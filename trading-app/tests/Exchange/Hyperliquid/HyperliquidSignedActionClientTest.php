@@ -98,6 +98,21 @@ final class HyperliquidSignedActionClientTest extends TestCase
         );
     }
 
+    public function testRejectsAccountMatchingAgentAfterNormalization(): void
+    {
+        $lowercase = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+        $mixedCase = '0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD';
+        $this->expectExceptionMessage('hyperliquid_signer_account_matches_agent');
+
+        new HttpHyperliquidSignedActionClient(
+            new MockHttpClient(),
+            self::URI,
+            self::TOKEN,
+            $mixedCase,
+            $lowercase,
+        );
+    }
+
     public function testSubmitsExactSidecarV1RequestWithHardenedHttpOptions(): void
     {
         $captured = null;
@@ -175,6 +190,193 @@ final class HyperliquidSignedActionClientTest extends TestCase
 
         self::assertSame('accepted', $result->outcome);
         self::assertNull($result->reason);
+    }
+
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>, ?string}> */
+    public static function validActionStatuses(): iterable
+    {
+        yield 'order resting' => ['order', 'accepted', [['kind' => 'resting', 'oid' => PHP_INT_MAX]], null];
+        yield 'order filled without decimals' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1]], null];
+        yield 'order filled with positive decimals' => ['order', 'accepted', [[
+            'kind' => 'filled',
+            'oid' => 42,
+            'total_size' => '0.0001',
+            'average_price' => '1.25e+4',
+        ]], null];
+        yield 'order error' => ['order', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'cancel success' => ['cancel', 'accepted', [['kind' => 'success']], null];
+        yield 'cancel error' => ['cancel', 'rejected', [['kind' => 'error']], 'exchange_status_error'];
+        yield 'cancel by cloid success' => ['cancelByCloid', 'accepted', [['kind' => 'success']], null];
+        yield 'update leverage empty' => ['updateLeverage', 'accepted', [], null];
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('validActionStatuses')]
+    public function testAcceptsExactTaskTwoStatusShapes(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+    ): void {
+        $response = $this->response($outcome, $reason, 'corr-valid-status', $statuses);
+
+        $result = $this->client(new MockHttpClient($response))->submit(
+            ['type' => $actionType],
+            1,
+            'corr-valid-status',
+        );
+
+        self::assertSame($outcome, $result->outcome);
+        self::assertSame($statuses, $result->statuses);
+        self::assertSame($reason, $result->reason);
+    }
+
+    /** @return iterable<string, array{string, string, list<array<string, mixed>>}> */
+    public static function malformedActionStatuses(): iterable
+    {
+        yield 'order rejects arbitrary data' => ['order', 'accepted', [['kind' => 'resting', 'oid' => 1, 'wallet_seed' => 'leak']]];
+        yield 'order rejects cancel kind' => ['order', 'accepted', [['kind' => 'success']]];
+        yield 'resting requires oid' => ['order', 'accepted', [['kind' => 'resting']]];
+        yield 'resting rejects zero oid' => ['order', 'accepted', [['kind' => 'resting', 'oid' => 0]]];
+        yield 'resting rejects negative oid' => ['order', 'accepted', [['kind' => 'resting', 'oid' => -1]]];
+        yield 'resting rejects string oid' => ['order', 'accepted', [['kind' => 'resting', 'oid' => '1']]];
+        yield 'resting rejects boolean oid' => ['order', 'accepted', [['kind' => 'resting', 'oid' => true]]];
+        yield 'filled requires oid' => ['order', 'accepted', [['kind' => 'filled', 'total_size' => '1']]];
+        yield 'filled rejects extra field' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'fee' => '1']]];
+        yield 'filled decimal must be string' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'total_size' => 1]]];
+        yield 'filled decimal must be positive' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'total_size' => '0']]];
+        yield 'filled decimal rejects negative' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'average_price' => '-1']]];
+        yield 'filled decimal rejects nan' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'average_price' => 'NaN']]];
+        yield 'filled decimal rejects infinity' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'average_price' => 'Infinity']]];
+        yield 'filled decimal rejects malformed exponent' => ['order', 'accepted', [['kind' => 'filled', 'oid' => 1, 'average_price' => '1e']]];
+        yield 'error row rejects details' => ['order', 'rejected', [['kind' => 'error', 'message' => 'raw exchange text']]];
+        yield 'cancel rejects order kind' => ['cancel', 'accepted', [['kind' => 'resting', 'oid' => 1]]];
+        yield 'cancel success rejects extra field' => ['cancel', 'accepted', [['kind' => 'success', 'wallet_seed' => 'leak']]];
+        yield 'cancel by cloid rejects filled' => ['cancelByCloid', 'accepted', [['kind' => 'filled', 'oid' => 1]]];
+        yield 'update leverage accepted requires empty statuses' => ['updateLeverage', 'accepted', [['kind' => 'success']]];
+    }
+
+    /** @param list<array<string, mixed>> $statuses */
+    #[DataProvider('malformedActionStatuses')]
+    public function testRejectsMalformedOrActionMismatchedStatusShapes(
+        string $actionType,
+        string $outcome,
+        array $statuses,
+    ): void {
+        $response = $this->response($outcome, null, 'corr-invalid-status', $statuses);
+
+        $result = $this->client(new MockHttpClient($response))->submit(
+            ['type' => $actionType],
+            1,
+            'corr-invalid-status',
+        );
+
+        self::assertSame('ambiguous', $result->outcome);
+        self::assertSame([], $result->statuses);
+        self::assertSame('signer_response_invalid', $result->reason);
+    }
+
+    public function testRejectsStableButUnknownSidecarReason(): void
+    {
+        $response = $this->response('rejected', 'exchange_rejected', 'corr-unknown-reason');
+
+        $result = $this->client(new MockHttpClient($response))->submit(
+            ['type' => 'order'],
+            1,
+            'corr-unknown-reason',
+        );
+
+        self::assertSame('ambiguous', $result->outcome);
+        self::assertSame('signer_response_invalid', $result->reason);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function knownReasons(): iterable
+    {
+        foreach ([
+            'broadcast_disabled',
+            'agent_address_mismatch',
+            'exchange_timeout',
+            'exchange_transport_error',
+            'exchange_response_too_large',
+            'exchange_response_invalid_length',
+            'exchange_response_invalid_json',
+            'exchange_response_not_object',
+            'exchange_redirect_rejected',
+            'testnet_endpoint_required',
+            'unknown_exchange_response',
+            'exchange_error',
+            'empty_exchange_statuses',
+            'too_many_exchange_statuses',
+            'invalid_exchange_statuses',
+            'exchange_status_error',
+            'mixed_exchange_statuses',
+            'unknown_exchange_status',
+            'unexpected_exchange_response_type',
+            'invalid_exchange_response',
+            'signer_auth_failed',
+            'signer_response_invalid',
+        ] as $reason) {
+            yield $reason => [$reason];
+        }
+    }
+
+    #[DataProvider('knownReasons')]
+    public function testResultAcceptsOnlyKnownReasonVocabulary(string $reason): void
+    {
+        $result = new HyperliquidSignedActionResult('ambiguous', [], $reason, 'corr-result');
+
+        self::assertSame($reason, $result->reason);
+    }
+
+    public function testResultAcceptsGenericNormalizedRowUnion(): void
+    {
+        $statuses = [
+            ['kind' => 'resting', 'oid' => 1],
+            ['kind' => 'filled', 'oid' => PHP_INT_MAX, 'total_size' => '.5', 'average_price' => '1E-8'],
+            ['kind' => 'success'],
+            ['kind' => 'error'],
+        ];
+
+        $result = new HyperliquidSignedActionResult('accepted', $statuses, null, 'corr-result');
+
+        self::assertSame($statuses, $result->statuses);
+    }
+
+    /** @return iterable<string, array{string, array<mixed>, ?string, string, string}> */
+    public static function invalidResults(): iterable
+    {
+        yield 'unknown outcome' => ['unknown', [], null, 'corr', 'hyperliquid_signed_action_result_outcome_invalid'];
+        yield 'statuses must be list' => ['accepted', ['row' => ['kind' => 'success']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'statuses limited to twenty' => ['accepted', array_fill(0, 21, ['kind' => 'success']), null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'status row must be object-shaped array' => ['accepted', ['success'], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'unknown reason' => ['rejected', [], 'exchange_rejected', 'corr', 'hyperliquid_signed_action_result_reason_invalid'];
+        yield 'blank correlation' => ['accepted', [], null, ' ', 'hyperliquid_signed_action_result_correlation_id_invalid'];
+        yield 'long correlation' => ['accepted', [], null, str_repeat('x', 129), 'hyperliquid_signed_action_result_correlation_id_invalid'];
+        yield 'arbitrary status key' => ['accepted', [['kind' => 'success', 'wallet_seed' => 'leak']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'unknown status kind' => ['accepted', [['kind' => 'pending']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'invalid oid' => ['accepted', [['kind' => 'resting', 'oid' => '1']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'invalid decimal' => ['accepted', [['kind' => 'filled', 'oid' => 1, 'total_size' => '0']], null, 'corr', 'hyperliquid_signed_action_result_statuses_invalid'];
+        yield 'oversized statuses' => ['accepted', [[
+            'kind' => 'filled',
+            'oid' => 1,
+            'total_size' => str_repeat('1', 65_536),
+        ]], null, 'corr', 'hyperliquid_signed_action_result_statuses_too_large'];
+    }
+
+    /** @param array<mixed> $statuses */
+    #[DataProvider('invalidResults')]
+    public function testResultRejectsImpossibleOrSensitiveState(
+        string $outcome,
+        array $statuses,
+        ?string $reason,
+        string $correlationId,
+        string $error,
+    ): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($error);
+
+        new HyperliquidSignedActionResult($outcome, $statuses, $reason, $correlationId);
     }
 
     /** @return iterable<string, array{array<string, mixed>, int, string, ?int, string}> */

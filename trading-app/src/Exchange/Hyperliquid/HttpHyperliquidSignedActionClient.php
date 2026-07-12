@@ -16,26 +16,7 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
     private const ALLOWED_ACTIONS = ['order', 'cancel', 'cancelByCloid', 'updateLeverage'];
     private const MAX_BODY_BYTES = 65_536;
     private const MAX_STATUSES = 20;
-    private const STABLE_REASON_PATTERN = '/^[a-z][a-z0-9_]{0,127}$/D';
     private const ADDRESS_PATTERN = '/^0x[0-9a-fA-F]{40}$/D';
-    private const SENSITIVE_KEY_TOKENS = [
-        'signature',
-        'sign',
-        'privatekey',
-        'signing',
-        'canonicalpayload',
-        'credential',
-        'token',
-        'secret',
-        'auth',
-        'authorization',
-        'password',
-        'cookie',
-        'passphrase',
-        'apikey',
-        'accesskey',
-        'memo',
-    ];
 
     private string $authToken;
     private string $accountAddress;
@@ -61,9 +42,15 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             throw new \InvalidArgumentException('hyperliquid_signer_agent_address_invalid');
         }
 
+        $normalizedAccountAddress = strtolower($accountAddress);
+        $normalizedAgentAddress = strtolower($agentAddress);
+        if ($normalizedAccountAddress === $normalizedAgentAddress) {
+            throw new \InvalidArgumentException('hyperliquid_signer_account_matches_agent');
+        }
+
         $this->authToken = trim($authToken);
-        $this->accountAddress = strtolower($accountAddress);
-        $this->agentAddress = strtolower($agentAddress);
+        $this->accountAddress = $normalizedAccountAddress;
+        $this->agentAddress = $normalizedAgentAddress;
     }
 
     public function submit(
@@ -120,7 +107,7 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             return $this->ambiguous($correlationId);
         }
 
-        return $this->normalizeExchangeResponse($body, $correlationId);
+        return $this->normalizeExchangeResponse($body, $correlationId, $action['type']);
     }
 
     public function health(): bool
@@ -218,7 +205,11 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         return $body;
     }
 
-    private function normalizeExchangeResponse(string $body, string $correlationId): HyperliquidSignedActionResult
+    private function normalizeExchangeResponse(
+        string $body,
+        string $correlationId,
+        string $actionType,
+    ): HyperliquidSignedActionResult
     {
         $payload = $this->decodeObject($body);
         if ($payload === null || !$this->hasExactKeys($payload, [
@@ -238,7 +229,7 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         }
 
         $reason = $payload['reason'] ?? null;
-        if ($reason !== null && (!is_string($reason) || preg_match(self::STABLE_REASON_PATTERN, $reason) !== 1)) {
+        if ($reason !== null && !is_string($reason)) {
             return $this->ambiguous($correlationId);
         }
 
@@ -247,12 +238,18 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             return $this->ambiguous($correlationId);
         }
 
-        return new HyperliquidSignedActionResult(
-            $payload['outcome'],
-            $statuses,
-            $reason,
-            $correlationId,
-        );
+        try {
+            $result = new HyperliquidSignedActionResult(
+                $payload['outcome'],
+                $statuses,
+                $reason,
+                $correlationId,
+            );
+        } catch (\InvalidArgumentException) {
+            return $this->ambiguous($correlationId);
+        }
+
+        return $this->statusesMatchAction($actionType, $result) ? $result : $this->ambiguous($correlationId);
     }
 
     /** @return array<string, mixed>|null */
@@ -279,61 +276,33 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             if (!$status instanceof \stdClass) {
                 return null;
             }
-            $value = $this->normalizeStatusValue($status);
-            if (!is_array($value)) {
-                return null;
-            }
-            $normalized[] = $value;
+            $normalized[] = $this->normalizeStatusObject($status);
         }
 
         return $normalized;
     }
 
-    private function normalizeStatusValue(mixed $value): mixed
+    /** @return array<string, mixed> */
+    private function normalizeStatusObject(\stdClass $status): array
     {
-        if ($value instanceof \stdClass) {
-            $normalized = [];
-            foreach (get_object_vars($value) as $key => $child) {
-                if ($this->isSensitiveKey($key)) {
-                    return null;
-                }
-                $normalized[$key] = $this->normalizeStatusValue($child);
-                if ($child !== null && $normalized[$key] === null) {
-                    return null;
-                }
-            }
-
-            return $normalized;
-        }
-        if (is_array($value)) {
-            $normalized = [];
-            foreach ($value as $child) {
-                $normalizedChild = $this->normalizeStatusValue($child);
-                if ($child !== null && $normalizedChild === null) {
-                    return null;
-                }
-                $normalized[] = $normalizedChild;
-            }
-
-            return $normalized;
-        }
-
-        return $value;
+        return get_object_vars($status);
     }
 
-    private function isSensitiveKey(string $key): bool
+    private function statusesMatchAction(string $actionType, HyperliquidSignedActionResult $result): bool
     {
-        $normalized = preg_replace('/[^a-z0-9]/', '', strtolower($key));
-        if (!is_string($normalized)) {
-            return true;
+        if ($actionType === 'updateLeverage') {
+            return $result->outcome !== 'accepted' || $result->statuses === [];
         }
-        foreach (self::SENSITIVE_KEY_TOKENS as $token) {
-            if (str_contains($normalized, $token)) {
-                return true;
+        $allowedKinds = $actionType === 'order'
+            ? ['resting', 'filled', 'error']
+            : ['success', 'error'];
+        foreach ($result->statuses as $status) {
+            if (!in_array($status['kind'], $allowedKinds, true)) {
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /**
