@@ -1,0 +1,343 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Exchange\Hyperliquid;
+
+use Symfony\Component\DependencyInjection\Attribute\AsAlias;
+use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\ResponseInterface;
+
+#[AsAlias(id: HyperliquidSignedActionClientInterface::class)]
+final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSignedActionClientInterface
+{
+    private const ALLOWED_BASE_URI = 'http://hyperliquid-signer:8098';
+    private const ALLOWED_ACTIONS = ['order', 'cancel', 'cancelByCloid', 'updateLeverage'];
+    private const MAX_BODY_BYTES = 65_536;
+    private const MAX_STATUSES = 20;
+    private const ADDRESS_PATTERN = '/^0x[0-9a-fA-F]{40}$/D';
+
+    private string $authToken;
+    private string $accountAddress;
+    private string $agentAddress;
+    private bool $configured;
+
+    public function __construct(
+        private HttpClientInterface $httpClient,
+        string $baseUri,
+        string $authToken,
+        string $accountAddress,
+        string $agentAddress,
+    ) {
+        if ($baseUri !== self::ALLOWED_BASE_URI) {
+            throw new \InvalidArgumentException('hyperliquid_signer_endpoint_not_allowed');
+        }
+        $authToken = trim($authToken);
+        $accountAddress = trim($accountAddress);
+        $agentAddress = trim($agentAddress);
+        if ($authToken === '') {
+            $this->authToken = '';
+            $this->accountAddress = '';
+            $this->agentAddress = '';
+            $this->configured = false;
+
+            return;
+        }
+        if (preg_match(self::ADDRESS_PATTERN, $accountAddress) !== 1) {
+            throw new \InvalidArgumentException('hyperliquid_signer_account_address_invalid');
+        }
+        if (preg_match(self::ADDRESS_PATTERN, $agentAddress) !== 1) {
+            throw new \InvalidArgumentException('hyperliquid_signer_agent_address_invalid');
+        }
+
+        $normalizedAccountAddress = strtolower($accountAddress);
+        $normalizedAgentAddress = strtolower($agentAddress);
+        if ($normalizedAccountAddress === $normalizedAgentAddress) {
+            throw new \InvalidArgumentException('hyperliquid_signer_account_matches_agent');
+        }
+
+        $this->authToken = $authToken;
+        $this->accountAddress = $normalizedAccountAddress;
+        $this->agentAddress = $normalizedAgentAddress;
+        $this->configured = true;
+    }
+
+    public function submit(
+        array $action,
+        int $nonce,
+        string $correlationId,
+        ?int $expiresAfter = null,
+    ): HyperliquidSignedActionResult {
+        $this->validateSubmission($action, $nonce, $correlationId, $expiresAfter);
+        $actionType = $action['type'];
+        if (!$this->configured) {
+            return $this->result($actionType, 'rejected', 'broadcast_disabled', $correlationId);
+        }
+
+        $payload = [
+            'schema_version' => '1',
+            'environment' => 'testnet',
+            'network' => 'testnet',
+            'account_address' => $this->accountAddress,
+            'agent_address' => $this->agentAddress,
+            'action' => $action,
+            'nonce' => $nonce,
+            'correlation_id' => $correlationId,
+        ];
+        if ($expiresAfter !== null) {
+            $payload['expires_after'] = $expiresAfter;
+        }
+
+        try {
+            $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            throw new \InvalidArgumentException('hyperliquid_signer_action_invalid');
+        }
+        if (strlen($encoded) > self::MAX_BODY_BYTES) {
+            throw new \InvalidArgumentException('hyperliquid_signer_request_too_large');
+        }
+
+        try {
+            $response = $this->httpClient->request(
+                'POST',
+                self::ALLOWED_BASE_URI . '/v1/exchange',
+                $this->requestOptions($encoded),
+            );
+            $statusCode = $response->getStatusCode();
+
+            if ($statusCode === 401 || $statusCode === 403) {
+                return $this->result($actionType, 'rejected', 'signer_auth_failed', $correlationId);
+            }
+            if ($statusCode !== 200) {
+                return $this->ambiguous($actionType, $correlationId);
+            }
+
+            $body = $this->readBoundedBody($response);
+            if ($body === null) {
+                return $this->ambiguous($actionType, $correlationId);
+            }
+        } catch (TransportExceptionInterface) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+
+        return $this->normalizeExchangeResponse($body, $correlationId, $actionType);
+    }
+
+    public function health(): bool
+    {
+        if (!$this->configured) {
+            return false;
+        }
+
+        try {
+            $response = $this->httpClient->request(
+                'GET',
+                self::ALLOWED_BASE_URI . '/v1/health',
+                $this->requestOptions(),
+            );
+            if ($response->getStatusCode() !== 200) {
+                return false;
+            }
+
+            $body = $this->readBoundedBody($response);
+            if ($body === null) {
+                return false;
+            }
+        } catch (TransportExceptionInterface) {
+            return false;
+        }
+
+        $payload = $this->decodeObject($body);
+        if ($payload === null || !$this->hasExactKeys($payload, [
+            'agent_address',
+            'broadcast_enabled',
+            'environment',
+            'ready',
+            'schema_version',
+        ])) {
+            return false;
+        }
+
+        return $payload['schema_version'] === '1'
+            && $payload['ready'] === true
+            && $payload['environment'] === 'testnet'
+            && $payload['agent_address'] === $this->agentAddress
+            && $payload['broadcast_enabled'] === true;
+    }
+
+    /** @return array<string, mixed> */
+    private function requestOptions(?string $body = null): array
+    {
+        $options = [
+            'headers' => ['Authorization: Bearer ' . $this->authToken],
+            'timeout' => 5.0,
+            'max_duration' => 5.0,
+            'max_redirects' => 0,
+            'proxy' => null,
+            'no_proxy' => '*',
+        ];
+        if ($body !== null) {
+            $options['headers'][] = 'Content-Type: application/json';
+            $options['body'] = $body;
+        }
+
+        return $options;
+    }
+
+    /** @param array<string, mixed> $action */
+    private function validateSubmission(
+        array $action,
+        int $nonce,
+        string $correlationId,
+        ?int $expiresAfter,
+    ): void {
+        if ($nonce <= 0) {
+            throw new \InvalidArgumentException('hyperliquid_signer_nonce_invalid');
+        }
+        if ($expiresAfter !== null && $expiresAfter <= 0) {
+            throw new \InvalidArgumentException('hyperliquid_signer_expires_after_invalid');
+        }
+        if (!isset($action['type']) || !is_string($action['type']) || !in_array($action['type'], self::ALLOWED_ACTIONS, true)) {
+            throw new \InvalidArgumentException('hyperliquid_signer_action_not_allowed');
+        }
+        if (trim($correlationId) === '' || strlen($correlationId) > 128) {
+            throw new \InvalidArgumentException('hyperliquid_signer_correlation_id_invalid');
+        }
+    }
+
+    private function readBoundedBody(ResponseInterface $response): ?string
+    {
+        $body = '';
+        foreach ($this->httpClient->stream($response) as $chunk) {
+            if ($chunk->isTimeout()) {
+                return null;
+            }
+            $content = $chunk->getContent();
+            if (strlen($body) + strlen($content) > self::MAX_BODY_BYTES) {
+                return null;
+            }
+            $body .= $content;
+        }
+
+        return $body;
+    }
+
+    private function normalizeExchangeResponse(
+        string $body,
+        string $correlationId,
+        string $actionType,
+    ): HyperliquidSignedActionResult
+    {
+        $payload = $this->decodeObject($body);
+        if ($payload === null || !$this->hasExactKeys($payload, [
+            'correlation_id',
+            'outcome',
+            'schema_version',
+            'statuses',
+        ], ['reason'])) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+        if ($payload['schema_version'] !== '1'
+            || !is_string($payload['outcome'])
+            || !in_array($payload['outcome'], ['accepted', 'rejected', 'ambiguous'], true)
+            || $payload['correlation_id'] !== $correlationId
+        ) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+
+        $reason = $payload['reason'] ?? null;
+        if ($reason !== null && !is_string($reason)) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+
+        $statuses = $this->normalizeStatuses($payload['statuses']);
+        if ($statuses === null) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+
+        try {
+            $result = new HyperliquidSignedActionResult(
+                $actionType,
+                $payload['outcome'],
+                $statuses,
+                $reason,
+                $correlationId,
+            );
+        } catch (\InvalidArgumentException) {
+            return $this->ambiguous($actionType, $correlationId);
+        }
+
+        return $result;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function decodeObject(string $body): ?array
+    {
+        try {
+            $decoded = json_decode($body, false, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        return $decoded instanceof \stdClass ? get_object_vars($decoded) : null;
+    }
+
+    /** @return list<array<string, mixed>>|null */
+    private function normalizeStatuses(mixed $statuses): ?array
+    {
+        if (!is_array($statuses) || !array_is_list($statuses) || count($statuses) > self::MAX_STATUSES) {
+            return null;
+        }
+
+        $normalized = [];
+        foreach ($statuses as $status) {
+            if (!$status instanceof \stdClass) {
+                return null;
+            }
+            $normalized[] = $this->normalizeStatusObject($status);
+        }
+
+        return $normalized;
+    }
+
+    /** @return array<string, mixed> */
+    private function normalizeStatusObject(\stdClass $status): array
+    {
+        return get_object_vars($status);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @param list<string> $requiredKeys
+     * @param list<string> $optionalKeys
+     */
+    private function hasExactKeys(array $payload, array $requiredKeys, array $optionalKeys = []): bool
+    {
+        $actualKeys = array_keys($payload);
+        sort($actualKeys);
+        sort($requiredKeys);
+        if ($actualKeys === $requiredKeys) {
+            return true;
+        }
+
+        $allowedKeys = array_values(array_unique([...$requiredKeys, ...$optionalKeys]));
+        sort($allowedKeys);
+
+        return $actualKeys === $allowedKeys;
+    }
+
+    private function ambiguous(string $actionType, string $correlationId): HyperliquidSignedActionResult
+    {
+        return $this->result($actionType, 'ambiguous', 'signer_response_invalid', $correlationId);
+    }
+
+    private function result(
+        string $actionType,
+        string $outcome,
+        string $reason,
+        string $correlationId,
+    ): HyperliquidSignedActionResult {
+        return new HyperliquidSignedActionResult($actionType, $outcome, [], $reason, $correlationId);
+    }
+}

@@ -50,6 +50,7 @@ final readonly class OkxRuntimeCheck implements ExchangeRuntimeCheckInterface
             configHash: $input->configHash,
             blockingErrors: $input->blockingErrors,
             warnings: $input->warnings,
+            configProfile: $input->configProfile,
         ));
 
         if ($report->readyLevel === ExchangeReadinessLevel::DemoTestnetCandidate && !$input->demoTestnetWriteEnabled) {
@@ -91,6 +92,7 @@ final readonly class OkxRuntimeCheck implements ExchangeRuntimeCheckInterface
             configHash: $report->configHash,
             blockingErrors: $report->blockingErrors,
             warnings: $report->warnings,
+            configProfile: $report->configProfile,
         );
     }
 }

@@ -26,6 +26,7 @@ final readonly class HyperliquidInstrumentMetadataDto
         public ?\DateTimeImmutable $fundingTime,
         public array $qualityFlags,
         public string $status = 'live',
+        public ?string $contractSize = null,
     ) {
     }
 

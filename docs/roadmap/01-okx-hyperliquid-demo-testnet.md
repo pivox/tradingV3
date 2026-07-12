@@ -55,18 +55,22 @@ Cette vague remplace la logique “dry-run uniquement” par une cible plus pré
 - [x] DEMO-003 — Demo ops runbook + rollback — #252 / `79acc0c`.
 - [x] DEMO-004 — Enable demo schedule guarded — #253.
 - [x] DEMO-005 — Pre-mutative demo readiness decision — decision `blocked`.
+- [x] HL-012 — Testnet trading controlled avec SL — implementation prete,
+  desactivee par defaut ; aucune execution reelle, validation bloquee par
+  DEMO-005.
 
 ## Restant vague 1
 
 - [ ] OKX-010 — Demo trading controlled avec SL.
-- [ ] HL-012 — Testnet trading controlled avec SL.
+- [ ] HL-012 execution validation — live smoke testnet interdit tant que
+  DEMO-005 reste `blocked` ; aucune preuve d'ordre reel a ce jour.
 - [ ] DEMO-006 — Final demo/testnet execution evidence report.
 
 ## Ordre strict recommandé
 
 ```text
 OKX-010
-HL-012
+HL-012 execution validation (apres DEMO-005 ready)
 
 DEMO-006
 ```

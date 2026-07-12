@@ -29,14 +29,14 @@ final class LiquidationGuard
         }
 
         $liquidationPrice = $this->resolveLiquidationPrice($request, $direction);
-        if ($liquidationPrice === null) {
+        if ($liquidationPrice === null || !is_finite($liquidationPrice) || $liquidationPrice <= 0.0) {
             return $this->unsafe(
                 request: $request,
                 liquidationPrice: null,
                 liquidationDistancePct: null,
                 ratio: null,
                 reason: 'insufficient_liquidation_data',
-                warnings: ['Liquidation price cannot be derived without leverage or an exchange-provided liquidation price.'],
+                warnings: ['An authoritative liquidation price is required.'],
             );
         }
 
@@ -77,19 +77,7 @@ final class LiquidationGuard
             return $request->liquidationPrice;
         }
 
-        if ($request->leverage === null || $request->leverage <= 0) {
-            return null;
-        }
-
-        $maintenance = $request->maintenanceMarginRate !== null && \is_finite($request->maintenanceMarginRate)
-            ? max(0.0, $request->maintenanceMarginRate)
-            : 0.0;
-
-        if ($direction === 'long') {
-            return $request->entryPrice * max(0.0, 1.0 - (1.0 / $request->leverage) + $maintenance);
-        }
-
-        return $request->entryPrice * (1.0 + (1.0 / $request->leverage) - $maintenance);
+        return null;
     }
 
     /**

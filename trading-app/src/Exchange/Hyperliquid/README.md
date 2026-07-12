@@ -57,10 +57,13 @@ First API-first Hyperliquid integration slice.
   The command still prints `Live allowed: no`, warns that agent trade permission
   is not proven in HL-010, recommends `dry_run=true`, and never exposes
   `demo_testnet_enabled` or `mainnet_ready`.
-- `HyperliquidAgentSigner` only accepts `HYPERLIQUID_NETWORK=testnet` and
-  `HYPERLIQUID_ENV=testnet`. The application never accepts the wallet principal
-  private key; only a dedicated testnet agent key is allowed, and signer outputs
-  are redacted.
+- Mutation readiness resolves exactly one DI-configured effective trading
+  profile. Its profile name and config hash are carried in the readiness report;
+  Task 7 execution must match both values before submitting any action. Changing
+  only `kill_switch_enabled` cannot authorize the current dry-run profile.
+- `HyperliquidAgentSigner` permanently rejects signing in PHP with
+  `hyperliquid_php_key_custody_forbidden`. Agent signing is delegated to the
+  dedicated sidecar, and PHP receives only its health and signed-action API.
 - `PersistentHyperliquidNonceManager` stores monotonic nonces in
   `hyperliquid_nonce_state`, scoped by
   `environment + network + signer_address`. It keeps `account_address` for audit,
@@ -73,7 +76,6 @@ Environment:
 ```dotenv
 HYPERLIQUID_ENV=testnet
 HYPERLIQUID_NETWORK=testnet
-HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY=
 HYPERLIQUID_TESTNET_AGENT_ADDRESS=
 HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS=
 HYPERLIQUID_API_BASE_URI=https://api.hyperliquid-testnet.xyz
@@ -81,6 +83,9 @@ HYPERLIQUID_WS_URI=wss://api.hyperliquid-testnet.xyz/ws
 HYPERLIQUID_MAINNET_ENABLED=0
 HYPERLIQUID_TESTNET_TRADING_ENABLED=0
 ```
+
+The agent private key is accepted only by the dedicated signer sidecar. It is
+never configured in PHP.
 
 Rollback for HL-004: unset the three `HYPERLIQUID_TESTNET_*` signer/account
 variables and keep `HYPERLIQUID_TESTNET_TRADING_ENABLED=0`. Public read-only

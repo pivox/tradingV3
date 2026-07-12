@@ -231,6 +231,7 @@ final class ExchangeReadinessEvaluator implements ExchangeRuntimeCheckInterface
             configHash: $input->configHash,
             blockingErrors: array_values(array_unique($blockingErrors)),
             warnings: array_values(array_unique($warnings)),
+            configProfile: $input->configProfile,
         );
     }
 

@@ -149,7 +149,6 @@ final class HyperliquidExchangeAdapterTest extends TestCase
             new HyperliquidConfig(
                 environment: 'testnet',
                 network: 'testnet',
-                testnetAgentPrivateKey: 'fixture-agent-material',
                 testnetAgentAddress: '0x0000000000000000000000000000000000000002',
                 testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             ),

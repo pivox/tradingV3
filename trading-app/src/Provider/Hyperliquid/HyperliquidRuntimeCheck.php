@@ -15,6 +15,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
 {
     public function __construct(
         private ExchangeReadinessEvaluator $evaluator = new ExchangeReadinessEvaluator(),
+        private ?HyperliquidMutationReadinessProbeInterface $probe = null,
     ) {
     }
 
@@ -22,6 +23,9 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
     {
         if ($input->exchange !== Exchange::HYPERLIQUID) {
             throw new \InvalidArgumentException('HyperliquidRuntimeCheck only accepts exchange=hyperliquid.');
+        }
+        if ($this->probe instanceof HyperliquidMutationReadinessProbeInterface) {
+            return $this->probe->current();
         }
 
         $warnings = $input->warnings;
@@ -86,6 +90,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
             configHash: $input->configHash,
             blockingErrors: $input->blockingErrors,
             warnings: $warnings,
+            configProfile: $input->configProfile,
         ));
 
         $readyLevel = $report->readyLevel;
@@ -125,6 +130,7 @@ final readonly class HyperliquidRuntimeCheck implements ExchangeRuntimeCheckInte
                 ? $this->blockingErrors($report)
                 : $report->blockingErrors,
             warnings: $report->warnings,
+            configProfile: $input->configProfile,
         );
     }
 

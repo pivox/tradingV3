@@ -169,6 +169,52 @@ final class LiquidationGuardTest extends TestCase
 
         self::assertFalse($result->isSafe);
         self::assertSame('insufficient_liquidation_data', $result->reasonIfUnsafe);
-        self::assertContains('Liquidation price cannot be derived without leverage or an exchange-provided liquidation price.', $result->warnings);
+        self::assertContains('An authoritative liquidation price is required.', $result->warnings);
+    }
+
+    public function testRejectsMissingAuthoritativeLiquidationPriceEvenWhenLeverageExists(): void
+    {
+        $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'hyperliquid',
+            marketType: 'perpetual',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 99.0,
+            leverage: 1,
+            maintenanceMarginRate: null,
+            liquidationPrice: null,
+            minDistanceRatio: 3.0,
+        ));
+
+        self::assertFalse($result->isSafe);
+        self::assertNull($result->liquidationPrice);
+        self::assertSame('insufficient_liquidation_data', $result->reasonIfUnsafe);
+    }
+
+    public function testUsesConservativelyRoundedAuthoritativeLiquidationPriceWithoutRecalculation(): void
+    {
+        $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'hyperliquid',
+            marketType: 'perpetual',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 98.0,
+            leverage: 5,
+            maintenanceMarginRate: null,
+            liquidationPrice: 84.210526315790,
+            minDistanceRatio: 3.0,
+            metadata: [
+                'maintenance_margin_rate' => '0.05',
+                'maintenance_margin_deduction' => '0',
+            ],
+        ));
+
+        self::assertTrue($result->isSafe);
+        self::assertSame(84.21052631579, $result->liquidationPrice);
+        self::assertSame('0.05', $result->metadata['maintenance_margin_rate'] ?? null);
     }
 }

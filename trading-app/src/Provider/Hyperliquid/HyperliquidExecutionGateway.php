@@ -153,10 +153,51 @@ final class HyperliquidExecutionGateway implements OrderProviderInterface
         }
 
         try {
-            return array_values(array_filter($this->client->info($request), \is_array(...)));
+            $payload = $this->client->info($request);
+            if (!array_is_list($payload)) {
+                throw new \UnexpectedValueException('hyperliquid_private_payload_malformed');
+            }
+
+            $rows = [];
+            foreach ($payload as $row) {
+                if (!is_array($row) || array_is_list($row)) {
+                    throw new \UnexpectedValueException('hyperliquid_private_payload_malformed');
+                }
+                $this->assertOpenOrderRow($row);
+                $rows[] = $row;
+            }
+
+            return $rows;
         } catch (\Throwable $exception) {
             throw new HyperliquidProviderUnavailableException($this->reason($exception), $operation, $exception);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function assertOpenOrderRow(array $row): void
+    {
+        if (
+            !$this->nonEmptyString($row['coin'] ?? null)
+            || !$this->scalarIdentifier($row['oid'] ?? null)
+            || !$this->nonEmptyString($row['side'] ?? null)
+            || !is_numeric($row['sz'] ?? null)
+            || !is_numeric($row['limitPx'] ?? null)
+            || !is_numeric($row['timestamp'] ?? null)
+        ) {
+            throw new \UnexpectedValueException('hyperliquid_private_payload_malformed');
+        }
+    }
+
+    private function nonEmptyString(mixed $value): bool
+    {
+        return is_string($value) && trim($value) !== '';
+    }
+
+    private function scalarIdentifier(mixed $value): bool
+    {
+        return (is_string($value) || is_int($value)) && trim((string) $value) !== '';
     }
 
     private function accountAddress(string $operation): string
