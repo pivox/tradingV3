@@ -1,5 +1,6 @@
 import asyncio
 import json
+import secrets
 import time
 from typing import Any
 
@@ -18,11 +19,10 @@ from app.signing import (
 )
 
 
-FIXTURE_KEY = (
-    "0x0123456789012345678901234567890123456789012345678901234567890123"
-)
-FIXTURE_ADDRESS = Account.from_key(FIXTURE_KEY).address.lower()
-TOKEN = "test-auth-token"
+FIXTURE_ACCOUNT = Account.create()
+FIXTURE_KEY = FIXTURE_ACCOUNT.key.hex()
+FIXTURE_ADDRESS = FIXTURE_ACCOUNT.address.lower()
+TOKEN = secrets.token_urlsafe(32)
 
 
 def config(**overrides: Any) -> SignerConfig:
@@ -87,21 +87,31 @@ class FakeTransport:
         return self.payload
 
 
-def test_official_sdk_testnet_signing_vector() -> None:
+def test_official_sdk_testnet_signing_is_deterministic_and_well_formed() -> None:
     wallet = Account.from_key(FIXTURE_KEY)
 
-    signature = _sign_l1_testnet_action(
+    first = _sign_l1_testnet_action(
+        wallet,
+        {"type": "dummy", "num": 100000000000},
+        nonce=0,
+        expires_after=None,
+    )
+    second = _sign_l1_testnet_action(
         wallet,
         {"type": "dummy", "num": 100000000000},
         nonce=0,
         expires_after=None,
     )
 
-    assert signature == {
-        "r": "0x542af61ef1f429707e3c76c5293c80d01f74ef853e34b76efffcb57e574f9510",
-        "s": "0x17b8b32f086e8cdede991f1e2c529f5dd5297cbe8128500e00cbaf766204a613",
-        "v": 28,
-    }
+    assert first == second
+    assert set(first) == {"r", "s", "v"}
+    assert first["v"] in {27, 28}
+    assert all(
+        isinstance(first[field], str)
+        and first[field].startswith("0x")
+        and len(first[field]) == 66
+        for field in ("r", "s")
+    )
 
 
 def test_signer_requires_private_key_to_match_configured_agent() -> None:

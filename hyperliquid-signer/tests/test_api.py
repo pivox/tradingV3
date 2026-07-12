@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import subprocess
 import sys
 from typing import Any
@@ -15,11 +16,10 @@ from app.config import SignerConfig, TESTNET_URI
 from app.main import create_app
 
 
-FIXTURE_KEY = (
-    "0x0123456789012345678901234567890123456789012345678901234567890123"
-)
-FIXTURE_ADDRESS = Account.from_key(FIXTURE_KEY).address.lower()
-TOKEN = "sidecar-test-token"
+FIXTURE_ACCOUNT = Account.create()
+FIXTURE_KEY = FIXTURE_ACCOUNT.key.hex()
+FIXTURE_ADDRESS = FIXTURE_ACCOUNT.address.lower()
+TOKEN = secrets.token_urlsafe(32)
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
