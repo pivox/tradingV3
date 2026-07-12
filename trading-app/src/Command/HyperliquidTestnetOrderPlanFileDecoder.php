@@ -8,6 +8,7 @@ use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
 use App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver;
 use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
+use App\TradingCore\OrderPlan\Service\OrderPlanValidator;
 use App\TradingCore\SlTp\Dto\LiquidationCheckRequest;
 use App\TradingCore\SlTp\Dto\ProtectionPlan;
 use App\TradingCore\SlTp\Dto\StopLossResult;
@@ -56,6 +57,7 @@ final class HyperliquidTestnetOrderPlanFileDecoder
     private readonly HyperliquidTestnetOrderPlanFileReaderInterface $fileReader;
     private readonly ClockInterface $clock;
     private readonly HyperliquidIsolatedLiquidationSolver $liquidationSolver;
+    private readonly OrderPlanValidator $orderPlanValidator;
 
     public function __construct(
         ?LiquidationGuard $liquidationGuard = null,
@@ -64,12 +66,14 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         private readonly ?HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence = null,
         ?ClockInterface $clock = null,
         ?HyperliquidIsolatedLiquidationSolver $liquidationSolver = null,
+        ?OrderPlanValidator $orderPlanValidator = null,
     ) {
         $this->liquidationGuard = $liquidationGuard ?? new LiquidationGuard();
         $this->jsonDecoder = $jsonDecoder ?? new BoundedDuplicateAwareJsonDecoder();
         $this->fileReader = $fileReader ?? new HyperliquidTestnetOrderPlanFileReader();
         $this->clock = $clock ?? new NativeClock();
         $this->liquidationSolver = $liquidationSolver ?? new HyperliquidIsolatedLiquidationSolver();
+        $this->orderPlanValidator = $orderPlanValidator ?? new OrderPlanValidator();
     }
 
     public function decode(string $path): OrderPlan
@@ -173,7 +177,7 @@ final class HyperliquidTestnetOrderPlanFileDecoder
             throw new \InvalidArgumentException('order_plan_liquidation_guard_unsafe');
         }
 
-        return new OrderPlan(
+        $orderPlan = new OrderPlan(
             symbol: $symbol,
             profile: $profile,
             exchange: $exchange,
@@ -196,6 +200,8 @@ final class HyperliquidTestnetOrderPlanFileDecoder
             idempotencyKey: $idempotencyKey,
             configHash: $configHash,
         );
+
+        return $orderPlan->withValidation($this->orderPlanValidator->validate($orderPlan));
     }
 
     /**

@@ -306,6 +306,19 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(3.0, $protection->liquidationCheck->metadata['min_distance_ratio'] ?? null);
     }
 
+    public function testDecoderReturnsAnExecutableValidatedPlan(): void
+    {
+        $decoder = new HyperliquidTestnetOrderPlanFileDecoder(
+            marginEvidence: new SmokeTestMarginEvidenceProvider($this->marginEvidence()),
+            clock: new MockClock('2026-07-12T12:00:00Z'),
+        );
+
+        $plan = $decoder->decode($this->planFile());
+
+        self::assertTrue($plan->validation->isExecutable);
+        self::assertSame([], $plan->validation->invalidReasons);
+    }
+
     public function testRejectsPlanWhenDerivedLiquidationGuardIsUnsafe(): void
     {
         $envelope = $this->validEnvelope();
