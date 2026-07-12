@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Execution\Hyperliquid;
 
-final readonly class FilesystemFallbackHyperliquidKillSwitch implements HyperliquidKillSwitchTripInterface
+final readonly class FilesystemFallbackHyperliquidKillSwitch implements HyperliquidKillSwitchTripInterface, HyperliquidQuarantineRecoveryInterface
 {
     private const MARKER_CONTENT = "HYPERLIQUID_TESTNET_EXECUTION_QUARANTINED\n";
 
@@ -45,11 +45,11 @@ final readonly class FilesystemFallbackHyperliquidKillSwitch implements Hyperliq
      * Transfers quarantine ownership to an already-tripped repository.
      * This never resets the kill switch or releases process-retained execution locks.
      */
-    public function recoverFallbackMarker(): bool
+    public function recoverFallbackMarker(): HyperliquidQuarantineRecoveryStatus
     {
         $filesystem = $this->markerFilesystem();
         if (!$filesystem->markerExists($this->markerPath)) {
-            return false;
+            return HyperliquidQuarantineRecoveryStatus::NoMarker;
         }
 
         try {
@@ -58,7 +58,7 @@ final readonly class FilesystemFallbackHyperliquidKillSwitch implements Hyperliq
             throw new HyperliquidDurableTripPersistenceException();
         }
         if (!$repositoryTripped) {
-            return false;
+            return HyperliquidQuarantineRecoveryStatus::RepositoryNotTripped;
         }
 
         try {
@@ -69,7 +69,7 @@ final readonly class FilesystemFallbackHyperliquidKillSwitch implements Hyperliq
             throw new HyperliquidDurableTripPersistenceException();
         }
 
-        return true;
+        return HyperliquidQuarantineRecoveryStatus::Transferred;
     }
 
     private function markerFilesystem(): HyperliquidQuarantineFilesystemInterface

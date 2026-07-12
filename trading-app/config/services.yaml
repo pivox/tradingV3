@@ -166,6 +166,9 @@ services:
     App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface:
         alias: App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch
 
+    App\TradingCore\Execution\Hyperliquid\HyperliquidQuarantineRecoveryInterface:
+        alias: App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch
+
     App\Trading\Reporting\PositionTradeAnalysisLegacyReaderInterface:
         alias: App\Repository\PositionTradeAnalysisRepository
 

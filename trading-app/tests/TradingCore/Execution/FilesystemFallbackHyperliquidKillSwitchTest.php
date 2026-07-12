@@ -8,6 +8,7 @@ use App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitc
 use App\TradingCore\Execution\Hyperliquid\HyperliquidDurableTripPersistenceException;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidQuarantineFilesystemInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidQuarantineRecoveryStatus;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -79,7 +80,7 @@ final class FilesystemFallbackHyperliquidKillSwitchTest extends TestCase
         $repository->tripFailure = false;
         $repository->tripped = true;
 
-        self::assertTrue($switch->recoverFallbackMarker());
+        self::assertSame(HyperliquidQuarantineRecoveryStatus::Transferred, $switch->recoverFallbackMarker());
 
         self::assertFileDoesNotExist($marker);
         self::assertTrue($switch->isTripped(), 'repository quarantine must remain active');
@@ -97,8 +98,18 @@ final class FilesystemFallbackHyperliquidKillSwitchTest extends TestCase
             $marker,
         );
 
-        self::assertFalse($switch->recoverFallbackMarker());
+        self::assertSame(HyperliquidQuarantineRecoveryStatus::RepositoryNotTripped, $switch->recoverFallbackMarker());
         self::assertFileExists($marker);
+    }
+
+    public function testRecoveryReportsNoMarkerWithoutReadingRepository(): void
+    {
+        $switch = new FilesystemFallbackHyperliquidKillSwitch(
+            new ControlledPrimaryKillSwitch(tripped: false, readFailure: true),
+            $this->directory . '/execution.quarantine',
+        );
+
+        self::assertSame(HyperliquidQuarantineRecoveryStatus::NoMarker, $switch->recoverFallbackMarker());
     }
 
     public function testRecoveryRefusesUnreadableRepositoryAndPreservesMarker(): void

@@ -82,4 +82,52 @@ final class NativeHyperliquidQuarantineFilesystemTest extends TestCase
             @rmdir($directory);
         }
     }
+
+    public function testMarkerExistsTreatsDirectoryEntryAsQuarantine(): void
+    {
+        $directory = sys_get_temp_dir() . '/hl-marker-directory-' . bin2hex(random_bytes(6));
+        mkdir($directory, 0700, true);
+
+        try {
+            self::assertTrue((new NativeHyperliquidQuarantineFilesystem())->markerExists($directory));
+        } finally {
+            @rmdir($directory);
+        }
+    }
+
+    public function testMarkerExistsTreatsDanglingSymlinkAsQuarantine(): void
+    {
+        $directory = sys_get_temp_dir() . '/hl-marker-symlink-' . bin2hex(random_bytes(6));
+        mkdir($directory, 0700, true);
+        $marker = $directory . '/execution.quarantine';
+        symlink($directory . '/missing-target', $marker);
+
+        try {
+            self::assertTrue((new NativeHyperliquidQuarantineFilesystem())->markerExists($marker));
+        } finally {
+            @unlink($marker);
+            @rmdir($directory);
+        }
+    }
+
+    public function testMarkerExistsReturnsFalseOnlyForConfirmedAccessibleAbsence(): void
+    {
+        $directory = sys_get_temp_dir() . '/hl-marker-absent-' . bin2hex(random_bytes(6));
+        mkdir($directory, 0700, true);
+
+        try {
+            self::assertFalse((new NativeHyperliquidQuarantineFilesystem())->markerExists(
+                $directory . '/execution.quarantine',
+            ));
+        } finally {
+            @rmdir($directory);
+        }
+    }
+
+    public function testMarkerExistsThrowsWhenParentCannotBeInspected(): void
+    {
+        $this->expectException(HyperliquidDurableTripPersistenceException::class);
+
+        (new NativeHyperliquidQuarantineFilesystem())->markerExists('/dev/null/execution.quarantine');
+    }
 }

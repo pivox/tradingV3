@@ -8,7 +8,37 @@ final class NativeHyperliquidQuarantineFilesystem implements HyperliquidQuaranti
 {
     public function markerExists(string $path): bool
     {
-        return @is_file($path);
+        if ($this->entryCanBeStat($path)) {
+            return true;
+        }
+
+        $directory = dirname($path);
+        $entry = basename($path);
+        $entries = @scandir($directory);
+        if (!is_array($entries)) {
+            throw new HyperliquidDurableTripPersistenceException();
+        }
+        if (in_array($entry, $entries, true)) {
+            return true;
+        }
+
+        if ($this->entryCanBeStat($path)) {
+            return true;
+        }
+        $entries = @scandir($directory);
+        if (!is_array($entries)) {
+            throw new HyperliquidDurableTripPersistenceException();
+        }
+
+        return in_array($entry, $entries, true);
+    }
+
+    /** @phpstan-impure */
+    private function entryCanBeStat(string $path): bool
+    {
+        clearstatcache(true, $path);
+
+        return @lstat($path) !== false;
     }
 
     public function persistMarker(string $path, string $content): void
