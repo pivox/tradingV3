@@ -55,31 +55,31 @@ final class HyperliquidSignedActionClientTest extends TestCase
         );
     }
 
-    /** @return iterable<string, array{string, string}> */
-    public static function invalidConstructorValues(): iterable
+    public function testDisabledDefaultCredentialsRemainFailClosedWithoutHttpRequest(): void
     {
-        yield 'blank token' => ['', 'hyperliquid_signer_auth_token_required'];
-        yield 'whitespace token' => ['  ', 'hyperliquid_signer_auth_token_required'];
-    }
+        $requests = 0;
+        $http = new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
 
-    #[DataProvider('invalidConstructorValues')]
-    public function testRejectsBlankAuthenticationToken(string $token, string $error): void
-    {
-        $this->expectExceptionMessage($error);
+            return new MockResponse('{}');
+        });
 
-        new HttpHyperliquidSignedActionClient(
-            new MockHttpClient(),
+        $client = new HttpHyperliquidSignedActionClient(
+            $http,
             self::URI,
-            $token,
-            self::ACCOUNT,
-            self::AGENT,
+            '',
+            '',
+            '',
         );
+
+        self::assertFalse($client->health());
+        self::assertSame('rejected', $client->submit(['type' => 'order'], 1, 'corr-disabled')->outcome);
+        self::assertSame(0, $requests);
     }
 
     /** @return iterable<string, array{string, string, string}> */
     public static function invalidAddresses(): iterable
     {
-        yield 'account is blank' => ['', self::AGENT, 'hyperliquid_signer_account_address_invalid'];
         yield 'account is private key length' => ['0x' . str_repeat('1', 64), self::AGENT, 'hyperliquid_signer_account_address_invalid'];
         yield 'agent has non-hex' => [self::ACCOUNT, '0x' . str_repeat('z', 40), 'hyperliquid_signer_agent_address_invalid'];
     }

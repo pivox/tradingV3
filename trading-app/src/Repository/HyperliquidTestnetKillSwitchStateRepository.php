@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Entity\HyperliquidTestnetKillSwitchState;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchAuditSanitizer;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\Persistence\ManagerRegistry;
@@ -14,14 +15,11 @@ use Psr\Clock\ClockInterface;
 /** @extends ServiceEntityRepository<HyperliquidTestnetKillSwitchState> */
 final class HyperliquidTestnetKillSwitchStateRepository extends ServiceEntityRepository implements HyperliquidKillSwitchTripInterface
 {
-    private const MAX_REASON_LENGTH = 128;
-    private const MAX_VALUE_LENGTH = 128;
-    private const MAX_CONTEXT_BYTES = 4_096;
-    private const MAX_ITEMS = 16;
-    private const MAX_DEPTH = 3;
-    private const SENSITIVE_KEY_PATTERN = '/(?:raw|payload|secret|token|api[_-]?key|private[_-]?key|passphrase|password|authorization|cookie|signature|credential|memo)/i';
-
-    public function __construct(ManagerRegistry $registry, private readonly ?ClockInterface $clock = null)
+    public function __construct(
+        ManagerRegistry $registry,
+        private readonly ?ClockInterface $clock = null,
+        private readonly ?HyperliquidKillSwitchAuditSanitizer $sanitizer = null,
+    )
     {
         parent::__construct($registry, HyperliquidTestnetKillSwitchState::class);
     }
@@ -61,8 +59,8 @@ DO UPDATE SET
 SQL,
             [
                 HyperliquidTestnetKillSwitchState::SCOPE,
-                $this->boundedReason($reason),
-                $this->boundedContext($auditContext),
+                $this->auditSanitizer()->sanitizeReason($reason),
+                $this->auditSanitizer()->sanitizeContext($auditContext),
                 $now,
                 $now,
             ],
@@ -107,64 +105,8 @@ SQL,
         return ($this->clock?->now() ?? new \DateTimeImmutable('now'))->setTimezone(new \DateTimeZone('UTC'));
     }
 
-    private function boundedReason(string $reason): string
+    private function auditSanitizer(): HyperliquidKillSwitchAuditSanitizer
     {
-        $reason = trim($reason);
-        if ($reason === '' || preg_match(self::SENSITIVE_KEY_PATTERN, $reason) === 1) {
-            return 'hyperliquid_kill_switch_tripped';
-        }
-
-        return substr($reason, 0, self::MAX_REASON_LENGTH);
-    }
-
-    /**
-     * @param array<string, mixed> $context
-     * @return array<string, mixed>
-     */
-    private function boundedContext(array $context): array
-    {
-        $bounded = $this->sanitizeArray($context, 0);
-        $encoded = json_encode($bounded);
-        if (is_string($encoded) && strlen($encoded) <= self::MAX_CONTEXT_BYTES) {
-            return $bounded;
-        }
-
-        $correlationId = $bounded['correlation_id'] ?? null;
-
-        return is_string($correlationId) ? ['correlation_id' => $correlationId] : [];
-    }
-
-    /**
-     * @param array<mixed> $values
-     * @return array<string, mixed>
-     */
-    private function sanitizeArray(array $values, int $depth): array
-    {
-        if ($depth >= self::MAX_DEPTH) {
-            return [];
-        }
-
-        $sanitized = [];
-        foreach (array_slice($values, 0, self::MAX_ITEMS, true) as $key => $value) {
-            if (!is_string($key) || preg_match(self::SENSITIVE_KEY_PATTERN, $key) === 1) {
-                continue;
-            }
-
-            $key = substr(trim($key), 0, 64);
-            if ($key === '') {
-                continue;
-            }
-            if (is_array($value)) {
-                $sanitized[$key] = $this->sanitizeArray($value, $depth + 1);
-            } elseif (is_string($value)) {
-                $sanitized[$key] = substr($value, 0, self::MAX_VALUE_LENGTH);
-            } elseif (is_int($value) || is_bool($value) || $value === null) {
-                $sanitized[$key] = $value;
-            } elseif (is_float($value) && is_finite($value)) {
-                $sanitized[$key] = $value;
-            }
-        }
-
-        return $sanitized;
+        return $this->sanitizer ?? new HyperliquidKillSwitchAuditSanitizer();
     }
 }

@@ -12,7 +12,7 @@ use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
 use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityStatus;
-use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
+use App\Exchange\Hyperliquid\HyperliquidReadinessInfoClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessEvaluator;
@@ -27,32 +27,27 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
     private const TESTNET_ENDPOINT = 'https://api.hyperliquid-testnet.xyz';
     private const ADDRESS_PATTERN = '/^0x[0-9a-f]{40}$/D';
 
-    /**
-     * @param list<string> $allowedSymbols
-     * @param list<string> $allowedMarkets
-     */
     public function __construct(
         private HyperliquidConfig $config,
         private ExchangeAdapterRegistryInterface $adapters,
         private ExchangeProviderRegistryInterface $providers,
-        private HyperliquidRestClientInterface $restClient,
+        private HyperliquidReadinessInfoClientInterface $readinessInfoClient,
         private HyperliquidSignedActionClientInterface $signedClient,
         private HyperliquidNonceManagerInterface $nonceManager,
         private HyperliquidKillSwitchTripInterface $durableKillSwitch,
         private HyperliquidPollingObservabilityPolicy $pollingPolicy,
         private ClockInterface $clock,
-        private bool $environmentKillSwitchEnabled = true,
-        private bool $reconciliationInFlight = true,
-        private array $allowedSymbols = [],
-        private array $allowedMarkets = [],
-        private ?float $maxNotional = null,
+        private HyperliquidReconciliationStatusInterface $reconciliationStatus,
+        private HyperliquidMutationReadinessConfigSourceInterface $readinessConfig,
     ) {
     }
 
     public function current(): ExchangeReadinessReport
     {
+        $cycleStartedAt = $this->clock->now();
         $warnings = [];
-        $maxNotional = $this->maxNotional;
+        $runtimeConfig = $this->runtimeConfig($warnings);
+        $maxNotional = $runtimeConfig->maxNotional;
         if ($maxNotional !== null && (!is_finite($maxNotional) || $maxNotional <= 0.0)) {
             $warnings[] = 'positive_max_notional_required';
             $maxNotional = null;
@@ -89,6 +84,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
         $sidecarReady = $addressesReady && $this->sidecarReady($warnings);
         $nonceReady = $addressesReady && $this->nonceReady($accountAddress, $agentAddress, $warnings);
         $durableKillSwitch = $this->durableKillSwitch($warnings);
+        $reconciliationInFlight = $this->reconciliationInFlight($warnings);
 
         $pollingStatus = new HyperliquidPollingObservabilityStatus(
             exchange: Exchange::HYPERLIQUID,
@@ -98,16 +94,17 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             ordersReady: $ordersReady,
             fillsReady: $fillsReady,
             positionsReady: $positionsReady,
-            reconciliationInFlight: $this->reconciliationInFlight,
-            observedAt: $this->clock->now(),
+            reconciliationInFlight: $reconciliationInFlight,
+            observedAt: $cycleStartedAt,
         );
         $pollingReasons = $this->pollingPolicy->blockingReasons($pollingStatus);
         $pollingReady = $pollingReasons === [];
 
-        $killSwitch = $durableKillSwitch || $this->environmentKillSwitchEnabled;
+        $killSwitch = $durableKillSwitch || $runtimeConfig->killSwitchEnabled;
         $stopLossCapability = $capabilities->supportsTriggerOrders || $capabilities->supportsAttachedStopLossOnEntry;
         $mutationEvidenceReady = $endpointReady
             && $this->config->testnetTradingEnabled
+            && $this->config->globalDemoTradingEnabled
             && $accountReadable
             && $permissionsTrade
             && $sidecarReady
@@ -139,9 +136,10 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             stopLossCapability: $stopLossCapability,
             killSwitch: $killSwitch,
             dryRun: true,
-            allowedSymbols: $this->allowedSymbols,
-            allowedMarkets: $this->allowedMarkets,
+            allowedSymbols: $runtimeConfig->allowedSymbols,
+            allowedMarkets: $runtimeConfig->allowedMarkets,
             maxNotional: $maxNotional,
+            configHash: $runtimeConfig->configHash,
             warnings: array_values(array_unique(array_merge($warnings, $pollingReasons))),
         ));
 
@@ -297,7 +295,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
     private function tradePermission(string $accountAddress, string $agentAddress, array &$warnings): bool
     {
         try {
-            $rows = $this->restClient->info(['type' => 'extraAgents', 'user' => $accountAddress]);
+            $rows = $this->readinessInfoClient->readinessInfo(['type' => 'extraAgents', 'user' => $accountAddress]);
         } catch (\Throwable) {
             $warnings[] = 'hyperliquid_extra_agents_probe_failed';
 
@@ -377,6 +375,30 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             $warnings[] = 'hyperliquid_durable_kill_switch_probe_failed';
 
             return true;
+        }
+    }
+
+    /** @param list<string> $warnings */
+    private function reconciliationInFlight(array &$warnings): bool
+    {
+        try {
+            return $this->reconciliationStatus->isInFlight();
+        } catch (\Throwable) {
+            $warnings[] = 'hyperliquid_reconciliation_status_unavailable';
+
+            return true;
+        }
+    }
+
+    /** @param list<string> $warnings */
+    private function runtimeConfig(array &$warnings): HyperliquidMutationReadinessConfig
+    {
+        try {
+            return $this->readinessConfig->current();
+        } catch (\Throwable) {
+            $warnings[] = 'hyperliquid_readiness_config_unavailable';
+
+            return HyperliquidMutationReadinessConfig::failClosed();
         }
     }
 

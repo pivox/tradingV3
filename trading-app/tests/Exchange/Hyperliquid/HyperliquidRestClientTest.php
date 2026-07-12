@@ -15,6 +15,16 @@ use Symfony\Component\HttpClient\Response\MockResponse;
 #[CoversClass(HyperliquidConfig::class)]
 final class HyperliquidRestClientTest extends TestCase
 {
+    public function testPhpConfigurationHasNoAgentPrivateKeyCustody(): void
+    {
+        self::assertFalse(property_exists(HyperliquidConfig::class, 'testnetAgentPrivateKey'));
+        self::assertFalse(interface_exists('App\\Exchange\\Hyperliquid\\HyperliquidSignatureBackendInterface'));
+        self::assertStringNotContainsString(
+            'HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY',
+            file_get_contents(__DIR__ . '/../../../config/services.yaml') ?: '',
+        );
+    }
+
     public function testInfoPostsToConfiguredInfoEndpoint(): void
     {
         $captured = null;
@@ -35,9 +45,70 @@ final class HyperliquidRestClientTest extends TestCase
         self::assertSame('POST', $captured['method']);
         self::assertSame('https://example.test/hyperliquid/info', $captured['url']);
         self::assertSame('{"type":"meta"}', $captured['options']['body'] ?? null);
+        self::assertSame(5.0, $captured['options']['timeout']);
+        self::assertSame(5.0, $captured['options']['max_duration']);
+        self::assertSame(0, $captured['options']['max_redirects']);
     }
 
-    public function testExchangeRequiresTradingCredentialsBeforeSigning(): void
+    public function testReadinessInfoRequiresExactTestnetEndpoint(): void
+    {
+        $requests = 0;
+        $client = new HyperliquidRestClient(
+            new MockHttpClient(function () use (&$requests): MockResponse {
+                ++$requests;
+
+                return new MockResponse('[]');
+            }),
+            new HyperliquidConfig(apiBaseUri: 'https://api.hyperliquid-testnet.xyz.attacker.invalid'),
+        );
+
+        $this->expectExceptionMessage('hyperliquid_readiness_testnet_endpoint_required');
+        try {
+            $client->readinessInfo(['type' => 'extraAgents']);
+        } finally {
+            self::assertSame(0, $requests);
+        }
+    }
+
+    public function testInfoRejectsNonSuccessfulJsonWithoutLeakingBody(): void
+    {
+        $client = new HyperliquidRestClient(
+            new MockHttpClient(new MockResponse('{"token":"must-not-leak"}', ['http_code' => 503])),
+            new HyperliquidConfig(apiBaseUri: 'https://example.test'),
+        );
+
+        try {
+            $client->info(['type' => 'meta']);
+            self::fail('Expected non-success response to fail.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_info_http_status_503', $exception->getMessage());
+            self::assertStringNotContainsString('must-not-leak', $exception->getMessage());
+        }
+    }
+
+    public function testInfoRejectsResponseLargerThan64KiB(): void
+    {
+        $client = new HyperliquidRestClient(
+            new MockHttpClient(new MockResponse(str_repeat('x', 65_537))),
+            new HyperliquidConfig(apiBaseUri: 'https://example.test'),
+        );
+
+        $this->expectExceptionMessage('hyperliquid_info_response_too_large');
+        $client->info(['type' => 'meta']);
+    }
+
+    public function testInfoRejectsTimeoutOrTransportFailure(): void
+    {
+        $client = new HyperliquidRestClient(
+            new MockHttpClient(new MockResponse('', ['error' => 'Operation timed out token=must-not-leak'])),
+            new HyperliquidConfig(apiBaseUri: 'https://example.test'),
+        );
+
+        $this->expectExceptionMessage('hyperliquid_info_transport_failed');
+        $client->info(['type' => 'meta']);
+    }
+
+    public function testExchangeRejectsBecausePhpSigningIsDisabled(): void
     {
         $requests = 0;
         $http = new MockHttpClient(function () use (&$requests): MockResponse {
@@ -57,9 +128,9 @@ final class HyperliquidRestClientTest extends TestCase
 
         try {
             $client->exchange(['type' => 'order']);
-            self::fail('Expected Hyperliquid exchange guard to reject missing private key.');
+            self::fail('Expected Hyperliquid exchange signing to remain disabled.');
         } catch (\RuntimeException $e) {
-            self::assertStringContainsString('HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY is required', $e->getMessage());
+            self::assertStringContainsString('exchange signing is not enabled', $e->getMessage());
         }
 
         self::assertSame(0, $requests);
@@ -78,7 +149,6 @@ final class HyperliquidRestClientTest extends TestCase
             new HyperliquidConfig(
                 environment: 'testnet',
                 network: 'testnet',
-                testnetAgentPrivateKey: 'fixture-agent-material',
                 testnetAgentAddress: '0x0000000000000000000000000000000000000002',
                 testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             ),
@@ -89,7 +159,6 @@ final class HyperliquidRestClientTest extends TestCase
             self::fail('Expected default Hyperliquid exchange client to reject unsigned actions.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('exchange signing is not enabled', $e->getMessage());
-            self::assertStringNotContainsString('fixture-agent-material', $e->getMessage());
         }
 
         self::assertSame(0, $requests);

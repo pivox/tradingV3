@@ -21,6 +21,7 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
     private string $authToken;
     private string $accountAddress;
     private string $agentAddress;
+    private bool $configured;
 
     public function __construct(
         private HttpClientInterface $httpClient,
@@ -32,7 +33,18 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         if ($baseUri !== self::ALLOWED_BASE_URI) {
             throw new \InvalidArgumentException('hyperliquid_signer_endpoint_not_allowed');
         }
-        if (trim($authToken) === '') {
+        $authToken = trim($authToken);
+        $accountAddress = trim($accountAddress);
+        $agentAddress = trim($agentAddress);
+        if ($authToken === '' && $accountAddress === '' && $agentAddress === '') {
+            $this->authToken = '';
+            $this->accountAddress = '';
+            $this->agentAddress = '';
+            $this->configured = false;
+
+            return;
+        }
+        if ($authToken === '') {
             throw new \InvalidArgumentException('hyperliquid_signer_auth_token_required');
         }
         if (preg_match(self::ADDRESS_PATTERN, $accountAddress) !== 1) {
@@ -48,9 +60,10 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
             throw new \InvalidArgumentException('hyperliquid_signer_account_matches_agent');
         }
 
-        $this->authToken = trim($authToken);
+        $this->authToken = $authToken;
         $this->accountAddress = $normalizedAccountAddress;
         $this->agentAddress = $normalizedAgentAddress;
+        $this->configured = true;
     }
 
     public function submit(
@@ -61,6 +74,9 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
     ): HyperliquidSignedActionResult {
         $this->validateSubmission($action, $nonce, $correlationId, $expiresAfter);
         $actionType = $action['type'];
+        if (!$this->configured) {
+            return $this->result($actionType, 'rejected', 'broadcast_disabled', $correlationId);
+        }
 
         $payload = [
             'schema_version' => '1',
@@ -113,6 +129,10 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
 
     public function health(): bool
     {
+        if (!$this->configured) {
+            return false;
+        }
+
         try {
             $response = $this->httpClient->request(
                 'GET',

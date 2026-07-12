@@ -140,6 +140,72 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         $gateway->getOpenPositionsOrFail();
     }
 
+    public function testStrictPrivateReadsAcceptValidEmptySnapshots(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides = [
+            'frontendOpenOrders' => [],
+            'userFills' => [],
+            'clearinghouseState' => ['assetPositions' => []],
+        ];
+
+        self::assertSame([], $this->executionGateway($client)->getOpenOrdersOrFail());
+        self::assertSame([], $this->accountGateway($client)->getTrades(limit: 20));
+        self::assertSame([], $this->accountGateway($client)->getOpenPositionsOrFail());
+    }
+
+    public function testStrictOpenOrdersRejectsMalformedMixedRows(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['frontendOpenOrders'] = [$this->validOpenOrderRow(), 'malformed'];
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->executionGateway($client)->getOpenOrdersOrFail();
+    }
+
+    public function testStrictFillsRejectMalformedTopLevelShape(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['userFills'] = ['rows' => []];
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->accountGateway($client)->getTrades(limit: 20);
+    }
+
+    public function testStrictPositionsRejectMalformedMixedRows(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['clearinghouseState'] = [
+            'assetPositions' => [['position' => ['coin' => 'BTC', 'szi' => '1']], 'malformed'],
+        ];
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->accountGateway($client)->getOpenPositionsOrFail();
+    }
+
+    public function testStrictPrivateReadsRejectRowsMissingEndpointFields(): void
+    {
+        $orders = new FakeHyperliquidPrivateReadClient();
+        $orders->overrides['frontendOpenOrders'] = [['coin' => 'BTC']];
+        $fills = new FakeHyperliquidPrivateReadClient();
+        $fills->overrides['userFills'] = [['coin' => 'BTC']];
+        $positions = new FakeHyperliquidPrivateReadClient();
+        $positions->overrides['clearinghouseState'] = ['assetPositions' => [['position' => ['coin' => 'BTC']]]];
+
+        foreach ([
+            fn () => $this->executionGateway($orders)->getOpenOrdersOrFail(),
+            fn () => $this->accountGateway($fills)->getTrades(limit: 20),
+            fn () => $this->accountGateway($positions)->getOpenPositionsOrFail(),
+        ] as $read) {
+            try {
+                $read();
+                self::fail('Expected malformed endpoint row to fail closed.');
+            } catch (HyperliquidProviderUnavailableException) {
+                self::addToAssertionCount(1);
+            }
+        }
+    }
+
     public function testReadsOpenOrdersReadOnlyAndFiltersBySymbol(): void
     {
         $client = new FakeHyperliquidPrivateReadClient();
@@ -305,6 +371,21 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
             testnetAccountAddress: '0xaccount',
         );
     }
+
+    /** @return array<string, mixed> */
+    private function validOpenOrderRow(): array
+    {
+        return [
+            'coin' => 'BTC',
+            'oid' => 1001,
+            'cloid' => 'client-a',
+            'side' => 'B',
+            'sz' => '0.15',
+            'origSz' => '0.2',
+            'limitPx' => '25000',
+            'timestamp' => 1_704_067_100_000,
+        ];
+    }
 }
 
 final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInterface
@@ -314,6 +395,9 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
     public bool $noPositions = false;
     public bool $hideFees = false;
     public int $exchangeCalls = 0;
+
+    /** @var array<string, array<mixed>> */
+    public array $overrides = [];
 
     /** @var list<array<string,mixed>> */
     public array $requests = [];
@@ -330,7 +414,12 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
 
         $this->requests[] = $request;
 
-        return match ((string) ($request['type'] ?? '')) {
+        $type = (string) ($request['type'] ?? '');
+        if (array_key_exists($type, $this->overrides)) {
+            return $this->overrides[$type];
+        }
+
+        return match ($type) {
             'meta' => [
                 'universe' => [
                     ['name' => 'BTC', 'szDecimals' => 5, 'maxLeverage' => 50],

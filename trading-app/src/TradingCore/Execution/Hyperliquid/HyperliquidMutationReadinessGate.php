@@ -25,10 +25,15 @@ final class HyperliquidMutationReadinessGate
         $config->configuredEnvironment() === 'testnet' || $reasons[] = 'hyperliquid_testnet_environment_required';
         $config->normalizedNetwork() === 'testnet' || $reasons[] = 'hyperliquid_testnet_network_required';
         $config->apiBaseUri() === self::TESTNET_ENDPOINT || $reasons[] = 'hyperliquid_testnet_endpoint_required';
+        $config->globalDemoTradingEnabled || $reasons[] = 'global_demo_trading_must_be_enabled';
         $config->testnetTradingEnabled || $reasons[] = 'hyperliquid_testnet_trading_must_be_enabled';
         $report->readyLevel === ExchangeReadinessLevel::DemoTestnetCandidate || $reasons[] = 'demo_testnet_candidate_required';
+        $report->accountReadable || $reasons[] = 'account_readable_not_proven';
+        $report->permissionsRead || $reasons[] = 'read_permission_not_proven';
         $report->permissionsTrade || $reasons[] = 'trade_permission_not_proven';
+        $report->collateralReadable || $reasons[] = 'collateral_readable_not_proven';
         $report->privateObservability || $reasons[] = 'private_observability_not_ready';
+        $report->pollingReady || $reasons[] = 'hyperliquid_polling_not_ready';
         $report->demoTestnetWriteGuard || $reasons[] = 'demo_testnet_write_guard_not_ready';
         $report->stopLossCapability || $reasons[] = 'stop_loss_capability_not_ready';
         $report->signerConfigured || $reasons[] = 'hyperliquid_signer_not_configured';

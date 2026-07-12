@@ -105,6 +105,26 @@ final class HyperliquidTestnetKillSwitchStateRepositoryTest extends KernelTestCa
         self::assertSame(128, strlen((string) $this->repository->currentAuditContext()['correlation_id']));
     }
 
+    public function testTripRedactsSensitiveValuesStoredUnderBenignKeys(): void
+    {
+        $privateKey = '0x' . str_repeat('a', 64);
+        $bearer = 'Bearer header.payload.signature';
+        $assignment = 'token=plain-text-sensitive-value';
+        $this->repository->trip('compensation_unconfirmed', [
+            'note' => $privateKey,
+            'detail' => $bearer,
+            'message' => $assignment,
+            'nested' => ['description' => 'Authorization: ' . $bearer],
+            'correlation_id' => 'corr-safe',
+        ]);
+
+        $encoded = json_encode($this->repository->currentAuditContext(), JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString($privateKey, $encoded);
+        self::assertStringNotContainsString($bearer, $encoded);
+        self::assertStringNotContainsString($assignment, $encoded);
+        self::assertSame('corr-safe', $this->repository->currentAuditContext()['correlation_id']);
+    }
+
     private function newRepository(): HyperliquidTestnetKillSwitchStateRepository
     {
         /** @var HyperliquidTestnetKillSwitchStateRepository $repository */

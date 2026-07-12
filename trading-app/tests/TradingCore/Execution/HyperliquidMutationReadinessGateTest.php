@@ -35,10 +35,15 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         yield 'configured environment' => [self::report(), self::config(environment: 'mainnet'), 'hyperliquid_testnet_environment_required'];
         yield 'network' => [self::report(), self::config(network: 'mainnet'), 'hyperliquid_testnet_network_required'];
         yield 'endpoint' => [self::report(), self::config(apiBaseUri: 'https://api.hyperliquid-testnet.xyz.attacker.invalid'), 'hyperliquid_testnet_endpoint_required'];
+        yield 'global demo flag' => [self::report(), self::config(globalDemoTradingEnabled: false), 'global_demo_trading_must_be_enabled'];
         yield 'trading feature flag' => [self::report(), self::config(testnetTradingEnabled: false), 'hyperliquid_testnet_trading_must_be_enabled'];
         yield 'candidate level' => [self::report(readyLevel: ExchangeReadinessLevel::LocalDryRunReady), self::config(), 'demo_testnet_candidate_required'];
+        yield 'account readable' => [self::report(accountReadable: false), self::config(), 'account_readable_not_proven'];
+        yield 'read permission' => [self::report(permissionsRead: false), self::config(), 'read_permission_not_proven'];
         yield 'trade permission' => [self::report(permissionsTrade: false), self::config(), 'trade_permission_not_proven'];
+        yield 'collateral readable' => [self::report(collateralReadable: false), self::config(), 'collateral_readable_not_proven'];
         yield 'private observability' => [self::report(privateObservability: false), self::config(), 'private_observability_not_ready'];
+        yield 'polling ready' => [self::report(pollingReady: false), self::config(), 'hyperliquid_polling_not_ready'];
         yield 'demo write guard' => [self::report(demoTestnetWriteGuard: false), self::config(), 'demo_testnet_write_guard_not_ready'];
         yield 'stop loss' => [self::report(stopLossCapability: false), self::config(), 'stop_loss_capability_not_ready'];
         yield 'signer configured' => [self::report(signerConfigured: false), self::config(), 'hyperliquid_signer_not_configured'];
@@ -65,7 +70,11 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             environment: 'mainnet',
             readyLevel: ExchangeReadinessLevel::NotReady,
             permissionsTrade: false,
+            accountReadable: false,
+            permissionsRead: false,
+            collateralReadable: false,
             privateObservability: false,
+            pollingReady: false,
             demoTestnetWriteGuard: false,
             stopLossCapability: false,
             signerConfigured: false,
@@ -84,10 +93,15 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             'hyperliquid_testnet_environment_required',
             'hyperliquid_testnet_network_required',
             'hyperliquid_testnet_endpoint_required',
+            'global_demo_trading_must_be_enabled',
             'hyperliquid_testnet_trading_must_be_enabled',
             'demo_testnet_candidate_required',
+            'account_readable_not_proven',
+            'read_permission_not_proven',
             'trade_permission_not_proven',
+            'collateral_readable_not_proven',
             'private_observability_not_ready',
+            'hyperliquid_polling_not_ready',
             'demo_testnet_write_guard_not_ready',
             'stop_loss_capability_not_ready',
             'hyperliquid_signer_not_configured',
@@ -105,6 +119,7 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
                 network: 'mainnet',
                 apiBaseUri: 'https://api.hyperliquid.xyz',
                 mainnetEnabled: true,
+                globalDemoTradingEnabled: false,
                 testnetTradingEnabled: false,
             ),
         ));
@@ -115,6 +130,7 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         string $network = 'testnet',
         string $apiBaseUri = 'https://api.hyperliquid-testnet.xyz',
         bool $mainnetEnabled = false,
+        bool $globalDemoTradingEnabled = true,
         bool $testnetTradingEnabled = true,
     ): HyperliquidConfig {
         return new HyperliquidConfig(
@@ -122,6 +138,7 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             network: $network,
             apiBaseUri: $apiBaseUri,
             mainnetEnabled: $mainnetEnabled,
+            globalDemoTradingEnabled: $globalDemoTradingEnabled,
             testnetAgentAddress: '0x0000000000000000000000000000000000000002',
             testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             testnetTradingEnabled: $testnetTradingEnabled,
@@ -134,8 +151,12 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
         MarketType $marketType = MarketType::PERPETUAL,
         string $environment = 'testnet',
         ExchangeReadinessLevel $readyLevel = ExchangeReadinessLevel::DemoTestnetCandidate,
+        bool $accountReadable = true,
+        bool $permissionsRead = true,
         bool $permissionsTrade = true,
+        bool $collateralReadable = true,
         bool $privateObservability = true,
+        bool $pollingReady = true,
         bool $demoTestnetWriteGuard = true,
         bool $stopLossCapability = true,
         bool $signerConfigured = true,
@@ -158,14 +179,14 @@ final class HyperliquidMutationReadinessGateTest extends TestCase
             instrumentsLoaded: true,
             metadataValid: true,
             precisionValid: true,
-            accountReadable: true,
-            permissionsRead: true,
+            accountReadable: $accountReadable,
+            permissionsRead: $permissionsRead,
             permissionsTrade: $permissionsTrade,
             signerConfigured: $signerConfigured,
             signerMatchesAccount: $signerMatchesAccount,
             nonceStoreReady: $nonceStoreReady,
-            collateralReadable: true,
-            pollingReady: true,
+            collateralReadable: $collateralReadable,
+            pollingReady: $pollingReady,
             mainnetWriteGuard: $mainnetWriteGuard,
             demoTestnetWriteGuard: $demoTestnetWriteGuard,
             stopLossCapability: $stopLossCapability,

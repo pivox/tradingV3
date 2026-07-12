@@ -344,6 +344,7 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
             testnetAgentAddress: '0x0000000000000000000000000000000000000002',
             testnetAccountAddress: '0x0000000000000000000000000000000000000001',
             testnetTradingEnabled: true,
+            globalDemoTradingEnabled: true,
         );
         $command = new ExchangeRuntimeCheckCommand(
             $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),

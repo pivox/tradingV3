@@ -192,7 +192,7 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
     {
         $target = $symbol !== null ? $this->coin($symbol) : null;
         $positions = [];
-        foreach ($this->positions($this->userState($operation)) as $row) {
+        foreach ($this->positions($this->userState($operation), $operation) as $row) {
             $position = \is_array($row['position'] ?? null) ? $row['position'] : $row;
             if (!\is_array($position)) {
                 continue;
@@ -222,7 +222,15 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
             'user' => $this->accountAddress($operation),
         ], $operation);
 
-        return $this->assoc($payload);
+        $state = $this->assoc($payload);
+        if ($payload !== [] && $state === []) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+        }
+        if (isset($state['assetPositions']) && !is_array($state['assetPositions'])) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+        }
+
+        return $state;
     }
 
     /**
@@ -248,7 +256,23 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
      */
     private function infoRows(array $request, string $operation): array
     {
-        return array_values(array_filter($this->info($request, $operation), \is_array(...)));
+        $payload = $this->info($request, $operation);
+        if (!array_is_list($payload)) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+        }
+
+        $rows = [];
+        foreach ($payload as $row) {
+            if (!is_array($row) || array_is_list($row)) {
+                throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+            }
+            if (in_array($request['type'] ?? null, ['userFills', 'userFillsByTime'], true)) {
+                $this->assertFillRow($row, $operation);
+            }
+            $rows[] = $row;
+        }
+
+        return $rows;
     }
 
     private function accountAddress(string $operation): string
@@ -290,14 +314,53 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
      * @param array<string,mixed> $state
      * @return list<array<string,mixed>>
      */
-    private function positions(array $state): array
+    private function positions(array $state, string $operation): array
     {
         $positions = $state['assetPositions'] ?? [];
-        if (!\is_array($positions)) {
-            return [];
+        if (!\is_array($positions) || !array_is_list($positions)) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
         }
 
-        return array_values(array_filter($positions, \is_array(...)));
+        $rows = [];
+        foreach ($positions as $row) {
+            if (!is_array($row) || array_is_list($row) || !is_array($row['position'] ?? null)) {
+                throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+            }
+            $position = $row['position'];
+            if (!$this->nonEmptyString($position['coin'] ?? null) || !is_numeric($position['szi'] ?? null)) {
+                throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+            }
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function assertFillRow(array $row, string $operation): void
+    {
+        if (
+            !$this->nonEmptyString($row['coin'] ?? null)
+            || !$this->scalarIdentifier($row['oid'] ?? null)
+            || !$this->nonEmptyString($row['side'] ?? null)
+            || !is_numeric($row['sz'] ?? null)
+            || !is_numeric($row['px'] ?? null)
+            || !is_numeric($row['time'] ?? null)
+        ) {
+            throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
+        }
+    }
+
+    private function nonEmptyString(mixed $value): bool
+    {
+        return is_string($value) && trim($value) !== '';
+    }
+
+    private function scalarIdentifier(mixed $value): bool
+    {
+        return (is_string($value) || is_int($value)) && trim((string) $value) !== '';
     }
 
     private function coin(string $symbol): string

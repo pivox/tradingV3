@@ -44,13 +44,13 @@ parameters:
     env(LOG_LEVEL_PIPELINE_EXEC): 'info'
     env(HYPERLIQUID_ENV): 'testnet'
     env(HYPERLIQUID_NETWORK): 'testnet'
-    env(HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY): ''
     env(HYPERLIQUID_TESTNET_AGENT_ADDRESS): ''
     env(HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS): ''
     env(HYPERLIQUID_API_BASE_URI): ''
     env(HYPERLIQUID_WS_URI): ''
     env(HYPERLIQUID_MAINNET_ENABLED): '0'
     env(HYPERLIQUID_TESTNET_TRADING_ENABLED): '0'
+    env(HYPERLIQUID_SIGNER_AUTH_TOKEN): ''
     env(OKX_ENV): 'demo'
     env(OKX_DEMO_API_KEY): ''
     env(OKX_DEMO_API_SECRET): ''
@@ -116,6 +116,24 @@ services:
 
     App\Provider\Hyperliquid\HyperliquidNonceManagerInterface:
         alias: App\Provider\Hyperliquid\PersistentHyperliquidNonceManager
+
+    App\Exchange\Hyperliquid\HyperliquidReadinessInfoClientInterface:
+        alias: App\Exchange\Hyperliquid\HyperliquidRestClient
+
+    App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface:
+        alias: App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient
+
+    App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface:
+        alias: App\Provider\Hyperliquid\HyperliquidMutationReadinessProbe
+
+    App\Provider\Hyperliquid\HyperliquidMutationReadinessConfigSourceInterface:
+        alias: App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource
+
+    App\Provider\Hyperliquid\HyperliquidReconciliationStatusInterface:
+        alias: App\Provider\Hyperliquid\FailClosedHyperliquidReconciliationStatus
+
+    App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface:
+        alias: App\Repository\HyperliquidTestnetKillSwitchStateRepository
 
     App\Trading\Reporting\PositionTradeAnalysisLegacyReaderInterface:
         alias: App\Repository\PositionTradeAnalysisRepository
@@ -201,10 +219,21 @@ services:
             $wsUri: '%env(string:HYPERLIQUID_WS_URI)%'
             $mainnetEnabled: '%env(bool:HYPERLIQUID_MAINNET_ENABLED)%'
             $network: '%env(string:HYPERLIQUID_NETWORK)%'
-            $testnetAgentPrivateKey: '%env(string:HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY)%'
             $testnetAgentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'
             $testnetAccountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
             $testnetTradingEnabled: '%env(bool:HYPERLIQUID_TESTNET_TRADING_ENABLED)%'
+            $globalDemoTradingEnabled: '%env(bool:DEMO_TRADING_ENABLED)%'
+
+    App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient:
+        arguments:
+            $baseUri: 'http://hyperliquid-signer:8098'
+            $authToken: '%env(string:HYPERLIQUID_SIGNER_AUTH_TOKEN)%'
+            $accountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
+            $agentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'
+
+    App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource:
+        arguments:
+            $profile: '%app.trade_entry_default_mode%'
 
     App\Exchange\Okx\OkxConfig:
         arguments:

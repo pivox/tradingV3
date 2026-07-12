@@ -18,6 +18,7 @@ use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
+use App\Exchange\Hyperliquid\HyperliquidReadinessInfoClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionResult;
@@ -26,8 +27,11 @@ use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbe;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
+use App\Provider\Hyperliquid\HyperliquidMutationReadinessConfig;
+use App\Provider\Hyperliquid\HyperliquidMutationReadinessConfigSourceInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
+use App\Provider\Hyperliquid\HyperliquidReconciliationStatusInterface;
 use App\Provider\Hyperliquid\HyperliquidRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
@@ -169,6 +173,42 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertNull($report->maxNotional);
     }
 
+    public function testSlowReadCycleMakesPollingSnapshotStale(): void
+    {
+        $report = $this->probe(readCycleSeconds: 2.001)->current();
+
+        self::assertFalse($report->privateObservability);
+        self::assertContains('hyperliquid_poll_snapshot_stale', $report->warnings);
+    }
+
+    public function testReconciliationStatusIsQueriedAfterReads(): void
+    {
+        $reconciliation = new MutableHyperliquidReconciliationStatus(false);
+        $report = $this->probe(
+            reconciliation: $reconciliation,
+            reconciliationInFlightAfterReads: true,
+        )->current();
+
+        self::assertFalse($report->pollingReady);
+        self::assertContains('hyperliquid_reconciliation_in_flight', $report->warnings);
+        self::assertSame(1, $reconciliation->calls);
+    }
+
+    public function testUnavailableReconciliationStatusFailsClosed(): void
+    {
+        $reconciliation = new class implements HyperliquidReconciliationStatusInterface {
+            public function isInFlight(): bool
+            {
+                throw new \RuntimeException('runtime state unavailable');
+            }
+        };
+
+        $report = $this->probe(reconciliation: $reconciliation)->current();
+
+        self::assertFalse($report->pollingReady);
+        self::assertContains('hyperliquid_reconciliation_status_unavailable', $report->warnings);
+    }
+
     public function testInvalidMaxNotionalFailsClosedWithoutThrowing(): void
     {
         $report = $this->probe(maxNotional: 0.0)->current();
@@ -224,23 +264,35 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         array $allowedMarkets = ['perpetual'],
         ?float $maxNotional = 25.0,
         ?string $failedRead = null,
+        float $readCycleSeconds = 0.0,
+        ?HyperliquidReconciliationStatusInterface $reconciliation = null,
+        ?bool $reconciliationInFlightAfterReads = null,
     ): HyperliquidMutationReadinessProbe {
         $clock = new MockClock('2026-07-12T12:00:00.000Z');
+        $reconciliation ??= new MutableHyperliquidReconciliationStatus(false);
 
         return new HyperliquidMutationReadinessProbe(
             config: $config ?? $this->config(),
             adapters: $this->adapterRegistry(),
-            providers: $this->providerRegistry($failedRead),
-            restClient: $rest ?? new RecordingInfoClient($this->validExtraAgents()),
+            providers: $this->providerRegistry(
+                $failedRead,
+                $clock,
+                $readCycleSeconds,
+                $reconciliation,
+                $reconciliationInFlightAfterReads,
+            ),
+            readinessInfoClient: $rest ?? new RecordingInfoClient($this->validExtraAgents()),
             signedClient: $this->signedClient($sidecarHealthy),
             nonceManager: $this->nonceManager($nonceReady),
             durableKillSwitch: $this->killSwitch($durableKillSwitch),
             pollingPolicy: new HyperliquidPollingObservabilityPolicy($clock),
             clock: $clock,
-            environmentKillSwitchEnabled: $environmentKillSwitch,
-            reconciliationInFlight: false,
-            allowedMarkets: $allowedMarkets,
-            maxNotional: $maxNotional,
+            reconciliationStatus: $reconciliation,
+            readinessConfig: $this->readinessConfig(
+                $environmentKillSwitch,
+                $allowedMarkets,
+                $maxNotional,
+            ),
         );
     }
 
@@ -250,10 +302,10 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             environment: 'testnet',
             apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
             network: 'testnet',
-            testnetAgentPrivateKey: '',
             testnetAgentAddress: $agent,
             testnetAccountAddress: self::ACCOUNT,
             testnetTradingEnabled: true,
+            globalDemoTradingEnabled: true,
         );
     }
 
@@ -267,7 +319,13 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         return $registry;
     }
 
-    private function providerRegistry(?string $failedRead): ExchangeProviderRegistryInterface
+    private function providerRegistry(
+        ?string $failedRead,
+        MockClock $clock,
+        float $readCycleSeconds,
+        HyperliquidReconciliationStatusInterface $reconciliation,
+        ?bool $reconciliationInFlightAfterReads,
+    ): ExchangeProviderRegistryInterface
     {
         $contracts = $this->createMock(ContractProviderInterface::class);
         $contracts->method('getContracts')->willReturnCallback(
@@ -282,7 +340,25 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
             static fn (): array => $failedRead === 'positions' ? throw new \RuntimeException('failed') : [],
         );
         $account->method('getTrades')->willReturnCallback(
-            static fn (): array => $failedRead === 'fills' ? throw new \RuntimeException('failed') : [],
+            static function () use (
+                $failedRead,
+                $clock,
+                $readCycleSeconds,
+                $reconciliation,
+                $reconciliationInFlightAfterReads,
+            ): array {
+                if ($failedRead === 'fills') {
+                    throw new \RuntimeException('failed');
+                }
+                if ($readCycleSeconds > 0.0) {
+                    $clock->sleep($readCycleSeconds);
+                }
+                if ($reconciliationInFlightAfterReads !== null && $reconciliation instanceof MutableHyperliquidReconciliationStatus) {
+                    $reconciliation->inFlight = $reconciliationInFlightAfterReads;
+                }
+
+                return [];
+            },
         );
 
         $orders = $this->createMock(OrderProviderInterface::class);
@@ -378,6 +454,34 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         };
     }
 
+    /** @param list<string> $allowedMarkets */
+    private function readinessConfig(
+        bool $killSwitchEnabled,
+        array $allowedMarkets,
+        ?float $maxNotional,
+    ): HyperliquidMutationReadinessConfigSourceInterface {
+        return new class($killSwitchEnabled, $allowedMarkets, $maxNotional) implements HyperliquidMutationReadinessConfigSourceInterface {
+            /** @param list<string> $allowedMarkets */
+            public function __construct(
+                private readonly bool $killSwitchEnabled,
+                private readonly array $allowedMarkets,
+                private readonly ?float $maxNotional,
+            ) {
+            }
+
+            public function current(): HyperliquidMutationReadinessConfig
+            {
+                return new HyperliquidMutationReadinessConfig(
+                    [],
+                    $this->allowedMarkets,
+                    $this->maxNotional,
+                    $this->killSwitchEnabled,
+                    'test-config-hash',
+                );
+            }
+        };
+    }
+
     /** @return list<array{address: string, validUntil: int}> */
     private function validExtraAgents(): array
     {
@@ -385,7 +489,7 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
     }
 }
 
-final class RecordingInfoClient implements HyperliquidRestClientInterface
+final class RecordingInfoClient implements HyperliquidRestClientInterface, HyperliquidReadinessInfoClientInterface
 {
     /** @var list<array<string, mixed>> */
     public array $requests = [];
@@ -402,8 +506,29 @@ final class RecordingInfoClient implements HyperliquidRestClientInterface
         return $this->response;
     }
 
+    public function readinessInfo(array $request): array
+    {
+        return $this->info($request);
+    }
+
     public function exchange(array $action): array
     {
         throw new \LogicException('readiness_probe_must_not_mutate');
+    }
+}
+
+final class MutableHyperliquidReconciliationStatus implements HyperliquidReconciliationStatusInterface
+{
+    public int $calls = 0;
+
+    public function __construct(public bool $inFlight)
+    {
+    }
+
+    public function isInFlight(): bool
+    {
+        ++$this->calls;
+
+        return $this->inFlight;
     }
 }
