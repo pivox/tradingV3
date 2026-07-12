@@ -129,8 +129,34 @@ services:
     App\Provider\Hyperliquid\HyperliquidMutationReadinessConfigSourceInterface:
         alias: App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource
 
+    App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface:
+        alias: App\Provider\Hyperliquid\HyperliquidMetadataProvider
+
+    App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionStateProviderInterface:
+        alias: App\TradingCore\Execution\Hyperliquid\StrictHyperliquidExecutionStateProvider
+
+    App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationInterface:
+        alias: App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationService
+
+    hyperliquid.execution_lock_store:
+        class: Symfony\Component\Lock\Store\FlockStore
+        arguments:
+            - '%kernel.project_dir%/var/lock'
+
+    hyperliquid.execution_lock_factory:
+        class: Symfony\Component\Lock\LockFactory
+        arguments:
+            - '@hyperliquid.execution_lock_store'
+
+    App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock:
+        arguments:
+            $locks: '@hyperliquid.execution_lock_factory'
+
+    App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockInterface:
+        alias: App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock
+
     App\Provider\Hyperliquid\HyperliquidReconciliationStatusInterface:
-        alias: App\Provider\Hyperliquid\FailClosedHyperliquidReconciliationStatus
+        alias: App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock
 
     App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface:
         alias: App\Repository\HyperliquidTestnetKillSwitchStateRepository

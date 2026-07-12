@@ -38,6 +38,7 @@ final readonly class OrderPlan
         ?OrderPlanValidationResult $validation = null,
         public array $metadata = [],
         ?string $instrument = null,
+        public ?string $configHash = null,
     ) {
         $this->instrument = $instrument ?? $symbol;
         $this->validation = $validation ?? new OrderPlanValidationResult(
@@ -77,6 +78,7 @@ final readonly class OrderPlan
             validation: $validation,
             metadata: $this->metadata,
             instrument: $this->instrument,
+            configHash: $this->configHash,
         );
     }
 }

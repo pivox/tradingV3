@@ -5,6 +5,7 @@ namespace App\TradingCore\Execution\Safety;
 
 use App\Common\Enum\Exchange;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityStatus;
 
 final readonly class DemoTradingMutationAttempt
 {
@@ -51,6 +52,7 @@ final readonly class DemoTradingMutationAttempt
         array $correlationIds = [],
         array $auditContext = [],
         public ?ExchangePrivateObservabilityStatus $privateObservabilityStatus = null,
+        public ?HyperliquidPollingObservabilityStatus $hyperliquidPollingObservabilityStatus = null,
     ) {
         $this->assertNonEmpty($mode, 'mode');
         $this->assertNonEmpty($profile, 'profile');

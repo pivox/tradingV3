@@ -7,6 +7,8 @@ use App\Common\Enum\Exchange;
 use App\Exchange\Readiness\ExchangePrivateObservabilityDecision;
 use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityStatus;
 use App\TradingCore\Execution\Safety\DemoTradingAuditSinkInterface;
 use App\TradingCore\Execution\Safety\DemoTradingKillSwitchDecision;
 use App\TradingCore\Execution\Safety\DemoTradingKillSwitchService;
@@ -17,6 +19,7 @@ use App\TradingCore\Execution\Safety\DemoTradingSafetyPolicyEvaluator;
 use App\TradingCore\Execution\Safety\ExchangeRuntimeEnvironment;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(DemoTradingKillSwitchDecision::class)]
 #[CoversClass(DemoTradingKillSwitchService::class)]
@@ -236,6 +239,27 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertTrue($sink->events[0]['private_observability']['status']['reconnecting']);
     }
 
+    public function testHyperliquidTestnetUsesTypedPollingEvidenceInsteadOfPrivateWebSocketPolicy(): void
+    {
+        $decision = $this->service(new CapturingDemoTradingAuditSink())->evaluate($this->hyperliquidAttempt());
+
+        self::assertTrue($decision->allowed);
+        self::assertSame('hyperliquid_polling', $decision->auditEvent['private_observability']['mechanism']);
+    }
+
+    public function testHyperliquidTestnetBlocksMissingOrStalePollingEvidence(): void
+    {
+        $missing = $this->service(new CapturingDemoTradingAuditSink())->evaluate($this->hyperliquidAttempt(null));
+        $stale = $this->service(new CapturingDemoTradingAuditSink())->evaluate($this->hyperliquidAttempt(
+            $this->pollingStatus('2026-07-12T11:59:57.999Z'),
+        ));
+
+        self::assertFalse($missing->allowed);
+        self::assertContains('hyperliquid_polling_status_missing', $missing->reasons);
+        self::assertFalse($stale->allowed);
+        self::assertContains('hyperliquid_poll_snapshot_stale', $stale->reasons);
+    }
+
     public function testMutationIsBlockedWhenPrivateObservabilityStatusDoesNotMatchAttemptTarget(): void
     {
         $sink = new CapturingDemoTradingAuditSink();
@@ -294,14 +318,42 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         );
     }
 
-    private function hyperliquidAttempt(): DemoTradingMutationAttempt
+    private function hyperliquidAttempt(?HyperliquidPollingObservabilityStatus $pollingStatus = null): DemoTradingMutationAttempt
     {
-        return $this->attempt(
+        return new DemoTradingMutationAttempt(
             exchange: Exchange::HYPERLIQUID,
             environment: ExchangeRuntimeEnvironment::TESTNET,
-            symbol: 'BTC',
+            mode: 'scalper_micro',
+            profile: 'scalper_micro',
+            market: 'perpetual',
+            symbol: 'BTCUSDT',
+            notional: 12.5,
             clientOrderId: 'hl-cid-001',
-            allowedSymbols: ['BTC'],
+            action: 'place_order',
+            demoTestnetWriteEnabled: true,
+            effectiveKillSwitchEnabled: false,
+            requireStopLoss: true,
+            stopLossPresent: true,
+            allowedSymbols: ['BTCUSDT'],
+            allowedMarkets: ['perpetual'],
+            maxNotional: 25.0,
+            privateObservabilityStatus: null,
+            hyperliquidPollingObservabilityStatus: func_num_args() === 0 ? $this->pollingStatus() : $pollingStatus,
+        );
+    }
+
+    private function pollingStatus(string $observedAt = '2026-07-12T11:59:59.000Z'): HyperliquidPollingObservabilityStatus
+    {
+        return new HyperliquidPollingObservabilityStatus(
+            exchange: Exchange::HYPERLIQUID,
+            environment: 'testnet',
+            endpoint: 'https://api.hyperliquid-testnet.xyz',
+            initialSnapshotLoaded: true,
+            ordersReady: true,
+            fillsReady: true,
+            positionsReady: true,
+            reconciliationInFlight: false,
+            observedAt: new \DateTimeImmutable($observedAt),
         );
     }
 
@@ -370,6 +422,7 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
             globalDemoTradingEnabled: $globalDemoTradingEnabled,
             okxDemoTradingEnabled: $okxDemoTradingEnabled,
             hyperliquidTestnetTradingEnabled: $hyperliquidTestnetTradingEnabled,
+            hyperliquidPollingPolicy: new HyperliquidPollingObservabilityPolicy(new MockClock('2026-07-12T12:00:00.000Z')),
         );
     }
 }

@@ -21,7 +21,7 @@ use App\Provider\Hyperliquid\HyperliquidIdentifierLifecycleLookupInterface;
 use App\Provider\Hyperliquid\HyperliquidIdentifierBindingException;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 
-final readonly class HyperliquidCompensationService
+final readonly class HyperliquidCompensationService implements HyperliquidCompensationInterface
 {
     private const MAX_RECONCILIATION_CYCLES = 3;
     private const RECONCILIATION_SLEEP_MILLISECONDS = 250;

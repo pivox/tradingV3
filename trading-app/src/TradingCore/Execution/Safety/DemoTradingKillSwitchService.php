@@ -6,6 +6,7 @@ namespace App\TradingCore\Execution\Safety;
 use App\Common\Enum\Exchange;
 use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
 
 final readonly class DemoTradingKillSwitchService
 {
@@ -16,6 +17,7 @@ final readonly class DemoTradingKillSwitchService
         private bool $globalDemoTradingEnabled = false,
         private bool $okxDemoTradingEnabled = false,
         private bool $hyperliquidTestnetTradingEnabled = false,
+        private ?HyperliquidPollingObservabilityPolicy $hyperliquidPollingPolicy = null,
     ) {
     }
 
@@ -40,22 +42,42 @@ final readonly class DemoTradingKillSwitchService
         );
 
         $safetyDecision = $this->evaluator->evaluate($policy);
-        $privateObservabilityDecision = $this->privateObservabilityPolicy->evaluate(
-            $attempt->privateObservabilityStatus ?? ExchangePrivateObservabilityStatus::absent($attempt->exchange, $attempt->environment->value),
-            dryRun: false,
-            expectedExchange: $attempt->exchange,
-            expectedEnvironment: $attempt->environment->value,
-        );
+        $isHyperliquidTestnet = $attempt->exchange === Exchange::HYPERLIQUID
+            && $attempt->environment === ExchangeRuntimeEnvironment::TESTNET;
+        if ($isHyperliquidTestnet) {
+            $pollingReasons = $attempt->hyperliquidPollingObservabilityStatus === null
+                ? ['hyperliquid_polling_status_missing']
+                : ($this->hyperliquidPollingPolicy?->blockingReasons($attempt->hyperliquidPollingObservabilityStatus)
+                    ?? ['hyperliquid_polling_policy_unavailable']);
+            $privateObservability = [
+                'mechanism' => 'hyperliquid_polling',
+                'allowed' => $pollingReasons === [],
+                'blocking_errors' => $pollingReasons,
+                'warnings' => [],
+                'status' => $attempt->hyperliquidPollingObservabilityStatus?->toArray(),
+            ];
+            $privateObservabilityMissing = $attempt->hyperliquidPollingObservabilityStatus === null;
+        } else {
+            $privateObservabilityDecision = $this->privateObservabilityPolicy->evaluate(
+                $attempt->privateObservabilityStatus ?? ExchangePrivateObservabilityStatus::absent($attempt->exchange, $attempt->environment->value),
+                dryRun: false,
+                expectedExchange: $attempt->exchange,
+                expectedEnvironment: $attempt->environment->value,
+            );
+            $pollingReasons = $privateObservabilityDecision->blockingErrors;
+            $privateObservability = $privateObservabilityDecision->toArray();
+            $privateObservabilityMissing = $attempt->privateObservabilityStatus === null;
+        }
         $reasons = $this->mergeReasons(
             $this->mergeReasons($switchReasons, $safetyDecision->blockingErrors),
-            $privateObservabilityDecision->blockingErrors,
+            $pollingReasons,
         );
         $allowed = $safetyDecision->allowed && $reasons === [];
         $auditEvent = $this->auditEvent(
             $attempt,
             $safetyDecision,
-            $privateObservabilityDecision->toArray(),
-            $attempt->privateObservabilityStatus === null,
+            $privateObservability,
+            $privateObservabilityMissing,
             $allowed,
             $reasons,
         );

@@ -10,7 +10,7 @@ use App\Exchange\Hyperliquid\HyperliquidAssetResolver;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Provider\Hyperliquid\Dto\HyperliquidInstrumentMetadataDto;
 
-final class HyperliquidMetadataProvider implements ContractProviderInterface
+final class HyperliquidMetadataProvider implements ContractProviderInterface, HyperliquidInstrumentMetadataProviderInterface
 {
     private HyperliquidPublicReadMapper $mapper;
 

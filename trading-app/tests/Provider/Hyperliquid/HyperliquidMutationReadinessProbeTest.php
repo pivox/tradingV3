@@ -18,6 +18,7 @@ use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityStatus;
 use App\Exchange\Hyperliquid\HyperliquidReadinessInfoClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidRestClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface;
@@ -60,6 +61,8 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertTrue($report->permissionsTrade);
         self::assertTrue($report->privateObservability);
         self::assertTrue($report->pollingReady);
+        self::assertInstanceOf(HyperliquidPollingObservabilityStatus::class, $report->hyperliquidPollingObservabilityStatus);
+        self::assertSame('https://api.hyperliquid-testnet.xyz', $report->hyperliquidPollingObservabilityStatus->endpoint);
         self::assertTrue($report->signerConfigured);
         self::assertTrue($report->signerMatchesAccount);
         self::assertTrue($report->nonceStoreReady);

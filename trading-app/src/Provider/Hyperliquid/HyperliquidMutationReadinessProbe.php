@@ -179,6 +179,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
                 ? array_values(array_diff($report->warnings, ['private_observability_absent_for_dry_run']))
                 : $report->warnings,
             configProfile: $report->configProfile,
+            hyperliquidPollingObservabilityStatus: $pollingStatus,
         );
     }
 

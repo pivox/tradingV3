@@ -6,6 +6,7 @@ namespace App\Exchange\Readiness;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityStatus;
 
 final readonly class ExchangeReadinessReport
 {
@@ -48,6 +49,7 @@ final readonly class ExchangeReadinessReport
         public array $blockingErrors,
         public array $warnings,
         public ?string $configProfile = null,
+        public ?HyperliquidPollingObservabilityStatus $hyperliquidPollingObservabilityStatus = null,
     ) {
     }
 
@@ -83,6 +85,7 @@ final readonly class ExchangeReadinessReport
      *     blocking_errors: list<string>,
      *     warnings: list<string>,
      *     config_profile: ?string,
+     *     hyperliquid_polling_observability_status: ?array<string,mixed>,
      * }
      */
     public function toArray(): array
@@ -118,6 +121,7 @@ final readonly class ExchangeReadinessReport
             'blocking_errors' => $this->redactMessages($this->blockingErrors),
             'warnings' => $this->redactMessages($this->warnings),
             'config_profile' => $this->configProfile,
+            'hyperliquid_polling_observability_status' => $this->hyperliquidPollingObservabilityStatus?->toArray(),
         ];
     }
 

@@ -113,6 +113,7 @@ final readonly class HyperliquidPublicReadMapper
             fundingTime: $this->time($funding['time'] ?? null),
             qualityFlags: array_values(array_unique($qualityFlags)),
             status: $status,
+            contractSize: '1',
         );
     }
 
