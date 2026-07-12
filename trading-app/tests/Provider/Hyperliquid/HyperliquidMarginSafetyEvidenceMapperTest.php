@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Provider\Hyperliquid;
 
 use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
 use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceMapper;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -12,32 +13,35 @@ use PHPUnit\Framework\TestCase;
 
 #[CoversClass(HyperliquidMarginSafetyEvidenceMapper::class)]
 #[CoversClass(HyperliquidMarginSafetyEvidence::class)]
+#[CoversClass(HyperliquidMarginTierEvidence::class)]
 final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
 {
     private const ACCOUNT = '0x1111111111111111111111111111111111111111';
 
-    public function testMapsOfficialSingleTierRuleFromMarginTableIdBelowFifty(): void
+    public function testRetainsCanonicalOfficialSingleTierTableAndObservedIdentities(): void
     {
         $evidence = $this->mapper()->map(
             meta: $this->meta(['name' => 'SOL', 'maxLeverage' => 10, 'marginTableId' => 10]),
-            activeAssetData: $this->active('isolated', 5),
+            activeAssetData: $this->active('SOL', self::ACCOUNT, 'isolated', 5),
             symbol: 'SOLUSDT',
-            notional: '100',
-            requestedLeverage: 5,
             accountAddress: self::ACCOUNT,
             observedAt: new \DateTimeImmutable('2026-07-12T12:00:00Z'),
         );
 
-        self::assertSame(10, $evidence->marginTableId);
-        self::assertSame('0', $evidence->tierLowerBound);
-        self::assertSame(10, $evidence->tierMaxLeverage);
-        self::assertSame('0.05', $evidence->maintenanceMarginRate);
-        self::assertSame('0', $evidence->maintenanceMarginDeduction);
-        self::assertSame('isolated', $evidence->accountMarginMode);
-        self::assertSame(5, $evidence->accountLeverage);
+        self::assertSame('SOL', $evidence->coin);
+        self::assertSame(10, $evidence->universeMaxLeverage);
+        self::assertSame(self::ACCOUNT, $evidence->observedUser);
+        self::assertSame('SOL', $evidence->observedCoin);
+        self::assertSame('isolated', $evidence->observedMarginMode);
+        self::assertSame(5, $evidence->observedLeverage);
+        self::assertCount(1, $evidence->tiers);
+        self::assertSame('0', $evidence->tiers[0]->lowerBound);
+        self::assertSame(10, $evidence->tiers[0]->maxLeverage);
+        self::assertSame('0.05', $evidence->tiers[0]->maintenanceMarginRate);
+        self::assertSame('0', $evidence->tiers[0]->maintenanceMarginDeduction);
     }
 
-    public function testSelectsTierAtThresholdAndDerivesContinuousDeduction(): void
+    public function testRetainsAllTieredRowsWithCanonicalRatesAndCumulativeDeductions(): void
     {
         $evidence = $this->mapper()->map(
             meta: $this->meta(
@@ -45,61 +49,72 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
                 [[52, ['marginTiers' => [
                     ['lowerBound' => '0.0', 'maxLeverage' => 10],
                     ['lowerBound' => '20000.0', 'maxLeverage' => 5],
+                    ['lowerBound' => '50000.00', 'maxLeverage' => 3],
                 ]]]],
             ),
-            activeAssetData: $this->active('isolated', 5),
+            activeAssetData: $this->active('ATOM', self::ACCOUNT, 'cross', 3),
             symbol: 'ATOMUSDT',
-            notional: '20000',
-            requestedLeverage: 5,
             accountAddress: self::ACCOUNT,
             observedAt: new \DateTimeImmutable('2026-07-12T12:00:00Z'),
         );
 
-        self::assertSame('20000', $evidence->tierLowerBound);
-        self::assertSame('20000', $evidence->notional);
-        self::assertSame(5, $evidence->tierMaxLeverage);
-        self::assertSame('0.1', $evidence->maintenanceMarginRate);
-        self::assertSame('1000', $evidence->maintenanceMarginDeduction);
+        self::assertSame(['0', '20000', '50000'], array_map(static fn ($tier) => $tier->lowerBound, $evidence->tiers));
+        self::assertSame([10, 5, 3], array_map(static fn ($tier) => $tier->maxLeverage, $evidence->tiers));
+        self::assertSame('0.166666666666666666666666666666666667', $evidence->tiers[2]->maintenanceMarginRate);
+        self::assertSame('4333.33333333333333333333333333333335', $evidence->tiers[2]->maintenanceMarginDeduction);
+        self::assertSame('cross', $evidence->observedMarginMode);
     }
 
-    #[DataProvider('invalidEvidence')]
-    public function testRejectsMissingMalformedWrongTierLeverageOrAccountEvidence(
-        array $asset,
-        array $tables,
-        array $active,
-        string $notional,
-        int $leverage,
-    ): void {
-        $this->expectException(\InvalidArgumentException::class);
-
-        $this->mapper()->map(
-            meta: $this->meta($asset, $tables),
-            activeAssetData: $active,
-            symbol: 'BTCUSDT',
-            notional: $notional,
-            requestedLeverage: $leverage,
-            accountAddress: self::ACCOUNT,
-            observedAt: new \DateTimeImmutable('2026-07-12T12:00:00Z'),
-        );
-    }
-
-    /** @return iterable<string,array{array<string,mixed>,array<mixed>,array<string,mixed>,string,int}> */
-    public static function invalidEvidence(): iterable
+    #[DataProvider('invalidOfficialEvidence')]
+    public function testRejectsMalformedTableOrObservedIdentity(array $meta, array $active): void
     {
-        $tiered = [[51, ['marginTiers' => [
-            ['lowerBound' => '0.0', 'maxLeverage' => 10],
-            ['lowerBound' => '10000.0', 'maxLeverage' => 5],
-        ]]]];
-        yield 'missing margin table id' => [['name' => 'BTC', 'maxLeverage' => 10], $tiered, self::activeRow(), '100', 5];
-        yield 'missing tiered table' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], [], self::activeRow(), '100', 5];
-        yield 'unordered tiers' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], [[51, ['marginTiers' => [
-            ['lowerBound' => '10000', 'maxLeverage' => 5],
+        $this->expectException(\InvalidArgumentException::class);
+        $this->mapper()->map(
+            $meta,
+            $active,
+            'BTCUSDT',
+            self::ACCOUNT,
+            new \DateTimeImmutable('2026-07-12T12:00:00Z'),
+        );
+    }
+
+    /** @return iterable<string,array{array<string,mixed>,array<string,mixed>}> */
+    public static function invalidOfficialEvidence(): iterable
+    {
+        $asset = ['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51];
+        $validTiers = [
             ['lowerBound' => '0', 'maxLeverage' => 10],
-        ]]]], self::activeRow(), '100', 5];
-        yield 'leverage exceeds selected tier' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], $tiered, self::activeRow(6), '10000', 6];
-        yield 'account leverage mismatch' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], $tiered, self::activeRow(3), '100', 5];
-        yield 'cross account evidence' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], $tiered, self::activeRow(5, 'cross'), '100', 5];
-        yield 'missing account evidence' => [['name' => 'BTC', 'maxLeverage' => 10, 'marginTableId' => 51], $tiered, [], '100', 5];
+            ['lowerBound' => '10000', 'maxLeverage' => 5],
+        ];
+        $meta = static fn (array $tables): array => ['universe' => [$asset], 'marginTables' => $tables];
+        $active = self::activeRow();
+
+        yield 'duplicate table id' => [$meta([[51, ['marginTiers' => $validTiers]], [51, ['marginTiers' => $validTiers]]]), $active];
+        yield 'first bound nonzero' => [$meta([[51, ['marginTiers' => [
+            ['lowerBound' => '1', 'maxLeverage' => 10],
+        ]]]]), $active];
+        yield 'equal bounds' => [$meta([[51, ['marginTiers' => [
+            ['lowerBound' => '0', 'maxLeverage' => 10],
+            ['lowerBound' => '0', 'maxLeverage' => 5],
+        ]]]]), $active];
+        yield 'leverage not strictly decreasing' => [$meta([[51, ['marginTiers' => [
+            ['lowerBound' => '0', 'maxLeverage' => 10],
+            ['lowerBound' => '10000', 'maxLeverage' => 10],
+        ]]]]), $active];
+        yield 'first tier differs from universe maximum' => [$meta([[51, ['marginTiers' => [
+            ['lowerBound' => '0', 'maxLeverage' => 9],
+        ]]]]), $active];
+        yield 'tiers are not a canonical list' => [$meta([[51, ['marginTiers' => [
+            'first' => ['lowerBound' => '0', 'maxLeverage' => 10],
+        ]]]]), $active];
+        yield 'too many tiers' => [$meta([[51, ['marginTiers' => array_map(
+            static fn (int $i): array => ['lowerBound' => (string) $i, 'maxLeverage' => 40 - $i],
+            range(0, 32),
+        )]]]), $active];
+        yield 'missing observed user' => [$meta([[51, ['marginTiers' => $validTiers]]]), array_diff_key($active, ['user' => true])];
+        yield 'wrong observed user' => [$meta([[51, ['marginTiers' => $validTiers]]]), self::activeRow(user: '0x2222222222222222222222222222222222222222')];
+        yield 'missing observed coin' => [$meta([[51, ['marginTiers' => $validTiers]]]), array_diff_key($active, ['coin' => true])];
+        yield 'wrong observed coin' => [$meta([[51, ['marginTiers' => $validTiers]]]), self::activeRow(coin: 'ETH')];
     }
 
     private function mapper(): HyperliquidMarginSafetyEvidenceMapper
@@ -114,14 +129,18 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
     }
 
     /** @return array<string,mixed> */
-    private function active(string $type, int $leverage): array
+    private function active(string $coin, string $user, string $type, int $leverage): array
     {
-        return self::activeRow($leverage, $type);
+        return self::activeRow($coin, $user, $type, $leverage);
     }
 
     /** @return array<string,mixed> */
-    private static function activeRow(int $leverage = 5, string $type = 'isolated'): array
-    {
-        return ['leverage' => ['type' => $type, 'value' => $leverage]];
+    private static function activeRow(
+        string $coin = 'BTC',
+        string $user = self::ACCOUNT,
+        string $type = 'isolated',
+        int $leverage = 5,
+    ): array {
+        return ['user' => $user, 'coin' => $coin, 'leverage' => ['type' => $type, 'value' => $leverage]];
     }
 }

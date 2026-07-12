@@ -169,10 +169,10 @@ final class LiquidationGuardTest extends TestCase
 
         self::assertFalse($result->isSafe);
         self::assertSame('insufficient_liquidation_data', $result->reasonIfUnsafe);
-        self::assertContains('Liquidation price cannot be derived without leverage or an exchange-provided liquidation price.', $result->warnings);
+        self::assertContains('An authoritative liquidation price is required.', $result->warnings);
     }
 
-    public function testUsesAuthoritativeMaintenanceRateForHalfPercentRegression(): void
+    public function testRejectsMissingAuthoritativeLiquidationPriceEvenWhenLeverageExists(): void
     {
         $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
@@ -181,21 +181,19 @@ final class LiquidationGuardTest extends TestCase
             marketType: 'perpetual',
             direction: 'long',
             entryPrice: 100.0,
-            stopPrice: 99.7,
-            leverage: 100,
-            maintenanceMarginRate: 0.005,
+            stopPrice: 99.0,
+            leverage: 1,
+            maintenanceMarginRate: null,
             liquidationPrice: null,
             minDistanceRatio: 3.0,
-            maintenanceMarginDeduction: 0.0,
-            positionSize: 1.0,
         ));
 
         self::assertFalse($result->isSafe);
-        self::assertEqualsWithDelta(99.497487437186, $result->liquidationPrice, 0.000000000001);
-        self::assertSame('liquidation_distance_below_min_ratio', $result->reasonIfUnsafe);
+        self::assertNull($result->liquidationPrice);
+        self::assertSame('insufficient_liquidation_data', $result->reasonIfUnsafe);
     }
 
-    public function testAppliesAuthoritativeMaintenanceDeduction(): void
+    public function testUsesConservativelyRoundedAuthoritativeLiquidationPriceWithoutRecalculation(): void
     {
         $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
             symbol: 'BTCUSDT',
@@ -204,17 +202,19 @@ final class LiquidationGuardTest extends TestCase
             marketType: 'perpetual',
             direction: 'long',
             entryPrice: 100.0,
-            stopPrice: 80.0,
+            stopPrice: 98.0,
             leverage: 5,
-            maintenanceMarginRate: 0.1,
-            liquidationPrice: null,
-            minDistanceRatio: 0.1,
-            maintenanceMarginDeduction: 10.0,
-            positionSize: 1.0,
+            maintenanceMarginRate: null,
+            liquidationPrice: 84.210526315790,
+            minDistanceRatio: 3.0,
+            metadata: [
+                'maintenance_margin_rate' => '0.05',
+                'maintenance_margin_deduction' => '0',
+            ],
         ));
 
         self::assertTrue($result->isSafe);
-        self::assertSame(77.777777777778, $result->liquidationPrice);
-        self::assertSame(10.0, $result->metadata['maintenance_margin_deduction'] ?? null);
+        self::assertSame(84.21052631579, $result->liquidationPrice);
+        self::assertSame('0.05', $result->metadata['maintenance_margin_rate'] ?? null);
     }
 }

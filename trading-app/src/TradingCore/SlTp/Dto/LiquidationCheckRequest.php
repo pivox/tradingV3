@@ -19,12 +19,10 @@ final readonly class LiquidationCheckRequest
         public float $entryPrice,
         public float $stopPrice,
         public ?int $leverage,
-        public ?float $maintenanceMarginRate,
+        public ?string $maintenanceMarginRate,
         public ?float $liquidationPrice,
         public float $minDistanceRatio,
         public array $metadata = [],
-        public ?float $maintenanceMarginDeduction = null,
-        public ?float $positionSize = null,
     ) {
         $this->instrument = $instrument ?? $symbol;
     }

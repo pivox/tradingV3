@@ -12,6 +12,7 @@ final readonly class HyperliquidExecutionState
         public float $bestAsk,
         public \DateTimeImmutable $observedAt,
         public ?int $observedLeverage,
+        public ?string $observedMarginMode = null,
     ) {
     }
 }

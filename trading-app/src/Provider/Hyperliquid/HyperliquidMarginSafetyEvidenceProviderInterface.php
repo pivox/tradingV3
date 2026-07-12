@@ -8,5 +8,5 @@ use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
 
 interface HyperliquidMarginSafetyEvidenceProviderInterface
 {
-    public function current(string $symbol, string $notional, int $requestedLeverage): HyperliquidMarginSafetyEvidence;
+    public function current(string $symbol): HyperliquidMarginSafetyEvidence;
 }

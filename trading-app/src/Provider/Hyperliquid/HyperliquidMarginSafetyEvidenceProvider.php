@@ -11,6 +11,8 @@ use Psr\Clock\ClockInterface;
 
 final readonly class HyperliquidMarginSafetyEvidenceProvider implements HyperliquidMarginSafetyEvidenceProviderInterface
 {
+    private const MAX_TOTAL_CALL_DURATION_MILLISECONDS = 2_000;
+
     public function __construct(
         private HyperliquidRestClientInterface $client,
         private HyperliquidConfig $config,
@@ -19,13 +21,14 @@ final readonly class HyperliquidMarginSafetyEvidenceProvider implements Hyperliq
     ) {
     }
 
-    public function current(string $symbol, string $notional, int $requestedLeverage): HyperliquidMarginSafetyEvidence
+    public function current(string $symbol): HyperliquidMarginSafetyEvidence
     {
         $account = $this->config->signingAccountAddress();
         if (preg_match('/^0x[a-f0-9]{40}$/D', $account) !== 1) {
             throw new \RuntimeException('hyperliquid_margin_account_unavailable');
         }
 
+        $startedAt = $this->clock->now();
         $meta = $this->client->info(['type' => 'meta']);
         $coin = $this->coin($meta, $symbol);
         $activeAssetData = $this->client->info([
@@ -33,15 +36,17 @@ final readonly class HyperliquidMarginSafetyEvidenceProvider implements Hyperliq
             'user' => $account,
             'coin' => $coin,
         ]);
+        $duration = $this->milliseconds($this->clock->now()) - $this->milliseconds($startedAt);
+        if ($duration < 0 || $duration > self::MAX_TOTAL_CALL_DURATION_MILLISECONDS) {
+            throw new \RuntimeException('hyperliquid_margin_evidence_read_timed_out');
+        }
 
         return $this->mapper->map(
             meta: $meta,
             activeAssetData: $activeAssetData,
             symbol: $symbol,
-            notional: $notional,
-            requestedLeverage: $requestedLeverage,
             accountAddress: $account,
-            observedAt: $this->clock->now(),
+            observedAt: $startedAt,
         );
     }
 
@@ -67,5 +72,10 @@ final readonly class HyperliquidMarginSafetyEvidenceProvider implements Hyperliq
         }
 
         return $matches[0];
+    }
+
+    private function milliseconds(\DateTimeInterface $time): int
+    {
+        return ((int) $time->format('U') * 1_000) + (int) $time->format('v');
     }
 }

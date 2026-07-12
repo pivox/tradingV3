@@ -30,11 +30,16 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
 
         $position = $this->account->getPosition($symbol);
         $observedLeverage = null;
+        $observedMarginMode = null;
         if ($position !== null) {
             try {
                 $observedLeverage = $position->leverage->toInt();
             } catch (\Throwable) {
                 throw new \RuntimeException('hyperliquid_observed_leverage_invalid');
+            }
+            $observedMarginMode = $position->metadata['margin_mode'] ?? null;
+            if (!is_string($observedMarginMode) || !in_array($observedMarginMode, ['isolated', 'cross'], true)) {
+                throw new \RuntimeException('hyperliquid_observed_margin_mode_invalid');
             }
         }
 
@@ -44,6 +49,7 @@ final readonly class StrictHyperliquidExecutionStateProvider implements Hyperliq
             bestAsk: (float) $ask,
             observedAt: $observedAt,
             observedLeverage: $observedLeverage,
+            observedMarginMode: $observedMarginMode,
         );
     }
 }

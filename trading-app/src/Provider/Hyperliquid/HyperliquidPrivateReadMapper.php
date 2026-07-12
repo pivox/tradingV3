@@ -50,6 +50,10 @@ final readonly class HyperliquidPrivateReadMapper
         if (abs($size) <= 0.00000001) {
             return null;
         }
+        $marginMode = $position['leverage']['type'] ?? null;
+        if (!is_string($marginMode) || !in_array($marginMode, ['isolated', 'cross'], true)) {
+            throw new \InvalidArgumentException('hyperliquid_position_margin_mode_invalid');
+        }
 
         return new PositionDto(
             symbol: $this->symbol($position['coin'] ?? ''),
@@ -62,7 +66,7 @@ final readonly class HyperliquidPrivateReadMapper
             margin: BigDecimal::of($this->number($position['marginUsed'] ?? '0')),
             leverage: BigDecimal::of($this->number($position['leverage']['value'] ?? '1')),
             openedAt: $this->time($position['openedAt'] ?? null),
-            metadata: $this->redacted($position),
+            metadata: ['margin_mode' => $marginMode] + $this->redacted($position),
         );
     }
 

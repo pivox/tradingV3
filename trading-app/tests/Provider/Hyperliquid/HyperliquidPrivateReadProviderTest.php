@@ -15,6 +15,8 @@ use App\Provider\Hyperliquid\HyperliquidAccountGateway;
 use App\Provider\Hyperliquid\HyperliquidExecutionGateway;
 use App\Provider\Hyperliquid\HyperliquidProviderNotReadyException;
 use App\Provider\Hyperliquid\HyperliquidProviderUnavailableException;
+use App\Provider\Hyperliquid\HyperliquidMetadataProvider;
+use App\TradingCore\Execution\Hyperliquid\StrictHyperliquidExecutionStateProvider;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
@@ -176,6 +178,7 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame('25000', (string) $positions[0]->entryPrice);
         self::assertSame('25120', (string) $positions[0]->markPrice);
         self::assertSame('7.5', (string) $positions[0]->leverage);
+        self::assertSame('isolated', $positions[0]->metadata['margin_mode'] ?? null);
         self::assertArrayNotHasKey('apiSecret', $positions[0]->metadata);
 
         self::assertSame('ETHUSDT', $positions[1]->symbol);
@@ -185,6 +188,28 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
 
         $client->noPositions = true;
         self::assertSame([], $gateway->getOpenPositions());
+    }
+
+    public function testStrictExecutionStateReadsAuthoritativePositionMarginMode(): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['l2Book'] = [
+            'time' => 1_720_780_799_000,
+            'levels' => [
+                [['px' => '99', 'sz' => '1', 'n' => 1]],
+                [['px' => '100', 'sz' => '1', 'n' => 1]],
+            ],
+        ];
+        $resolver = new HyperliquidAssetResolver($client);
+        $provider = new StrictHyperliquidExecutionStateProvider(
+            new HyperliquidMetadataProvider($client, $resolver),
+            new HyperliquidAccountGateway($client, $resolver, $this->config()),
+        );
+
+        $state = $provider->current('ETHUSDT');
+
+        self::assertSame(5, $state->observedLeverage);
+        self::assertSame('cross', $state->observedMarginMode);
     }
 
     public function testPrivateDataUnavailableIsNotReadyForStrictReadAndTolerantForOpenPositions(): void
@@ -558,7 +583,7 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
                         'markPx' => '25120',
                         'unrealizedPnl' => '12.5',
                         'marginUsed' => '120',
-                        'leverage' => ['value' => '7.5'],
+                        'leverage' => ['type' => 'isolated', 'value' => '7.5'],
                         'apiSecret' => 'must-not-leak',
                     ],
                 ],
@@ -570,7 +595,7 @@ final class FakeHyperliquidPrivateReadClient implements HyperliquidRestClientInt
                         'markPx' => '1790',
                         'unrealizedPnl' => '23',
                         'marginUsed' => '105.25',
-                        'leverage' => ['value' => '5'],
+                        'leverage' => ['type' => 'cross', 'value' => '5'],
                     ],
                 ],
                 [

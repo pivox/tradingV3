@@ -13,6 +13,7 @@ use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
 use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
 use App\TradingCore\Execution\Dto\ExecutionResult;
@@ -288,10 +289,10 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(2.0, $protection->stopLoss->stopDistance);
         self::assertSame(0.02, $protection->stopLoss->stopPct);
         self::assertTrue($protection->liquidationCheck->isSafe);
-        self::assertEqualsWithDelta(84.210526315789, $protection->liquidationCheck->liquidationPrice, 1.0E-12);
+        self::assertSame(84.21052631579, $protection->liquidationCheck->liquidationPrice);
         self::assertEqualsWithDelta(0.15789473684211, $protection->liquidationCheck->liquidationDistancePct, 1.0E-12);
         self::assertEqualsWithDelta(7.8947368421053, $protection->liquidationCheck->stopToLiquidationRatio, 1.0E-12);
-        self::assertSame(0.05, $protection->liquidationCheck->metadata['maintenance_margin_rate'] ?? null);
+        self::assertSame('0.05', $protection->liquidationCheck->metadata['maintenance_margin_rate'] ?? null);
         self::assertSame(3.0, $protection->liquidationCheck->metadata['min_distance_ratio'] ?? null);
     }
 
@@ -327,10 +328,10 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $tester = $this->tester($port, marginEvidence: $evidence);
 
         self::assertSame(Command::SUCCESS, $tester->execute($this->input($this->planFile())));
-        self::assertSame([['BTCUSDT', '10', 5]], $evidence->requests);
+        self::assertSame([['BTCUSDT']], $evidence->requests);
         self::assertNotNull($port->request);
-        self::assertSame(0.05, $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_rate'] ?? null);
-        self::assertSame(0.0, $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_deduction'] ?? null);
+        self::assertSame('0.05', $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_rate'] ?? null);
+        self::assertSame('0', $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_deduction'] ?? null);
     }
 
     #[DataProvider('unusableMarginEvidence')]
@@ -340,7 +341,11 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             'missing' => new SmokeTestMarginEvidenceProvider(exception: new \RuntimeException('missing evidence')),
             'stale' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(observedAt: '2026-07-12T11:59:50Z')),
             'wrong symbol' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(symbol: 'ETHUSDT')),
-            'wrong leverage' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(tierMaxLeverage: 4)),
+            'wrong leverage' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(
+                tiers: [new HyperliquidMarginTierEvidence('0', 4, '0.125', '0')],
+                universeMaxLeverage: 4,
+            )),
+            'cross account' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(observedMarginMode: 'cross')),
             default => throw new \LogicException('unknown evidence case'),
         };
         $port = new SmokeTestPort($this->accepted());
@@ -358,6 +363,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         yield 'stale' => ['stale'];
         yield 'wrong symbol' => ['wrong symbol'];
         yield 'wrong leverage' => ['wrong leverage'];
+        yield 'cross account' => ['cross account'];
     }
 
     public function testAuthoritativeHalfPercentMaintenanceRegressionRejectsOptimisticStop(): void
@@ -367,10 +373,9 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         $envelope['order_plan']['quantity'] = '1';
         $envelope['order_plan']['protection_plan']['stop_loss']['stop_price'] = '99.7';
         $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence(
-            notional: '100',
-            tierMaxLeverage: 100,
-            maintenanceMarginRate: '0.005',
-            accountLeverage: 100,
+            tiers: [new HyperliquidMarginTierEvidence('0', 100, '0.005', '0')],
+            universeMaxLeverage: 100,
+            observedLeverage: 100,
         ));
         $port = new SmokeTestPort($this->accepted());
         $tester = $this->tester($port, marginEvidence: $evidence);
@@ -581,23 +586,23 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
 
     private function marginEvidence(
         string $symbol = 'BTCUSDT',
-        string $notional = '10',
-        int $tierMaxLeverage = 10,
-        string $maintenanceMarginRate = '0.05',
-        int $accountLeverage = 5,
+        ?array $tiers = null,
+        int $universeMaxLeverage = 10,
+        string $observedMarginMode = 'isolated',
+        int $observedLeverage = 5,
         string $observedAt = '2026-07-12T12:00:00Z',
     ): HyperliquidMarginSafetyEvidence {
         return new HyperliquidMarginSafetyEvidence(
             symbol: $symbol,
-            notional: $notional,
-            marginTableId: $tierMaxLeverage < 50 ? $tierMaxLeverage : 51,
-            tierLowerBound: '0',
-            tierMaxLeverage: $tierMaxLeverage,
-            maintenanceMarginRate: $maintenanceMarginRate,
-            maintenanceMarginDeduction: '0',
+            coin: 'BTC',
+            marginTableId: $universeMaxLeverage < 50 ? $universeMaxLeverage : 51,
+            universeMaxLeverage: $universeMaxLeverage,
+            tiers: $tiers ?? [new HyperliquidMarginTierEvidence('0', 10, '0.05', '0')],
             accountAddress: '0x1111111111111111111111111111111111111111',
-            accountMarginMode: 'isolated',
-            accountLeverage: $accountLeverage,
+            observedUser: '0x1111111111111111111111111111111111111111',
+            observedCoin: 'BTC',
+            observedMarginMode: $observedMarginMode,
+            observedLeverage: $observedLeverage,
             observedAt: new \DateTimeImmutable($observedAt),
         );
     }
@@ -701,7 +706,7 @@ final class SmokeTestReadinessProbe implements HyperliquidMutationReadinessProbe
 final class SmokeTestMarginEvidenceProvider implements HyperliquidMarginSafetyEvidenceProviderInterface
 {
     public int $calls = 0;
-    /** @var list<array{string,string,int}> */
+    /** @var list<array{string}> */
     public array $requests = [];
 
     public function __construct(
@@ -710,10 +715,10 @@ final class SmokeTestMarginEvidenceProvider implements HyperliquidMarginSafetyEv
     ) {
     }
 
-    public function current(string $symbol, string $notional, int $requestedLeverage): HyperliquidMarginSafetyEvidence
+    public function current(string $symbol): HyperliquidMarginSafetyEvidence
     {
         ++$this->calls;
-        $this->requests[] = [$symbol, $notional, $requestedLeverage];
+        $this->requests[] = [$symbol];
         if ($this->exception instanceof \Throwable) {
             throw $this->exception;
         }

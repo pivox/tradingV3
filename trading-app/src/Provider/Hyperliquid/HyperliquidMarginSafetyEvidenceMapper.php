@@ -5,11 +5,15 @@ declare(strict_types=1);
 namespace App\Provider\Hyperliquid;
 
 use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 
 final class HyperliquidMarginSafetyEvidenceMapper
 {
+    private const MAX_SUPPORTED_TIERS = 32;
+    private const RATE_SCALE = 36;
+
     /**
      * @param array<string,mixed> $meta
      * @param array<string,mixed> $activeAssetData
@@ -18,65 +22,43 @@ final class HyperliquidMarginSafetyEvidenceMapper
         array $meta,
         array $activeAssetData,
         string $symbol,
-        string $notional,
-        int $requestedLeverage,
         string $accountAddress,
         \DateTimeImmutable $observedAt,
     ): HyperliquidMarginSafetyEvidence {
         $asset = $this->asset($meta, $symbol);
+        $coin = strtoupper((string) ($asset['name'] ?? ''));
         $tableId = $this->positiveInt($asset['marginTableId'] ?? null);
-        $assetMaxLeverage = $this->positiveInt($asset['maxLeverage'] ?? null);
-        $notionalDecimal = $this->positiveDecimal($notional);
-        $tiers = $tableId < 50
-            ? [['lowerBound' => BigDecimal::zero(), 'maxLeverage' => $assetMaxLeverage]]
-            : $this->tiers($meta, $tableId);
-        if ($tableId < 50 && $assetMaxLeverage !== $tableId) {
-            throw new \InvalidArgumentException('hyperliquid_single_tier_identity_invalid');
-        }
+        $universeMaxLeverage = $this->positiveInt($asset['maxLeverage'] ?? null);
+        $rows = $tableId < 50
+            ? [['lowerBound' => '0', 'maxLeverage' => $universeMaxLeverage]]
+            : $this->tableRows($meta, $tableId);
+        $tiers = $this->tiers($rows, $universeMaxLeverage);
 
-        $deduction = BigDecimal::zero();
-        $selected = null;
-        $previousRate = null;
-        foreach ($tiers as $tier) {
-            $rate = BigDecimal::one()->dividedBy(2 * $tier['maxLeverage'], 18, RoundingMode::HALF_UP);
-            if ($previousRate instanceof BigDecimal) {
-                $deduction = $deduction->plus($tier['lowerBound']->multipliedBy($rate->minus($previousRate)));
-            }
-            if ($notionalDecimal->isGreaterThanOrEqualTo($tier['lowerBound'])) {
-                $selected = [
-                    'lowerBound' => $tier['lowerBound'],
-                    'maxLeverage' => $tier['maxLeverage'],
-                    'rate' => $rate,
-                    'deduction' => $deduction,
-                ];
-            }
-            $previousRate = $rate;
-        }
-        if (!is_array($selected) || $requestedLeverage < 1 || $requestedLeverage > $selected['maxLeverage']) {
-            throw new \InvalidArgumentException('hyperliquid_margin_tier_leverage_invalid');
-        }
-
+        $observedUser = strtolower($this->identity($activeAssetData['user'] ?? null, '/^0x[a-f0-9]{40}$/D'));
+        $observedCoin = strtoupper($this->identity($activeAssetData['coin'] ?? null, '/^[A-Z0-9][A-Z0-9_-]{0,31}$/D'));
+        $expectedAccount = strtolower($accountAddress);
         $leverage = $activeAssetData['leverage'] ?? null;
-        if (!is_array($leverage)
-            || ($leverage['type'] ?? null) !== 'isolated'
-            || $this->positiveInt($leverage['value'] ?? null) !== $requestedLeverage
-            || preg_match('/^0x[a-f0-9]{40}$/D', $accountAddress) !== 1
+        $mode = is_array($leverage) ? ($leverage['type'] ?? null) : null;
+        $observedLeverage = is_array($leverage) ? $this->positiveInt($leverage['value'] ?? null) : 0;
+        if ($observedUser !== $expectedAccount || $observedCoin !== $coin
+            || !is_string($mode) || !in_array($mode, ['isolated', 'cross'], true)
+            || preg_match('/^0x[a-f0-9]{40}$/D', $expectedAccount) !== 1
         ) {
-            throw new \InvalidArgumentException('hyperliquid_isolated_account_evidence_invalid');
+            throw new \InvalidArgumentException('hyperliquid_active_asset_identity_invalid');
         }
 
         return new HyperliquidMarginSafetyEvidence(
-            symbol: strtoupper($symbol),
-            notional: $this->decimalString($notionalDecimal),
-            marginTableId: $tableId,
-            tierLowerBound: $this->decimalString($selected['lowerBound']),
-            tierMaxLeverage: $selected['maxLeverage'],
-            maintenanceMarginRate: $this->decimalString($selected['rate']),
-            maintenanceMarginDeduction: $this->decimalString($selected['deduction']),
-            accountAddress: $accountAddress,
-            accountMarginMode: 'isolated',
-            accountLeverage: $requestedLeverage,
-            observedAt: $observedAt,
+            strtoupper($symbol),
+            $coin,
+            $tableId,
+            $universeMaxLeverage,
+            $tiers,
+            $expectedAccount,
+            $observedUser,
+            $observedCoin,
+            $mode,
+            $observedLeverage,
+            $observedAt,
         );
     }
 
@@ -91,58 +73,82 @@ final class HyperliquidMarginSafetyEvidenceMapper
         if (!is_array($universe)) {
             throw new \InvalidArgumentException('hyperliquid_margin_universe_missing');
         }
-        foreach ($universe as $candidate) {
-            if (is_array($candidate)
-                && strtoupper((string) ($candidate['name'] ?? '')) . 'USDT' === strtoupper($symbol)
-            ) {
-                return $candidate;
-            }
+        $matches = array_values(array_filter($universe, static fn (mixed $asset): bool => is_array($asset)
+            && strtoupper((string) ($asset['name'] ?? '')) . 'USDT' === strtoupper($symbol)));
+        if (count($matches) !== 1 || !is_array($matches[0])) {
+            throw new \InvalidArgumentException('hyperliquid_margin_asset_invalid');
         }
 
-        throw new \InvalidArgumentException('hyperliquid_margin_asset_missing');
+        return $matches[0];
     }
 
     /**
      * @param array<string,mixed> $meta
      *
-     * @return list<array{lowerBound:BigDecimal,maxLeverage:int}>
+     * @return array<mixed>
      */
-    private function tiers(array $meta, int $tableId): array
+    private function tableRows(array $meta, int $tableId): array
     {
         $tables = $meta['marginTables'] ?? null;
         if (!is_array($tables)) {
             throw new \InvalidArgumentException('hyperliquid_margin_tables_missing');
         }
-        $rows = null;
+        $matches = [];
         foreach ($tables as $table) {
-            if (is_array($table) && count($table) === 2 && $this->positiveInt($table[0] ?? null) === $tableId) {
-                $definition = $table[1] ?? null;
-                $rows = is_array($definition) ? ($definition['marginTiers'] ?? null) : null;
-                break;
+            if (is_array($table) && count($table) === 2 && ($table[0] ?? null) === $tableId) {
+                $matches[] = $table;
             }
         }
-        if (!is_array($rows) || $rows === []) {
-            throw new \InvalidArgumentException('hyperliquid_margin_table_missing');
+        if (count($matches) !== 1 || !is_array($matches[0][1] ?? null)
+            || !is_array($matches[0][1]['marginTiers'] ?? null)
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_margin_table_invalid');
         }
 
+        return $matches[0][1]['marginTiers'];
+    }
+
+    /**
+     * @param array<mixed> $rows
+     *
+     * @return list<HyperliquidMarginTierEvidence>
+     */
+    private function tiers(array $rows, int $universeMaxLeverage): array
+    {
+        if ($rows === [] || !array_is_list($rows) || count($rows) > self::MAX_SUPPORTED_TIERS) {
+            throw new \InvalidArgumentException('hyperliquid_margin_tier_count_invalid');
+        }
         $tiers = [];
         $previousBound = null;
         $previousLeverage = null;
-        foreach ($rows as $row) {
+        $previousRate = null;
+        $deduction = BigDecimal::zero();
+        foreach ($rows as $index => $row) {
             if (!is_array($row)) {
                 throw new \InvalidArgumentException('hyperliquid_margin_tier_invalid');
             }
             $bound = $this->nonNegativeDecimal($row['lowerBound'] ?? null);
             $maxLeverage = $this->positiveInt($row['maxLeverage'] ?? null);
-            if (($previousBound === null && !$bound->isZero())
+            if (($index === 0 && (!$bound->isZero() || $maxLeverage !== $universeMaxLeverage))
                 || ($previousBound instanceof BigDecimal && $bound->isLessThanOrEqualTo($previousBound))
-                || ($previousLeverage !== null && $maxLeverage > $previousLeverage)
+                || ($previousLeverage !== null && $maxLeverage >= $previousLeverage)
             ) {
                 throw new \InvalidArgumentException('hyperliquid_margin_tier_order_invalid');
             }
-            $tiers[] = ['lowerBound' => $bound, 'maxLeverage' => $maxLeverage];
+            // Upward rate rounding is conservative for liquidation distance; deductions remain canonical decimals.
+            $rate = BigDecimal::one()->dividedBy(2 * $maxLeverage, self::RATE_SCALE, RoundingMode::UP);
+            if ($previousRate instanceof BigDecimal) {
+                $deduction = $deduction->plus($bound->multipliedBy($rate->minus($previousRate)));
+            }
+            $tiers[] = new HyperliquidMarginTierEvidence(
+                $this->decimalString($bound),
+                $maxLeverage,
+                $this->decimalString($rate),
+                $this->decimalString($deduction),
+            );
             $previousBound = $bound;
             $previousLeverage = $maxLeverage;
+            $previousRate = $rate;
         }
 
         return $tiers;
@@ -157,40 +163,31 @@ final class HyperliquidMarginSafetyEvidenceMapper
         return $value;
     }
 
-    private function positiveDecimal(string $value): BigDecimal
+    private function nonNegativeDecimal(mixed $value): BigDecimal
     {
-        $decimal = $this->nonNegativeDecimal($value);
-        if ($decimal->isZero()) {
-            throw new \InvalidArgumentException('hyperliquid_margin_notional_invalid');
+        if (!is_string($value) || preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D', $value) !== 1) {
+            throw new \InvalidArgumentException('hyperliquid_margin_decimal_invalid');
+        }
+        $decimal = BigDecimal::of($value);
+        if ($decimal->isNegative()) {
+            throw new \InvalidArgumentException('hyperliquid_margin_decimal_invalid');
         }
 
         return $decimal;
     }
 
-    private function nonNegativeDecimal(mixed $value): BigDecimal
+    private function identity(mixed $value, string $pattern): string
     {
-        if (!is_string($value) || preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9]|\.0)?$/D', $value) !== 1) {
-            throw new \InvalidArgumentException('hyperliquid_margin_decimal_invalid');
-        }
-        try {
-            $decimal = BigDecimal::of($value);
-        } catch (\Throwable) {
-            throw new \InvalidArgumentException('hyperliquid_margin_decimal_invalid');
-        }
-        if ($decimal->isLessThan(BigDecimal::zero())) {
-            throw new \InvalidArgumentException('hyperliquid_margin_decimal_invalid');
+        if (!is_string($value) || preg_match($pattern, strtolower($value)) !== 1 && preg_match($pattern, strtoupper($value)) !== 1) {
+            throw new \InvalidArgumentException('hyperliquid_active_asset_identity_invalid');
         }
 
-        return $decimal;
+        return $value;
     }
 
     private function decimalString(BigDecimal $value): string
     {
         $normalized = (string) $value;
-        if (str_contains($normalized, '.')) {
-            $normalized = rtrim(rtrim($normalized, '0'), '.');
-        }
-
-        return $normalized === '' ? '0' : $normalized;
+        return str_contains($normalized, '.') ? rtrim(rtrim($normalized, '0'), '.') : $normalized;
     }
 }

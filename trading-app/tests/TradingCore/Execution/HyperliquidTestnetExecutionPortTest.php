@@ -16,7 +16,11 @@ use App\Exchange\Hyperliquid\Lifecycle\HyperliquidLifecycleStatus;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Hyperliquid\Dto\HyperliquidInstrumentMetadataDto;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
 use App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface;
+use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
+use App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
@@ -51,6 +55,7 @@ use App\TradingCore\SlTp\Dto\ProtectionPlan;
 use App\TradingCore\SlTp\Dto\StopLossResult;
 use App\TradingCore\SlTp\Dto\TakeProfitResult;
 use App\TradingCore\SlTp\Enum\ProtectionPlanStatus;
+use App\TradingCore\SlTp\Service\LiquidationGuard;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -270,6 +275,98 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Accepted, $result->status);
         self::assertSame([1_000, 1_001], $fixture->nonces->issued);
         self::assertSame(['updateLeverage', 'order'], array_column(array_column($fixture->signed->submissions, 'action'), 'type'));
+    }
+
+    public function testMissingLeaseTimeMarginEvidenceRejectsBeforeNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([new \RuntimeException('unavailable')]);
+        $fixture = $this->fixture(marginEvidence: $evidence);
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
+        self::assertSame(1, $evidence->calls);
+    }
+
+    public function testStaleLeaseTimeMarginEvidenceRejectsBeforeNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([
+            $this->marginEvidence(observedAt: '2026-07-12T11:59:57.000Z'),
+        ]);
+        $fixture = $this->fixture(marginEvidence: $evidence);
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
+    }
+
+    public function testSameLeverageCrossPositionForcesIsolatedUpdateAndRefetchBeforeOrderNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([
+            $this->marginEvidence(mode: 'cross'),
+            $this->marginEvidence(mode: 'isolated'),
+        ]);
+        $fixture = $this->fixture(
+            state: $this->state(marginMode: 'cross'),
+            marginEvidence: $evidence,
+            signedResults: [$this->acceptedLeverage(), $this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Accepted, $result->status);
+        self::assertSame(2, $evidence->calls);
+        self::assertSame([1_000, 1_001], $fixture->nonces->issued);
+        self::assertSame(['updateLeverage', 'order'], array_column(array_column($fixture->signed->submissions, 'action'), 'type'));
+    }
+
+    public function testCrossPositionWithoutPostUpdateIsolatedConfirmationStopsBeforeOrderNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([
+            $this->marginEvidence(mode: 'cross'),
+            $this->marginEvidence(mode: 'cross'),
+        ]);
+        $fixture = $this->fixture(
+            state: $this->state(marginMode: 'cross'),
+            marginEvidence: $evidence,
+            signedResults: [$this->acceptedLeverage()],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertSame(2, $evidence->calls);
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertCount(1, $fixture->signed->submissions);
+    }
+
+    public function testFinalShapedShortNotionalCrossingTierUsesPiecewiseLiquidationBeforeNonce(): void
+    {
+        $evidence = new TestnetPortMarginEvidenceProvider([$this->marginEvidence(
+            leverage: 10,
+            tiers: [
+                new HyperliquidMarginTierEvidence('0', 10, '0.05', '0'),
+                new HyperliquidMarginTierEvidence('10000', 5, '0.1', '500'),
+            ],
+        )]);
+        $fixture = $this->fixture(
+            report: $this->report(maxNotional: 20_000.0),
+            plan: $this->plan(side: 'short', entry: 99.0, stop: 100.0, quantity: 100.0, leverage: 10),
+            metadata: $this->metadata(minSize: '0.01', maxSize: '100'),
+            state: $this->state(leverage: 10),
+            marginEvidence: $evidence,
+            signedResults: [$this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Accepted, $result->status);
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertSame(1, $evidence->calls);
     }
 
     public function testFilledEntryAndFilledStopRowsAreAcceptedInOriginalOrder(): void
@@ -701,7 +798,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(100.7, $fixture->compensation->contexts[0]->emergencyCloseSlippageCapPrice);
     }
 
-    public function testMinimumTickProtectiveSellCapIsPositiveBeforeNonceSubmission(): void
+    public function testMinimumTickPlanUnsafeUnderAuthoritativeLiquidationRejectsBeforeNonce(): void
     {
         $fixture = $this->fixture(
             plan: $this->plan(entry: 0.2, stop: 0.1, liquidationPrice: 0.05),
@@ -712,9 +809,9 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
 
         $result = $fixture->port->execute($fixture->request);
 
-        self::assertSame(ExecutionStatus::Accepted, $result->status);
-        self::assertSame([1_000], $fixture->nonces->issued);
-        self::assertSame('0.1', $fixture->signed->submissions[0]['action']['orders'][1]['p']);
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
     }
 
     public function testResultMetadataIsRecursivelyRedactedAndContainsNoRawResponse(): void
@@ -827,6 +924,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         bool $lockThrows = false,
         bool $lockReleaseThrows = false,
         ?HyperliquidKillSwitchTripInterface $durableTrip = null,
+        ?HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence = null,
     ): TestnetPortFixture {
         $config ??= $this->config();
         $report ??= $this->report();
@@ -849,6 +947,18 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             hyperliquidTestnetTradingEnabled: true,
             hyperliquidPollingPolicy: new HyperliquidPollingObservabilityPolicy($clock),
         );
+        if ($marginEvidence === null) {
+            $evidenceResults = [$this->marginEvidence(
+                mode: $stateProvider->current($plan->symbol)->observedMarginMode ?? 'isolated',
+                leverage: $stateProvider->current($plan->symbol)->observedLeverage ?? $plan->leverage,
+            )];
+            if ($stateProvider->current($plan->symbol)->observedLeverage !== $plan->leverage
+                || $stateProvider->current($plan->symbol)->observedMarginMode === 'cross'
+            ) {
+                $evidenceResults[] = $this->marginEvidence(leverage: $plan->leverage);
+            }
+            $marginEvidence = new TestnetPortMarginEvidenceProvider($evidenceResults);
+        }
         $port = new HyperliquidTestnetExecutionPort(
             config: $config,
             readiness: new TestnetPortReadinessProbe($report),
@@ -864,6 +974,10 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             compensation: $compensation,
             executionLock: $lock,
             leveragePolicy: new HyperliquidLeveragePolicy($allowUnknownLeverage),
+            marginEvidence: $marginEvidence,
+            liquidationSolver: new HyperliquidIsolatedLiquidationSolver(),
+            liquidationGuard: new LiquidationGuard(),
+            clock: $clock,
         );
         $request = ExecutionRequest::forPlan($plan, $mode, $requestMetadata + ['correlation_id' => 'corr-1']);
 
@@ -983,8 +1097,9 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         float $ask = 100.1,
         ?int $leverage = 5,
         string $observedAt = '2026-07-12T11:59:59.000Z',
+        ?string $marginMode = 'isolated',
     ): HyperliquidExecutionState {
-        return new HyperliquidExecutionState('BTCUSDT', $bid, $ask, new \DateTimeImmutable($observedAt), $leverage);
+        return new HyperliquidExecutionState('BTCUSDT', $bid, $ask, new \DateTimeImmutable($observedAt), $leverage, $marginMode);
     }
 
     private function plan(
@@ -1036,6 +1151,28 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             ['kind' => 'resting', 'oid' => $entryOid],
             ['kind' => 'resting', 'oid' => $stopOid],
         ], null, 'corr-1');
+    }
+
+    /** @param list<HyperliquidMarginTierEvidence>|null $tiers */
+    private function marginEvidence(
+        string $mode = 'isolated',
+        int $leverage = 5,
+        string $observedAt = '2026-07-12T12:00:00.000Z',
+        ?array $tiers = null,
+    ): HyperliquidMarginSafetyEvidence {
+        return new HyperliquidMarginSafetyEvidence(
+            'BTCUSDT',
+            'BTC',
+            10,
+            10,
+            $tiers ?? [new HyperliquidMarginTierEvidence('0', 10, '0.05', '0')],
+            self::ACCOUNT,
+            self::ACCOUNT,
+            'BTC',
+            $mode,
+            $leverage,
+            new \DateTimeImmutable($observedAt),
+        );
     }
 
     private function acceptedLeverage(): HyperliquidSignedActionResult
@@ -1162,6 +1299,27 @@ final class TestnetPortCompensation implements HyperliquidCompensationInterface
     {
         $this->contexts[] = $context;
         return $this->result;
+    }
+}
+
+final class TestnetPortMarginEvidenceProvider implements HyperliquidMarginSafetyEvidenceProviderInterface
+{
+    public int $calls = 0;
+
+    /** @param list<HyperliquidMarginSafetyEvidence|\Throwable> $results */
+    public function __construct(private array $results)
+    {
+    }
+
+    public function current(string $symbol): HyperliquidMarginSafetyEvidence
+    {
+        ++$this->calls;
+        $result = array_shift($this->results) ?? throw new \RuntimeException('missing margin evidence result');
+        if ($result instanceof \Throwable) {
+            throw $result;
+        }
+
+        return $result;
     }
 }
 

@@ -6,17 +6,18 @@ namespace App\Provider\Hyperliquid\Dto;
 
 final readonly class HyperliquidMarginSafetyEvidence
 {
+    /** @param list<HyperliquidMarginTierEvidence> $tiers */
     public function __construct(
         public string $symbol,
-        public string $notional,
+        public string $coin,
         public int $marginTableId,
-        public string $tierLowerBound,
-        public int $tierMaxLeverage,
-        public string $maintenanceMarginRate,
-        public string $maintenanceMarginDeduction,
+        public int $universeMaxLeverage,
+        public array $tiers,
         public string $accountAddress,
-        public string $accountMarginMode,
-        public int $accountLeverage,
+        public string $observedUser,
+        public string $observedCoin,
+        public string $observedMarginMode,
+        public int $observedLeverage,
         public \DateTimeImmutable $observedAt,
     ) {
     }

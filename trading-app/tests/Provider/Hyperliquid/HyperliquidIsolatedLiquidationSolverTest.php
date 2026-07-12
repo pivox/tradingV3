@@ -1,0 +1,98 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Provider\Hyperliquid;
+
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence;
+use App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\TestCase;
+
+#[CoversClass(HyperliquidIsolatedLiquidationSolver::class)]
+final class HyperliquidIsolatedLiquidationSolverTest extends TestCase
+{
+    public function testShortEntryNotionalBelowThresholdUsesLiquidationTierAboveThreshold(): void
+    {
+        $result = $this->solver()->solve($this->evidence(), '99', '100', 10, 'short');
+
+        self::assertSame(1, $result->tierIndex);
+        self::assertSame('10000', $result->tierLowerBound);
+        self::assertSame('103.545454545454545454545454545454545454', $result->liquidationPrice);
+    }
+
+    public function testExactTierBoundaryBelongsOnlyToUpperTier(): void
+    {
+        $result = $this->solver()->solve($this->evidence(), '118.75', '100', 5, 'long');
+
+        self::assertSame(1, $result->tierIndex);
+        self::assertSame('100', $result->liquidationPrice);
+    }
+
+    public function testSupportsRepeatingThreeXRateWithoutFloatConversion(): void
+    {
+        $evidence = $this->evidence([
+            new HyperliquidMarginTierEvidence('0', 3, '0.166666666666666666666666666666666667', '0'),
+        ], universeMaxLeverage: 3);
+
+        $result = $this->solver()->solve($evidence, '100', '1', 3, 'long');
+
+        self::assertSame('80.000000000000000000000000000000000033', $result->liquidationPrice);
+        self::assertSame(80.000000000001, $this->solver()->toConservativeFloat($result, 'long'));
+    }
+
+    public function testRejectsWhenNoTierCandidateMatchesItsInterval(): void
+    {
+        $evidence = $this->evidence([
+            new HyperliquidMarginTierEvidence('0', 10, '0.05', '0'),
+            new HyperliquidMarginTierEvidence('10000', 5, '0.9', '0'),
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->solve($evidence, '99', '100', 10, 'short');
+    }
+
+    public function testRejectsWhenMultipleTierCandidatesMatch(): void
+    {
+        $evidence = $this->evidence([
+            new HyperliquidMarginTierEvidence('0', 10, '0.05', '0'),
+            new HyperliquidMarginTierEvidence('10000', 5, '0.1', '0'),
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->solve($evidence, '117', '100', 5, 'long');
+    }
+
+    public function testOpeningLeverageIsCheckedAgainstEntryNotionalTierSeparately(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->solver()->solve($this->evidence(), '101', '100', 10, 'long');
+    }
+
+    /** @param list<HyperliquidMarginTierEvidence>|null $tiers */
+    private function evidence(?array $tiers = null, int $universeMaxLeverage = 10): HyperliquidMarginSafetyEvidence
+    {
+        return new HyperliquidMarginSafetyEvidence(
+            symbol: 'BTCUSDT',
+            coin: 'BTC',
+            marginTableId: 51,
+            universeMaxLeverage: $universeMaxLeverage,
+            tiers: $tiers ?? [
+                new HyperliquidMarginTierEvidence('0', 10, '0.05', '0'),
+                new HyperliquidMarginTierEvidence('10000', 5, '0.1', '500'),
+            ],
+            accountAddress: '0x1111111111111111111111111111111111111111',
+            observedUser: '0x1111111111111111111111111111111111111111',
+            observedCoin: 'BTC',
+            observedMarginMode: 'isolated',
+            observedLeverage: 5,
+            observedAt: new \DateTimeImmutable('2026-07-12T12:00:00Z'),
+        );
+    }
+
+    private function solver(): HyperliquidIsolatedLiquidationSolver
+    {
+        return new HyperliquidIsolatedLiquidationSolver();
+    }
+}

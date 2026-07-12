@@ -17,7 +17,9 @@ use App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionResult;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Hyperliquid\Dto\HyperliquidInstrumentMetadataDto;
+use App\Provider\Hyperliquid\HyperliquidIsolatedLiquidationSolver;
 use App\Provider\Hyperliquid\HyperliquidInstrumentMetadataProviderInterface;
+use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
@@ -30,10 +32,16 @@ use App\TradingCore\Execution\Safety\DemoTradingKillSwitchService;
 use App\TradingCore\Execution\Safety\DemoTradingMutationAttempt;
 use App\TradingCore\Execution\Safety\ExchangeRuntimeEnvironment;
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
+use App\TradingCore\SlTp\Dto\LiquidationCheckRequest;
+use App\TradingCore\SlTp\Service\LiquidationGuard;
 use Brick\Math\BigDecimal;
+use Psr\Clock\ClockInterface;
 
 final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInterface, HyperliquidTestnetExecutionPortInterface
 {
+    private const MAX_MARGIN_EVIDENCE_AGE_MILLISECONDS = 2_000;
+    private const MIN_LIQUIDATION_DISTANCE_RATIO = 3.0;
+
     public function __construct(
         private HyperliquidConfig $config,
         private HyperliquidMutationReadinessProbeInterface $readiness,
@@ -49,6 +57,10 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         private HyperliquidCompensationInterface $compensation,
         private HyperliquidExecutionLockInterface $executionLock,
         private HyperliquidLeveragePolicy $leveragePolicy,
+        private HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence,
+        private HyperliquidIsolatedLiquidationSolver $liquidationSolver,
+        private LiquidationGuard $liquidationGuard,
+        private ClockInterface $clock,
     ) {
     }
 
@@ -191,15 +203,36 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             return $this->rejected($plan, 'demo_trading_safety_blocked', $decision->reasons);
         }
 
+        $requiresLeverageUpdate = $this->leveragePolicy->requiresUpdate($state->observedLeverage, $plan->leverage)
+            || $this->executionStatePolicy->requiresIsolatedModeUpdate($state);
+        $marginReasons = $this->marginSafetyReasons(
+            $plan,
+            $shape,
+            $state,
+            requireRequestedAccountState: !$requiresLeverageUpdate,
+        );
+        if ($marginReasons !== []) {
+            return $this->rejected($plan, 'hyperliquid_margin_safety_rejected', $marginReasons);
+        }
+
         try {
             $scope = $this->nonceScope();
         } catch (\Throwable) {
             return $this->rejected($plan, 'hyperliquid_nonce_scope_invalid', ['hyperliquid_nonce_scope_invalid']);
         }
-        if ($this->leveragePolicy->requiresUpdate($state->observedLeverage, $plan->leverage)) {
+        if ($requiresLeverageUpdate) {
             $leverageResult = $this->updateLeverage($metadata->assetId, $plan, $scope, $correlationId);
             if ($leverageResult instanceof ExecutionResult) {
                 return $leverageResult;
+            }
+            $marginReasons = $this->marginSafetyReasons(
+                $plan,
+                $shape,
+                state: null,
+                requireRequestedAccountState: true,
+            );
+            if ($marginReasons !== []) {
+                return $this->rejected($plan, 'hyperliquid_margin_safety_revalidation_rejected', $marginReasons);
             }
         }
 
@@ -220,6 +253,77 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         return $this->mapSubmission($submission, $plan, $metadata, $state, $scope, $correlationId, $shape['quantity']);
+    }
+
+    /**
+     * @param array{price:string,quantity:string,stop:string,reasons:list<string>} $shape
+     *
+     * @return list<string>
+     */
+    private function marginSafetyReasons(
+        OrderPlan $plan,
+        array $shape,
+        ?HyperliquidExecutionState $state,
+        bool $requireRequestedAccountState,
+    ): array {
+        try {
+            $evidence = $this->marginEvidence->current($plan->symbol);
+            $age = $this->milliseconds($this->clock->now()) - $this->milliseconds($evidence->observedAt);
+            $account = strtolower($this->config->signingAccountAddress());
+            $coin = str_ends_with($plan->symbol, 'USDT') ? substr($plan->symbol, 0, -4) : '';
+            if ($age < 0 || $age > self::MAX_MARGIN_EVIDENCE_AGE_MILLISECONDS
+                || $evidence->symbol !== $plan->symbol
+                || $evidence->coin !== $coin
+                || $evidence->observedCoin !== $coin
+                || !hash_equals($account, $evidence->accountAddress)
+                || !hash_equals($account, $evidence->observedUser)
+                || $evidence->tiers === []
+            ) {
+                return ['hyperliquid_margin_evidence_invalid'];
+            }
+            if ($state instanceof HyperliquidExecutionState && $state->observedLeverage !== null
+                && ($evidence->observedLeverage !== $state->observedLeverage
+                    || $evidence->observedMarginMode !== $state->observedMarginMode)
+            ) {
+                return ['hyperliquid_margin_account_state_mismatch'];
+            }
+            if ($requireRequestedAccountState
+                && ($evidence->observedLeverage !== $plan->leverage || $evidence->observedMarginMode !== 'isolated')
+            ) {
+                return ['hyperliquid_isolated_margin_not_confirmed'];
+            }
+            $liquidation = $this->liquidationSolver->solve(
+                $evidence,
+                $shape['price'],
+                $shape['quantity'],
+                $plan->leverage,
+                $plan->side,
+            );
+            $check = $this->liquidationGuard->check(new LiquidationCheckRequest(
+                symbol: $plan->symbol,
+                instrument: $plan->symbol,
+                exchange: $plan->exchange,
+                marketType: $plan->marketType,
+                direction: $plan->side,
+                entryPrice: (float) $shape['price'],
+                stopPrice: (float) $shape['stop'],
+                leverage: $plan->leverage,
+                maintenanceMarginRate: $liquidation->maintenanceMarginRate,
+                liquidationPrice: $this->liquidationSolver->toConservativeFloat($liquidation, $plan->side),
+                minDistanceRatio: self::MIN_LIQUIDATION_DISTANCE_RATIO,
+                metadata: [
+                    'margin_table_id' => $evidence->marginTableId,
+                    'tier_lower_bound' => $liquidation->tierLowerBound,
+                    'maintenance_margin_rate' => $liquidation->maintenanceMarginRate,
+                    'maintenance_margin_deduction' => $liquidation->maintenanceMarginDeduction,
+                    'position_size' => $shape['quantity'],
+                ],
+            ));
+
+            return $check->isSafe ? [] : ['hyperliquid_liquidation_guard_unsafe'];
+        } catch (\Throwable) {
+            return ['hyperliquid_margin_evidence_unavailable'];
+        }
     }
 
     /** @return list<string> */
@@ -602,6 +706,11 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
     private function decimalPlaces(string $value): int
     {
         return str_contains($value, '.') ? strlen(rtrim(substr($value, strpos($value, '.') + 1), '0')) : 0;
+    }
+
+    private function milliseconds(\DateTimeInterface $time): int
+    {
+        return ((int) $time->format('U') * 1_000) + (int) $time->format('v');
     }
 
     /** @param list<string> $reasons */
