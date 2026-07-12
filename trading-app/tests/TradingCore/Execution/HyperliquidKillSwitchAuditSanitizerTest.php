@@ -70,6 +70,11 @@ final class HyperliquidKillSwitchAuditSanitizerTest extends TestCase
             'credential=hidden',
             'credentials=hidden',
             'memo=hidden',
+            '{"token":"hidden"}',
+            '{"api_key": "hidden"}',
+            'api key=hidden',
+            'private key: hidden',
+            'API KEY = hidden',
         ] as $assignment) {
             yield $assignment => [$assignment];
         }
@@ -81,5 +86,19 @@ final class HyperliquidKillSwitchAuditSanitizerTest extends TestCase
         $context = (new HyperliquidKillSwitchAuditSanitizer())->sanitizeContext(['message' => $assignment]);
 
         self::assertSame('[redacted]', $context['message'] ?? null);
+    }
+
+    public function testPreservesOrdinaryCorrelationIdsAndReasonText(): void
+    {
+        $sanitizer = new HyperliquidKillSwitchAuditSanitizer();
+
+        self::assertSame(
+            ['correlation_id' => 'corr-token-refresh-signature-check-1'],
+            $sanitizer->sanitizeContext(['correlation_id' => 'corr-token-refresh-signature-check-1']),
+        );
+        self::assertSame(
+            'hyperliquid_signature_confirmation_failed',
+            $sanitizer->sanitizeReason('hyperliquid_signature_confirmation_failed'),
+        );
     }
 }

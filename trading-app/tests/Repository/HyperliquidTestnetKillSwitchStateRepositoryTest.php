@@ -117,6 +117,9 @@ final class HyperliquidTestnetKillSwitchStateRepositoryTest extends KernelTestCa
             'fourth' => 'signature=raw-signature',
             'fifth' => 'credentials=credential-bundle',
             'sixth' => 'memo=sensitive-memo',
+            'seventh' => '{"token":"json-secret"}',
+            'eighth' => 'api key=spaced-secret',
+            'ninth' => 'private key: spaced-private-key',
         ];
         $this->repository->trip('compensation_unconfirmed', [
             'note' => $privateKey,

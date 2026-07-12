@@ -12,14 +12,12 @@ final class HyperliquidKillSwitchAuditSanitizer
     private const MAX_ITEMS = 16;
     private const MAX_DEPTH = 3;
     private const SENSITIVE_KEY_PATTERN = '/(?:raw|payload|secret|token|api[_-]?key|private[_-]?key|passphrase|password|authorization|cookie|signature|credential|memo)/i';
-    private const SENSITIVE_VALUE_PATTERN = '/(?:(?<![0-9a-f])(?:0x)?[0-9a-f]{64}(?![0-9a-f])|\b(?:bearer|basic)\s+\S+|\b(?:sk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b|\b(?:api[_-]?key|secret|token|private[_-]?key|passphrase|password|authorization|cookie|signature|credentials?|memo)\s*[:=]\s*\S+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/i';
+    private const SENSITIVE_VALUE_PATTERN = '/(?:(?<![0-9a-f])(?:0x)?[0-9a-f]{64}(?![0-9a-f])|\b(?:bearer|basic)\s+\S+|\b(?:sk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b|(?<![A-Za-z0-9])(?:["\'])?(?:api[\s_-]+key|secret|token|private[\s_-]+key|passphrase|password|authorization|cookie|signature|credentials?|memo)(?:["\'])?\s*[:=]\s*(?:["\'])?\S+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/i';
 
     public function sanitizeReason(string $reason): string
     {
         $reason = trim($reason);
-        if ($reason === ''
-            || preg_match(self::SENSITIVE_KEY_PATTERN, $reason) === 1
-            || $this->isSensitiveValue($reason)) {
+        if ($reason === '' || $this->isSensitiveValue($reason)) {
             return 'hyperliquid_kill_switch_tripped';
         }
 
