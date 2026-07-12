@@ -70,7 +70,7 @@ def _contains_sensitive_field(value: Any) -> bool:
             normalized_key = "".join(
                 character for character in key.lower() if character.isalnum()
             )
-            if normalized_key == "signature" or normalized_key.endswith("privatekey"):
+            if "signature" in normalized_key or "privatekey" in normalized_key:
                 return True
             if _contains_sensitive_field(child):
                 return True

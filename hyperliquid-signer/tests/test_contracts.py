@@ -123,10 +123,28 @@ def test_response_forbids_sensitive_top_level_fields(field: str) -> None:
         ExchangeResponse(**response_data(**{field: "forbidden"}))
 
 
-@pytest.mark.parametrize("field", ["signature", "privateKey", "agent_private_key"])
-def test_response_forbids_sensitive_status_fields(field: str) -> None:
+@pytest.mark.parametrize(
+    ("field", "nested"),
+    [
+        ("signature", True),
+        ("privateKey", True),
+        ("agent_private_key", True),
+        ("signature_hex", False),
+        ("signature_hex", True),
+        ("agent_signature", False),
+        ("agent_signature", True),
+        ("private_key_hex", False),
+        ("private_key_hex", True),
+    ],
+)
+def test_response_forbids_sensitive_status_fields(
+    field: str,
+    nested: bool,
+) -> None:
+    status = {"nested": {field: "forbidden"}} if nested else {field: "forbidden"}
+
     with pytest.raises(ValidationError, match="sensitive_response_field"):
-        ExchangeResponse(**response_data(statuses=[{"nested": {field: "forbidden"}}]))
+        ExchangeResponse(**response_data(statuses=[status]))
 
 
 def test_response_limits_status_rows_to_twenty() -> None:
