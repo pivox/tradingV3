@@ -72,6 +72,13 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
 
         try {
             $result = $this->executeUnderLock($request);
+            if ($result->status === ExecutionStatus::Accepted && !$this->acceptedResultIsProven($result, $request)) {
+                $result = $this->tripAndFail(
+                    $plan,
+                    $this->correlationId($request),
+                    'hyperliquid_accepted_result_invariant_failed',
+                );
+            }
         } catch (HyperliquidDurableTripPersistenceException) {
             $lease->retain();
 
@@ -94,6 +101,20 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         return $result;
+    }
+
+    private function acceptedResultIsProven(ExecutionResult $result, ExecutionRequest $request): bool
+    {
+        $submittedClientOrderId = $request->orderPlan->clientOrderId;
+
+        return is_string($submittedClientOrderId)
+            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/D', $submittedClientOrderId) === 1
+            && is_string($result->clientOrderId)
+            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/D', $result->clientOrderId) === 1
+            && hash_equals($submittedClientOrderId, $result->clientOrderId)
+            && is_string($result->exchangeOrderId)
+            && preg_match('/^[1-9][0-9]{0,19}$/D', $result->exchangeOrderId) === 1
+            && ($result->metadata['protection_confirmed'] ?? null) === true;
     }
 
     private function executeUnderLock(ExecutionRequest $request): ExecutionResult

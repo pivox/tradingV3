@@ -458,6 +458,10 @@ services:
     # Provide a default context alias so autowiring of ExchangeContext resolves
     App\Provider\Context\ExchangeContext: '@App\Provider\Context\ExchangeContext.bitmart_perpetual'
 
+    App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceMapper: ~
+    App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProvider: ~
+    App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface: '@App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProvider'
+
     # Kline Provider
 
 

@@ -22,6 +22,7 @@ use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
 use App\Provider\Hyperliquid\HyperliquidPublicReadMapper;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
+use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationContext;
@@ -283,6 +284,75 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Accepted, $result->status);
         self::assertSame('42', $result->exchangeOrderId);
         self::assertTrue($result->metadata['protection_confirmed']);
+    }
+
+    public function testAcceptedResultInvariantTripsBeforeReleasingLease(): void
+    {
+        $trip = new TestnetPortTrip();
+        $fixture = $this->fixture(
+            plan: $this->plan(clientOrderId: "CID-HL-1\nunsafe"),
+            trip: $trip,
+            signedResults: [$this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_accepted_result_invariant_failed', $result->metadata['failure_reason']);
+        self::assertSame(1, $trip->tripAttempts);
+        self::assertTrue($fixture->lock->lease?->released);
+        self::assertFalse($fixture->lock->lease?->retained);
+    }
+
+    public function testAcceptedResultInvariantTripFailureRetainsLease(): void
+    {
+        $trip = new TestnetPortTrip();
+        $trip->writeFailure = true;
+        $fixture = $this->fixture(
+            plan: $this->plan(clientOrderId: "CID-HL-1\nunsafe"),
+            trip: $trip,
+            signedResults: [$this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_durable_quarantine_failed', $result->metadata['failure_reason']);
+        self::assertSame(1, $trip->tripAttempts);
+        self::assertTrue($fixture->lock->lease?->retained);
+        self::assertFalse($fixture->lock->lease?->released);
+    }
+
+    /** @param array<string,mixed> $metadata */
+    #[DataProvider('unprovenAcceptedResults')]
+    public function testAcceptedResultInvariantRejectsEveryUnprovenField(
+        ?string $submittedClientOrderId,
+        ?string $resultClientOrderId,
+        ?string $exchangeOrderId,
+        array $metadata,
+    ): void {
+        $fixture = $this->fixture(plan: $this->plan(clientOrderId: $submittedClientOrderId));
+        $result = new ExecutionResult(
+            ExecutionStatus::Accepted,
+            $resultClientOrderId,
+            $exchangeOrderId,
+            metadata: $metadata,
+        );
+        $method = new \ReflectionMethod(HyperliquidTestnetExecutionPort::class, 'acceptedResultIsProven');
+
+        self::assertFalse($method->invoke($fixture->port, $result, $fixture->request));
+    }
+
+    /** @return iterable<string,array{?string,?string,?string,array<string,mixed>}> */
+    public static function unprovenAcceptedResults(): iterable
+    {
+        yield 'unsafe submitted client id' => ["CID-HL-1\n", "CID-HL-1\n", '42', ['protection_confirmed' => true]];
+        yield 'mismatched client id' => ['CID-HL-1', 'CID-HL-2', '42', ['protection_confirmed' => true]];
+        yield 'missing exchange oid' => ['CID-HL-1', 'CID-HL-1', null, ['protection_confirmed' => true]];
+        yield 'zero exchange oid' => ['CID-HL-1', 'CID-HL-1', '0', ['protection_confirmed' => true]];
+        yield 'unsafe exchange oid' => ['CID-HL-1', 'CID-HL-1', '42-secret', ['protection_confirmed' => true]];
+        yield 'missing protection proof' => ['CID-HL-1', 'CID-HL-1', '42', []];
+        yield 'false protection proof' => ['CID-HL-1', 'CID-HL-1', '42', ['protection_confirmed' => false]];
     }
 
     #[DataProvider('invalidAcceptedGroupedResponses')]
@@ -930,6 +1000,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         string $profile = 'scalper_micro',
         ?string $configHash = self::HASH,
         ?float $liquidationPrice = null,
+        ?string $clientOrderId = 'CID-HL-1',
     ): OrderPlan {
         $liquidation = $liquidationPrice ?? ($side === 'long' ? 80.0 : 120.0);
         $plan = new OrderPlan(
@@ -951,7 +1022,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
                 isValid: true,
                 status: ProtectionPlanStatus::Valid,
             ),
-            clientOrderId: 'CID-HL-1',
+            clientOrderId: $clientOrderId,
             idempotencyKey: 'decision:BTCUSDT:' . $side,
             configHash: $configHash,
         );

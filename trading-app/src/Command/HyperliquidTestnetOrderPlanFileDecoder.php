@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\TradingCore\OrderPlan\Dto\OrderPlan;
 use App\TradingCore\SlTp\Dto\LiquidationCheckRequest;
 use App\TradingCore\SlTp\Dto\ProtectionPlan;
@@ -12,21 +14,22 @@ use App\TradingCore\SlTp\Enum\ProtectionPlanStatus;
 use App\TradingCore\SlTp\Service\LiquidationGuard;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Clock\NativeClock;
 
 /**
  * Schema v1 accepts only authoritative order primitives. Prices and quantity are
  * canonical decimal strings (scale <= 8); stop and liquidation metrics are derived.
- * Without exchange maintenance-margin evidence, LiquidationGuard uses the existing
- * fallback maintenance margin 0.0 and a conservative minimum distance ratio of 3.0.
+ * Isolated-margin liquidation inputs come only from fresh public Hyperliquid margin
+ * metadata plus the account's active-asset leverage evidence.
  */
 final class HyperliquidTestnetOrderPlanFileDecoder
 {
     private const MAX_DECIMAL_SCALE = 8;
     private const MAX_DECIMAL_VALUE = '1000000000000';
 
-    // Existing LiquidationGuard fallback: derive from entry/leverage with no maintenance-margin adjustment.
-    private const DEFAULT_MAINTENANCE_MARGIN_RATE = 0.0;
     private const MIN_LIQUIDATION_DISTANCE_RATIO = 3.0;
+    private const MAX_MARGIN_EVIDENCE_AGE_SECONDS = 5;
 
     /** @var list<string> */
     private const PLAN_FIELDS = [
@@ -50,15 +53,19 @@ final class HyperliquidTestnetOrderPlanFileDecoder
     private readonly LiquidationGuard $liquidationGuard;
     private readonly BoundedDuplicateAwareJsonDecoder $jsonDecoder;
     private readonly HyperliquidTestnetOrderPlanFileReaderInterface $fileReader;
+    private readonly ClockInterface $clock;
 
     public function __construct(
         ?LiquidationGuard $liquidationGuard = null,
         ?BoundedDuplicateAwareJsonDecoder $jsonDecoder = null,
         ?HyperliquidTestnetOrderPlanFileReaderInterface $fileReader = null,
+        private readonly ?HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence = null,
+        ?ClockInterface $clock = null,
     ) {
         $this->liquidationGuard = $liquidationGuard ?? new LiquidationGuard();
         $this->jsonDecoder = $jsonDecoder ?? new BoundedDuplicateAwareJsonDecoder();
         $this->fileReader = $fileReader ?? new HyperliquidTestnetOrderPlanFileReader();
+        $this->clock = $clock ?? new NativeClock();
     }
 
     public function decode(string $path): OrderPlan
@@ -81,11 +88,11 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         $orderType = $this->exactString($plan, 'order_type', 'limit');
         $timeInForce = $this->exactString($plan, 'time_in_force', 'gtc');
         $side = $this->enumString($plan, 'side', ['long', 'short']);
-        $marginMode = $this->enumString($plan, 'margin_mode', ['isolated', 'cross']);
+        $marginMode = $this->exactString($plan, 'margin_mode', 'isolated');
         $entryDecimal = $this->positiveDecimal($plan, 'entry_price');
         $quantityDecimal = $this->positiveDecimal($plan, 'quantity');
-        $entryPrice = $this->exactFloat($entryDecimal, self::MAX_DECIMAL_SCALE);
-        $quantity = $this->exactFloat($quantityDecimal, self::MAX_DECIMAL_SCALE);
+        $entryPrice = $this->exactFloat($entryDecimal);
+        $quantity = $this->exactFloat($quantityDecimal);
         $leverage = $this->boundedInt($plan, 'leverage', 1, 100);
 
         $symbol = $this->patternString($plan, 'symbol', '/^[A-Z0-9][A-Z0-9_-]{1,31}$/D');
@@ -106,16 +113,33 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         if ($stopDistance->isZero()) {
             throw new \InvalidArgumentException('order_plan_stop_distance_invalid');
         }
-        $stopPrice = $this->exactFloat($stopDecimal, self::MAX_DECIMAL_SCALE);
+        $stopPrice = $this->exactFloat($stopDecimal);
         $stopLoss = new StopLossResult(
             stopPrice: $stopPrice,
-            stopPct: $this->exactFloat(
-                $stopDistance->dividedBy($entryDecimal, 12, RoundingMode::HALF_UP),
-                12,
-            ),
-            stopDistance: $this->exactFloat($stopDistance, self::MAX_DECIMAL_SCALE),
+            stopPct: $this->exactFloat($stopDistance->dividedBy($entryDecimal, 12, RoundingMode::HALF_UP)),
+            stopDistance: $this->exactFloat($stopDistance),
             stopSource: $this->patternString($stop, 'stop_source', '/^[a-z][a-z0-9_.-]{0,31}$/D'),
             isFullSize: true,
+        );
+
+        if ($this->marginEvidence === null) {
+            throw new \InvalidArgumentException('order_plan_margin_evidence_unavailable');
+        }
+        $notional = $entryDecimal->multipliedBy($quantityDecimal);
+        try {
+            $evidence = $this->marginEvidence->current(
+                $symbol,
+                $this->canonicalDecimal($notional),
+                $leverage,
+            );
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('order_plan_margin_evidence_unavailable');
+        }
+        [$maintenanceRate, $maintenanceDeduction] = $this->validateMarginEvidence(
+            $evidence,
+            $symbol,
+            $notional,
+            $leverage,
         );
 
         $liquidationCheck = $this->liquidationGuard->check(new LiquidationCheckRequest(
@@ -127,10 +151,16 @@ final class HyperliquidTestnetOrderPlanFileDecoder
             entryPrice: $entryPrice,
             stopPrice: $stopPrice,
             leverage: $leverage,
-            maintenanceMarginRate: self::DEFAULT_MAINTENANCE_MARGIN_RATE,
+            maintenanceMarginRate: $maintenanceRate,
             liquidationPrice: null,
             minDistanceRatio: self::MIN_LIQUIDATION_DISTANCE_RATIO,
-            metadata: ['model' => 'entry_leverage_default_maintenance_margin'],
+            metadata: [
+                'model' => 'hyperliquid_authoritative_margin_tier',
+                'margin_table_id' => $evidence->marginTableId,
+                'tier_lower_bound' => $evidence->tierLowerBound,
+            ],
+            maintenanceMarginDeduction: $maintenanceDeduction,
+            positionSize: $quantity,
         ));
         if (!$liquidationCheck->isSafe) {
             throw new \InvalidArgumentException('order_plan_liquidation_guard_unsafe');
@@ -257,18 +287,68 @@ final class HyperliquidTestnetOrderPlanFileDecoder
         return $decimal;
     }
 
-    private function exactFloat(BigDecimal $decimal, int $scale): float
+    private function exactFloat(BigDecimal $decimal): float
     {
         $float = $decimal->toFloat();
         if (!is_finite($float)) {
             throw new \InvalidArgumentException('order_plan_float_invalid');
         }
-        $roundTrip = BigDecimal::of(sprintf('%.' . $scale . 'F', $float));
+        $roundTrip = BigDecimal::of((string) $float);
         if (!$roundTrip->isEqualTo($decimal)) {
             throw new \InvalidArgumentException('order_plan_float_not_exactly_representable');
         }
 
         return $float;
+    }
+
+    /** @return array{float, float} */
+    private function validateMarginEvidence(
+        HyperliquidMarginSafetyEvidence $evidence,
+        string $symbol,
+        BigDecimal $notional,
+        int $leverage,
+    ): array {
+        $age = $this->clock->now()->getTimestamp() - $evidence->observedAt->getTimestamp();
+        if ($age < 0 || $age > self::MAX_MARGIN_EVIDENCE_AGE_SECONDS
+            || $evidence->symbol !== $symbol
+            || $evidence->marginTableId < 0
+            || $evidence->tierMaxLeverage < $leverage
+            || $evidence->accountMarginMode !== 'isolated'
+            || $evidence->accountLeverage !== $leverage
+            || preg_match('/^0x[a-f0-9]{40}$/D', $evidence->accountAddress) !== 1
+        ) {
+            throw new \InvalidArgumentException('order_plan_margin_evidence_invalid');
+        }
+
+        try {
+            $evidenceNotional = BigDecimal::of($evidence->notional);
+            $tierLowerBound = BigDecimal::of($evidence->tierLowerBound);
+            $rate = BigDecimal::of($evidence->maintenanceMarginRate);
+            $deduction = BigDecimal::of($evidence->maintenanceMarginDeduction);
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('order_plan_margin_evidence_invalid');
+        }
+        if (!$evidenceNotional->isEqualTo($notional)
+            || $tierLowerBound->isNegative()
+            || $tierLowerBound->isGreaterThan($notional)
+            || $rate->isLessThanOrEqualTo(BigDecimal::zero())
+            || $rate->isGreaterThanOrEqualTo(BigDecimal::one())
+            || $deduction->isNegative()
+        ) {
+            throw new \InvalidArgumentException('order_plan_margin_evidence_invalid');
+        }
+
+        return [$this->exactFloat($rate), $this->exactFloat($deduction)];
+    }
+
+    private function canonicalDecimal(BigDecimal $decimal): string
+    {
+        $value = (string) $decimal;
+        if (str_contains($value, '.')) {
+            $value = rtrim(rtrim($value, '0'), '.');
+        }
+
+        return $value;
     }
 
     /** @param array<string,mixed> $source */

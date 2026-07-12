@@ -171,4 +171,50 @@ final class LiquidationGuardTest extends TestCase
         self::assertSame('insufficient_liquidation_data', $result->reasonIfUnsafe);
         self::assertContains('Liquidation price cannot be derived without leverage or an exchange-provided liquidation price.', $result->warnings);
     }
+
+    public function testUsesAuthoritativeMaintenanceRateForHalfPercentRegression(): void
+    {
+        $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'hyperliquid',
+            marketType: 'perpetual',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 99.7,
+            leverage: 100,
+            maintenanceMarginRate: 0.005,
+            liquidationPrice: null,
+            minDistanceRatio: 3.0,
+            maintenanceMarginDeduction: 0.0,
+            positionSize: 1.0,
+        ));
+
+        self::assertFalse($result->isSafe);
+        self::assertEqualsWithDelta(99.497487437186, $result->liquidationPrice, 0.000000000001);
+        self::assertSame('liquidation_distance_below_min_ratio', $result->reasonIfUnsafe);
+    }
+
+    public function testAppliesAuthoritativeMaintenanceDeduction(): void
+    {
+        $result = (new LiquidationGuard())->check(new LiquidationCheckRequest(
+            symbol: 'BTCUSDT',
+            instrument: null,
+            exchange: 'hyperliquid',
+            marketType: 'perpetual',
+            direction: 'long',
+            entryPrice: 100.0,
+            stopPrice: 80.0,
+            leverage: 5,
+            maintenanceMarginRate: 0.1,
+            liquidationPrice: null,
+            minDistanceRatio: 0.1,
+            maintenanceMarginDeduction: 10.0,
+            positionSize: 1.0,
+        ));
+
+        self::assertTrue($result->isSafe);
+        self::assertSame(77.777777777778, $result->liquidationPrice);
+        self::assertSame(10.0, $result->metadata['maintenance_margin_deduction'] ?? null);
+    }
 }

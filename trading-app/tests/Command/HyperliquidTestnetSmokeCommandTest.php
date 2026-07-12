@@ -12,18 +12,20 @@ use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
+use App\Provider\Hyperliquid\Dto\HyperliquidMarginSafetyEvidence;
+use App\Provider\Hyperliquid\HyperliquidMarginSafetyEvidenceProviderInterface;
 use App\TradingCore\Execution\Dto\ExecutionRequest;
 use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
-use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPortInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
+use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(HyperliquidTestnetSmokeCommand::class)]
 #[CoversClass(HyperliquidTestnetOrderPlanFileDecoder::class)]
@@ -286,10 +288,10 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(2.0, $protection->stopLoss->stopDistance);
         self::assertSame(0.02, $protection->stopLoss->stopPct);
         self::assertTrue($protection->liquidationCheck->isSafe);
-        self::assertSame(80.0, $protection->liquidationCheck->liquidationPrice);
-        self::assertSame(0.2, $protection->liquidationCheck->liquidationDistancePct);
-        self::assertSame(10.0, $protection->liquidationCheck->stopToLiquidationRatio);
-        self::assertSame(0.0, $protection->liquidationCheck->metadata['maintenance_margin_rate'] ?? null);
+        self::assertEqualsWithDelta(84.210526315789, $protection->liquidationCheck->liquidationPrice, 1.0E-12);
+        self::assertEqualsWithDelta(0.15789473684211, $protection->liquidationCheck->liquidationDistancePct, 1.0E-12);
+        self::assertEqualsWithDelta(7.8947368421053, $protection->liquidationCheck->stopToLiquidationRatio, 1.0E-12);
+        self::assertSame(0.05, $protection->liquidationCheck->metadata['maintenance_margin_rate'] ?? null);
         self::assertSame(3.0, $protection->liquidationCheck->metadata['min_distance_ratio'] ?? null);
     }
 
@@ -305,6 +307,79 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame(0, $port->calls);
     }
 
+    public function testRejectsCrossMarginBeforeRequestingMarginEvidence(): void
+    {
+        $envelope = $this->validEnvelope();
+        $envelope['order_plan']['margin_mode'] = 'cross';
+        $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence());
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port, marginEvidence: $evidence);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
+        self::assertSame(0, $evidence->calls);
+        self::assertSame(0, $port->calls);
+    }
+
+    public function testBuildsPlanOnlyFromFreshMatchingMarginEvidence(): void
+    {
+        $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence());
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port, marginEvidence: $evidence);
+
+        self::assertSame(Command::SUCCESS, $tester->execute($this->input($this->planFile())));
+        self::assertSame([['BTCUSDT', '10', 5]], $evidence->requests);
+        self::assertNotNull($port->request);
+        self::assertSame(0.05, $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_rate'] ?? null);
+        self::assertSame(0.0, $port->request->orderPlan->protectionPlan?->liquidationCheck?->metadata['maintenance_margin_deduction'] ?? null);
+    }
+
+    #[DataProvider('unusableMarginEvidence')]
+    public function testRejectsMissingStaleOrMismatchedMarginEvidence(string $case): void
+    {
+        $evidence = match ($case) {
+            'missing' => new SmokeTestMarginEvidenceProvider(exception: new \RuntimeException('missing evidence')),
+            'stale' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(observedAt: '2026-07-12T11:59:50Z')),
+            'wrong symbol' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(symbol: 'ETHUSDT')),
+            'wrong leverage' => new SmokeTestMarginEvidenceProvider($this->marginEvidence(tierMaxLeverage: 4)),
+            default => throw new \LogicException('unknown evidence case'),
+        };
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port, marginEvidence: $evidence);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile())));
+        self::assertSame(1, $evidence->calls);
+        self::assertSame(0, $port->calls);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function unusableMarginEvidence(): iterable
+    {
+        yield 'missing' => ['missing'];
+        yield 'stale' => ['stale'];
+        yield 'wrong symbol' => ['wrong symbol'];
+        yield 'wrong leverage' => ['wrong leverage'];
+    }
+
+    public function testAuthoritativeHalfPercentMaintenanceRegressionRejectsOptimisticStop(): void
+    {
+        $envelope = $this->validEnvelope();
+        $envelope['order_plan']['leverage'] = 100;
+        $envelope['order_plan']['quantity'] = '1';
+        $envelope['order_plan']['protection_plan']['stop_loss']['stop_price'] = '99.7';
+        $evidence = new SmokeTestMarginEvidenceProvider($this->marginEvidence(
+            notional: '100',
+            tierMaxLeverage: 100,
+            maintenanceMarginRate: '0.005',
+            accountLeverage: 100,
+        ));
+        $port = new SmokeTestPort($this->accepted());
+        $tester = $this->tester($port, marginEvidence: $evidence);
+
+        self::assertSame(Command::FAILURE, $tester->execute($this->input($this->planFile($envelope))));
+        self::assertSame(1, $evidence->calls);
+        self::assertSame(0, $port->calls);
+    }
+
     public function testBuildsCanonicalLiveRequestAndPrintsOnlySafeAcceptedIdentifiers(): void
     {
         $result = new ExecutionResult(
@@ -315,8 +390,7 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             ['protection_confirmed' => true, 'token' => 'metadata-secret'],
         );
         $port = new SmokeTestPort($result);
-        $trip = new SmokeTestTrip();
-        $tester = $this->tester($port, trip: $trip);
+        $tester = $this->tester($port);
 
         $exitCode = $tester->execute($this->input($this->planFile()));
 
@@ -332,12 +406,11 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         self::assertSame('gtc', $port->request->orderPlan->timeInForce);
         self::assertTrue($port->request->orderPlan->protectionPlan?->stopLoss?->isFullSize ?? false);
         self::assertSame(self::HASH, $port->request->orderPlan->configHash);
-        self::assertSame(0, $trip->attempts);
     }
 
     /** @param array<string,mixed> $metadata */
     #[DataProvider('ambiguousAcceptedResults')]
-    public function testAcceptedResultWithoutProvenIdentityAndProtectionTripsQuarantine(
+    public function testAcceptedResultWithoutProvenIdentityAndProtectionFailsDefensively(
         ?string $clientOrderId,
         ?string $exchangeOrderId,
         array $metadata,
@@ -349,16 +422,12 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             $exchangeOrderId,
             metadata: $metadata,
         ));
-        $trip = new SmokeTestTrip();
-        $tester = $this->tester($port, trip: $trip);
+        $tester = $this->tester($port);
 
         $exitCode = $tester->execute($this->input($this->planFile()));
 
         self::assertSame(Command::FAILURE, $exitCode);
         self::assertSame("status=ambiguous\n", $tester->getDisplay());
-        self::assertSame(1, $trip->attempts);
-        self::assertSame('hyperliquid_smoke_accepted_result_ambiguous', $trip->reason);
-        self::assertSame(['command' => 'app:hyperliquid:testnet:smoke'], $trip->context);
     }
 
     /** @return iterable<string, array{?string,?string,array<string,mixed>}> */
@@ -371,24 +440,6 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         yield 'unsafe exchange id' => ['CID-HL-1', '<secret>', ['protection_confirmed' => true]];
         yield 'absent protection proof' => ['CID-HL-1', '123', []];
         yield 'false protection proof' => ['CID-HL-1', '123', ['protection_confirmed' => false]];
-    }
-
-    public function testAmbiguousAcceptedResultStillFailsWhenDurableTripThrows(): void
-    {
-        $port = new SmokeTestPort(new ExecutionResult(
-            ExecutionStatus::Accepted,
-            'CID-HL-OTHER',
-            '123',
-            metadata: ['protection_confirmed' => true, 'secret' => 'not-output'],
-        ));
-        $trip = new SmokeTestTrip(throwOnTrip: true);
-        $tester = $this->tester($port, trip: $trip);
-
-        $exitCode = $tester->execute($this->input($this->planFile()));
-
-        self::assertSame(Command::FAILURE, $exitCode);
-        self::assertSame("status=ambiguous\n", $tester->getDisplay());
-        self::assertSame(1, $trip->attempts);
     }
 
     #[DataProvider('unsuccessfulStatuses')]
@@ -434,15 +485,17 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
         SmokeTestPort $port,
         ?SmokeTestReadinessProbe $probe = null,
         ?HyperliquidConfig $config = null,
-        ?SmokeTestTrip $trip = null,
+        ?SmokeTestMarginEvidenceProvider $marginEvidence = null,
     ): CommandTester {
         return new CommandTester(new HyperliquidTestnetSmokeCommand(
-            new HyperliquidTestnetOrderPlanFileDecoder(),
+            new HyperliquidTestnetOrderPlanFileDecoder(
+                marginEvidence: $marginEvidence ?? new SmokeTestMarginEvidenceProvider($this->marginEvidence()),
+                clock: new MockClock('2026-07-12T12:00:00Z'),
+            ),
             $port,
             $probe ?? new SmokeTestReadinessProbe($this->report()),
             new HyperliquidMutationReadinessGate(),
             $config ?? $this->config(),
-            $trip ?? new SmokeTestTrip(),
         ));
     }
 
@@ -523,6 +576,29 @@ final class HyperliquidTestnetSmokeCommandTest extends TestCase
             'CID-HL-1',
             '123',
             metadata: ['protection_confirmed' => true],
+        );
+    }
+
+    private function marginEvidence(
+        string $symbol = 'BTCUSDT',
+        string $notional = '10',
+        int $tierMaxLeverage = 10,
+        string $maintenanceMarginRate = '0.05',
+        int $accountLeverage = 5,
+        string $observedAt = '2026-07-12T12:00:00Z',
+    ): HyperliquidMarginSafetyEvidence {
+        return new HyperliquidMarginSafetyEvidence(
+            symbol: $symbol,
+            notional: $notional,
+            marginTableId: $tierMaxLeverage < 50 ? $tierMaxLeverage : 51,
+            tierLowerBound: '0',
+            tierMaxLeverage: $tierMaxLeverage,
+            maintenanceMarginRate: $maintenanceMarginRate,
+            maintenanceMarginDeduction: '0',
+            accountAddress: '0x1111111111111111111111111111111111111111',
+            accountMarginMode: 'isolated',
+            accountLeverage: $accountLeverage,
+            observedAt: new \DateTimeImmutable($observedAt),
         );
     }
 
@@ -622,29 +698,26 @@ final class SmokeTestReadinessProbe implements HyperliquidMutationReadinessProbe
     }
 }
 
-final class SmokeTestTrip implements HyperliquidKillSwitchTripInterface
+final class SmokeTestMarginEvidenceProvider implements HyperliquidMarginSafetyEvidenceProviderInterface
 {
-    public int $attempts = 0;
-    public ?string $reason = null;
-    /** @var array<string,mixed>|null */
-    public ?array $context = null;
+    public int $calls = 0;
+    /** @var list<array{string,string,int}> */
+    public array $requests = [];
 
-    public function __construct(private readonly bool $throwOnTrip = false)
-    {
+    public function __construct(
+        private readonly ?HyperliquidMarginSafetyEvidence $evidence = null,
+        private readonly ?\Throwable $exception = null,
+    ) {
     }
 
-    public function isTripped(): bool
+    public function current(string $symbol, string $notional, int $requestedLeverage): HyperliquidMarginSafetyEvidence
     {
-        return false;
-    }
-
-    public function trip(string $reason, array $auditContext): void
-    {
-        ++$this->attempts;
-        $this->reason = $reason;
-        $this->context = $auditContext;
-        if ($this->throwOnTrip) {
-            throw new \RuntimeException('secret-trip-failure');
+        ++$this->calls;
+        $this->requests[] = [$symbol, $notional, $requestedLeverage];
+        if ($this->exception instanceof \Throwable) {
+            throw $this->exception;
         }
+
+        return $this->evidence ?? throw new \RuntimeException('evidence unavailable');
     }
 }

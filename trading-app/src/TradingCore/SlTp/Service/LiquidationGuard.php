@@ -85,6 +85,31 @@ final class LiquidationGuard
             ? max(0.0, $request->maintenanceMarginRate)
             : 0.0;
 
+        if ($request->maintenanceMarginDeduction !== null || $request->positionSize !== null) {
+            $deduction = $request->maintenanceMarginDeduction;
+            $positionSize = $request->positionSize;
+            if ($request->maintenanceMarginRate === null
+                || !\is_finite($request->maintenanceMarginRate)
+                || $request->maintenanceMarginRate < 0.0
+                || $request->maintenanceMarginRate >= 1.0
+                || $deduction === null
+                || !\is_finite($deduction)
+                || $deduction < 0.0
+                || $positionSize === null
+                || !\is_finite($positionSize)
+                || $positionSize <= 0.0
+            ) {
+                return null;
+            }
+            if ($direction === 'long') {
+                return (($request->entryPrice * (1.0 - (1.0 / $request->leverage))) - ($deduction / $positionSize))
+                    / (1.0 - $request->maintenanceMarginRate);
+            }
+
+            return (($request->entryPrice * (1.0 + (1.0 / $request->leverage))) + ($deduction / $positionSize))
+                / (1.0 + $request->maintenanceMarginRate);
+        }
+
         if ($direction === 'long') {
             return $request->entryPrice * max(0.0, 1.0 - (1.0 / $request->leverage) + $maintenance);
         }
@@ -129,6 +154,8 @@ final class LiquidationGuard
             'stop_price' => $request->stopPrice,
             'leverage' => $request->leverage,
             'maintenance_margin_rate' => $request->maintenanceMarginRate,
+            'maintenance_margin_deduction' => $request->maintenanceMarginDeduction,
+            'position_size' => $request->positionSize,
             'min_distance_ratio' => $request->minDistanceRatio,
         ];
     }

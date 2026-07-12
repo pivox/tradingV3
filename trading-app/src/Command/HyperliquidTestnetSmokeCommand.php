@@ -11,7 +11,6 @@ use App\TradingCore\Execution\Dto\ExecutionResult;
 use App\TradingCore\Execution\Enum\ExecutionMode;
 use App\TradingCore\Execution\Enum\ExecutionStatus;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
-use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidTestnetExecutionPortInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -35,7 +34,6 @@ final class HyperliquidTestnetSmokeCommand extends Command
         private readonly HyperliquidMutationReadinessProbeInterface $readiness,
         private readonly HyperliquidMutationReadinessGate $readinessGate,
         private readonly HyperliquidConfig $config,
-        private readonly HyperliquidKillSwitchTripInterface $durableTrip,
     ) {
         parent::__construct();
     }
@@ -97,14 +95,6 @@ final class HyperliquidTestnetSmokeCommand extends Command
     {
         if ($result->status === ExecutionStatus::Accepted) {
             if (!$this->acceptedResultIsProven($result, $submittedClientOrderId)) {
-                try {
-                    $this->durableTrip->trip(
-                        'hyperliquid_smoke_accepted_result_ambiguous',
-                        ['command' => 'app:hyperliquid:testnet:smoke'],
-                    );
-                } catch (\Throwable) {
-                    // The fixed ambiguous result remains fail-closed even if durable persistence fails.
-                }
                 $output->writeln('status=ambiguous');
 
                 return Command::FAILURE;
