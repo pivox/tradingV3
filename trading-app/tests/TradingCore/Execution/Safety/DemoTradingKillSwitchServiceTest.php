@@ -120,6 +120,42 @@ final class DemoTradingKillSwitchServiceTest extends TestCase
         self::assertStringNotContainsString('wallet-secret', $encoded);
     }
 
+    public function testAuditPayloadRedactsSensitiveValuesAndAppliesStructuralBounds(): void
+    {
+        $sink = new CapturingDemoTradingAuditSink();
+        $secret = 'sidecar-secret-value-never-log';
+        $manyItems = [];
+        for ($index = 0; $index < 40; ++$index) {
+            $manyItems['item_' . $index] = 'value_' . $index;
+        }
+        $decision = $this->service($sink)->evaluate($this->okxAttempt(
+            auditContext: [
+                'message' => 'token=' . $secret,
+                'api_key' => $secret,
+                'long_value' => str_repeat('x', 500),
+                'nested' => ['one' => ['two' => ['three' => ['four' => $secret]]]],
+            ] + $manyItems,
+            correlationIds: [
+                'diagnostic' => 'authorization=' . $secret,
+                'correlation_id' => str_repeat('c', 500),
+            ] + $manyItems,
+        ));
+
+        self::assertTrue($decision->allowed);
+        $event = $sink->events[0];
+        self::assertSame('[redacted]', $event['audit_context']['message']);
+        self::assertSame('[redacted]', $event['audit_context']['api_key']);
+        self::assertSame('[redacted]', $event['correlation_ids']['diagnostic']);
+        self::assertLessThanOrEqual(16, count($event['audit_context']));
+        self::assertLessThanOrEqual(16, count($event['correlation_ids']));
+        self::assertLessThanOrEqual(128, strlen((string) $event['audit_context']['long_value']));
+        self::assertLessThanOrEqual(128, strlen((string) $event['correlation_ids']['correlation_id']));
+        self::assertLessThanOrEqual(4_096, strlen(json_encode($event['audit_context'], JSON_THROW_ON_ERROR)));
+        self::assertLessThanOrEqual(4_096, strlen(json_encode($event['correlation_ids'], JSON_THROW_ON_ERROR)));
+        self::assertSame([], $event['audit_context']['nested']['one']['two']);
+        self::assertStringNotContainsString($secret, json_encode($event, JSON_THROW_ON_ERROR));
+    }
+
     public function testMainnetRemainsBlockedEvenWhenEverySwitchIsOff(): void
     {
         $sink = new CapturingDemoTradingAuditSink();

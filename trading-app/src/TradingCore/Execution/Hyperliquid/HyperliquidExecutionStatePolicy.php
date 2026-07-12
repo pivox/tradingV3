@@ -69,8 +69,15 @@ final readonly class HyperliquidExecutionStatePolicy
             : BigDecimal::one()->plus(self::EMERGENCY_SLIPPAGE);
         $rounding = $sell ? RoundingMode::DOWN : RoundingMode::UP;
         $units = $reference->multipliedBy($factor)->dividedBy($tick, 0, $rounding);
+        if ($units->isLessThan(BigDecimal::one())) {
+            $units = BigDecimal::one();
+        }
+        $cap = $units->multipliedBy($tick);
+        if ($cap->isLessThanOrEqualTo(BigDecimal::zero()) || !$cap->remainder($tick)->isZero()) {
+            throw new \InvalidArgumentException('hyperliquid_execution_cap_price_invalid');
+        }
 
-        return (float) (string) $units->multipliedBy($tick);
+        return (float) (string) $cap;
     }
 
     private function milliseconds(\DateTimeInterface $time): int

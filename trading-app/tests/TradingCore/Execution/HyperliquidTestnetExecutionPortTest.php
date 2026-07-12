@@ -28,6 +28,8 @@ use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationContext;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationReasonCode;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationResult;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidDurableTripPersistenceException;
+use App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockLeaseInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionState;
@@ -111,6 +113,42 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(ExecutionStatus::Rejected, $result->status);
         self::assertSame([], $fixture->nonces->issued);
         self::assertSame([], $fixture->signed->submissions);
+    }
+
+    public function testFallbackMarkerBlocksNextExecutionBeforeNonce(): void
+    {
+        $directory = sys_get_temp_dir() . '/hl-port-quarantine-' . bin2hex(random_bytes(6));
+        mkdir($directory, 0700, true);
+        $marker = $directory . '/execution.quarantine';
+        $primary = new TestnetPortTrip();
+        $primary->readFailure = true;
+        $primary->writeFailure = true;
+        $durableTrip = new FilesystemFallbackHyperliquidKillSwitch($primary, $marker);
+        $durableTrip->trip('database fallback', []);
+        $fixture = $this->fixture(durableTrip: $durableTrip);
+
+        try {
+            $result = $fixture->port->execute($fixture->request);
+
+            self::assertSame(ExecutionStatus::Rejected, $result->status);
+            self::assertContains('hyperliquid_durable_kill_switch_tripped', $result->metadata['blocking_reasons']);
+            self::assertSame([], $fixture->nonces->issued);
+            self::assertSame([], $fixture->signed->submissions);
+        } finally {
+            @unlink($marker);
+            @rmdir($directory);
+        }
+    }
+
+    public function testLockBackendFailureIsDistinctFromContention(): void
+    {
+        $unavailableFixture = $this->fixture(lockThrows: true);
+        $unavailable = $unavailableFixture->port->execute($unavailableFixture->request);
+        $contendedFixture = $this->fixture(lockAvailable: false);
+        $contended = $contendedFixture->port->execute($contendedFixture->request);
+
+        self::assertSame('hyperliquid_execution_lock_unavailable', $unavailable->metadata['reject_reason']);
+        self::assertSame('hyperliquid_execution_in_flight', $contended->metadata['reject_reason']);
     }
 
     public function testMapperMetadataWithoutPublishedMaximumIsCompatibleWithExecutionPort(): void
@@ -354,6 +392,93 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(0, $fixture->trip->tripAttempts);
     }
 
+    public function testRejectedLeverageCorrelationMismatchTripsAndNeverSubmitsGroup(): void
+    {
+        $fixture = $this->fixture(
+            state: $this->state(leverage: 3),
+            signedResults: [new HyperliquidSignedActionResult(
+                'updateLeverage', 'rejected', [], 'exchange_error', 'corr-other',
+            )],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_leverage_update_ambiguous', $result->metadata['failure_reason']);
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertCount(1, $fixture->signed->submissions);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+    }
+
+    public function testLockReleaseFailureReturnsFailedTripsAndRetainsLease(): void
+    {
+        $fixture = $this->fixture(
+            signedResults: [$this->acceptedGroup(42, 43)],
+            lockReleaseThrows: true,
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_execution_lock_release_failed', $result->metadata['failure_reason']);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+        self::assertTrue($fixture->lock->lease?->retained);
+    }
+
+    public function testLockReleaseAndDurableTripFailureReturnsDistinctFailureAndRetainsLease(): void
+    {
+        $trip = new TestnetPortTrip();
+        $trip->writeFailure = true;
+        $fixture = $this->fixture(
+            trip: $trip,
+            signedResults: [$this->acceptedGroup(42, 43)],
+            lockReleaseThrows: true,
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_execution_lock_release_quarantine_failed', $result->metadata['failure_reason']);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+        self::assertTrue($fixture->lock->lease?->retained);
+    }
+
+    public function testDurableTripFailureDuringAmbiguousLeverageReturnsDistinctFailureAndRetainsLease(): void
+    {
+        $trip = new TestnetPortTrip();
+        $trip->writeFailure = true;
+        $fixture = $this->fixture(
+            state: $this->state(leverage: 3),
+            trip: $trip,
+            signedResults: [$this->ambiguous('updateLeverage')],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_durable_quarantine_failed', $result->metadata['failure_reason']);
+        self::assertTrue($fixture->lock->lease?->retained);
+        self::assertFalse($fixture->lock->lease->released);
+    }
+
+    public function testDurableTripFailureAfterUnconfirmedCompensationRetainsLease(): void
+    {
+        $trip = new TestnetPortTrip();
+        $trip->writeFailure = true;
+        $fixture = $this->fixture(
+            trip: $trip,
+            signedResults: [$this->ambiguous('order')],
+            compensationResult: $this->unknown(),
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertSame('hyperliquid_durable_quarantine_failed', $result->metadata['failure_reason']);
+        self::assertTrue($fixture->lock->lease?->retained);
+        self::assertFalse($fixture->lock->lease->released);
+    }
+
     public function testBothOrderRowsRejectedReturnRejectedWithoutCompensation(): void
     {
         $fixture = $this->fixture(signedResults: [$this->bothRejected()]);
@@ -506,6 +631,22 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame(100.7, $fixture->compensation->contexts[0]->emergencyCloseSlippageCapPrice);
     }
 
+    public function testMinimumTickProtectiveSellCapIsPositiveBeforeNonceSubmission(): void
+    {
+        $fixture = $this->fixture(
+            plan: $this->plan(entry: 0.2, stop: 0.1, liquidationPrice: 0.05),
+            metadata: $this->metadata(priceTick: '0.1', priceMaxDecimals: 1),
+            state: $this->state(bid: 0.1, ask: 0.2),
+            signedResults: [$this->acceptedGroup(42, 43)],
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Accepted, $result->status);
+        self::assertSame([1_000], $fixture->nonces->issued);
+        self::assertSame('0.1', $fixture->signed->submissions[0]['action']['orders'][1]['p']);
+    }
+
     public function testResultMetadataIsRecursivelyRedactedAndContainsNoRawResponse(): void
     {
         $fixture = $this->fixture(
@@ -614,6 +755,8 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         array $requestMetadata = [],
         bool $metadataMissing = false,
         bool $lockThrows = false,
+        bool $lockReleaseThrows = false,
+        ?HyperliquidKillSwitchTripInterface $durableTrip = null,
     ): TestnetPortFixture {
         $config ??= $this->config();
         $report ??= $this->report();
@@ -624,7 +767,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         $nonces = new TestnetPortNonceManager($nonceReady);
         $signed = new TestnetPortSignedClient($signedResults);
         $compensation = new TestnetPortCompensation($compensationResult ?? $this->unknown());
-        $lock = new TestnetPortExecutionLock($lockAvailable, $lockThrows);
+        $lock = new TestnetPortExecutionLock($lockAvailable, $lockThrows, $lockReleaseThrows);
         $clock = new MockClock('2026-07-12T12:00:00.000Z');
         $audit = $auditFails ? new TestnetPortThrowingAuditSink() : new TestnetPortAuditSink();
         $killSwitch = new DemoTradingKillSwitchService(
@@ -644,7 +787,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             executionState: $stateProvider,
             executionStatePolicy: new HyperliquidExecutionStatePolicy($clock),
             killSwitch: $killSwitch,
-            durableTrip: $trip,
+            durableTrip: $durableTrip ?? $trip,
             nonces: $nonces,
             actions: new HyperliquidActionFactory(),
             signedActions: $signed,
@@ -739,6 +882,8 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
     private function metadata(
         string $symbol = 'BTCUSDT',
         int $assetId = 0,
+        string $priceTick = '0.1',
+        int $priceMaxDecimals = 1,
         string $minSize = '0.01',
         string $maxSize = '10',
         array $qualityFlags = [],
@@ -749,8 +894,8 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             symbol: $symbol,
             coin: 'BTC',
             assetId: $assetId,
-            priceTick: '0.1',
-            priceMaxDecimals: 1,
+            priceTick: $priceTick,
+            priceMaxDecimals: $priceMaxDecimals,
             quantityStep: '0.01',
             minSize: $minSize,
             maxSize: $maxSize,
@@ -784,8 +929,9 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         ?string $timeInForce = null,
         string $profile = 'scalper_micro',
         ?string $configHash = self::HASH,
+        ?float $liquidationPrice = null,
     ): OrderPlan {
-        $liquidation = $side === 'long' ? 80.0 : 120.0;
+        $liquidation = $liquidationPrice ?? ($side === 'long' ? 80.0 : 120.0);
         $plan = new OrderPlan(
             symbol: 'BTCUSDT',
             profile: $profile,
@@ -953,17 +1099,25 @@ final class TestnetPortTrip implements HyperliquidKillSwitchTripInterface
     public bool $tripped = false;
     public bool $readFailure = false;
     public int $tripAttempts = 0;
+    public bool $writeFailure = false;
     public function isTripped(): bool { if ($this->readFailure) { throw new \RuntimeException('trip_unreadable'); } return $this->tripped; }
-    public function trip(string $reason, array $redactedAuditContext = []): void { ++$this->tripAttempts; $this->tripped = true; }
+    public function trip(string $reason, array $redactedAuditContext = []): void
+    {
+        ++$this->tripAttempts;
+        if ($this->writeFailure) { throw new HyperliquidDurableTripPersistenceException(); }
+        $this->tripped = true;
+    }
 }
 
 final class TestnetPortExecutionLock implements HyperliquidExecutionLockInterface
 {
-    public function __construct(public bool $available, public bool $throws = false) {}
+    public ?TestnetPortExecutionLockLease $lease = null;
+    public function __construct(public bool $available, public bool $throws = false, public bool $releaseThrows = false) {}
     public function acquire(): ?HyperliquidExecutionLockLeaseInterface
     {
         if ($this->throws) { throw new \RuntimeException('lock_backend_failed'); }
-        return $this->available ? new TestnetPortExecutionLockLease() : null;
+        $this->lease = $this->available ? new TestnetPortExecutionLockLease($this->releaseThrows) : null;
+        return $this->lease;
     }
     public function isInFlight(): bool { return !$this->available; }
 }
@@ -971,7 +1125,14 @@ final class TestnetPortExecutionLock implements HyperliquidExecutionLockInterfac
 final class TestnetPortExecutionLockLease implements HyperliquidExecutionLockLeaseInterface
 {
     public bool $released = false;
-    public function release(): void { $this->released = true; }
+    public bool $retained = false;
+    public function __construct(private readonly bool $releaseThrows = false) {}
+    public function release(): void
+    {
+        if ($this->releaseThrows) { throw new \RuntimeException('lock_release_failed'); }
+        $this->released = true;
+    }
+    public function retain(): void { $this->retained = true; }
 }
 
 final class TestnetPortAuditSink implements DemoTradingAuditSinkInterface

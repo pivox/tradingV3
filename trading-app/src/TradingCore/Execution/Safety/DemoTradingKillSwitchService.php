@@ -7,6 +7,7 @@ use App\Common\Enum\Exchange;
 use App\Exchange\Readiness\ExchangePrivateObservabilityPolicy;
 use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\Exchange\Hyperliquid\HyperliquidPollingObservabilityPolicy;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchAuditSanitizer;
 
 final readonly class DemoTradingKillSwitchService
 {
@@ -18,6 +19,7 @@ final readonly class DemoTradingKillSwitchService
         private bool $okxDemoTradingEnabled = false,
         private bool $hyperliquidTestnetTradingEnabled = false,
         private ?HyperliquidPollingObservabilityPolicy $hyperliquidPollingPolicy = null,
+        private ?HyperliquidKillSwitchAuditSanitizer $auditSanitizer = null,
     ) {
     }
 
@@ -190,7 +192,7 @@ final readonly class DemoTradingKillSwitchService
             'allowed' => $allowed,
             'outcome' => $allowed ? 'allowed' : 'blocked',
             'reasons' => $reasons,
-            'correlation_ids' => self::redact($attempt->correlationIds),
+            'correlation_ids' => $this->sanitizeAuditPayload($attempt->correlationIds),
             'safety' => [
                 'level' => $safetyDecision->level->value,
                 'allowed' => $safetyDecision->allowed,
@@ -200,46 +202,16 @@ final readonly class DemoTradingKillSwitchService
             'private_observability' => $privateObservabilityMissing
                 ? ['status_available' => false] + $privateObservabilityDecision
                 : $privateObservabilityDecision,
-            'audit_context' => self::redact($attempt->auditContext),
+            'audit_context' => $this->sanitizeAuditPayload($attempt->auditContext),
         ];
     }
 
-    private static function redact(mixed $value, ?string $key = null): mixed
+    /**
+     * @param array<string, mixed> $value
+     * @return array<string, mixed>
+     */
+    private function sanitizeAuditPayload(array $value): array
     {
-        if ($key !== null && self::isSensitiveKey($key)) {
-            return '[redacted]';
-        }
-
-        if (!is_array($value)) {
-            return $value;
-        }
-
-        $redacted = [];
-        foreach ($value as $childKey => $childValue) {
-            $redacted[$childKey] = self::redact(
-                $childValue,
-                is_string($childKey) ? $childKey : null,
-            );
-        }
-
-        return $redacted;
-    }
-
-    private static function isSensitiveKey(string $key): bool
-    {
-        $normalized = trim((string) preg_replace('/[^a-z0-9]+/', '_', strtolower($key)), '_');
-        $compacted = str_replace('_', '', $normalized);
-
-        foreach (['secret', 'token', 'api_key', 'private_key', 'passphrase', 'password', 'signature', 'authorization', 'cookie', 'memo', 'credential'] as $needle) {
-            if (str_contains($normalized, $needle) || str_contains($compacted, str_replace('_', '', $needle))) {
-                return true;
-            }
-        }
-
-        return $normalized === 'key'
-            || $normalized === 'sign'
-            || str_ends_with($normalized, '_key')
-            || str_ends_with($normalized, '_sign')
-            || str_ends_with($compacted, 'key');
+        return ($this->auditSanitizer ?? new HyperliquidKillSwitchAuditSanitizer())->sanitizeAuditPayload($value);
     }
 }

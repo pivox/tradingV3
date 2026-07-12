@@ -158,8 +158,13 @@ services:
     App\Provider\Hyperliquid\HyperliquidReconciliationStatusInterface:
         alias: App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock
 
+    App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch:
+        arguments:
+            $repository: '@App\Repository\HyperliquidTestnetKillSwitchStateRepository'
+            $markerPath: '%kernel.project_dir%/var/hyperliquid-testnet-execution.quarantine'
+
     App\TradingCore\Execution\Hyperliquid\HyperliquidKillSwitchTripInterface:
-        alias: App\Repository\HyperliquidTestnetKillSwitchStateRepository
+        alias: App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch
 
     App\Trading\Reporting\PositionTradeAnalysisLegacyReaderInterface:
         alias: App\Repository\PositionTradeAnalysisRepository

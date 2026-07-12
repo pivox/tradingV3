@@ -71,17 +71,29 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         try {
-            return $this->executeUnderLock($request);
-        } finally {
-            try {
-                $lease->release();
-            } catch (\Throwable) {
-                try {
-                    $this->durableTrip->trip('hyperliquid_execution_lock_release_failed', []);
-                } catch (\Throwable) {
-                }
-            }
+            $result = $this->executeUnderLock($request);
+        } catch (HyperliquidDurableTripPersistenceException) {
+            $lease->retain();
+
+            return $this->failed($plan, $this->correlationId($request), 'hyperliquid_durable_quarantine_failed');
         }
+
+        try {
+            $lease->release();
+        } catch (\Throwable) {
+            try {
+                $this->durableTrip->trip('hyperliquid_execution_lock_release_failed', []);
+            } catch (\Throwable) {
+                $lease->retain();
+
+                return $this->failed($plan, $this->correlationId($request), 'hyperliquid_execution_lock_release_quarantine_failed');
+            }
+            $lease->retain();
+
+            return $this->failed($plan, $this->correlationId($request), 'hyperliquid_execution_lock_release_failed');
+        }
+
+        return $result;
     }
 
     private function executeUnderLock(ExecutionRequest $request): ExecutionResult
@@ -345,7 +357,9 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         ) {
             return null;
         }
-        if ($result->actionType === 'updateLeverage' && $result->outcome === 'rejected') {
+        if ($result->actionType === 'updateLeverage' && $result->outcome === 'rejected'
+            && hash_equals($correlationId, $result->correlationId)
+        ) {
             return $this->rejected($plan, 'hyperliquid_leverage_update_rejected', ['hyperliquid_leverage_update_rejected']);
         }
 
@@ -426,10 +440,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         if ($compensation->outcome === 'unknown_requires_resync') {
-            try {
-                $this->durableTrip->trip('hyperliquid_compensation_unconfirmed', ['correlation_id' => $correlationId]);
-            } catch (\Throwable) {
-            }
+            $this->durableTrip->trip('hyperliquid_compensation_unconfirmed', ['correlation_id' => $correlationId]);
         }
         $status = $compensation->outcome === 'entry_rejected' ? ExecutionStatus::Rejected : ExecutionStatus::Failed;
 
@@ -584,11 +595,13 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
 
     private function tripAndFail(OrderPlan $plan, string $correlationId, string $reason): ExecutionResult
     {
-        try {
-            $this->durableTrip->trip($reason, ['correlation_id' => $correlationId]);
-        } catch (\Throwable) {
-        }
+        $this->durableTrip->trip($reason, ['correlation_id' => $correlationId]);
 
+        return $this->failed($plan, $correlationId, $reason);
+    }
+
+    private function failed(OrderPlan $plan, string $correlationId, string $reason): ExecutionResult
+    {
         return $this->result(ExecutionStatus::Failed, $plan, null, [
             'outcome' => 'unknown_requires_resync',
             'failure_reason' => $reason,

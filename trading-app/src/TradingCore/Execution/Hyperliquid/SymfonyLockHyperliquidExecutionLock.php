@@ -23,19 +23,15 @@ final class SymfonyLockHyperliquidExecutionLock implements HyperliquidExecutionL
             return null;
         }
 
-        try {
-            $lock = $this->locks->createLock(self::RESOURCE, 300.0, false);
-            if (!$lock->acquire(false)) {
-                return null;
-            }
-            $this->ownedLock = $lock;
-
-            return new SymfonyLockHyperliquidExecutionLockLease($lock, function (): void {
-                $this->ownedLock = null;
-            });
-        } catch (\Throwable) {
+        $lock = $this->locks->createLock(self::RESOURCE, 300.0, false);
+        if (!$lock->acquire(false)) {
             return null;
         }
+        $this->ownedLock = $lock;
+
+        return new SymfonyLockHyperliquidExecutionLockLease($lock, function (): void {
+            $this->ownedLock = null;
+        });
     }
 
     public function isInFlight(): bool
@@ -61,6 +57,7 @@ final class SymfonyLockHyperliquidExecutionLock implements HyperliquidExecutionL
 final class SymfonyLockHyperliquidExecutionLockLease implements HyperliquidExecutionLockLeaseInterface
 {
     private bool $released = false;
+    private bool $retained = false;
 
     public function __construct(
         private readonly LockInterface $lock,
@@ -73,16 +70,24 @@ final class SymfonyLockHyperliquidExecutionLockLease implements HyperliquidExecu
         if ($this->released) {
             return;
         }
+        $this->lock->release();
         $this->released = true;
-        try {
-            $this->lock->release();
-        } finally {
-            ($this->onRelease)();
-        }
+        ($this->onRelease)();
+    }
+
+    public function retain(): void
+    {
+        $this->retained = true;
     }
 
     public function __destruct()
     {
-        $this->release();
+        if ($this->retained) {
+            return;
+        }
+        try {
+            $this->release();
+        } catch (\Throwable) {
+        }
     }
 }

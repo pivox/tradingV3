@@ -7,4 +7,6 @@ namespace App\TradingCore\Execution\Hyperliquid;
 interface HyperliquidExecutionLockLeaseInterface
 {
     public function release(): void;
+
+    public function retain(): void;
 }
