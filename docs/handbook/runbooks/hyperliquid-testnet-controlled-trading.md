@@ -273,7 +273,8 @@ testnet peut obtenir du collateral fictif selon la procedure officielle
 
 Avant toute preparation :
 
-1. La migration `Version20260712120000` est appliquee et PostgreSQL est sain.
+1. Les migrations `Version20260712120000` et `Version20260712230000` sont
+   appliquees et PostgreSQL est sain.
 2. Le master account de role officiel `user` et l'agent testnet dedies sont
    approuves et finances ; subaccounts et vaults sont interdits.
 3. `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et l'endpoint
@@ -293,6 +294,15 @@ Verifier l'etat sans afficher de valeur sensible :
 ```bash
 set -euo pipefail
 docker compose ps trading-app-db trading-app-php trading-app-messenger-trading
+
+MIGRATION_LIST="$(docker compose exec -T trading-app-php \
+  php bin/console doctrine:migrations:list --no-interaction)"
+for version in Version20260712120000 Version20260712230000; do
+  printf '%s\n' "$MIGRATION_LIST" | awk -F '|' -v version="$version" '
+    $2 ~ version && $3 ~ /^[[:space:]]*migrated[[:space:]]*$/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  '
+done
 
 docker compose exec -T trading-app-php php -r '
 $missing = false;

@@ -115,6 +115,26 @@ def test_official_sdk_testnet_signing_is_deterministic_and_well_formed() -> None
     )
 
 
+def test_submit_preserves_canonical_short_signature_limbs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = FakeTransport()
+    signer = HyperliquidTestnetSigner(config(), transport)
+    monkeypatch.setattr(
+        "app.signing._sign_l1_testnet_action",
+        lambda *args, **kwargs: {"r": "0x1", "s": "0x2", "v": 27},
+    )
+
+    response = asyncio.run(signer.submit(exchange_request()))
+
+    assert response.outcome == "accepted"
+    assert transport.calls[0][1]["signature"] == {
+        "r": "0x1",
+        "s": "0x2",
+        "v": 27,
+    }
+
+
 def test_signer_requires_private_key_to_match_configured_agent() -> None:
     with pytest.raises(
         ValueError, match="^agent_private_key_address_mismatch$"
