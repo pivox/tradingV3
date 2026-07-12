@@ -37,6 +37,116 @@ address retournerait un state vide ou incorrect. Un agent neuf et dedie au
 processus evite aussi le partage de nonces recommande par la documentation
 Hyperliquid : [Nonces and API wallets](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets).
 
+## Creation et approbation de l'agent API dedie
+
+Cette procedure utilise l'UI officielle Hyperliquid testnet. Le repository ne
+fournit aucune commande de creation ou d'approbation d'agent ; ne pas en
+inventer une et ne pas appeler `/exchange` a la main. Garder
+`DEMO_TRADING_ENABLED=0`, `HYPERLIQUID_TESTNET_TRADING_ENABLED=0`,
+`HYPERLIQUID_SIGNER_BROADCAST_ENABLED=0` et le sidecar arrete.
+
+1. Ouvrir exclusivement [l'UI API officielle testnet](https://app.hyperliquid-testnet.xyz/API)
+   et verifier le host avant de connecter le wallet du compte testnet dedie.
+2. Verifier dans l'UI que l'adresse connectee est l'**account address** attendue.
+   Pour un subaccount, utiliser son adresse comme account address ; l'agent
+   reste approuve par le master account selon le modele Hyperliquid.
+3. Creer un **named API wallet** avec un nom neuf reserve a ce processus. Ne pas
+   reutiliser un agent ou un nom existant : Hyperliquid peut deregistrer/remplacer
+   un agent du meme slot et son etat de nonce peut etre prune.
+4. L'UI genere une private key et en derive une **agent address**. L'agent
+   address est publique et distincte de l'account address. La private key agent
+   est le secret de signature ; elle n'est ni l'adresse du compte ni la private
+   key du compte principal.
+5. Conserver la private key dans un enregistrement secret `pending`, hors Git et
+   hors runtime. Ne pas la copier dans une commande, une variable shell, un
+   fichier `.env`, le presse-papiers partage ou un terminal. Ne pas encore
+   l'injecter au sidecar.
+6. Approuver l'agent dans l'UI avec le wallet du compte, sur **Testnet**, puis
+   relever uniquement account address, agent address, nom et expiration.
+
+Le modele agent, les nonces par signer et le risque de reutilisation sont
+decrits dans [Nonces and API wallets](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets).
+L'action officielle sous-jacente est `approveAgent`, documentee dans
+[Approve an API wallet](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#approve-an-api-wallet).
+
+Verifier l'approbation **avant toute injection du secret**. Les deux invites
+ci-dessous ne demandent que des adresses publiques et ne les inscrivent pas
+dans l'historique shell :
+
+```bash
+set +x
+read -r -p 'Dedicated testnet account address: ' HL_TESTNET_ACCOUNT_ADDRESS
+read -r -p 'Derived testnet agent address: ' HL_TESTNET_AGENT_ADDRESS
+export HL_TESTNET_ACCOUNT_ADDRESS HL_TESTNET_AGENT_ADDRESS
+export HL_INFO_URL='https://api.hyperliquid-testnet.xyz/info'
+
+jq -en --arg account "$HL_TESTNET_ACCOUNT_ADDRESS" \
+  --arg agent "$HL_TESTNET_AGENT_ADDRESS" '
+  ($account | test("^0x[0-9a-fA-F]{40}$")) and
+  ($agent | test("^0x[0-9a-fA-F]{40}$")) and
+  (($account | ascii_downcase) != ($agent | ascii_downcase))
+' >/dev/null
+
+EXTRA_AGENTS_JSON="$(
+  curl --fail --silent --show-error \
+    -H 'Content-Type: application/json' \
+    --data "$(jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
+      '{type:"extraAgents", user:$user}')" \
+    "$HL_INFO_URL"
+)"
+
+printf '%s' "$EXTRA_AGENTS_JSON" | jq \
+  --arg agent "$HL_TESTNET_AGENT_ADDRESS" '
+  [.[]
+    | select((.address | ascii_downcase) == ($agent | ascii_downcase))
+    | {address, name, validUntil}]
+'
+
+printf '%s' "$EXTRA_AGENTS_JSON" | jq -e \
+  --arg agent "$HL_TESTNET_AGENT_ADDRESS" '
+  [.[]
+    | select((.address | ascii_downcase) == ($agent | ascii_downcase))
+    | select((.validUntil | type) == "number")
+    | select(.validUntil > (now * 1000))]
+  | length == 1
+' >/dev/null
+```
+
+La sortie filtree doit contenir exactement l'agent derive et une expiration
+future. Une reponse vide, dupliquee, expiree ou mal formee bloque la procedure.
+`extraAgents` est la preuve read-only utilisee par la readiness HL-012 ; elle ne
+contient et ne valide aucune private key.
+
+Configurer ensuite **uniquement les deux adresses publiques** dans
+`HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` et
+`HYPERLIQUID_TESTNET_AGENT_ADDRESS` du runtime PHP, recreer PHP sans demarrer le
+sidecar, puis verifier la permission trade :
+
+```bash
+docker compose up -d --no-deps --force-recreate trading-app-php
+
+HL_READINESS_OUTPUT="$(
+  docker compose exec -T trading-app-php \
+    php bin/console app:exchange:runtime-check hyperliquid perpetual
+)"
+
+printf '%s\n' "$HL_READINESS_OUTPUT" \
+  | rg '^(Readiness level|Readiness blocking errors|Readiness warnings|Signer configured|Live allowed|Schedule ready):'
+
+if printf '%s\n' "$HL_READINESS_OUTPUT" | rg -q \
+  'hyperliquid_(extra_agents|agent_wallet_trade_permission)'; then
+  echo 'Agent trade permission is not proven; secret injection refused.' >&2
+  exit 1
+fi
+```
+
+Avec le sidecar encore arrete, d'autres blocages comme
+`hyperliquid_signer_sidecar_not_ready` sont attendus. Seules la preuve
+`extraAgents` exacte et l'absence des erreurs readiness de permission autorisent
+le passage de l'enregistrement secret `pending` vers l'injection sidecar par le
+mecanisme local approuve. Ne jamais utiliser `export`, `read`, `docker compose
+run -e`, `--env` ou une ligne de commande pour la private key.
+
 ## Secrets et sidecar
 
 Le signer est le service Compose `hyperliquid-signer`, sous le profile
@@ -296,6 +406,145 @@ afficher de payload signe.
 rg -n --fixed-strings 'hl12-testnet-attempt-001' trading-app/var/log
 ```
 
+### Reconciliation `/info` read-only
+
+Les commandes suivantes utilisent exclusivement l'endpoint testnet et
+l'**account address**, jamais l'agent address. Elles suivent les surfaces
+officielles [clearinghouseState](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-users-perpetuals-account-summary),
+[frontendOpenOrders](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-open-orders-with-additional-frontend-info)
+et [orderStatus](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#query-order-status-by-oid-or-cloid).
+Elles n'affichent que coin, taille, oid, cloid, statut et flags utiles.
+
+Initialiser les identifiants publics. `HL_COIN` est le coin Hyperliquid, par
+exemple celui lie au symbole du plan. `HL_ENTRY_OID` vient de la sortie smoke et
+`HL_ENTRY_CLOID` est le cloid wire de 16 octets (`0x` + 32 hex) conserve dans
+l'audit redacted ; ce n'est pas le `client_order_id` metier.
+
+```bash
+set +x
+export HL_INFO_URL='https://api.hyperliquid-testnet.xyz/info'
+: "${HL_TESTNET_ACCOUNT_ADDRESS:?set the dedicated account address}"
+: "${HL_COIN:?set the exact Hyperliquid coin from the approved plan}"
+: "${HL_ENTRY_OID:?set the exact exchange OID returned by the smoke command}"
+: "${HL_ENTRY_CLOID:?set the exact wire cloid from redacted application evidence}"
+
+jq -en --arg account "$HL_TESTNET_ACCOUNT_ADDRESS" --arg coin "$HL_COIN" '
+  ($account | test("^0x[0-9a-fA-F]{40}$")) and
+  ($coin | test("^[A-Z0-9][A-Z0-9_-]{0,31}$"))
+' >/dev/null
+
+hl_info() {
+  curl --fail --silent --show-error \
+    -H 'Content-Type: application/json' \
+    --data "$1" \
+    "$HL_INFO_URL"
+}
+```
+
+Verifier les positions non nulles du coin, puis exiger un resultat vide pour
+declarer le symbole flat :
+
+```bash
+HL_POSITIONS_JSON="$(hl_info "$(
+  jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
+    '{type:"clearinghouseState", user:$user}'
+)")"
+
+HL_OPEN_POSITIONS="$(
+  printf '%s' "$HL_POSITIONS_JSON" | jq --arg coin "$HL_COIN" '
+    [.assetPositions[]?.position
+      | select(.coin == $coin)
+      | select((.szi | tonumber?) != 0)
+      | {coin, size:.szi}]
+  '
+)"
+printf '%s\n' "$HL_OPEN_POSITIONS"
+printf '%s' "$HL_OPEN_POSITIONS" | jq -e 'length == 0' >/dev/null
+```
+
+Verifier les ordres ouverts du meme coin, puis exiger un resultat vide :
+
+```bash
+HL_ORDERS_JSON="$(hl_info "$(
+  jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
+    '{type:"frontendOpenOrders", user:$user}'
+)")"
+
+HL_OPEN_ORDERS="$(
+  printf '%s' "$HL_ORDERS_JSON" | jq --arg coin "$HL_COIN" '
+    [.[]
+      | select(.coin == $coin)
+      | {coin, oid, cloid, size:.sz, reduceOnly, isTrigger}]
+  '
+)"
+printf '%s\n' "$HL_OPEN_ORDERS"
+printf '%s' "$HL_OPEN_ORDERS" | jq -e 'length == 0' >/dev/null
+```
+
+Interroger `orderStatus` sans convertir un OID u64 en float et sans accepter un
+identifiant approximatif :
+
+```bash
+hl_order_status() {
+  local identifier="$1" payload
+  if [[ "$identifier" =~ ^[1-9][0-9]*$ ]]; then
+    payload="$(printf '{"type":"orderStatus","user":"%s","oid":%s}' \
+      "$HL_TESTNET_ACCOUNT_ADDRESS" "$identifier")"
+  elif [[ "$identifier" =~ ^0x[0-9a-fA-F]{32}$ ]]; then
+    payload="$(jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
+      --arg oid "$identifier" '{type:"orderStatus", user:$user, oid:$oid}')"
+  else
+    echo 'Invalid exact OID/cloid; lookup refused.' >&2
+    return 2
+  fi
+  hl_info "$payload"
+}
+
+HL_OID_STATUS_JSON="$(hl_order_status "$HL_ENTRY_OID")"
+HL_CLOID_STATUS_JSON="$(hl_order_status "$HL_ENTRY_CLOID")"
+
+for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
+  printf '%s' "$status_json" | jq '
+    if .status == "order" then
+      {
+        lookupStatus:.status,
+        oid:.order.order.oid,
+        cloid:.order.order.cloid,
+        orderStatus:.order.status,
+        size:.order.order.sz,
+        originalSize:.order.order.origSz,
+        reduceOnly:.order.order.reduceOnly
+      }
+    else
+      {lookupStatus:.status}
+    end
+  '
+done
+
+for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
+  printf '%s' "$status_json" | jq -e \
+    --arg oid "$HL_ENTRY_OID" --arg cloid "$HL_ENTRY_CLOID" '
+    .status == "order" and
+    ((.order.order.oid | tostring) == $oid) and
+    ((.order.order.cloid | ascii_downcase) == ($cloid | ascii_downcase))
+  ' >/dev/null
+done
+
+HL_OID_STATUS="$(printf '%s' "$HL_OID_STATUS_JSON" | jq -r '.order.status')"
+HL_CLOID_STATUS="$(printf '%s' "$HL_CLOID_STATUS_JSON" | jq -r '.order.status')"
+test "$HL_OID_STATUS" = "$HL_CLOID_STATUS"
+```
+
+Les deux recherches doivent retourner le meme couple OID/cloid. `unknownOid`,
+un cloid absent, un OID divergent ou des statuts incompatibles reste
+`ambiguous`. Si le statut a change entre les deux appels, rejouer immediatement
+les deux lookups une seule fois ; une seconde divergence reste `ambiguous`. Il
+est interdit de chercher un autre ordre par coin, prix, taille ou fenetre
+temporelle. Rejouer `hl_order_status` avec les OID/cloid exacts du SL et de
+l'eventuel `:emergency-close` lorsqu'ils sont emis dans la preuve redacted.
+
+### Escalade cancel/close
+
 Le chemin applicatif gere le cancel/close, pas l'operateur :
 
 - si l'entree est resting ou partiellement filled lors d'un incident, il annule
@@ -304,6 +553,29 @@ Le chemin applicatif gere le cancel/close, pas l'operateur :
   le close par les memes identifiants ;
 - si la protection, l'annulation ou le close ne sont pas confirmes, il trip le
   kill switch durable et conserve la quarantaine.
+
+Le seul point d'entree implemente est
+`app:hyperliquid:testnet:smoke` : son execution port appelle la compensation
+dans la meme tentative. Ne pas interrompre le processus pendant cette phase,
+ne pas relancer le smoke et ne pas chercher une commande de compensation
+separee, qui n'existe pas.
+
+Apres retour `failed`/`ambiguous`, ordre encore `open`, position non nulle ou
+ordre protecteur restant :
+
+1. laisser la tentative originale terminer son cancel-by-cloid, sa
+   reconciliation OID/cloid et, si necessaire, son close reduce-only ;
+2. executer les trois controles read-only ci-dessus avec les identifiants exacts
+   de l'entree, du SL et du close ;
+3. si `length == 0` n'est pas prouve pour positions **et** open orders, executer
+   immediatement « Rollback immediat sans deploiement » pour fermer les flags,
+   trip la DB, arreter le signer et conserver la quarantaine ;
+4. declarer l'etat `ambiguous`. Aucune commande repository ne peut reprendre la
+   compensation apres coup ; une action UI/API d'urgence exige un transfert
+   explicite d'ownership a l'incident commander et invalide la recette ;
+5. apres toute action d'urgence, rejouer uniquement les memes assertions
+   account/coin et les lookups OID/cloid exacts. La cloture exige position flat,
+   zero ordre ouvert et identifiants terminaux coherents.
 
 Une action manuelle UI/API pendant la fenetre viole l'ownership exclusif. Si
 elle devient indispensable pour proteger le compte testnet, l'incident
