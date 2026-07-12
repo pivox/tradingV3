@@ -222,11 +222,14 @@ final class HyperliquidAccountGateway implements AccountProviderInterface
             'user' => $this->accountAddress($operation),
         ], $operation);
 
-        $state = $this->assoc($payload);
-        if ($payload !== [] && $state === []) {
+        if (array_is_list($payload)) {
             throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
         }
-        if (isset($state['assetPositions']) && !is_array($state['assetPositions'])) {
+
+        $state = $this->assoc($payload);
+        if (!array_key_exists('assetPositions', $state)
+            || !is_array($state['assetPositions'])
+            || !array_is_list($state['assetPositions'])) {
             throw new HyperliquidProviderUnavailableException('hyperliquid_private_payload_malformed', $operation);
         }
 

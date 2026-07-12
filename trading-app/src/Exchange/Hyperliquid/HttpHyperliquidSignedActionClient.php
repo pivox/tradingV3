@@ -36,16 +36,13 @@ final readonly class HttpHyperliquidSignedActionClient implements HyperliquidSig
         $authToken = trim($authToken);
         $accountAddress = trim($accountAddress);
         $agentAddress = trim($agentAddress);
-        if ($authToken === '' && $accountAddress === '' && $agentAddress === '') {
+        if ($authToken === '') {
             $this->authToken = '';
             $this->accountAddress = '';
             $this->agentAddress = '';
             $this->configured = false;
 
             return;
-        }
-        if ($authToken === '') {
-            throw new \InvalidArgumentException('hyperliquid_signer_auth_token_required');
         }
         if (preg_match(self::ADDRESS_PATTERN, $accountAddress) !== 1) {
             throw new \InvalidArgumentException('hyperliquid_signer_account_address_invalid');

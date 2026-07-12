@@ -77,6 +77,28 @@ final class HyperliquidSignedActionClientTest extends TestCase
         self::assertSame(0, $requests);
     }
 
+    public function testMissingTokenDisablesClientEvenWhenVisibleAddressesAreConfigured(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('{}');
+        });
+
+        $client = new HttpHyperliquidSignedActionClient(
+            $http,
+            self::URI,
+            '',
+            self::ACCOUNT,
+            self::AGENT,
+        );
+
+        self::assertFalse($client->health());
+        self::assertSame('rejected', $client->submit(['type' => 'order'], 1, 'corr-disabled-addresses')->outcome);
+        self::assertSame(0, $requests);
+    }
+
     /** @return iterable<string, array{string, string, string}> */
     public static function invalidAddresses(): iterable
     {

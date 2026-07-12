@@ -17,6 +17,7 @@ use App\Contract\Provider\SystemProviderInterface;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
@@ -28,6 +29,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
+use Symfony\Component\HttpClient\MockHttpClient;
 
 #[CoversClass(ExchangeRuntimeCheckCommand::class)]
 final class ExchangeRuntimeCheckCommandTest extends TestCase
@@ -367,6 +369,47 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Live allowed: yes', $output);
         self::assertStringContainsString('Recommended dry_run: false', $output);
         self::assertStringContainsString('Schedule ready: yes', $output);
+    }
+
+    public function testHyperliquidRuntimeDoesNotAbortWhenAddressesExistWithoutSignerToken(): void
+    {
+        $account = '0x0000000000000000000000000000000000000001';
+        $agent = '0x0000000000000000000000000000000000000002';
+        $signedClient = new HttpHyperliquidSignedActionClient(
+            new MockHttpClient(),
+            'http://hyperliquid-signer:8098',
+            '',
+            $account,
+            $agent,
+        );
+        $config = new HyperliquidConfig(
+            environment: 'testnet',
+            apiBaseUri: 'https://api.hyperliquid-testnet.xyz',
+            network: 'testnet',
+            testnetAgentAddress: $agent,
+            testnetAccountAddress: $account,
+            testnetTradingEnabled: true,
+            globalDemoTradingEnabled: true,
+        );
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            $this->providerRegistry($this->providerBundle(Exchange::HYPERLIQUID, MarketType::PERPETUAL)),
+            new OkxConfig(environment: 'demo'),
+            $config,
+            [],
+            $this->mutationProbe(signerReady: $signedClient->health()),
+        );
+
+        $tester = new CommandTester($command);
+        self::assertSame(Command::SUCCESS, $tester->execute([
+            'exchange' => 'hyperliquid',
+            'market_type' => 'perpetual',
+        ]));
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Signer configured: no', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
     }
 
     public function testHyperliquidWithoutProbeRemainsBlockedEvenWithLegacyReadinessInputs(): void
@@ -800,7 +843,16 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
 
     private function readyMutationProbe(): HyperliquidMutationReadinessProbeInterface
     {
-        return new class implements HyperliquidMutationReadinessProbeInterface {
+        return $this->mutationProbe(signerReady: true);
+    }
+
+    private function mutationProbe(bool $signerReady): HyperliquidMutationReadinessProbeInterface
+    {
+        return new class($signerReady) implements HyperliquidMutationReadinessProbeInterface {
+            public function __construct(private readonly bool $signerReady)
+            {
+            }
+
             public function current(): ExchangeReadinessReport
             {
                 return new ExchangeReadinessReport(
@@ -818,8 +870,8 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
                     accountReadable: true,
                     permissionsRead: true,
                     permissionsTrade: true,
-                    signerConfigured: true,
-                    signerMatchesAccount: true,
+                    signerConfigured: $this->signerReady,
+                    signerMatchesAccount: $this->signerReady,
                     nonceStoreReady: true,
                     collateralReadable: true,
                     pollingReady: true,

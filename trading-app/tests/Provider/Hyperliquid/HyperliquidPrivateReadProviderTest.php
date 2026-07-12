@@ -41,15 +41,17 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         self::assertSame(0, $client->exchangeCalls);
     }
 
-    public function testUnknownAccountReturnsNullAndHealthIsFalse(): void
+    public function testEmptyTopLevelAccountStateFailsStrictReadAndHealthIsFalse(): void
     {
         $client = new FakeHyperliquidPrivateReadClient();
         $client->unknownAccount = true;
         $gateway = $this->accountGateway($client);
 
-        self::assertNull($gateway->getAccountInfo());
         self::assertFalse($gateway->healthCheck());
         self::assertSame(0, $client->exchangeCalls);
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $gateway->getAccountInfo();
     }
 
     public function testWrongNetworkIsNotReady(): void
@@ -178,6 +180,26 @@ final class HyperliquidPrivateReadProviderTest extends TestCase
         $client->overrides['clearinghouseState'] = [
             'assetPositions' => [['position' => ['coin' => 'BTC', 'szi' => '1']], 'malformed'],
         ];
+
+        $this->expectException(HyperliquidProviderUnavailableException::class);
+        $this->accountGateway($client)->getOpenPositionsOrFail();
+    }
+
+    /** @return iterable<string, array{array<mixed>}> */
+    public static function malformedPositionSnapshots(): iterable
+    {
+        yield 'empty top-level list' => [[]];
+        yield 'missing assetPositions' => [['marginSummary' => []]];
+        yield 'assetPositions is associative' => [['assetPositions' => ['position' => []]]];
+        yield 'assetPositions is scalar' => [['assetPositions' => 'malformed']];
+    }
+
+    /** @param array<mixed> $snapshot */
+    #[\PHPUnit\Framework\Attributes\DataProvider('malformedPositionSnapshots')]
+    public function testStrictPositionsRejectMalformedSnapshotShape(array $snapshot): void
+    {
+        $client = new FakeHyperliquidPrivateReadClient();
+        $client->overrides['clearinghouseState'] = $snapshot;
 
         $this->expectException(HyperliquidProviderUnavailableException::class);
         $this->accountGateway($client)->getOpenPositionsOrFail();
