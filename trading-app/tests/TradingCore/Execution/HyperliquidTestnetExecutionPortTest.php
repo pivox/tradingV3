@@ -37,6 +37,8 @@ use App\TradingCore\Execution\Hyperliquid\HyperliquidDurableTripPersistenceExcep
 use App\TradingCore\Execution\Hyperliquid\FilesystemFallbackHyperliquidKillSwitch;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockLeaseInterface;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionAttemptClaim;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionAttemptStoreInterface;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionState;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionStatePolicy;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionStateProviderInterface;
@@ -263,6 +265,88 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertSame([], $result->raw);
     }
 
+    public function testExactTerminalReplayReturnsStoredResultWithoutNonceOrBroadcast(): void
+    {
+        $stored = new ExecutionResult(
+            ExecutionStatus::Accepted,
+            'CID-HL-1',
+            '42',
+            [],
+            ['protection_confirmed' => true, 'correlation_id' => 'corr-1'],
+        );
+        $attempts = new TestnetPortAttemptStore(new HyperliquidExecutionAttemptClaim(
+            HyperliquidExecutionAttemptClaim::TERMINAL_REPLAY,
+            $stored,
+        ));
+        $fixture = $this->fixture(
+            attempts: $attempts,
+            report: $this->report(blockingErrors: ['currently_blocked']),
+            state: $this->state(hasOpenPosition: true, openOrderCount: 2),
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame($stored, $result);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
+        self::assertSame([], $attempts->transitions);
+    }
+
+    #[DataProvider('unsafeReplayClaims')]
+    public function testActiveReplayOrConflictingPayloadTripsWithoutNonce(string $outcome): void
+    {
+        $attempts = new TestnetPortAttemptStore(new HyperliquidExecutionAttemptClaim($outcome));
+        $fixture = $this->fixture(attempts: $attempts);
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertTrue($fixture->trip->tripped);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unsafeReplayClaims(): iterable
+    {
+        yield 'active attempt after crash' => [HyperliquidExecutionAttemptClaim::ACTIVE_REPLAY];
+        yield 'another key active after crash' => [HyperliquidExecutionAttemptClaim::GLOBAL_ACTIVE];
+        yield 'same key different payload' => [HyperliquidExecutionAttemptClaim::CONFLICT];
+    }
+
+    public function testSuccessfulSubmissionPersistsSubmittedAndTerminalStates(): void
+    {
+        $attempts = new TestnetPortAttemptStore();
+        $fixture = $this->fixture(
+            signedResults: [$this->acceptedGroup(42, 43)],
+            attempts: $attempts,
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Accepted, $result->status);
+        self::assertSame(['submitted', 'submitted'], array_column($attempts->transitions, 'state'));
+        self::assertCount(1, $attempts->completions);
+        self::assertSame(ExecutionStatus::Accepted, $attempts->completions[0]['result']->status);
+    }
+
+    public function testCompletionFailureAfterBroadcastTripsAndRetainsLease(): void
+    {
+        $attempts = new TestnetPortAttemptStore();
+        $attempts->completeThrows = true;
+        $fixture = $this->fixture(
+            signedResults: [$this->acceptedGroup(42, 43)],
+            attempts: $attempts,
+        );
+
+        $result = $fixture->port->execute($fixture->request);
+
+        self::assertSame(ExecutionStatus::Failed, $result->status);
+        self::assertTrue($fixture->trip->tripped);
+        self::assertTrue($fixture->lock->lease->retained);
+        self::assertFalse($fixture->lock->lease->released);
+    }
+
     public function testDifferentLeverageBurnsDedicatedNonceBeforeGroupedNonce(): void
     {
         $fixture = $this->fixture(
@@ -470,7 +554,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         self::assertTrue($result->metadata['protection_confirmed']);
     }
 
-    public function testAcceptedResultInvariantTripsBeforeReleasingLease(): void
+    public function testUnsafeClientOrderIdRejectsBeforeLockNonceOrBroadcast(): void
     {
         $trip = new TestnetPortTrip();
         $fixture = $this->fixture(
@@ -481,30 +565,32 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
 
         $result = $fixture->port->execute($fixture->request);
 
-        self::assertSame(ExecutionStatus::Failed, $result->status);
-        self::assertSame('hyperliquid_accepted_result_invariant_failed', $result->metadata['failure_reason']);
-        self::assertSame(1, $trip->tripAttempts);
-        self::assertTrue($fixture->lock->lease->released);
-        self::assertFalse($fixture->lock->lease->retained);
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertContains('client_order_id_invalid', $result->metadata['blocking_reasons']);
+        self::assertSame(0, $trip->tripAttempts);
+        self::assertNull($fixture->lock->lease);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
     }
 
-    public function testAcceptedResultInvariantTripFailureRetainsLease(): void
+    public function testUnsafeIdempotencyKeyRejectsBeforeLockEvenIfTripStoreWouldFail(): void
     {
         $trip = new TestnetPortTrip();
         $trip->writeFailure = true;
         $fixture = $this->fixture(
-            plan: $this->plan(clientOrderId: "CID-HL-1\nunsafe"),
+            plan: $this->plan(idempotencyKey: "decision:BTCUSDT:long\nunsafe"),
             trip: $trip,
             signedResults: [$this->acceptedGroup(42, 43)],
         );
 
         $result = $fixture->port->execute($fixture->request);
 
-        self::assertSame(ExecutionStatus::Failed, $result->status);
-        self::assertSame('hyperliquid_durable_quarantine_failed', $result->metadata['failure_reason']);
-        self::assertSame(1, $trip->tripAttempts);
-        self::assertTrue($fixture->lock->lease->retained);
-        self::assertFalse($fixture->lock->lease->released);
+        self::assertSame(ExecutionStatus::Rejected, $result->status);
+        self::assertContains('idempotency_key_invalid', $result->metadata['blocking_reasons']);
+        self::assertSame(0, $trip->tripAttempts);
+        self::assertNull($fixture->lock->lease);
+        self::assertSame([], $fixture->nonces->issued);
+        self::assertSame([], $fixture->signed->submissions);
     }
 
     /** @param array<string,mixed> $metadata */
@@ -1012,6 +1098,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         ?HyperliquidKillSwitchTripInterface $durableTrip = null,
         ?HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence = null,
         ?array $executionStates = null,
+        ?TestnetPortAttemptStore $attempts = null,
     ): TestnetPortFixture {
         $config ??= $this->config();
         $report ??= $this->report();
@@ -1029,6 +1116,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         }
         $signed = new TestnetPortSignedClient($signedResults);
         $compensation = new TestnetPortCompensation($compensationResult ?? $this->unknown());
+        $attempts ??= new TestnetPortAttemptStore();
         $lock = new TestnetPortExecutionLock($lockAvailable, $lockThrows, $lockReleaseThrows);
         $clock = new MockClock('2026-07-12T12:00:00.000Z');
         $audit = $auditFails ? new TestnetPortThrowingAuditSink() : new TestnetPortAuditSink();
@@ -1066,6 +1154,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
             actions: new HyperliquidActionFactory(),
             signedActions: $signed,
             compensation: $compensation,
+            attempts: $attempts,
             executionLock: $lock,
             leveragePolicy: new HyperliquidLeveragePolicy($allowUnknownLeverage),
             marginEvidence: $marginEvidence,
@@ -1075,7 +1164,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         );
         $request = ExecutionRequest::forPlan($plan, $mode, $requestMetadata + ['correlation_id' => 'corr-1']);
 
-        return new TestnetPortFixture($port, $request, $nonces, $signed, $compensation, $trip, $lock);
+        return new TestnetPortFixture($port, $request, $nonces, $signed, $compensation, $attempts, $trip, $lock);
     }
 
     private function config(string $network = 'testnet'): HyperliquidConfig
@@ -1215,6 +1304,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
         ?string $configHash = self::HASH,
         ?float $liquidationPrice = null,
         ?string $clientOrderId = 'CID-HL-1',
+        ?string $idempotencyKey = null,
     ): OrderPlan {
         $liquidation = $liquidationPrice ?? ($side === 'long' ? 80.0 : 120.0);
         $plan = new OrderPlan(
@@ -1237,7 +1327,7 @@ final class HyperliquidTestnetExecutionPortTest extends TestCase
                 status: ProtectionPlanStatus::Valid,
             ),
             clientOrderId: $clientOrderId,
-            idempotencyKey: 'decision:BTCUSDT:' . $side,
+            idempotencyKey: $idempotencyKey ?? ('decision:BTCUSDT:' . $side),
             configHash: $configHash,
         );
 
@@ -1345,9 +1435,53 @@ final readonly class TestnetPortFixture
         public TestnetPortNonceManager $nonces,
         public TestnetPortSignedClient $signed,
         public TestnetPortCompensation $compensation,
+        public TestnetPortAttemptStore $attempts,
         public TestnetPortTrip $trip,
         public TestnetPortExecutionLock $lock,
     ) {}
+}
+
+final class TestnetPortAttemptStore implements HyperliquidExecutionAttemptStoreInterface
+{
+    /** @var list<array{key:string,fingerprint:string,client_order_id:string,correlation_id:string}> */
+    public array $claims = [];
+    /** @var list<array{key:string,fingerprint:string,state:string}> */
+    public array $transitions = [];
+    /** @var list<array{key:string,fingerprint:string,result:ExecutionResult}> */
+    public array $completions = [];
+    public bool $claimThrows = false;
+    public bool $transitionThrows = false;
+    public bool $completeThrows = false;
+
+    public function __construct(
+        private readonly HyperliquidExecutionAttemptClaim $claim = new HyperliquidExecutionAttemptClaim(HyperliquidExecutionAttemptClaim::CLAIMED),
+    ) {}
+
+    public function claim(string $idempotencyKey, string $planFingerprint, string $clientOrderId, string $correlationId): HyperliquidExecutionAttemptClaim
+    {
+        $this->claims[] = ['key' => $idempotencyKey, 'fingerprint' => $planFingerprint, 'client_order_id' => $clientOrderId, 'correlation_id' => $correlationId];
+        if ($this->claimThrows) {
+            throw new \RuntimeException('attempt_store_unavailable');
+        }
+
+        return $this->claim;
+    }
+
+    public function transition(string $idempotencyKey, string $planFingerprint, string $state): void
+    {
+        $this->transitions[] = ['key' => $idempotencyKey, 'fingerprint' => $planFingerprint, 'state' => $state];
+        if ($this->transitionThrows) {
+            throw new \RuntimeException('attempt_store_unavailable');
+        }
+    }
+
+    public function complete(string $idempotencyKey, string $planFingerprint, ExecutionResult $result): void
+    {
+        $this->completions[] = ['key' => $idempotencyKey, 'fingerprint' => $planFingerprint, 'result' => $result];
+        if ($this->completeThrows) {
+            throw new \RuntimeException('attempt_store_unavailable');
+        }
+    }
 }
 
 final readonly class TestnetPortReadinessProbe implements HyperliquidMutationReadinessProbeInterface

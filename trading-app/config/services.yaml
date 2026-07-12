@@ -118,6 +118,9 @@ services:
     App\Provider\Hyperliquid\HyperliquidNonceManagerInterface:
         alias: App\Provider\Hyperliquid\PersistentHyperliquidNonceManager
 
+    App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionAttemptStoreInterface:
+        alias: App\Repository\HyperliquidTestnetExecutionAttemptRepository
+
     App\Exchange\Hyperliquid\HyperliquidReadinessInfoClientInterface:
         alias: App\Exchange\Hyperliquid\HyperliquidRestClient
 

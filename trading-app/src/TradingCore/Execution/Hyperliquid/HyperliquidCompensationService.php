@@ -138,12 +138,42 @@ final readonly class HyperliquidCompensationService implements HyperliquidCompen
         try {
             $submission = $this->signedActions->submit($cancel, $nonce, $context->correlationId);
         } catch (\RuntimeException) {
-            throw new HyperliquidCompensationRuntimeFailure(HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED);
+            return $this->resolveCancelLifecycle(
+                $context,
+                $entry,
+                HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED,
+                $tripGuard,
+            );
         }
-        if (!$submission instanceof HyperliquidSignedActionResult || !$this->validAcceptedCancel($submission, $context)) {
+        if (!$submission instanceof HyperliquidSignedActionResult) {
+            return $this->unresolved($context, $entry->status, $entry->filledQuantity, $entry->exchangeOrderId, HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED, $tripGuard);
+        }
+        if (in_array($submission->outcome, ['rejected', 'ambiguous'], true)) {
+            return $this->resolveCancelLifecycle(
+                $context,
+                $entry,
+                HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED,
+                $tripGuard,
+            );
+        }
+        if (!$this->validAcceptedCancel($submission, $context)) {
             return $this->unresolved($context, $entry->status, $entry->filledQuantity, $entry->exchangeOrderId, HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED, $tripGuard);
         }
 
+        return $this->resolveCancelLifecycle(
+            $context,
+            $entry,
+            HyperliquidCompensationReasonCode::CANCEL_CONFIRMATION_UNCONFIRMED,
+            $tripGuard,
+        );
+    }
+
+    private function resolveCancelLifecycle(
+        HyperliquidCompensationContext $context,
+        HyperliquidNormalizedOrderLifecycleDto $entry,
+        HyperliquidCompensationReasonCode $unconfirmedReason,
+        HyperliquidCompensationTripGuard $tripGuard,
+    ): HyperliquidCompensationResult {
         $terminal = $this->reconcile(
             $context,
             $this->entryIdentifiers($context),
@@ -156,7 +186,7 @@ final readonly class HyperliquidCompensationService implements HyperliquidCompen
                 ], true),
         );
         if (!$terminal instanceof HyperliquidNormalizedOrderLifecycleDto) {
-            return $this->unresolved($context, $entry->status, $entry->filledQuantity, $entry->exchangeOrderId, HyperliquidCompensationReasonCode::CANCEL_CONFIRMATION_UNCONFIRMED, $tripGuard);
+            return $this->unresolved($context, $entry->status, $entry->filledQuantity, $entry->exchangeOrderId, $unconfirmedReason, $tripGuard);
         }
         if (!$this->validEntryLifecycle($context, $terminal)) {
             return $this->unresolved($context, $terminal->status, $terminal->filledQuantity, $terminal->exchangeOrderId, HyperliquidCompensationReasonCode::ENTRY_LIFECYCLE_CONTRADICTORY, $tripGuard);

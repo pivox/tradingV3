@@ -313,15 +313,46 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertStringNotContainsString('secret_detail', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
-    public function testAmbiguousCancelTripsExactlyOnceWithoutTreatingAcceptanceAsConfirmation(): void
+    public function testRejectedMissingOrderCancelReconcilesFillRaceAndClosesProvenExposure(): void
     {
-        $fixture = $this->fixture([$this->lifecycle('open')], [$this->ambiguous('cancelByCloid')]);
+        $closeCloid = (new HyperliquidActionFactory())->cloid(self::CLOSE_ID);
+        $fixture = $this->fixture(
+            [
+                $this->lifecycle('open'),
+                $this->lifecycle('filled'),
+                null,
+                null,
+                null,
+                $this->lifecycle('filled', oid: 99, cloid: $closeCloid, side: 'A'),
+            ],
+            [$this->rejectedMissingOrderCancel(), $this->acceptedOrder(99)],
+        );
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('exposure_closed', $result->outcome);
+        self::assertSame(1.0, $result->closedQuantity);
+        self::assertCount(2, $fixture->signed->actions);
+        self::assertTrue($fixture->signed->actions[1]['action']['orders'][0]['r']);
+        self::assertSame([1_000, 1_001], $fixture->nonce->issued);
+        self::assertSame([], $fixture->trip->reasons);
+    }
+
+    public function testAmbiguousCancelReconcilesBeforeQuarantiningStillUnknownState(): void
+    {
+        $fixture = $this->fixture(
+            [$this->lifecycle('open'), null, null, null],
+            [$this->ambiguous('cancelByCloid')],
+        );
 
         $result = $fixture->service->compensate($this->context());
 
         self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(HyperliquidCompensationReasonCode::CANCEL_SUBMISSION_UNCONFIRMED, $result->reasonCode);
         self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
-        self::assertCount(1, $fixture->lookup->calls);
+        self::assertCount(4, $fixture->lookup->calls);
+        self::assertCount(1, $fixture->signed->actions);
+        self::assertSame([250, 250], $fixture->sleeper->milliseconds);
     }
 
     public function testCancelAcceptedRequiresCancelByCloidActionType(): void
@@ -768,6 +799,17 @@ final class HyperliquidCompensationServiceTest extends TestCase
     private function acceptedCancel(): HyperliquidSignedActionResult
     {
         return new HyperliquidSignedActionResult('cancelByCloid', 'accepted', [['kind' => 'success']], null, 'corr-1');
+    }
+
+    private function rejectedMissingOrderCancel(): HyperliquidSignedActionResult
+    {
+        return new HyperliquidSignedActionResult(
+            'cancelByCloid',
+            'rejected',
+            [['kind' => 'error']],
+            'exchange_status_error',
+            'corr-1',
+        );
     }
 
     private function acceptedOrder(int $oid): HyperliquidSignedActionResult

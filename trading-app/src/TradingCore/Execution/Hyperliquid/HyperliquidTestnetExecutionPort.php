@@ -55,6 +55,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         private HyperliquidActionFactory $actions,
         private HyperliquidSignedActionClientInterface $signedActions,
         private HyperliquidCompensationInterface $compensation,
+        private HyperliquidExecutionAttemptStoreInterface $attempts,
         private HyperliquidExecutionLockInterface $executionLock,
         private HyperliquidLeveragePolicy $leveragePolicy,
         private HyperliquidMarginSafetyEvidenceProviderInterface $marginEvidence,
@@ -67,34 +68,93 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
     public function execute(ExecutionRequest $request): ExecutionResult
     {
         $plan = $request->orderPlan;
+        $correlationId = $this->correlationId($request);
+        $idempotencyKey = $plan->idempotencyKey ?? '';
+        $clientOrderId = $plan->clientOrderId ?? '';
+        $identityReasons = [];
+        $this->safeOpaqueIdentifier($clientOrderId) || $identityReasons[] = 'client_order_id_invalid';
+        $this->safeOpaqueIdentifier($idempotencyKey) || $identityReasons[] = 'idempotency_key_invalid';
+        if ($identityReasons !== []) {
+            return $this->rejected($plan, 'hyperliquid_testnet_preflight_rejected', $identityReasons);
+        }
+        try {
+            $fingerprint = $this->planFingerprint($plan);
+        } catch (\Throwable) {
+            return $this->rejected($plan, 'hyperliquid_testnet_preflight_rejected', ['execution_attempt_fingerprint_invalid']);
+        }
+        try {
+            $claim = $this->attempts->claim($idempotencyKey, $fingerprint, $clientOrderId, $correlationId);
+        } catch (\Throwable) {
+            return $this->tripAndFail($plan, $correlationId, 'hyperliquid_execution_attempt_store_unavailable');
+        }
+        if ($claim->outcome === HyperliquidExecutionAttemptClaim::TERMINAL_REPLAY) {
+            $stored = $claim->result;
+            if (!$stored instanceof ExecutionResult
+                || ($stored->status === ExecutionStatus::Accepted && !$this->acceptedResultIsProven($stored, $request))
+            ) {
+                return $this->tripAndFail($plan, $correlationId, 'hyperliquid_execution_attempt_result_invalid');
+            }
+
+            return $stored;
+        }
+        if ($claim->outcome !== HyperliquidExecutionAttemptClaim::CLAIMED) {
+            $reason = $claim->outcome === HyperliquidExecutionAttemptClaim::CONFLICT
+                ? 'hyperliquid_idempotency_payload_conflict'
+                : 'hyperliquid_execution_attempt_incomplete_replay';
+
+            return $this->tripAndFail($plan, $correlationId, $reason);
+        }
+
         $initialReport = $this->reportOrNull();
         $initialReasons = $this->initialReasons($request, $initialReport);
         if ($initialReasons !== []) {
-            return $this->rejected($plan, 'hyperliquid_testnet_preflight_rejected', $initialReasons);
+            return $this->completeAttempt(
+                $plan,
+                $idempotencyKey,
+                $fingerprint,
+                $correlationId,
+                $this->rejected($plan, 'hyperliquid_testnet_preflight_rejected', $initialReasons),
+                false,
+            );
         }
 
         try {
             $lease = $this->executionLock->acquire();
         } catch (\Throwable) {
-            return $this->rejected($plan, 'hyperliquid_execution_lock_unavailable', ['hyperliquid_execution_lock_unavailable']);
+            return $this->completeAttempt(
+                $plan,
+                $idempotencyKey,
+                $fingerprint,
+                $correlationId,
+                $this->rejected($plan, 'hyperliquid_execution_lock_unavailable', ['hyperliquid_execution_lock_unavailable']),
+                false,
+            );
         }
         if ($lease === null) {
-            return $this->rejected($plan, 'hyperliquid_execution_in_flight', ['hyperliquid_execution_in_flight']);
+            return $this->completeAttempt(
+                $plan,
+                $idempotencyKey,
+                $fingerprint,
+                $correlationId,
+                $this->rejected($plan, 'hyperliquid_execution_in_flight', ['hyperliquid_execution_in_flight']),
+                false,
+            );
         }
 
         try {
-            $result = $this->executeUnderLock($request);
+            $result = $this->executeUnderLock($request, $idempotencyKey, $fingerprint, $correlationId);
             if ($result->status === ExecutionStatus::Accepted && !$this->acceptedResultIsProven($result, $request)) {
                 $result = $this->tripAndFail(
                     $plan,
-                    $this->correlationId($request),
+                    $correlationId,
                     'hyperliquid_accepted_result_invariant_failed',
                 );
             }
+            $result = $this->completeAttempt($plan, $idempotencyKey, $fingerprint, $correlationId, $result, true);
         } catch (HyperliquidDurableTripPersistenceException) {
             $lease->retain();
 
-            return $this->failed($plan, $this->correlationId($request), 'hyperliquid_durable_quarantine_failed');
+            return $this->failed($plan, $correlationId, 'hyperliquid_durable_quarantine_failed');
         }
 
         try {
@@ -105,11 +165,11 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             } catch (\Throwable) {
                 $lease->retain();
 
-                return $this->failed($plan, $this->correlationId($request), 'hyperliquid_execution_lock_release_quarantine_failed');
+                return $this->failed($plan, $correlationId, 'hyperliquid_execution_lock_release_quarantine_failed');
             }
             $lease->retain();
 
-            return $this->failed($plan, $this->correlationId($request), 'hyperliquid_execution_lock_release_failed');
+            return $this->failed($plan, $correlationId, 'hyperliquid_execution_lock_release_failed');
         }
 
         return $result;
@@ -129,7 +189,12 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             && ($result->metadata['protection_confirmed'] ?? null) === true;
     }
 
-    private function executeUnderLock(ExecutionRequest $request): ExecutionResult
+    private function executeUnderLock(
+        ExecutionRequest $request,
+        string $idempotencyKey,
+        string $fingerprint,
+        string $correlationId,
+    ): ExecutionResult
     {
         $plan = $request->orderPlan;
         $report = $this->reportOrNull();
@@ -172,7 +237,6 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
             return $this->rejected($plan, 'hyperliquid_notional_rejected', ['max_notional_exceeded']);
         }
 
-        $correlationId = $this->correlationId($request);
         $decision = $this->killSwitch->evaluate(new DemoTradingMutationAttempt(
             exchange: Exchange::HYPERLIQUID,
             environment: ExchangeRuntimeEnvironment::TESTNET,
@@ -217,7 +281,38 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         } catch (\Throwable) {
             return $this->rejected($plan, 'hyperliquid_nonce_scope_invalid', ['hyperliquid_nonce_scope_invalid']);
         }
+
+        return $this->executeClaimed(
+            $plan,
+            $metadata,
+            $state,
+            $shape,
+            $scope,
+            $correlationId,
+            $idempotencyKey,
+            $fingerprint,
+        );
+    }
+
+    /**
+     * @param array{price:string,quantity:string,stop:string,reasons:list<string>} $shape
+     */
+    private function executeClaimed(
+        OrderPlan $plan,
+        HyperliquidInstrumentMetadataDto $metadata,
+        HyperliquidExecutionState $state,
+        array $shape,
+        HyperliquidNonceScope $scope,
+        string $correlationId,
+        string $idempotencyKey,
+        string $fingerprint,
+    ): ExecutionResult {
+        $requiresLeverageUpdate = $this->leveragePolicy->requiresUpdate($state->observedLeverage, $plan->leverage)
+            || $this->executionStatePolicy->requiresIsolatedModeUpdate($state);
         if ($requiresLeverageUpdate) {
+            if (!$this->transitionAttempt($idempotencyKey, $fingerprint, 'submitted', $correlationId)) {
+                return $this->failed($plan, $correlationId, 'hyperliquid_execution_attempt_transition_failed');
+            }
             $leverageResult = $this->updateLeverage($metadata->assetId, $plan, $scope, $correlationId);
             if ($leverageResult instanceof ExecutionResult) {
                 return $leverageResult;
@@ -252,6 +347,9 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         if (!$this->nonceReady($scope)) {
             return $this->rejected($plan, 'hyperliquid_nonce_not_ready', ['hyperliquid_nonce_store_not_ready']);
         }
+        if (!$this->transitionAttempt($idempotencyKey, $fingerprint, 'submitted', $correlationId)) {
+            return $this->failed($plan, $correlationId, 'hyperliquid_execution_attempt_transition_failed');
+        }
         try {
             $nonce = $this->nonces->nextNonce($scope);
             $submission = $this->signedActions->submit(
@@ -260,10 +358,22 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
                 $correlationId,
             );
         } catch (\Throwable) {
+            $this->transitionAttempt($idempotencyKey, $fingerprint, 'compensating', $correlationId);
+
             return $this->compensate($plan, $metadata, $state, $scope, $correlationId, null);
         }
 
-        return $this->mapSubmission($submission, $plan, $metadata, $state, $scope, $correlationId, $shape['quantity']);
+        return $this->mapSubmission(
+            $submission,
+            $plan,
+            $metadata,
+            $state,
+            $scope,
+            $correlationId,
+            $shape['quantity'],
+            $idempotencyKey,
+            $fingerprint,
+        );
     }
 
     /** @return list<string> */
@@ -366,6 +476,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         in_array(strtolower($plan->side), ['long', 'short'], true) || $reasons[] = 'position_side_invalid';
         $plan->protectionPlan?->stopLoss !== null || $reasons[] = 'stop_loss_required';
         $plan->protectionPlan?->stopLoss?->isFullSize === true || $reasons[] = 'full_size_stop_loss_required';
+        $this->safeOpaqueIdentifier($plan->clientOrderId) || $reasons[] = 'client_order_id_invalid';
+        $this->safeOpaqueIdentifier($plan->idempotencyKey) || $reasons[] = 'idempotency_key_invalid';
 
         if (!$report instanceof ExchangeReadinessReport) {
             $reasons[] = 'readiness_report_unavailable';
@@ -525,6 +637,8 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         HyperliquidNonceScope $scope,
         string $correlationId,
         string $quantity,
+        string $idempotencyKey,
+        string $fingerprint,
     ): ExecutionResult {
         $statuses = $submission->statuses;
         if ($submission->actionType === 'order' && hash_equals($correlationId, $submission->correlationId)
@@ -554,6 +668,7 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         $entryOid = isset($statuses[0]) && $this->acceptedOrderRow($statuses[0]) ? (string) $statuses[0]['oid'] : null;
+        $this->transitionAttempt($idempotencyKey, $fingerprint, 'compensating', $correlationId);
 
         return $this->compensate($plan, $metadata, $state, $scope, $correlationId, $entryOid);
     }
@@ -714,6 +829,83 @@ final readonly class HyperliquidTestnetExecutionPort implements ExecutionPortInt
         }
 
         return 'hl-' . substr(hash('sha256', (string) $request->orderPlan->clientOrderId), 0, 24);
+    }
+
+    private function planFingerprint(OrderPlan $plan): string
+    {
+        try {
+            $payload = json_encode([
+                'symbol' => $plan->symbol,
+                'profile' => $plan->profile,
+                'config_hash' => $plan->configHash,
+                'exchange' => $plan->exchange,
+                'market_type' => $plan->marketType,
+                'side' => $plan->side,
+                'order_type' => $plan->orderType,
+                'margin_mode' => $plan->marginMode,
+                'time_in_force' => $plan->timeInForce,
+                'entry_price' => $this->decimal($plan->entryPrice),
+                'quantity' => $this->decimal($plan->quantity),
+                'stop_price' => $this->decimal($plan->protectionPlan?->stopLoss?->stopPrice ?? 0.0),
+                'stop_source' => $plan->protectionPlan?->stopLoss?->stopSource,
+                'stop_full_size' => $plan->protectionPlan?->stopLoss?->isFullSize,
+                'leverage' => $plan->leverage,
+                'client_order_id' => $plan->clientOrderId,
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        } catch (\JsonException $exception) {
+            throw new \RuntimeException('hyperliquid_execution_attempt_fingerprint_failed', previous: $exception);
+        }
+
+        return hash('sha256', $payload);
+    }
+
+    private function completeAttempt(
+        OrderPlan $plan,
+        string $key,
+        string $fingerprint,
+        string $correlationId,
+        ExecutionResult $result,
+        bool $retainLeaseOnFailure,
+    ): ExecutionResult {
+        try {
+            $this->attempts->complete($key, $fingerprint, $result);
+
+            return $result;
+        } catch (\Throwable) {
+            try {
+                $this->durableTrip->trip('hyperliquid_execution_attempt_completion_failed', ['correlation_id' => $correlationId]);
+            } catch (\Throwable) {
+                if ($retainLeaseOnFailure) {
+                    throw new HyperliquidDurableTripPersistenceException();
+                }
+
+                return $this->failed($plan, $correlationId, 'hyperliquid_durable_quarantine_failed');
+            }
+            if ($retainLeaseOnFailure) {
+                throw new HyperliquidDurableTripPersistenceException();
+            }
+
+            return $this->failed($plan, $correlationId, 'hyperliquid_execution_attempt_completion_failed');
+        }
+    }
+
+    private function transitionAttempt(string $key, string $fingerprint, string $state, string $correlationId): bool
+    {
+        try {
+            $this->attempts->transition($key, $fingerprint, $state);
+
+            return true;
+        } catch (\Throwable) {
+            $this->durableTrip->trip('hyperliquid_execution_attempt_transition_failed', ['correlation_id' => $correlationId]);
+
+            return false;
+        }
+    }
+
+    private function safeOpaqueIdentifier(?string $value): bool
+    {
+        return is_string($value)
+            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/D', $value) === 1;
     }
 
     private function decimal(float $value): string

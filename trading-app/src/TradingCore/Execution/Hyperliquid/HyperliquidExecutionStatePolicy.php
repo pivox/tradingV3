@@ -12,6 +12,7 @@ final readonly class HyperliquidExecutionStatePolicy
 {
     private const MAX_AGE_MILLISECONDS = 2_000;
     private const EMERGENCY_SLIPPAGE = '0.005';
+    private const MAX_PRICE_SIGNIFICANT_FIGURES = 5;
 
     public function __construct(private ClockInterface $clock)
     {
@@ -81,16 +82,60 @@ final readonly class HyperliquidExecutionStatePolicy
             ? BigDecimal::one()->minus(self::EMERGENCY_SLIPPAGE)
             : BigDecimal::one()->plus(self::EMERGENCY_SLIPPAGE);
         $rounding = $sell ? RoundingMode::DOWN : RoundingMode::UP;
-        $units = $reference->multipliedBy($factor)->dividedBy($tick, 0, $rounding);
+        $target = $reference->multipliedBy($factor);
+        $step = $this->commonPriceStep($target, $tick);
+        $units = $target->dividedBy($step, 0, $rounding);
         if ($units->isLessThan(BigDecimal::one())) {
             $units = BigDecimal::one();
         }
-        $cap = $units->multipliedBy($tick);
-        if ($cap->isLessThanOrEqualTo(BigDecimal::zero()) || !$cap->remainder($tick)->isZero()) {
+        $cap = $units->multipliedBy($step);
+
+        $stableStep = $this->commonPriceStep($cap, $tick);
+        if (!$stableStep->isEqualTo($step)) {
+            $units = $target->dividedBy($stableStep, 0, $rounding);
+            if ($units->isLessThan(BigDecimal::one())) {
+                $units = BigDecimal::one();
+            }
+            $cap = $units->multipliedBy($stableStep);
+        }
+
+        $result = (float) (string) $cap;
+        if ($cap->isLessThanOrEqualTo(BigDecimal::zero())
+            || !$cap->remainder($tick)->isZero()
+            || $this->significantFigures($cap) > self::MAX_PRICE_SIGNIFICANT_FIGURES
+            || !is_finite($result)
+            || $result <= 0.0
+        ) {
             throw new \InvalidArgumentException('hyperliquid_execution_cap_price_invalid');
         }
 
-        return (float) (string) $cap;
+        return $result;
+    }
+
+    private function commonPriceStep(BigDecimal $price, BigDecimal $tick): BigDecimal
+    {
+        $normalizedPrice = $price->stripTrailingZeros();
+        $orderOfMagnitude = strlen((string) $normalizedPrice->getUnscaledValue())
+            - $normalizedPrice->getScale()
+            - 1;
+        $significantStep = BigDecimal::one()->withPointMovedRight(
+            $orderOfMagnitude - self::MAX_PRICE_SIGNIFICANT_FIGURES + 1,
+        );
+        $scale = max($tick->getScale(), $significantStep->getScale());
+        $tickUnits = $tick->toScale($scale)->getUnscaledValue();
+        $significantUnits = $significantStep->toScale($scale)->getUnscaledValue();
+        $commonUnits = $tickUnits
+            ->dividedBy($tickUnits->gcd($significantUnits))
+            ->multipliedBy($significantUnits);
+
+        return BigDecimal::ofUnscaledValue($commonUnits, $scale);
+    }
+
+    private function significantFigures(BigDecimal $price): int
+    {
+        $digits = ltrim((string) $price->getUnscaledValue(), '0');
+
+        return strlen(rtrim($digits, '0'));
     }
 
     private function milliseconds(\DateTimeInterface $time): int

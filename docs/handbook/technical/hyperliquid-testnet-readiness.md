@@ -54,7 +54,7 @@ maintenir la voie mutative fermee.
 | Local dry-run | Simulation locale, sans HTTP mutatif, sans signature reelle, sans broadcast exchange. |
 | Hyperliquid testnet | Reseau testnet Hyperliquid, avec endpoint testnet et fonds fictifs. |
 | API wallet / agent | Cle de signature dediee au bot. Le wallet principal sert d'adresse de compte, pas de secret applicatif. |
-| Account address | Adresse du compte observe via `info`; elle n'est pas forcement le signer. |
+| Account address | Adresse du master account observe via `info`, dont `userRole` vaut exactement `user`; elle n'est pas le signer. |
 | Controlled testnet trading | Chemin HL-012 implemente mais fail-closed ; son smoke reste interdit avec DEMO-005=`blocked`. |
 | Mainnet | Reseau reel Hyperliquid. Interdit en ecriture dans cette serie. |
 
@@ -63,11 +63,14 @@ doivent utiliser que des noms de variables ou des identifiants factices non
 reutilisables.
 
 Avec HL-012, `Controlled testnet trading` designe le chemin implemente mais non
-autorise. L'account address identifie le compte lu et trade ; l'agent address
-identifie le wallet API de signature. Elles sont distinctes. La private key de
-l'agent est presente uniquement dans le sidecar interne
+autorise. L'account address identifie exclusivement le master account de role
+officiel `user` lu et trade ; subaccounts et vaults sont strictement non
+supportes. L'agent address identifie le wallet API de signature. Elles sont
+distinctes. La private key de l'agent est presente uniquement dans le sidecar
+interne
 `hyperliquid-signer` : aucun port hote n'est publie et PHP ne recoit jamais la
-private key.
+private key. Le sidecar signe toujours avec `vaultAddress=null` et rejette toute
+autre valeur.
 
 ## Differences structurantes avec un CEX
 
@@ -94,7 +97,7 @@ private key.
 | WebSocket public | Fallback REST HL-003 | HL-003 choisit le polling REST borne via `/info` au lieu d'un client WS public. | Client public, subscriptions, reconnect et freshness si une PR future remplace le polling. |
 | WebSocket prive / equivalent | Polling borne HL-012 | Snapshot initial puis polling ordres/fills/positions avec freshness et reconciliation-in-flight explicites. | Conserver la policy fail-closed et n'adopter le WS que par changement dedie. |
 | Signer fake/local | Livre HL-009 | `FakeHyperliquidSigner` produit une signature deterministe de fixture, sans secret et sans HTTP. `HyperliquidDryRunExecutionPort` l'utilise seulement pour signer une preview redacted non diffusee. | Conserver le fake pour les recettes local dry-run et les tests de payload. |
-| Signer testnet | Implemente HL-012, desactive | Le sidecar `hyperliquid-signer` valide testnet/account/agent, signe et ne broadcast que si son flag dedie est ouvert. Il est interne au reseau Docker, sans port hote, et recoit seul la private key agent. | DEMO-005 `ready` et preuve testnet redacted ; le flag broadcast reste `0` jusque-la. |
+| Signer testnet | Implemente HL-012, desactive | Le sidecar `hyperliquid-signer` valide testnet/master account/agent, impose `vaultAddress=null`, signe et ne broadcast que si son flag dedie est ouvert. Il est interne au reseau Docker, sans port hote, et recoit seul la private key agent. | DEMO-005 `ready` et preuve testnet redacted ; le flag broadcast reste `0` jusque-la. |
 | Nonce manager | Utilise par HL-012 | `PersistentHyperliquidNonceManager` persiste `hyperliquid_nonce_state` par `environment + network + signer_address`, garde `account_address` en audit, rejette la reutilisation d'un signer sur un autre compte et detecte les replays. La reservation intervient seulement apres readiness et revalidation flat. | Preuve d'execution encore bloquee par DEMO-005. |
 | Metadata / precision | Renforce HL-007 | Mapping `symbol -> coin -> asset_id`, `szDecimals`, tick prix, step quantite, max leverage, status marche et flags de qualite sont exposes dans `HyperliquidInstrumentMetadataDto`. Les collisions d'asset et metadata requises manquantes ne sont pas resolues arbitrairement. | Min-notional si Hyperliquid l'expose dans une surface officielle future. |
 | Fees / funding / costs | Renforce HL-007 | Funding public absent reste `null` avec `funding_rate_unknown`. `getTradingFees()` lit `userFees` read-only et expose maker/taker `null` + flags si absents. User fills et funding history sont lisibles via account read-only, redacted et non certifies PnL. | Ledger/certification dans les PRs dediees. |
@@ -102,7 +105,7 @@ private key.
 | Local dry-run no broadcast | Livre HL-009 | `HyperliquidDryRunExecutionPort` construit les actions `/exchange` locales (`updateLeverage`, entry, SL reduce-only, TP reduce-only), applique safety/observability en mode informatif, signe avec le fake signer, expose `local_dry_run_ready` et garde `no_http/no_exchange_call/no_broadcast`. | Continuer la recette orchestrateur dry-run ; elle ne constitue jamais une preuve d'ordre reel. |
 | Runtime-check candidate | Renforce HL-012 | La commande runtime sonde account, permission agent, sidecar, nonce store, collateral, polling, guards, kill switch et stop-loss capability. `demo_testnet_candidate` n'est possible qu'avec toutes les gates techniques ouvertes. | La sortie technique ne remplace jamais DEMO-005, actuellement `blocked`. |
 | SL/TP / protection | Implemente, non execute | HL-012 exige un SL reduce-only plein volume, confirme par identifiants ; echec ou ambiguite declenche cancel/close compensatoire et quarantaine. Aucun ordre reel n'a valide ce chemin. | Decision DEMO-005 `ready_for_demo_testnet_trading_attempt`, puis preuve testnet redacted. |
-| Controlled testnet write | Implemente, desactive | La commande `app:hyperliquid:testnet:smoke` exige schema v1 strict, confirmation exacte, decision exacte, readiness complete, compte flat/ordres ouverts zero et ownership exclusif. Flags, config effective, signer broadcast et kill switch restent fail-closed. | DEMO-005 reste `blocked`; live smoke interdit jusqu'a ouverture explicite du gate. |
+| Controlled testnet write | Implemente, desactive | La commande `app:hyperliquid:testnet:smoke` exige schema v1 strict, confirmation exacte, valeur litterale de decision, readiness complete, compte flat/ordres ouverts zero et ownership exclusif. Elle ne lit ni GitHub ni une decision versionnee : DEMO-005 reste un gate humain/documentaire prealable. Flags, config effective, signer broadcast et kill switch restent fail-closed. | DEMO-005 reste `blocked`; live smoke interdit jusqu'a ouverture explicite du gate. |
 | Mainnet write | Interdit | `mainnet_write_enabled=false` reste requis. | Aucun manque a combler dans cette serie. |
 
 ## Surfaces API attendues
@@ -187,6 +190,8 @@ touchent jamais a `/exchange`.
 | Donnee | Surface Hyperliquid attendue | Utilisation |
 |---|---|---|
 | Account state | `POST /info` user state | Equity, margin summary, positions ouvertes. |
+| User role | `POST /info` type `userRole` | Exiger le role officiel `user` du master account ; tout autre role bloque HL-012. |
+| Extra agents | `POST /info` type `extraAgents`, expose par le SDK officiel epingle mais absent de l'Info GitBook | Confirmer la relation agent/account avec les autres gates, jamais comme preuve authoritative unique. |
 | Open orders | `POST /info` open orders | Reconciliation ordres actifs et `client_order_id` si expose. |
 | User fills | `POST /info` user fills / fills by time | Prix, quantite, fees, side, oid, timestamps et pagination. |
 | Historical orders | `POST /info` historical orders | Statuts terminaux et reconciliation apres restart. |
@@ -214,8 +219,18 @@ Regles HL-006 :
 
 - `HYPERLIQUID_ENV` et `HYPERLIQUID_NETWORK` doivent rester `testnet` pour les
   lectures account de cette serie.
-- `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` est l'adresse wallet/subaccount a lire.
-  Elle ne doit pas etre remplacee par `HYPERLIQUID_TESTNET_AGENT_ADDRESS`.
+- `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` est exclusivement l'adresse du master
+  wallet a lire. La surface officielle
+  [`userRole`](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#query-a-users-role)
+  doit retourner exactement `{"role":"user"}`. Les roles `subAccount`, `vault`,
+  `agent` et `missing` sont fail-closed pour HL-012.
+- `extraAgents`, expose par
+  [`Info.extra_agents()` dans le SDK Python officiel 0.24.0 epingle](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/0.24.0/hyperliquid/info.py)
+  mais non documente dans l'Info GitBook, confirme la relation avec l'agent en
+  complement de `userRole` et des autres gates. Une reponse absente, ambigue ou
+  mal formee bloque ; cette surface n'est pas une preuve authoritative unique.
+- L'account address ne doit pas etre remplacee par
+  `HYPERLIQUID_TESTNET_AGENT_ADDRESS`.
 - Si l'adresse account est absente alors qu'une adresse agent est configuree,
   le provider echoue avec `hyperliquid_account_address_missing_for_signer`.
 - Si account et agent sont identiques, le provider echoue avec
@@ -276,7 +291,8 @@ HL-004 ajoute la frontiere de signature sans activer de broadcast :
   preuves partagees ;
 - `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` est une adresse publique de compte ; la
   private key du wallet principal ne doit jamais entrer dans l'application ;
-- la presence de credentials seule n'active jamais le client `/exchange`.
+- la presence de credentials seule n'active jamais le client `/exchange` ;
+- le sidecar impose `vaultAddress=null`; subaccounts et vaults sont rejetes.
 
 HL-012 cable le signer crypto dans un sidecar Compose dedie au profile
 `hyperliquid-testnet`. Le sidecar n'a aucun port hote et recoit seul la private
@@ -284,6 +300,8 @@ key agent ; PHP recoit uniquement l'endpoint interne, l'auth token et les
 adresses. Le broadcast reste desactive par defaut et exige simultanement les
 flags globaux/HL, la config effective mutative, le kill switch ouvert, la
 readiness complete et la confirmation de la commande operateur.
+La valeur CLI de decision ne consulte ni GitHub ni un artefact versionne et ne
+remplace pas le gate humain/documentaire DEMO-005.
 
 ### Nonce manager et replay
 
@@ -308,6 +326,21 @@ HL-005 ajoute un compteur nonce persistant sans activer de broadcast :
   observe plus haut ;
 - ce compteur n'est pas une cle d'idempotence metier et ne remplace pas les
   `client_order_id`/Cloid applicatifs.
+
+HL-012 ajoute donc un journal distinct
+`hyperliquid_testnet_execution_attempt`, cle par `idempotency_key`. Une
+reclamation atomique lie cette cle a l'empreinte SHA-256 du plan et au
+`client_order_id` avant la premiere action mutative. Les etats durables sont
+`reserved`, `submitted`, `compensating` puis un etat `terminal_*`. Un rejeu
+terminal strictement identique restitue le resultat redacted sans nonce ni
+broadcast, avant les gates qui peuvent legitimement avoir change apres le
+premier succes. Une contrainte unique sur le slot actif du scope testnet
+serialise aussi les cles differentes entre processus et hotes partageant
+PostgreSQL. Une tentative non terminale apres crash, une empreinte differente,
+un autre `client_order_id` ou une seconde cle concurrente declenche la
+quarantaine ; aucune heuristique par symbole ou timestamp n'est autorisee. Un
+echec d'ecriture du journal apres broadcast trip le kill switch et conserve le
+lease d'execution.
 
 Le signer est l'axe de serialization anti-replay. Le compte reste visible dans
 la ligne persistante, mais il ne cree pas un compteur independant pour un meme
@@ -363,7 +396,9 @@ Hyperliquid peut progresser vers `local_dry_run_ready` seulement si :
    la precision prix Hyperliquid qui evite les rejets `tickRejected`.
 4. La lecture publique est fraiche et bornee.
 5. La lecture account est redacted et couvre positions, ordres, fills et funding.
-6. Le signer agent testnet est configure et rattache a un compte testnet distinct.
+6. Le signer agent testnet est configure et rattache a un master account testnet
+   distinct, dont la reponse officielle `userRole` vaut exactement `user` ; le
+   sidecar impose `vaultAddress=null`.
 7. Le nonce store persistant est disponible ; HL-012 ne reserve un nonce
    qu'apres readiness et revalidation flat du symbole.
 8. Le collateral est lisible via account read-only.
@@ -379,10 +414,13 @@ Hyperliquid peut progresser de `local_dry_run_ready` vers `demo_testnet_candidat
    effective doit aussi porter `kill_switch_enabled=false` uniquement pendant
    la fenetre approuvee.
 4. L'observabilite privee est complete ou explicitement acceptee en dry-run par la policy documentee.
-5. La permission trade de l'agent wallet est prouvee pour l'account address
-   distinct.
-6. DEMO-005 porte exactement `ready_for_demo_testnet_trading_attempt`; dans
-   l'etat documentaire actuel `blocked`, cette progression est interdite.
+5. Le role officiel `user` du master account et la relation avec l'agent wallet
+   sont confirmes. `extraAgents` complete ce controle avec les autres gates,
+   sans etre une preuve authoritative unique ; toute reponse ambigue echoue.
+6. Une decision DEMO-005 versionnee et relue porte exactement
+   `ready_for_demo_testnet_trading_attempt`. Ce gate est humain/documentaire :
+   aucune option CLI ne consulte ou n'impose cette decision. Dans l'etat
+   documentaire actuel `blocked`, l'operateur ne doit pas activer le chemin.
 
 Hyperliquid ne peut atteindre `demo_testnet_enabled` que si, en plus :
 
@@ -393,8 +431,9 @@ Hyperliquid ne peut atteindre `demo_testnet_enabled` que si, en plus :
    notional positif sous plafond et stop-loss present.
 4. La private observability policy autorise le statut Hyperliquid testnet.
 5. Le signer utilise uniquement une API wallet testnet dediee.
-6. `permissions_trade=true` est prouve pour l'API wallet/le compte testnet
-   avant tout statut enabled.
+6. `userRole=user` est prouve par la surface officielle pour le master account,
+   puis la relation API wallet/account est confirmee avec `extraAgents` et les
+   autres gates, en mode fail-closed.
 7. Le nonce manager persistant est operationnel et audite.
 8. Une compensation fail-safe est documentee si le SL ne peut pas etre attache.
 9. L'audit demo/testnet trading est ecrit avant de considerer la mutation
@@ -421,7 +460,8 @@ Les elements suivants restent explicitement non supportes :
 - ordre mainnet Hyperliquid ;
 - utilisation d'une private key de wallet principal dans l'application ;
 - activation Hyperliquid par presence de credentials ;
-- spot, vault, subaccount ou builder-deployed perps sans PR explicite ;
+- spot ou builder-deployed perps sans PR explicite ;
+- vaults et subaccounts, strictement non supportes par HL-012 ;
 - retrait, transfert, bridge ou mutation account ;
 - fallback silencieux vers Bitmart quand `exchange=hyperliquid` ;
 - ordre testnet sans SL immediat ou compensation fail-safe ;
@@ -492,9 +532,11 @@ demo_testnet_write_enabled=false
 kill_switch_enabled=true
 ```
 
-HL-012 ajoute un kill switch durable DB avec fallback filesystem. Le rollback
-doit trip la DB, arreter le profile `hyperliquid-testnet` et conserver toutes
-les preuves. Un marker fallback ne doit jamais etre supprime a la main : utiliser
+HL-012 ajoute un kill switch durable DB avec fallback filesystem et la table
+`hyperliquid_testnet_execution_attempt` via une migration additive distincte.
+Le rollback doit trip la DB, arreter le profile `hyperliquid-testnet` et
+conserver toutes les preuves, y compris les tentatives non terminales. Un
+marker fallback ne doit jamais etre supprime a la main : utiliser
 `app:hyperliquid:testnet:quarantine-recover` uniquement lorsque la DB est deja
 lisible et `tripped`, puis redemarrer les workers. Voir le runbook
 [Hyperliquid testnet controlled trading](../runbooks/hyperliquid-testnet-controlled-trading.md)

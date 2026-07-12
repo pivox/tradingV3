@@ -29,13 +29,16 @@ TradingV3. Pendant toute la fenetre, TradingV3 a l'ownership externe exclusif :
 - toute intervention manuelle met fin a la recette et doit etre declaree comme
   incident avec transfert d'ownership explicite.
 
-L'**account address** est l'adresse du master account ou subaccount dont on lit
-le collateral, les positions et les ordres. L'**agent address** est l'adresse
-du wallet API approuve qui signe pour ce compte. Elles doivent etre distinctes.
+L'**account address** est obligatoirement l'adresse du master account, dont le
+role officiel `/info` est exactement `user`. Les subaccounts et vaults sont
+strictement non supportes par HL-012. L'**agent address** est l'adresse du wallet
+API approuve qui signe pour ce compte. Elles doivent etre distinctes.
 Les lectures `/info` utilisent toujours l'account address ; utiliser l'agent
 address retournerait un state vide ou incorrect. Un agent neuf et dedie au
 processus evite aussi le partage de nonces recommande par la documentation
 Hyperliquid : [Nonces and API wallets](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets).
+Le sidecar envoie toujours `vaultAddress=null` ; toute autre valeur bloque la
+tentative avant signature ou broadcast.
 
 ## Creation et approbation de l'agent API dedie
 
@@ -47,9 +50,8 @@ inventer une et ne pas appeler `/exchange` a la main. Garder
 
 1. Ouvrir exclusivement [l'UI API officielle testnet](https://app.hyperliquid-testnet.xyz/API)
    et verifier le host avant de connecter le wallet du compte testnet dedie.
-2. Verifier dans l'UI que l'adresse connectee est l'**account address** attendue.
-   Pour un subaccount, utiliser son adresse comme account address ; l'agent
-   reste approuve par le master account selon le modele Hyperliquid.
+2. Verifier dans l'UI que l'adresse connectee est l'**account address** attendue
+   du master account. Ne pas continuer avec une adresse de subaccount ou vault.
 3. Creer un **named API wallet** avec un nom neuf reserve a ce processus. Ne pas
    reutiliser un agent ou un nom existant : Hyperliquid peut deregistrer/remplacer
    un agent du meme slot et son etat de nonce peut etre prune.
@@ -88,6 +90,21 @@ jq -en --arg account "$HL_TESTNET_ACCOUNT_ADDRESS" \
   (($account | ascii_downcase) != ($agent | ascii_downcase))
 ' >/dev/null
 
+USER_ROLE_JSON="$(
+  curl --fail --silent --show-error \
+    -H 'Content-Type: application/json' \
+    --data "$(jq -cn --arg user "$HL_TESTNET_ACCOUNT_ADDRESS" \
+      '{type:"userRole", user:$user}')" \
+    "$HL_INFO_URL"
+)"
+
+printf '%s' "$USER_ROLE_JSON" | jq -e '
+  type == "object" and
+  keys == ["role"] and
+  (.role | type) == "string" and
+  .role == "user"
+' >/dev/null
+
 EXTRA_AGENTS_JSON="$(
   curl --fail --silent --show-error \
     -H 'Content-Type: application/json' \
@@ -105,18 +122,32 @@ printf '%s' "$EXTRA_AGENTS_JSON" | jq \
 
 printf '%s' "$EXTRA_AGENTS_JSON" | jq -e \
   --arg agent "$HL_TESTNET_AGENT_ADDRESS" '
-  [.[]
-    | select((.address | ascii_downcase) == ($agent | ascii_downcase))
-    | select((.validUntil | type) == "number")
-    | select(.validUntil > (now * 1000))]
-  | length == 1
+  type == "array" and
+  all(.[];
+    type == "object" and
+    has("address") and has("validUntil") and
+    ((keys_unsorted - ["address", "name", "validUntil"]) | length == 0) and
+    (.address | type) == "string" and
+    (.address | test("^0x[0-9a-fA-F]{40}$")) and
+    (.validUntil | type) == "number" and
+    (.validUntil == (.validUntil | floor)) and
+    ((has("name") | not) or (.name | type) == "string")
+  ) and
+  ([.[] | select((.address | ascii_downcase) == ($agent | ascii_downcase))] | length == 1) and
+  ([.[] | select((.address | ascii_downcase) == ($agent | ascii_downcase))][0].validUntil > (now * 1000))
 ' >/dev/null
 ```
 
-La sortie filtree doit contenir exactement l'agent derive et une expiration
-future. Une reponse vide, dupliquee, expiree ou mal formee bloque la procedure.
-`extraAgents` est la preuve read-only utilisee par la readiness HL-012 ; elle ne
-contient et ne valide aucune private key.
+`userRole` doit retourner exactement le role `user` du master account. La sortie
+`extraAgents` filtree doit contenir exactement l'agent derive et une expiration
+future. Une reponse vide, dupliquee, expiree, mal formee ou tout autre role
+(`agent`, `vault`, `subAccount`, `missing`) bloque la procedure. `userRole` est
+la surface officielle documentee : [Query a user's role](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#query-a-users-role).
+`extraAgents` est expose par le
+[SDK Python officiel 0.24.0 epingle](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/blob/0.24.0/hyperliquid/info.py),
+mais n'est pas documente dans l'Info GitBook. Il confirme seulement la relation
+avec l'agent, en complement de `userRole` et des autres gates ; il ne constitue
+ni une preuve authoritative unique ni une validation de private key.
 
 Configurer ensuite **uniquement les deux adresses publiques** dans
 `HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS` et
@@ -207,11 +238,15 @@ fi
 ```
 
 Avec le sidecar encore arrete, d'autres blocages comme
-`hyperliquid_signer_sidecar_not_ready` sont attendus. La requete directe
-`extraAgents` est la preuve positive de permission trade. Le runtime-check doit
-etre complet, lire exactement les memes adresses publiques et ne pas contredire
-cette preuve par un warning `extra_agents` ou `agent_wallet_trade_permission`.
-Seules ces conditions autorisent le passage de l'enregistrement secret
+`hyperliquid_signer_sidecar_not_ready` sont attendus. La requete officielle
+`userRole` doit confirmer le role `user` du master account. La reponse
+`extraAgents`, surface du SDK officiel epingle mais absente de l'Info GitBook,
+confirme ensuite la relation avec l'agent sans etre une preuve authoritative
+unique. Le runtime-check doit etre complet, lire exactement les memes adresses
+publiques et ne contredire aucun de ces controles par un warning `extra_agents`
+ou `agent_wallet_trade_permission`. Toute reponse absente, ambigue ou mal
+formee reste fail-closed. Seul l'ensemble de ces conditions autorise le passage
+de l'enregistrement secret
 `pending` vers l'injection sidecar par le mecanisme local approuve. Ne jamais
 utiliser `export`, `read`, `docker compose run -e`, `--env` ou une ligne de
 commande pour la private key.
@@ -239,11 +274,13 @@ testnet peut obtenir du collateral fictif selon la procedure officielle
 Avant toute preparation :
 
 1. La migration `Version20260712120000` est appliquee et PostgreSQL est sain.
-2. Le compte et l'agent testnet dedies sont approuves et finances.
+2. Le master account de role officiel `user` et l'agent testnet dedies sont
+   approuves et finances ; subaccounts et vaults sont interdits.
 3. `HYPERLIQUID_ENV=testnet`, `HYPERLIQUID_NETWORK=testnet` et l'endpoint
    `https://api.hyperliquid-testnet.xyz` sont imposes.
 4. `HYPERLIQUID_MAINNET_ENABLED=0` reste immuable.
-5. Les adresses account et agent sont distinctes, valides et configurees hors Git.
+5. Les adresses account et agent sont distinctes, valides et configurees hors
+   Git ; le sidecar conserve `vaultAddress=null`.
 6. L'auth token sidecar est configure hors Git ; sa valeur n'est jamais affichee.
 7. Les configs effectives restent fail-closed pendant la preparation :
    `dry_run=true`, `live_enabled=false`, `demo_testnet_write_enabled=false`,
@@ -429,6 +466,9 @@ Le hash doit etre le `config_hash` effectif de 64 caracteres hexadecimaux, les
 identifiants doivent etre uniques, et le notional doit respecter l'allow-list
 et le plafond du profil. L'exemple est uniquement structurel : ses prix ne sont
 pas une recommandation et doivent etre recalcules avec une quote fraiche.
+`idempotency_key` est reclamee durablement avant la premiere mutation. Ne jamais
+la reutiliser pour un autre plan ou `client_order_id`. Un etat non terminal
+apres interruption est ambigu et impose la quarantaine, jamais un rejeu.
 
 HL-012 impose `perpetual`, `limit`, `gtc`, `isolated`, leverage entier 1..50,
 position initialement flat et aucun ordre ouvert sur le symbole. Le stop doit
@@ -438,9 +478,12 @@ schema v1.
 
 ## Gate de tentative mutative future
 
-Cette section est **interdite avec DEMO-005=`blocked`**. Une future execution
-n'est permise que si toutes les conditions suivantes sont simultanement
-prouvees dans une decision versionnee :
+Cette section est **interdite avec DEMO-005=`blocked`**. DEMO-005 est un gate
+humain et documentaire : ni la commande ni son option
+`--readiness-decision` ne lisent GitHub ou une decision versionnee. Le chemin
+reste desactive par defaut et l'operateur ne doit ouvrir ses flags qu'apres
+publication et revue de la decision versionnee. Une future execution n'est
+permise que si toutes les conditions suivantes sont simultanement satisfaites :
 
 1. decision exacte `ready_for_demo_testnet_trading_attempt` ;
 2. confirmation operateur exacte `CONFIRM_HYPERLIQUID_TESTNET_ONLY` ;
@@ -468,6 +511,11 @@ docker compose exec -T trading-app-php \
   --readiness-decision=ready_for_demo_testnet_trading_attempt
 ```
 
+L'option `--readiness-decision` verifie seulement que l'operateur fournit la
+valeur litterale attendue. Elle ne prouve pas et n'impose pas l'existence, le
+statut ou la revue de DEMO-005 ; ce controle doit etre realise humainement avant
+l'activation des flags et l'execution de la commande.
+
 Ne jamais relancer apres timeout, sortie `ambiguous` ou erreur. Un succes exige
 `status=accepted`, le meme `client_order_id`, un `exchange_order_id` opaque et
 `protection_confirmed=true` dans la preuve applicative. Toute autre sortie est
@@ -492,7 +540,8 @@ l'**account address**, jamais l'agent address. Elles suivent les surfaces
 officielles [clearinghouseState](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals#retrieve-users-perpetuals-account-summary),
 [frontendOpenOrders](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-open-orders-with-additional-frontend-info)
 et [orderStatus](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint#query-order-status-by-oid-or-cloid).
-Elles n'affichent que coin, taille, oid, cloid, statut et flags utiles.
+Elles n'affichent que coin, taille, cloid, statut et flags utiles. L'OID exact
+reste uniquement dans la requete textuelle de lookup.
 
 Initialiser les identifiants publics. `HL_COIN` est le coin Hyperliquid, par
 exemple celui lie au symbole du plan. `HL_ENTRY_OID` vient de la sortie smoke et
@@ -589,7 +638,6 @@ printf '%s' "$HL_ORDERS_JSON" | jq -e '
   all(.[];
     type == "object" and
     has("coin") and (.coin | type) == "string" and
-    has("oid") and (.oid | type) == "number" and (.oid | floor) == .oid and .oid > 0 and
     has("sz") and (.sz | type) == "string" and
       (.sz | test("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
       (try (.sz | tonumber) catch null) != null and
@@ -603,15 +651,17 @@ HL_OPEN_ORDERS="$(
   printf '%s' "$HL_ORDERS_JSON" | jq --arg coin "$HL_COIN" '
     [.[]
       | select(.coin == $coin)
-      | {coin, oid, cloid, size:.sz, reduceOnly, isTrigger}]
+      | {coin, cloid, size:.sz, reduceOnly, isTrigger}]
   '
 )"
 printf '%s\n' "$HL_OPEN_ORDERS"
 printf '%s' "$HL_OPEN_ORDERS" | jq -e 'length == 0' >/dev/null
 ```
 
-Interroger `orderStatus` sans convertir un OID u64 en float et sans accepter un
-identifiant approximatif :
+Interroger `orderStatus` en inserant l'OID decimal exact comme texte dans le
+payload JSON, sans le faire passer par `jq`. La reponse est identifiee par le
+cloid exact ; l'OID JSON numerique de la reponse n'est ni compare, ni affiche,
+car `jq` le representerait en IEEE-754 :
 
 ```bash
 set -euo pipefail
@@ -622,7 +672,6 @@ HL_ALLOWED_ORDER_STATUSES='[
   "triggered",
   "rejected",
   "marginCanceled",
-  "vaultWithdrawalCanceled",
   "openInterestCapCanceled",
   "selfTradeCanceled",
   "reduceOnlyCanceled",
@@ -667,7 +716,6 @@ HL_CLOID_STATUS_JSON="$(hl_order_status "$HL_ENTRY_CLOID")"
 
 for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
   printf '%s' "$status_json" | jq -e \
-    --arg oid "$HL_ENTRY_OID" \
     --arg cloid "$HL_ENTRY_CLOID" \
     --argjson allowed "$HL_ALLOWED_ORDER_STATUSES" '
     .order.status as $order_status |
@@ -677,9 +725,6 @@ for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
     (.order.status | type) == "string" and
     ($allowed | index($order_status)) != null and
     (.order.order | type) == "object" and
-    (.order.order.oid | type) == "number" and
-    (.order.order.oid | floor) == .order.order.oid and
-    .order.order.oid > 0 and
     (.order.order.cloid | type) == "string" and
     (.order.order.cloid | test("^0x[0-9a-fA-F]{32}$")) and
     (.order.order.sz | type) == "string" and
@@ -689,7 +734,6 @@ for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
     (.order.order.origSz | test("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$")) and
     (try (.order.order.origSz | tonumber) catch null) != null and
     (.order.order.reduceOnly | type) == "boolean" and
-    ((.order.order.oid | tostring) == $oid) and
     ((.order.order.cloid | ascii_downcase) == ($cloid | ascii_downcase))
   ' >/dev/null
 
@@ -698,7 +742,6 @@ for status_json in "$HL_OID_STATUS_JSON" "$HL_CLOID_STATUS_JSON"; do
     .order.status as $order_status |
     {
       lookupStatus:.status,
-      oid:.order.order.oid,
       cloid:.order.order.cloid,
       orderStatus:.order.status,
       statusAllowed:($allowed | index($order_status) != null),
@@ -729,9 +772,10 @@ test -n "$HL_CLOID_STATUS"
 test "$HL_OID_STATUS" = "$HL_CLOID_STATUS"
 ```
 
-Les deux recherches doivent retourner le meme couple OID/cloid. `unknownOid`,
-une reponse mal formee, un statut hors allow-list, un cloid absent, un OID
-divergent ou des statuts incompatibles provoque un exit non nul et reste
+Les recherches par OID exact et par cloid doivent retourner le meme cloid et le
+meme statut. `unknownOid`, une reponse mal formee, un statut hors allow-list, un
+cloid absent ou divergent, ou des statuts incompatibles provoque un exit non
+nul et reste
 `ambiguous`. Si le statut a change entre les deux appels, rejouer immediatement
 les deux lookups une seule fois ; une seconde divergence reste `ambiguous`. Il
 est interdit de chercher un autre ordre par coin, prix, taille ou fenetre
@@ -800,7 +844,14 @@ Verifier la DB sans afficher de contexte sensible :
 set -euo pipefail
 docker compose exec -T trading-app-php php bin/console dbal:run-sql \
   "SELECT scope, tripped, reason, tripped_at, updated_at FROM hyperliquid_testnet_kill_switch_state WHERE scope = 'hyperliquid_testnet'"
+
+docker compose exec -T trading-app-php php bin/console dbal:run-sql \
+  "SELECT idempotency_key, client_order_id, state, created_at, updated_at FROM hyperliquid_testnet_execution_attempt ORDER BY updated_at DESC LIMIT 20"
 ```
+
+Le second resultat ne contient ni action brute, ni signature, ni secret. Un
+etat `reserved`, `submitted` ou `compensating` survivant a un restart reste un
+incident non terminal : ne pas modifier la ligne et ne pas relancer la cle.
 
 Si le marker existe et **seulement apres** confirmation que la DB est lisible et
 `tripped=true`, transferer la quarantaine avec la commande controlee :

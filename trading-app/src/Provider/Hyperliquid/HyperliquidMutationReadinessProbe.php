@@ -78,8 +78,10 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             $warnings[] = 'hyperliquid_agent_wallet_account_relation_not_ready';
         }
 
-        $permissionsTrade = $endpointReady
+        $masterAccountReady = $endpointReady
             && $addressesReady
+            && $this->masterAccountRole($accountAddress, $warnings);
+        $permissionsTrade = $masterAccountReady
             && $this->tradePermission($accountAddress, $agentAddress, $warnings);
         $sidecarReady = $addressesReady && $this->sidecarReady($warnings);
         $nonceReady = $addressesReady && $this->nonceReady($accountAddress, $agentAddress, $warnings);
@@ -322,6 +324,41 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
     }
 
     /** @param list<string> $warnings */
+    private function masterAccountRole(string $accountAddress, array &$warnings): bool
+    {
+        try {
+            $role = $this->readinessInfoClient->readinessInfo(['type' => 'userRole', 'user' => $accountAddress]);
+        } catch (\Throwable) {
+            $warnings[] = 'hyperliquid_user_role_probe_failed';
+
+            return false;
+        }
+
+        if (array_is_list($role) || !isset($role['role']) || !is_string($role['role'])) {
+            $warnings[] = 'hyperliquid_user_role_response_malformed';
+
+            return false;
+        }
+        if ($role['role'] === 'subAccount') {
+            $warnings[] = 'hyperliquid_subaccount_not_supported';
+
+            return false;
+        }
+        if ($role['role'] !== 'user') {
+            $warnings[] = 'hyperliquid_master_account_role_not_proven';
+
+            return false;
+        }
+        if (array_keys($role) !== ['role']) {
+            $warnings[] = 'hyperliquid_user_role_response_malformed';
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** @param list<string> $warnings */
     private function tradePermission(string $accountAddress, string $agentAddress, array &$warnings): bool
     {
         try {
@@ -339,7 +376,7 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
         }
 
         $nowMilliseconds = $this->milliseconds($this->clock->now());
-        $matchedExpired = false;
+        $matches = [];
         foreach ($rows as $row) {
             if (!is_array($row)
                 || array_is_list($row)
@@ -357,17 +394,26 @@ final readonly class HyperliquidMutationReadinessProbe implements HyperliquidMut
             if (strtolower($row['address']) !== $agentAddress) {
                 continue;
             }
-            if ($row['validUntil'] > $nowMilliseconds) {
-                return true;
-            }
-            $matchedExpired = true;
+            $matches[] = $row;
         }
 
-        $warnings[] = $matchedExpired
-            ? 'hyperliquid_agent_wallet_trade_permission_expired'
-            : 'hyperliquid_agent_wallet_trade_permission_not_proven';
+        if (count($matches) > 1) {
+            $warnings[] = 'hyperliquid_extra_agents_response_ambiguous';
 
-        return false;
+            return false;
+        }
+        if ($matches === []) {
+            $warnings[] = 'hyperliquid_agent_wallet_trade_permission_not_proven';
+
+            return false;
+        }
+        if ($matches[0]['validUntil'] <= $nowMilliseconds) {
+            $warnings[] = 'hyperliquid_agent_wallet_trade_permission_expired';
+
+            return false;
+        }
+
+        return true;
     }
 
     /** @param list<string> $warnings */

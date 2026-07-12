@@ -71,7 +71,10 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         self::assertSame(str_repeat('a', 64), $report->configHash);
         self::assertSame([], $report->blockingErrors);
         self::assertSame([], $report->warnings);
-        self::assertSame([['type' => 'extraAgents', 'user' => self::ACCOUNT]], $rest->requests);
+        self::assertSame([
+            ['type' => 'userRole', 'user' => self::ACCOUNT],
+            ['type' => 'extraAgents', 'user' => self::ACCOUNT],
+        ], $rest->requests);
     }
 
     public function testRuntimeCheckUsesProbeInsteadOfForgeableInputWhenProbeIsAvailable(): void
@@ -110,6 +113,45 @@ final class HyperliquidMutationReadinessProbeTest extends TestCase
         yield 'unexpected row key' => [[['address' => self::AGENT, 'validUntil' => 1_900_000_000_000, 'unexpected' => true]], 'hyperliquid_extra_agents_response_malformed'];
         yield 'malformed optional name' => [[['address' => self::AGENT, 'validUntil' => 1_900_000_000_000, 'name' => 123]], 'hyperliquid_extra_agents_response_malformed'];
         yield 'wrong agent' => [[['address' => self::OTHER_AGENT, 'validUntil' => 1_900_000_000_000]], 'hyperliquid_agent_wallet_trade_permission_not_proven'];
+        yield 'valid then malformed' => [[
+            ['address' => self::AGENT, 'validUntil' => 1_900_000_000_000],
+            ['address' => self::OTHER_AGENT],
+        ], 'hyperliquid_extra_agents_response_malformed'];
+        yield 'duplicate valid agent' => [[
+            ['address' => self::AGENT, 'validUntil' => 1_900_000_000_000],
+            ['address' => self::AGENT, 'validUntil' => 1_900_000_000_001],
+        ], 'hyperliquid_extra_agents_response_ambiguous'];
+        yield 'valid and expired duplicate' => [[
+            ['address' => self::AGENT, 'validUntil' => 1_900_000_000_000],
+            ['address' => self::AGENT, 'validUntil' => 1_783_857_600_000],
+        ], 'hyperliquid_extra_agents_response_ambiguous'];
+    }
+
+    /** @param array<mixed> $userRole */
+    #[DataProvider('unsupportedAccountRoles')]
+    public function testOnlyMasterUserAccountRoleCanProveTradePermission(
+        array $userRole,
+        string $warning,
+    ): void {
+        $rest = new ReadinessRecordingInfoClient($this->validExtraAgents(), $userRole);
+
+        $report = $this->probe(rest: $rest)->current();
+
+        self::assertFalse($report->permissionsTrade);
+        self::assertContains($warning, $report->warnings);
+        self::assertSame([['type' => 'userRole', 'user' => self::ACCOUNT]], $rest->requests);
+    }
+
+    /** @return iterable<string, array{array<mixed>, string}> */
+    public static function unsupportedAccountRoles(): iterable
+    {
+        yield 'subaccount' => [['role' => 'subAccount', 'data' => ['master' => self::OTHER_AGENT]], 'hyperliquid_subaccount_not_supported'];
+        yield 'vault' => [['role' => 'vault'], 'hyperliquid_master_account_role_not_proven'];
+        yield 'agent' => [['role' => 'agent', 'data' => ['user' => self::ACCOUNT]], 'hyperliquid_master_account_role_not_proven'];
+        yield 'missing' => [['role' => 'missing'], 'hyperliquid_master_account_role_not_proven'];
+        yield 'malformed role' => [['role' => 123], 'hyperliquid_user_role_response_malformed'];
+        yield 'unexpected key' => [['role' => 'user', 'unexpected' => true], 'hyperliquid_user_role_response_malformed'];
+        yield 'list response' => [[['role' => 'user']], 'hyperliquid_user_role_response_malformed'];
     }
 
     #[DataProvider('zeroAddressConfigs')]
@@ -577,8 +619,14 @@ final class ReadinessRecordingInfoClient implements HyperliquidRestClientInterfa
     /** @var list<array<string, mixed>> */
     public array $requests = [];
 
-    /** @param array<mixed> $response */
-    public function __construct(private readonly array $response)
+    /**
+     * @param array<mixed> $response
+     * @param array<mixed> $userRole
+     */
+    public function __construct(
+        private readonly array $response,
+        private readonly array $userRole = ['role' => 'user'],
+    )
     {
     }
 
@@ -586,7 +634,9 @@ final class ReadinessRecordingInfoClient implements HyperliquidRestClientInterfa
     {
         $this->requests[] = $request;
 
-        return $this->response;
+        return ($request['type'] ?? null) === 'userRole'
+            ? $this->userRole
+            : $this->response;
     }
 
     public function readinessInfo(array $request): array
