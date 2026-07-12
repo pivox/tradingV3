@@ -82,24 +82,52 @@ final class HyperliquidIsolatedLiquidationSolver
         if (!in_array($side, ['long', 'short'], true)) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_side_invalid');
         }
-        // The legacy DTO is float-based: round toward the entry before crossing that final boundary.
-        $exact = $this->positive($result->liquidationPrice);
-        $decimal = $exact->toScale(
+        // The legacy DTO is float-based: round toward entry, then advance one binary64 ULP in that direction.
+        $decimal = $this->positive($result->liquidationPrice)->toScale(
             self::DTO_SCALE,
             $side === 'long' ? RoundingMode::UP : RoundingMode::DOWN,
         );
-        $value = $decimal->toFloat();
+        $value = $this->oneUlpTowardEntry($decimal->toFloat(), $side);
         if (!is_finite($value) || $value <= 0.0) {
             throw new \InvalidArgumentException('hyperliquid_liquidation_float_invalid');
         }
-        $roundTrip = BigDecimal::of(sprintf('%.17g', $value));
-        if (($side === 'long' && $roundTrip->isLessThan($exact))
-            || ($side === 'short' && $roundTrip->isGreaterThan($exact))
+        return $value;
+    }
+
+    private function oneUlpTowardEntry(float $value, string $side): float
+    {
+        if (!is_finite($value) || $value <= 0.0) {
+            throw new \InvalidArgumentException('hyperliquid_liquidation_float_invalid');
+        }
+        $parts = unpack('Nhigh/Nlow', pack('E', $value));
+        if (!is_array($parts) || !is_int($parts['high'] ?? null) || !is_int($parts['low'] ?? null)) {
+            throw new \InvalidArgumentException('hyperliquid_liquidation_float_bits_invalid');
+        }
+        $high = $parts['high'];
+        $low = $parts['low'];
+        if ($side === 'long') {
+            if ($low === 0xffffffff) {
+                ++$high;
+                $low = 0;
+            } else {
+                ++$low;
+            }
+        } elseif ($low === 0) {
+            --$high;
+            $low = 0xffffffff;
+        } else {
+            --$low;
+        }
+        $next = unpack('Evalue', pack('N2', $high, $low));
+        $moved = is_array($next) ? ($next['value'] ?? null) : null;
+        if (!is_float($moved) || !is_finite($moved) || $moved <= 0.0
+            || ($side === 'long' && $moved <= $value)
+            || ($side === 'short' && $moved >= $value)
         ) {
-            throw new \InvalidArgumentException('hyperliquid_liquidation_float_direction_invalid');
+            throw new \InvalidArgumentException('hyperliquid_liquidation_float_invalid');
         }
 
-        return $value;
+        return $moved;
     }
 
     private function tierForNotional(HyperliquidMarginSafetyEvidence $evidence, BigDecimal $notional): \App\Provider\Hyperliquid\Dto\HyperliquidMarginTierEvidence

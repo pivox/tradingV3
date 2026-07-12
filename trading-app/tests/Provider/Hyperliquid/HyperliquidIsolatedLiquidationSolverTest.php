@@ -40,7 +40,7 @@ final class HyperliquidIsolatedLiquidationSolverTest extends TestCase
         $result = $this->solver()->solve($evidence, '100', '1', 3, 'long');
 
         self::assertSame('80.000000000000000000000000000000000033', $result->liquidationPrice);
-        self::assertSame(80.000000000001, $this->solver()->toConservativeFloat($result, 'long'));
+        self::assertSame(80.00000000000101, $this->solver()->toConservativeFloat($result, 'long'));
     }
 
     public function testRejectsWhenNoTierCandidateMatchesItsInterval(): void
@@ -81,47 +81,77 @@ final class HyperliquidIsolatedLiquidationSolverTest extends TestCase
         $this->solver()->solve($evidence, '100', '1', 51, 'long');
     }
 
-    public function testRejectsHugeLongWhenFloatRoundTripMovesBelowConservativeDecimal(): void
+    public function testHugeLongMovesExactlyOneUlpHigher(): void
     {
         $result = new HyperliquidIsolatedLiquidationResult(
             '10000000000000000.000000000001', 0, '0', 5, '0.1', '0',
         );
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->solver()->toConservativeFloat($result, 'long');
+        self::assertSame('10000000000000002', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'long')));
     }
 
-    public function testRejectsHugeShortWhenFloatRoundTripMovesAboveConservativeDecimal(): void
+    public function testHugeShortMovesExactlyOneUlpLower(): void
     {
         $result = new HyperliquidIsolatedLiquidationResult(
             '9999999999999999.999999999999', 0, '0', 5, '0.1', '0',
         );
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->solver()->toConservativeFloat($result, 'short');
+        self::assertSame('9999999999999998', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'short')));
     }
 
-    public function testRejectsPointOneShortBecauseActualFloatMovesAwayFromEntry(): void
+    public function testPointOneShortMovesExactlyOneUlpLower(): void
     {
         $result = new HyperliquidIsolatedLiquidationResult('0.1', 0, '0', 5, '0.1', '0');
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->solver()->toConservativeFloat($result, 'short');
+        self::assertSame('0.099999999999999992', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'short')));
     }
 
-    public function testRejectsPointThreeLongBecauseActualFloatMovesAwayFromEntry(): void
+    public function testPointThreeLongMovesExactlyOneUlpHigher(): void
     {
         $result = new HyperliquidIsolatedLiquidationResult('0.3', 0, '0', 5, '0.1', '0');
+
+        self::assertSame('0.30000000000000004', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'long')));
+    }
+
+    public function testPointOneLongAlsoMovesExactlyOneUlpTowardEntry(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('0.1', 0, '0', 5, '0.1', '0');
+
+        self::assertSame('0.10000000000000002', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'long')));
+    }
+
+    public function testReviewerShortOnePointEightMovesBelowActualBinaryValue(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('1.8', 0, '0', 5, '0.1', '0');
+
+        self::assertSame('1.7999999999999998', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'short')));
+    }
+
+    public function testReviewerLongOnePointSixFiveMovesAboveActualBinaryValue(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult('1.65', 0, '0', 5, '0.1', '0');
+
+        self::assertSame('1.6500000000000001', sprintf('%.17g', $this->solver()->toConservativeFloat($result, 'long')));
+    }
+
+    public function testLongUpperFiniteBoundaryRejectsInfinityAfterOneUlp(): void
+    {
+        $result = new HyperliquidIsolatedLiquidationResult(
+            sprintf('%.0f', PHP_FLOAT_MAX), 0, '0', 5, '0.1', '0',
+        );
 
         $this->expectException(\InvalidArgumentException::class);
         $this->solver()->toConservativeFloat($result, 'long');
     }
 
-    public function testPointOneLongRemainsConservativeInTheOppositeDirection(): void
+    public function testShortLowerDtoBoundaryRemainsPositiveAfterOneUlp(): void
     {
-        $result = new HyperliquidIsolatedLiquidationResult('0.1', 0, '0', 5, '0.1', '0');
+        $result = new HyperliquidIsolatedLiquidationResult('0.000000000001', 0, '0', 5, '0.1', '0');
 
-        self::assertSame(0.1, $this->solver()->toConservativeFloat($result, 'long'));
+        $value = $this->solver()->toConservativeFloat($result, 'short');
+
+        self::assertGreaterThan(0.0, $value);
+        self::assertSame('9.9999999999999978e-13', sprintf('%.17g', $value));
     }
 
     /** @param list<HyperliquidMarginTierEvidence>|null $tiers */
