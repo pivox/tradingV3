@@ -56,16 +56,19 @@ final readonly class HyperliquidCompensationResult
         $valid = match ($outcome) {
             'entry_rejected' => $reasonCode === HyperliquidCompensationReasonCode::ENTRY_REJECTED
                 && $entryStatus === HyperliquidLifecycleStatus::REJECTED
+                && $entryExchangeOrderId !== null
                 && $proven->isZero()
                 && $closed->isZero()
                 && $closeExchangeOrderId === null,
             'entry_canceled' => $reasonCode === HyperliquidCompensationReasonCode::ENTRY_CANCELED
                 && $entryStatus === HyperliquidLifecycleStatus::CANCELED
+                && $entryExchangeOrderId !== null
                 && $proven->isZero()
                 && $closed->isZero()
                 && $closeExchangeOrderId === null,
             'exposure_closed' => $reasonCode === HyperliquidCompensationReasonCode::EXPOSURE_CLOSED
                 && in_array($entryStatus, [HyperliquidLifecycleStatus::FILLED, HyperliquidLifecycleStatus::CANCELED], true)
+                && $entryExchangeOrderId !== null
                 && $proven->isPositive()
                 && $proven->equals($closed)
                 && $closeExchangeOrderId !== null,

@@ -50,6 +50,27 @@ final class HyperliquidCompensationResultTest extends TestCase
         yield 'closed zero' => [['outcome' => 'exposure_closed', 'status' => HyperliquidLifecycleStatus::FILLED, 'closeOid' => '99']];
         yield 'closed unequal' => [['outcome' => 'exposure_closed', 'status' => HyperliquidLifecycleStatus::FILLED, 'proven' => 1.0, 'closed' => 0.999, 'closeOid' => '99']];
         yield 'closed missing oid' => [['outcome' => 'exposure_closed', 'status' => HyperliquidLifecycleStatus::FILLED, 'proven' => 1.0, 'closed' => 1.0]];
+        yield 'rejected missing entry oid' => [[
+            'outcome' => 'entry_rejected',
+            'reasonCode' => HyperliquidCompensationReasonCode::ENTRY_REJECTED,
+            'status' => HyperliquidLifecycleStatus::REJECTED,
+            'entryOid' => null,
+        ]];
+        yield 'canceled missing entry oid' => [[
+            'outcome' => 'entry_canceled',
+            'reasonCode' => HyperliquidCompensationReasonCode::ENTRY_CANCELED,
+            'status' => HyperliquidLifecycleStatus::CANCELED,
+            'entryOid' => null,
+        ]];
+        yield 'closed missing entry oid' => [[
+            'outcome' => 'exposure_closed',
+            'reasonCode' => HyperliquidCompensationReasonCode::EXPOSURE_CLOSED,
+            'status' => HyperliquidLifecycleStatus::FILLED,
+            'proven' => 1.0,
+            'closed' => 1.0,
+            'entryOid' => null,
+            'closeOid' => '99',
+        ]];
         yield 'unknown over expected' => [['outcome' => 'unknown_requires_resync', 'status' => HyperliquidLifecycleStatus::UNKNOWN_REQUIRES_RESYNC, 'proven' => 1.001]];
         yield 'noncanonical entry oid' => [['entryOid' => '00042']];
         yield 'noncanonical close oid' => [['closeOid' => 'oid-99']];

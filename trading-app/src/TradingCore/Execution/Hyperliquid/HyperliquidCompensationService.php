@@ -54,6 +54,10 @@ final readonly class HyperliquidCompensationService
             $tripGuard->trip();
 
             throw $exception;
+        } catch (\Throwable $exception) {
+            $tripGuard->trip();
+
+            throw $exception;
         }
     }
 

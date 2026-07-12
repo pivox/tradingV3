@@ -463,6 +463,23 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertSame(1, $fixture->trip->tripAttempts);
     }
 
+    public function testSignedClientTypeErrorAfterPotentialMutationTripsOnceAndIsRethrown(): void
+    {
+        $typeError = new \TypeError('collaborator_return_contract_broken');
+        $fixture = $this->fixture([$this->lifecycle('open')], [$typeError]);
+
+        try {
+            $fixture->service->compensate($this->context());
+            self::fail('Expected TypeError');
+        } catch (\TypeError $exception) {
+            self::assertSame($typeError, $exception);
+        }
+
+        self::assertSame([1_000], $fixture->nonce->issued);
+        self::assertCount(1, $fixture->signed->actions);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+    }
+
     public function testTripPersistenceFailurePropagatesAfterExactlyOneAttempt(): void
     {
         $fixture = $this->fixture([null, null, null]);
