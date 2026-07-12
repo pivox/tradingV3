@@ -62,6 +62,7 @@ def signer_config(**overrides: Any) -> SignerConfig:
         "api_base_uri": TESTNET_URI,
         "agent_private_key": SecretStr(FIXTURE_KEY),
         "agent_address": FIXTURE_ADDRESS,
+        "account_address": "0x1111111111111111111111111111111111111111",
         "auth_token": SecretStr(TOKEN),
         "broadcast_enabled": True,
     }

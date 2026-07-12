@@ -7,6 +7,7 @@ from app.config import SignerConfig, TESTNET_URI
 
 
 AGENT_ADDRESS = "0x1111111111111111111111111111111111111111"
+ACCOUNT_ADDRESS = "0x2222222222222222222222222222222222222222"
 INVALID_FIXTURE_KEY = "not-a-real-private-key"
 FIXTURE_TOKEN = "deterministic-test-token"
 
@@ -16,6 +17,7 @@ def set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY", INVALID_FIXTURE_KEY
     )
     monkeypatch.setenv("HYPERLIQUID_TESTNET_AGENT_ADDRESS", AGENT_ADDRESS)
+    monkeypatch.setenv("HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS", ACCOUNT_ADDRESS)
     monkeypatch.setenv("HYPERLIQUID_SIGNER_AUTH_TOKEN", FIXTURE_TOKEN)
 
 
@@ -30,6 +32,7 @@ def test_config_uses_testnet_defaults_and_hides_secrets(
     assert config.network == "testnet"
     assert config.api_base_uri == TESTNET_URI
     assert config.agent_address == AGENT_ADDRESS
+    assert config.account_address == ACCOUNT_ADDRESS
     assert config.broadcast_enabled is False
     assert isinstance(config.agent_private_key, SecretStr)
     assert isinstance(config.auth_token, SecretStr)
@@ -48,6 +51,7 @@ def test_config_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("variable", [
     "HYPERLIQUID_TESTNET_AGENT_PRIVATE_KEY",
     "HYPERLIQUID_TESTNET_AGENT_ADDRESS",
+    "HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS",
     "HYPERLIQUID_SIGNER_AUTH_TOKEN",
 ])
 @pytest.mark.parametrize("value", ["", "   "])

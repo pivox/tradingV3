@@ -153,6 +153,12 @@ class HyperliquidTestnetSigner:
                 outcome="rejected",
                 reason="agent_address_mismatch",
             )
+        if request.account_address.lower() != self._config.account_address:
+            return _response(
+                request,
+                outcome="rejected",
+                reason="account_address_mismatch",
+            )
 
         signature = _sign_l1_testnet_action(
             self._wallet,

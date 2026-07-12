@@ -18,6 +18,7 @@ class SignerConfig:
     api_base_uri: str
     agent_private_key: SecretStr
     agent_address: str
+    account_address: str
     auth_token: SecretStr
     broadcast_enabled: bool
 
@@ -38,11 +39,15 @@ class SignerConfig:
         agent_address = os.getenv(
             "HYPERLIQUID_TESTNET_AGENT_ADDRESS", ""
         ).strip()
+        account_address = os.getenv(
+            "HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS", ""
+        ).strip()
         auth_token = os.getenv("HYPERLIQUID_SIGNER_AUTH_TOKEN", "").strip()
         if (
             not private_key
             or not auth_token
             or _ADDRESS_PATTERN.fullmatch(agent_address) is None
+            or _ADDRESS_PATTERN.fullmatch(account_address) is None
         ):
             raise ValueError("signer_credentials_required")
 
@@ -55,6 +60,7 @@ class SignerConfig:
             api_base_uri=api_base_uri,
             agent_private_key=SecretStr(private_key),
             agent_address=agent_address,
+            account_address=account_address,
             auth_token=SecretStr(auth_token),
             broadcast_enabled=broadcast_enabled,
         )

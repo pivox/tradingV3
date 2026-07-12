@@ -22,6 +22,7 @@ from app.signing import (
 FIXTURE_ACCOUNT = Account.create()
 FIXTURE_KEY = FIXTURE_ACCOUNT.key.hex()
 FIXTURE_ADDRESS = FIXTURE_ACCOUNT.address.lower()
+CONFIGURED_ACCOUNT = "0x1111111111111111111111111111111111111111"
 TOKEN = secrets.token_urlsafe(32)
 
 
@@ -32,6 +33,7 @@ def config(**overrides: Any) -> SignerConfig:
         "api_base_uri": TESTNET_URI,
         "agent_private_key": SecretStr(FIXTURE_KEY),
         "agent_address": FIXTURE_ADDRESS,
+        "account_address": CONFIGURED_ACCOUNT,
         "auth_token": SecretStr(TOKEN),
         "broadcast_enabled": True,
     }
@@ -45,7 +47,7 @@ def exchange_request(**overrides: Any) -> ExchangeRequest:
         "environment": "testnet",
         "network": "testnet",
         "nonce": 1_700_000_000_001,
-        "account_address": "0x1111111111111111111111111111111111111111",
+        "account_address": CONFIGURED_ACCOUNT,
         "agent_address": FIXTURE_ADDRESS,
         "action": {"type": "order", "orders": []},
         "correlation_id": "corr-1",
@@ -195,6 +197,30 @@ def test_request_agent_mismatch_rejects_before_signing_or_transport(
 
     assert response.outcome == "rejected"
     assert response.reason == "agent_address_mismatch"
+    assert response.statuses == []
+    assert transport.calls == []
+
+
+def test_request_account_mismatch_rejects_before_signing_or_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = FakeTransport()
+    signer = HyperliquidTestnetSigner(config(), transport)
+    monkeypatch.setattr(
+        "app.signing._sign_l1_testnet_action",
+        lambda *args, **kwargs: pytest.fail("signing must not run"),
+    )
+
+    response = asyncio.run(
+        signer.submit(
+            exchange_request(
+                account_address="0x2222222222222222222222222222222222222222"
+            )
+        )
+    )
+
+    assert response.outcome == "rejected"
+    assert response.reason == "account_address_mismatch"
     assert response.statuses == []
     assert transport.calls == []
 
