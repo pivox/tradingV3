@@ -80,11 +80,17 @@ final class HyperliquidKillSwitchAuditSanitizer
                 continue;
             }
 
-            $key = substr(trim($key), 0, 64);
+            $originalKey = trim($key);
+            $sensitiveKey = preg_match(self::SENSITIVE_KEY_PATTERN, $originalKey) === 1;
+            $key = substr($originalKey, 0, 64);
             if ($key === '') {
                 continue;
             }
-            if (preg_match(self::SENSITIVE_KEY_PATTERN, $key) === 1) {
+            if (array_key_exists($key, $sanitized)) {
+                $sanitized[$key] = '[redacted]';
+                continue;
+            }
+            if ($sensitiveKey) {
                 if ($preserveSensitiveKeys) {
                     $sanitized[$key] = '[redacted]';
                 }

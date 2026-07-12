@@ -101,4 +101,45 @@ final class HyperliquidKillSwitchAuditSanitizerTest extends TestCase
             $sanitizer->sanitizeReason('hyperliquid_signature_confirmation_failed'),
         );
     }
+
+    public function testChecksSensitiveSuffixBeforeTruncatingLongKey(): void
+    {
+        $secret = 'long-key-secret-never-log';
+        $key = str_repeat('a', 80) . '_private_key';
+
+        $context = (new HyperliquidKillSwitchAuditSanitizer())->sanitizeAuditPayload([$key => $secret]);
+        $encoded = json_encode($context, JSON_THROW_ON_ERROR);
+
+        self::assertSame('[redacted]', $context[str_repeat('a', 64)] ?? null);
+        self::assertStringNotContainsString($secret, $encoded);
+    }
+
+    /** @param array<string, string> $payload */
+    #[\PHPUnit\Framework\Attributes\DataProvider('truncationCollisionPayloads')]
+    public function testTruncationCollisionCannotRestoreSensitiveValue(array $payload): void
+    {
+        $secret = 'collision-secret-never-log';
+
+        $context = (new HyperliquidKillSwitchAuditSanitizer())->sanitizeAuditPayload($payload);
+        $encoded = json_encode($context, JSON_THROW_ON_ERROR);
+
+        self::assertSame('[redacted]', $context[str_repeat('k', 64)] ?? null);
+        self::assertStringNotContainsString($secret, $encoded);
+    }
+
+    /** @return iterable<string, array{array<string,string>}> */
+    public static function truncationCollisionPayloads(): iterable
+    {
+        $prefix = str_repeat('k', 64);
+        $secret = 'collision-secret-never-log';
+
+        yield 'sensitive second' => [[
+            $prefix . '_label' => 'visible',
+            $prefix . '_private_key' => $secret,
+        ]];
+        yield 'sensitive first' => [[
+            $prefix . '_private_key' => $secret,
+            $prefix . '_label' => 'visible',
+        ]];
+    }
 }

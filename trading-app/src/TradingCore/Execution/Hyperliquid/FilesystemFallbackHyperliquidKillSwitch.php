@@ -11,12 +11,13 @@ final readonly class FilesystemFallbackHyperliquidKillSwitch implements Hyperliq
     public function __construct(
         private HyperliquidKillSwitchTripInterface $repository,
         private string $markerPath,
+        private ?HyperliquidQuarantineFilesystemInterface $filesystem = null,
     ) {
     }
 
     public function isTripped(): bool
     {
-        if (@is_file($this->markerPath)) {
+        if ($this->markerFilesystem()->markerExists($this->markerPath)) {
             return true;
         }
 
@@ -32,33 +33,47 @@ final readonly class FilesystemFallbackHyperliquidKillSwitch implements Hyperliq
         }
 
         try {
-            $this->writeMarker();
+            $this->markerFilesystem()->persistMarker($this->markerPath, self::MARKER_CONTENT);
+        } catch (HyperliquidDurableTripPersistenceException $exception) {
+            throw $exception;
         } catch (\Throwable) {
             throw new HyperliquidDurableTripPersistenceException();
         }
     }
 
-    private function writeMarker(): void
+    /**
+     * Transfers quarantine ownership to an already-tripped repository.
+     * This never resets the kill switch or releases process-retained execution locks.
+     */
+    public function recoverFallbackMarker(): bool
     {
-        if (@is_file($this->markerPath)) {
-            return;
-        }
-
-        $directory = dirname($this->markerPath);
-        $temporary = @tempnam($directory, '.hl-quarantine-');
-        if (!is_string($temporary)) {
-            throw new \RuntimeException('hyperliquid_quarantine_marker_temp_failed');
+        $filesystem = $this->markerFilesystem();
+        if (!$filesystem->markerExists($this->markerPath)) {
+            return false;
         }
 
         try {
-            $written = @file_put_contents($temporary, self::MARKER_CONTENT, LOCK_EX);
-            if ($written !== strlen(self::MARKER_CONTENT) || !@chmod($temporary, 0600) || !@rename($temporary, $this->markerPath)) {
-                throw new \RuntimeException('hyperliquid_quarantine_marker_write_failed');
-            }
-        } finally {
-            if (@is_file($temporary)) {
-                @unlink($temporary);
-            }
+            $repositoryTripped = $this->repository->isTripped();
+        } catch (\Throwable) {
+            throw new HyperliquidDurableTripPersistenceException();
         }
+        if (!$repositoryTripped) {
+            return false;
+        }
+
+        try {
+            $filesystem->removeMarker($this->markerPath);
+        } catch (HyperliquidDurableTripPersistenceException $exception) {
+            throw $exception;
+        } catch (\Throwable) {
+            throw new HyperliquidDurableTripPersistenceException();
+        }
+
+        return true;
+    }
+
+    private function markerFilesystem(): HyperliquidQuarantineFilesystemInterface
+    {
+        return $this->filesystem ?? new NativeHyperliquidQuarantineFilesystem();
     }
 }
