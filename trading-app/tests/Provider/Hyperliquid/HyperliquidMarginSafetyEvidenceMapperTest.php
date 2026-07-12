@@ -41,6 +41,28 @@ final class HyperliquidMarginSafetyEvidenceMapperTest extends TestCase
         self::assertSame('0', $evidence->tiers[0]->maintenanceMarginDeduction);
     }
 
+    public function testInfersDefaultMarginTableFromMaxLeverageWhenOfficialAssetOmitsItsId(): void
+    {
+        $evidence = $this->mapper()->map(
+            meta: $this->meta(
+                ['name' => 'BTC', 'maxLeverage' => 50],
+                [[50, ['marginTiers' => [
+                    ['lowerBound' => '0.0', 'maxLeverage' => 50],
+                ]]]],
+            ),
+            activeAssetData: $this->active('BTC', self::ACCOUNT, 'isolated', 5),
+            symbol: 'BTCUSDT',
+            accountAddress: self::ACCOUNT,
+            observedAt: new \DateTimeImmutable('2026-07-12T12:00:00Z'),
+        );
+
+        self::assertSame(50, $evidence->marginTableId);
+        self::assertSame(50, $evidence->universeMaxLeverage);
+        self::assertCount(1, $evidence->tiers);
+        self::assertSame(50, $evidence->tiers[0]->maxLeverage);
+        self::assertSame('0.01', $evidence->tiers[0]->maintenanceMarginRate);
+    }
+
     public function testRetainsAllTieredRowsWithCanonicalRatesAndCumulativeDeductions(): void
     {
         $evidence = $this->mapper()->map(

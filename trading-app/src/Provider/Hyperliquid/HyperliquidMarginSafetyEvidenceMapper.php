@@ -27,8 +27,10 @@ final class HyperliquidMarginSafetyEvidenceMapper
     ): HyperliquidMarginSafetyEvidence {
         $asset = $this->asset($meta, $symbol);
         $coin = strtoupper((string) ($asset['name'] ?? ''));
-        $tableId = $this->tableId($asset['marginTableId'] ?? null);
         $universeMaxLeverage = $this->leverage($asset['maxLeverage'] ?? null);
+        $tableId = array_key_exists('marginTableId', $asset)
+            ? $this->tableId($asset['marginTableId'])
+            : $universeMaxLeverage;
         if ($tableId < 50 && $tableId !== $universeMaxLeverage) {
             throw new \InvalidArgumentException('hyperliquid_single_tier_identity_invalid');
         }
