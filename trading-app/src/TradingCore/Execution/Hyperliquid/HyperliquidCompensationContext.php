@@ -20,6 +20,8 @@ final readonly class HyperliquidCompensationContext
     public string $closeClientOrderId;
     public string $correlationId;
     public string $marginMode;
+    public string $quantityStep;
+    public HyperliquidQuantity $canonicalQuantity;
     /** @var array<string, mixed> */
     public array $redactedAuditContext;
 
@@ -32,6 +34,8 @@ final readonly class HyperliquidCompensationContext
         string $entryWireCloid,
         ?string $entryExchangeOrderId,
         public float $quantity,
+        public int $quantityPrecision,
+        string $quantityStep,
         string $closeClientOrderId,
         public HyperliquidNonceScope $nonceScope,
         string $correlationId,
@@ -47,6 +51,7 @@ final readonly class HyperliquidCompensationContext
         $this->closeClientOrderId = strtolower(trim($closeClientOrderId));
         $this->correlationId = trim($correlationId);
         $this->marginMode = strtolower(trim($marginMode));
+        $this->quantityStep = trim($quantityStep);
 
         if (preg_match(self::ADDRESS_PATTERN, $this->accountAddress) !== 1) {
             throw new \InvalidArgumentException('hyperliquid_compensation_account_invalid');
@@ -69,7 +74,20 @@ final readonly class HyperliquidCompensationContext
                 throw new \InvalidArgumentException('hyperliquid_compensation_entry_oid_invalid');
             }
         }
-        if (!is_finite($quantity) || $quantity <= 0.0) {
+        try {
+            $expectedQuantityStep = HyperliquidQuantity::stepForPrecision($quantityPrecision);
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('hyperliquid_compensation_quantity_step_invalid');
+        }
+        if ($this->quantityStep !== $expectedQuantityStep) {
+            throw new \InvalidArgumentException('hyperliquid_compensation_quantity_step_invalid');
+        }
+        try {
+            $this->canonicalQuantity = new HyperliquidQuantity($quantity, $quantityPrecision, $this->quantityStep);
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('hyperliquid_compensation_quantity_invalid');
+        }
+        if (!$this->canonicalQuantity->isPositive()) {
             throw new \InvalidArgumentException('hyperliquid_compensation_quantity_invalid');
         }
         if (preg_match(self::CLOID_PATTERN, $this->closeClientOrderId) !== 1
@@ -85,7 +103,7 @@ final readonly class HyperliquidCompensationContext
         ) {
             throw new \InvalidArgumentException('hyperliquid_compensation_nonce_scope_invalid');
         }
-        if ($this->correlationId === '' || strlen($this->correlationId) > 128) {
+        if (!(new HyperliquidCorrelationIdValidator())->isValid($this->correlationId)) {
             throw new \InvalidArgumentException('hyperliquid_compensation_correlation_id_invalid');
         }
         if (!in_array($this->marginMode, ['cross', 'isolated'], true) || $leverage <= 0) {

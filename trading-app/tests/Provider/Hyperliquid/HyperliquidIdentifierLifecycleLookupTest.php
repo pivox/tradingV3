@@ -32,7 +32,7 @@ final class HyperliquidIdentifierLifecycleLookupTest extends TestCase
             ],
         ]]);
 
-        $lifecycle = $this->lookup($rest)->lookup(self::ACCOUNT, '42');
+        $lifecycle = $this->lookup($rest)->lookup(self::ACCOUNT, '42', '42', self::CLOID);
 
         self::assertNotNull($lifecycle);
         self::assertSame(HyperliquidLifecycleStatus::FILLED, $lifecycle->status);
@@ -51,7 +51,7 @@ final class HyperliquidIdentifierLifecycleLookupTest extends TestCase
             ],
         ]]);
 
-        $lifecycle = $this->lookup($rest)->lookup(self::ACCOUNT, self::CLOID);
+        $lifecycle = $this->lookup($rest)->lookup(self::ACCOUNT, self::CLOID, null, self::CLOID);
 
         self::assertNotNull($lifecycle);
         self::assertSame(self::CLOID, $lifecycle->clientOrderId);
@@ -66,7 +66,7 @@ final class HyperliquidIdentifierLifecycleLookupTest extends TestCase
     {
         $rest = new RecordingInfoClient([['status' => 'unknownOid']]);
 
-        self::assertNull($this->lookup($rest)->lookup(self::ACCOUNT, '42'));
+        self::assertNull($this->lookup($rest)->lookup(self::ACCOUNT, '42', '42', self::CLOID));
         self::assertCount(1, $rest->requests);
     }
 
@@ -76,7 +76,7 @@ final class HyperliquidIdentifierLifecycleLookupTest extends TestCase
         $this->expectExceptionMessage('hyperliquid_identifier_lookup_account_mismatch');
 
         try {
-            $this->lookup($rest)->lookup('0x2222222222222222222222222222222222222222', '42');
+            $this->lookup($rest)->lookup('0x2222222222222222222222222222222222222222', '42', '42', self::CLOID);
         } finally {
             self::assertSame([], $rest->requests);
         }
@@ -93,7 +93,34 @@ final class HyperliquidIdentifierLifecycleLookupTest extends TestCase
         ]]);
         $this->expectExceptionMessage('hyperliquid_identifier_lookup_response_mismatch');
 
-        $this->lookup($rest)->lookup(self::ACCOUNT, '42');
+        $this->lookup($rest)->lookup(self::ACCOUNT, '42', '42', self::CLOID);
+    }
+
+    public function testRejectsOidResponseMissingExpectedCloid(): void
+    {
+        $order = $this->order(oid: 42, cloid: self::CLOID, remaining: '1');
+        unset($order['cloid']);
+        $rest = new RecordingInfoClient([[
+            'status' => 'order',
+            'order' => ['status' => 'open', 'order' => $order],
+        ]]);
+        $this->expectExceptionMessage('hyperliquid_identifier_lookup_response_mismatch');
+
+        $this->lookup($rest)->lookup(self::ACCOUNT, '42', '42', self::CLOID);
+    }
+
+    public function testRejectsCloidResponseWithWrongExpectedOid(): void
+    {
+        $rest = new RecordingInfoClient([[
+            'status' => 'order',
+            'order' => [
+                'status' => 'open',
+                'order' => $this->order(oid: 99, cloid: self::CLOID, remaining: '1'),
+            ],
+        ]]);
+        $this->expectExceptionMessage('hyperliquid_identifier_lookup_response_mismatch');
+
+        $this->lookup($rest)->lookup(self::ACCOUNT, self::CLOID, '42', self::CLOID);
     }
 
     private function lookup(RecordingInfoClient $rest): HyperliquidIdentifierLifecycleLookup

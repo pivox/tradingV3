@@ -8,5 +8,10 @@ use App\Exchange\Hyperliquid\Lifecycle\HyperliquidNormalizedOrderLifecycleDto;
 
 interface HyperliquidIdentifierLifecycleLookupInterface
 {
-    public function lookup(string $accountAddress, string $identifier): ?HyperliquidNormalizedOrderLifecycleDto;
+    public function lookup(
+        string $accountAddress,
+        string $identifier,
+        ?string $expectedExchangeOrderId,
+        string $expectedWireCloid,
+    ): ?HyperliquidNormalizedOrderLifecycleDto;
 }

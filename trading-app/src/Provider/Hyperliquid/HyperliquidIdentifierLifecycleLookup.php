@@ -24,8 +24,12 @@ final readonly class HyperliquidIdentifierLifecycleLookup implements Hyperliquid
     ) {
     }
 
-    public function lookup(string $accountAddress, string $identifier): ?HyperliquidNormalizedOrderLifecycleDto
-    {
+    public function lookup(
+        string $accountAddress,
+        string $identifier,
+        ?string $expectedExchangeOrderId,
+        string $expectedWireCloid,
+    ): ?HyperliquidNormalizedOrderLifecycleDto {
         $accountAddress = strtolower(trim($accountAddress));
         $configuredAccount = $this->config->signingAccountAddress();
         if (preg_match(self::ADDRESS_PATTERN, $accountAddress) !== 1 || $accountAddress !== $configuredAccount) {
@@ -34,6 +38,13 @@ final readonly class HyperliquidIdentifierLifecycleLookup implements Hyperliquid
 
         $identifier = strtolower(trim($identifier));
         $wireIdentifier = $this->wireIdentifier($identifier);
+        $expectedWireCloid = strtolower(trim($expectedWireCloid));
+        if (preg_match(self::CLOID_PATTERN, $expectedWireCloid) !== 1) {
+            throw new \InvalidArgumentException('hyperliquid_identifier_lookup_identifier_invalid');
+        }
+        if ($expectedExchangeOrderId !== null) {
+            $this->wireIdentifier($expectedExchangeOrderId);
+        }
         $response = $this->restClient->info([
             'type' => 'orderStatus',
             'user' => $accountAddress,
@@ -49,14 +60,26 @@ final readonly class HyperliquidIdentifierLifecycleLookup implements Hyperliquid
         }
 
         $lifecycle = $this->normalizer->normalizeOrderLifecycle([$response]);
-        $matches = is_int($wireIdentifier)
-            ? $lifecycle->exchangeOrderId === (string) $wireIdentifier
-            : strtolower((string) $lifecycle->clientOrderId) === $wireIdentifier;
+        $responseOid = $this->canonicalResponseOid($lifecycle->exchangeOrderId);
+        $responseCloid = strtolower((string) $lifecycle->clientOrderId);
+        $matches = $responseCloid === $expectedWireCloid
+            && ($expectedExchangeOrderId === null || $responseOid === $expectedExchangeOrderId)
+            && (is_int($wireIdentifier) ? $responseOid === (string) $wireIdentifier : $responseCloid === $wireIdentifier);
         if (!$matches) {
-            throw new \RuntimeException('hyperliquid_identifier_lookup_response_mismatch');
+            throw new HyperliquidIdentifierBindingException();
         }
 
         return $lifecycle;
+    }
+
+    private function canonicalResponseOid(string $oid): string
+    {
+        $wire = $this->wireIdentifier($oid);
+        if (!is_int($wire)) {
+            throw new HyperliquidIdentifierBindingException();
+        }
+
+        return (string) $wire;
     }
 
     private function wireIdentifier(string $identifier): int|string

@@ -5,15 +5,20 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Execution;
 
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Hyperliquid\HyperliquidActionFactory;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionClientInterface;
 use App\Exchange\Hyperliquid\HyperliquidSignedActionResult;
 use App\Exchange\Hyperliquid\Lifecycle\HyperliquidLifecycleNormalizer;
+use App\Exchange\Hyperliquid\Lifecycle\HyperliquidLifecycleStatus;
 use App\Exchange\Hyperliquid\Lifecycle\HyperliquidNormalizedOrderLifecycleDto;
 use App\Provider\Hyperliquid\HyperliquidIdentifierLifecycleLookupInterface;
 use App\Provider\Hyperliquid\HyperliquidNonceManagerInterface;
+use App\Provider\Hyperliquid\HyperliquidNonceScopeConflictException;
 use App\Provider\Hyperliquid\HyperliquidNonceScope;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationContext;
+use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationReasonCode;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationResult;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationService;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidCompensationSleeperInterface;
@@ -61,7 +66,13 @@ final class HyperliquidCompensationServiceTest extends TestCase
     {
         $closeCloid = (new HyperliquidActionFactory())->cloid(self::CLOSE_ID);
         $fixture = $this->fixture(
-            [$this->lifecycle('filled'), $this->lifecycle('filled', oid: 99, cloid: $closeCloid, side: 'A')],
+            [
+                $this->lifecycle('filled'),
+                null,
+                null,
+                null,
+                $this->lifecycle('filled', oid: 99, cloid: $closeCloid, side: 'A'),
+            ],
             [$this->acceptedOrder(99)],
         );
 
@@ -69,7 +80,7 @@ final class HyperliquidCompensationServiceTest extends TestCase
 
         self::assertSame('exposure_closed', $result->outcome);
         self::assertSame(1.0, $result->closedQuantity);
-        self::assertSame([self::ENTRY_CLOID, '99'], $fixture->lookup->identifiers());
+        self::assertSame([self::ENTRY_CLOID, self::CLOSE_ID, self::CLOSE_ID, self::CLOSE_ID, '99'], $fixture->lookup->identifiers());
         $close = $fixture->signed->actions[0]['action'];
         self::assertSame('order', $close['type']);
         self::assertTrue($close['orders'][0]['r']);
@@ -78,12 +89,90 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertSame('24900', $close['orders'][0]['p']);
     }
 
+    public function testAlreadyTrippedKillSwitchBlocksReconciliationAndMutationOnRerun(): void
+    {
+        $fixture = $this->fixture([]);
+        $fixture->trip->initiallyTripped = true;
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame([], $fixture->lookup->calls);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame([], $fixture->nonce->issued);
+        self::assertSame([], $fixture->trip->reasons);
+    }
+
+    public function testExistingFilledDeterministicCloseReturnsClosedWithoutResubmission(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycle('filled'),
+            $this->lifecycle('filled', oid: 99, cloid: self::CLOSE_ID, side: 'A'),
+        ]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('exposure_closed', $result->outcome);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame([], $fixture->nonce->issued);
+        self::assertSame([self::ENTRY_CLOID, self::CLOSE_ID], $fixture->lookup->identifiers());
+    }
+
+    public function testExistingNonterminalDeterministicCloseTripsWithoutResubmission(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycle('filled'),
+            $this->lifecycle('open', oid: 99, cloid: self::CLOSE_ID, side: 'A'),
+        ]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame([], $fixture->nonce->issued);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+    }
+
+    public function testAmbiguousCloseSubmissionReconcilesFilledCloseByDeterministicCloid(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycle('filled'),
+            null,
+            null,
+            null,
+            $this->lifecycle('filled', oid: 99, cloid: self::CLOSE_ID, side: 'A'),
+        ], [$this->ambiguous('order')]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('exposure_closed', $result->outcome);
+        self::assertCount(1, $fixture->signed->actions);
+        self::assertSame([1_000], $fixture->nonce->issued);
+        self::assertSame([], $fixture->trip->reasons);
+    }
+
+    public function testKillSwitchReadFailureFailsClosedBeforeMutation(): void
+    {
+        $fixture = $this->fixture([]);
+        $fixture->trip->readFailure = new \RuntimeException('state_backend_unavailable');
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame([], $fixture->lookup->calls);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+    }
+
     public function testAlreadyCanceledEntryWithProvenFillClosesOnlyThatQuantity(): void
     {
         $closeCloid = (new HyperliquidActionFactory())->cloid(self::CLOSE_ID);
         $fixture = $this->fixture(
             [
                 $this->lifecycle('canceled', remaining: '0.75'),
+                null,
+                null,
+                null,
                 $this->lifecycle('filled', oid: 99, cloid: $closeCloid, original: '0.25', side: 'A'),
             ],
             [$this->acceptedOrder(99)],
@@ -103,6 +192,9 @@ final class HyperliquidCompensationServiceTest extends TestCase
             [
                 $this->lifecycle('open', remaining: '0.6'),
                 $this->lifecycle('canceled', remaining: '0.6'),
+                null,
+                null,
+                null,
                 $this->lifecycle('filled', oid: 99, cloid: $closeCloid, original: '0.4', remaining: '0', side: 'A'),
             ],
             [$this->acceptedCancel(), $this->acceptedOrder(99)],
@@ -123,6 +215,9 @@ final class HyperliquidCompensationServiceTest extends TestCase
             [
                 $this->lifecycle('open'),
                 $this->lifecycle('filled'),
+                null,
+                null,
+                null,
                 $this->lifecycle('filled', oid: 99, cloid: $closeCloid, side: 'A'),
             ],
             [$this->acceptedCancel(), $this->acceptedOrder(99)],
@@ -143,6 +238,25 @@ final class HyperliquidCompensationServiceTest extends TestCase
 
         self::assertSame('entry_rejected', $result->outcome);
         self::assertSame(['42', self::ENTRY_CLOID], $fixture->lookup->identifiers());
+    }
+
+    public function testEntryLifecycleMustBindExpectedOidAndCloidTogether(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycleEvidence(
+                HyperliquidLifecycleStatus::FILLED,
+                1.0,
+                1.0,
+                oid: 42,
+                cloid: '0xcccccccccccccccccccccccccccccccc',
+            ),
+        ]);
+
+        $result = $fixture->service->compensate($this->context(oid: '42'));
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
     }
 
     public function testUnknownOidExhaustsExactlyThreeCyclesAndSixReads(): void
@@ -168,6 +282,35 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertCount(3, $fixture->lookup->calls);
         self::assertSame([250, 250], $fixture->sleeper->milliseconds);
         self::assertCount(1, $fixture->trip->reasons);
+        self::assertSame(HyperliquidCompensationReasonCode::PROVIDER_RUNTIME_FAILURE, $result->reasonCode);
+    }
+
+    public function testLookupLogicExceptionTripsOnceAndIsRethrown(): void
+    {
+        $fixture = $this->fixture([new \LogicException('programmer_invariant')]);
+
+        try {
+            $fixture->service->compensate($this->context());
+            self::fail('Expected LogicException');
+        } catch (\LogicException $exception) {
+            self::assertSame('programmer_invariant', $exception->getMessage());
+        }
+
+        self::assertSame(1, $fixture->trip->tripAttempts);
+        self::assertCount(1, $fixture->lookup->calls);
+    }
+
+    public function testSleeperFailureTripsWithNormalizedReason(): void
+    {
+        $fixture = $this->fixture([null]);
+        $fixture->sleeper->failure = new \RuntimeException('clock_backend_secret_detail');
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(HyperliquidCompensationReasonCode::SLEEPER_FAILURE, $result->reasonCode);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+        self::assertStringNotContainsString('secret_detail', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function testAmbiguousCancelTripsExactlyOnceWithoutTreatingAcceptanceAsConfirmation(): void
@@ -179,6 +322,37 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertSame('unknown_requires_resync', $result->outcome);
         self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
         self::assertCount(1, $fixture->lookup->calls);
+    }
+
+    public function testCancelAcceptedRequiresCancelByCloidActionType(): void
+    {
+        $fixture = $this->fixture([$this->lifecycle('open')], [
+            new HyperliquidSignedActionResult('cancel', 'accepted', [['kind' => 'success']], null, 'corr-1'),
+        ]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+        self::assertCount(1, $fixture->lookup->calls);
+    }
+
+    public function testCancelAcceptedRequiresExactlyOneSuccessStatus(): void
+    {
+        $fixture = $this->fixture([$this->lifecycle('open')], [
+            new HyperliquidSignedActionResult(
+                'cancelByCloid',
+                'accepted',
+                [['kind' => 'success'], ['kind' => 'success']],
+                null,
+                'corr-1',
+            ),
+        ]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
     }
 
     public function testAcceptedCancelWhoseConfirmationNeverBecomesTerminalTripsOnce(): void
@@ -207,6 +381,50 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
     }
 
+    public function testCloseAcceptedRequiresOrderActionTypeAndOneStatus(): void
+    {
+        $wrongAction = $this->fixture(
+            [$this->lifecycle('filled'), null, null, null],
+            [new HyperliquidSignedActionResult('cancelByCloid', 'accepted', [['kind' => 'success']], null, 'corr-1')],
+        );
+        $multipleRows = $this->fixture(
+            [$this->lifecycle('filled'), null, null, null],
+            [new HyperliquidSignedActionResult('order', 'accepted', [
+                ['kind' => 'filled', 'oid' => 99],
+                ['kind' => 'filled', 'oid' => 100],
+            ], null, 'corr-1')],
+        );
+
+        self::assertSame('unknown_requires_resync', $wrongAction->service->compensate($this->context())->outcome);
+        self::assertSame('unknown_requires_resync', $multipleRows->service->compensate($this->context())->outcome);
+        self::assertCount(1, $wrongAction->trip->reasons);
+        self::assertCount(1, $multipleRows->trip->reasons);
+        self::assertCount(4, $wrongAction->lookup->calls);
+        self::assertCount(4, $multipleRows->lookup->calls);
+    }
+
+    public function testCloseConfirmationMustBindReturnedOidAndDeterministicCloid(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycle('filled'),
+            null,
+            null,
+            null,
+            $this->lifecycleEvidence(
+                HyperliquidLifecycleStatus::FILLED,
+                1.0,
+                1.0,
+                oid: 99,
+                cloid: '0xcccccccccccccccccccccccccccccccc',
+            ),
+        ], [$this->acceptedOrder(99)]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+    }
+
     public function testCloseTransportFailureConsumesOneFreshNonceAndTripsOnce(): void
     {
         $fixture = $this->fixture([$this->lifecycle('filled')], [new \RuntimeException('transport_failed')]);
@@ -218,6 +436,49 @@ final class HyperliquidCompensationServiceTest extends TestCase
         self::assertCount(1, $fixture->trip->reasons);
     }
 
+    public function testNonceConflictTripsWithNormalizedReasonWithoutSubmitting(): void
+    {
+        $fixture = $this->fixture([$this->lifecycle('filled'), null, null, null]);
+        $fixture->nonce->failure = new HyperliquidNonceScopeConflictException();
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(HyperliquidCompensationReasonCode::NONCE_FAILURE, $result->reasonCode);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame(1, $fixture->trip->tripAttempts);
+    }
+
+    public function testSignedClientLogicExceptionTripsOnceAndIsRethrown(): void
+    {
+        $fixture = $this->fixture([$this->lifecycle('open')], [new \LogicException('invalid_client_contract')]);
+
+        try {
+            $fixture->service->compensate($this->context());
+            self::fail('Expected LogicException');
+        } catch (\LogicException $exception) {
+            self::assertSame('invalid_client_contract', $exception->getMessage());
+        }
+
+        self::assertSame(1, $fixture->trip->tripAttempts);
+    }
+
+    public function testTripPersistenceFailurePropagatesAfterExactlyOneAttempt(): void
+    {
+        $fixture = $this->fixture([null, null, null]);
+        $fixture->trip->tripFailure = new \RuntimeException('durable_trip_write_failed');
+
+        try {
+            $fixture->service->compensate($this->context());
+            self::fail('Expected durable trip failure');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('durable_trip_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame(1, $fixture->trip->tripAttempts);
+        self::assertSame([], $fixture->trip->reasons);
+    }
+
     public function testIocPartialCloseIsUnresolvedAndTripsOnce(): void
     {
         $closeCloid = (new HyperliquidActionFactory())->cloid(self::CLOSE_ID);
@@ -225,6 +486,77 @@ final class HyperliquidCompensationServiceTest extends TestCase
             [$this->lifecycle('filled'), $this->lifecycle('open', oid: 99, cloid: $closeCloid, remaining: '0.25', side: 'A')],
             [$this->acceptedOrder(99)],
         );
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+    }
+
+    /** @return iterable<string, array{HyperliquidLifecycleStatus, float}> */
+    public static function contradictoryEntryLifecycleProvider(): iterable
+    {
+        yield 'rejected with fill' => [HyperliquidLifecycleStatus::REJECTED, 0.001];
+        yield 'canceled over expected' => [HyperliquidLifecycleStatus::CANCELED, 1.001];
+        yield 'filled partial' => [HyperliquidLifecycleStatus::FILLED, 0.999];
+        yield 'filled over expected' => [HyperliquidLifecycleStatus::FILLED, 1.001];
+        yield 'open with fill' => [HyperliquidLifecycleStatus::OPEN, 0.001];
+        yield 'accepted with fill' => [HyperliquidLifecycleStatus::ACCEPTED, 0.001];
+        yield 'partial with zero' => [HyperliquidLifecycleStatus::PARTIALLY_FILLED, 0.0];
+        yield 'partial at expected' => [HyperliquidLifecycleStatus::PARTIALLY_FILLED, 1.0];
+    }
+
+    #[DataProvider('contradictoryEntryLifecycleProvider')]
+    public function testContradictoryEntryLifecycleTripsWithoutMutation(
+        HyperliquidLifecycleStatus $status,
+        float $filledQuantity,
+    ): void {
+        $fixture = $this->fixture([$this->lifecycleEvidence($status, 1.0, $filledQuantity)]);
+
+        $result = $fixture->service->compensate($this->context());
+
+        self::assertSame('unknown_requires_resync', $result->outcome);
+        self::assertSame([], $fixture->signed->actions);
+        self::assertSame(['hyperliquid_compensation_unconfirmed'], $fixture->trip->reasons);
+    }
+
+    public function testSmallRepresentableQuantityClosesAtExactAssetPrecision(): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycleEvidence(HyperliquidLifecycleStatus::FILLED, 0.000001, 0.000001),
+            null,
+            null,
+            null,
+            $this->lifecycleEvidence(HyperliquidLifecycleStatus::FILLED, 0.000001, 0.000001, oid: 99, cloid: self::CLOSE_ID),
+        ], [$this->acceptedOrder(99)]);
+
+        $result = $fixture->service->compensate($this->contextFrom([
+            'quantity' => 0.000001,
+            'quantityPrecision' => 6,
+            'quantityStep' => '0.000001',
+        ]));
+
+        self::assertSame('exposure_closed', $result->outcome);
+        self::assertSame('0.000001', $fixture->signed->actions[0]['action']['orders'][0]['s']);
+    }
+
+    /** @return iterable<string, array{float}> */
+    public static function inexactCloseQuantityProvider(): iterable
+    {
+        yield 'one lot underfill' => [0.999];
+        yield 'one lot overfill' => [1.001];
+    }
+
+    #[DataProvider('inexactCloseQuantityProvider')]
+    public function testCloseConfirmationRejectsOneLotDifference(float $confirmedQuantity): void
+    {
+        $fixture = $this->fixture([
+            $this->lifecycleEvidence(HyperliquidLifecycleStatus::FILLED, 1.0, 1.0),
+            null,
+            null,
+            null,
+            $this->lifecycleEvidence(HyperliquidLifecycleStatus::FILLED, $confirmedQuantity, $confirmedQuantity, oid: 99, cloid: self::CLOSE_ID),
+        ], [$this->acceptedOrder(99)]);
 
         $result = $fixture->service->compensate($this->context());
 
@@ -262,6 +594,19 @@ final class HyperliquidCompensationServiceTest extends TestCase
         yield 'oid overflow' => [['entryExchangeOrderId' => str_repeat('9', 40)], 'hyperliquid_compensation_entry_oid_invalid'];
         yield 'quantity zero' => [['quantity' => 0.0], 'hyperliquid_compensation_quantity_invalid'];
         yield 'quantity nan' => [['quantity' => NAN], 'hyperliquid_compensation_quantity_invalid'];
+        yield 'quantity not representable' => [[
+            'quantity' => 1.0001,
+            'quantityPrecision' => 3,
+            'quantityStep' => '0.001',
+        ], 'hyperliquid_compensation_quantity_invalid'];
+        yield 'quantity step mismatch' => [[
+            'quantityPrecision' => 3,
+            'quantityStep' => '0.01',
+        ], 'hyperliquid_compensation_quantity_step_invalid'];
+        yield 'quantity precision invalid' => [[
+            'quantityPrecision' => -1,
+            'quantityStep' => '1',
+        ], 'hyperliquid_compensation_quantity_step_invalid'];
         yield 'price zero' => [['emergencyCloseSlippageCapPrice' => 0.0], 'hyperliquid_compensation_close_price_invalid'];
         yield 'price infinity' => [['emergencyCloseSlippageCapPrice' => INF], 'hyperliquid_compensation_close_price_invalid'];
         yield 'close id' => [['closeClientOrderId' => ''], 'hyperliquid_compensation_close_client_id_invalid'];
@@ -270,6 +615,18 @@ final class HyperliquidCompensationServiceTest extends TestCase
         yield 'nonce signer address' => [[
             'nonceScope' => new HyperliquidNonceScope('testnet', 'testnet', self::ACCOUNT, 'agent-invalid'),
         ], 'hyperliquid_compensation_nonce_scope_invalid'];
+        yield 'correlation whitespace' => [['correlationId' => 'corr unsafe'], 'hyperliquid_compensation_correlation_id_invalid'];
+        yield 'correlation control' => [['correlationId' => "corr\nunsafe"], 'hyperliquid_compensation_correlation_id_invalid'];
+        yield 'correlation assignment' => [['correlationId' => 'token=hidden'], 'hyperliquid_compensation_correlation_id_invalid'];
+        yield 'correlation jwt' => [[
+            'correlationId' => 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature',
+        ], 'hyperliquid_compensation_correlation_id_invalid'];
+        yield 'correlation private key' => [[
+            'correlationId' => '0x' . str_repeat('a', 64),
+        ], 'hyperliquid_compensation_correlation_id_invalid'];
+        yield 'correlation token shape' => [[
+            'correlationId' => 'sk-test_' . str_repeat('z', 32),
+        ], 'hyperliquid_compensation_correlation_id_invalid'];
     }
 
     /** @param array<string, mixed> $overrides */
@@ -298,6 +655,8 @@ final class HyperliquidCompensationServiceTest extends TestCase
             'entryWireCloid' => self::ENTRY_CLOID,
             'entryExchangeOrderId' => null,
             'quantity' => 1.0,
+            'quantityPrecision' => 3,
+            'quantityStep' => '0.001',
             'closeClientOrderId' => self::CLOSE_ID,
             'nonceScope' => new HyperliquidNonceScope('testnet', 'testnet', self::ACCOUNT, self::AGENT),
             'correlationId' => 'corr-1',
@@ -334,7 +693,7 @@ final class HyperliquidCompensationServiceTest extends TestCase
     private function lifecycle(
         string $status,
         int $oid = 42,
-        string $cloid = self::ENTRY_CLOID,
+        ?string $cloid = self::ENTRY_CLOID,
         string $original = '1',
         string $remaining = '0',
         string $side = 'B',
@@ -357,6 +716,36 @@ final class HyperliquidCompensationServiceTest extends TestCase
             'timestamp' => 1_767_225_600_000,
             'uTime' => 1_767_225_601_000,
         ]]);
+    }
+
+    private function lifecycleEvidence(
+        HyperliquidLifecycleStatus $status,
+        float $quantity,
+        float $filledQuantity,
+        int $oid = 42,
+        string $cloid = self::ENTRY_CLOID,
+    ): HyperliquidNormalizedOrderLifecycleDto {
+        return new HyperliquidNormalizedOrderLifecycleDto(
+            status: $status,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: (string) $oid,
+            clientOrderId: $cloid,
+            side: $cloid === self::CLOSE_ID ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            quantity: $quantity,
+            filledQuantity: $filledQuantity,
+            remainingQuantity: max(0.0, $quantity - $filledQuantity),
+            price: 25_000.0,
+            averageFillPrice: $filledQuantity > 0.0 ? 25_000.0 : null,
+            createdAt: new \DateTimeImmutable('@1767225600'),
+            updatedAt: new \DateTimeImmutable('@1767225601'),
+            fills: [],
+            requiresResync: false,
+            deduplicatedEventCount: 1,
+            qualityFlags: [],
+            redactedPayload: [],
+        );
     }
 
     private function acceptedCancel(): HyperliquidSignedActionResult
@@ -390,7 +779,7 @@ final readonly class CompensationFixture
 
 final class SequenceLifecycleLookup implements HyperliquidIdentifierLifecycleLookupInterface
 {
-    /** @var list<array{account: string, identifier: string}> */
+    /** @var list<array{account: string, identifier: string, expected_oid: ?string, expected_cloid: string}> */
     public array $calls = [];
 
     /** @param list<HyperliquidNormalizedOrderLifecycleDto|null|\Throwable> $responses */
@@ -398,9 +787,18 @@ final class SequenceLifecycleLookup implements HyperliquidIdentifierLifecycleLoo
     {
     }
 
-    public function lookup(string $accountAddress, string $identifier): ?HyperliquidNormalizedOrderLifecycleDto
-    {
-        $this->calls[] = ['account' => $accountAddress, 'identifier' => $identifier];
+    public function lookup(
+        string $accountAddress,
+        string $identifier,
+        ?string $expectedExchangeOrderId,
+        string $expectedWireCloid,
+    ): ?HyperliquidNormalizedOrderLifecycleDto {
+        $this->calls[] = [
+            'account' => $accountAddress,
+            'identifier' => $identifier,
+            'expected_oid' => $expectedExchangeOrderId,
+            'expected_cloid' => $expectedWireCloid,
+        ];
         $response = array_shift($this->responses);
         if ($response instanceof \Throwable) {
             throw $response;
@@ -449,6 +847,7 @@ final class RecordingNonceManager implements HyperliquidNonceManagerInterface
     /** @var list<int> */
     public array $issued = [];
     private int $next = 1_000;
+    public ?\RuntimeException $failure = null;
 
     public function isReady(HyperliquidNonceScope $scope): bool
     {
@@ -457,6 +856,9 @@ final class RecordingNonceManager implements HyperliquidNonceManagerInterface
 
     public function nextNonce(HyperliquidNonceScope $scope): int
     {
+        if ($this->failure instanceof \RuntimeException) {
+            throw $this->failure;
+        }
         $this->issued[] = $this->next;
 
         return $this->next++;
@@ -473,14 +875,26 @@ final class RecordingKillSwitchTrip implements HyperliquidKillSwitchTripInterfac
     public array $reasons = [];
     /** @var list<array<string, mixed>> */
     public array $contexts = [];
+    public bool $initiallyTripped = false;
+    public ?\RuntimeException $readFailure = null;
+    public ?\RuntimeException $tripFailure = null;
+    public int $tripAttempts = 0;
 
     public function isTripped(): bool
     {
-        return $this->reasons !== [];
+        if ($this->readFailure instanceof \RuntimeException) {
+            throw $this->readFailure;
+        }
+
+        return $this->initiallyTripped || $this->reasons !== [];
     }
 
     public function trip(string $reason, array $auditContext): void
     {
+        ++$this->tripAttempts;
+        if ($this->tripFailure instanceof \RuntimeException) {
+            throw $this->tripFailure;
+        }
         $this->reasons[] = $reason;
         $this->contexts[] = $auditContext;
     }
@@ -490,9 +904,13 @@ final class RecordingCompensationSleeper implements HyperliquidCompensationSleep
 {
     /** @var list<int> */
     public array $milliseconds = [];
+    public ?\RuntimeException $failure = null;
 
     public function sleepMilliseconds(int $milliseconds): void
     {
+        if ($this->failure instanceof \RuntimeException) {
+            throw $this->failure;
+        }
         $this->milliseconds[] = $milliseconds;
     }
 }

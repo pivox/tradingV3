@@ -24,6 +24,11 @@ final class HyperliquidKillSwitchAuditSanitizer
         return substr($reason, 0, self::MAX_REASON_LENGTH);
     }
 
+    public function isSafeOpaqueValue(string $value): bool
+    {
+        return !$this->isSensitiveValue($value);
+    }
+
     /**
      * @param array<string, mixed> $context
      * @return array<string, mixed>
