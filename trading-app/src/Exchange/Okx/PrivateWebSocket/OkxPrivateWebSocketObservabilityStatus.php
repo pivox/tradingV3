@@ -9,13 +9,13 @@ use InvalidArgumentException;
 
 final readonly class OkxPrivateWebSocketObservabilityStatus
 {
-    public const int SCHEMA_VERSION = 1;
-    public const string EXCHANGE = 'okx';
-    public const string ENVIRONMENT = 'demo';
-    public const string ENDPOINT_ID = 'okx_demo_private_v1';
+    public const SCHEMA_VERSION = 1;
+    public const EXCHANGE = 'okx';
+    public const ENVIRONMENT = 'demo';
+    public const ENDPOINT_ID = 'okx_demo_private_v1';
 
     /** @var list<string> */
-    public const array BLOCKING_ERROR_CODES = [
+    public const BLOCKING_ERROR_CODES = [
         'okx_private_ws_connection_failed',
         'okx_private_ws_authentication_failed',
         'okx_private_ws_subscription_failed',
@@ -25,11 +25,11 @@ final readonly class OkxPrivateWebSocketObservabilityStatus
     ];
 
     /** @var list<string> */
-    public const array WARNING_CODES = [
+    public const WARNING_CODES = [
         'okx_fills_channel_vip_unavailable',
     ];
 
-    private const int MAX_CODES = 16;
+    private const MAX_CODES = 16;
 
     public readonly int $schemaVersion;
     public readonly string $exchange;

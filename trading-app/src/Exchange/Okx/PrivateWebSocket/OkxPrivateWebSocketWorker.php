@@ -15,9 +15,9 @@ use React\EventLoop\TimerInterface;
 
 final class OkxPrivateWebSocketWorker
 {
-    private const array RECONNECT_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0, 15.0];
-    private const float PING_INTERVAL_SECONDS = 5.0;
-    private const float PONG_TIMEOUT_SECONDS = 4.0;
+    private const RECONNECT_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0, 15.0];
+    private const PING_INTERVAL_SECONDS = 5.0;
+    private const PONG_TIMEOUT_SECONDS = 4.0;
     private const LOGIN_TIMEOUT_SECONDS = 5.0;
     private const READINESS_TIMEOUT_SECONDS = 10.0;
 

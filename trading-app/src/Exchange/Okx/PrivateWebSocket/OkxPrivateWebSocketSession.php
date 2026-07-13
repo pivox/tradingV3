@@ -12,7 +12,7 @@ use InvalidArgumentException;
 final class OkxPrivateWebSocketSession
 {
     /** @var list<string> */
-    private const array REQUIRED_CHANNELS = [
+    private const REQUIRED_CHANNELS = [
         'orders',
         'positions',
         'balance_and_position',

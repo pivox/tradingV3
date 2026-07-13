@@ -17,7 +17,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(OkxPrivateWebSocketObservabilityPolicy::class)]
 final class OkxPrivateWebSocketObservabilityPolicyTest extends TestCase
 {
-    private const string NOW = '2026-07-13T10:00:10.000000Z';
+    private const NOW = '2026-07-13T10:00:10.000000Z';
 
     #[DataProvider('healthyFillsSources')]
     public function testFreshCompleteStatusIsAllowedByCommonPolicy(string $fillsSource): void

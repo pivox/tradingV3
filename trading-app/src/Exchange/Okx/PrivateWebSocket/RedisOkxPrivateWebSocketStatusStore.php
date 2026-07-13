@@ -10,8 +10,8 @@ use Throwable;
 
 final readonly class RedisOkxPrivateWebSocketStatusStore implements OkxPrivateWebSocketStatusStoreInterface
 {
-    public const string KEY = 'tradingv3:okx:demo:private-observability:v1';
-    public const int TTL_SECONDS = 10;
+    public const KEY = 'tradingv3:okx:demo:private-observability:v1';
+    public const TTL_SECONDS = 10;
 
     public function __construct(
         private OkxPrivateWebSocketRedisClientInterface $redis,

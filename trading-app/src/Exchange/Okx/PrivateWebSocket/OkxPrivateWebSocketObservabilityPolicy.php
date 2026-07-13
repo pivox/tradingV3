@@ -11,7 +11,7 @@ use DateTimeInterface;
 
 final readonly class OkxPrivateWebSocketObservabilityPolicy
 {
-    private const int MAX_AGE_MICROSECONDS = 10_000_000;
+    private const MAX_AGE_MICROSECONDS = 10_000_000;
 
     public function evaluate(
         ?OkxPrivateWebSocketObservabilityStatus $status,

@@ -28,8 +28,8 @@ use ReflectionClass;
 #[CoversClass(OkxPrivateWebSocketSessionResult::class)]
 final class OkxPrivateWebSocketSessionTest extends TestCase
 {
-    private const string SECRET = 'private-login-secret';
-    private const string RAW_SECRET = 'private-message-secret';
+    private const SECRET = 'private-login-secret';
+    private const RAW_SECRET = 'private-message-secret';
 
     private OkxPrivateWebSocketSession $session;
 
