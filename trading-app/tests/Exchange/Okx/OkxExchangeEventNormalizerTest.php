@@ -65,6 +65,8 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'fillTime' => '1767225601123',
                 'instId' => 'BTC-USDT-SWAP',
                 'instType' => 'SWAP',
+                'lever' => '3',
+                'mgnMode' => 'isolated',
                 'ordId' => '12345',
                 'ordType' => 'limit',
                 'posSide' => 'long',
@@ -89,6 +91,8 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertSame('1', $events[0]->order()->metadata['quantity_decimal'] ?? null);
         self::assertSame('0.2', $events[0]->order()->metadata['filled_quantity_decimal'] ?? null);
         self::assertSame('0.8', $events[0]->order()->metadata['remaining_quantity_decimal'] ?? null);
+        self::assertSame('isolated', $events[0]->order()->metadata['margin_mode'] ?? null);
+        self::assertSame('3', $events[0]->order()->metadata['leverage'] ?? null);
         self::assertSame('1767225601.123000', $events[0]->occurredAt()->format('U.u'));
         self::assertSame($this->okxFillId('BTC-USDT-SWAP', 'fill-1'), $events[1]->fill()->fillId);
         self::assertSame(ExchangeOrderSide::BUY, $events[1]->fill()->side);
@@ -712,6 +716,7 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'clOrdId' => 'OKXENTRY',
                 'fee' => '-0.01',
                 'feeCcy' => 'USDT',
+                'execType' => 'M',
                 'fillPx' => '25000.5',
                 'fillSz' => '0.1',
                 'instId' => 'BTC-USDT-SWAP',
@@ -731,6 +736,130 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.1, $events[0]->fill()->quantity, 0.000001);
         self::assertSame('1767225603.123000', $events[0]->fill()->filledAt->format('U.u'));
         self::assertSame('okx_ws_fills', $events[0]->fill()->metadata['source'] ?? null);
+        self::assertSame('maker', $events[0]->fill()->metadata['liquidity_role'] ?? null);
+    }
+
+    public function testPrivateOrderAndDerivedFillNeverExposeProviderRows(): void
+    {
+        $events = $this->normalizer->normalize([
+            'arg' => ['channel' => 'orders', 'instType' => 'SWAP'],
+            'data' => [array_merge([
+                'accFillSz' => '0.2',
+                'clOrdId' => 'safe-client-order',
+                'fillFee' => '-0.02',
+                'fillFeeCcy' => 'USDT',
+                'fillPx' => '25010',
+                'fillSz' => '0.2',
+                'fillTime' => '1767225601123',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'lever' => ['nested' => 'secret-array-value-sentinel'],
+                'nested' => ['token' => 'secret-nested-value-sentinel'],
+                'ordId' => 'safe-order',
+                'ordType' => 'limit',
+                'posSide' => 'long',
+                'px' => '25000',
+                'reduceOnly' => 'false',
+                'side' => 'buy',
+                'state' => 'partially_filled',
+                'sz' => '1',
+                'tradeId' => 'safe-trade',
+                'uTime' => '1767225601123',
+            ], $this->privateSecretFields('secret'))],
+        ]);
+
+        self::assertCount(2, $events);
+        self::assertInstanceOf(ExchangeOrderPartiallyFilled::class, $events[0]);
+        self::assertInstanceOf(ExchangeFillReceived::class, $events[1]);
+        self::assertSame([
+            'source' => 'okx_ws_orders',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'exchange_order_id' => 'safe-order',
+            'client_order_id' => 'safe-client-order',
+        ], $events[0]->payload());
+        self::assertSame([
+            'source' => 'okx_ws_orders',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'exchange_order_id' => 'safe-order',
+            'client_order_id' => 'safe-client-order',
+            'exchange_fill_id' => 'safe-trade',
+        ], $events[1]->payload());
+        self::assertSame([
+            'source' => 'okx_ws_orders',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'quantity_decimal' => '1',
+            'filled_quantity_decimal' => '0.2',
+            'remaining_quantity_decimal' => '0.8',
+        ], $events[0]->order()->metadata);
+        self::assertSame([
+            'source' => 'okx_ws_orders',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'exchange_fill_id' => 'safe-trade',
+        ], $events[1]->fill()->metadata);
+
+        $serialized = serialize($events);
+        foreach (['secret-', 'apiKey', 'api_secret', 'passphrase', 'signature', 'Authorization', 'token', 'cookie', 'credential', 'nested'] as $forbidden) {
+            self::assertStringNotContainsString($forbidden, $serialized);
+        }
+    }
+
+    public function testPrivateFillAndPositionChannelsUseMinimalSanitizedData(): void
+    {
+        $fillEvents = $this->normalizer->normalize([
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [array_merge([
+                'clOrdId' => 'fill-client',
+                'fee' => '-0.01',
+                'feeCcy' => 'USDT',
+                'fillPx' => '25000.5',
+                'fillSz' => '0.1',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'fill-order',
+                'posSide' => 'long',
+                'side' => 'buy',
+                'tradeId' => 'fill-trade',
+                'ts' => '1767225603123',
+            ], $this->privateSecretFields('fill-secret'))],
+        ]);
+        $positionEvents = $this->normalizer->normalize([
+            'arg' => ['channel' => 'positions', 'instType' => 'SWAP'],
+            'data' => [array_merge([
+                'avgPx' => '25000',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'lever' => '3',
+                'markPx' => '25100',
+                'margin' => '100',
+                'mgnMode' => 'isolated',
+                'pos' => '0.5',
+                'posSide' => 'long',
+                'realizedPnl' => '1.5',
+                'uTime' => '1767225604000',
+                'upl' => '50',
+            ], $this->privateSecretFields('position-secret'))],
+        ]);
+
+        self::assertCount(1, $fillEvents);
+        self::assertCount(1, $positionEvents);
+        self::assertInstanceOf(ExchangePositionUpdated::class, $positionEvents[0]);
+        self::assertSame([
+            'source' => 'okx_ws_fills',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'exchange_order_id' => 'fill-order',
+            'client_order_id' => 'fill-client',
+            'exchange_fill_id' => 'fill-trade',
+        ], $fillEvents[0]->payload());
+        self::assertSame([
+            'source' => 'okx_ws_positions',
+            'instrument_id' => 'BTC-USDT-SWAP',
+        ], $positionEvents[0]->payload());
+        self::assertSame([
+            'source' => 'okx_ws_positions',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'margin_mode' => 'isolated',
+        ], $positionEvents[0]->position()?->metadata);
+        self::assertStringNotContainsString('secret-', serialize([$fillEvents, $positionEvents]));
     }
 
     public function testOkxTradeFillIdsIncludeInstrument(): void
@@ -767,6 +896,26 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertSame($this->okxFillId('BTC-USDT-SWAP', 'duplicate-trade-id'), $events[0]->fill()->fillId);
         self::assertSame($this->okxFillId('ETH-USDT-SWAP', 'duplicate-trade-id'), $events[1]->fill()->fillId);
         self::assertNotSame($events[0]->fill()->fillId, $events[1]->fill()->fillId);
+    }
+
+    public function testDropsFillWhenAllowlistedTradeIdentifierIsNotScalar(): void
+    {
+        $events = $this->normalizer->normalize([
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [[
+                'fillPx' => '25000.5',
+                'fillSz' => '0.1',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'fill-order',
+                'side' => 'buy',
+                'tradeId' => ['nested' => 'malformed-trade-secret-sentinel'],
+                'ts' => '1767225603123',
+            ]],
+        ]);
+
+        self::assertSame([], $events);
+        self::assertStringNotContainsString('malformed-trade-secret-sentinel', serialize($events));
     }
 
     public function testNormalizesPositionUpdateAndCloseEvents(): void
@@ -819,6 +968,8 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'instType' => 'SWAP',
                 'pos' => '0',
                 'posSide' => 'net',
+                'token' => 'net-close-secret-sentinel',
+                'unknown' => ['credential' => 'net-close-nested-sentinel'],
                 'uTime' => '1767225605000',
             ]],
         ]);
@@ -830,6 +981,13 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             $events[0]->side(),
             $events[1]->side(),
         ]);
+        self::assertSame([
+            'source' => 'okx_ws_positions',
+            'instrument_id' => 'BTC-USDT-SWAP',
+        ], $events[0]->payload());
+        self::assertSame($events[0]->payload(), $events[1]->payload());
+        self::assertStringNotContainsString('net-close-secret-sentinel', serialize($events));
+        self::assertStringNotContainsString('net-close-nested-sentinel', serialize($events));
     }
 
     public function testIgnoresAmbiguousZeroPositionWithoutSide(): void
@@ -922,5 +1080,21 @@ final class OkxExchangeEventNormalizerTest extends TestCase
     private function okxFillId(string $instId, string $tradeId): string
     {
         return OkxFillId::fromTradeId($instId, $tradeId) ?? '';
+    }
+
+    /** @return array<string,mixed> */
+    private function privateSecretFields(string $prefix): array
+    {
+        return [
+            'apiKey' => $prefix . '-api-key-sentinel',
+            'api_secret' => $prefix . '-api-secret-sentinel',
+            'passphrase' => $prefix . '-passphrase-sentinel',
+            'signature' => $prefix . '-signature-sentinel',
+            'Authorization' => $prefix . '-authorization-sentinel',
+            'token' => $prefix . '-token-sentinel',
+            'cookie' => $prefix . '-cookie-sentinel',
+            'credential' => $prefix . '-credential-sentinel',
+            'nested' => ['unknown' => $prefix . '-nested-sentinel'],
+        ];
     }
 }

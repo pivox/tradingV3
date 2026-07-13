@@ -87,34 +87,35 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         }
 
         $occurredAt = $this->time($row['uTime'] ?? $row['fillTime'] ?? $row['cTime'] ?? null);
+        $payload = $this->orderPayload($row, $preferAlgoId);
         $events = match ($order->status) {
             ExchangeOrderStatus::OPEN, ExchangeOrderStatus::PENDING => [
                 $this->isProtectionOrder($order, $row)
-                    ? new ExchangeProtectionOrderCreated($order, $occurredAt, $row)
-                    : new ExchangeOrderCreated($order, $occurredAt, $row),
+                    ? new ExchangeProtectionOrderCreated($order, $occurredAt, $payload)
+                    : new ExchangeOrderCreated($order, $occurredAt, $payload),
             ],
             ExchangeOrderStatus::PARTIALLY_FILLED => [
-                new ExchangeOrderPartiallyFilled($order, $occurredAt, $row),
+                new ExchangeOrderPartiallyFilled($order, $occurredAt, $payload),
             ],
             ExchangeOrderStatus::FILLED => [
-                new ExchangeOrderFilled($order, $occurredAt, $row),
+                new ExchangeOrderFilled($order, $occurredAt, $payload),
             ],
             ExchangeOrderStatus::CANCELLED, ExchangeOrderStatus::EXPIRED => [
-                new ExchangeOrderCancelled($order, $occurredAt, $row),
+                new ExchangeOrderCancelled($order, $occurredAt, $payload),
             ],
             ExchangeOrderStatus::REJECTED => [
                 $this->isProtectionOrder($order, $row)
-                    ? new ExchangeProtectionOrderRejected($order, $occurredAt, $row)
-                    : new ExchangeOrderRejected($order, $occurredAt, $row),
+                    ? new ExchangeProtectionOrderRejected($order, $occurredAt, $payload)
+                    : new ExchangeOrderRejected($order, $occurredAt, $payload),
             ],
             default => [
-                new ExchangeOrderUpdated($order, $occurredAt, $row),
+                new ExchangeOrderUpdated($order, $occurredAt, $payload),
             ],
         };
 
         $fill = $this->fillFromRow($row, 'okx_ws_orders', $preferAlgoId);
         if ($fill instanceof ExchangeFillDto) {
-            $events[] = new ExchangeFillReceived($fill, $row);
+            $events[] = new ExchangeFillReceived($fill, $this->fillPayload($row, 'okx_ws_orders', $preferAlgoId));
         }
 
         return $events;
@@ -128,7 +129,9 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
     {
         $fill = $this->fillFromRow($row, 'okx_ws_fills');
 
-        return $fill instanceof ExchangeFillDto ? [new ExchangeFillReceived($fill, $row)] : [];
+        return $fill instanceof ExchangeFillDto
+            ? [new ExchangeFillReceived($fill, $this->fillPayload($row, 'okx_ws_fills'))]
+            : [];
     }
 
     /**
@@ -146,8 +149,8 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             $occurredAt = $this->time($row['uTime'] ?? null);
 
             return [
-                $this->positionClosedEvent($symbol, ExchangePositionSide::LONG, $occurredAt, $row),
-                $this->positionClosedEvent($symbol, ExchangePositionSide::SHORT, $occurredAt, $row),
+                $this->positionClosedEvent($symbol, ExchangePositionSide::LONG, $occurredAt, $this->positionPayload($row)),
+                $this->positionClosedEvent($symbol, ExchangePositionSide::SHORT, $occurredAt, $this->positionPayload($row)),
             ];
         }
 
@@ -158,7 +161,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
         $occurredAt = $position->updatedAt ?? $this->clock->now();
         if ($position->size <= 0.00000001) {
-            return [$this->positionClosedEvent($position->symbol, $position->side, $occurredAt, $row)];
+            return [$this->positionClosedEvent($position->symbol, $position->side, $occurredAt, $this->positionPayload($row))];
         }
 
         return [new ExchangePositionUpdated(
@@ -169,7 +172,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             size: $position->size,
             position: $position,
             occurredAt: $occurredAt,
-            payload: $row,
+            payload: $this->positionPayload($row),
         )];
     }
 
@@ -224,7 +227,11 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             timeInForce: $this->timeInForce($row['ordType'] ?? null),
             createdAt: $this->time($row['cTime'] ?? null),
             updatedAt: $this->timeOrNull($row['uTime'] ?? null),
-            metadata: array_replace(['source' => 'okx_ws_orders'], $row, [
+            metadata: $this->withoutNullStrings([
+                'source' => 'okx_ws_orders',
+                'instrument_id' => $this->scalarString($row['instId'] ?? null),
+                'margin_mode' => $this->marginMode($row['mgnMode'] ?? null),
+                'leverage' => $this->numericString($row['lever'] ?? null),
                 'quantity_decimal' => $exactQuantities->quantity,
                 'filled_quantity_decimal' => $exactQuantities->filled,
                 'remaining_quantity_decimal' => $exactQuantities->remaining,
@@ -245,7 +252,10 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         $quantity = $this->fillQuantity($row);
         $price = $this->fillPrice($row);
         $exchangeOrderId = $this->orderId($row, $preferAlgoId);
-        $fillId = OkxFillId::fromTradeId($row['instId'] ?? '', $row['tradeId'] ?? null);
+        $fillId = OkxFillId::fromTradeId(
+            $this->scalarString($row['instId'] ?? null),
+            $this->scalarString($row['tradeId'] ?? null),
+        );
         if ($symbol === null || $fillId === null || $quantity <= 0.0 || $price <= 0.0 || $exchangeOrderId === '') {
             return null;
         }
@@ -271,7 +281,12 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             fee: $this->floatOrNull($fee),
             feeCurrency: $feeCurrency,
             filledAt: $filledAt,
-            metadata: ['source' => $source] + $row,
+            metadata: $this->withoutNullStrings([
+                'source' => $source,
+                'instrument_id' => $this->scalarString($row['instId'] ?? null),
+                'exchange_fill_id' => $this->scalarString($row['tradeId'] ?? null),
+                'liquidity_role' => $this->liquidityRole($row['execType'] ?? null),
+            ]),
         );
     }
 
@@ -308,8 +323,102 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             margin: $this->floatOrNull($row['margin'] ?? $row['imr'] ?? null),
             leverage: $this->floatOrNull($row['lever'] ?? null),
             updatedAt: $this->timeOrNull($row['uTime'] ?? null),
-            metadata: ['source' => 'okx_ws_positions'] + $row,
+            metadata: $this->withoutNullStrings([
+                'source' => 'okx_ws_positions',
+                'instrument_id' => $this->scalarString($row['instId'] ?? null),
+                'margin_mode' => $this->marginMode($row['mgnMode'] ?? null),
+            ]),
         );
+    }
+
+    /**
+     * Private provider rows are never forwarded. These channel-aware builders are
+     * the positive allowlist for event payloads; non-scalar values are dropped.
+     *
+     * @param array<string,mixed> $row
+     * @return array<string,string>
+     */
+    private function orderPayload(array $row, bool $preferAlgoId): array
+    {
+        return $this->withoutNullStrings([
+            'source' => 'okx_ws_orders',
+            'instrument_id' => $this->scalarString($row['instId'] ?? null),
+            'exchange_order_id' => $this->orderId($row, $preferAlgoId),
+            'client_order_id' => $this->clientOrderId($row, $preferAlgoId),
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,string>
+     */
+    private function fillPayload(array $row, string $source, bool $preferAlgoId = false): array
+    {
+        return $this->withoutNullStrings([
+            'source' => $source,
+            'instrument_id' => $this->scalarString($row['instId'] ?? null),
+            'exchange_order_id' => $this->orderId($row, $preferAlgoId),
+            'client_order_id' => $this->clientOrderId($row, $preferAlgoId),
+            'exchange_fill_id' => $this->scalarString($row['tradeId'] ?? null),
+        ]);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array<string,string>
+     */
+    private function positionPayload(array $row): array
+    {
+        return $this->withoutNullStrings([
+            'source' => 'okx_ws_positions',
+            'instrument_id' => $this->scalarString($row['instId'] ?? null),
+        ]);
+    }
+
+    /**
+     * @param array<string,?string> $values
+     * @return array<string,string>
+     */
+    private function withoutNullStrings(array $values): array
+    {
+        return array_filter(
+            $values,
+            static fn (?string $value): bool => $value !== null && $value !== '',
+        );
+    }
+
+    private function scalarString(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
+    private function numericString(mixed $value): ?string
+    {
+        $value = $this->scalarString($value);
+
+        return $value !== null && is_numeric($value) ? $value : null;
+    }
+
+    private function marginMode(mixed $value): ?string
+    {
+        $value = strtolower($this->scalarString($value) ?? '');
+
+        return \in_array($value, ['cross', 'isolated'], true) ? $value : null;
+    }
+
+    private function liquidityRole(mixed $value): ?string
+    {
+        return match (strtolower($this->scalarString($value) ?? '')) {
+            'm', 'maker' => 'maker',
+            't', 'taker' => 'taker',
+            default => null,
+        };
     }
 
     /**
@@ -575,7 +684,10 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function bool(mixed $value): bool
     {
-        return \filter_var($value, \FILTER_VALIDATE_BOOLEAN, \FILTER_NULL_ON_FAILURE) ?? (bool) $value;
+        $value = $this->scalarString($value);
+
+        return $value !== null
+            && (\filter_var($value, \FILTER_VALIDATE_BOOLEAN, \FILTER_NULL_ON_FAILURE) ?? false);
     }
 
     private function float(mixed $value): float
@@ -635,7 +747,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function hasValue(mixed $value): bool
     {
-        return trim((string) $value) !== '';
+        return $this->scalarString($value) !== null;
     }
 
     /**

@@ -18,6 +18,8 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\DoctrineExchangeLocalProjectionStore;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderUpdated;
+use App\Exchange\Okx\OkxExchangeEventNormalizer;
+use App\Exchange\Okx\OkxInstrumentResolver;
 use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Repository\FuturesOrderRepository;
@@ -30,6 +32,7 @@ use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Psr\Clock\ClockInterface;
 use Psr\Log\NullLogger;
 
 #[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
@@ -208,6 +211,74 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         self::assertSame('1.123456789012345678', $captured['quantity_decimal']);
         self::assertSame('0.400000000000000001', $captured['filled_quantity_decimal']);
         self::assertSame('0.723456789012345677', $captured['remaining_quantity_decimal']);
+    }
+
+    public function testOkxPrivateOrderAndFillProjectionRawNeverContainsProviderSecrets(): void
+    {
+        $capturedOrder = null;
+        $capturedFill = null;
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::once())
+            ->method('syncOrderFromApi')
+            ->willReturnCallback(function (array $payload) use (&$capturedOrder): FuturesOrder {
+                $capturedOrder = $payload;
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $orderSync->expects(self::never())->method('syncTradeFromApi');
+        $normalizer = new OkxExchangeEventNormalizer(
+            new OkxInstrumentResolver(),
+            new class implements ClockInterface {
+                public function now(): \DateTimeImmutable
+                {
+                    return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+                }
+            },
+        );
+        $events = $normalizer->normalize([
+            'arg' => ['channel' => 'orders', 'instType' => 'SWAP'],
+            'data' => [[
+                'accFillSz' => '0.2',
+                'apiKey' => 'doctrine-secret-api-sentinel',
+                'Authorization' => 'doctrine-secret-authorization-sentinel',
+                'clOrdId' => 'safe-client-order',
+                'fillFee' => '-0.02',
+                'fillFeeCcy' => 'USDT',
+                'fillPx' => '25010',
+                'fillSz' => '0.2',
+                'fillTime' => '1767225601123',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'nested' => ['passphrase' => 'doctrine-secret-nested-sentinel'],
+                'ordId' => 'safe-order',
+                'ordType' => 'limit',
+                'posSide' => 'long',
+                'px' => '25000',
+                'reduceOnly' => 'false',
+                'side' => 'buy',
+                'state' => 'partially_filled',
+                'sz' => '1',
+                'tradeId' => 'safe-trade',
+                'uTime' => '1767225601123',
+            ]],
+        ]);
+
+        self::assertCount(2, $events);
+        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
+        $store->project($events[0]);
+        self::assertInstanceOf(ExchangeFillReceived::class, $events[1]);
+        $fillPayload = new \ReflectionMethod(DoctrineExchangeLocalProjectionStore::class, 'fillPayload');
+        $capturedFill = $fillPayload->invoke($store, $events[1]->fill(), $events[1]);
+
+        self::assertIsArray($capturedOrder);
+        self::assertIsArray($capturedFill);
+        self::assertSame('okx_ws_orders', $capturedOrder['raw']['metadata']['source'] ?? null);
+        self::assertSame('okx_ws_orders', $capturedOrder['raw']['payload']['source'] ?? null);
+        self::assertSame('okx_ws_orders', $capturedFill['raw']['metadata']['source'] ?? null);
+        self::assertSame('safe-trade', $capturedFill['raw']['payload']['exchange_fill_id'] ?? null);
+        self::assertStringNotContainsString('doctrine-secret-', serialize([$capturedOrder, $capturedFill]));
+        self::assertArrayNotHasKey('apiKey', $capturedOrder['raw']['metadata']);
+        self::assertArrayNotHasKey('nested', $capturedFill['raw']['payload']);
     }
 
     public function testOrderProjectionFailsWhenLegacySyncReturnsNull(): void
