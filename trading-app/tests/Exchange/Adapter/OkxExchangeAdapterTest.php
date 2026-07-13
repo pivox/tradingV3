@@ -35,6 +35,7 @@ final class OkxExchangeAdapterTest extends TestCase
         $capabilities = $this->adapter()->capabilities();
 
         self::assertTrue($capabilities->supportsTestnet);
+        self::assertTrue($capabilities->supportsWebSocketPrivate);
         self::assertTrue($capabilities->supportsClientOrderId);
         self::assertTrue($capabilities->supportsCancelByClientOrderId);
         self::assertFalse($capabilities->supportsAttachedStopLossOnEntry);

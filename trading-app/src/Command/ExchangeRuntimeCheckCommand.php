@@ -12,6 +12,9 @@ use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketObservabilityPolicy;
+use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketStatusStoreInterface;
+use App\Exchange\Readiness\ExchangePrivateObservabilityStatus;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
@@ -21,11 +24,13 @@ use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
+use Psr\Clock\ClockInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Clock\NativeClock;
 
 #[AsCommand(
     name: 'app:exchange:runtime-check',
@@ -33,6 +38,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 )]
 final class ExchangeRuntimeCheckCommand extends Command
 {
+    private readonly ClockInterface $clock;
+
     /**
      * @param array<string, string> $bitmartEnv
      */
@@ -43,7 +50,11 @@ final class ExchangeRuntimeCheckCommand extends Command
         private readonly HyperliquidConfig $hyperliquidConfig,
         private readonly array $bitmartEnv = [],
         private readonly ?HyperliquidMutationReadinessProbeInterface $hyperliquidReadinessProbe = null,
+        private readonly ?OkxPrivateWebSocketStatusStoreInterface $okxPrivateWebSocketStatusStore = null,
+        private readonly OkxPrivateWebSocketObservabilityPolicy $okxPrivateWebSocketObservabilityPolicy = new OkxPrivateWebSocketObservabilityPolicy(),
+        ?ClockInterface $clock = null,
     ) {
+        $this->clock = $clock ?? new NativeClock(new \DateTimeZone('UTC'));
         parent::__construct();
     }
 
@@ -118,6 +129,7 @@ final class ExchangeRuntimeCheckCommand extends Command
                 $output->writeln(sprintf('Readiness level: %s', $okxReadinessReport->readyLevel->value));
                 $output->writeln(sprintf('Readiness blocking errors: %s', $this->formatReasons($this->stringReasons($okxReadiness['blocking_errors']))));
                 $output->writeln(sprintf('Readiness warnings: %s', $this->formatReasons($this->stringReasons($okxReadiness['warnings']))));
+                $output->writeln(sprintf('Private WS observability: %s', $okxReadinessReport->privateObservability ? 'ready' : 'not_ready'));
                 $output->writeln(sprintf('Mainnet write guard: %s', $okxReadinessReport->mainnetWriteGuard ? 'yes' : 'no'));
                 $output->writeln(sprintf('Demo/testnet write guard: %s', $okxReadinessReport->demoTestnetWriteGuard ? 'yes' : 'no'));
                 $output->writeln(sprintf('Stop loss capability: %s', $okxReadinessReport->stopLossCapability ? 'yes' : 'no'));
@@ -316,6 +328,7 @@ final class ExchangeRuntimeCheckCommand extends Command
     ): ExchangeReadinessReport {
         $capabilities = $adapter instanceof ExchangeAdapterInterface ? $adapter->capabilities() : new ExchangeCapabilities();
         $environment = $this->okxConfig->normalizedEnvironment();
+        [$privateObservabilityStatus, $privateObservabilityWarnings] = $this->okxPrivateObservabilityStatus();
         [$publicConnectivity, $instrumentsLoaded, $metadataValid, $precisionValid, $publicWarnings] = $this->okxPublicReadStatus($adapterStatus, $providerStatus, $providerBundle);
         $mainnetGuard = $this->okxConfig->isDemo() && !$this->okxConfig->liveEnabled;
         $demoHeaderGuard = $this->okxConfig->isDemo() && $this->okxConfig->simulatedTrading && !$this->okxConfig->liveEnabled;
@@ -331,6 +344,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             publicConnectivity: $publicConnectivity,
             privateReadConnectivity: $privateReadReady,
             privateObservability: false,
+            privateObservabilityStatus: $privateObservabilityStatus,
             instrumentsLoaded: $instrumentsLoaded,
             metadataValid: $metadataValid,
             precisionValid: $precisionValid,
@@ -345,8 +359,38 @@ final class ExchangeRuntimeCheckCommand extends Command
             dryRun: true,
             allowedMarkets: [$marketType->value],
             maxNotional: 25.0,
-            warnings: array_merge($publicWarnings, $privateWarnings),
+            warnings: array_merge($publicWarnings, $privateWarnings, $privateObservabilityWarnings),
         ));
+    }
+
+    /**
+     * @return array{0: ?ExchangePrivateObservabilityStatus, 1: list<string>}
+     */
+    private function okxPrivateObservabilityStatus(): array
+    {
+        if ($this->okxConfig->environment !== 'demo'
+            || !$this->okxConfig->simulatedTrading
+            || $this->okxConfig->liveEnabled
+            || !$this->okxPrivateWebSocketStatusStore instanceof OkxPrivateWebSocketStatusStoreInterface) {
+            return [null, []];
+        }
+
+        $now = $this->clock->now();
+
+        try {
+            return [
+                $this->okxPrivateWebSocketObservabilityPolicy->evaluate(
+                    $this->okxPrivateWebSocketStatusStore->load(),
+                    $now,
+                ),
+                [],
+            ];
+        } catch (\Throwable) {
+            return [
+                $this->okxPrivateWebSocketObservabilityPolicy->evaluate(null, $now),
+                ['okx_private_observability_status_store_unavailable'],
+            ];
+        }
     }
 
     /**

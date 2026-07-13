@@ -38,10 +38,15 @@ final readonly class RedisOkxPrivateWebSocketStatusStore implements OkxPrivateWe
     {
         try {
             $json = $this->redis->get(self::KEY);
-            if (false === $json) {
-                return null;
-            }
+        } catch (Throwable) {
+            throw new RuntimeException('okx_private_ws_status_read_failed');
+        }
 
+        if (false === $json) {
+            return null;
+        }
+
+        try {
             $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
             if (!is_array($data)) {
                 return null;

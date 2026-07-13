@@ -13,6 +13,7 @@ use DateTimeImmutable;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\TestCase;
 use Redis;
 use RuntimeException;
@@ -31,6 +32,7 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
         self::assertTrue((new \ReflectionClass(OkxPrivateWebSocketObservabilityStatus::class))->isReadOnly());
     }
 
+    #[RequiresPhpExtension('redis')]
     public function testRedisFactoryUsesExplicitConnectAndReadTimeouts(): void
     {
         $redis = new InspectableRedisConnection(true);
@@ -40,6 +42,7 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
         self::assertSame(['redis', 6379, 1.0, null, 0, 1.0], $redis->connectArguments);
     }
 
+    #[RequiresPhpExtension('redis')]
     public function testRedisFactoryRejectsAFailedConnectionWithAStableException(): void
     {
         $redis = new InspectableRedisConnection(false);
@@ -159,12 +162,20 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
         }
     }
 
-    public function testReadFailureIsFailClosed(): void
+    public function testReadFailureUsesAStableRedactedExceptionWithoutChainingTransportDetails(): void
     {
         $redis = new SpyOkxPrivateWebSocketRedisClient();
         $redis->throwOnRead = true;
 
-        self::assertNull((new RedisOkxPrivateWebSocketStatusStore($redis))->load());
+        try {
+            (new RedisOkxPrivateWebSocketStatusStore($redis))->load();
+            self::fail('Expected the Redis read failure to be surfaced.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('okx_private_ws_status_read_failed', $exception->getMessage());
+            self::assertSame(0, $exception->getCode());
+            self::assertNull($exception->getPrevious());
+            self::assertStringNotContainsString('demo-secret', $exception->getMessage());
+        }
     }
 
     public function testWriteFailureUsesAStableRedactedException(): void
@@ -242,6 +253,7 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
         yield 'invalid timestamp' => [[...$valid, 'observed_at' => '2026-07-13 10:00:00']];
     }
 
+    #[RequiresPhpExtension('redis')]
     public function testExpiresAgainstRealRedis(): void
     {
         if (!class_exists(Redis::class)) {
@@ -367,34 +379,36 @@ final class SpyOkxPrivateWebSocketRedisClient implements OkxPrivateWebSocketRedi
     }
 }
 
-final class InspectableRedisConnection extends Redis
-{
-    /** @var array{string, int, float, ?string, int, float}|null */
-    public ?array $connectArguments = null;
-
-    public function __construct(private readonly bool $connectResult)
+if (class_exists(Redis::class)) {
+    final class InspectableRedisConnection extends Redis
     {
-    }
+        /** @var array{string, int, float, ?string, int, float}|null */
+        public ?array $connectArguments = null;
 
-    /** @param null|array<mixed> $context */
-    public function connect(
-        string $host,
-        int $port = 6379,
-        float $timeout = 0.0,
-        ?string $persistent_id = null,
-        int $retry_interval = 0,
-        float $read_timeout = 0.0,
-        ?array $context = null,
-    ): bool {
-        $this->connectArguments = [
-            $host,
-            $port,
-            $timeout,
-            $persistent_id,
-            $retry_interval,
-            $read_timeout,
-        ];
+        public function __construct(private readonly bool $connectResult)
+        {
+        }
 
-        return $this->connectResult;
+        /** @param null|array<mixed> $context */
+        public function connect(
+            string $host,
+            int $port = 6379,
+            float $timeout = 0.0,
+            ?string $persistent_id = null,
+            int $retry_interval = 0,
+            float $read_timeout = 0.0,
+            ?array $context = null,
+        ): bool {
+            $this->connectArguments = [
+                $host,
+                $port,
+                $timeout,
+                $persistent_id,
+                $retry_interval,
+                $read_timeout,
+            ];
+
+            return $this->connectResult;
+        }
     }
 }
