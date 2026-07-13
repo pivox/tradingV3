@@ -440,6 +440,53 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         }
     }
 
+    public function testInitialStoreFailureRecoversWithPeriodicStatusAndHeartbeatTimers(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore(failuresBeforeSuccess: 1);
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker($transport, $loop, $store, clock: $clock);
+
+        $worker->start();
+        $worker->start();
+
+        self::assertSame([], $transport->connections);
+        self::assertSame([1.0, 5.0], array_column($loop->periodicTimers, 0));
+        self::assertCount(1, $loop->timers);
+        self::assertSame(1.0, $loop->fireNextTimer());
+        self::assertCount(1, $transport->connections);
+        self::assertSame([], $loop->timers);
+        self::assertSame([1.0, 5.0], array_column($loop->periodicTimers, 0));
+
+        $transport->open();
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+        self::assertCount(2, $store->saved);
+
+        $clock->sleep(2);
+        $loop->firePeriodicInterval(5.0);
+        self::assertSame(['op' => 'ping'], $transport->sent[array_key_last($transport->sent)]);
+        $transport->message('pong');
+        $clock->sleep(1);
+        $loop->firePeriodicInterval(1.0);
+
+        self::assertCount(3, $store->saved);
+        self::assertSame(
+            '2026-07-13T10:00:05+00:00',
+            $store->load()?->lastHeartbeatAt->format(DATE_ATOM),
+        );
+        self::assertSame(4.0, $loop->fireNextTimer());
+        self::assertSame([], $loop->timers);
+        self::assertCount(1, $transport->connections);
+
+        $worker->stop();
+
+        self::assertSame([], $loop->periodicTimers);
+        self::assertSame([], $loop->timers);
+        self::assertSame([], $loop->signals);
+    }
+
     /** @return iterable<string, array{int}> */
     public static function terminationSignals(): iterable
     {
@@ -817,12 +864,18 @@ final class RecordingStatusStore implements OkxPrivateWebSocketStatusStoreInterf
     public function __construct(
         private readonly ?int $failAfter = null,
         private readonly ?EventTimeline $timeline = null,
+        private int $failuresBeforeSuccess = 0,
     )
     {
     }
 
     public function save(OkxPrivateWebSocketObservabilityStatus $status): void
     {
+        if ($this->failuresBeforeSuccess > 0) {
+            --$this->failuresBeforeSuccess;
+
+            throw new \RuntimeException('redis password and payload must stay redacted');
+        }
         if (null !== $this->failAfter && count($this->saved) >= $this->failAfter) {
             throw new \RuntimeException('redis password and payload must stay redacted');
         }

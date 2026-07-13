@@ -82,9 +82,6 @@ final class OkxPrivateWebSocketWorker
         };
         $this->loop->addSignal(\SIGTERM, $this->sigtermHandler);
         $this->loop->addSignal(\SIGINT, $this->sigintHandler);
-        if (!$this->publishStatus($this->session->status(), true)) {
-            return;
-        }
         $this->trackTimer($this->loop->addPeriodicTimer(1.0, function (): void {
             if ($this->stopping) {
                 return;
@@ -112,6 +109,9 @@ final class OkxPrivateWebSocketWorker
                 $this->logger->info('okx_private_ws.state', $this->logContext('ping_sent', 'heartbeat'));
             }
         }));
+        if (!$this->publishStatus($this->session->status(), true)) {
+            return;
+        }
         $this->connect($uri);
     }
 
