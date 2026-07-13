@@ -224,7 +224,7 @@ final class OkxPrivateWebSocketSession
                 ['channel' => 'orders', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
-                ['channel' => 'fills', 'instType' => 'SWAP'],
+                ['channel' => 'fills'],
             ],
         ]]);
     }
@@ -430,7 +430,7 @@ final class OkxPrivateWebSocketSession
     /** @return array<string, string> */
     private static function expectedSubscriptionArg(string $channel): array
     {
-        return 'balance_and_position' === $channel
+        return \in_array($channel, ['balance_and_position', 'fills'], true)
             ? ['channel' => $channel]
             : ['channel' => $channel, 'instType' => 'SWAP'];
     }

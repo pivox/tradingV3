@@ -87,7 +87,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
                 ['channel' => 'orders', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
-                ['channel' => 'fills', 'instType' => 'SWAP'],
+                ['channel' => 'fills'],
             ],
         ]], $result->outgoingCommands);
         self::assertSame([], $result->normalizedEvents);
@@ -125,7 +125,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         $result = $this->session->onMessage([
             'event' => 'error',
             'code' => '64003',
-            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'arg' => ['channel' => 'fills'],
             'msg' => self::RAW_SECRET,
         ], self::at(3));
 
@@ -147,7 +147,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         $this->session->onMessage([
             'event' => 'error',
             'code' => '60012',
-            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'arg' => ['channel' => 'fills'],
         ], self::at(3));
 
         $status = $this->session->status();
@@ -468,6 +468,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         yield 'orders SPOT' => ['orders', ['channel' => 'orders', 'instType' => 'SPOT']];
         yield 'positions SPOT' => ['positions', ['channel' => 'positions', 'instType' => 'SPOT']];
         yield 'fills SPOT' => ['fills', ['channel' => 'fills', 'instType' => 'SPOT']];
+        yield 'fills SWAP' => ['fills', ['channel' => 'fills', 'instType' => 'SWAP']];
         yield 'balance with instType' => [
             'balance_and_position',
             ['channel' => 'balance_and_position', 'instType' => 'SWAP'],
@@ -504,7 +505,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
     public static function invalidFillsFallbackArguments(): iterable
     {
         yield 'SPOT' => [['channel' => 'fills', 'instType' => 'SPOT']];
-        yield 'missing instType' => [['channel' => 'fills']];
+        yield 'SWAP' => [['channel' => 'fills', 'instType' => 'SWAP']];
         yield 'extra arg' => [['channel' => 'fills', 'instType' => 'SWAP', 'extra' => 'value']];
     }
 
@@ -644,7 +645,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
     /** @return array<string, string> */
     private static function subscriptionArg(string $channel): array
     {
-        return 'balance_and_position' === $channel
+        return \in_array($channel, ['balance_and_position', 'fills'], true)
             ? ['channel' => $channel]
             : ['channel' => $channel, 'instType' => 'SWAP'];
     }
