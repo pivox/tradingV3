@@ -7,6 +7,7 @@ namespace App\Tests\Exchange\Okx;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Okx\OkxRestClient;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\HttpClient\MockHttpClient;
@@ -152,7 +153,87 @@ final class OkxRestClientTest extends TestCase
             $client->privateGet('/api/v5/account/balance', ['ccy' => 'USDT']);
             self::fail('Expected demo production URL guard to reject the private GET.');
         } catch (\RuntimeException $e) {
-            self::assertStringContainsString('OKX demo private requests must not use production OKX REST URL.', $e->getMessage());
+            self::assertSame('okx_private_rest_endpoint_not_allowed', $e->getMessage());
+        }
+
+        self::assertSame(0, $requests);
+    }
+
+    /**
+     * @return iterable<string,array{string,string,bool}>
+     */
+    public static function invalidPrivateRestBaseUris(): iterable
+    {
+        yield 'demo http' => ['demo', 'http://eea.okx.com', false];
+        yield 'demo userinfo' => ['demo', 'https://user:secret@eea.okx.com', false];
+        yield 'demo port' => ['demo', 'https://eea.okx.com:443', false];
+        yield 'demo evil suffix' => ['demo', 'https://eea.okx.com.evil.test', false];
+        yield 'demo subdomain' => ['demo', 'https://api.eea.okx.com', false];
+        yield 'demo path' => ['demo', 'https://eea.okx.com/api', false];
+        yield 'demo trailing slash' => ['demo', 'https://eea.okx.com/', false];
+        yield 'demo query' => ['demo', 'https://eea.okx.com?target=evil', false];
+        yield 'demo fragment' => ['demo', 'https://eea.okx.com#target', false];
+        yield 'demo invalid parse' => ['demo', 'https://[eea.okx.com', false];
+        yield 'live http' => ['live', 'http://www.okx.com', true];
+        yield 'live userinfo' => ['live', 'https://user:secret@www.okx.com', true];
+        yield 'live port' => ['live', 'https://www.okx.com:443', true];
+        yield 'live evil suffix' => ['live', 'https://www.okx.com.evil.test', true];
+        yield 'live subdomain' => ['live', 'https://api.www.okx.com', true];
+        yield 'live path' => ['live', 'https://www.okx.com/api', true];
+        yield 'live trailing slash' => ['live', 'https://www.okx.com/', true];
+        yield 'live query' => ['live', 'https://www.okx.com?target=evil', true];
+        yield 'live fragment' => ['live', 'https://www.okx.com#target', true];
+        yield 'live invalid parse' => ['live', 'https://[www.okx.com', true];
+    }
+
+    #[DataProvider('invalidPrivateRestBaseUris')]
+    public function testPrivateConfigurationRejectsEveryNonAllowlistedRestBaseUri(
+        string $environment,
+        string $apiBaseUri,
+        bool $liveEnabled,
+    ): void {
+        $config = new OkxConfig(
+            environment: $environment,
+            apiKey: 'test-key',
+            apiSecret: 'test-secret',
+            apiPassphrase: 'test-passphrase',
+            apiBaseUri: $apiBaseUri,
+            simulatedTrading: true,
+            liveEnabled: $liveEnabled,
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('okx_private_rest_endpoint_not_allowed');
+
+        $config->assertPrivateConfigured();
+    }
+
+    public function testInvalidPrivateRestBaseUriIsRejectedBeforeHttpCallWithoutLeakingCredentials(): void
+    {
+        $requests = 0;
+        $http = new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+
+            return new MockResponse('{"code":"0","data":[]}');
+        });
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'test-key',
+                apiSecret: 'test-secret',
+                apiPassphrase: 'test-passphrase',
+                apiBaseUri: 'https://test-key:test-secret@eea.okx.com',
+                simulatedTrading: true,
+            ),
+            $this->fixedClock(),
+        );
+
+        try {
+            $client->privateGet('/api/v5/account/balance');
+            self::fail('Expected the private REST endpoint guard to reject the request.');
+        } catch (\RuntimeException $e) {
+            self::assertSame('okx_private_rest_endpoint_not_allowed', $e->getMessage());
         }
 
         self::assertSame(0, $requests);

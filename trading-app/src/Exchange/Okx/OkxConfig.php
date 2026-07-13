@@ -6,6 +6,9 @@ namespace App\Exchange\Okx;
 
 final readonly class OkxConfig
 {
+    private const string DEMO_API_BASE_URI = 'https://eea.okx.com';
+    private const string LIVE_API_BASE_URI = 'https://www.okx.com';
+
     public function __construct(
         public string $environment = '',
         public string $apiKey = '',
@@ -39,7 +42,7 @@ final readonly class OkxConfig
             return $configured;
         }
 
-        return $this->isDemo() ? 'https://eea.okx.com' : 'https://www.okx.com';
+        return $this->isDemo() ? self::DEMO_API_BASE_URI : self::LIVE_API_BASE_URI;
     }
 
     public function wsPublicUri(): string
@@ -75,14 +78,12 @@ final readonly class OkxConfig
 
     public function assertPrivateConfigured(): void
     {
+        $this->assertPrivateRestEndpointAllowed();
         $this->assertLiveAllowed();
 
         if ($this->isDemo()) {
             if (!$this->simulatedTrading) {
                 throw new \RuntimeException('OKX_SIMULATED_TRADING=1 is required for OKX demo private requests.');
-            }
-            if (str_contains(strtolower($this->apiBaseUri()), 'www.okx.com')) {
-                throw new \RuntimeException('OKX demo private requests must not use production OKX REST URL.');
             }
             if ($this->liveEnabled) {
                 throw new \RuntimeException('OKX_LIVE_ENABLED must remain disabled when OKX_ENV=demo.');
@@ -106,6 +107,16 @@ final readonly class OkxConfig
 
         if ($this->isDemo() && !$this->demoTradingEnabled) {
             throw new \RuntimeException('OKX demo trading is disabled by default; set OKX_DEMO_TRADING_ENABLED=1 explicitly.');
+        }
+    }
+
+    private function assertPrivateRestEndpointAllowed(): void
+    {
+        $expected = $this->isDemo() ? self::DEMO_API_BASE_URI : self::LIVE_API_BASE_URI;
+        $configured = $this->apiBaseUri === '' ? $expected : $this->apiBaseUri;
+
+        if ($configured !== $expected) {
+            throw new \RuntimeException('okx_private_rest_endpoint_not_allowed');
         }
     }
 }
