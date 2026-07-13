@@ -334,6 +334,27 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertFalse($store->load()?->connected);
     }
 
+    public function testSnapshotExceptionIsCanonicalizedWithoutSensitiveLogData(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $logger = new RecordingLogger();
+        $source = new CountingSnapshotSource(throwOnAccount: true);
+        $worker = $this->worker($transport, $loop, $store, $source, logger: $logger);
+        $worker->start();
+        $transport->open();
+
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertSame(['okx_private_ws_connection_failed'], $store->load()?->blockingErrors);
+        $serializedLogs = json_encode($logger->records, \JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('snapshot source sensitive failure', $serializedLogs);
+        foreach ($logger->records as $record) {
+            self::assertSame(['endpoint_id', 'channel', 'state', 'code'], array_keys($record['context']));
+        }
+    }
+
     /** @return iterable<string, array{CountingSnapshotSource}> */
     public static function failedSnapshotSources(): iterable
     {

@@ -11,6 +11,8 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 #[AsAlias(id: OkxRestClientInterface::class)]
 final readonly class OkxRestClient implements OkxRestClientInterface
 {
+    private const PRIVATE_GET_TIMEOUT_SECONDS = 2.0;
+
     public function __construct(
         private HttpClientInterface $httpClient,
         private OkxConfig $config,
@@ -46,6 +48,8 @@ final readonly class OkxRestClient implements OkxRestClientInterface
         $data = $this->httpClient
             ->request('GET', $this->config->apiBaseUri() . $requestPath, [
                 'headers' => $this->signedHeaders('GET', $requestPath),
+                'timeout' => self::PRIVATE_GET_TIMEOUT_SECONDS,
+                'max_duration' => self::PRIVATE_GET_TIMEOUT_SECONDS,
             ])
             ->toArray(false);
 

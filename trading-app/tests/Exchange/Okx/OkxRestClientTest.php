@@ -36,6 +36,8 @@ final class OkxRestClientTest extends TestCase
         self::assertIsArray($captured);
         self::assertSame('GET', $captured['method']);
         self::assertSame('https://eea.okx.com/api/v5/public/instruments?instType=SWAP', $captured['url']);
+        self::assertSame(60.0, $captured['options']['timeout'] ?? null);
+        self::assertSame(0, $captured['options']['max_duration'] ?? null);
         self::assertNull($this->header($captured['options'], 'OK-ACCESS-KEY'));
         self::assertNull($this->header($captured['options'], 'x-simulated-trading'));
     }
@@ -83,6 +85,8 @@ final class OkxRestClientTest extends TestCase
         self::assertIsArray($captured);
         self::assertSame('GET', $captured['method']);
         self::assertSame('https://eea.okx.com/api/v5/account/balance?ccy=USDT', $captured['url']);
+        self::assertSame(2.0, $captured['options']['timeout'] ?? null);
+        self::assertSame(2.0, $captured['options']['max_duration'] ?? null);
         self::assertSame('test-key', $this->header($captured['options'], 'OK-ACCESS-KEY'));
         self::assertSame('test-passphrase', $this->header($captured['options'], 'OK-ACCESS-PASSPHRASE'));
         self::assertSame('2026-01-01T00:00:00.000Z', $this->header($captured['options'], 'OK-ACCESS-TIMESTAMP'));
@@ -326,6 +330,8 @@ final class OkxRestClientTest extends TestCase
         self::assertIsArray($captured);
         self::assertSame('POST', $captured['method']);
         self::assertSame('https://eea.okx.com/api/v5/trade/order', $captured['url']);
+        self::assertSame(60.0, $captured['options']['timeout'] ?? null);
+        self::assertSame(0, $captured['options']['max_duration'] ?? null);
         self::assertSame('{"instId":"BTC-USDT-SWAP","side":"buy"}', $captured['options']['body'] ?? null);
         self::assertSame('1', $this->header($captured['options'], 'x-simulated-trading'));
         self::assertSame(
