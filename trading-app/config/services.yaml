@@ -63,6 +63,8 @@ parameters:
     env(DEMO_TRADING_ENABLED): '0'
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
+    env(REDIS_HOST): '127.0.0.1'
+    env(REDIS_PORT): '6379'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
     env(POSITION_TRADE_ANALYSIS_REPORTING_SOURCE): 'v2'
     app.trade_entry_default_mode: 'scalper_micro'
@@ -228,6 +230,19 @@ services:
     App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient:
         arguments:
             $redis: '@Redis.okx_private_observability'
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisClientInterface:
+        alias: App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketTransportInterface:
+        alias: App\Exchange\Okx\PrivateWebSocket\PawlOkxPrivateWebSocketTransport
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketStatusStoreInterface:
+        alias: App\Exchange\Okx\PrivateWebSocket\RedisOkxPrivateWebSocketStatusStore
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketWorker:
+        arguments:
+            $logger: '@monolog.logger.okx_private_ws'
 
     # Service Redis réel pour OrderWatcherPublisher (Pub/Sub)
     App\Provider\Redis\RedisPubSubClient:

@@ -16,6 +16,7 @@ Voir aussi :
 - [Exchange runtime gates](exchange-runtime-gates.md)
 - [Demo/Testnet Safety Envelope](demo-testnet-safety-envelope.md)
 - [Exchange private observability policy](exchange-private-observability-policy.md)
+- [OKX private WS observability runbook](../runbooks/okx-private-ws-observability.md)
 
 ## Decision
 
@@ -65,13 +66,32 @@ reutilisables.
 | Public REST read-only | `public_read_only` partiel | OKX-003 lit instruments SWAP, ticker, candles et order book via REST public EEA demo, avec timestamps UTC et erreurs normalisees. | Funding courant/historique et validation runtime complete restent a traiter dans les PRs suivantes. |
 | Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
 | Private REST read-only | `private_read_only` partiel | OKX-004 signe les requetes privees demo, lit balance, positions, ordres ouverts, algo-orders ouverts et fills recents sans mutation. | Details d'ordre historiques et enrichissements frais/funding restent pour les PRs metadata/ledger. |
-| Private WebSocket read-only | Partiel | Normalizers ordres/fills/positions existent, mais pas de vrai client prive annonce. | Connexion demo, auth, snapshot initial, streams ordres/fills/positions et reconciliation fraiche. |
+| Private WebSocket read-only | Capacite exploitable, opt-in | `app:okx:private-ws` fournit connexion demo, auth, snapshot REST initial, streams ordres/fills/positions, fallback fills `orders+REST`, heartbeat, reconnexion et statut Redis borne. Le service Compose reste derriere `okx-observability`. | Produire les preuves de recette runtime #188 sur une stack representative; cette capacite seule n'autorise aucune ecriture. |
 | Metadata / precision | Partiel OKX-005 | `OkxMetadataProvider::getInstrumentMetadata()` expose `instId`, tick, step, min/max size, contract value, `ctType`, `ctValCcy`, settle currency et max leverage. Les champs requis invalides ou un SWAP inverse bloquent avec `okx_metadata_incomplete`. | Brancher cette metadata dans tous les chemins de sizing demo avant ordre. |
 | Lifecycle normalizers | Partiel OKX-006 | `OkxLifecycleNormalizer` normalise order request/status, fills, positions et erreurs vers statuts stables (`pending`, `accepted`, `open`, `partially_filled`, `filled`, `cancel_pending`, `canceled`, `rejected`, `expired`, `failed`, `unknown_requires_resync`). | Brancher ces snapshots dans ledger/state lors des PRs runtime suivantes. |
 | Fees / funding / costs | Partiel OKX-005 | Fees maker/taker lues via `trade-fee` avec `groupId` si present, sinon `instFamily`; funding courant lu via `/public/funding-rate`. Valeur absente => `null` + quality flag, jamais zero. | Ledger/certification OKX restent a traiter dans une PR separee. |
 | Local dry-run execution | Partiel OKX-009 | `OkxDryRunExecutionPort` ne fait aucun HTTP, retourne `OKX-DRYRUN-{client_order_id}`, sérialise les payloads `set-leverage`, ordre entry et protections SL/TP via `OkxActionFactory`, vérifie symbole/notional/leverage/mainnet et audite safety + private observability. `OkxRuntimeCheck` peut exposer `local_dry_run_ready` puis `demo_testnet_candidate` sans jamais annoncer `demo_testnet_enabled`, `live_ready` ou `mainnet_ready`. OKX-009 ajoute une fixture orchestrateur `recipe-r1-r16-okx-dry-run` et un mode runner `--target-exchange okx` qui bloque R1/R2/R14 si le runtime-check OKX ne sort pas `Schedule ready: yes`. | Exécuter la recette sur stack représentative et conserver les preuves redacted avant toute PR mutative. |
 | Controlled demo write | Non supporte | Les guards communs existent, mais OKX reste dry-run only. | PR dediee avec readiness complete, SL immediat, compensation fail-safe et rollback. |
 | Mainnet write | Interdit | Runtime-check OKX garde `Live allowed: no`. | Aucun manque a combler dans cette serie. |
+
+## Capability vs readiness
+
+Le worker prive ajoute une **capability d'observabilite read-only**. Quand son
+statut frais et complet est accepte par la policy, le runtime-check peut confirmer
+la couverture privee et contribuer a `demo_testnet_candidate`. Cela ne constitue
+pas une readiness d'ecriture et ne change pas `target_dry_run_only`.
+
+Deux gates restent distincts et obligatoires :
+
+1. **#188** doit produire la recette runtime representative, redacted et
+   reproductible de la capability OKX, y compris l'expiration fail-closed apres
+   arret du worker.
+2. **DEMO-005** doit traiter separement la decision pre-mutative, les protections,
+   la compensation, l'audit et l'activation explicite des gates d'ecriture demo.
+
+Cette PR ne debloque ni `demo_testnet_enabled`, ni ordre demo, ni mutation de
+levier/protection, ni mainnet. Elle ne ferme ni #188 ni DEMO-005 et ne modifie
+aucune strategie, aucun sizing et aucune logique d'ordre.
 
 ## Endpoints requis
 
@@ -227,7 +247,10 @@ Les elements suivants restent explicitement non supportes :
 
 ## Rollback
 
-OKX-001 est docs-only. Le rollback applicatif est le revert de cette page.
+Le rollback de l'observabilite privee consiste d'abord a arreter et supprimer le
+service profile, puis a laisser expirer son statut Redis. Le runbook detaille la
+procedure complete; aucune gate d'ecriture ne doit etre ouverte pendant ce
+rollback.
 
 Le rollback operationnel a conserver pour les PRs suivantes reste :
 

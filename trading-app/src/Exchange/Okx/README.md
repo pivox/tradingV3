@@ -22,7 +22,47 @@ API-first OKX demo integration slice for SWAP instruments.
 - Metadata normalization exposes OKX native tick/step/min/max/contract/leverage,
   public funding, and private fee rates without submitting orders.
 - Entry orders use `/api/v5/trade/order`; standalone stop-loss/take-profit protection uses `/api/v5/trade/order-algo` conditional orders.
-- WebSocket public demo is documented as `wss://wseeapap.okx.com:8443/ws/v5/public`, but OKX-003 keeps runtime market data on REST polling. WebSocket private payload normalization is available for `orders`, `fills`, and `positions` messages. A real OKX private WS client is not implemented yet, so the adapter still does not advertise private WS support.
+- WebSocket public demo is documented as `wss://wseeapap.okx.com:8443/ws/v5/public`, but OKX-003 keeps runtime market data on REST polling.
+- The private demo WebSocket observer is implemented but operationally disabled by default. It is started only through the Compose profile `okx-observability`.
+
+## Private WebSocket observer
+
+`app:okx:private-ws` runs a single read-only observer session. The command checks
+the strict demo configuration before `OkxPrivateWebSocketWorker` connects through
+the Pawl transport. `OkxPrivateWebSocketSession` owns login, channel
+subscriptions, normalized events and readiness state. It never builds, submits,
+cancels or amends an order.
+
+After authentication, the worker loads the private REST snapshot for account,
+positions, open orders, algo orders and recent fills, then subscribes to
+`orders`, `fills`, `positions` and `balance_and_position`. The VIP-only `fills`
+channel may be rejected by OKX; in that case the explicit supported fallback is
+the `orders` stream plus the recent-fills REST snapshot. The status then reports
+`fills_source=orders_plus_rest` and the allow-listed warning
+`okx_fills_channel_vip_unavailable`.
+
+`RedisOkxPrivateWebSocketStatusStore` publishes one bounded JSON document at
+`tradingv3:okx:demo:private-observability:v1`. The schema contains only:
+
+- `schema_version`, `exchange`, `environment`, `endpoint_id`;
+- `connected`, `authenticated`, `orders_stream_ready`, `fills_stream_ready`,
+  `fills_source`, `positions_stream_ready`, `initial_snapshot_loaded`,
+  `reconciliation_fresh`, `reconnecting`;
+- `connected_at`, `last_heartbeat_at`, `last_event_at`, `observed_at`;
+- allow-listed `blocking_errors` and `warnings` codes.
+
+The Redis TTL is 10 seconds and the readiness policy accepts at most 10 seconds
+of age for both `observed_at` and the heartbeat. The worker sends a ping every 5
+seconds, requires the pong within 4 seconds, and reconnects after
+`1/2/4/8/15` seconds, capped at 15 seconds. Connection, auth, subscription,
+snapshot, Redis or freshness failures remain fail-closed.
+
+The observer accepts only `OKX_ENV=demo`, `OKX_SIMULATED_TRADING=1`, the canonical
+demo private endpoint and dedicated non-empty demo credentials. The operational
+service forces `OKX_DEMO_TRADING_ENABLED=0` and `OKX_LIVE_ENABLED=0`; it uses
+read-only API-key permissions and sends no order. Logs use the dedicated
+`okx_private_ws` channel and contain only state names, phases, bounded error
+codes, endpoint identifiers and close codes, never raw messages or credentials.
 
 Metadata mapping:
 
@@ -92,3 +132,6 @@ Local safety checks:
 ```bash
 ./vendor/bin/phpunit tests/Exchange/Okx tests/Exchange/Adapter/OkxExchangeAdapterTest.php tests/Exchange/Contract/OkxExchangeAdapterContractTest.php
 ```
+
+Operations are documented in
+[`docs/handbook/runbooks/okx-private-ws-observability.md`](../../../../docs/handbook/runbooks/okx-private-ws-observability.md).
