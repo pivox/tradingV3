@@ -24,6 +24,8 @@ use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\NumberFormatException;
 
 final readonly class OkxPrivateRestSnapshotReconciler
 {
@@ -76,9 +78,6 @@ final readonly class OkxPrivateRestSnapshotReconciler
 
     private function orderEvent(OrderSnapshotItem $item): ExchangeEventInterface
     {
-        $quantity = $this->positive($item->quantity);
-        $filledQuantity = $this->nonNegative($item->filledQuantity);
-        $remainingQuantity = $this->nonNegative($item->remainingQuantity);
         $status = ExchangeOrderStatus::tryFrom($item->status);
         $side = ExchangeOrderSide::tryFrom($item->side);
         $type = $this->orderType($item->type);
@@ -91,6 +90,23 @@ final readonly class OkxPrivateRestSnapshotReconciler
             ], true)) {
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
+
+        $quantityDecimal = $this->decimal($item->quantity);
+        $filledDecimal = $this->decimal($item->filledQuantity);
+        $remainingDecimal = $this->decimal($item->remainingQuantity);
+        if ($quantityDecimal->compareTo(BigDecimal::zero()) <= 0
+            || $filledDecimal->compareTo(BigDecimal::zero()) < 0
+            || $remainingDecimal->compareTo(BigDecimal::zero()) < 0
+            || $filledDecimal->compareTo($quantityDecimal) > 0
+            || $filledDecimal->plus($remainingDecimal)->compareTo($quantityDecimal) !== 0
+            || ($status === ExchangeOrderStatus::PARTIALLY_FILLED
+                && ($filledDecimal->compareTo(BigDecimal::zero()) <= 0
+                    || $remainingDecimal->compareTo(BigDecimal::zero()) <= 0))) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+        $quantity = $this->finiteFloat($quantityDecimal);
+        $filledQuantity = $this->finiteFloat($filledDecimal);
+        $remainingQuantity = $this->finiteFloat($remainingDecimal);
 
         $order = new ExchangeOrderDto(
             exchange: Exchange::OKX,
@@ -326,16 +342,6 @@ final readonly class OkxPrivateRestSnapshotReconciler
         return $number;
     }
 
-    private function nonNegative(string $value): float
-    {
-        $number = $this->number($value);
-        if ($number < 0.0) {
-            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
-        }
-
-        return $number;
-    }
-
     private function nullablePositive(?string $value): ?float
     {
         return $value === null ? null : $this->positive($value);
@@ -362,6 +368,29 @@ final readonly class OkxPrivateRestSnapshotReconciler
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
         $number = (float) $value;
+        if (!is_finite($number)) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        return $number;
+    }
+
+    private function decimal(string $value): BigDecimal
+    {
+        if ($value === '' || trim($value) !== $value) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        try {
+            return BigDecimal::of($value);
+        } catch (NumberFormatException) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+    }
+
+    private function finiteFloat(BigDecimal $value): float
+    {
+        $number = $value->toFloat();
         if (!is_finite($number)) {
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }

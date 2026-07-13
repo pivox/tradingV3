@@ -287,6 +287,60 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         }
     }
 
+    /**
+     * @param array{quantity: string, filled: string, remaining: string, status: string} $values
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidOrderQuantityInvariantProvider')]
+    public function testRejectsInvalidOrderQuantityInvariants(array $values): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+        try {
+            $this->reconciler($store)->reconcile($this->snapshot(orders: [new OrderSnapshotItem(
+                orderId: 'order-1',
+                symbol: 'BTCUSDT',
+                side: 'buy',
+                type: 'limit',
+                status: $values['status'],
+                quantity: $values['quantity'],
+                filledQuantity: $values['filled'],
+                remainingQuantity: $values['remaining'],
+                price: '25000',
+                stopPrice: null,
+                createdAt: new \DateTimeImmutable(self::NOW),
+            )]));
+        } finally {
+            self::assertSame([], $store->events);
+        }
+    }
+
+    /**
+     * @return iterable<string,array{array{quantity: string, filled: string, remaining: string, status: string}}>
+     */
+    public static function invalidOrderQuantityInvariantProvider(): iterable
+    {
+        yield 'exact sum mismatch' => [[
+            'quantity' => '1',
+            'filled' => '0.7',
+            'remaining' => '0.4',
+            'status' => 'partially_filled',
+        ]];
+        yield 'filled exceeds quantity' => [[
+            'quantity' => '1',
+            'filled' => '1.1',
+            'remaining' => '0',
+            'status' => 'open',
+        ]];
+        yield 'partial status without a fill' => [[
+            'quantity' => '1',
+            'filled' => '0',
+            'remaining' => '1',
+            'status' => 'partially_filled',
+        ]];
+    }
+
     public function testAmbiguousUnknownOrderStatusFailsBeforeAnyProjection(): void
     {
         $store = new SnapshotRecordingProjectionStore();
