@@ -35,6 +35,71 @@ use Psr\Log\NullLogger;
 #[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
 final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
 {
+    #[\PHPUnit\Framework\Attributes\DataProvider('numericSideProvider')]
+    public function testOrderPayloadUsesCanonicalNumericSide(
+        ExchangeOrderSide $side,
+        ExchangePositionSide $positionSide,
+        int $expected,
+    ): void {
+        $captured = null;
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::once())
+            ->method('syncOrderFromApi')
+            ->willReturnCallback(function (array $payload) use (&$captured): FuturesOrder {
+                $captured = $payload;
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
+
+        $store->project(new ExchangeOrderUpdated($this->orderDto($side, $positionSide), new \DateTimeImmutable('2026-01-01 UTC')));
+
+        self::assertIsArray($captured);
+        self::assertSame($expected, $captured['side']);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('numericSideProvider')]
+    public function testFillPayloadUsesCanonicalNumericSide(
+        ExchangeOrderSide $side,
+        ExchangePositionSide $positionSide,
+        int $expected,
+    ): void {
+        $fill = new ExchangeFillDto(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'order-1',
+            clientOrderId: null,
+            fillId: 'fill-1',
+            side: $side,
+            positionSide: $positionSide,
+            quantity: 1.0,
+            price: 100.0,
+            fee: null,
+            feeCurrency: null,
+            filledAt: new \DateTimeImmutable('2026-01-01 UTC'),
+        );
+        $event = new ExchangeFillReceived($fill);
+        $method = new \ReflectionMethod(DoctrineExchangeLocalProjectionStore::class, 'fillPayload');
+        /** @var array<string,mixed> $payload */
+        $payload = $method->invoke(
+            $this->store($this->createStub(FuturesOrderSyncService::class), $this->createStub(FillCostLedgerEntryRepository::class)),
+            $fill,
+            $event,
+        );
+
+        self::assertSame($expected, $payload['side']);
+    }
+
+    /** @return iterable<string,array{ExchangeOrderSide,ExchangePositionSide,int}> */
+    public static function numericSideProvider(): iterable
+    {
+        yield 'open long' => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG, 1];
+        yield 'close long' => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG, 2];
+        yield 'close short' => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT, 3];
+        yield 'open short' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 4];
+    }
+
     public function testProtectiveOrderProjectionKeepsCompleteAllowlistedPayload(): void
     {
         $captured = null;
@@ -253,6 +318,31 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
             $this->createStub(PositionRepository::class),
             $this->createStub(EntityManagerInterface::class),
             new FillCostLedgerIngestionService($ledgerRepository, $lineage),
+        );
+    }
+
+    private function orderDto(ExchangeOrderSide $side, ExchangePositionSide $positionSide): ExchangeOrderDto
+    {
+        return new ExchangeOrderDto(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'order-1',
+            clientOrderId: null,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: ExchangeOrderType::LIMIT,
+            status: ExchangeOrderStatus::OPEN,
+            quantity: 1.0,
+            filledQuantity: 0.0,
+            remainingQuantity: 1.0,
+            price: 100.0,
+            averagePrice: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: new \DateTimeImmutable('2026-01-01 UTC'),
         );
     }
 }

@@ -219,8 +219,8 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
     {
         return match ([$side, $positionSide]) {
             [ExchangeOrderSide::BUY, ExchangePositionSide::LONG] => 1,
-            [ExchangeOrderSide::SELL, ExchangePositionSide::LONG] => 3,
-            [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT] => 2,
+            [ExchangeOrderSide::SELL, ExchangePositionSide::LONG] => 2,
+            [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT] => 3,
             [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT] => 4,
             default => $side === ExchangeOrderSide::BUY ? 1 : 4,
         };
