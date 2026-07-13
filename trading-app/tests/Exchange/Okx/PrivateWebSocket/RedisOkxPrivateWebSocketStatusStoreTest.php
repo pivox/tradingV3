@@ -99,6 +99,45 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
     }
 
     #[RequiresPhpExtension('redis')]
+    public function testLazyRedisClientReconnectsOnTheCallAfterAnOperationException(): void
+    {
+        $firstRedis = new InspectableRedisConnection(true);
+        $secondRedis = new InspectableRedisConnection(true);
+        $firstRedis->setex('status', 10, 'initial');
+        $secondRedis->setex('status', 10, 'recovered');
+        $connections = [$firstRedis, $secondRedis];
+        $redisCreations = 0;
+        $client = (new OkxPrivateWebSocketRedisFactory(
+            static function () use ($connections, &$redisCreations): Redis {
+                return $connections[$redisCreations++];
+            },
+        ))->createClient('redis', 6379, 1.0, 1.0);
+
+        self::assertSame('initial', $client->get('status'));
+        $firstRedis->throwOnGet = true;
+
+        try {
+            $client->get('status');
+            self::fail('Expected the Redis operation to fail.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('redis_operation_failed', $exception->getMessage());
+        }
+
+        self::assertSame(1, $redisCreations, 'The failing operation must not retry automatically.');
+
+        try {
+            $recoveredValue = $client->get('status');
+        } catch (RuntimeException) {
+            self::fail('Expected the next operation to reconnect.');
+        }
+
+        self::assertSame('recovered', $recoveredValue);
+        self::assertSame(2, $redisCreations);
+        self::assertSame(1, $firstRedis->connectCalls);
+        self::assertSame(1, $secondRedis->connectCalls);
+    }
+
+    #[RequiresPhpExtension('redis')]
     #[DataProvider('lazyConnectionFailureOperations')]
     public function testLazyConnectionFailuresAreRedactedByTheStatusStore(
         string $operation,
@@ -470,6 +509,8 @@ if (class_exists(Redis::class)) {
         /** @var array<string, string> */
         private array $values = [];
 
+        public bool $throwOnGet = false;
+
         public function __construct(private readonly bool $connectResult)
         {
         }
@@ -506,6 +547,10 @@ if (class_exists(Redis::class)) {
 
         public function get(string $key): mixed
         {
+            if ($this->throwOnGet) {
+                throw new RuntimeException('redis_operation_failed');
+            }
+
             return $this->values[$key] ?? false;
         }
 

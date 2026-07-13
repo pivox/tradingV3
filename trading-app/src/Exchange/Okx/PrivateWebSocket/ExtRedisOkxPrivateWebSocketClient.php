@@ -6,6 +6,7 @@ namespace App\Exchange\Okx\PrivateWebSocket;
 
 use Closure;
 use Redis;
+use Throwable;
 
 final class ExtRedisOkxPrivateWebSocketClient implements OkxPrivateWebSocketRedisClientInterface
 {
@@ -23,17 +24,35 @@ final class ExtRedisOkxPrivateWebSocketClient implements OkxPrivateWebSocketRedi
 
     public function setex(string $key, int $ttl, string $value): bool
     {
-        return $this->redis()->setex($key, $ttl, $value);
+        try {
+            return $this->redis()->setex($key, $ttl, $value);
+        } catch (Throwable $exception) {
+            $this->redis = null;
+
+            throw $exception;
+        }
     }
 
     public function get(string $key): string|false
     {
-        return $this->redis()->get($key);
+        try {
+            return $this->redis()->get($key);
+        } catch (Throwable $exception) {
+            $this->redis = null;
+
+            throw $exception;
+        }
     }
 
     public function del(string $key): int|false
     {
-        return $this->redis()->del($key);
+        try {
+            return $this->redis()->del($key);
+        } catch (Throwable $exception) {
+            $this->redis = null;
+
+            throw $exception;
+        }
     }
 
     private function redis(): Redis
