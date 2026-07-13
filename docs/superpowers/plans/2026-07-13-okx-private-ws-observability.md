@@ -225,7 +225,7 @@ Résultat attendu : classes absentes.
 
 - [ ] **Étape 3 : Implémenter le DTO fermé et le store**
 
-Le DTO doit exposer exactement les champs de la spécification, `SCHEMA_VERSION = 1`, `ENDPOINT_ID = 'okx_demo_private_v1'`, et rejeter les champs manquants, timestamps invalides et codes d'erreur non canoniques. Le test `fromArray($status->toArray())` vérifie uniquement l'identité de désérialisation et la fermeture du schéma. La fraîcheur, la cible et le mapping vers `ExchangePrivateObservabilityStatus` relèvent exclusivement de `OkxPrivateWebSocketObservabilityPolicy::evaluate()`. Le store doit utiliser `setex(KEY, 10, $json)`, `get(KEY)` et `del(KEY)` sur un client ext-redis dédié ; aucune exception Redis ne doit être transformée en readiness positive.
+Le DTO doit exposer exactement les champs de la spécification, `SCHEMA_VERSION = 1`, `ENDPOINT_ID = 'okx_demo_private_v1'`, et rejeter les champs manquants, types ou timestamps invalides et codes d'erreur non canoniques. `OkxPrivateWebSocketObservabilityStatus::fromArray()` valide exclusivement la cible sérialisée `okx/demo/okx_demo_private_v1` ainsi que la version et la fermeture du schéma ; la matrice de désérialisation couvre notamment les mauvaises valeurs d'exchange, d'environnement et d'endpoint. Le round-trip `fromArray($status->toArray())` vérifie l'identité de désérialisation. La fraîcheur et le mapping vers `ExchangePrivateObservabilityStatus` relèvent de `OkxPrivateWebSocketObservabilityPolicy::evaluate()`. Le store doit utiliser `setex(KEY, 10, $json)`, `get(KEY)` et `del(KEY)` sur un client ext-redis dédié ; aucune exception Redis ne doit être transformée en readiness positive.
 
 ```php
 interface OkxPrivateWebSocketStatusStoreInterface
@@ -256,7 +256,7 @@ git commit -m "feat(okx): persist private ws readiness with ttl"
 
 - [ ] **Étape 1 : Écrire la matrice de tests en échec**
 
-Chaque cas doit attendre un statut non prêt et un code stable distinct : statut absent, mauvaise cible, heartbeat âgé de plus de 10 secondes, timestamp futur, non connecté, non authentifié, ordre/fill/position absent, snapshot absent, réconciliation non fraîche, reconnexion active et erreur bloquante. Un statut complet avec `fills_source=orders_plus_rest` doit être prêt.
+La matrice de policy doit attendre un statut non prêt et un code stable distinct pour : statut absent, heartbeat âgé de plus de 10 secondes, timestamp futur, non connecté, non authentifié, ordre/fill/position absent, snapshot absent, réconciliation non fraîche, reconnexion active et erreur bloquante. La mauvaise cible appartient à la matrice du statut et de sa désérialisation de la tâche précédente. Un statut complet avec `fills_source=orders_plus_rest` doit être prêt.
 
 ```php
 #[DataProvider('healthyFillsSources')]
@@ -284,7 +284,7 @@ public function testFreshCompleteStatusIsAllowedByCommonPolicy(string $fillsSour
 
 - [ ] **Étape 2 : Vérifier le RED puis implémenter**
 
-La méthode `evaluate(?OkxPrivateWebSocketObservabilityStatus $status, DateTimeImmutable $now): ExchangePrivateObservabilityStatus` doit calculer l'âge, vérifier `okx/demo/okx_demo_private_v1`, puis mapper tous les booléens. Elle ne contourne jamais `ExchangePrivateObservabilityPolicy`.
+La méthode `evaluate(?OkxPrivateWebSocketObservabilityStatus $status, DateTimeImmutable $now): ExchangePrivateObservabilityStatus` doit uniquement calculer la fraîcheur et mapper les booléens vers le statut commun. Elle ne reçoit aucun champ de cible : exchange, environnement et endpoint ont déjà été validés par `OkxPrivateWebSocketObservabilityStatus::fromArray()`. Elle ne contourne jamais `ExchangePrivateObservabilityPolicy`.
 
 - [ ] **Étape 3 : Vérifier et committer**
 
