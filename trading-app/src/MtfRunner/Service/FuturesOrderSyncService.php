@@ -59,6 +59,10 @@ class FuturesOrderSyncService
                 $order = new FuturesOrder();
             }
 
+            $exactQuantities = $this->prospectiveExactQuantities($orderData, $order);
+            $size = $this->legacyIntegerQuantity($orderData, 'size');
+            $filledSize = $this->legacyIntegerQuantity($orderData, 'filled_size');
+
             // Mapper les champs depuis l'API
             $order->setExchange($context->exchange);
             $order->setMarketType($context->marketType);
@@ -75,29 +79,17 @@ class FuturesOrderSyncService
             $order->setStatus($this->extractString($orderData, 'status'));
             $order->setPrice($this->extractString($orderData, 'price'));
             
-            $size = $this->extractInt($orderData, 'size');
             if ($size !== null) {
                 $order->setSize($size);
             }
 
-            $filledSize = $this->extractInt($orderData, 'filled_size');
             if ($filledSize !== null) {
                 $order->setFilledSize($filledSize);
             }
 
-            $exactQuantities = ExactOrderQuantities::fromArray($orderData);
             if ($exactQuantities !== null) {
                 $order->setQuantityDecimal($exactQuantities->quantity);
                 $order->setFilledQuantityDecimal($exactQuantities->filled);
-            } else {
-                $legacyQuantity = $this->legacyQuantity($orderData, 'size');
-                if ($legacyQuantity !== null) {
-                    $order->setQuantityDecimal($legacyQuantity);
-                }
-                $legacyFilled = $this->legacyQuantity($orderData, 'filled_size');
-                if ($legacyFilled !== null) {
-                    $order->setFilledQuantityDecimal($legacyFilled);
-                }
             }
 
             $order->setFilledNotional($this->extractString($orderData, 'filled_notional'));
@@ -425,11 +417,67 @@ class FuturesOrderSyncService
         if (\is_int($value) && $value >= 0) {
             return ExactOrderQuantities::canonicalNonNegative((string) $value);
         }
-        if (\is_string($value) && preg_match('/^\d+$/', $value)) {
+        if (\is_string($value)) {
             return ExactOrderQuantities::canonicalNonNegative($value);
         }
 
         throw new \InvalidArgumentException('futures_order_legacy_quantity_invalid');
+    }
+
+    /** @param array<string,mixed> $data */
+    private function legacyIntegerQuantity(array $data, string $key): ?int
+    {
+        if (!array_key_exists($key, $data)) {
+            return null;
+        }
+        $value = $data[$key];
+        if (\is_int($value) && $value >= 0) {
+            return $value;
+        }
+        if (\is_string($value) && preg_match('/^\d+$/', $value)) {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
+            if (strlen($canonical) < strlen((string) PHP_INT_MAX)
+                || (strlen($canonical) === strlen((string) PHP_INT_MAX) && $canonical <= (string) PHP_INT_MAX)) {
+                return (int) $canonical;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string,mixed> $data */
+    private function prospectiveExactQuantities(array $data, FuturesOrder $order): ?ExactOrderQuantities
+    {
+        $exactQuantities = ExactOrderQuantities::fromArray($data);
+        if ($exactQuantities !== null) {
+            return $exactQuantities;
+        }
+
+        $hasQuantity = array_key_exists('size', $data);
+        $hasFilled = array_key_exists('filled_size', $data);
+        if (!$hasQuantity && !$hasFilled) {
+            return null;
+        }
+
+        $quantity = $hasQuantity
+            ? $this->legacyQuantity($data, 'size')
+            : $order->getQuantityDecimal();
+        $quantity ??= $order->getSize() !== null
+            ? ExactOrderQuantities::canonicalNonNegative((string) $order->getSize())
+            : null;
+
+        $filled = $hasFilled
+            ? $this->legacyQuantity($data, 'filled_size')
+            : $order->getFilledQuantityDecimal();
+        $filled ??= $order->getFilledSize() !== null
+            ? ExactOrderQuantities::canonicalNonNegative((string) $order->getFilledSize())
+            : null;
+
+        if ($quantity === null || $filled === null) {
+            return null;
+        }
+
+        return ExactOrderQuantities::fromQuantityAndFilled($quantity, $filled);
     }
 
     /**
