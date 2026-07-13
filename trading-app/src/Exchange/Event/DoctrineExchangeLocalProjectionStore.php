@@ -17,8 +17,7 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\PositionRepository;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
-use Brick\Math\BigDecimal;
-use Brick\Math\Exception\NumberFormatException;
+use App\Exchange\Value\ExactOrderQuantities;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -102,7 +101,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
      */
     private function orderPayload(ExchangeOrderDto $order, ExchangeEventInterface $event): array
     {
-        $exactQuantities = $this->exactQuantities($order->metadata);
+        $exactQuantities = ExactOrderQuantities::fromArray($order->metadata)?->toArray() ?? [];
         $filledNotional = $order->averagePrice !== null && $order->filledQuantity > 0.0
             ? (string)($order->averagePrice * $order->filledQuantity)
             : null;
@@ -146,68 +145,6 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
                 'payload' => $event->payload(),
             ],
         ];
-    }
-
-    /**
-     * @param array<string,mixed> $metadata
-     * @return array{quantity_decimal: string, filled_quantity_decimal: string, remaining_quantity_decimal: string}|array{}
-     */
-    private function exactQuantities(array $metadata): array
-    {
-        $keys = ['quantity_decimal', 'filled_quantity_decimal', 'remaining_quantity_decimal'];
-        $present = array_filter($keys, static fn (string $key): bool => array_key_exists($key, $metadata));
-        if ($present === []) {
-            return [];
-        }
-        if (count($present) !== count($keys)) {
-            throw new \InvalidArgumentException('exchange_order_exact_quantities_invalid');
-        }
-
-        $values = [];
-        foreach ($keys as $key) {
-            $raw = $metadata[$key];
-            if (!\is_string($raw) || !$this->isDecimal36Scale18($raw)) {
-                throw new \InvalidArgumentException('exchange_order_exact_quantities_invalid');
-            }
-            try {
-                $decimal = BigDecimal::of($raw);
-            } catch (NumberFormatException) {
-                throw new \InvalidArgumentException('exchange_order_exact_quantities_invalid');
-            }
-            if ($decimal->getScale() > 18 || $this->decimalPrecision($decimal) > 36 || $decimal->isNegative()) {
-                throw new \InvalidArgumentException('exchange_order_exact_quantities_invalid');
-            }
-            $values[$key] = [$raw, $decimal];
-        }
-
-        if ($values['quantity_decimal'][1]->compareTo(BigDecimal::zero()) <= 0
-            || $values['filled_quantity_decimal'][1]->compareTo($values['quantity_decimal'][1]) > 0
-            || $values['filled_quantity_decimal'][1]
-                ->plus($values['remaining_quantity_decimal'][1])
-                ->compareTo($values['quantity_decimal'][1]) !== 0) {
-            throw new \InvalidArgumentException('exchange_order_exact_quantities_invalid');
-        }
-
-        return [
-            'quantity_decimal' => $values['quantity_decimal'][0],
-            'filled_quantity_decimal' => $values['filled_quantity_decimal'][0],
-            'remaining_quantity_decimal' => $values['remaining_quantity_decimal'][0],
-        ];
-    }
-
-    private function decimalPrecision(BigDecimal $decimal): int
-    {
-        return max(1, strlen(ltrim($decimal->getUnscaledValue()->abs()->__toString(), '0')));
-    }
-
-    private function isDecimal36Scale18(string $value): bool
-    {
-        if (!preg_match('/^\d+(?:\.\d{1,18})?$/', $value)) {
-            return false;
-        }
-        $integer = explode('.', $value, 2)[0];
-
-        return strlen(ltrim($integer, '0')) <= 18;
     }
 
     /**

@@ -27,8 +27,7 @@ use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
 use App\Exchange\Event\ExchangeProtectionOrderCreated;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
-use Brick\Math\BigDecimal;
-use Brick\Math\Exception\NumberFormatException;
+use App\Exchange\Value\ExactOrderQuantities;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
@@ -199,8 +198,8 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         if ($exactQuantities === null) {
             return null;
         }
-        $quantity = $exactQuantities['quantity']->toFloat();
-        $filled = $exactQuantities['filled']->toFloat();
+        $quantity = $exactQuantities->quantityValue()->toFloat();
+        $filled = $exactQuantities->filledValue()->toFloat();
         $orderType = $this->orderType($row);
         $reduceOnly = $this->bool($row['reduceOnly'] ?? false);
 
@@ -216,7 +215,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             status: $status,
             quantity: $quantity,
             filledQuantity: $filled,
-            remainingQuantity: $exactQuantities['remaining']->toFloat(),
+            remainingQuantity: $exactQuantities->remainingValue()->toFloat(),
             price: $this->orderPrice($row, $orderType),
             averagePrice: $this->floatOrNull($row['avgPx'] ?? null),
             stopPrice: $this->stopPrice($row, $orderType),
@@ -226,9 +225,9 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             createdAt: $this->time($row['cTime'] ?? null),
             updatedAt: $this->timeOrNull($row['uTime'] ?? null),
             metadata: array_replace(['source' => 'okx_ws_orders'], $row, [
-                'quantity_decimal' => $exactQuantities['quantity_string'],
-                'filled_quantity_decimal' => $exactQuantities['filled_string'],
-                'remaining_quantity_decimal' => $exactQuantities['remaining']->__toString(),
+                'quantity_decimal' => $exactQuantities->quantity,
+                'filled_quantity_decimal' => $exactQuantities->filled,
+                'remaining_quantity_decimal' => $exactQuantities->remaining,
             ]),
         );
     }
@@ -610,65 +609,28 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
      */
     /**
      * @param array<string,mixed> $row
-     * @return array{
-     *   quantity_string: string,
-     *   filled_string: string,
-     *   quantity: BigDecimal,
-     *   filled: BigDecimal,
-     *   remaining: BigDecimal
-     * }|null
      */
-    private function orderExactQuantities(array $row, ExchangeOrderStatus $status): ?array
+    private function orderExactQuantities(array $row, ExchangeOrderStatus $status): ?ExactOrderQuantities
     {
-        $quantity = $this->exactDecimal($row['sz'] ?? null);
-        if ($quantity === null || $quantity['decimal']->compareTo(BigDecimal::zero()) <= 0) {
+        $quantity = $row['sz'] ?? null;
+        if (!\is_string($quantity)) {
             return null;
         }
-        $filled = $this->exactDecimal($row['accFillSz'] ?? null);
-        if ($filled === null) {
+        $filled = $row['accFillSz'] ?? null;
+        if (!\is_string($filled)) {
             if ($this->hasValue($row['accFillSz'] ?? null)) {
                 return null;
             }
             $filled = $status === ExchangeOrderStatus::FILLED
                 ? $quantity
-                : ['string' => '0', 'decimal' => BigDecimal::zero()];
-        }
-        if ($filled['decimal']->isNegative() || $filled['decimal']->compareTo($quantity['decimal']) > 0) {
-            return null;
+                : '0';
         }
 
-        $remaining = $quantity['decimal']->minus($filled['decimal']);
-
-        return [
-            'quantity_string' => $quantity['string'],
-            'filled_string' => $filled['string'],
-            'quantity' => $quantity['decimal'],
-            'filled' => $filled['decimal'],
-            'remaining' => $remaining,
-        ];
-    }
-
-    /** @return array{string: string, decimal: BigDecimal}|null */
-    private function exactDecimal(mixed $value): ?array
-    {
-        if (!\is_string($value) || !preg_match('/^\d+(?:\.\d{1,18})?$/', $value)) {
-            return null;
-        }
-        $integer = explode('.', $value, 2)[0];
-        if (strlen(ltrim($integer, '0')) > 18) {
-            return null;
-        }
         try {
-            $decimal = BigDecimal::of($value);
-        } catch (NumberFormatException) {
+            return ExactOrderQuantities::fromQuantityAndFilled($quantity, $filled);
+        } catch (\InvalidArgumentException) {
             return null;
         }
-        $precision = max(1, strlen(ltrim($decimal->getUnscaledValue()->abs()->__toString(), '0')));
-        if ($decimal->getScale() > 18 || $precision > 36 || $decimal->isNegative()) {
-            return null;
-        }
-
-        return ['string' => $value, 'decimal' => $decimal];
     }
 
     private function hasValue(mixed $value): bool

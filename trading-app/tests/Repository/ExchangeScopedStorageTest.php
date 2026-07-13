@@ -839,6 +839,88 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('0.723456789012345677', $second->getRawData()['remaining_quantity_decimal'] ?? null);
     }
 
+    public function testLegacyQuantityUpdatesReplaceStaleCanonicalDecimalsAndReplay(): void
+    {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $base = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-stale',
+            'symbol' => 'BTCUSDT',
+        ];
+        self::assertInstanceOf(FuturesOrder::class, $service->syncOrderFromApi($base + [
+            'size' => 1,
+            'filled_size' => 0,
+            'quantity_decimal' => '1.123456789012345678',
+            'filled_quantity_decimal' => '0.400000000000000001',
+            'remaining_quantity_decimal' => '0.723456789012345677',
+        ]));
+
+        $quantityOnly = $service->syncOrderFromApi($base + ['size' => 2]);
+        self::assertInstanceOf(FuturesOrder::class, $quantityOnly);
+        self::assertSame('2', $quantityOnly->getQuantityDecimal());
+        self::assertSame('0.400000000000000001', $quantityOnly->getFilledQuantityDecimal());
+
+        $filledOnly = $service->syncOrderFromApi($base + ['filled_size' => 1]);
+        $replay = $service->syncOrderFromApi($base + ['filled_size' => 1]);
+        self::assertInstanceOf(FuturesOrder::class, $filledOnly);
+        self::assertSame($filledOnly, $replay);
+        self::assertSame('2', $replay->getQuantityDecimal());
+        self::assertSame('1', $replay->getFilledQuantityDecimal());
+
+        $state = new FuturesOrderOrderStateRepository($this->futuresOrderRepository(), $this->em);
+        $read = $state->findLocalOrder('BTCUSDT', 'sync-stale', new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL));
+        self::assertInstanceOf(TradingOrderDto::class, $read);
+        self::assertSame('2', $read->quantity->__toString());
+        self::assertSame('1', $read->filledQuantity->__toString());
+
+        $unchanged = $service->syncOrderFromApi($base + ['status' => 'open']);
+        self::assertInstanceOf(FuturesOrder::class, $unchanged);
+        self::assertSame('2', $unchanged->getQuantityDecimal());
+        self::assertSame('1', $unchanged->getFilledQuantityDecimal());
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidRepositoryQuantityProvider')]
+    public function testOrderStateRejectsInvalidDecimalBeforeFlush(string $quantity): void
+    {
+        $repository = new FuturesOrderOrderStateRepository($this->futuresOrderRepository(), $this->em);
+        $dto = new TradingOrderDto(
+            orderId: 'invalid-decimal-' . md5($quantity),
+            clientOrderId: null,
+            symbol: 'BTCUSDT',
+            side: OrderSide::BUY,
+            type: OrderType::LIMIT,
+            status: OrderStatus::PENDING,
+            price: BigDecimal::of('1'),
+            quantity: BigDecimal::of($quantity),
+            filledQuantity: BigDecimal::zero(),
+            avgFilledPrice: null,
+            createdAt: new \DateTimeImmutable('2026-01-01 UTC'),
+            updatedAt: null,
+            raw: ['exchange' => 'okx', 'market_type' => 'perpetual'],
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        try {
+            $repository->saveOrder($dto);
+        } finally {
+            self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $dto->orderId]));
+        }
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function invalidRepositoryQuantityProvider(): iterable
+    {
+        yield 'scale 19' => ['1.0000000000000000000'];
+        yield 'precision 37' => ['1234567890123456789.123456789012345678'];
+    }
+
     public function testOrderStateUsesExactFilledQuantityForAveragePrice(): void
     {
         $entity = $this->newFuturesOrder('bitmart', 'exact-average', '1')
