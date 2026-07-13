@@ -303,8 +303,22 @@ final class OkxPrivateWebSocketWorker
 
         if (!$wasAuthenticated && $status->authenticated) {
             $this->cancelDeadline($this->loginDeadlineTimer);
+            $readinessStartedAt = $this->clock->now();
+            $this->armReadinessDeadline($generation);
             try {
-                $snapshot = $this->snapshotProbe->probe($this->clock->now());
+                $snapshot = $this->snapshotProbe->probe($readinessStartedAt);
+            } catch (\Throwable) {
+                $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
+
+                return;
+            }
+            $readinessElapsed = $this->clock->now()->getTimestamp() - $readinessStartedAt->getTimestamp();
+            if ($readinessElapsed >= self::READINESS_TIMEOUT_SECONDS) {
+                $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
+
+                return;
+            }
+            try {
                 $this->session->applySnapshot($snapshot, $this->clock->now());
             } catch (\Throwable) {
                 $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
@@ -316,7 +330,6 @@ final class OkxPrivateWebSocketWorker
 
                 return;
             }
-            $this->armReadinessDeadline($generation);
         }
 
         if ($this->isReady()) {

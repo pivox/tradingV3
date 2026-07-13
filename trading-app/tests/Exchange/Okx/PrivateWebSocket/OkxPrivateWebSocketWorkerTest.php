@@ -372,6 +372,32 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertSame([1.0], $loop->timerIntervals());
     }
 
+    public function testSlowSnapshotFailsClosedWhenReadinessBudgetIsExhausted(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $readinessDeadlineArmed = false;
+        $source = new CountingSnapshotSource(
+            onAccountReadable: static function () use ($clock, $loop, &$readinessDeadlineArmed): void {
+                $readinessDeadlineArmed = \in_array(10.0, $loop->timerIntervals(), true);
+                $clock->sleep(11);
+            },
+        );
+        $worker = $this->worker($transport, $loop, $store, $source, $clock);
+        $worker->start();
+        $transport->open();
+
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertTrue($readinessDeadlineArmed);
+        self::assertSame(1, $source->calls);
+        self::assertSame(1, $transport->closeCount);
+        self::assertSame([1.0], $loop->timerIntervals());
+        self::assertFalse($store->load()?->initialSnapshotLoaded);
+    }
+
     public function testReadySessionIgnoresDeadlines(): void
     {
         $transport = new FakeOkxPrivateWebSocketTransport();
@@ -415,6 +441,26 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
 
         self::assertSame(0, $transport->closeCount);
         self::assertSame([5.0], $loop->timerIntervals());
+    }
+
+    public function testStaleReadinessDeadlineFromPreviousConnectionIsIgnored(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $worker = $this->worker($transport, $loop, new RecordingStatusStore());
+        $worker->start();
+        $transport->open(0);
+        $transport->message(['event' => 'login', 'code' => '0'], 0);
+        $staleDeadline = $loop->timerCallback(10.0);
+        $transport->disconnect(1006, 0);
+        $loop->fireTimerInterval(1.0);
+        $transport->open(1);
+        $transport->message(['event' => 'login', 'code' => '0'], 1);
+
+        $staleDeadline();
+
+        self::assertSame(0, $transport->closeCount);
+        self::assertSame([10.0], $loop->timerIntervals());
     }
 
     public function testHeartbeatSendsStructuredPingAndPongRefreshesStatus(): void
@@ -1077,6 +1123,7 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
     public function __construct(
         private readonly bool $accountReadable = true,
         private readonly bool $throwOnAccount = false,
+        private readonly ?\Closure $onAccountReadable = null,
     ) {
     }
 
@@ -1086,6 +1133,9 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
 
         if ($this->throwOnAccount) {
             throw new \RuntimeException('snapshot source sensitive failure');
+        }
+        if (null !== $this->onAccountReadable) {
+            ($this->onAccountReadable)();
         }
 
         return $this->accountReadable;
