@@ -58,7 +58,7 @@
 ```php
 #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private'])]
 #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'])]
-public function test_accepts_only_canonical_demo_private_uri(string $uri): void
+public function testAcceptsOnlyCanonicalDemoPrivateUri(string $uri): void
 {
     self::assertSame('okx_demo_private_v1', (new OkxPrivateWebSocketEndpointGuard())->assertAllowed($uri));
 }
@@ -69,13 +69,13 @@ public function test_accepts_only_canonical_demo_private_uri(string $uri): void
 #[TestWith(['wss://wspap.okx.com/ws/v5/private'])]
 #[TestWith(['wss://wspap.okx.com:8443/ws/v5/public'])]
 #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?x=1'])]
-public function test_rejects_every_non_allowlisted_uri(string $uri): void
+public function testRejectsEveryNonAllowlistedUri(string $uri): void
 {
     $this->expectExceptionMessage('okx_demo_private_ws_endpoint_not_allowed');
     (new OkxPrivateWebSocketEndpointGuard())->assertAllowed($uri);
 }
 
-public function test_builds_the_documented_login_signature(): void
+public function testBuildsTheDocumentedLoginSignature(): void
 {
     $args = (new OkxPrivateWebSocketLoginSigner(new OkxAuthSigner()))->buildLoginArgs(
         'demo-key', 'demo-secret', 'demo-passphrase', '1538054050',
@@ -103,20 +103,20 @@ Résultat attendu : échec de chargement, car les deux classes n'existent pas.
 ```php
 final class OkxPrivateWebSocketEndpointGuard
 {
+    private const ENDPOINT_ID = 'okx_demo_private_v1';
+
+    private const ALLOWED_URIS = [
+        'wss://wspap.okx.com:8443/ws/v5/private',
+        'wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999',
+    ];
+
     public function assertAllowed(string $uri): string
     {
-        $parts = parse_url($uri);
-        $valid = is_array($parts)
-            && ($parts['scheme'] ?? null) === 'wss'
-            && ($parts['host'] ?? null) === 'wspap.okx.com'
-            && ($parts['port'] ?? null) === 8443
-            && ($parts['path'] ?? null) === '/ws/v5/private'
-            && !isset($parts['user'], $parts['pass'], $parts['fragment'])
-            && in_array($parts['query'] ?? '', ['', 'brokerId=9999'], true);
-        if (!$valid) {
-            throw new InvalidArgumentException('okx_demo_private_ws_endpoint_not_allowed');
+        if (!in_array($uri, self::ALLOWED_URIS, true)) {
+            throw new \InvalidArgumentException('okx_demo_private_ws_endpoint_not_allowed');
         }
-        return 'okx_demo_private_v1';
+
+        return self::ENDPOINT_ID;
     }
 }
 
@@ -170,20 +170,48 @@ git commit -m "feat(okx): guard and sign private ws login"
 - [ ] **Étape 1 : Tester sérialisation, corruption, TTL et redaction**
 
 ```php
-public function test_round_trips_only_the_allowlisted_schema_with_ttl(): void
+public function testSaveUsesTheExactProductionKeyAndTtl(): void
 {
-    $redis = new SpyRedisClient();
+    $redis = new SpyOkxPrivateWebSocketRedisClient();
     $store = new RedisOkxPrivateWebSocketStatusStore($redis);
-    $store->save(OkxPrivateWebSocketObservabilityStatus::connecting(new DateTimeImmutable('2026-07-13T10:00:00Z')));
-    self::assertSame(10, $redis->lastTtl);
+
+    $store->save(self::healthyStatus());
+
     self::assertSame('tradingv3:okx:demo:private-observability:v1', $redis->lastKey);
-    self::assertStringNotContainsString('secret', $redis->lastValue);
+    self::assertSame(10, $redis->lastTtl);
+    self::assertNotNull($redis->lastValue);
+    self::assertSame(
+        self::healthyStatus()->toArray(),
+        json_decode($redis->lastValue, true, 512, JSON_THROW_ON_ERROR),
+    );
 }
 
-public function test_invalid_json_or_unknown_schema_is_absent(): void
+public function testLoadReturnsNullForAbsenceCorruptionAndEverySchemaViolation(): void
 {
-    self::assertNull($this->storeContaining('{invalid')->load());
-    self::assertNull($this->storeContaining('{"schema_version":2}')->load());
+    $valid = self::healthyStatus()->toArray();
+    $invalidPayloads = [
+        false,
+        '{invalid',
+        json_encode(array_diff_key($valid, ['exchange' => true]), JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'unexpected' => true], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'schema_version' => 2], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'exchange' => 'bitmart'], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'environment' => 'live'], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'endpoint_id' => 'mainnet'], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'connected' => 1], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'fills_source' => 'raw_fills'], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'last_heartbeat_at' => null], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'observed_at' => 'not-a-timestamp'], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'blocking_errors' => ['api_secret=leaked']], JSON_THROW_ON_ERROR),
+        json_encode([...$valid, 'warnings' => ['okx_fills_channel_vip_unavailable', 'okx_fills_channel_vip_unavailable']], JSON_THROW_ON_ERROR),
+    ];
+
+    foreach ($invalidPayloads as $payload) {
+        $redis = new SpyOkxPrivateWebSocketRedisClient();
+        $redis->value = $payload;
+
+        self::assertNull((new RedisOkxPrivateWebSocketStatusStore($redis))->load());
+    }
 }
 ```
 
@@ -197,7 +225,7 @@ Résultat attendu : classes absentes.
 
 - [ ] **Étape 3 : Implémenter le DTO fermé et le store**
 
-Le DTO doit exposer exactement les champs de la spécification, `SCHEMA_VERSION = 1`, `ENDPOINT_ID = 'okx_demo_private_v1'`, et rejeter les champs manquants, timestamps invalides et codes d'erreur non canoniques. Le store doit utiliser `setex(KEY, 10, $json)`, `get(KEY)` et `del(KEY)` sur un client ext-redis dédié ; aucune exception Redis ne doit être transformée en readiness positive.
+Le DTO doit exposer exactement les champs de la spécification, `SCHEMA_VERSION = 1`, `ENDPOINT_ID = 'okx_demo_private_v1'`, et rejeter les champs manquants, timestamps invalides et codes d'erreur non canoniques. Le test `fromArray($status->toArray())` vérifie uniquement l'identité de désérialisation et la fermeture du schéma. La fraîcheur, la cible et le mapping vers `ExchangePrivateObservabilityStatus` relèvent exclusivement de `OkxPrivateWebSocketObservabilityPolicy::evaluate()`. Le store doit utiliser `setex(KEY, 10, $json)`, `get(KEY)` et `del(KEY)` sur un client ext-redis dédié ; aucune exception Redis ne doit être transformée en readiness positive.
 
 ```php
 interface OkxPrivateWebSocketStatusStoreInterface
@@ -231,18 +259,26 @@ git commit -m "feat(okx): persist private ws readiness with ttl"
 Chaque cas doit attendre un statut non prêt et un code stable distinct : statut absent, mauvaise cible, heartbeat âgé de plus de 10 secondes, timestamp futur, non connecté, non authentifié, ordre/fill/position absent, snapshot absent, réconciliation non fraîche, reconnexion active et erreur bloquante. Un statut complet avec `fills_source=orders_plus_rest` doit être prêt.
 
 ```php
-public function test_maps_a_fresh_complete_status_to_common_observability(): void
+#[DataProvider('healthyFillsSources')]
+public function testFreshCompleteStatusIsAllowedByCommonPolicy(string $fillsSource): void
 {
-    $common = (new OkxPrivateWebSocketObservabilityPolicy())->evaluate(
-        $this->healthyStatus('orders_plus_rest'),
-        new DateTimeImmutable('2026-07-13T10:00:09Z'),
-    );
-    self::assertTrue($common->connected);
-    self::assertTrue($common->authenticated);
-    self::assertTrue($common->ordersVisible);
-    self::assertTrue($common->fillsVisible);
-    self::assertTrue($common->positionsVisible);
-    self::assertSame([], $common->blockingErrors);
+    $status = self::evaluate(self::healthyStatus(fillsSource: $fillsSource));
+    $decision = self::commonDecision($status);
+
+    self::assertTrue($decision->allowed);
+    self::assertSame([], $decision->blockingErrors);
+    self::assertSame(Exchange::OKX, $status->exchange);
+    self::assertSame('demo', $status->environment);
+    self::assertTrue($status->privateWsSupported);
+    self::assertTrue($status->privateWsConnected);
+    self::assertTrue($status->privateWsAuthenticated);
+    self::assertTrue($status->ordersStreamReady);
+    self::assertTrue($status->fillsStreamReady);
+    self::assertTrue($status->positionsStreamReady);
+    self::assertTrue($status->initialSnapshotLoaded);
+    self::assertTrue($status->reconciliationFresh);
+    self::assertFalse($status->reconnecting);
+    self::assertSame('2026-07-13T10:00:08+00:00', $status->lastEventAt?->format(DATE_ATOM));
 }
 ```
 
@@ -268,7 +304,7 @@ git commit -m "feat(okx): evaluate private ws observability"
 - [ ] **Étape 1 : Tester les lectures requises et l'absence d'écriture**
 
 ```php
-public function test_accepts_an_empty_but_complete_demo_snapshot(): void
+public function testAcceptsAnEmptyButCompleteSnapshot(): void
 {
     $source = $this->createStub(OkxPrivateRestSnapshotSourceInterface::class);
     $source->method('accountReadable')->willReturn(true);
@@ -312,7 +348,7 @@ git commit -m "feat(okx): probe private rest snapshot"
 Les tests de session doivent prouver : connexion vers login ; ack login vers quatre souscriptions ; streams prêts uniquement après ack `orders`, `positions`, `balance_and_position` et `fills` ; fallback exact de `fills` sur code `64003` ; toute autre erreur bloquante ; JSON mal formé non prêt ; messages `orders`, `fills`, `positions` normalisés ; aucun payload brut conservé. L'ordre entre souscriptions, snapshot et readiness relève des tests du worker de la tâche suivante.
 
 ```php
-public function test_vip_fill_rejection_uses_orders_plus_rest_fallback(): void
+public function testVipFillRejectionUsesOrdersPlusRestFallback(): void
 {
     $now = new DateTimeImmutable('2026-07-13T10:00:00+00:00');
     $clock = $this->createStub(ClockInterface::class);
@@ -371,13 +407,24 @@ git commit -m "feat(okx): model private ws session"
 Tester l'envoi des souscriptions avant le lancement et la projection immédiats du snapshot, sans attente de leurs acknowledgements, puis la readiness uniquement après projection du snapshot et réception des acknowledgements requis. Tester aussi les délais exacts `1, 2, 4, 8, 15, 15`, le snapshot repris après chaque reconnexion, le statut non prêt publié avant retry, le refresh au plus toutes les 3 secondes, l'échec Redis fail-closed, et SIGTERM/SIGINT publiant `worker_stopping`. La commande doit refuser tout environnement autre que `demo`, `OKX_SIMULATED_TRADING != 1`, `OKX_LIVE_ENABLED != 0` ou credentials demo vides.
 
 ```php
-public function test_reconnect_invalidates_readiness_and_reloads_snapshot(): void
+public function testSnapshotIsReloadedAfterEveryAuthenticatedReconnection(): void
 {
-    $worker = $this->worker(transport: FakeOkxPrivateWebSocketTransport::disconnectOnce());
-    $worker->run(maxCycles: 2);
-    self::assertSame([1], $this->scheduler->delays);
-    self::assertSame(2, $this->snapshotProbe->calls);
-    self::assertFalse($this->store->history[1]->reconciliationFresh);
+    $transport = new FakeOkxPrivateWebSocketTransport();
+    $loop = new DeterministicLoop();
+    $source = new CountingSnapshotSource();
+    $worker = $this->worker($transport, $loop, new RecordingStatusStore(), $source);
+
+    $worker->start();
+    $transport->open();
+    $transport->message(['event' => 'login', 'code' => '0']);
+    self::assertSame(1, $source->calls);
+
+    $transport->disconnect(1006);
+    self::assertSame(1.0, $loop->fireNextTimer());
+    $transport->open();
+    $transport->message(['event' => 'login', 'code' => '0']);
+
+    self::assertSame(2, $source->calls);
 }
 ```
 
