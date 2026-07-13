@@ -86,6 +86,9 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $events[0]->order()->status);
         self::assertEqualsWithDelta(0.2, $events[0]->order()->filledQuantity, 0.000001);
         self::assertEqualsWithDelta(0.8, $events[0]->order()->remainingQuantity, 0.000001);
+        self::assertSame('1', $events[0]->order()->metadata['quantity_decimal'] ?? null);
+        self::assertSame('0.2', $events[0]->order()->metadata['filled_quantity_decimal'] ?? null);
+        self::assertSame('0.8', $events[0]->order()->metadata['remaining_quantity_decimal'] ?? null);
         self::assertSame('1767225601.123000', $events[0]->occurredAt()->format('U.u'));
         self::assertSame($this->okxFillId('BTC-USDT-SWAP', 'fill-1'), $events[1]->fill()->fillId);
         self::assertSame(ExchangeOrderSide::BUY, $events[1]->fill()->side);
@@ -93,6 +96,33 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertEqualsWithDelta(-0.02, $events[1]->fill()->fee, 0.000001);
         self::assertSame('USDT', $events[1]->fill()->feeCurrency);
         self::assertSame('1767225601.123000', $events[1]->fill()->filledAt->format('U.u'));
+    }
+
+    public function testPreservesEighteenDecimalOrderQuantitiesWithoutFloatIntermediary(): void
+    {
+        $events = $this->normalizer->normalize([
+            'arg' => ['channel' => 'orders', 'instType' => 'SWAP'],
+            'data' => [[
+                'accFillSz' => '0.400000000000000001',
+                'cTime' => '1767225600000',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'exact-order',
+                'ordType' => 'limit',
+                'posSide' => 'long',
+                'px' => '25000',
+                'side' => 'buy',
+                'state' => 'partially_filled',
+                'sz' => '1.123456789012345678',
+                'uTime' => '1767225600000',
+            ]],
+        ]);
+
+        self::assertCount(1, $events);
+        self::assertInstanceOf(ExchangeOrderPartiallyFilled::class, $events[0]);
+        self::assertSame('1.123456789012345678', $events[0]->order()->metadata['quantity_decimal'] ?? null);
+        self::assertSame('0.400000000000000001', $events[0]->order()->metadata['filled_quantity_decimal'] ?? null);
+        self::assertSame('0.723456789012345677', $events[0]->order()->metadata['remaining_quantity_decimal'] ?? null);
     }
 
     public function testNormalizesStopLossAlgoLiveAsProtectionCreated(): void

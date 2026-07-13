@@ -133,6 +133,9 @@ final readonly class OkxPrivateRestSnapshotReconciler
                 self::sourcePayload() + [
                     'open_type' => $this->nullableRequired($item->openType),
                     'leverage' => $this->nullablePositiveString($item->leverage),
+                    'quantity_decimal' => $item->quantity,
+                    'filled_quantity_decimal' => $item->filledQuantity,
+                    'remaining_quantity_decimal' => $item->remainingQuantity,
                 ],
                 static fn (mixed $value): bool => $value !== null,
             ),

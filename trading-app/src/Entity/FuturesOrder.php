@@ -57,6 +57,12 @@ class FuturesOrder
     #[ORM\Column(type: Types::INTEGER, nullable: true)]
     private ?int $filledSize = null;
 
+    #[ORM\Column(name: 'quantity_decimal', type: Types::DECIMAL, precision: 36, scale: 18, nullable: true)]
+    private ?string $quantityDecimal = null;
+
+    #[ORM\Column(name: 'filled_quantity_decimal', type: Types::DECIMAL, precision: 36, scale: 18, nullable: true)]
+    private ?string $filledQuantityDecimal = null;
+
     #[ORM\Column(type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
     private ?string $filledNotional = null;
 
@@ -87,6 +93,7 @@ class FuturesOrder
     #[ORM\Column(type: Types::BIGINT, nullable: true)]
     private ?int $updatedTime = null; // timestamp millis
 
+    /** @var array<string,mixed> */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $rawData = []; // données complètes de l'API
 
@@ -226,6 +233,28 @@ class FuturesOrder
     public function setFilledSize(?int $filledSize): self
     {
         $this->filledSize = $filledSize;
+        return $this->touch();
+    }
+
+    public function getQuantityDecimal(): ?string
+    {
+        return $this->quantityDecimal;
+    }
+
+    public function setQuantityDecimal(?string $quantityDecimal): self
+    {
+        $this->quantityDecimal = $quantityDecimal;
+        return $this->touch();
+    }
+
+    public function getFilledQuantityDecimal(): ?string
+    {
+        return $this->filledQuantityDecimal;
+    }
+
+    public function setFilledQuantityDecimal(?string $filledQuantityDecimal): self
+    {
+        $this->filledQuantityDecimal = $filledQuantityDecimal;
         return $this->touch();
     }
 

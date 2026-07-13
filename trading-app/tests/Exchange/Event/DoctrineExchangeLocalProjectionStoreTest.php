@@ -161,6 +161,55 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         self::assertStringNotContainsString('secret', serialize($captured));
     }
 
+    public function testOrderPayloadPreservesExactDecimalQuantitiesWithoutFloatReconstruction(): void
+    {
+        $captured = null;
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::once())
+            ->method('syncOrderFromApi')
+            ->willReturnCallback(function (array $payload) use (&$captured): FuturesOrder {
+                $captured = $payload;
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
+        $order = $this->orderDto(ExchangeOrderSide::BUY, ExchangePositionSide::LONG);
+        $order = new ExchangeOrderDto(
+            exchange: $order->exchange,
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $order->side,
+            positionSide: $order->positionSide,
+            orderType: $order->orderType,
+            status: ExchangeOrderStatus::PARTIALLY_FILLED,
+            quantity: 1.1234567890123457,
+            filledQuantity: 0.40000000000000002,
+            remainingQuantity: 0.72345678901234568,
+            price: $order->price,
+            averagePrice: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: $order->createdAt,
+            metadata: [
+                'source' => 'okx_private_rest_snapshot',
+                'quantity_decimal' => '1.123456789012345678',
+                'filled_quantity_decimal' => '0.400000000000000001',
+                'remaining_quantity_decimal' => '0.723456789012345677',
+            ],
+        );
+
+        $store->project(new ExchangeOrderUpdated($order, $order->createdAt));
+
+        self::assertIsArray($captured);
+        self::assertSame('1.123456789012345678', $captured['quantity_decimal']);
+        self::assertSame('0.400000000000000001', $captured['filled_quantity_decimal']);
+        self::assertSame('0.723456789012345677', $captured['remaining_quantity_decimal']);
+    }
+
     public function testOrderProjectionFailsWhenLegacySyncReturnsNull(): void
     {
         $orderSync = $this->createMock(FuturesOrderSyncService::class);

@@ -13,6 +13,8 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\NumberFormatException;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -82,6 +84,12 @@ class FuturesOrderSyncService
             $filledSize = $this->extractInt($orderData, 'filled_size');
             if ($filledSize !== null) {
                 $order->setFilledSize($filledSize);
+            }
+
+            $exactQuantities = $this->extractExactQuantities($orderData);
+            if ($exactQuantities !== null) {
+                $order->setQuantityDecimal($exactQuantities['quantity_decimal']);
+                $order->setFilledQuantityDecimal($exactQuantities['filled_quantity_decimal']);
             }
 
             $order->setFilledNotional($this->extractString($orderData, 'filled_notional'));
@@ -379,6 +387,7 @@ class FuturesOrderSyncService
         return null;
     }
 
+    /** @param array<string,mixed> $data */
     private function extractString(array $data, string $key, ?string $default = null): ?string
     {
         $value = $data[$key] ?? null;
@@ -388,6 +397,7 @@ class FuturesOrderSyncService
         return (string) $value;
     }
 
+    /** @param array<string,mixed> $data */
     private function extractInt(array $data, string $key, ?int $default = null): ?int
     {
         $value = $data[$key] ?? null;
@@ -395,6 +405,68 @@ class FuturesOrderSyncService
             return $default;
         }
         return (int) $value;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array{quantity_decimal: string, filled_quantity_decimal: string, remaining_quantity_decimal: string}|null
+     */
+    private function extractExactQuantities(array $data): ?array
+    {
+        $keys = ['quantity_decimal', 'filled_quantity_decimal', 'remaining_quantity_decimal'];
+        $present = array_filter($keys, static fn (string $key): bool => array_key_exists($key, $data));
+        if ($present === []) {
+            return null;
+        }
+        if (count($present) !== count($keys)) {
+            throw new \InvalidArgumentException('futures_order_exact_quantities_invalid');
+        }
+
+        $values = [];
+        foreach ($keys as $key) {
+            $raw = $data[$key];
+            if (!\is_string($raw) || !$this->isDecimal36Scale18($raw)) {
+                throw new \InvalidArgumentException('futures_order_exact_quantities_invalid');
+            }
+            try {
+                $decimal = BigDecimal::of($raw);
+            } catch (NumberFormatException) {
+                throw new \InvalidArgumentException('futures_order_exact_quantities_invalid');
+            }
+            if ($decimal->getScale() > 18 || $this->decimalPrecision($decimal) > 36 || $decimal->isNegative()) {
+                throw new \InvalidArgumentException('futures_order_exact_quantities_invalid');
+            }
+            $values[$key] = [$raw, $decimal];
+        }
+
+        if ($values['quantity_decimal'][1]->compareTo(BigDecimal::zero()) <= 0
+            || $values['filled_quantity_decimal'][1]->compareTo($values['quantity_decimal'][1]) > 0
+            || $values['filled_quantity_decimal'][1]
+                ->plus($values['remaining_quantity_decimal'][1])
+                ->compareTo($values['quantity_decimal'][1]) !== 0) {
+            throw new \InvalidArgumentException('futures_order_exact_quantities_invalid');
+        }
+
+        return [
+            'quantity_decimal' => $values['quantity_decimal'][0],
+            'filled_quantity_decimal' => $values['filled_quantity_decimal'][0],
+            'remaining_quantity_decimal' => $values['remaining_quantity_decimal'][0],
+        ];
+    }
+
+    private function decimalPrecision(BigDecimal $decimal): int
+    {
+        return max(1, strlen(ltrim($decimal->getUnscaledValue()->abs()->__toString(), '0')));
+    }
+
+    private function isDecimal36Scale18(string $value): bool
+    {
+        if (!preg_match('/^\d+(?:\.\d{1,18})?$/', $value)) {
+            return false;
+        }
+        $integer = explode('.', $value, 2)[0];
+
+        return strlen(ltrim($integer, '0')) <= 18;
     }
 
     /**

@@ -26,6 +26,8 @@
 | `order_intent` | Intention locale d'ordre. |
 | `order_protection` | SL/TP et protections associees. |
 | `futures_order*` | Ordres, plans et fills exchange. |
+
+Dans `futures_order`, `quantity_decimal` et `filled_quantity_decimal` (`NUMERIC(36,18)`) sont les valeurs canoniques pour les calculs précis. Les colonnes entières `size` et `filled_size` restent disponibles pour les consommateurs legacy et servent de fallback aux anciennes lignes.
 | `trade_lifecycle_event` | Evenements bout-en-bout. |
 | `trade_zone_events` | Diagnostics entry zone. |
 | `entry_zone_live` | Zones d'entree actives avec TTL. |

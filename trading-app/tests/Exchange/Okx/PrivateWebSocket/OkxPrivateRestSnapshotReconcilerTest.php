@@ -62,7 +62,12 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         self::assertNull($orderEvent->order()->positionSide);
         self::assertFalse($orderEvent->order()->reduceOnly);
         self::assertFalse($orderEvent->order()->postOnly);
-        self::assertSame(['source' => 'okx_private_rest_snapshot'], $orderEvent->order()->metadata);
+        self::assertSame([
+            'source' => 'okx_private_rest_snapshot',
+            'quantity_decimal' => '1',
+            'filled_quantity_decimal' => '0',
+            'remaining_quantity_decimal' => '1',
+        ], $orderEvent->order()->metadata);
     }
 
     public function testEmptyAuthoritativeSnapshotClosesMissingLocalPosition(): void
@@ -222,6 +227,9 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
             'source' => 'okx_private_rest_snapshot',
             'open_type' => 'isolated',
             'leverage' => '3',
+            'quantity_decimal' => '1',
+            'filled_quantity_decimal' => '0.4',
+            'remaining_quantity_decimal' => '0.6',
         ], $order->metadata);
     }
 
