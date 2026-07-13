@@ -36,23 +36,25 @@ the Pawl transport. `OkxPrivateWebSocketSession` owns login, channel
 subscriptions, normalized events and readiness state. It never builds, submits,
 cancels or amends an order.
 
-The login deadline is 5 seconds. After authentication, the worker loads the
-private REST snapshot for account, positions, open orders, algo orders and
-recent fills, then subscribes to
-`orders`, `fills`, `positions` and `balance_and_position`. The VIP-only `fills`
-channel may be rejected by OKX; in that case the explicit supported fallback is
-the `orders` stream plus the recent-fills REST snapshot. The status then reports
-`fills_source=orders_plus_rest` and the allow-listed warning
-`okx_fills_channel_vip_unavailable`.
+The login deadline is 5 seconds. After a successful login, the worker first
+sends the subscription command for `orders`, `fills`, `positions` and
+`balance_and_position`, then immediately executes and projects the private REST
+snapshot for account, positions, open orders, algo orders and recent fills. It
+does not wait for subscription acknowledgements before starting the snapshot.
+The VIP-only `fills` channel may be rejected by OKX; in that case the explicit
+supported fallback is the `orders` stream plus the recent-fills REST snapshot.
+The status then reports `fills_source=orders_plus_rest` and the allow-listed
+warning `okx_fills_channel_vip_unavailable`.
 
 Each private REST read has a 2-second timeout and 2-second maximum duration. The
-whole readiness phase is bounded to 10 seconds. Before readiness can be
-published, the snapshot is validated, deduplicated, reconciled and projected to
-the local order, position and fill stores. Conflicting duplicates or partial
-projection fail closed. A complete position snapshot closes local OKX perpetual
-positions that are absent remotely. Fill IDs are instrument-scoped hashes of
-`instId + tradeId`, so equal provider trade IDs on different instruments do not
-collide.
+whole readiness phase is bounded to 10 seconds. Readiness is published only
+after the snapshot has been validated, deduplicated, reconciled and projected to
+the local order, position and fill stores, and all required subscription
+acknowledgements have been received. Conflicting duplicates, missing required
+acknowledgements or partial projection fail closed. A complete position snapshot
+closes local OKX perpetual positions that are absent remotely. Fill IDs are
+instrument-scoped hashes of `instId + tradeId`, so equal provider trade IDs on
+different instruments do not collide.
 
 `RedisOkxPrivateWebSocketStatusStore` publishes one bounded JSON document at
 `tradingv3:okx:demo:private-observability:v1`. The schema contains only:
