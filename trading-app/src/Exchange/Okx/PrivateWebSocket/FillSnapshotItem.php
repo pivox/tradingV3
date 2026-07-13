@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace App\Exchange\Okx\PrivateWebSocket;
 
+use App\Exchange\Okx\OkxInstrumentResolver;
+
 final readonly class FillSnapshotItem
 {
     public ?\DateTimeImmutable $occurredAt;
+    public string $instrumentId;
 
     public function __construct(
         public string $exchange,
@@ -21,8 +24,10 @@ final readonly class FillSnapshotItem
         public ?string $fee,
         public ?string $feeCurrency,
         ?\DateTimeImmutable $occurredAt,
+        ?string $instrumentId = null,
     ) {
         $this->occurredAt = $occurredAt?->setTimezone(new \DateTimeZone('UTC'));
+        $this->instrumentId = self::instrumentId($instrumentId, $this->symbol);
     }
 
     /** @param array<string, mixed> $fill */
@@ -41,6 +46,7 @@ final readonly class FillSnapshotItem
             fee: self::nullableString($fill, 'fee'),
             feeCurrency: self::nullableString($fill, 'fee_currency'),
             occurredAt: self::occurredAt($fill['create_time'] ?? null),
+            instrumentId: self::nullableString($fill, 'instrument_id'),
         );
     }
 
@@ -72,5 +78,21 @@ final readonly class FillSnapshotItem
         return $occurredAt === false
             ? null
             : $occurredAt->setTimezone(new \DateTimeZone('UTC'));
+    }
+
+    private static function instrumentId(?string $instrumentId, string $symbol): string
+    {
+        if ($instrumentId !== null && trim($instrumentId) !== '') {
+            return $instrumentId;
+        }
+        if (trim($symbol) === '') {
+            return '';
+        }
+
+        try {
+            return (new OkxInstrumentResolver())->instId($symbol);
+        } catch (\InvalidArgumentException) {
+            return '';
+        }
     }
 }

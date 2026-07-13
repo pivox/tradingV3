@@ -142,6 +142,7 @@ final readonly class OkxPrivateReadMapper
     {
         $trade = [
             'exchange' => 'okx',
+            'instrument_id' => $this->string($row['instId'] ?? ''),
             'symbol' => $this->instruments->symbol($this->string($row['instId'] ?? '')),
             'order_id' => $this->string($row['ordId'] ?? ''),
             'client_order_id' => $this->stringOrNull($row['clOrdId'] ?? null),

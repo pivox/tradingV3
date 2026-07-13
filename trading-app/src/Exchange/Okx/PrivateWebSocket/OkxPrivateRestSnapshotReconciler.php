@@ -21,6 +21,8 @@ use App\Exchange\Event\ExchangeOrderPartiallyFilled;
 use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
+use App\Exchange\Okx\OkxFillId;
+use App\Exchange\Okx\OkxInstrumentResolver;
 
 final readonly class OkxPrivateRestSnapshotReconciler
 {
@@ -43,7 +45,7 @@ final readonly class OkxPrivateRestSnapshotReconciler
             $snapshot->positions,
             fn (PositionSnapshotItem $item): string => $this->symbol($item->symbol) . ':' . $this->positionSide($item->side)->value,
         );
-        $fills = $this->unique($snapshot->fills, fn (FillSnapshotItem $item): string => $this->required($item->tradeId));
+        $fills = $this->unique($snapshot->fills, fn (FillSnapshotItem $item): string => $this->fillId($item));
 
         $events = [];
         foreach ($orders as $order) {
@@ -167,7 +169,7 @@ final readonly class OkxPrivateRestSnapshotReconciler
             symbol: $this->symbol($item->symbol),
             exchangeOrderId: $this->required($item->orderId),
             clientOrderId: $this->nullableRequired($item->clientOrderId),
-            fillId: $this->required($item->tradeId),
+            fillId: $this->fillId($item),
             side: $side,
             positionSide: $positionSide,
             quantity: $this->positive($item->size),
@@ -235,6 +237,23 @@ final readonly class OkxPrivateRestSnapshotReconciler
         }
 
         return $side;
+    }
+
+    private function fillId(FillSnapshotItem $item): string
+    {
+        $instrumentId = $this->required($item->instrumentId);
+        $resolver = new OkxInstrumentResolver();
+        if ($resolver->instId($instrumentId) !== $instrumentId
+            || $resolver->symbol($instrumentId) !== $this->symbol($item->symbol)) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        $fillId = OkxFillId::fromTradeId($instrumentId, $this->required($item->tradeId));
+        if ($fillId === null) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        return $fillId;
     }
 
     private function orderType(string $value): ExchangeOrderType

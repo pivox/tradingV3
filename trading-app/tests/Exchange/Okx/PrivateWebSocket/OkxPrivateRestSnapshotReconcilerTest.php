@@ -16,6 +16,8 @@ use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
+use App\Exchange\Okx\OkxExchangeEventNormalizer;
+use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\PrivateWebSocket\FillSnapshotItem;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateRestSnapshot;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateRestSnapshotReconciler;
@@ -24,6 +26,7 @@ use App\Exchange\Okx\PrivateWebSocket\PositionSnapshotItem;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(OkxPrivateRestSnapshotReconciler::class)]
 final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
@@ -95,6 +98,67 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
 
         self::assertSame(3, $count);
         self::assertCount(3, $store->events);
+    }
+
+    public function testRestAndWebSocketFillUseTheSameInstrumentScopedFillId(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $restFill = FillSnapshotItem::fromProviderArray([
+            'exchange' => 'okx',
+            'instrument_id' => 'BTC-USDT-SWAP',
+            'symbol' => 'BTCUSDT',
+            'order_id' => 'order-1',
+            'trade_id' => 'trade-1',
+            'side' => 'buy',
+            'position_side' => 'long',
+            'size' => '0.25',
+            'price' => '25000',
+            'create_time' => 1783936800000,
+        ]);
+        $this->reconciler($store)->reconcile($this->snapshot(fills: [$restFill]));
+
+        $restEvent = $store->events[0];
+        self::assertInstanceOf(ExchangeFillReceived::class, $restEvent);
+        $wsEvents = (new OkxExchangeEventNormalizer(
+            new OkxInstrumentResolver(),
+            new MockClock('2026-07-13T10:00:00Z'),
+        ))->normalize([
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [[
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'order-1',
+                'tradeId' => 'trade-1',
+                'side' => 'buy',
+                'posSide' => 'long',
+                'fillSz' => '0.25',
+                'fillPx' => '25000',
+                'fillTime' => '1783936800000',
+            ]],
+        ]);
+        self::assertCount(1, $wsEvents);
+        self::assertInstanceOf(ExchangeFillReceived::class, $wsEvents[0]);
+        self::assertSame($wsEvents[0]->fill()->fillId, $restEvent->fill()->fillId);
+    }
+
+    public function testSameTradeIdOnTwoInstrumentsProducesTwoFills(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $btc = $this->fill(instrumentId: 'BTC-USDT-SWAP', symbol: 'BTCUSDT');
+        $eth = $this->fill(instrumentId: 'ETH-USDT-SWAP', symbol: 'ETHUSDT');
+
+        $count = $this->reconciler($store)->reconcile($this->snapshot(fills: [$btc, $eth]));
+
+        self::assertSame(2, $count);
+        self::assertCount(2, $store->events);
+        $btcEvent = $store->events[0];
+        $ethEvent = $store->events[1];
+        self::assertInstanceOf(ExchangeFillReceived::class, $btcEvent);
+        self::assertInstanceOf(ExchangeFillReceived::class, $ethEvent);
+        self::assertNotSame(
+            $btcEvent->fill()->fillId,
+            $ethEvent->fill()->fillId,
+        );
     }
 
     public function testMapsProviderStopOrderToGenericTrigger(): void
@@ -248,11 +312,15 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         );
     }
 
-    private function fill(string $size = '0.25'): FillSnapshotItem
+    private function fill(
+        string $size = '0.25',
+        string $instrumentId = 'BTC-USDT-SWAP',
+        string $symbol = 'BTCUSDT',
+    ): FillSnapshotItem
     {
         return new FillSnapshotItem(
             'okx',
-            'BTCUSDT',
+            $symbol,
             'order-1',
             'client-1',
             'trade-1',
@@ -263,6 +331,7 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
             '-0.01',
             'USDT',
             new \DateTimeImmutable(self::NOW),
+            $instrumentId,
         );
     }
 }

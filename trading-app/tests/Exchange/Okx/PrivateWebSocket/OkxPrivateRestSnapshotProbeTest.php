@@ -22,6 +22,7 @@ use App\Exchange\Okx\PrivateWebSocket\OrderSnapshotItem;
 use App\Exchange\Okx\PrivateWebSocket\PositionSnapshotItem;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxOrderGateway;
+use App\Provider\Okx\OkxPrivateReadMapper;
 use Brick\Math\BigDecimal;
 use DateTimeImmutable;
 use InvalidArgumentException;
@@ -156,6 +157,16 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
 
         self::assertSame('1783936800.123', $first->occurredAt?->format('U.v'));
         self::assertSame('1783936800.124', $second->occurredAt?->format('U.v'));
+    }
+
+    public function testLegacyFillPreservesExactOkxInstrumentIdForIdentity(): void
+    {
+        $fill = (new OkxPrivateReadMapper())->legacyTrade([
+            'instId' => 'BTC-USDT-SWAP',
+            'tradeId' => 'trade-1',
+        ]);
+
+        self::assertSame('BTC-USDT-SWAP', $fill['instrument_id'] ?? null);
     }
 
     /**
