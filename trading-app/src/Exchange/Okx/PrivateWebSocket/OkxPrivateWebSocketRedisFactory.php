@@ -47,4 +47,15 @@ final class OkxPrivateWebSocketRedisFactory
 
         return $redis;
     }
+
+    public function createClient(
+        string $host,
+        int $port,
+        float $connectTimeout,
+        float $readTimeout,
+    ): ExtRedisOkxPrivateWebSocketClient {
+        return new ExtRedisOkxPrivateWebSocketClient(
+            fn (): Redis => $this->connect($host, $port, $connectTimeout, $readTimeout),
+        );
+    }
 }

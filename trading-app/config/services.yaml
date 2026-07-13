@@ -218,18 +218,13 @@ services:
         class: App\Runtime\Concurrency\MockRedis
         public: true
 
-    Redis.okx_private_observability:
-        class: Redis
-        factory: ['@App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisFactory', 'connect']
+    App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient:
+        factory: ['@App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisFactory', 'createClient']
         arguments:
             $host: '%env(string:REDIS_HOST)%'
             $port: '%env(int:REDIS_PORT)%'
             $connectTimeout: 1.0
             $readTimeout: 1.0
-
-    App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient:
-        arguments:
-            $redis: '@Redis.okx_private_observability'
 
     App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisClientInterface:
         alias: App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient

@@ -54,6 +54,87 @@ final class RedisOkxPrivateWebSocketStatusStoreTest extends TestCase
         $factory->connect('redis', 6379, 1.0, 1.0);
     }
 
+    #[RequiresPhpExtension('redis')]
+    public function testRedisFactoryDefersConnectionUntilTheFirstClientOperation(): void
+    {
+        $redis = new InspectableRedisConnection(true);
+        $redisCreations = 0;
+        $factory = new OkxPrivateWebSocketRedisFactory(
+            static function () use ($redis, &$redisCreations): Redis {
+                ++$redisCreations;
+
+                return $redis;
+            },
+        );
+
+        $client = $factory->createClient('redis', 6379, 1.0, 1.0);
+
+        self::assertSame(0, $redisCreations);
+        self::assertNull($redis->connectArguments);
+
+        self::assertFalse($client->get('missing'));
+        self::assertSame(1, $redisCreations);
+        self::assertSame(['redis', 6379, 1.0, null, 0, 1.0], $redis->connectArguments);
+    }
+
+    #[RequiresPhpExtension('redis')]
+    public function testLazyRedisClientReusesItsConnectionAcrossOperations(): void
+    {
+        $redis = new InspectableRedisConnection(true);
+        $redisCreations = 0;
+        $client = (new OkxPrivateWebSocketRedisFactory(
+            static function () use ($redis, &$redisCreations): Redis {
+                ++$redisCreations;
+
+                return $redis;
+            },
+        ))->createClient('redis', 6379, 1.0, 1.0);
+
+        self::assertTrue($client->setex('status', 10, '{}'));
+        self::assertSame('{}', $client->get('status'));
+        self::assertSame(1, $client->del('status'));
+
+        self::assertSame(1, $redisCreations);
+        self::assertSame(1, $redis->connectCalls);
+    }
+
+    #[RequiresPhpExtension('redis')]
+    #[DataProvider('lazyConnectionFailureOperations')]
+    public function testLazyConnectionFailuresAreRedactedByTheStatusStore(
+        string $operation,
+        string $expectedCode,
+    ): void {
+        $factory = new OkxPrivateWebSocketRedisFactory(
+            static fn (): Redis => new InspectableRedisConnection(false),
+        );
+        $store = new RedisOkxPrivateWebSocketStatusStore(
+            $factory->createClient('redis-password=highly-sensitive', 6379, 1.0, 1.0),
+        );
+
+        try {
+            match ($operation) {
+                'load' => $store->load(),
+                'save' => $store->save(self::healthyStatus()),
+                'clear' => $store->clear(),
+                default => throw new \LogicException('Unsupported test operation.'),
+            };
+            self::fail('Expected the lazy Redis connection to fail.');
+        } catch (RuntimeException $exception) {
+            self::assertSame($expectedCode, $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+            self::assertStringNotContainsString('redis-password=highly-sensitive', $exception->getMessage());
+            self::assertStringNotContainsString('okx_private_ws_redis_connect_failed', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function lazyConnectionFailureOperations(): iterable
+    {
+        yield 'read' => ['load', 'okx_private_ws_status_read_failed'];
+        yield 'write' => ['save', 'okx_private_ws_status_write_failed'];
+        yield 'clear' => ['clear', 'okx_private_ws_status_write_failed'];
+    }
+
     public function testRoundTripsTheCompleteClosedSchema(): void
     {
         $status = self::healthyStatus();
@@ -384,6 +465,10 @@ if (class_exists(Redis::class)) {
     {
         /** @var array{string, int, float, ?string, int, float}|null */
         public ?array $connectArguments = null;
+        public int $connectCalls = 0;
+
+        /** @var array<string, string> */
+        private array $values = [];
 
         public function __construct(private readonly bool $connectResult)
         {
@@ -399,6 +484,7 @@ if (class_exists(Redis::class)) {
             float $read_timeout = 0.0,
             ?array $context = null,
         ): bool {
+            ++$this->connectCalls;
             $this->connectArguments = [
                 $host,
                 $port,
@@ -409,6 +495,34 @@ if (class_exists(Redis::class)) {
             ];
 
             return $this->connectResult;
+        }
+
+        public function setex(string $key, int $expire, mixed $value): Redis|bool
+        {
+            $this->values[$key] = (string) $value;
+
+            return true;
+        }
+
+        public function get(string $key): mixed
+        {
+            return $this->values[$key] ?? false;
+        }
+
+        /** @param array<mixed>|string $key */
+        public function del(array|string $key, string ...$other_keys): Redis|int|false
+        {
+            $keys = [...(array) $key, ...$other_keys];
+            $deleted = 0;
+
+            foreach ($keys as $candidate) {
+                if (array_key_exists($candidate, $this->values)) {
+                    unset($this->values[$candidate]);
+                    ++$deleted;
+                }
+            }
+
+            return $deleted;
         }
     }
 }
