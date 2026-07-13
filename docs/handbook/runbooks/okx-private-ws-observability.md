@@ -3,6 +3,9 @@
 Ce runbook exploite uniquement le worker d'observabilite privee OKX demo. Il
 n'envoie aucun ordre. Les gates #188 et DEMO-005 restent distincts : #188 porte
 la preuve runtime representative; DEMO-005 porte une future decision pre-mutative.
+La recette reelle OKX demo executee pour OKX-010 est restee fail-closed : OKX a
+ferme la connexion pendant le login. Aucun ordre exchange n'a ete envoye et ce
+resultat reste un gate d'environnement externe, pas une preuve de readiness.
 
 ## Preflight
 
@@ -56,6 +59,13 @@ Les logs applicatifs dedies sont dans
 `trading-app/var/log/okx-private-ws-YYYY-MM-DD.log`. Ils ne doivent contenir que
 des transitions, phases et codes bornes, jamais de message WS brut.
 
+Le login est borne a 5 secondes. Une fois authentifie, l'ensemble
+souscriptions + snapshot REST + reconciliation doit devenir pret en moins de
+10 secondes. Chaque lecture REST privee utilise un `timeout` et un
+`max_duration` de 2 secondes; le snapshot ne lit que account, positions, ordres
+ouverts et fills recents. Une erreur ou un depassement de ces bornes maintient
+le statut fail-closed, ferme la connexion courante et programme une reconnexion.
+
 ## Verification runtime
 
 Attendre l'authentification, les souscriptions et le snapshot initial, puis :
@@ -79,6 +89,19 @@ docker compose exec -T redis redis-cli TTL tradingv3:okx:demo:private-observabil
 Ne jamais afficher le document Redis brut. Le TTL doit rester compris entre 1 et
 10 secondes pendant que le worker publie son etat.
 
+Avant d'annoncer `initial_snapshot_loaded=true`, le worker valide et deduplique
+les lignes du snapshot, rejette les doublons contradictoires, puis reconcilie et
+projette ordres, positions et fills dans les projections locales. Un snapshot
+complet ferme explicitement les positions locales OKX perpetual absentes du
+snapshot. Les IDs de fills sont derives de `instId + tradeId`, de sorte qu'un
+`tradeId` reutilise sur deux instruments ne soit pas fusionne.
+
+Les evenements WS prives appliquent des allowlists positives par type
+order/fill/position. Les champs inconnus, sensibles ou imbriques sont retires;
+aucun payload provider brut ne doit atteindre Redis, les logs ou les metadata
+des projections Doctrine. Une enveloppe ou une ligne supportee mal formee est
+rejetee avec `okx_private_ws_message_invalid`, puis la connexion est recyclee.
+
 ## Verification fail-closed
 
 ```bash
@@ -97,14 +120,32 @@ absente/non prete. La readiness d'ecriture reste fermee.
 Symptomes : `okx_private_ws_authentication_failed` ou reconnexions apres login. Verifier
 uniquement la presence des trois variables, les permissions read-only de la cle
 demo, `OKX_ENV=demo`, `OKX_SIMULATED_TRADING=1` et l'horloge de l'hote. Ne jamais
-journaliser la signature, la passphrase ou le message de login.
+journaliser la signature, la passphrase ou le message de login. Une absence de
+reponse au login sous 5 secondes ou un rejet d'authentification ferme la
+connexion et declenche le backoff de reconnexion.
 
 ### Subscription
 
 Symptomes : stream orders ou positions non pret. Rechercher les codes
 `okx_private_ws_subscription_failed` et le nom de phase dans le canal dedie.
 Verifier l'acces aux canaux `orders`, `positions` et `balance_and_position`, puis
-redemarrer le worker. Un canal requis manquant reste fail-closed.
+redemarrer le worker. Un canal requis manquant reste fail-closed. Un rejet de
+souscription ou une readiness incomplete apres 10 secondes recycle la connexion.
+
+### Snapshot et projection
+
+Symptomes : `okx_private_rest_snapshot_failed`, snapshot incomplet ou cycles de
+reconnexion apres authentification. Verifier les lectures read-only account,
+positions, ordres ouverts et fills recents. Les requetes signees ne sont
+autorisees que vers l'origine HTTPS exacte de l'environnement :
+`https://eea.okx.com` en demo et `https://www.okx.com` en live. Scheme, port,
+userinfo, sous-domaine, chemin, query ou fragment ajoutes a l'origine sont
+refuses avant envoi.
+
+La reconciliation est volontairement fail-closed : valeur invalide, doublon
+contradictoire, projection Doctrine impossible ou budget global de 10 secondes
+depasse entrainent une reconnexion. Ne pas marquer manuellement le snapshot
+comme charge et ne pas ignorer une projection partielle.
 
 ### Fills VIP
 
@@ -117,12 +158,35 @@ prete.
 ### Redis
 
 Une publication du worker en echec est journalisee avec
-`okx_private_ws_status_store_failed`; le worker se ferme si sa publication
-initiale echoue. Une lecture du store indisponible pendant le runtime-check est
-signalee separement par `okx_private_observability_status_store_unavailable`.
-Dans les deux cas, verifier la sante du service `redis`, le reseau
+`okx_private_ws_status_store_failed`. Le client Redis est cree a la demande; une
+erreur d'operation invalide la connexion courante et l'operation suivante tente
+une nouvelle connexion. Une panne lors de la publication initiale garde les
+timers du worker actifs, ne demarre aucune session WS tant que le store ne
+repond pas et programme les tentatives de reprise. Le worker n'est pas tue, mais
+aucun statut pret n'est publie et le TTL eventuel expire : le systeme reste
+fail-closed.
+
+Une lecture du store indisponible pendant le runtime-check est signalee
+separement par `okx_private_observability_status_store_unavailable`. Dans les
+deux cas, verifier la sante du service `redis`, le reseau
 `trading-app-net` et les variables `REDIS_HOST`/`REDIS_PORT` par leur nom
 seulement. Ne pas contourner le store avec le client Redis global ou `MockRedis`.
+
+### Precision des quantites
+
+La migration additive `Version20260713150000` ajoute
+`futures_order.quantity_decimal` et
+`futures_order.filled_quantity_decimal` en `NUMERIC(36,18)`, avec backfill des
+colonnes entieres historiques. Les lecteurs preferent ces valeurs exactes et
+conservent un fallback legacy pour les lignes anterieures. Verifier le schema et
+la relecture sur PostgreSQL avec :
+
+```bash
+docker compose exec -T trading-app-php php vendor/bin/phpunit tests/Repository/FuturesOrderExactQuantityPostgresTest.php
+```
+
+Une quantite decimale invalide ou contradictoire doit bloquer la projection;
+elle ne doit jamais etre tronquee vers une quantite entiere.
 
 ### Stale
 

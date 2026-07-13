@@ -65,8 +65,8 @@ reutilisables.
 | Spot | Non supporte | Aucun contrat demo spot explicite dans ce perimetre. | PR separee si spot devient necessaire. |
 | Public REST read-only | `public_read_only` partiel | OKX-003 lit instruments SWAP, ticker, candles et order book via REST public EEA demo, avec timestamps UTC et erreurs normalisees. | Funding courant/historique et validation runtime complete restent a traiter dans les PRs suivantes. |
 | Public WebSocket read-only | Non pret | URI public configurable. | Client public, subscriptions, reconnect, freshness et tests fixtures. |
-| Private REST read-only | `private_read_only` partiel | OKX-004 signe les requetes privees demo, lit balance, positions, ordres ouverts, algo-orders ouverts et fills recents sans mutation. | Details d'ordre historiques et enrichissements frais/funding restent pour les PRs metadata/ledger. |
-| Private WebSocket read-only | Capacite exploitable, opt-in | `app:okx:private-ws` fournit connexion demo, auth, snapshot REST initial, streams ordres/fills/positions, fallback fills `orders+REST`, heartbeat, reconnexion et statut Redis borne. Le service Compose reste derriere `okx-observability`. | Produire les preuves de recette runtime #188 sur une stack representative; cette capacite seule n'autorise aucune ecriture. |
+| Private REST read-only | `private_read_only` partiel | OKX-004 signe les requetes privees demo, lit balance, positions, ordres ouverts, algo-orders ouverts et fills recents sans mutation. Les lectures privees sont bornees a 2 s et les requetes signees n'acceptent que les origines HTTPS exactes `https://eea.okx.com` (demo) ou `https://www.okx.com` (live). | Details d'ordre historiques et enrichissements frais/funding restent pour les PRs metadata/ledger. |
+| Private WebSocket read-only | Capacite implementee, opt-in, recette externe non concluante | `app:okx:private-ws` fournit login borne a 5 s, readiness bornee a 10 s, snapshot REST valide/deduplique/reconcilie/projete, streams ordres/fills/positions allow-listes et redacted, fallback fills `orders+REST`, heartbeat, reconnexion et statut Redis borne. Redis est lazy et une panne initiale reste fail-closed sans tuer le worker. Le service Compose reste derriere `okx-observability`. | La recette reelle demo s'est arretee lorsque OKX a ferme la connexion pendant le login. Rejouer la preuve runtime #188 dans un environnement OKX accepte; cette capacite seule n'autorise aucune ecriture. |
 | Metadata / precision | Partiel OKX-005 | `OkxMetadataProvider::getInstrumentMetadata()` expose `instId`, tick, step, min/max size, contract value, `ctType`, `ctValCcy`, settle currency et max leverage. Les champs requis invalides ou un SWAP inverse bloquent avec `okx_metadata_incomplete`. | Brancher cette metadata dans tous les chemins de sizing demo avant ordre. |
 | Lifecycle normalizers | Partiel OKX-006 | `OkxLifecycleNormalizer` normalise order request/status, fills, positions et erreurs vers statuts stables (`pending`, `accepted`, `open`, `partially_filled`, `filled`, `cancel_pending`, `canceled`, `rejected`, `expired`, `failed`, `unknown_requires_resync`). | Brancher ces snapshots dans ledger/state lors des PRs runtime suivantes. |
 | Fees / funding / costs | Partiel OKX-005 | Fees maker/taker lues via `trade-fee` avec `groupId` si present, sinon `instFamily`; funding courant lu via `/public/funding-rate`. Valeur absente => `null` + quality flag, jamais zero. | Ledger/certification OKX restent a traiter dans une PR separee. |
@@ -80,6 +80,12 @@ Le worker prive ajoute une **capability d'observabilite read-only**. Quand son
 statut frais et complet est accepte par la policy, le runtime-check peut confirmer
 la couverture privee et contribuer a `demo_testnet_candidate`. Cela ne constitue
 pas une readiness d'ecriture et ne change pas `target_dry_run_only`.
+
+OKX-010 ne fournit pas encore cette preuve en environnement reel : durant la
+recette demo, OKX a ferme la connexion au stade du login. Le statut est reste
+fail-closed, toutes les gates d'ecriture sont restees fermees et aucun ordre
+exchange n'a ete envoye. La validation runtime representative reste donc un gate
+externe a rejouer, sans assouplir les guards.
 
 Deux gates restent distincts et obligatoires :
 
@@ -158,7 +164,10 @@ Les credentials doivent etre crees dans l'environnement demo OKX avec permission
 read-only minimales. Le provider bloque les requetes privees demo si le flag
 `OKX_SIMULATED_TRADING=1` est absent, si l'URL REST pointe vers
 `https://www.okx.com`, ou si `OKX_LIVE_ENABLED=1` est combine avec
-`OKX_ENV=demo`. Les logs et DTOs ne doivent jamais contenir de secret.
+`OKX_ENV=demo`. Toute requete REST signee valide en outre l'origine complete :
+HTTPS sans userinfo, port, chemin, query ni fragment, et host exact
+`eea.okx.com` en demo ou `www.okx.com` en live. Les logs et DTOs ne doivent
+jamais contenir de secret.
 
 ### Demo write future
 
@@ -183,6 +192,14 @@ Une readiness demo OKX ne doit pas etre consideree complete sans ces donnees :
 - protections conditionnelles relues via les surfaces algo-order ;
 - fills avec id exchange, prix, quantite, fee amount, fee currency et timestamp ;
 - statut observabilite privee avec snapshot initial et streams ordres/fills/positions.
+
+Pour les projections OKX, les fills utilisent un identifiant interne derive de
+`instId + tradeId`, afin d'eviter une collision entre instruments. Les quantites
+d'ordre exactes sont persistees dans `futures_order.quantity_decimal` et
+`futures_order.filled_quantity_decimal` en `NUMERIC(36,18)`. La migration
+additive `Version20260713150000` backfill les valeurs historiques et les lecteurs
+gardent un fallback legacy; le comportement est couvert par un test PostgreSQL
+reel (`FuturesOrderExactQuantityPostgresTest`).
 
 Les donnees manquantes restent manquantes. Elles ne doivent jamais etre converties
 en zero pour obtenir une certification PnL ou une readiness mutative.
@@ -241,6 +258,9 @@ Les elements suivants restent explicitement non supportes :
 | Metadata incomplete | Fail closed : pas de sizing, pas d'ordre, readiness non complete. |
 | Frais/funding absents | Flags de qualite et PnL non certifie, jamais zero implicite. |
 | Private stream indisponible | `demo_testnet_enabled` bloque par private observability policy. |
+| Redis indisponible au demarrage ou en cours de run | Client lazy, connexion invalidee apres erreur puis retentee; statut absent/expire et worker fail-closed sans ouverture des gates. |
+| Snapshot incomplet ou contradictoire | Validation, deduplication et projection obligatoires avant readiness; echec ou budget de 10 s depasse => reconnexion. |
+| Payload WS prive sensible ou mal forme | Allowlists positives order/fill/position, suppression des champs inconnus et imbriques; ligne mal formee rejetee puis reconnexion, sans payload provider brut persiste. |
 | Partial fill ou SL attach failure | Scenario Fake/Paper d'abord, compensation fail-safe avant toute ecriture demo. |
 | Rate limits ou donnees stale | Bornes de timeout/retry read-only, freshness explicite, pas de mutation si donnees obsoletes. |
 | Secret dans logs/docs | Redaction defensive, exemples sans valeurs, audit sans payload brut. |

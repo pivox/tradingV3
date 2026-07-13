@@ -16,6 +16,9 @@ API-first OKX demo integration slice for SWAP instruments.
 - Demo order submission also requires `OKX_DEMO_TRADING_ENABLED=1`; private reads do not require the trading flag.
 - Demo public REST defaults to the OKX EEA demo host `https://eea.okx.com`.
 - REST private calls are signed with `OK-ACCESS-*` headers. Demo calls include `x-simulated-trading: 1`.
+- Signed REST calls accept only the exact HTTPS origin for the selected environment:
+  `https://eea.okx.com` for demo or `https://www.okx.com` for live. Userinfo,
+  explicit ports, paths, queries, fragments, subdomains and look-alike hosts are rejected.
 - Internal symbols are normalized as SWAP instruments, for example `BTCUSDT` to `BTC-USDT-SWAP`.
 - Provider public read-only coverage is implemented for instruments, ticker, candles and order book.
 - Provider private read-only coverage is implemented for account balance, positions, open orders, algo open orders and recent fills.
@@ -33,13 +36,23 @@ the Pawl transport. `OkxPrivateWebSocketSession` owns login, channel
 subscriptions, normalized events and readiness state. It never builds, submits,
 cancels or amends an order.
 
-After authentication, the worker loads the private REST snapshot for account,
-positions, open orders, algo orders and recent fills, then subscribes to
+The login deadline is 5 seconds. After authentication, the worker loads the
+private REST snapshot for account, positions, open orders, algo orders and
+recent fills, then subscribes to
 `orders`, `fills`, `positions` and `balance_and_position`. The VIP-only `fills`
 channel may be rejected by OKX; in that case the explicit supported fallback is
 the `orders` stream plus the recent-fills REST snapshot. The status then reports
 `fills_source=orders_plus_rest` and the allow-listed warning
 `okx_fills_channel_vip_unavailable`.
+
+Each private REST read has a 2-second timeout and 2-second maximum duration. The
+whole readiness phase is bounded to 10 seconds. Before readiness can be
+published, the snapshot is validated, deduplicated, reconciled and projected to
+the local order, position and fill stores. Conflicting duplicates or partial
+projection fail closed. A complete position snapshot closes local OKX perpetual
+positions that are absent remotely. Fill IDs are instrument-scoped hashes of
+`instId + tradeId`, so equal provider trade IDs on different instruments do not
+collide.
 
 `RedisOkxPrivateWebSocketStatusStore` publishes one bounded JSON document at
 `tradingv3:okx:demo:private-observability:v1`. The schema contains only:
@@ -57,12 +70,41 @@ seconds, requires the pong within 4 seconds, and reconnects after
 `1/2/4/8/15` seconds, capped at 15 seconds. Connection, auth, subscription,
 snapshot, Redis or freshness failures remain fail-closed.
 
+The Redis client is lazy. A failed Redis operation discards its current client,
+and the next operation reconnects. An initial store failure does not terminate
+the event-loop worker: it prevents the WS session from starting, leaves status
+absent or expiring, and schedules recovery attempts. Authentication,
+subscription, snapshot and malformed supported-event failures close the current
+connection and enter the same bounded reconnect cycle.
+
+Private WS events use positive allowlists for order, fill and position fields.
+Unknown, sensitive and nested provider values are removed before normalized
+events reach Redis, logs or Doctrine projection metadata. Raw provider payloads
+are never persisted. Malformed supported envelopes or rows produce the bounded
+`okx_private_ws_message_invalid` code and trigger reconnect.
+
 The observer accepts only `OKX_ENV=demo`, `OKX_SIMULATED_TRADING=1`, the canonical
 demo private endpoint and dedicated non-empty demo credentials. The operational
 service forces `OKX_DEMO_TRADING_ENABLED=0` and `OKX_LIVE_ENABLED=0`; it uses
 read-only API-key permissions and sends no order. Logs use the dedicated
 `okx_private_ws` channel and contain only state names, phases, bounded error
 codes, endpoint identifiers and close codes, never raw messages or credentials.
+
+The real OKX demo recipe attempted for OKX-010 did not establish readiness: OKX
+closed the connection during login. The observer remained fail-closed, all write
+gates remained disabled, and no exchange order was sent. A successful demo
+runtime recipe is still an external gate; this implementation must not be used
+as evidence of write readiness.
+
+Exact order quantities are stored in additive nullable columns
+`futures_order.quantity_decimal` and
+`futures_order.filled_quantity_decimal` as PostgreSQL `NUMERIC(36,18)`. Migration
+`Version20260713150000` backfills legacy integer quantities. Readers prefer the
+exact columns and fall back to legacy rows when needed. The real-schema check is:
+
+```bash
+docker compose exec -T trading-app-php php vendor/bin/phpunit tests/Repository/FuturesOrderExactQuantityPostgresTest.php
+```
 
 Metadata mapping:
 
