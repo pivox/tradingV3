@@ -6,8 +6,8 @@ namespace App\Exchange\Okx;
 
 final readonly class OkxConfig
 {
-    private const string DEMO_API_BASE_URI = 'https://eea.okx.com';
-    private const string LIVE_API_BASE_URI = 'https://www.okx.com';
+    private const DEMO_API_BASE_URI = 'https://eea.okx.com';
+    private const LIVE_API_BASE_URI = 'https://www.okx.com';
 
     public function __construct(
         public string $environment = '',

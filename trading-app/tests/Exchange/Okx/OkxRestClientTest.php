@@ -98,6 +98,36 @@ final class OkxRestClientTest extends TestCase
         );
     }
 
+    public function testExplicitCanonicalLiveBaseUriAllowsSignedPrivateRequest(): void
+    {
+        $captured = null;
+        $http = new MockHttpClient(function (string $method, string $url, array $options) use (&$captured): MockResponse {
+            $captured = ['method' => $method, 'url' => $url, 'options' => $options];
+
+            return new MockResponse('{"code":"0","data":[]}');
+        });
+        $client = new OkxRestClient(
+            $http,
+            new OkxConfig(
+                environment: 'live',
+                apiKey: 'test-key',
+                apiSecret: 'test-secret',
+                apiPassphrase: 'test-passphrase',
+                apiBaseUri: 'https://www.okx.com',
+                liveEnabled: true,
+            ),
+            $this->fixedClock(),
+        );
+
+        $client->privateGet('/api/v5/account/balance');
+
+        self::assertIsArray($captured);
+        self::assertSame('GET', $captured['method']);
+        self::assertSame('https://www.okx.com/api/v5/account/balance', $captured['url']);
+        self::assertNotNull($this->header($captured['options'], 'OK-ACCESS-SIGN'));
+        self::assertNull($this->header($captured['options'], 'x-simulated-trading'));
+    }
+
     public function testDemoPrivateGetRequiresSimulatedTradingFlagBeforeHttpCall(): void
     {
         $requests = 0;
