@@ -34,6 +34,50 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 #[AutoconfigureTag('app.exchange_event_normalizer')]
 final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormalizerInterface
 {
+    private const ROW_SCALAR_KEYS = [
+        'accFillSz',
+        'algoClOrdId',
+        'algoId',
+        'avgPx',
+        'cTime',
+        'clOrdId',
+        'execType',
+        'fee',
+        'feeCcy',
+        'fillFee',
+        'fillFeeCcy',
+        'fillPx',
+        'fillSz',
+        'fillTime',
+        'imr',
+        'instId',
+        'instType',
+        'lever',
+        'margin',
+        'markPx',
+        'mgnMode',
+        'ordId',
+        'ordPx',
+        'ordType',
+        'pos',
+        'posSide',
+        'px',
+        'realizedPnl',
+        'reduceOnly',
+        'side',
+        'slOrdPx',
+        'slTriggerPx',
+        'state',
+        'sz',
+        'tpOrdPx',
+        'tpTriggerPx',
+        'tradeId',
+        'triggerPx',
+        'ts',
+        'uTime',
+        'upl',
+    ];
+
     public function __construct(
         private OkxInstrumentResolver $instruments,
         private ClockInterface $clock,
@@ -42,7 +86,13 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     public function supports(mixed $event): bool
     {
-        if (!\is_array($event) || !\is_array($event['data'] ?? null)) {
+        if (!\is_array($event) || !\is_array($event['arg'] ?? null) || !\is_array($event['data'] ?? null)) {
+            return false;
+        }
+        if ($this->channel($event) === '') {
+            return false;
+        }
+        if (\array_key_exists('instType', $event['arg']) && $this->scalarString($event['arg']['instType']) === null) {
             return false;
         }
 
@@ -63,6 +113,9 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         $normalized = [];
         $channel = $this->channel($event);
         foreach ($this->dataRows($event) as $row) {
+            if (!$this->hasValidRowShapes($row)) {
+                continue;
+            }
             array_push($normalized, ...match ($channel) {
                 'orders', 'orders-algo' => $this->orderEvents($row, $channel),
                 'fills' => $this->fillEvents($row),
@@ -210,7 +263,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
             symbol: $symbol,
-            exchangeOrderId: $exchangeOrderId !== '' ? $exchangeOrderId : (string) $clientOrderId,
+            exchangeOrderId: $exchangeOrderId !== '' ? $exchangeOrderId : $clientOrderId,
             clientOrderId: $clientOrderId,
             side: $this->orderSide($row['side'] ?? null),
             positionSide: $this->nullablePositionSide($row['posSide'] ?? null, $row['side'] ?? null, $reduceOnly),
@@ -223,7 +276,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             averagePrice: $this->floatOrNull($row['avgPx'] ?? null),
             stopPrice: $this->stopPrice($row, $orderType),
             reduceOnly: $reduceOnly,
-            postOnly: strtolower((string) ($row['ordType'] ?? '')) === 'post_only',
+            postOnly: $this->lowerScalar($row['ordType'] ?? null) === 'post_only',
             timeInForce: $this->timeInForce($row['ordType'] ?? null),
             createdAt: $this->time($row['cTime'] ?? null),
             updatedAt: $this->timeOrNull($row['uTime'] ?? null),
@@ -262,9 +315,8 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
         $filledAt = $this->time($row['fillTime'] ?? $row['ts'] ?? $row['uTime'] ?? null);
         $fee = $this->hasValue($row['fillFee'] ?? null) ? $row['fillFee'] : ($row['fee'] ?? null);
-        $feeCurrency = $this->hasValue($row['fillFeeCcy'] ?? null)
-            ? (string) $row['fillFeeCcy']
-            : ($this->hasValue($row['feeCcy'] ?? null) ? (string) $row['feeCcy'] : null);
+        $feeCurrency = $this->scalarString($row['fillFeeCcy'] ?? null)
+            ?? $this->scalarString($row['feeCcy'] ?? null);
         $reduceOnly = $this->bool($row['reduceOnly'] ?? false);
 
         return new ExchangeFillDto(
@@ -398,6 +450,16 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         return $value !== '' ? $value : null;
     }
 
+    private function lowerScalar(mixed $value): string
+    {
+        return strtolower($this->scalarString($value) ?? '');
+    }
+
+    private function upperScalar(mixed $value): string
+    {
+        return strtoupper($this->scalarString($value) ?? '');
+    }
+
     private function numericString(mixed $value): ?string
     {
         $value = $this->scalarString($value);
@@ -407,14 +469,14 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function marginMode(mixed $value): ?string
     {
-        $value = strtolower($this->scalarString($value) ?? '');
+        $value = $this->lowerScalar($value);
 
         return \in_array($value, ['cross', 'isolated'], true) ? $value : null;
     }
 
     private function liquidityRole(mixed $value): ?string
     {
-        return match (strtolower($this->scalarString($value) ?? '')) {
+        return match ($this->lowerScalar($value)) {
             'm', 'maker' => 'maker',
             't', 'taker' => 'taker',
             default => null,
@@ -433,7 +495,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             return true;
         }
 
-        return strtolower((string) ($row['ordType'] ?? '')) === 'conditional';
+        return $this->lowerScalar($row['ordType'] ?? null) === 'conditional';
     }
 
     /**
@@ -447,18 +509,18 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         if ($this->hasValue($row['slTriggerPx'] ?? null)) {
             return ExchangeOrderType::STOP_LOSS;
         }
-        if (strtolower((string) ($row['ordType'] ?? '')) === 'conditional') {
+        if ($this->lowerScalar($row['ordType'] ?? null) === 'conditional') {
             return ExchangeOrderType::TRIGGER;
         }
-        if (strtolower((string) ($row['ordType'] ?? '')) === 'trigger') {
+        if ($this->lowerScalar($row['ordType'] ?? null) === 'trigger') {
             return ExchangeOrderType::TRIGGER;
         }
 
-        if (strtolower((string) ($row['ordType'] ?? '')) === 'optimal_limit_ioc') {
+        if ($this->lowerScalar($row['ordType'] ?? null) === 'optimal_limit_ioc') {
             return ExchangeOrderType::MARKET;
         }
 
-        return strtolower((string) ($row['ordType'] ?? '')) === 'market'
+        return $this->lowerScalar($row['ordType'] ?? null) === 'market'
             ? ExchangeOrderType::MARKET
             : ExchangeOrderType::LIMIT;
     }
@@ -503,7 +565,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function orderSide(mixed $side): ExchangeOrderSide
     {
-        return strtolower((string) $side) === 'sell' ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY;
+        return $this->lowerScalar($side) === 'sell' ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY;
     }
 
     private function nullablePositionSide(
@@ -512,7 +574,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         bool $reduceOnly = false,
     ): ?ExchangePositionSide
     {
-        $positionSide = strtolower((string) $side);
+        $positionSide = $this->lowerScalar($side);
         if ($positionSide === 'long') {
             return ExchangePositionSide::LONG;
         }
@@ -523,7 +585,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             return null;
         }
 
-        $isSell = strtolower((string) $orderSide) === 'sell';
+        $isSell = $this->lowerScalar($orderSide) === 'sell';
         if ($reduceOnly) {
             return $isSell ? ExchangePositionSide::LONG : ExchangePositionSide::SHORT;
         }
@@ -533,7 +595,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function positionSide(mixed $side, float $size): ?ExchangePositionSide
     {
-        return match (strtolower((string) $side)) {
+        return match ($this->lowerScalar($side)) {
             'short' => ExchangePositionSide::SHORT,
             'long' => ExchangePositionSide::LONG,
             default => $size < -0.00000001
@@ -544,7 +606,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function timeInForce(mixed $ordType): ExchangeTimeInForce
     {
-        return match (strtolower((string) $ordType)) {
+        return match ($this->lowerScalar($ordType)) {
             'ioc', 'optimal_limit_ioc' => ExchangeTimeInForce::IOC,
             'fok' => ExchangeTimeInForce::FOK,
             default => ExchangeTimeInForce::GTC,
@@ -553,7 +615,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function orderStatus(mixed $state): ExchangeOrderStatus
     {
-        return match (strtolower((string) $state)) {
+        return match ($this->lowerScalar($state)) {
             'filled' => ExchangeOrderStatus::FILLED,
             'partially_filled' => ExchangeOrderStatus::PARTIALLY_FILLED,
             'canceled', 'cancelled', 'mmp_canceled' => ExchangeOrderStatus::CANCELLED,
@@ -569,14 +631,16 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
      */
     private function orderId(array $row, bool $preferAlgoId = false): string
     {
-        if ($preferAlgoId && $this->hasValue($row['algoId'] ?? null)) {
-            return 'algo:' . (string) $row['algoId'];
+        $algoId = $this->scalarString($row['algoId'] ?? null);
+        $orderId = $this->scalarString($row['ordId'] ?? null);
+        if ($preferAlgoId && $algoId !== null) {
+            return 'algo:' . $algoId;
         }
-        if ($this->hasValue($row['ordId'] ?? null)) {
-            return (string) $row['ordId'];
+        if ($orderId !== null) {
+            return $orderId;
         }
-        if ($this->hasValue($row['algoId'] ?? null)) {
-            return 'algo:' . (string) $row['algoId'];
+        if ($algoId !== null) {
+            return 'algo:' . $algoId;
         }
 
         return '';
@@ -587,14 +651,16 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
      */
     private function clientOrderId(array $row, bool $preferAlgoId = false): ?string
     {
-        if ($preferAlgoId && $this->hasValue($row['algoClOrdId'] ?? null)) {
-            return (string) $row['algoClOrdId'];
+        $algoClientOrderId = $this->scalarString($row['algoClOrdId'] ?? null);
+        $clientOrderId = $this->scalarString($row['clOrdId'] ?? null);
+        if ($preferAlgoId && $algoClientOrderId !== null) {
+            return $algoClientOrderId;
         }
-        if ($this->hasValue($row['clOrdId'] ?? null)) {
-            return (string) $row['clOrdId'];
+        if ($clientOrderId !== null) {
+            return $clientOrderId;
         }
-        if ($this->hasValue($row['algoClOrdId'] ?? null)) {
-            return (string) $row['algoClOrdId'];
+        if ($algoClientOrderId !== null) {
+            return $algoClientOrderId;
         }
 
         return null;
@@ -605,11 +671,12 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
      */
     private function symbol(array $row): ?string
     {
-        if (!$this->hasValue($row['instId'] ?? null)) {
+        $instrumentId = $this->scalarString($row['instId'] ?? null);
+        if ($instrumentId === null) {
             return null;
         }
 
-        return $this->instruments->symbol((string) $row['instId']);
+        return $this->instruments->symbol($instrumentId);
     }
 
     /**
@@ -618,11 +685,10 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
     private function isSwapRow(array $row): bool
     {
         if (isset($row['instType'])) {
-            return strtoupper((string) $row['instType']) === 'SWAP';
+            return $this->upperScalar($row['instType']) === 'SWAP';
         }
 
-        return $this->hasValue($row['instId'] ?? null)
-            && str_ends_with(strtoupper((string) $row['instId']), '-SWAP');
+        return str_ends_with($this->upperScalar($row['instId'] ?? null), '-SWAP');
     }
 
     /**
@@ -634,7 +700,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             return true;
         }
 
-        return \in_array(strtoupper((string) $event['arg']['instType']), ['SWAP', 'ANY'], true);
+        return \in_array($this->upperScalar($event['arg']['instType']), ['SWAP', 'ANY'], true);
     }
 
     /**
@@ -656,7 +722,9 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
      */
     private function channel(array $event): string
     {
-        return \is_array($event['arg'] ?? null) ? (string) ($event['arg']['channel'] ?? '') : '';
+        return \is_array($event['arg'] ?? null)
+            ? ($this->scalarString($event['arg']['channel'] ?? null) ?? '')
+            : '';
     }
 
     private function time(mixed $milliseconds): \DateTimeImmutable
@@ -750,12 +818,24 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         return $this->scalarString($value) !== null;
     }
 
+    /** @param array<string,mixed> $row */
+    private function hasValidRowShapes(array $row): bool
+    {
+        foreach (self::ROW_SCALAR_KEYS as $key) {
+            if (\array_key_exists($key, $row) && $row[$key] !== null && !\is_scalar($row[$key])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * @param array<string,mixed> $row
      */
     private function isNetModeZeroPosition(array $row): bool
     {
-        return strtolower((string) ($row['posSide'] ?? '')) === 'net'
+        return $this->lowerScalar($row['posSide'] ?? null) === 'net'
             && abs($this->float($row['pos'] ?? null)) <= 0.00000001;
     }
 

@@ -23,6 +23,7 @@ use App\Exchange\Okx\OkxExchangeEventNormalizer;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 
@@ -753,7 +754,6 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'fillTime' => '1767225601123',
                 'instId' => 'BTC-USDT-SWAP',
                 'instType' => 'SWAP',
-                'lever' => ['nested' => 'secret-array-value-sentinel'],
                 'nested' => ['token' => 'secret-nested-value-sentinel'],
                 'ordId' => 'safe-order',
                 'ordType' => 'limit',
@@ -1025,6 +1025,42 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         ]));
     }
 
+    /**
+     * @param array<string,mixed> $event
+     */
+    #[DataProvider('malformedPrivateEventProvider')]
+    public function testMalformedPrivateEnvelopeAndRowsFailClosedWithoutWarnings(
+        array $event,
+        bool $expectedSupports,
+    ): void {
+        set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
+            throw new \ErrorException($message, 0, $severity, $file, $line);
+        });
+
+        try {
+            self::assertSame($expectedSupports, $this->normalizer->supports($event));
+            self::assertSame([], $this->normalizer->normalize($event));
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /** @return iterable<string,array{array<string,mixed>,bool}> */
+    public static function malformedPrivateEventProvider(): iterable
+    {
+        yield 'envelope channel array' => [self::validPrivateOrderEvent(['channel' => []]), false];
+        yield 'envelope instType array' => [self::validPrivateOrderEvent(['instType' => []]), false];
+        yield 'row instType object' => [self::validPrivateOrderEvent([], ['instType' => new \stdClass()]), true];
+        yield 'order type array' => [self::validPrivateOrderEvent([], ['ordType' => []]), true];
+        yield 'state object' => [self::validPrivateOrderEvent([], ['state' => new \stdClass()]), true];
+        yield 'side array' => [self::validPrivateOrderEvent([], ['side' => []]), true];
+        yield 'position side object' => [self::validPrivateOrderEvent([], ['posSide' => new \stdClass()]), true];
+        yield 'timestamp array' => [self::validPrivateOrderEvent([], ['uTime' => []]), true];
+        yield 'identifier object' => [self::validPrivateOrderEvent([], ['ordId' => new \stdClass()]), true];
+        yield 'price array' => [self::validPrivateOrderEvent([], ['px' => []]), true];
+        yield 'known field resource' => [self::validPrivateOrderEvent([], ['avgPx' => fopen('php://memory', 'r')]), true];
+    }
+
     public function testAcceptsAnyInstTypeSubscriptionsAndFiltersRows(): void
     {
         $events = $this->normalizer->normalize([
@@ -1095,6 +1131,32 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             'cookie' => $prefix . '-cookie-sentinel',
             'credential' => $prefix . '-credential-sentinel',
             'nested' => ['unknown' => $prefix . '-nested-sentinel'],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $argOverrides
+     * @param array<string,mixed> $rowOverrides
+     * @return array<string,mixed>
+     */
+    private static function validPrivateOrderEvent(array $argOverrides = [], array $rowOverrides = []): array
+    {
+        return [
+            'arg' => array_replace(['channel' => 'orders', 'instType' => 'SWAP'], $argOverrides),
+            'data' => [array_replace([
+                'accFillSz' => '0',
+                'cTime' => '1767225600000',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'safe-order',
+                'ordType' => 'limit',
+                'posSide' => 'long',
+                'px' => '25000',
+                'side' => 'buy',
+                'state' => 'live',
+                'sz' => '1',
+                'uTime' => '1767225600000',
+            ], $rowOverrides)],
         ];
     }
 }

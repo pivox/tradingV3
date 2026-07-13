@@ -8,6 +8,9 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Entity\FillCostLedgerEntry;
 use App\Entity\FuturesOrder;
+use App\Entity\FuturesOrderTrade;
+use App\Entity\Position;
+use App\Entity\TradeLineage;
 use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderSide;
@@ -29,6 +32,9 @@ use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Pnl\FillCostLedgerIngestionConflict;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
 use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\Mapping\ClassMetadata;
+use Doctrine\ORM\Persisters\Entity\EntityPersister;
+use Doctrine\ORM\UnitOfWork;
 use Doctrine\Persistence\ManagerRegistry;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -217,6 +223,7 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
     {
         $capturedOrder = null;
         $capturedFill = null;
+        $savedLedgerEntry = null;
         $orderSync = $this->createMock(FuturesOrderSyncService::class);
         $orderSync->expects(self::once())
             ->method('syncOrderFromApi')
@@ -225,7 +232,20 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
 
                 return $this->createStub(FuturesOrder::class);
             });
-        $orderSync->expects(self::never())->method('syncTradeFromApi');
+        $orderSync->expects(self::once())
+            ->method('syncTradeFromApi')
+            ->willReturnCallback(function (array $payload) use (&$capturedFill): FuturesOrderTrade {
+                $capturedFill = $payload;
+
+                return $this->createStub(FuturesOrderTrade::class);
+            });
+        $ledgerRepository = $this->createMock(FillCostLedgerEntryRepository::class);
+        $ledgerRepository->expects(self::once())->method('findOneByIdempotencyKey')->willReturn(null);
+        $ledgerRepository->expects(self::once())
+            ->method('save')
+            ->willReturnCallback(static function (FillCostLedgerEntry $entry) use (&$savedLedgerEntry): void {
+                $savedLedgerEntry = $entry;
+            });
         $normalizer = new OkxExchangeEventNormalizer(
             new OkxInstrumentResolver(),
             new class implements ClockInterface {
@@ -264,21 +284,95 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         ]);
 
         self::assertCount(2, $events);
-        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
-        $store->project($events[0]);
+        $store = $this->storeWithPersistenceDoubles($orderSync, $ledgerRepository);
+        foreach ($events as $event) {
+            $store->project($event);
+        }
         self::assertInstanceOf(ExchangeFillReceived::class, $events[1]);
-        $fillPayload = new \ReflectionMethod(DoctrineExchangeLocalProjectionStore::class, 'fillPayload');
-        $capturedFill = $fillPayload->invoke($store, $events[1]->fill(), $events[1]);
 
         self::assertIsArray($capturedOrder);
         self::assertIsArray($capturedFill);
+        self::assertInstanceOf(FillCostLedgerEntry::class, $savedLedgerEntry);
         self::assertSame('okx_ws_orders', $capturedOrder['raw']['metadata']['source'] ?? null);
         self::assertSame('okx_ws_orders', $capturedOrder['raw']['payload']['source'] ?? null);
         self::assertSame('okx_ws_orders', $capturedFill['raw']['metadata']['source'] ?? null);
         self::assertSame('safe-trade', $capturedFill['raw']['payload']['exchange_fill_id'] ?? null);
-        self::assertStringNotContainsString('doctrine-secret-', serialize([$capturedOrder, $capturedFill]));
+        self::assertStringNotContainsString('doctrine-secret-', serialize([$capturedOrder, $capturedFill, $savedLedgerEntry]));
         self::assertArrayNotHasKey('apiKey', $capturedOrder['raw']['metadata']);
         self::assertArrayNotHasKey('nested', $capturedFill['raw']['payload']);
+    }
+
+    public function testOkxPrivatePositionUpdateAndNetClosePersistOnlySanitizedPayloads(): void
+    {
+        /** @var list<array{status:string,side:string,payload:array<string,mixed>}> $persisted */
+        $persisted = [];
+        /** @var array<string,Position> $positionsBySide */
+        $positionsBySide = [];
+        $positions = $this->createMock(PositionRepository::class);
+        $positions->method('findOneBySymbolSide')
+            ->willReturnCallback(static function (string $symbol, string $side) use (&$positionsBySide): ?Position {
+                return $positionsBySide[strtoupper($symbol) . ':' . strtoupper($side)] ?? null;
+            });
+        $entityManager = $this->createMock(EntityManagerInterface::class);
+        $entityManager->expects(self::exactly(3))
+            ->method('persist')
+            ->willReturnCallback(static function (Position $position) use (&$persisted, &$positionsBySide): void {
+                $positionsBySide[$position->getSymbol() . ':' . $position->getSide()] = $position;
+                $persisted[] = [
+                    'status' => $position->getStatus(),
+                    'side' => $position->getSide(),
+                    'payload' => $position->getPayload(),
+                ];
+            });
+        $entityManager->expects(self::exactly(3))->method('flush');
+        $normalizer = new OkxExchangeEventNormalizer(new OkxInstrumentResolver(), $this->fixedClock());
+        $updated = $normalizer->normalize([
+            'arg' => ['channel' => 'positions', 'instType' => 'SWAP'],
+            'data' => [[
+                'apiKey' => 'position-update-secret-sentinel',
+                'avgPx' => '25000',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'lever' => '3',
+                'markPx' => '25100',
+                'nested' => ['token' => 'position-update-nested-secret-sentinel'],
+                'pos' => '0.5',
+                'posSide' => 'long',
+                'uTime' => '1767225604000',
+                'upl' => '50',
+            ]],
+        ]);
+        $closed = $normalizer->normalize([
+            'arg' => ['channel' => 'positions', 'instType' => 'SWAP'],
+            'data' => [[
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'passphrase' => 'position-close-secret-sentinel',
+                'pos' => '0',
+                'posSide' => 'net',
+                'unknown' => ['credential' => 'position-close-nested-secret-sentinel'],
+                'uTime' => '1767225605000',
+            ]],
+        ]);
+
+        self::assertCount(1, $updated);
+        self::assertCount(2, $closed);
+        $store = $this->storeWithPersistenceDoubles(
+            $this->createStub(FuturesOrderSyncService::class),
+            $this->createStub(FillCostLedgerEntryRepository::class),
+            $positions,
+            $entityManager,
+        );
+        foreach (array_merge($updated, $closed) as $event) {
+            $store->project($event);
+        }
+
+        self::assertSame(['OPEN', 'CLOSED', 'CLOSED'], array_column($persisted, 'status'));
+        self::assertSame(['LONG', 'LONG', 'SHORT'], array_column($persisted, 'side'));
+        self::assertSame('okx_ws_positions', $persisted[0]['payload']['payload']['source'] ?? null);
+        self::assertSame('okx_ws_positions', $persisted[1]['payload']['payload']['source'] ?? null);
+        self::assertSame('okx_ws_positions', $persisted[2]['payload']['payload']['source'] ?? null);
+        self::assertStringNotContainsString('secret-sentinel', serialize($persisted));
     }
 
     public function testOrderProjectionFailsWhenLegacySyncReturnsNull(): void
@@ -439,6 +533,47 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
             $this->createStub(EntityManagerInterface::class),
             new FillCostLedgerIngestionService($ledgerRepository, $lineage),
         );
+    }
+
+    private function storeWithPersistenceDoubles(
+        FuturesOrderSyncService $orderSync,
+        FillCostLedgerEntryRepository $ledgerRepository,
+        ?PositionRepository $positions = null,
+        ?EntityManagerInterface $entityManager = null,
+    ): DoctrineExchangeLocalProjectionStore {
+        $persister = $this->createStub(EntityPersister::class);
+        $persister->method('load')->willReturn(null);
+        $persister->method('loadAll')->willReturn([]);
+        $unitOfWork = $this->createStub(UnitOfWork::class);
+        $unitOfWork->method('getEntityPersister')->willReturn($persister);
+        $repositoryEntityManager = $this->createStub(EntityManagerInterface::class);
+        $repositoryEntityManager->method('getClassMetadata')->willReturn(new ClassMetadata(TradeLineage::class));
+        $repositoryEntityManager->method('getUnitOfWork')->willReturn($unitOfWork);
+        $registry = $this->createStub(ManagerRegistry::class);
+        $registry->method('getManagerForClass')->willReturn($repositoryEntityManager);
+        $lineage = new TradeLineageManager(
+            new TradeLineageRepository($registry),
+            $repositoryEntityManager,
+            new NullLogger(),
+        );
+
+        return new DoctrineExchangeLocalProjectionStore(
+            $orderSync,
+            new FuturesOrderRepository($registry),
+            $positions ?? $this->createStub(PositionRepository::class),
+            $entityManager ?? $this->createStub(EntityManagerInterface::class),
+            new FillCostLedgerIngestionService($ledgerRepository, $lineage),
+        );
+    }
+
+    private function fixedClock(): ClockInterface
+    {
+        return new class implements ClockInterface {
+            public function now(): \DateTimeImmutable
+            {
+                return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+            }
+        };
     }
 
     private function orderDto(ExchangeOrderSide $side, ExchangePositionSide $positionSide): ExchangeOrderDto
