@@ -17,6 +17,7 @@ use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
+use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxRuntimeCheck;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\TradingCore\Execution\Hyperliquid\HyperliquidMutationReadinessGate;
@@ -381,7 +382,10 @@ final class ExchangeRuntimeCheckCommand extends Command
         }
 
         try {
-            if ($providerBundle->account()->getAccountInfo() !== null) {
+            $accountProvider = $providerBundle->account();
+            if ($accountProvider instanceof OkxAccountGateway
+                ? $accountProvider->healthCheck()
+                : $accountProvider->getAccountInfo() !== null) {
                 return [true, []];
             }
         } catch (\Throwable) {

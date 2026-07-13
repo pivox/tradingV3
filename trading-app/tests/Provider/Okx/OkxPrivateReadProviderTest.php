@@ -48,6 +48,16 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame(99.5, $gateway->getAccountBalance('USDT'));
     }
 
+    public function testHealthCheckAcceptsReadableDemoAccountWithoutBalances(): void
+    {
+        $client = $this->client();
+        $client->emptyBalanceDetails = true;
+        $gateway = new OkxAccountGateway($client);
+
+        self::assertTrue($gateway->healthCheck());
+        self::assertNull($gateway->getAccountInfo());
+    }
+
     public function testReadsOpenPositions(): void
     {
         $gateway = new OkxPositionGateway($this->client());
@@ -366,6 +376,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
 {
     public bool $rateLimited = false;
     public bool $emptyAvailableEquity = false;
+    public bool $emptyBalanceDetails = false;
     public bool $hidePendingOrders = false;
     public bool $hideOrderDetail = false;
     public bool $orderDetailReturnsNotFoundCode = false;
@@ -426,7 +437,7 @@ final class FakeOkxPrivateReadClient implements OkxRestClientInterface
     {
         return ['code' => '0', 'data' => [[
             'totalEq' => '120.75',
-            'details' => [[
+            'details' => $this->emptyBalanceDetails ? [] : [[
                 'ccy' => 'USDT',
                 'availEq' => $this->emptyAvailableEquity ? '' : '100.5',
                 'availBal' => '99.5',

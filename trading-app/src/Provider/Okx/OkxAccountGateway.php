@@ -162,7 +162,10 @@ final class OkxAccountGateway implements AccountProviderInterface
     public function healthCheck(): bool
     {
         try {
-            return $this->getAccountInfo() instanceof AccountDto;
+            return $this->dataRows(
+                $this->privateGet('/api/v5/account/balance', [], __METHOD__),
+                __METHOD__,
+            ) !== [];
         } catch (\Throwable) {
             return false;
         }
