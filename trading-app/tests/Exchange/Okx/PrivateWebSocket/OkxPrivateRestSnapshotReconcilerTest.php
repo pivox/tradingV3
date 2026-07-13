@@ -9,6 +9,7 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\AbstractExchangeOrderEvent;
 use App\Exchange\Event\ExchangeEventBus;
 use App\Exchange\Event\ExchangeEventInterface;
@@ -174,6 +175,54 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         $event = $store->events[0];
         self::assertInstanceOf(AbstractExchangeOrderEvent::class, $event);
         self::assertSame(ExchangeOrderType::TRIGGER, $event->order()->orderType);
+    }
+
+    public function testProjectsCompleteAllowlistedProtectiveOrder(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $updatedAt = new \DateTimeImmutable('2026-07-13T10:01:00Z');
+        $item = new OrderSnapshotItem(
+            orderId: 'algo:algo-1',
+            symbol: 'BTCUSDT',
+            side: 'sell',
+            type: 'stop_loss',
+            status: 'partially_filled',
+            quantity: '1',
+            filledQuantity: '0.4',
+            remainingQuantity: '0.6',
+            price: null,
+            stopPrice: '24000',
+            createdAt: new \DateTimeImmutable(self::NOW),
+            clientOrderId: 'algo-client-1',
+            positionSide: 'long',
+            reduceOnly: true,
+            postOnly: false,
+            averagePrice: '24500',
+            updatedAt: $updatedAt,
+            timeInForce: 'fok',
+            openType: 'isolated',
+            leverage: '3',
+        );
+
+        $this->reconciler($store)->reconcile($this->snapshot(orders: [$item]));
+
+        $event = $store->events[0];
+        self::assertInstanceOf(AbstractExchangeOrderEvent::class, $event);
+        $order = $event->order();
+        self::assertSame('algo-client-1', $order->clientOrderId);
+        self::assertSame(ExchangePositionSide::LONG, $order->positionSide);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $order->orderType);
+        self::assertTrue($order->reduceOnly);
+        self::assertFalse($order->postOnly);
+        self::assertSame(24500.0, $order->averagePrice);
+        self::assertSame(24000.0, $order->stopPrice);
+        self::assertEquals($updatedAt, $order->updatedAt);
+        self::assertSame(ExchangeTimeInForce::FOK, $order->timeInForce);
+        self::assertSame([
+            'source' => 'okx_private_rest_snapshot',
+            'open_type' => 'isolated',
+            'leverage' => '3',
+        ], $order->metadata);
     }
 
     public function testNumericallyEquivalentButTextuallyDifferentDuplicateIsAConflict(): void

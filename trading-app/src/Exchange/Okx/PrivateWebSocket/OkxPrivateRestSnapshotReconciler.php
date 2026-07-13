@@ -13,6 +13,7 @@ use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeEventBus;
 use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Event\ExchangeFillReceived;
@@ -96,28 +97,36 @@ final readonly class OkxPrivateRestSnapshotReconciler
             marketType: MarketType::PERPETUAL,
             symbol: $this->symbol($item->symbol),
             exchangeOrderId: $this->required($item->orderId),
-            clientOrderId: null,
+            clientOrderId: $this->nullableRequired($item->clientOrderId),
             side: $side,
-            positionSide: null,
+            positionSide: $this->nullablePositionSide($item->positionSide),
             orderType: $type,
             status: $status,
             quantity: $quantity,
             filledQuantity: $filledQuantity,
             remainingQuantity: $remainingQuantity,
             price: $this->nullablePositive($item->price),
-            averagePrice: null,
+            averagePrice: $this->nullablePositive($item->averagePrice),
             stopPrice: $this->nullablePositive($item->stopPrice),
-            reduceOnly: false,
-            postOnly: false,
-            timeInForce: null,
+            reduceOnly: $item->reduceOnly,
+            postOnly: $item->postOnly,
+            timeInForce: $this->nullableTimeInForce($item->timeInForce),
             createdAt: $item->createdAt,
-            updatedAt: null,
-            metadata: self::sourcePayload(),
+            updatedAt: $item->updatedAt,
+            metadata: array_filter(
+                self::sourcePayload() + [
+                    'open_type' => $this->nullableRequired($item->openType),
+                    'leverage' => $this->nullablePositiveString($item->leverage),
+                ],
+                static fn (mixed $value): bool => $value !== null,
+            ),
         );
 
+        $occurredAt = $item->updatedAt ?? $item->createdAt;
+
         return $status === ExchangeOrderStatus::PARTIALLY_FILLED
-            ? new ExchangeOrderPartiallyFilled($order, $item->createdAt, self::sourcePayload())
-            : new ExchangeOrderUpdated($order, $item->createdAt, self::sourcePayload());
+            ? new ExchangeOrderPartiallyFilled($order, $occurredAt, self::sourcePayload())
+            : new ExchangeOrderUpdated($order, $occurredAt, self::sourcePayload());
     }
 
     private function positionEvent(PositionSnapshotItem $item, \DateTimeImmutable $observedAt): ExchangePositionUpdated
@@ -239,6 +248,24 @@ final readonly class OkxPrivateRestSnapshotReconciler
         return $side;
     }
 
+    private function nullablePositionSide(?string $value): ?ExchangePositionSide
+    {
+        return $value === null ? null : $this->positionSide($value);
+    }
+
+    private function nullableTimeInForce(?string $value): ?ExchangeTimeInForce
+    {
+        if ($value === null) {
+            return null;
+        }
+        $timeInForce = ExchangeTimeInForce::tryFrom($value);
+        if (!$timeInForce instanceof ExchangeTimeInForce) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        return $timeInForce;
+    }
+
     private function fillId(FillSnapshotItem $item): string
     {
         $instrumentId = $this->required($item->instrumentId);
@@ -312,6 +339,16 @@ final readonly class OkxPrivateRestSnapshotReconciler
     private function nullablePositive(?string $value): ?float
     {
         return $value === null ? null : $this->positive($value);
+    }
+
+    private function nullablePositiveString(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        $this->positive($value);
+
+        return $value;
     }
 
     private function nullableNumber(?string $value): ?float

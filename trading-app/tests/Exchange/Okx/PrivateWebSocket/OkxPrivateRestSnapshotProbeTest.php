@@ -150,6 +150,58 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         }
     }
 
+    public function testOrderSnapshotPreservesOnlyAllowlistedProtectiveOrderFields(): void
+    {
+        $order = OrderSnapshotItem::fromProviderDto(new OrderDto(
+            orderId: 'algo:algo-1',
+            symbol: 'BTCUSDT',
+            side: OrderSide::SELL,
+            type: OrderType::STOP,
+            status: OrderStatus::PENDING,
+            quantity: BigDecimal::of('1'),
+            price: null,
+            stopPrice: BigDecimal::of('24000'),
+            filledQuantity: BigDecimal::of('0.4'),
+            remainingQuantity: BigDecimal::of('0.6'),
+            averagePrice: BigDecimal::of('24500'),
+            createdAt: new DateTimeImmutable('2026-07-13T09:30:00Z'),
+            updatedAt: new DateTimeImmutable('2026-07-13T09:31:00Z'),
+            metadata: [
+                'client_order_id' => 'algo-client-1',
+                'posSide' => 'long',
+                'reduceOnly' => 'true',
+                'ordType' => 'conditional',
+                'slTriggerPx' => '24000',
+                'tdMode' => 'isolated',
+                'lever' => '3',
+                'apiSecret' => 'must-not-survive',
+                'unknown' => 'must-not-survive',
+            ],
+        ));
+
+        self::assertSame('algo-client-1', $order->clientOrderId);
+        self::assertSame('long', $order->positionSide);
+        self::assertTrue($order->reduceOnly);
+        self::assertFalse($order->postOnly);
+        self::assertSame('stop_loss', $order->type);
+        self::assertSame('24500', $order->averagePrice);
+        self::assertSame('2026-07-13T09:31:00+00:00', $order->updatedAt?->format(DATE_ATOM));
+        self::assertNull($order->timeInForce);
+        self::assertSame('isolated', $order->openType);
+        self::assertSame('3', $order->leverage);
+        self::assertStringNotContainsString('must-not-survive', serialize($order));
+    }
+
+    public function testOrderSnapshotDeterminesPostOnlyAndTimeInForceFromKnownOrderType(): void
+    {
+        $order = OrderSnapshotItem::fromProviderDto(self::order([
+            'ordType' => 'post_only',
+        ]));
+
+        self::assertTrue($order->postOnly);
+        self::assertSame('gtc', $order->timeInForce);
+    }
+
     public function testFillOccurredAtPreservesMillisecondPrecision(): void
     {
         $first = FillSnapshotItem::fromProviderArray(['create_time' => 1783936800123]);

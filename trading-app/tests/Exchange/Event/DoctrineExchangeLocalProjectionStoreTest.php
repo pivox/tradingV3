@@ -7,12 +7,14 @@ namespace App\Tests\Exchange\Event;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Entity\FillCostLedgerEntry;
+use App\Entity\FuturesOrder;
 use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\DoctrineExchangeLocalProjectionStore;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderUpdated;
@@ -33,6 +35,67 @@ use Psr\Log\NullLogger;
 #[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
 final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
 {
+    public function testProtectiveOrderProjectionKeepsCompleteAllowlistedPayload(): void
+    {
+        $captured = null;
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::once())
+            ->method('syncOrderFromApi')
+            ->willReturnCallback(function (array $payload) use (&$captured): FuturesOrder {
+                $captured = $payload;
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
+        $updatedAt = new \DateTimeImmutable('2026-01-01 00:01:00.123 UTC');
+
+        $store->project(new ExchangeOrderUpdated(new ExchangeOrderDto(
+            exchange: Exchange::OKX,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'algo:algo-1',
+            clientOrderId: 'algo-client-1',
+            side: ExchangeOrderSide::SELL,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::STOP_LOSS,
+            status: ExchangeOrderStatus::PARTIALLY_FILLED,
+            quantity: 1.0,
+            filledQuantity: 0.4,
+            remainingQuantity: 0.6,
+            price: null,
+            averagePrice: 24500.0,
+            stopPrice: 24000.0,
+            reduceOnly: true,
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::FOK,
+            createdAt: new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
+            updatedAt: $updatedAt,
+            metadata: [
+                'source' => 'okx_private_rest_snapshot',
+                'open_type' => 'isolated',
+                'leverage' => '3',
+            ],
+        ), $updatedAt, ['source' => 'okx_private_rest_snapshot']));
+
+        self::assertIsArray($captured);
+        self::assertSame('algo-client-1', $captured['client_order_id']);
+        self::assertSame('24500', $captured['average_price']);
+        self::assertSame('24000', $captured['stop_price']);
+        self::assertSame(1767225660123, $captured['updated_time']);
+        self::assertSame('stop_loss', $captured['raw']['order_type']);
+        self::assertSame('24000', $captured['raw']['stop_price']);
+        self::assertSame('long', $captured['raw']['position_side']);
+        self::assertTrue($captured['raw']['reduce_only']);
+        self::assertFalse($captured['raw']['post_only']);
+        self::assertSame('fok', $captured['raw']['time_in_force']);
+        self::assertSame([
+            'source' => 'okx_private_rest_snapshot',
+            'open_type' => 'isolated',
+            'leverage' => '3',
+        ], $captured['raw']['metadata']);
+        self::assertStringNotContainsString('secret', serialize($captured));
+    }
+
     public function testOrderProjectionFailsWhenLegacySyncReturnsNull(): void
     {
         $orderSync = $this->createMock(FuturesOrderSyncService::class);

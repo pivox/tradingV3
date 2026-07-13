@@ -114,6 +114,8 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             'type' => $order->orderType->value,
             'status' => $order->status->value,
             'price' => $order->price !== null ? (string)$order->price : null,
+            'average_price' => $order->averagePrice !== null ? (string)$order->averagePrice : null,
+            'stop_price' => $order->stopPrice !== null ? (string)$order->stopPrice : null,
             'size' => (int)round($order->quantity),
             'filled_size' => (int)round($order->filledQuantity),
             'filled_notional' => $filledNotional,
@@ -128,6 +130,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             'raw' => [
                 'event_type' => $event->eventType(),
                 'order_type' => $order->orderType->value,
+                'stop_price' => $order->stopPrice !== null ? (string)$order->stopPrice : null,
                 'position_side' => $order->positionSide?->value,
                 'remaining_quantity' => $order->remainingQuantity,
                 'reduce_only' => $order->reduceOnly,
