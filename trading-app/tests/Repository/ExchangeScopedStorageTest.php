@@ -956,7 +956,49 @@ final class ExchangeScopedStorageTest extends KernelTestCase
     public static function invalidProspectiveLegacyQuantityProvider(): iterable
     {
         yield 'filled exceeds existing quantity' => ['filled_size', 3];
-        yield 'quantity below existing filled' => ['size', '0.5'];
+        yield 'quantity below existing filled' => ['size', 0];
+        yield 'decimal quantity string' => ['size', '2.5'];
+        yield 'decimal filled string' => ['filled_size', '1.5'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidNewLegacyQuantityProvider')]
+    public function testNewOrderRejectsInvalidLegacyIntegerBeforePersistenceAndReplay(
+        string $quantityKey,
+        int|float|string $quantityValue,
+    ): void {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $payload = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-invalid-new-' . md5($quantityKey . ':' . (string) $quantityValue),
+            'symbol' => 'BTCUSDT',
+            $quantityKey => $quantityValue,
+        ];
+
+        self::assertNull($service->syncOrderFromApi($payload));
+        self::assertNull($service->syncOrderFromApi($payload), 'Rejected replay must remain stable.');
+        self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $payload['order_id']]));
+
+        $this->em->flush();
+        self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $payload['order_id']]));
+    }
+
+    /** @return iterable<string,array{string,int|float|string}> */
+    public static function invalidNewLegacyQuantityProvider(): iterable
+    {
+        yield 'decimal size string' => ['size', '2.5'];
+        yield 'decimal filled string' => ['filled_size', '1.5'];
+        yield 'float size' => ['size', 2.0];
+        yield 'signed size' => ['size', '+2'];
+        yield 'negative filled' => ['filled_size', '-1'];
+        yield 'leading whitespace' => ['size', ' 2'];
+        yield 'trailing whitespace' => ['filled_size', '1 '];
     }
 
     public function testNewIncompleteLegacyOrderDefersCanonicalQuantitiesUntilPairIsAvailable(): void
@@ -975,7 +1017,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
             'symbol' => 'BTCUSDT',
         ];
 
-        $deferred = $service->syncOrderFromApi($base + ['size' => 2]);
+        $deferred = $service->syncOrderFromApi($base + ['size' => '2']);
         self::assertInstanceOf(FuturesOrder::class, $deferred);
         self::assertSame(2, $deferred->getSize());
         self::assertNull($deferred->getFilledSize());

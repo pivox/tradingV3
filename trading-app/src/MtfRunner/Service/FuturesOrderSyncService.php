@@ -14,6 +14,7 @@ use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
 use App\Exchange\Value\ExactOrderQuantities;
+use App\Exchange\Value\LegacyOrderQuantity;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -59,9 +60,9 @@ class FuturesOrderSyncService
                 $order = new FuturesOrder();
             }
 
-            $exactQuantities = $this->prospectiveExactQuantities($orderData, $order);
             $size = $this->legacyIntegerQuantity($orderData, 'size');
             $filledSize = $this->legacyIntegerQuantity($orderData, 'filled_size');
+            $exactQuantities = $this->prospectiveExactQuantities($orderData, $order, $size, $filledSize);
 
             // Mapper les champs depuis l'API
             $order->setExchange($context->exchange);
@@ -80,11 +81,11 @@ class FuturesOrderSyncService
             $order->setPrice($this->extractString($orderData, 'price'));
             
             if ($size !== null) {
-                $order->setSize($size);
+                $order->setSize($size->integer);
             }
 
             if ($filledSize !== null) {
-                $order->setFilledSize($filledSize);
+                $order->setFilledSize($filledSize->integer);
             }
 
             if ($exactQuantities !== null) {
@@ -408,46 +409,27 @@ class FuturesOrderSyncService
     }
 
     /** @param array<string,mixed> $data */
-    private function legacyQuantity(array $data, string $key): ?string
+    /** @param array<string,mixed> $data */
+    private function legacyIntegerQuantity(array $data, string $key): ?LegacyOrderQuantity
     {
         if (!array_key_exists($key, $data)) {
             return null;
         }
         $value = $data[$key];
-        if (\is_int($value) && $value >= 0) {
-            return ExactOrderQuantities::canonicalNonNegative((string) $value);
-        }
-        if (\is_string($value)) {
-            return ExactOrderQuantities::canonicalNonNegative($value);
+        if (!\is_int($value) && !\is_float($value) && !\is_string($value)) {
+            throw new \InvalidArgumentException('futures_order_legacy_quantity_invalid');
         }
 
-        throw new \InvalidArgumentException('futures_order_legacy_quantity_invalid');
+        return LegacyOrderQuantity::from($value);
     }
 
     /** @param array<string,mixed> $data */
-    private function legacyIntegerQuantity(array $data, string $key): ?int
-    {
-        if (!array_key_exists($key, $data)) {
-            return null;
-        }
-        $value = $data[$key];
-        if (\is_int($value) && $value >= 0) {
-            return $value;
-        }
-        if (\is_string($value) && preg_match('/^\d+$/', $value)) {
-            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
-            if (strlen($canonical) < strlen((string) PHP_INT_MAX)
-                || (strlen($canonical) === strlen((string) PHP_INT_MAX) && $canonical <= (string) PHP_INT_MAX)) {
-                return (int) $canonical;
-            }
-        }
-
-        return null;
-    }
-
-    /** @param array<string,mixed> $data */
-    private function prospectiveExactQuantities(array $data, FuturesOrder $order): ?ExactOrderQuantities
-    {
+    private function prospectiveExactQuantities(
+        array $data,
+        FuturesOrder $order,
+        ?LegacyOrderQuantity $incomingQuantity,
+        ?LegacyOrderQuantity $incomingFilled,
+    ): ?ExactOrderQuantities {
         $exactQuantities = ExactOrderQuantities::fromArray($data);
         if ($exactQuantities !== null) {
             return $exactQuantities;
@@ -460,14 +442,14 @@ class FuturesOrderSyncService
         }
 
         $quantity = $hasQuantity
-            ? $this->legacyQuantity($data, 'size')
+            ? $incomingQuantity?->canonical
             : $order->getQuantityDecimal();
         $quantity ??= $order->getSize() !== null
             ? ExactOrderQuantities::canonicalNonNegative((string) $order->getSize())
             : null;
 
         $filled = $hasFilled
-            ? $this->legacyQuantity($data, 'filled_size')
+            ? $incomingFilled?->canonical
             : $order->getFilledQuantityDecimal();
         $filled ??= $order->getFilledSize() !== null
             ? ExactOrderQuantities::canonicalNonNegative((string) $order->getFilledSize())
