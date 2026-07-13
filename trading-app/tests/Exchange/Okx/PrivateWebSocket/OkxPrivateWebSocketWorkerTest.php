@@ -16,6 +16,7 @@ use App\Exchange\Okx\OkxExchangeEventNormalizer;
 use App\Exchange\Okx\OkxInstrumentResolver;
 use App\Exchange\Okx\PrivateWebSocket\FillSnapshotItem;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateRestSnapshotProbe;
+use App\Exchange\Okx\PrivateWebSocket\OkxPrivateRestSnapshotReconciler;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateRestSnapshotSourceInterface;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketEndpointGuard;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketLoginSigner;
@@ -245,6 +246,67 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertTrue($status->initialSnapshotLoaded);
         self::assertTrue($status->reconciliationFresh);
         self::assertSame([], $status->blockingErrors);
+    }
+
+    public function testSnapshotEventsAreProjectedBeforeSnapshotReadinessIsPersisted(): void
+    {
+        $timeline = new EventTimeline();
+        $transport = new FakeOkxPrivateWebSocketTransport($timeline);
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore(timeline: $timeline);
+        $projectionStore = new RecordingProjectionStore($timeline);
+        $source = new CountingSnapshotSource(
+            positions: [new PositionSnapshotItem('BTCUSDT', 'long', '0.25', '25000', '25100', new \DateTimeImmutable('2026-07-13T10:00:00Z'))],
+            openOrders: [new OrderSnapshotItem('order-1', 'BTCUSDT', 'buy', 'limit', 'open', '0.25', '0', '0.25', '25000', null, new \DateTimeImmutable('2026-07-13T10:00:00Z'))],
+            fills: [new FillSnapshotItem('okx', 'BTCUSDT', 'order-1', null, 'trade-1', 'buy', 'long', '0.25', '25000', null, null, new \DateTimeImmutable('2026-07-13T10:00:00Z'))],
+        );
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker($transport, $loop, $store, $source, $clock, projectionStore: $projectionStore);
+
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+            ['channel' => 'fills'],
+        ] as $arg) {
+            $transport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+
+        $readyIndex = array_search('save:snapshot_ready', $timeline->events, true);
+        self::assertIsInt($readyIndex);
+        foreach (['project:exchange.order.updated', 'project:exchange.position.updated', 'project:exchange.fill.received'] as $projected) {
+            $projectionIndex = array_search($projected, $timeline->events, true);
+            self::assertIsInt($projectionIndex);
+            self::assertLessThan($readyIndex, $projectionIndex);
+        }
+    }
+
+    public function testSnapshotProjectionFailureClosesReconnectsAndNeverPersistsSnapshotReadiness(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $projectionStore = new RecordingProjectionStore(failProjection: true);
+        $source = new CountingSnapshotSource(
+            openOrders: [new OrderSnapshotItem('order-1', 'BTCUSDT', 'buy', 'limit', 'open', '1', '0', '1', '25000', null, new \DateTimeImmutable('2026-07-13T10:00:00Z'))],
+        );
+        $worker = $this->worker($transport, $loop, $store, $source, projectionStore: $projectionStore);
+
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
+        foreach ($store->saved as $status) {
+            self::assertFalse($status->initialSnapshotLoaded);
+            self::assertFalse($status->reconciliationFresh);
+        }
     }
 
     public function testExplicitLoginFailureClosesAndSchedulesReconnect(): void
@@ -1023,9 +1085,12 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         ?CountingSnapshotSource $snapshotSource = null,
         ?MockClock $clock = null,
         ?LoggerInterface $logger = null,
+        ?RecordingProjectionStore $projectionStore = null,
     ): OkxPrivateWebSocketWorker {
         $clock ??= new MockClock('2026-07-13T10:00:00Z');
         $normalizer = new OkxExchangeEventNormalizer(new OkxInstrumentResolver(), $clock);
+        $projectionStore ??= new RecordingProjectionStore();
+        $eventBus = new ExchangeEventBus($projectionStore, new NullLogger());
 
         return new OkxPrivateWebSocketWorker(
             transport: $transport,
@@ -1033,9 +1098,10 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             endpointGuard: new OkxPrivateWebSocketEndpointGuard(),
             loginSigner: new OkxPrivateWebSocketLoginSigner(new OkxAuthSigner()),
             snapshotProbe: new OkxPrivateRestSnapshotProbe($snapshotSource ?? new CountingSnapshotSource()),
+            snapshotReconciler: new OkxPrivateRestSnapshotReconciler($eventBus, $projectionStore),
             statusStore: $store,
             normalizer: $normalizer,
-            eventBus: new ExchangeEventBus(new RecordingProjectionStore(), new NullLogger()),
+            eventBus: $eventBus,
             clock: $clock,
             logger: $logger ?? new NullLogger(),
             loop: $loop,
@@ -1118,11 +1184,13 @@ final class RecordingStatusStore implements OkxPrivateWebSocketStatusStoreInterf
         }
         $this->saved[] = $status;
         if (null !== $this->timeline) {
-            $this->timeline->events[] = \in_array(
+            $this->timeline->events[] = $status->initialSnapshotLoaded
+                ? 'save:snapshot_ready'
+                : (\in_array(
                 'okx_private_ws_worker_stopping',
                 $status->blockingErrors,
                 true,
-            ) ? 'save:worker_stopping' : 'save:status';
+            ) ? 'save:worker_stopping' : 'save:status');
         }
     }
 
@@ -1145,6 +1213,12 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
         private readonly bool $accountReadable = true,
         private readonly bool $throwOnAccount = false,
         private readonly ?\Closure $onAccountReadable = null,
+        /** @var list<PositionSnapshotItem> */
+        private readonly array $positions = [],
+        /** @var list<OrderSnapshotItem> */
+        private readonly array $openOrders = [],
+        /** @var list<FillSnapshotItem> */
+        private readonly array $fills = [],
     ) {
     }
 
@@ -1165,19 +1239,19 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
     /** @return list<PositionSnapshotItem> */
     public function positions(): array
     {
-        return [];
+        return $this->positions;
     }
 
     /** @return list<OrderSnapshotItem> */
     public function openOrders(): array
     {
-        return [];
+        return $this->openOrders;
     }
 
     /** @return list<FillSnapshotItem> */
     public function fills(): array
     {
-        return [];
+        return $this->fills;
     }
 }
 
@@ -1185,6 +1259,12 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
 {
     /** @var list<ExchangeEventInterface> */
     public array $events = [];
+
+    public function __construct(
+        private readonly ?EventTimeline $timeline = null,
+        private readonly bool $failProjection = false,
+    ) {
+    }
 
     public function hasOrder(ExchangeOrderDto $order): bool
     {
@@ -1198,7 +1278,13 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
 
     public function project(ExchangeEventInterface $event): void
     {
+        if ($this->failProjection) {
+            throw new \RuntimeException('projection sensitive failure');
+        }
         $this->events[] = $event;
+        if (null !== $this->timeline) {
+            $this->timeline->events[] = 'project:' . $event->eventType();
+        }
     }
 }
 

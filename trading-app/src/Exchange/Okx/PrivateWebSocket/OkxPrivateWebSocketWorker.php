@@ -48,6 +48,7 @@ final class OkxPrivateWebSocketWorker
         private readonly OkxPrivateWebSocketEndpointGuard $endpointGuard,
         private readonly OkxPrivateWebSocketLoginSigner $loginSigner,
         private readonly OkxPrivateRestSnapshotProbe $snapshotProbe,
+        private readonly OkxPrivateRestSnapshotReconciler $snapshotReconciler,
         private readonly OkxPrivateWebSocketStatusStoreInterface $statusStore,
         OkxExchangeEventNormalizer $normalizer,
         private readonly ExchangeEventBus $eventBus,
@@ -319,6 +320,11 @@ final class OkxPrivateWebSocketWorker
                 return;
             }
             try {
+                $this->snapshotReconciler->reconcile($snapshot);
+                $readinessElapsed = $this->clock->now()->getTimestamp() - $readinessStartedAt->getTimestamp();
+                if ($readinessElapsed >= self::READINESS_TIMEOUT_SECONDS) {
+                    throw new \RuntimeException('okx_private_rest_snapshot_failed');
+                }
                 $this->session->applySnapshot($snapshot, $this->clock->now());
             } catch (\Throwable) {
                 $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
