@@ -309,6 +309,43 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         }
     }
 
+    public function testProviderStopSnapshotProjectsAndAllowsReadiness(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $projectionStore = new RecordingProjectionStore();
+        $source = new CountingSnapshotSource(
+            openOrders: [new OrderSnapshotItem('algo:algo-1', 'BTCUSDT', 'sell', 'stop', 'pending', '0.25', '0', '0.25', null, '24000', new \DateTimeImmutable('2026-07-13T10:00:00Z'))],
+        );
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker($transport, $loop, $store, $source, $clock, projectionStore: $projectionStore);
+
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+            ['channel' => 'fills'],
+        ] as $arg) {
+            $transport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+
+        self::assertSame(0, $transport->closeCount);
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertTrue($status->initialSnapshotLoaded);
+        self::assertTrue($status->reconciliationFresh);
+        self::assertCount(1, $projectionStore->events);
+        $event = $projectionStore->events[0];
+        self::assertInstanceOf(\App\Exchange\Event\AbstractExchangeOrderEvent::class, $event);
+        self::assertSame(\App\Exchange\Enum\ExchangeOrderType::TRIGGER, $event->order()->orderType);
+    }
+
     public function testExplicitLoginFailureClosesAndSchedulesReconnect(): void
     {
         $transport = new FakeOkxPrivateWebSocketTransport();

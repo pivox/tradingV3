@@ -7,6 +7,7 @@ namespace App\Tests\Exchange\Okx\PrivateWebSocket;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Event\AbstractExchangeOrderEvent;
 use App\Exchange\Event\ExchangeEventBus;
@@ -94,6 +95,36 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
 
         self::assertSame(3, $count);
         self::assertCount(3, $store->events);
+    }
+
+    public function testMapsProviderStopOrderToGenericTrigger(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+
+        $count = $this->reconciler($store)->reconcile($this->snapshot(
+            orders: [$this->order(type: 'stop')],
+        ));
+
+        self::assertSame(1, $count);
+        self::assertCount(1, $store->events);
+        $event = $store->events[0];
+        self::assertInstanceOf(AbstractExchangeOrderEvent::class, $event);
+        self::assertSame(ExchangeOrderType::TRIGGER, $event->order()->orderType);
+    }
+
+    public function testNumericallyEquivalentButTextuallyDifferentDuplicateIsAConflict(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_duplicate_conflict');
+        try {
+            $this->reconciler($store)->reconcile($this->snapshot(
+                orders: [$this->order(quantity: '1'), $this->order(quantity: '1.0')],
+            ));
+        } finally {
+            self::assertSame([], $store->events);
+        }
     }
 
     public function testConflictingDuplicateFailsBeforeAnyProjection(): void
@@ -200,13 +231,13 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         return new PositionSnapshotItem('BTCUSDT', $side, '0.25', '25000', '25100', new \DateTimeImmutable(self::NOW));
     }
 
-    private function order(string $quantity = '1'): OrderSnapshotItem
+    private function order(string $quantity = '1', string $type = 'limit'): OrderSnapshotItem
     {
         return new OrderSnapshotItem(
             'order-1',
             'BTCUSDT',
             'buy',
-            'limit',
+            $type,
             'open',
             $quantity,
             '0',

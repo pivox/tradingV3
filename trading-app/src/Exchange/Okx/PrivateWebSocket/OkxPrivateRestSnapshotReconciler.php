@@ -78,10 +78,9 @@ final readonly class OkxPrivateRestSnapshotReconciler
         $remainingQuantity = $this->nonNegative($item->remainingQuantity);
         $status = ExchangeOrderStatus::tryFrom($item->status);
         $side = ExchangeOrderSide::tryFrom($item->side);
-        $type = ExchangeOrderType::tryFrom($item->type);
+        $type = $this->orderType($item->type);
         if (!$status instanceof ExchangeOrderStatus
             || !$side instanceof ExchangeOrderSide
-            || !$type instanceof ExchangeOrderType
             || !\in_array($status, [
                 ExchangeOrderStatus::PENDING,
                 ExchangeOrderStatus::OPEN,
@@ -217,7 +216,7 @@ final readonly class OkxPrivateRestSnapshotReconciler
         foreach ($items as $item) {
             $itemKey = $key($item);
             if (isset($unique[$itemKey])) {
-                if ($unique[$itemKey] != $item) {
+                if (serialize($unique[$itemKey]) !== serialize($item)) {
                     throw new \InvalidArgumentException('okx_private_rest_snapshot_duplicate_conflict');
                 }
                 continue;
@@ -236,6 +235,20 @@ final readonly class OkxPrivateRestSnapshotReconciler
         }
 
         return $side;
+    }
+
+    private function orderType(string $value): ExchangeOrderType
+    {
+        if ($value === 'stop') {
+            return ExchangeOrderType::TRIGGER;
+        }
+
+        $type = ExchangeOrderType::tryFrom($value);
+        if (!$type instanceof ExchangeOrderType) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
+
+        return $type;
     }
 
     private function symbol(string $value): string
