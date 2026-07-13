@@ -20,10 +20,12 @@ use App\Exchange\Dto\ExchangeCapabilities;
 use App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
+use App\Exchange\Okx\OkxRestClientInterface;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
+use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Registry\ExchangeProviderBundle;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -302,6 +304,43 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Readiness level: public_read_only', $output);
         self::assertStringContainsString('Readiness warnings: okx_private_read_probe_failed, private_read_not_ready', $output);
         self::assertStringContainsString('Schedule ready: no', $output);
+    }
+
+    public function testOkxRuntimeCheckAcceptsReadableDemoAccountWithoutBalances(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->providerRegistry($this->providerBundle(
+                Exchange::OKX,
+                MarketType::PERPETUAL,
+                accountProvider: new OkxAccountGateway(new ReadableEmptyOkxAccountClient()),
+            )),
+            new OkxConfig(
+                environment: 'demo',
+                apiKey: 'key',
+                apiSecret: 'secret',
+                apiPassphrase: 'pass',
+                simulatedTrading: true,
+                demoTradingEnabled: true,
+                liveEnabled: false,
+            ),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        self::assertSame(Command::SUCCESS, $tester->execute([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+        ]));
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Readiness level: demo_testnet_candidate', $output);
+        self::assertStringNotContainsString('okx_private_read_probe_failed', $output);
     }
 
     public function testReportsUnreadyHyperliquidRuntimeWithoutProviderOrCredentials(): void
@@ -817,19 +856,22 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         MarketType $marketType,
         bool $contractsLoaded = true,
         bool $accountReadable = true,
+        ?AccountProviderInterface $accountProvider = null,
     ): ExchangeProviderBundle
     {
         $contractProvider = $this->createMock(ContractProviderInterface::class);
         $contractProvider->method('getContracts')->willReturn($contractsLoaded ? [['symbol' => 'BTCUSDT']] : []);
-        $accountProvider = $this->createMock(AccountProviderInterface::class);
-        $accountProvider->method('getAccountInfo')->willReturn($accountReadable ? AccountDto::fromArray([
-            'currency' => 'USDT',
-            'available_balance' => '100',
-            'frozen_balance' => '0',
-            'unrealized' => '0',
-            'equity' => '100',
-            'position_deposit' => '0',
-        ]) : null);
+        if (!$accountProvider instanceof AccountProviderInterface) {
+            $accountProvider = $this->createMock(AccountProviderInterface::class);
+            $accountProvider->method('getAccountInfo')->willReturn($accountReadable ? AccountDto::fromArray([
+                'currency' => 'USDT',
+                'available_balance' => '100',
+                'frozen_balance' => '0',
+                'unrealized' => '0',
+                'equity' => '100',
+                'position_deposit' => '0',
+            ]) : null);
+        }
 
         return new ExchangeProviderBundle(
             new ExchangeContext($exchange, $marketType),
@@ -889,5 +931,23 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
                 );
             }
         };
+    }
+}
+
+final class ReadableEmptyOkxAccountClient implements OkxRestClientInterface
+{
+    public function publicGet(string $path, array $query = []): array
+    {
+        throw new \LogicException('Public reads are not used by this fixture.');
+    }
+
+    public function privateGet(string $path, array $query = []): array
+    {
+        return ['code' => '0', 'data' => [['details' => []]]];
+    }
+
+    public function privatePost(string $path, array $body = []): array
+    {
+        throw new \LogicException('Writes are not used by this fixture.');
     }
 }
