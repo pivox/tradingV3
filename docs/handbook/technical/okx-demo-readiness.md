@@ -87,17 +87,19 @@ fail-closed, toutes les gates d'ecriture sont restees fermees et aucun ordre
 exchange n'a ete envoye. La validation runtime representative reste donc un gate
 externe a rejouer, sans assouplir les guards.
 
-Deux gates restent distincts et obligatoires :
+Deux controles restent distincts et contraignants :
 
-1. **#188** doit produire la recette runtime representative, redacted et
+1. **#188** reste ouvert et doit produire la recette runtime representative, redacted et
    reproductible de la capability OKX, y compris l'expiration fail-closed apres
    arret du worker.
-2. **DEMO-005** doit traiter separement la decision pre-mutative, les protections,
-   la compensation, l'audit et l'activation explicite des gates d'ecriture demo.
+2. **DEMO-005** est termine et livre avec la decision `blocked`. Cette decision
+   interdit la tentative mutative et maintient les gates d'ecriture demo fermees
+   tant qu'une reevaluation explicite ne la remplace pas.
 
 Cette PR ne debloque ni `demo_testnet_enabled`, ni ordre demo, ni mutation de
-levier/protection, ni mainnet. Elle ne ferme ni #188 ni DEMO-005 et ne modifie
-aucune strategie, aucun sizing et aucune logique d'ordre.
+levier/protection, ni mainnet. Elle ne ferme pas #188 et ne modifie pas la
+decision `blocked` de DEMO-005, ni aucune strategie, aucun sizing ou logique
+d'ordre.
 
 ## Endpoints requis
 

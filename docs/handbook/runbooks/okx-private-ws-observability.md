@@ -1,8 +1,9 @@
 # OKX private WS observability
 
 Ce runbook exploite uniquement le worker d'observabilite privee OKX demo. Il
-n'envoie aucun ordre. Les gates #188 et DEMO-005 restent distincts : #188 porte
-la preuve runtime representative; DEMO-005 porte une future decision pre-mutative.
+n'envoie aucun ordre. #188 reste le gate ouvert de preuve runtime representative.
+DEMO-005 est termine et livre avec la decision `blocked`; cette decision
+distincte maintient la gate mutative fermee.
 La recette reelle OKX demo executee pour OKX-010 est restee fail-closed : OKX a
 ferme la connexion pendant le login. Aucun ordre exchange n'a ete envoye et ce
 resultat reste un gate d'environnement externe, pas une preuve de readiness.
@@ -218,5 +219,6 @@ Confirmer l'etat fail-closed, puis retirer le deploiement qui active le profil
 `kill_switch_enabled=true`. Ne pas supprimer Redis, les logs partages ou les
 credentials d'autres services dans ce rollback.
 
-Ce rollback n'envoie aucun ordre et ne valide aucune readiness mutative. #188 et
-DEMO-005 restent des gates distincts apres l'operation.
+Ce rollback n'envoie aucun ordre et ne valide aucune readiness mutative. #188
+reste ouvert apres l'operation et la decision DEMO-005 livree reste `blocked`;
+les gates d'ecriture restent fermees.
