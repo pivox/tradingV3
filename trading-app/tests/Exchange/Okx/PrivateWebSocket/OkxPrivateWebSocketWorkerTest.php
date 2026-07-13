@@ -945,6 +945,67 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertFalse($status->authenticated);
     }
 
+    public function testMalformedSwapRowAfterReadinessClosesReconnectsAndProjectsNothing(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $logger = new RecordingLogger();
+        $projectionStore = new RecordingProjectionStore();
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker(
+            $transport,
+            $loop,
+            $store,
+            clock: $clock,
+            logger: $logger,
+            projectionStore: $projectionStore,
+        );
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+            ['channel' => 'fills'],
+        ] as $arg) {
+            $transport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+        self::assertTrue($store->load()?->initialSnapshotLoaded);
+
+        $transport->message([
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [[
+                'fillPx' => '1e309',
+                'fillSz' => '0.1',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'malformed-row-order',
+                'side' => 'buy',
+                'token' => 'worker-malformed-secret-sentinel',
+                'tradeId' => 'malformed-row-fill',
+                'ts' => '1767225603123',
+            ]],
+        ]);
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
+        self::assertSame([], $projectionStore->events);
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertFalse($status->connected);
+        self::assertFalse($status->authenticated);
+        self::assertTrue($status->reconnecting);
+        self::assertSame(['okx_private_ws_connection_failed'], $status->blockingErrors);
+        self::assertStringNotContainsString(
+            'worker-malformed-secret-sentinel',
+            json_encode($logger->records, \JSON_THROW_ON_ERROR),
+        );
+    }
+
     public function testLoginSendExceptionFailsClosedWithOneRetry(): void
     {
         $transport = new FakeOkxPrivateWebSocketTransport();

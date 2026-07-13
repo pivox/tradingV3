@@ -67,7 +67,8 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'instId' => 'BTC-USDT-SWAP',
                 'instType' => 'SWAP',
                 'lever' => '3',
-                'mgnMode' => 'isolated',
+                'mgnMode' => 'cross',
+                'tdMode' => 'isolated',
                 'ordId' => '12345',
                 'ordType' => 'limit',
                 'posSide' => 'long',
@@ -148,12 +149,14 @@ final class OkxExchangeEventNormalizerTest extends TestCase
                 'slTriggerPx' => '24800',
                 'state' => 'live',
                 'sz' => '0.01',
+                'tdMode' => 'cross',
                 'uTime' => '1767225600000',
             ]],
         ]);
 
         self::assertCount(1, $events);
         self::assertInstanceOf(ExchangeProtectionOrderCreated::class, $events[0]);
+        self::assertSame('cross', $events[0]->order()->metadata['margin_mode'] ?? null);
         self::assertSame('algo:90001', $events[0]->order()->exchangeOrderId);
         self::assertSame('OKXSL', $events[0]->order()->clientOrderId);
         self::assertSame(ExchangeOrderType::STOP_LOSS, $events[0]->order()->orderType);
@@ -898,9 +901,12 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         self::assertNotSame($events[0]->fill()->fillId, $events[1]->fill()->fillId);
     }
 
-    public function testDropsFillWhenAllowlistedTradeIdentifierIsNotScalar(): void
+    public function testRejectsFillWhenAllowlistedTradeIdentifierIsNotScalar(): void
     {
-        $events = $this->normalizer->normalize([
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_ws_message_invalid');
+
+        $this->normalizer->normalize([
             'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
             'data' => [[
                 'fillPx' => '25000.5',
@@ -914,8 +920,6 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             ]],
         ]);
 
-        self::assertSame([], $events);
-        self::assertStringNotContainsString('malformed-trade-secret-sentinel', serialize($events));
     }
 
     public function testNormalizesPositionUpdateAndCloseEvents(): void
@@ -1028,37 +1032,83 @@ final class OkxExchangeEventNormalizerTest extends TestCase
     /**
      * @param array<string,mixed> $event
      */
-    #[DataProvider('malformedPrivateEventProvider')]
-    public function testMalformedPrivateEnvelopeAndRowsFailClosedWithoutWarnings(
-        array $event,
-        bool $expectedSupports,
-    ): void {
+    #[DataProvider('malformedPrivateEnvelopeProvider')]
+    public function testMalformedPrivateEnvelopeIsUnsupportedWithoutWarnings(array $event): void
+    {
         set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
             throw new \ErrorException($message, 0, $severity, $file, $line);
         });
 
         try {
-            self::assertSame($expectedSupports, $this->normalizer->supports($event));
+            self::assertFalse($this->normalizer->supports($event));
             self::assertSame([], $this->normalizer->normalize($event));
         } finally {
             restore_error_handler();
         }
     }
 
-    /** @return iterable<string,array{array<string,mixed>,bool}> */
-    public static function malformedPrivateEventProvider(): iterable
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function malformedPrivateEnvelopeProvider(): iterable
     {
-        yield 'envelope channel array' => [self::validPrivateOrderEvent(['channel' => []]), false];
-        yield 'envelope instType array' => [self::validPrivateOrderEvent(['instType' => []]), false];
-        yield 'row instType object' => [self::validPrivateOrderEvent([], ['instType' => new \stdClass()]), true];
-        yield 'order type array' => [self::validPrivateOrderEvent([], ['ordType' => []]), true];
-        yield 'state object' => [self::validPrivateOrderEvent([], ['state' => new \stdClass()]), true];
-        yield 'side array' => [self::validPrivateOrderEvent([], ['side' => []]), true];
-        yield 'position side object' => [self::validPrivateOrderEvent([], ['posSide' => new \stdClass()]), true];
-        yield 'timestamp array' => [self::validPrivateOrderEvent([], ['uTime' => []]), true];
-        yield 'identifier object' => [self::validPrivateOrderEvent([], ['ordId' => new \stdClass()]), true];
-        yield 'price array' => [self::validPrivateOrderEvent([], ['px' => []]), true];
-        yield 'known field resource' => [self::validPrivateOrderEvent([], ['avgPx' => fopen('php://memory', 'r')]), true];
+        yield 'envelope channel array' => [self::validPrivateOrderEvent(['channel' => []])];
+        yield 'envelope instType array' => [self::validPrivateOrderEvent(['instType' => []])];
+    }
+
+    /** @param array<string,mixed> $event */
+    #[DataProvider('malformedPrivateRowProvider')]
+    public function testMalformedPrivateRowsThrowCanonicalExceptionWithoutWarnings(array $event): void
+    {
+        set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
+            throw new \ErrorException($message, 0, $severity, $file, $line);
+        });
+
+        try {
+            self::assertTrue($this->normalizer->supports($event));
+            $this->expectException(\InvalidArgumentException::class);
+            $this->expectExceptionMessage('okx_private_ws_message_invalid');
+            $this->normalizer->normalize($event);
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function malformedPrivateRowProvider(): iterable
+    {
+        yield 'row instType object' => [self::validPrivateOrderEvent([], ['instType' => new \stdClass()])];
+        yield 'order type array' => [self::validPrivateOrderEvent([], ['ordType' => []])];
+        yield 'state object' => [self::validPrivateOrderEvent([], ['state' => new \stdClass()])];
+        yield 'side array' => [self::validPrivateOrderEvent([], ['side' => []])];
+        yield 'position side object' => [self::validPrivateOrderEvent([], ['posSide' => new \stdClass()])];
+        yield 'timestamp array' => [self::validPrivateOrderEvent([], ['uTime' => []])];
+        yield 'identifier object' => [self::validPrivateOrderEvent([], ['ordId' => new \stdClass()])];
+        yield 'price array' => [self::validPrivateOrderEvent([], ['px' => []])];
+        yield 'known field resource' => [self::validPrivateOrderEvent([], ['avgPx' => fopen('php://memory', 'r')])];
+        yield 'fill price overflow' => [self::validPrivateOrderEvent([], ['fillPx' => '1e309'])];
+        yield 'fill timestamp exponent' => [self::validPrivateOrderEvent([], ['fillTime' => '1e309'])];
+        yield 'update timestamp overflow' => [self::validPrivateOrderEvent([], ['uTime' => '999999999999999999999999'])];
+        yield 'leverage overflow' => [self::validPrivateOrderEvent([], ['lever' => '1e309'])];
+        yield 'fee malformed' => [self::validPrivateOrderEvent([], ['fee' => 'not-a-fee'])];
+        yield 'quantity exponent overflow' => [self::validPrivateOrderEvent([], ['sz' => '1e309'])];
+        yield 'numeric infinity' => [self::validPrivateOrderEvent([], ['avgPx' => 'INF'])];
+        yield 'numeric nan' => [self::validPrivateOrderEvent([], ['markPx' => 'NAN'])];
+        yield 'numeric boolean' => [self::validPrivateOrderEvent([], ['fee' => false])];
+        yield 'timestamp boolean' => [self::validPrivateOrderEvent([], ['uTime' => false])];
+        yield 'invalid order margin mode' => [self::validPrivateOrderEvent([], ['tdMode' => 'portfolio'])];
+        yield 'zero leverage' => [self::validPrivateOrderEvent([], ['lever' => '0'])];
+        yield 'zero fill price on fills channel' => [[
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [[
+                'fillPx' => '0',
+                'fillSz' => '0.1',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'fill-order',
+                'side' => 'buy',
+                'tradeId' => 'fill-id',
+                'ts' => '1767225600000',
+            ]],
+        ]];
     }
 
     public function testAcceptsAnyInstTypeSubscriptionsAndFiltersRows(): void

@@ -69,6 +69,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         'slTriggerPx',
         'state',
         'sz',
+        'tdMode',
         'tpOrdPx',
         'tpTriggerPx',
         'tradeId',
@@ -114,8 +115,12 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         $channel = $this->channel($event);
         foreach ($this->dataRows($event) as $row) {
             if (!$this->hasValidRowShapes($row)) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+            if (!$this->isSwapRow($row)) {
                 continue;
             }
+            $this->assertValidRowValues($row, $channel);
             array_push($normalized, ...match ($channel) {
                 'orders', 'orders-algo' => $this->orderEvents($row, $channel),
                 'fills' => $this->fillEvents($row),
@@ -283,7 +288,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             metadata: $this->withoutNullStrings([
                 'source' => 'okx_ws_orders',
                 'instrument_id' => $this->scalarString($row['instId'] ?? null),
-                'margin_mode' => $this->marginMode($row['mgnMode'] ?? null),
+                'margin_mode' => $this->marginMode($row['tdMode'] ?? null),
                 'leverage' => $this->numericString($row['lever'] ?? null),
                 'quantity_decimal' => $exactQuantities->quantity,
                 'filled_quantity_decimal' => $exactQuantities->filled,
@@ -464,7 +469,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
     {
         $value = $this->scalarString($value);
 
-        return $value !== null && is_numeric($value) ? $value : null;
+        return $value !== null && $this->isFiniteDecimal($value) ? $value : null;
     }
 
     private function marginMode(mixed $value): ?string
@@ -734,11 +739,12 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function timeOrNull(mixed $milliseconds): ?\DateTimeImmutable
     {
-        if (!is_numeric($milliseconds)) {
+        $milliseconds = $this->scalarString($milliseconds);
+        if ($milliseconds === null || !$this->isValidTimestamp($milliseconds)) {
             return null;
         }
 
-        $milliseconds = (int) floor((float) $milliseconds);
+        $milliseconds = (int) $milliseconds;
         $seconds = intdiv($milliseconds, 1000);
         $microseconds = ($milliseconds % 1000) * 1000;
         $time = \DateTimeImmutable::createFromFormat(
@@ -760,12 +766,17 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
 
     private function float(mixed $value): float
     {
-        return is_numeric($value) ? (float) $value : 0.0;
+        return $this->floatOrNull($value) ?? 0.0;
     }
 
     private function floatOrNull(mixed $value): ?float
     {
-        return is_numeric($value) ? (float) $value : null;
+        $value = $this->scalarString($value);
+        if ($value === null || !$this->isFiniteDecimal($value)) {
+            return null;
+        }
+
+        return (float) $value;
     }
 
     /**
@@ -809,7 +820,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         try {
             return ExactOrderQuantities::fromQuantityAndFilled($quantity, $filled);
         } catch (\InvalidArgumentException) {
-            return null;
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
         }
     }
 
@@ -828,6 +839,104 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         }
 
         return true;
+    }
+
+    /** @param array<string,mixed> $row */
+    private function assertValidRowValues(array $row, string $channel): void
+    {
+        foreach ([
+            'accFillSz',
+            'avgPx',
+            'fee',
+            'fillFee',
+            'fillPx',
+            'fillSz',
+            'imr',
+            'lever',
+            'margin',
+            'markPx',
+            'ordPx',
+            'pos',
+            'px',
+            'realizedPnl',
+            'slOrdPx',
+            'slTriggerPx',
+            'sz',
+            'tpOrdPx',
+            'tpTriggerPx',
+            'triggerPx',
+            'upl',
+        ] as $key) {
+            if ($this->hasProvidedValue($row, $key) && !$this->isFiniteDecimal($this->scalarString($row[$key]) ?? '')) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+        }
+
+        foreach (['accFillSz', 'avgPx', 'fillPx', 'fillSz', 'imr', 'lever', 'margin', 'markPx', 'sz'] as $key) {
+            if ($this->hasProvidedValue($row, $key) && ($this->floatOrNull($row[$key]) ?? -1.0) < 0.0) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+        }
+
+        if ($this->hasProvidedValue($row, 'lever') && ($this->floatOrNull($row['lever']) ?? 0.0) <= 0.0) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+        if ($channel === 'fills') {
+            foreach (['fillPx', 'fillSz'] as $key) {
+                if ($this->hasProvidedValue($row, $key) && ($this->floatOrNull($row[$key]) ?? 0.0) <= 0.0) {
+                    throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+                }
+            }
+        }
+        if (\in_array($channel, ['orders', 'orders-algo'], true)
+            && $this->hasProvidedValue($row, 'tdMode')
+            && $this->marginMode($row['tdMode']) === null) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+        if ($channel === 'positions'
+            && $this->hasProvidedValue($row, 'mgnMode')
+            && $this->marginMode($row['mgnMode']) === null) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+
+        foreach (['cTime', 'fillTime', 'ts', 'uTime'] as $key) {
+            if ($this->hasProvidedValue($row, $key) && !$this->isValidTimestamp($this->scalarString($row[$key]) ?? '')) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+        }
+    }
+
+    /** @param array<string,mixed> $row */
+    private function hasProvidedValue(array $row, string $key): bool
+    {
+        if (!\array_key_exists($key, $row) || $row[$key] === null) {
+            return false;
+        }
+
+        return !\is_string($row[$key]) || trim($row[$key]) !== '';
+    }
+
+    private function isFiniteDecimal(string $value): bool
+    {
+        if (preg_match('/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/D', $value) !== 1) {
+            return false;
+        }
+
+        return is_finite((float) $value);
+    }
+
+    private function isValidTimestamp(string $value): bool
+    {
+        if (preg_match('/^\d+$/D', $value) !== 1) {
+            return false;
+        }
+
+        $normalized = ltrim($value, '0');
+        $normalized = $normalized === '' ? '0' : $normalized;
+        $maximum = '9999999999999';
+
+        return strlen($normalized) < strlen($maximum)
+            || (strlen($normalized) === strlen($maximum) && strcmp($normalized, $maximum) <= 0);
     }
 
     /**

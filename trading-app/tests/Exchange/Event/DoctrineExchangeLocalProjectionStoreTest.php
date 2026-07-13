@@ -278,6 +278,7 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
                 'side' => 'buy',
                 'state' => 'partially_filled',
                 'sz' => '1',
+                'tdMode' => 'cross',
                 'tradeId' => 'safe-trade',
                 'uTime' => '1767225601123',
             ]],
@@ -294,6 +295,8 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         self::assertIsArray($capturedFill);
         self::assertInstanceOf(FillCostLedgerEntry::class, $savedLedgerEntry);
         self::assertSame('okx_ws_orders', $capturedOrder['raw']['metadata']['source'] ?? null);
+        self::assertSame('cross', $capturedOrder['open_type'] ?? null);
+        self::assertSame('cross', $capturedOrder['raw']['metadata']['margin_mode'] ?? null);
         self::assertSame('okx_ws_orders', $capturedOrder['raw']['payload']['source'] ?? null);
         self::assertSame('okx_ws_orders', $capturedFill['raw']['metadata']['source'] ?? null);
         self::assertSame('safe-trade', $capturedFill['raw']['payload']['exchange_fill_id'] ?? null);
