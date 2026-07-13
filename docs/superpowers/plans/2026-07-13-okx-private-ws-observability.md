@@ -4,7 +4,7 @@
 
 **Objectif :** Ajouter un worker WebSocket privé OKX demo strictement read-only, publier sa readiness éphémère dans Redis et la brancher au contrôle runtime commun sans jamais activer une écriture exchange.
 
-**Architecture :** Une commande Symfony possède la connexion Pawl, authentifie les credentials demo, attend les acknowledgements, charge un snapshot REST privé puis alimente une machine d'état pure. Un store Redis dédié publie un statut versionné avec TTL ; `app:exchange:runtime-check` le lit et le convertit en `ExchangePrivateObservabilityStatus`, tandis que la politique commune reste l'autorité finale.
+**Architecture :** Une commande Symfony possède la connexion Pawl et authentifie les credentials demo. Après le login, elle envoie les souscriptions, exécute et projette immédiatement le snapshot REST privé, puis n'accorde la readiness qu'une fois le snapshot projeté et les acknowledgements requis reçus. Un store Redis dédié publie un statut versionné avec TTL ; `app:exchange:runtime-check` le lit et le convertit en `ExchangePrivateObservabilityStatus`, tandis que la politique commune reste l'autorité finale.
 
 **Stack technique :** PHP 8.2, Symfony 7.1 Console/DI, ReactPHP, Ratchet Pawl, ext-redis, PHPUnit 11, PHPStan, Docker Compose, MkDocs.
 
@@ -288,7 +288,7 @@ git commit -m "feat(okx): probe private rest snapshot"
 
 - [ ] **Étape 1 : Tester la séquence protocolaire pure**
 
-Les tests doivent prouver : connexion vers login ; ack login vers quatre souscriptions ; readiness uniquement après ack `orders`, `positions`, `balance_and_position` et `fills` ; fallback exact de `fills` sur code `64003` ; toute autre erreur bloquante ; JSON mal formé non prêt ; messages `orders`, `fills`, `positions` normalisés ; aucun payload brut conservé.
+Les tests de session doivent prouver : connexion vers login ; ack login vers quatre souscriptions ; streams prêts uniquement après ack `orders`, `positions`, `balance_and_position` et `fills` ; fallback exact de `fills` sur code `64003` ; toute autre erreur bloquante ; JSON mal formé non prêt ; messages `orders`, `fills`, `positions` normalisés ; aucun payload brut conservé. L'ordre entre souscriptions, snapshot et readiness relève des tests du worker de la tâche suivante.
 
 ```php
 public function test_vip_fill_rejection_uses_orders_plus_rest_fallback(): void
@@ -326,7 +326,7 @@ git commit -m "feat(okx): model private ws session"
 
 - [ ] **Étape 1 : Tester démarrage, heartbeat, reconnexion et arrêt**
 
-Tester les délais exacts `1, 2, 4, 8, 15, 15`, le snapshot repris après chaque reconnexion, le statut non prêt publié avant retry, le refresh au plus toutes les 3 secondes, l'échec Redis fail-closed, et SIGTERM/SIGINT publiant `worker_stopping`. La commande doit refuser tout environnement autre que `demo`, `OKX_SIMULATED_TRADING != 1`, `OKX_LIVE_ENABLED != 0` ou credentials demo vides.
+Tester l'envoi des souscriptions avant le lancement et la projection immédiats du snapshot, sans attente de leurs acknowledgements, puis la readiness uniquement après projection du snapshot et réception des acknowledgements requis. Tester aussi les délais exacts `1, 2, 4, 8, 15, 15`, le snapshot repris après chaque reconnexion, le statut non prêt publié avant retry, le refresh au plus toutes les 3 secondes, l'échec Redis fail-closed, et SIGTERM/SIGINT publiant `worker_stopping`. La commande doit refuser tout environnement autre que `demo`, `OKX_SIMULATED_TRADING != 1`, `OKX_LIVE_ENABLED != 0` ou credentials demo vides.
 
 ```php
 public function test_reconnect_invalidates_readiness_and_reloads_snapshot(): void
@@ -350,7 +350,7 @@ interface OkxPrivateWebSocketTransportInterface
 }
 ```
 
-Le transport Pawl sérialise uniquement les commandes structurées. Le worker orchestre garde, login, acks, snapshot, publication et backoff. Les logs ne contiennent que `endpoint_id`, canal, état et code canonique.
+Le transport Pawl sérialise uniquement les commandes structurées. Le worker orchestre garde, login, envoi des souscriptions, exécution et projection immédiates du snapshot, acknowledgements requis, publication de la readiness et backoff. Les logs ne contiennent que `endpoint_id`, canal, état et code canonique.
 
 - [ ] **Étape 3 : Vérifier et committer**
 

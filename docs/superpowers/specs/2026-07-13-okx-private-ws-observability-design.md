@@ -190,9 +190,12 @@ Séquence de démarrage :
 1. valider la configuration et l'endpoint ;
 2. publier un statut `connecting` non prêt ;
 3. se connecter et s'authentifier ;
-4. souscrire et attendre les acknowledgements requis ;
-5. exécuter le snapshot REST initial ;
-6. publier le statut prêt et entrer dans la boucle de réception.
+4. envoyer les commandes de souscription ;
+5. exécuter, réconcilier et projeter immédiatement le snapshot REST initial, sans
+   attendre les acknowledgements de souscription ;
+6. publier le statut prêt uniquement lorsque le snapshot est projeté et que tous
+   les acknowledgements requis ont été reçus, puis entrer dans la boucle de
+   réception.
 
 Le worker gère le ping/pong du protocole et rafraîchit le statut lors d'un
 heartbeat ou d'un événement privé. Une déconnexion ou une erreur publie un statut
