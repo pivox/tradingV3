@@ -77,7 +77,7 @@ public function test_rejects_every_non_allowlisted_uri(string $uri): void
 
 public function test_builds_the_documented_login_signature(): void
 {
-    $args = (new OkxPrivateWebSocketLoginSigner())->sign(
+    $args = (new OkxPrivateWebSocketLoginSigner(new OkxAuthSigner()))->buildLoginArgs(
         'demo-key', 'demo-secret', 'demo-passphrase', '1538054050',
     );
     self::assertSame('1538054050', $args['timestamp']);
@@ -120,16 +120,31 @@ final class OkxPrivateWebSocketEndpointGuard
     }
 }
 
-final class OkxPrivateWebSocketLoginSigner
+final readonly class OkxPrivateWebSocketLoginSigner
 {
+    public function __construct(private OkxAuthSigner $authSigner)
+    {
+    }
+
     /** @return array{apiKey:string,passphrase:string,timestamp:string,sign:string} */
-    public function sign(string $apiKey, string $secret, string $passphrase, string $timestamp): array
+    public function buildLoginArgs(
+        string $apiKey,
+        string $secret,
+        string $passphrase,
+        string $timestamp,
+    ): array
     {
         return [
             'apiKey' => $apiKey,
             'passphrase' => $passphrase,
             'timestamp' => $timestamp,
-            'sign' => base64_encode(hash_hmac('sha256', $timestamp.'GET/users/self/verify', $secret, true)),
+            'sign' => $this->authSigner->sign(
+                $timestamp,
+                'GET',
+                '/users/self/verify',
+                '',
+                $secret,
+            ),
         ];
     }
 }
@@ -255,12 +270,18 @@ git commit -m "feat(okx): evaluate private ws observability"
 ```php
 public function test_accepts_an_empty_but_complete_demo_snapshot(): void
 {
-    $bundle = OkxBundleFake::withPrivateReads(account: [], positions: [], openOrders: [], fills: []);
-    $snapshot = (new OkxPrivateRestSnapshotProbe($bundle))->probe();
+    $source = $this->createStub(OkxPrivateRestSnapshotSourceInterface::class);
+    $source->method('accountReadable')->willReturn(true);
+    $source->method('positions')->willReturn([]);
+    $source->method('openOrders')->willReturn([]);
+    $source->method('fills')->willReturn([]);
+
+    $snapshot = (new OkxPrivateRestSnapshotProbe($source))->probe(
+        new DateTimeImmutable('2026-07-13T10:00:00+00:00'),
+    );
+
     self::assertTrue($snapshot->complete);
     self::assertSame([], $snapshot->blockingErrors);
-    self::assertSame(['account', 'positions', 'open_orders', 'fills'], $bundle->readCalls);
-    self::assertSame([], $bundle->writeCalls);
 }
 ```
 
@@ -293,8 +314,29 @@ Les tests de session doivent prouver : connexion vers login ; ack login vers qua
 ```php
 public function test_vip_fill_rejection_uses_orders_plus_rest_fallback(): void
 {
-    $session = $this->authenticatedSession();
-    $session->onMessage('{"event":"error","code":"64003","arg":{"channel":"fills"}}');
+    $now = new DateTimeImmutable('2026-07-13T10:00:00+00:00');
+    $clock = $this->createStub(ClockInterface::class);
+    $clock->method('now')->willReturn($now);
+    $session = new OkxPrivateWebSocketSession(
+        new OkxExchangeEventNormalizer(new OkxInstrumentResolver(), $clock),
+        $now,
+    );
+    $session->onConnected([[
+        'apiKey' => 'demo-key',
+        'passphrase' => 'demo-passphrase',
+        'timestamp' => '1783936800',
+        'sign' => 'fixture-signature',
+    ]], $now);
+    $session->onMessage(
+        ['event' => 'login', 'code' => '0'],
+        $now->modify('+1 second'),
+    );
+    $session->onMessage([
+        'event' => 'error',
+        'code' => '64003',
+        'arg' => ['channel' => 'fills'],
+    ], $now->modify('+2 seconds'));
+
     self::assertSame('orders_plus_rest', $session->status()->fillsSource);
     self::assertTrue($session->status()->fillsStreamReady);
     self::assertContains('okx_fills_channel_vip_unavailable', $session->status()->warnings);
@@ -303,7 +345,7 @@ public function test_vip_fill_rejection_uses_orders_plus_rest_fallback(): void
 
 - [ ] **Étape 2 : Vérifier le RED puis implémenter la machine d'état**
 
-La session reçoit des tableaux JSON décodés et retourne une liste de commandes sortantes structurées ; elle ne possède ni socket, ni Redis, ni horloge système. Injecter une horloge callable et `OkxExchangeEventNormalizer`. Une reconnexion appelle `reset()` et invalide authentification, acks et snapshot.
+La session reçoit des tableaux JSON décodés et un `DateTimeImmutable` pour chaque transition, puis retourne une liste de commandes sortantes structurées ; elle ne possède ni socket, ni Redis, ni horloge système. Son constructeur reçoit `OkxExchangeEventNormalizer` et un `DateTimeImmutable` initial. Une reconnexion appelle `reset()` avec un `DateTimeImmutable` et invalide authentification, acks et snapshot.
 
 - [ ] **Étape 3 : Vérifier et committer**
 
