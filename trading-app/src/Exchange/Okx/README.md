@@ -87,10 +87,12 @@ are never persisted. Malformed supported envelopes or rows produce the bounded
 
 The observer accepts only `OKX_ENV=demo`, `OKX_SIMULATED_TRADING=1`, the canonical
 demo private endpoint and dedicated non-empty demo credentials. The operational
-service forces `OKX_DEMO_TRADING_ENABLED=0` and `OKX_LIVE_ENABLED=0`; it uses
-read-only API-key permissions and sends no order. Logs use the dedicated
-`okx_private_ws` channel and contain only state names, phases, bounded error
-codes, endpoint identifiers and close codes, never raw messages or credentials.
+service forces `OKX_DEMO_TRADING_ENABLED=0` and `OKX_LIVE_ENABLED=0`, and its code
+path sends no order. Provisioning an API key with read-only permissions is a
+manual operator precondition: the worker does not inspect or prove the
+permissions configured in OKX. Logs use the dedicated `okx_private_ws` channel
+and contain only state names, phases, bounded error codes, endpoint identifiers
+and close codes, never raw messages or credentials.
 
 The real OKX demo recipe attempted for OKX-010 did not establish readiness: OKX
 closed the connection during login. The observer remained fail-closed, all write

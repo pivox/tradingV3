@@ -10,27 +10,45 @@ resultat reste un gate d'environnement externe, pas une preuve de readiness.
 
 ## Preflight
 
-Utiliser exclusivement une cle API OKX demo a permissions read-only. Placer les
-variables dans l'environnement du shell ou dans le fichier Compose `.env`. Cette
-commande verifie leur presence sans afficher leur valeur :
+Utiliser exclusivement une cle API OKX demo a permissions read-only. Cette
+restriction est une precondition operateur : le worker verifie la presence des
+credentials et ses gates locales, mais ne peut pas inspecter les permissions
+accordees a la cle par OKX. Choisir explicitement le fichier d'environnement
+Compose qui sera reutilise par toutes les commandes de cette recette. Cette
+commande verifie la presence des trois credentials sans afficher leur valeur :
 
 ```bash
 bash -c '
+OKX_ENV_FILE="${OKX_ENV_FILE:-trading-app/.env.local}"
+if [ ! -r "$OKX_ENV_FILE" ]; then
+  printf "OKX env file: MISSING (%s)\n" "$OKX_ENV_FILE" >&2
+  exit 1
+fi
 required="OKX_DEMO_API_KEY OKX_DEMO_API_SECRET OKX_DEMO_API_PASSPHRASE"
 for name in $required; do
-  if [ -n "${!name:-}" ] || awk -v key="$name" '\''
-    index($0, key "=") == 1 {
-      value = substr($0, length(key) + 2)
-      if (length(value) > 0) found = 1
+  if awk -v key="$name" '\''
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (line ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=") {
+        sub("^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=[[:space:]]*", "", line)
+        empty_double = sprintf("%c%c", 34, 34)
+        empty_single = sprintf("%c%c", 39, 39)
+        if (line != "" && line != empty_double && line != empty_single) found = 1
+      }
     }
     END { exit(found ? 0 : 1) }
-  '\'' .env 2>/dev/null; then
+  '\'' "$OKX_ENV_FILE"; then
     printf "%s: set\n" "$name"
   else
     printf "%s: MISSING\n" "$name"
+    missing=1
   fi
 done
+exit "${missing:-0}"
 '
+export OKX_ENV_FILE="${OKX_ENV_FILE:-trading-app/.env.local}"
 ```
 
 Les valeurs non sensibles attendues sont `OKX_ENV=demo`,
@@ -43,7 +61,7 @@ Verifier le profil sans rendre la configuration resolue, qui contiendrait les
 valeurs injectees :
 
 ```bash
-docker compose config --profiles
+docker compose --env-file "$OKX_ENV_FILE" config --profiles
 ```
 
 La sortie doit contenir `okx-observability`.
@@ -51,9 +69,9 @@ La sortie doit contenir `okx-observability`.
 ## Demarrage
 
 ```bash
-docker compose --profile okx-observability up --build -d trading-app-okx-private-ws
-docker compose --profile okx-observability ps trading-app-okx-private-ws
-docker compose --profile okx-observability logs --tail=100 trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability up --build -d trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability ps trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability logs --tail=100 trading-app-okx-private-ws
 ```
 
 Les logs applicatifs dedies sont dans
@@ -72,7 +90,8 @@ le statut fail-closed, ferme la connexion courante et programme une reconnexion.
 Attendre l'authentification, les souscriptions et le snapshot initial, puis :
 
 ```bash
-docker compose exec trading-app-php php bin/console app:exchange:runtime-check okx perpetual
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability exec -T \
+  trading-app-okx-private-ws php bin/console app:exchange:runtime-check okx perpetual
 ```
 
 La capability privee doit etre supportee, connectee, authentifiee, complete et
@@ -82,9 +101,9 @@ annoncer `demo_testnet_enabled`, `live_ready` ou `mainnet_ready`.
 Lire uniquement les champs allow-listes du statut Redis :
 
 ```bash
-docker compose exec -T redis redis-cli --json GET tradingv3:okx:demo:private-observability:v1 \
+docker compose --env-file "$OKX_ENV_FILE" exec -T redis redis-cli --json GET tradingv3:okx:demo:private-observability:v1 \
   | jq 'fromjson | {schema_version,exchange,environment,endpoint_id,connected,authenticated,orders_stream_ready,fills_stream_ready,fills_source,positions_stream_ready,initial_snapshot_loaded,reconciliation_fresh,reconnecting,connected_at,last_heartbeat_at,last_event_at,observed_at,blocking_errors,warnings}'
-docker compose exec -T redis redis-cli TTL tradingv3:okx:demo:private-observability:v1
+docker compose --env-file "$OKX_ENV_FILE" exec -T redis redis-cli TTL tradingv3:okx:demo:private-observability:v1
 ```
 
 Ne jamais afficher le document Redis brut. Le TTL doit rester compris entre 1 et
@@ -106,9 +125,10 @@ rejetee avec `okx_private_ws_message_invalid`, puis la connexion est recyclee.
 ## Verification fail-closed
 
 ```bash
-docker compose --profile okx-observability stop trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability stop trading-app-okx-private-ws
 sleep 11
-docker compose exec trading-app-php php bin/console app:exchange:runtime-check okx perpetual
+docker compose --env-file "$OKX_ENV_FILE" run --rm --no-deps \
+  trading-app-okx-private-ws php bin/console app:exchange:runtime-check okx perpetual
 ```
 
 Apres 11 secondes, le statut Redis a expire et l'observabilite privee doit etre
@@ -183,7 +203,7 @@ conservent un fallback legacy pour les lignes anterieures. Verifier le schema et
 la relecture sur PostgreSQL avec :
 
 ```bash
-docker compose exec -T trading-app-php php vendor/bin/phpunit tests/Repository/FuturesOrderExactQuantityPostgresTest.php
+docker compose --env-file "$OKX_ENV_FILE" exec -T trading-app-php php vendor/bin/phpunit tests/Repository/FuturesOrderExactQuantityPostgresTest.php
 ```
 
 Une quantite decimale invalide ou contradictoire doit bloquer la projection;
@@ -206,10 +226,11 @@ resoudre un incident demo.
 ## Rollback
 
 ```bash
-docker compose --profile okx-observability stop trading-app-okx-private-ws
-docker compose --profile okx-observability rm -f trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability stop trading-app-okx-private-ws
+docker compose --env-file "$OKX_ENV_FILE" --profile okx-observability rm -f trading-app-okx-private-ws
 sleep 11
-docker compose exec trading-app-php php bin/console app:exchange:runtime-check okx perpetual
+docker compose --env-file "$OKX_ENV_FILE" run --rm --no-deps \
+  trading-app-okx-private-ws php bin/console app:exchange:runtime-check okx perpetual
 ```
 
 Confirmer l'etat fail-closed, puis retirer le deploiement qui active le profil
