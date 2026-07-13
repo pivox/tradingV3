@@ -37,6 +37,6 @@ final readonly class OkxGatewayPrivateRestReader implements OkxPrivateRestGatewa
     /** @return list<mixed> */
     public function fills(): array
     {
-        return $this->accountGateway->getTrades(null, 100, null, null);
+        return $this->accountGateway->getRecentFillsForSnapshotOrFail();
     }
 }

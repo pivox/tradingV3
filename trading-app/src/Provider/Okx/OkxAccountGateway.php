@@ -12,6 +12,9 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxAccountGateway implements AccountProviderInterface
 {
+    private const PRIVATE_PAGE_SIZE = 100;
+    private const PRIVATE_SNAPSHOT_MAX_ITEMS = 1_000;
+
     private OkxPrivateReadMapper $mapper;
     private OkxPositionGateway $positions;
 
@@ -104,6 +107,51 @@ final class OkxAccountGateway implements AccountProviderInterface
         }
 
         return $fills;
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function getRecentFillsForSnapshotOrFail(): array
+    {
+        $query = [
+            'instType' => 'SWAP',
+            'limit' => self::PRIVATE_PAGE_SIZE,
+        ];
+        $fills = [];
+        $after = null;
+        $seenCursors = [];
+
+        do {
+            $pageQuery = $after === null ? $query : $query + ['after' => $after];
+            $rows = $this->dataRows(
+                $this->privateGet('/api/v5/trade/fills', $pageQuery, __METHOD__),
+                __METHOD__,
+            );
+            if (\count($fills) + \count($rows) > self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', __METHOD__);
+            }
+
+            foreach ($rows as $row) {
+                $fills[] = $this->mapper->legacyTrade($row);
+            }
+
+            if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
+                return $fills;
+            }
+            if (\count($fills) >= self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', __METHOD__);
+            }
+
+            $nextAfter = trim((string) ($rows[\count($rows) - 1]['billId'] ?? ''));
+            if ($nextAfter === '') {
+                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', __METHOD__);
+            }
+            if (isset($seenCursors[$nextAfter])) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', __METHOD__);
+            }
+
+            $seenCursors[$nextAfter] = true;
+            $after = $nextAfter;
+        } while (true);
     }
 
     /**

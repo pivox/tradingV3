@@ -14,6 +14,8 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxOrderGateway implements OrderProviderInterface
 {
+    private const PRIVATE_PAGE_SIZE = 100;
+    private const PRIVATE_SNAPSHOT_MAX_ITEMS = 1_000;
     private const TERMINAL_ALGO_HISTORY_STATES = ['effective', 'canceled', 'order_failed'];
 
     private OkxPublicReadMapper $mapper;
@@ -295,22 +297,77 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     private function fetchOpenOrders(?string $symbol, string $operation): array
     {
-        $query = ['instType' => 'SWAP'];
+        $query = ['instType' => 'SWAP', 'limit' => self::PRIVATE_PAGE_SIZE];
         if ($symbol !== null) {
             $query['instId'] = $this->resolver()->instId($symbol);
         }
 
         $orders = [];
-        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-pending', $query, $operation), $operation) as $row) {
-            $orders[] = $this->privateMapper->order($row, false);
-        }
-
         $algoQuery = $query + ['ordType' => 'conditional'];
-        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-algo-pending', $algoQuery, $operation), $operation) as $row) {
-            $orders[] = $this->privateMapper->order($row, true);
-        }
+        $this->appendPaginatedOpenOrders(
+            $orders,
+            '/api/v5/trade/orders-pending',
+            $query,
+            'ordId',
+            false,
+            $operation,
+        );
+        $this->appendPaginatedOpenOrders(
+            $orders,
+            '/api/v5/trade/orders-algo-pending',
+            $algoQuery,
+            'algoId',
+            true,
+            $operation,
+        );
 
         return $orders;
+    }
+
+    /**
+     * @param list<OrderDto>          $orders
+     * @param array<string, mixed>    $baseQuery
+     */
+    private function appendPaginatedOpenOrders(
+        array &$orders,
+        string $path,
+        array $baseQuery,
+        string $cursorField,
+        bool $algo,
+        string $operation,
+    ): void {
+        $after = null;
+        $seenCursors = [];
+
+        do {
+            $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
+            $rows = $this->dataRows($this->privateGet($path, $query, $operation), $operation);
+            if (\count($orders) + \count($rows) > self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
+            }
+
+            foreach ($rows as $row) {
+                $orders[] = $this->privateMapper->order($row, $algo);
+            }
+
+            if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
+                return;
+            }
+            if (\count($orders) >= self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
+            }
+
+            $nextAfter = trim((string) ($rows[\count($rows) - 1][$cursorField] ?? ''));
+            if ($nextAfter === '') {
+                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+            }
+            if (isset($seenCursors[$nextAfter])) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', $operation);
+            }
+
+            $seenCursors[$nextAfter] = true;
+            $after = $nextAfter;
+        } while (true);
     }
 
     /**

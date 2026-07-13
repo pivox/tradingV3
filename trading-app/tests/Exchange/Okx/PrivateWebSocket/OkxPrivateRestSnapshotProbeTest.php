@@ -23,6 +23,7 @@ use App\Exchange\Okx\PrivateWebSocket\PositionSnapshotItem;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxOrderGateway;
 use App\Provider\Okx\OkxPrivateReadMapper;
+use App\Provider\Okx\OkxProviderUnavailableException;
 use Brick\Math\BigDecimal;
 use DateTimeImmutable;
 use InvalidArgumentException;
@@ -462,11 +463,151 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         self::assertSame([
             ['/api/v5/account/balance', []],
             ['/api/v5/account/positions', ['instType' => 'SWAP']],
-            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP']],
-            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'ordType' => 'conditional']],
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'limit' => 100]],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'limit' => 100, 'ordType' => 'conditional']],
             ['/api/v5/trade/fills', ['instType' => 'SWAP', 'limit' => 100]],
         ], $client->privateGetCalls);
         self::assertSame(0, $client->privatePostCalls);
+    }
+
+    public function testGatewayAdapterPaginatesStandardAndAlgoOrders(): void
+    {
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [
+                self::payload(self::standardOrderRows(100, 300)),
+                self::payload(self::standardOrderRows(1, 200)),
+            ],
+            '/api/v5/trade/orders-algo-pending' => [
+                self::payload(self::algoOrderRows(100, 300)),
+                self::payload(self::algoOrderRows(1, 200)),
+            ],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        $orders = $reader->openOrders();
+
+        self::assertCount(202, $orders);
+        self::assertSame([
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'limit' => 100]],
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'limit' => 100, 'after' => '201']],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'limit' => 100, 'ordType' => 'conditional']],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'limit' => 100, 'ordType' => 'conditional', 'after' => '201']],
+        ], $client->privateGetCalls);
+        self::assertSame(0, $client->privatePostCalls);
+    }
+
+    public function testGatewayAdapterPaginatesMoreThanOneHundredFills(): void
+    {
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/fills' => [
+                self::payload(self::fillRows(100, 300)),
+                self::payload(self::fillRows(2, 200)),
+            ],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        $fills = $reader->fills();
+
+        self::assertCount(102, $fills);
+        self::assertSame([
+            ['/api/v5/trade/fills', ['instType' => 'SWAP', 'limit' => 100]],
+            ['/api/v5/trade/fills', ['instType' => 'SWAP', 'limit' => 100, 'after' => '201']],
+        ], $client->privateGetCalls);
+        self::assertSame(0, $client->privatePostCalls);
+    }
+
+    public function testRepeatedOrderCursorFailsClosed(): void
+    {
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [
+                self::payload(self::standardOrderRows(100, 300)),
+                self::payload(self::standardOrderRows(100, 300)),
+            ],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        try {
+            $reader->openOrders();
+            self::fail('A repeated pagination cursor must fail closed.');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::assertSame('okx_private_pagination_cursor_repeated', $exception->reason());
+        }
+    }
+
+    public function testMissingOrderCursorFailsClosed(): void
+    {
+        $rows = self::standardOrderRows(100, 300);
+        unset($rows[99]['ordId']);
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [self::payload($rows)],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        try {
+            $reader->openOrders();
+            self::fail('A missing pagination cursor must fail closed.');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::assertSame('okx_private_pagination_cursor_invalid', $exception->reason());
+        }
+    }
+
+    public function testSnapshotItemCapFailsClosedInsteadOfReturningTruncatedOrders(): void
+    {
+        $pages = [];
+        for ($page = 0; $page < 10; ++$page) {
+            $pages[] = self::payload(self::standardOrderRows(100, 2_000 - ($page * 100)));
+        }
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => $pages,
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        try {
+            $reader->openOrders();
+            self::fail('A full page at the defensive item cap must fail closed.');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::assertSame('okx_private_pagination_limit_exceeded', $exception->reason());
+        }
+        self::assertCount(10, $client->privateGetCalls);
+    }
+
+    public function testLaterPageFailureMakesProbeSnapshotIncomplete(): void
+    {
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/account/balance' => [self::payload([['details' => []]])],
+            '/api/v5/account/positions' => [self::payload([])],
+            '/api/v5/trade/orders-pending' => [
+                self::payload(self::standardOrderRows(100, 300)),
+                new RuntimeException('page failed with api_secret=demo-secret'),
+            ],
+            '/api/v5/trade/fills' => [self::payload([])],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+        $source = new OkxGatewayPrivateRestSnapshotSource($reader);
+
+        $snapshot = (new OkxPrivateRestSnapshotProbe($source))->probe(new DateTimeImmutable(self::NOW));
+
+        self::assertFalse($snapshot->complete);
+        self::assertSame(['okx_private_rest_orders_snapshot_failed'], $snapshot->blockingErrors);
+        self::assertSame([], $snapshot->openOrders);
     }
 
     public function testSourceContractAndSnapshotExposeOnlyReadOnlyState(): void
@@ -552,6 +693,81 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
             'price' => '25000',
             'create_time' => 1783936800000,
         ]);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return array{code: string, data: list<array<string, mixed>>}
+     */
+    private static function payload(array $rows): array
+    {
+        return ['code' => '0', 'data' => $rows];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private static function standardOrderRows(int $count, int $firstId): array
+    {
+        $rows = [];
+        for ($offset = 0; $offset < $count; ++$offset) {
+            $id = (string) ($firstId - $offset);
+            $rows[] = [
+                'instId' => 'BTC-USDT-SWAP',
+                'ordId' => $id,
+                'side' => 'buy',
+                'ordType' => 'limit',
+                'state' => 'live',
+                'sz' => '0.25',
+                'accFillSz' => '0',
+                'px' => '25000',
+                'cTime' => '1783935000000',
+            ];
+        }
+
+        return $rows;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private static function algoOrderRows(int $count, int $firstId): array
+    {
+        $rows = [];
+        for ($offset = 0; $offset < $count; ++$offset) {
+            $id = (string) ($firstId - $offset);
+            $rows[] = [
+                'instId' => 'BTC-USDT-SWAP',
+                'algoId' => $id,
+                'side' => 'sell',
+                'ordType' => 'conditional',
+                'state' => 'live',
+                'sz' => '0.25',
+                'accFillSz' => '0',
+                'slTriggerPx' => '24000',
+                'cTime' => '1783935000000',
+            ];
+        }
+
+        return $rows;
+    }
+
+    /** @return list<array<string, mixed>> */
+    private static function fillRows(int $count, int $firstId): array
+    {
+        $rows = [];
+        for ($offset = 0; $offset < $count; ++$offset) {
+            $id = (string) ($firstId - $offset);
+            $rows[] = [
+                'instId' => 'BTC-USDT-SWAP',
+                'ordId' => 'order-'.$id,
+                'billId' => $id,
+                'tradeId' => 'trade-'.$id,
+                'side' => 'buy',
+                'posSide' => 'long',
+                'fillSz' => '0.25',
+                'fillPx' => '25000.5',
+                'ts' => '1783936800000',
+            ];
+        }
+
+        return $rows;
     }
 }
 
@@ -731,6 +947,44 @@ final class RecordingOkxPrivateRestClient implements OkxRestClientInterface
             ]]],
             default => ['code' => '0', 'data' => []],
         };
+    }
+
+    public function privatePost(string $path, array $body = []): array
+    {
+        ++$this->privatePostCalls;
+
+        throw new RuntimeException('Writes are forbidden in the private snapshot scope.');
+    }
+}
+
+final class ScriptedOkxPrivateRestClient implements OkxRestClientInterface
+{
+    /** @var list<array{string, array<string, mixed>}> */
+    public array $privateGetCalls = [];
+    public int $privatePostCalls = 0;
+
+    /** @param array<string, list<array<string, mixed>|\Throwable>> $responses */
+    public function __construct(private array $responses)
+    {
+    }
+
+    public function publicGet(string $path, array $query = []): array
+    {
+        throw new RuntimeException('Public reads are outside the private snapshot scope.');
+    }
+
+    public function privateGet(string $path, array $query = []): array
+    {
+        $this->privateGetCalls[] = [$path, $query];
+        $response = array_shift($this->responses[$path]);
+        if ($response instanceof \Throwable) {
+            throw $response;
+        }
+        if (!\is_array($response)) {
+            throw new RuntimeException('Unexpected private REST page.');
+        }
+
+        return $response;
     }
 
     public function privatePost(string $path, array $body = []): array
