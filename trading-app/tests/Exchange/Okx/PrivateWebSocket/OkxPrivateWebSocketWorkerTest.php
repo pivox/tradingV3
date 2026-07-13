@@ -247,6 +247,176 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertSame([], $status->blockingErrors);
     }
 
+    public function testExplicitLoginFailureClosesAndSchedulesReconnect(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $worker = $this->worker($transport, $loop, $store);
+        $worker->start();
+        $transport->open();
+
+        $transport->message(['event' => 'login', 'code' => '60009']);
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
+        self::assertFalse($store->load()?->connected);
+    }
+
+    public function testRequiredSubscriptionFailureClosesAndSchedulesReconnect(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $worker = $this->worker($transport, $loop, $store);
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        $transport->message([
+            'event' => 'error',
+            'code' => '60012',
+            'arg' => ['channel' => 'orders', 'instType' => 'SWAP'],
+        ]);
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
+        self::assertFalse($store->load()?->connected);
+    }
+
+    public function testFillsVipFailureKeepsOrdersPlusRestSessionAndDoesNotReconnect(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker($transport, $loop, $store, clock: $clock);
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+        ] as $arg) {
+            $transport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+
+        $transport->message([
+            'event' => 'error',
+            'code' => '64003',
+            'arg' => ['channel' => 'fills'],
+        ]);
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+
+        self::assertSame(0, $transport->closeCount);
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertSame('orders_plus_rest', $status->fillsSource);
+        self::assertSame([], $status->blockingErrors);
+    }
+
+    #[DataProvider('failedSnapshotSources')]
+    public function testFailedRestSnapshotClosesAndSchedulesReconnect(CountingSnapshotSource $source): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $worker = $this->worker($transport, $loop, $store, $source);
+        $worker->start();
+        $transport->open();
+
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
+        self::assertFalse($store->load()?->connected);
+    }
+
+    /** @return iterable<string, array{CountingSnapshotSource}> */
+    public static function failedSnapshotSources(): iterable
+    {
+        yield 'incomplete snapshot' => [new CountingSnapshotSource(accountReadable: false)];
+        yield 'snapshot source exception' => [new CountingSnapshotSource(throwOnAccount: true)];
+    }
+
+    public function testMissingLoginAckFailsClosedAfterFiveSeconds(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $worker = $this->worker($transport, $loop, new RecordingStatusStore());
+        $worker->start();
+        $transport->open();
+
+        self::assertContains(5.0, $loop->timerIntervals());
+        self::assertSame(5.0, $loop->fireTimerInterval(5.0));
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertSame([1.0], $loop->timerIntervals());
+    }
+
+    public function testMissingRequiredReadinessFailsClosedTenSecondsAfterLogin(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $worker = $this->worker($transport, $loop, new RecordingStatusStore());
+        $worker->start();
+        $transport->open();
+        $transport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertContains(10.0, $loop->timerIntervals());
+        self::assertSame(10.0, $loop->fireTimerInterval(10.0));
+
+        self::assertSame(1, $transport->closeCount);
+        self::assertSame([1.0], $loop->timerIntervals());
+    }
+
+    public function testReadySessionIgnoresDeadlines(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $worker = $this->worker($transport, $loop, new RecordingStatusStore());
+        $worker->start();
+        $transport->open();
+        $staleLoginDeadline = $loop->timerCallback(5.0);
+        $transport->message(['event' => 'login', 'code' => '0']);
+        $staleReadinessDeadline = $loop->timerCallback(10.0);
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+            ['channel' => 'fills'],
+        ] as $arg) {
+            $transport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+
+        $staleLoginDeadline();
+        $staleReadinessDeadline();
+
+        self::assertSame(0, $transport->closeCount);
+        self::assertSame([], $loop->timers);
+    }
+
+    public function testStaleLoginDeadlineFromPreviousConnectionIsIgnored(): void
+    {
+        $transport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $worker = $this->worker($transport, $loop, new RecordingStatusStore());
+        $worker->start();
+        $transport->open(0);
+        self::assertContains(5.0, $loop->timerIntervals());
+        $staleDeadline = $loop->timerCallback(5.0);
+        $transport->disconnect(1006, 0);
+        $loop->fireTimerInterval(1.0);
+        $transport->open(1);
+
+        $staleDeadline();
+
+        self::assertSame(0, $transport->closeCount);
+        self::assertSame([5.0], $loop->timerIntervals());
+    }
+
     public function testHeartbeatSendsStructuredPingAndPongRefreshesStatus(): void
     {
         $transport = new FakeOkxPrivateWebSocketTransport();
@@ -268,9 +438,9 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             '2026-07-13T10:00:05+00:00',
             $store->load()?->lastHeartbeatAt->format(DATE_ATOM),
         );
-        self::assertSame(4.0, $loop->fireNextTimer());
+        self::assertSame(4.0, $loop->fireTimerInterval(4.0));
         self::assertSame(0, $transport->closeCount);
-        self::assertSame([], $loop->timers);
+        self::assertSame([5.0], $loop->timerIntervals());
     }
 
     public function testMissingPongFailsClosedBeforeThirtySecondsAndReconnects(): void
@@ -297,7 +467,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
 
         $clock->sleep(2);
         $loop->firePeriodicInterval(5.0);
-        self::assertSame(4.0, $loop->fireNextTimer());
+        self::assertSame(4.0, $loop->fireTimerInterval(4.0));
 
         $status = $store->load();
         self::assertNotNull($status);
@@ -476,8 +646,8 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             '2026-07-13T10:00:05+00:00',
             $store->load()?->lastHeartbeatAt->format(DATE_ATOM),
         );
-        self::assertSame(4.0, $loop->fireNextTimer());
-        self::assertSame([], $loop->timers);
+        self::assertSame(4.0, $loop->fireTimerInterval(4.0));
+        self::assertSame([5.0], $loop->timerIntervals());
         self::assertCount(1, $transport->connections);
 
         $worker->stop();
@@ -708,7 +878,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertCount(2, $transport->connections);
         self::assertCount(1, $transport->sent);
         self::assertSame('login', $transport->sent[0]['op']);
-        self::assertSame([], $loop->timers);
+        self::assertSame([5.0], $loop->timerIntervals());
         self::assertSame(1, $transport->closeCount);
     }
 
@@ -904,11 +1074,21 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
 {
     public int $calls = 0;
 
+    public function __construct(
+        private readonly bool $accountReadable = true,
+        private readonly bool $throwOnAccount = false,
+    ) {
+    }
+
     public function accountReadable(): bool
     {
         ++$this->calls;
 
-        return true;
+        if ($this->throwOnAccount) {
+            throw new \RuntimeException('snapshot source sensitive failure');
+        }
+
+        return $this->accountReadable;
     }
 
     /** @return list<PositionSnapshotItem> */
@@ -1014,6 +1194,37 @@ final class DeterministicLoop implements LoopInterface
         $callback();
 
         return $delay;
+    }
+
+    /** @return list<float> */
+    public function timerIntervals(): array
+    {
+        return array_column($this->timers, 0);
+    }
+
+    public function timerCallback(float $interval): callable
+    {
+        foreach ($this->timers as [$candidate, $callback]) {
+            if ($candidate === $interval) {
+                return $callback;
+            }
+        }
+
+        throw new \LogicException('timer_not_found');
+    }
+
+    public function fireTimerInterval(float $interval): float
+    {
+        foreach ($this->timers as $index => [$candidate, $callback]) {
+            if ($candidate === $interval) {
+                array_splice($this->timers, $index, 1);
+                $callback();
+
+                return $candidate;
+            }
+        }
+
+        throw new \LogicException('timer_not_found');
     }
 
     public function firePeriodic(int $index = 0): void

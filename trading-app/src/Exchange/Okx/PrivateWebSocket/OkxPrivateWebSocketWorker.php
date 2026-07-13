@@ -18,6 +18,8 @@ final class OkxPrivateWebSocketWorker
     private const array RECONNECT_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0, 15.0];
     private const float PING_INTERVAL_SECONDS = 5.0;
     private const float PONG_TIMEOUT_SECONDS = 4.0;
+    private const LOGIN_TIMEOUT_SECONDS = 5.0;
+    private const READINESS_TIMEOUT_SECONDS = 10.0;
 
     private readonly LoopInterface $loop;
     private readonly OkxPrivateWebSocketSession $session;
@@ -35,6 +37,8 @@ final class OkxPrivateWebSocketWorker
     private int $connectionAttempts = 0;
     /** @var array<int, TimerInterface> */
     private array $timers = [];
+    private ?TimerInterface $loginDeadlineTimer = null;
+    private ?TimerInterface $readinessDeadlineTimer = null;
     private ?\Closure $sigtermHandler = null;
     private ?\Closure $sigintHandler = null;
 
@@ -153,6 +157,8 @@ final class OkxPrivateWebSocketWorker
             $this->loop->cancelTimer($timer);
         }
         $this->timers = [];
+        $this->loginDeadlineTimer = null;
+        $this->readinessDeadlineTimer = null;
         if (null !== $this->sigtermHandler) {
             $this->loop->removeSignal(\SIGTERM, $this->sigtermHandler);
             $this->sigtermHandler = null;
@@ -170,7 +176,7 @@ final class OkxPrivateWebSocketWorker
         $this->timers[spl_object_id($timer)] = $timer;
     }
 
-    private function addOneShotTimer(float $interval, \Closure $callback): void
+    private function addOneShotTimer(float $interval, \Closure $callback): TimerInterface
     {
         $timer = null;
         $timer = $this->loop->addTimer($interval, function () use (&$timer, $callback): void {
@@ -180,6 +186,8 @@ final class OkxPrivateWebSocketWorker
             $callback();
         });
         $this->trackTimer($timer);
+
+        return $timer;
     }
 
     private function connect(string $uri): void
@@ -218,6 +226,7 @@ final class OkxPrivateWebSocketWorker
 
                     return;
                 }
+                $this->armLoginDeadline($generation);
                 $this->logger->info('okx_private_ws.state', $this->logContext('login_sent'));
             },
             function (string $message) use ($generation): void {
@@ -225,7 +234,7 @@ final class OkxPrivateWebSocketWorker
                     return;
                 }
                 try {
-                    $this->onMessage($message);
+                    $this->onMessage($message, $generation);
                 } catch (\Throwable) {
                     $this->failClosed('message', 'okx_private_ws_message_invalid');
                 }
@@ -257,7 +266,7 @@ final class OkxPrivateWebSocketWorker
         return !$this->stopping && $generation === $this->connectionGeneration;
     }
 
-    private function onMessage(string $payload): void
+    private function onMessage(string $payload, int $generation): void
     {
         if ('pong' === $payload) {
             $this->awaitingPong = false;
@@ -280,13 +289,93 @@ final class OkxPrivateWebSocketWorker
         }
         $this->eventBus->publishMany($result->normalizedEvents);
 
-        if (!$wasAuthenticated && $this->session->status()->authenticated) {
-            $snapshot = $this->snapshotProbe->probe($this->clock->now());
-            $this->session->applySnapshot($snapshot, $this->clock->now());
+        $status = $this->session->status();
+        if (\in_array('okx_private_ws_authentication_failed', $status->blockingErrors, true)) {
+            $this->failClosed('login', 'okx_private_ws_authentication_failed');
+
+            return;
+        }
+        if (\in_array('okx_private_ws_subscription_failed', $status->blockingErrors, true)) {
+            $this->failClosed('subscription', 'okx_private_ws_subscription_failed');
+
+            return;
+        }
+
+        if (!$wasAuthenticated && $status->authenticated) {
+            $this->cancelDeadline($this->loginDeadlineTimer);
+            try {
+                $snapshot = $this->snapshotProbe->probe($this->clock->now());
+                $this->session->applySnapshot($snapshot, $this->clock->now());
+            } catch (\Throwable) {
+                $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
+
+                return;
+            }
+            if (!$this->session->status()->initialSnapshotLoaded) {
+                $this->failClosed('snapshot', 'okx_private_rest_snapshot_failed');
+
+                return;
+            }
+            $this->armReadinessDeadline($generation);
+        }
+
+        if ($this->isReady()) {
+            $this->cancelDeadline($this->readinessDeadlineTimer);
             $this->reconnectAttempt = 0;
         }
 
         $this->publishStatus($this->session->status());
+    }
+
+    private function armLoginDeadline(int $generation): void
+    {
+        $this->cancelDeadline($this->loginDeadlineTimer);
+        $this->loginDeadlineTimer = $this->addOneShotTimer(
+            self::LOGIN_TIMEOUT_SECONDS,
+            function () use ($generation): void {
+                if (!$this->isCurrentConnection($generation)
+                    || $this->session->status()->authenticated) {
+                    return;
+                }
+                $this->failClosed('login', 'okx_private_ws_authentication_failed');
+            },
+        );
+    }
+
+    private function armReadinessDeadline(int $generation): void
+    {
+        $this->cancelDeadline($this->readinessDeadlineTimer);
+        $this->readinessDeadlineTimer = $this->addOneShotTimer(
+            self::READINESS_TIMEOUT_SECONDS,
+            function () use ($generation): void {
+                if (!$this->isCurrentConnection($generation) || $this->isReady()) {
+                    return;
+                }
+                $this->failClosed('subscription', 'okx_private_ws_subscription_failed');
+            },
+        );
+    }
+
+    private function isReady(): bool
+    {
+        $status = $this->session->status();
+
+        return $status->authenticated
+            && $status->ordersStreamReady
+            && $status->fillsStreamReady
+            && $status->positionsStreamReady
+            && $status->initialSnapshotLoaded
+            && $status->reconciliationFresh;
+    }
+
+    private function cancelDeadline(?TimerInterface &$timer): void
+    {
+        if (null === $timer) {
+            return;
+        }
+        $this->loop->cancelTimer($timer);
+        unset($this->timers[spl_object_id($timer)]);
+        $timer = null;
     }
 
     private function handleConnectionFailure(string $code, ?int $closeCode = null): void
@@ -295,6 +384,9 @@ final class OkxPrivateWebSocketWorker
             return;
         }
 
+        ++$this->connectionGeneration;
+        $this->cancelDeadline($this->loginDeadlineTimer);
+        $this->cancelDeadline($this->readinessDeadlineTimer);
         $this->awaitingPong = false;
         ++$this->pingGeneration;
         $this->session->onDisconnected($this->clock->now());
@@ -371,6 +463,9 @@ final class OkxPrivateWebSocketWorker
                 'okx_private_ws_status_store_failed',
             ));
             if (!$this->stopping) {
+                ++$this->connectionGeneration;
+                $this->cancelDeadline($this->loginDeadlineTimer);
+                $this->cancelDeadline($this->readinessDeadlineTimer);
                 $this->session->onDisconnected($this->clock->now());
                 $this->scheduleReconnect();
                 $this->transport->close();
