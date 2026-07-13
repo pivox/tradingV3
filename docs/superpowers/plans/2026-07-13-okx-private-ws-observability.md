@@ -399,11 +399,11 @@ git commit -m "feat(okx): expose private ws runtime readiness"
 
 - [ ] **Étape 1 : Ajouter le wiring et le service Compose opt-in**
 
-Déclarer un client Redis dédié au store avec `REDIS_HOST`/`REDIS_PORT`, sans alias vers `MockRedis`. Le service `trading-app-okx-private-ws` utilise un profil `okx-observability`, lance `php bin/console app:okx:private-ws`, possède `OKX_DEMO_WRITE_ENABLED=0`, `OKX_LIVE_ENABLED=0`, et ne démarre jamais avec le Compose par défaut.
+Déclarer un client Redis dédié au store avec `REDIS_HOST`/`REDIS_PORT`, sans alias vers `MockRedis`. Le service `trading-app-okx-private-ws` utilise un profil `okx-observability`, lance `php bin/console app:okx:private-ws`, force `DEMO_TRADING_ENABLED=0`, `OKX_DEMO_TRADING_ENABLED=0` et `OKX_LIVE_ENABLED=0`, et ne démarre jamais avec le Compose par défaut.
 
 - [ ] **Étape 2 : Documenter les opérations exactes**
 
-Le runbook doit contenir : préflight des variables sans afficher leurs valeurs, démarrage du profil, commande runtime-check, lecture des seuls champs allow-listés du statut, arrêt, attente de 11 secondes, vérification fail-closed, incidents auth/subscription/Redis et rollback. Il doit rappeler qu'aucun ordre ne doit être envoyé et que #188/DEMO-005 restent des gates distincts.
+Le runbook doit contenir : préflight des variables sans afficher leurs valeurs, démarrage du profil, commande runtime-check, lecture des seuls champs allow-listés du statut, arrêt, attente de 11 secondes, vérification fail-closed, incidents auth/subscription/Redis et rollback. Il doit rappeler qu'aucun ordre ne doit être envoyé, que #188 reste ouvert et que DEMO-005 est terminé et livré avec la décision `blocked`, laquelle maintient les gates d'écriture fermées.
 
 - [ ] **Étape 3 : Vérifier configuration et documentation**
 
@@ -451,7 +451,7 @@ La PR doit référencer #197, #188, DEMO-005 et la PR précédente réellement m
 
 - [ ] **Étape 4 : Merger seulement lorsque les gates de revue sont vertes**
 
-Le merge est permis après CI verte, aucun thread bloquant et soit une réaction pouce levé de Codex, soit un verdict explicite équivalent à « Didn't find any major issues ». Une validation utilisateur explicite autorise également le merge. Après merge, mettre à jour `main` local puis commenter #197 avec ce qui est livré et les gates #188/DEMO-005 encore ouvertes ; ne pas fermer OKX-010.
+Le merge est permis après CI verte, aucun thread bloquant et soit une réaction pouce levé de Codex, soit un verdict explicite équivalent à « Didn't find any major issues ». Une validation utilisateur explicite autorise également le merge. Après merge, mettre à jour `main` local puis commenter #197 avec ce qui est livré, #188 qui reste ouvert et la décision `blocked` de DEMO-005 qui maintient la gate mutative fermée ; ne pas fermer OKX-010.
 
 - [ ] **Étape 5 : Mettre à jour le prompt canonique local**
 

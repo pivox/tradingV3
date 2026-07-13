@@ -5,7 +5,8 @@
 Cette conception livre le dernier prérequis technique d'observabilité pour
 OKX-010. Elle est strictement read-only : elle n'ajoute aucune opération submit,
 amend, cancel, leverage, protection ou autre écriture exchange. Elle n'autorise
-pas OKX-010 tant que #188 ou DEMO-005 restent bloqués.
+pas de tentative mutative : #188 reste ouvert et DEMO-005 est terminé et livré
+avec la décision `blocked`, qui maintient les gates d'écriture fermées.
 
 L'implémentation doit :
 
@@ -203,11 +204,14 @@ non prêt avant la reconnexion. Le délai de reconnexion utilise un backoff
 exponentiel borné : 1, 2, 4, 8 puis 15 secondes. Chaque tentative reconstruit
 l'authentification, les souscriptions et le snapshot REST.
 
-Une panne Redis reste fail-closed. Le worker peut conserver la socket et réessayer
-le store, mais les lecteurs runtime ne voient aucun statut valide. Les échecs
-d'authentification, de garde endpoint, les messages mal formés, les erreurs de
-souscription inattendues et les échecs de snapshot sont représentés par des codes
-stables, jamais par les corps de réponse bruts.
+Une panne Redis reste fail-closed. Un échec de publication invalide la connexion
+courante, ferme le transport WebSocket et programme une tentative de reprise. Le
+store Redis doit accepter une nouvelle publication non prête avant que le worker
+puisse ouvrir une nouvelle connexion WebSocket. Tant que Redis ne récupère pas,
+les lecteurs runtime ne voient aucun statut valide et aucune reconnexion WS n'est
+lancée. Les échecs d'authentification, de garde endpoint, les messages mal formés,
+les erreurs de souscription inattendues et les échecs de snapshot sont représentés
+par des codes stables, jamais par les corps de réponse bruts.
 
 SIGTERM et SIGINT publient un statut `worker_stopping` non prêt lorsque Redis est
 disponible, ferment la socket puis terminent proprement.
