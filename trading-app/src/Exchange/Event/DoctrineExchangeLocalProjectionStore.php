@@ -74,13 +74,19 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
     public function project(ExchangeEventInterface $event): void
     {
         if ($event instanceof AbstractExchangeOrderEvent) {
-            $this->orderSync->syncOrderFromApi($this->orderPayload($event->order(), $event));
+            if ($this->orderSync->syncOrderFromApi($this->orderPayload($event->order(), $event)) === null) {
+                throw new \RuntimeException('exchange_order_projection_failed');
+            }
+
             return;
         }
 
         if ($event instanceof ExchangeFillReceived) {
             $this->fillCostLedger->ingestExchangeFill($event);
-            $this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event));
+            if ($this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event)) === null) {
+                throw new \RuntimeException('exchange_fill_projection_failed');
+            }
+
             return;
         }
 
