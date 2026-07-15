@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\View;
 
+use App\Tests\Support\PostgresIntegrationDatabaseGuard;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
@@ -43,6 +44,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
         if (!is_string($dsn) || !preg_match('/^(postgres|postgresql|pdo-pgsql)/', $dsn)) {
             self::markTestSkipped('PostgreSQL DATABASE_URL required for the view integration test.');
         }
+
+        PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase($dsn);
 
         try {
             $this->conn = DriverManager::getConnection(['url' => $dsn]);
