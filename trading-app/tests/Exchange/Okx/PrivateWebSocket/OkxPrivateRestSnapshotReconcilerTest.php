@@ -93,7 +93,7 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
     {
         $store = new SnapshotRecordingProjectionStore();
         $position = $this->position();
-        $order = $this->order();
+        $order = $this->order(clientOrderId: 'client-1');
         $fill = $this->fill();
 
         $count = $this->reconciler($store)->reconcile($this->snapshot(
@@ -265,6 +265,49 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         self::assertSame([], $store->events);
     }
 
+    public function testDistinctOrderIdsWithSameClientOrderIdFailBeforeProjection(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $first = $this->order(orderId: 'order-1', clientOrderId: 'client-1');
+        $second = $this->order(orderId: 'order-2', clientOrderId: 'client-1');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_duplicate_conflict');
+        try {
+            $this->reconciler($store)->reconcile($this->snapshot(orders: [$first, $second]));
+        } finally {
+            self::assertSame([], $store->events);
+        }
+    }
+
+    public function testStandardAndAlgoOrderIdsWithSameClientOrderIdFailBeforeProjection(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $standard = $this->order(orderId: 'order-1', clientOrderId: 'client-1');
+        $algo = $this->order(orderId: 'algo:algo-1', clientOrderId: 'client-1', type: 'stop_loss');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_duplicate_conflict');
+        try {
+            $this->reconciler($store)->reconcile($this->snapshot(orders: [$standard, $algo]));
+        } finally {
+            self::assertSame([], $store->events);
+        }
+    }
+
+    public function testMultipleOrdersWithoutClientOrderIdRemainAllowed(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+
+        $count = $this->reconciler($store)->reconcile($this->snapshot(orders: [
+            $this->order(orderId: 'order-1'),
+            $this->order(orderId: 'order-2'),
+        ]));
+
+        self::assertSame(2, $count);
+        self::assertCount(2, $store->events);
+    }
+
     public function testInvalidEnumFailsBeforeAnyProjection(): void
     {
         $store = new SnapshotRecordingProjectionStore();
@@ -406,10 +449,15 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         return new PositionSnapshotItem('BTCUSDT', $side, '0.25', '25000', '25100', new \DateTimeImmutable(self::NOW));
     }
 
-    private function order(string $quantity = '1', string $type = 'limit'): OrderSnapshotItem
+    private function order(
+        string $quantity = '1',
+        string $type = 'limit',
+        string $orderId = 'order-1',
+        ?string $clientOrderId = null,
+    ): OrderSnapshotItem
     {
         return new OrderSnapshotItem(
-            'order-1',
+            $orderId,
             'BTCUSDT',
             'buy',
             $type,
@@ -420,6 +468,7 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
             '25000',
             null,
             new \DateTimeImmutable(self::NOW),
+            $clientOrderId,
         );
     }
 

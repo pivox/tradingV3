@@ -44,6 +44,7 @@ final readonly class OkxPrivateRestSnapshotReconciler
         }
 
         $orders = $this->unique($snapshot->openOrders, fn (OrderSnapshotItem $item): string => $this->required($item->orderId));
+        $this->assertUniqueClientOrderIds($orders);
         $positions = $this->unique(
             $snapshot->positions,
             fn (PositionSnapshotItem $item): string => $this->symbol($item->symbol) . ':' . $this->positionSide($item->side)->value,
@@ -255,6 +256,28 @@ final readonly class OkxPrivateRestSnapshotReconciler
         }
 
         return array_values($unique);
+    }
+
+    /**
+     * @param list<OrderSnapshotItem> $orders
+     */
+    private function assertUniqueClientOrderIds(array $orders): void
+    {
+        $exchangeOrderIdsByClientOrderId = [];
+        foreach ($orders as $order) {
+            if ($order->clientOrderId === null) {
+                continue;
+            }
+
+            $clientOrderId = $order->clientOrderId;
+            $exchangeOrderId = $this->required($order->orderId);
+            if (isset($exchangeOrderIdsByClientOrderId[$clientOrderId])
+                && $exchangeOrderIdsByClientOrderId[$clientOrderId] !== $exchangeOrderId) {
+                throw new \InvalidArgumentException('okx_private_rest_snapshot_duplicate_conflict');
+            }
+
+            $exchangeOrderIdsByClientOrderId[$clientOrderId] = $exchangeOrderId;
+        }
     }
 
     private function positionSide(string $value): ExchangePositionSide
