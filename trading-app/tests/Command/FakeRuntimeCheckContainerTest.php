@@ -24,6 +24,7 @@ final class FakeRuntimeCheckContainerTest extends KernelTestCase
     public function testCorruptedActiveStateIsReportedWithoutBreakingCommandConstruction(): void
     {
         $stateFile = dirname(__DIR__, 2) . '/var/fake_exchange_state.dat';
+        $this->ensureStateDirectory($stateFile);
         $stateExisted = is_file($stateFile);
         $previousState = $stateExisted ? file_get_contents($stateFile) : null;
         self::assertTrue(!$stateExisted || \is_string($previousState));
@@ -56,6 +57,7 @@ final class FakeRuntimeCheckContainerTest extends KernelTestCase
     public function testRuntimeCheckDoesNotCreateMissingActiveState(): void
     {
         $stateFile = dirname(__DIR__, 2) . '/var/fake_exchange_state.dat';
+        $this->ensureStateDirectory($stateFile);
         $stateExisted = is_file($stateFile);
         $previousState = $stateExisted ? file_get_contents($stateFile) : null;
         self::assertTrue(!$stateExisted || \is_string($previousState));
@@ -78,6 +80,14 @@ final class FakeRuntimeCheckContainerTest extends KernelTestCase
             } else {
                 @unlink($stateFile);
             }
+        }
+    }
+
+    private function ensureStateDirectory(string $stateFile): void
+    {
+        $directory = dirname($stateFile);
+        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+            self::fail('Unable to create Fake runtime-check state directory.');
         }
     }
 }
