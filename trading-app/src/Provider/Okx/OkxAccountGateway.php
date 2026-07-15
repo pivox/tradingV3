@@ -12,6 +12,9 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxAccountGateway implements AccountProviderInterface
 {
+    private const PRIVATE_PAGE_SIZE = 100;
+    private const PRIVATE_SNAPSHOT_MAX_ITEMS = 1_000;
+
     private OkxPrivateReadMapper $mapper;
     private OkxPositionGateway $positions;
 
@@ -104,6 +107,83 @@ final class OkxAccountGateway implements AccountProviderInterface
         }
 
         return $fills;
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function getRecentFillsForSnapshotOrFail(): array
+    {
+        $query = [
+            'instType' => 'SWAP',
+            'limit' => self::PRIVATE_PAGE_SIZE,
+        ];
+        $fills = [];
+        $after = null;
+        $seenCursors = [];
+
+        do {
+            $pageQuery = $after === null ? $query : $query + ['after' => $after];
+            $rows = $this->snapshotDataRows(
+                $this->privateGet('/api/v5/trade/fills', $pageQuery, __METHOD__),
+                __METHOD__,
+            );
+            if (\count($fills) + \count($rows) > self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', __METHOD__);
+            }
+
+            $nextAfter = null;
+            if (\count($rows) === self::PRIVATE_PAGE_SIZE) {
+                $nextAfter = $this->snapshotPaginationCursor($rows[\count($rows) - 1], __METHOD__);
+                if (isset($seenCursors[$nextAfter])) {
+                    throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', __METHOD__);
+                }
+            }
+
+            foreach ($rows as $row) {
+                $fills[] = $this->mapper->legacyTrade($row);
+            }
+
+            if ($nextAfter === null) {
+                return $fills;
+            }
+
+            $seenCursors[$nextAfter] = true;
+            $after = $nextAfter;
+        } while (true);
+    }
+
+    /** @param array<string, mixed> $row */
+    private function snapshotPaginationCursor(array $row, string $operation): string
+    {
+        $value = $row['billId'] ?? null;
+        if (!\is_string($value) && !\is_int($value)) {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        $cursor = trim((string) $value);
+        if ($cursor === '') {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        return $cursor;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return list<array<string, mixed>>
+     */
+    private function snapshotDataRows(array $payload, string $operation): array
+    {
+        $rows = $this->dataRows($payload, $operation);
+        $data = $payload['data'] ?? null;
+        if (
+            !\is_array($data)
+            || \count($rows) !== \count($data)
+            || \count($data) > self::PRIVATE_PAGE_SIZE
+        ) {
+            throw new OkxProviderUnavailableException('okx_private_snapshot_page_invalid', $operation);
+        }
+
+        return $rows;
     }
 
     /**

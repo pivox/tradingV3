@@ -425,6 +425,59 @@ services:
     networks:
       - trading-app-net
 
+  trading-app-okx-private-ws:
+    build:
+      context: ./trading-app
+      dockerfile: Dockerfile.mtf
+    profiles: ["okx-observability"]
+    container_name: trading_app_okx_private_ws
+    mem_limit: 256m
+    working_dir: /var/www/html
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    volumes:
+      - app-cache:/var/www/html/var/cache
+      - ./trading-app/var/log:/var/www/html/var/log
+      - var-lock:/var/www/html/var/lock
+    environment:
+      APP_SECRET: "${APP_SECRET:-}"
+      DATABASE_URL: "${TRADING_APP_DATABASE_URL:-postgresql://postgres:password@trading-app-db:5432/trading_app?serverVersion=15&charset=utf8}"
+      LOCK_DSN: postgresql://postgres:password@trading-app-db:5432/trading_app
+      LOG_LEVEL_MAIN: info
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OKX_ENV: demo
+      OKX_DEMO_API_KEY: "${OKX_DEMO_API_KEY:-}"
+      OKX_DEMO_API_SECRET: "${OKX_DEMO_API_SECRET:-}"
+      OKX_DEMO_API_PASSPHRASE: "${OKX_DEMO_API_PASSPHRASE:-}"
+      OKX_API_BASE_URI: "${OKX_API_BASE_URI:-https://eea.okx.com}"
+      OKX_WS_PUBLIC_URI: "${OKX_WS_PUBLIC_URI:-wss://wseeapap.okx.com:8443/ws/v5/public}"
+      OKX_WS_PRIVATE_URI: "${OKX_WS_PRIVATE_URI:-wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999}"
+      OKX_WS_BUSINESS_URI: "${OKX_WS_BUSINESS_URI:-wss://wseeapap.okx.com:8443/ws/v5/business}"
+      OKX_SIMULATED_TRADING: '1'
+      DEMO_TRADING_ENABLED: '0'
+      OKX_DEMO_TRADING_ENABLED: '0'
+      OKX_LIVE_ENABLED: '0'
+    depends_on:
+      trading-app-php:
+        condition: service_started
+      trading-app-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - trading-app-net
+      - shared-net
+    command: ["php", "bin/console", "app:okx:private-ws"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
   trading-app-messenger-order-timeout:
     build:
       context: ./trading-app

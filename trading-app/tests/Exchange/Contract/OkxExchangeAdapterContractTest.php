@@ -56,6 +56,11 @@ final class OkxExchangeAdapterContractTest extends ExchangeAdapterContractTestCa
         return MarketType::PERPETUAL;
     }
 
+    public function testAdvertisesPrivateWebSocketCapability(): void
+    {
+        self::assertTrue($this->adapter->capabilities()->supportsWebSocketPrivate);
+    }
+
     protected function snapshotClientOrderId(string $clientOrderId): string
     {
         return (new OkxActionFactory())->clientOrderId($clientOrderId);

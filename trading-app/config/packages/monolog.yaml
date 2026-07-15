@@ -1,5 +1,5 @@
 monolog:
-  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent', 'conditionsLogger', 'demo_trading_audit']
+  channels: ['mtf', 'signals', 'positions', 'provider', 'bitmart', 'indicators', 'runtime', 'pipeline_exec', 'deprecation', 'global-severity', 'ws_agent', 'conditionsLogger', 'demo_trading_audit', 'okx_private_ws']
   handlers:
     # =====================
     # --- Handler Temporal (Asynchrone) ---
@@ -70,6 +70,14 @@ monolog:
       max_files: 30
       level: debug
       channels: ['demo_trading_audit']
+      formatter: App\Logging\CustomLineFormatter
+
+    okx_private_ws_rotating:
+      type: rotating_file
+      path: '%kernel.project_dir%/var/log/okx-private-ws.log'
+      max_files: 10
+      level: info
+      channels: ['okx_private_ws']
       formatter: App\Logging\CustomLineFormatter
 
     # Canal Bitmart - Traçage des appels API Bitmart (REST/Privé)

@@ -58,6 +58,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function position(array $row): ?PositionDto
     {
+        $this->assertKnownEnums($row);
         $size = $this->float($row['pos'] ?? null);
         if (abs($size) <= 0.00000001) {
             return null;
@@ -88,6 +89,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function order(array $row, bool $algo): OrderDto
     {
+        $this->assertKnownEnums($row);
         $quantity = BigDecimal::of($this->number($row['sz'] ?? '0'));
         $filled = BigDecimal::of($this->number($row['accFillSz'] ?? '0'));
         $orderType = $this->orderType($row, $algo);
@@ -116,6 +118,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function fill(array $row): ExchangeFillDto
     {
+        $this->assertKnownEnums($row);
         return new ExchangeFillDto(
             exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
@@ -140,8 +143,10 @@ final readonly class OkxPrivateReadMapper
      */
     public function legacyTrade(array $row): array
     {
+        $this->assertKnownEnums($row);
         $trade = [
             'exchange' => 'okx',
+            'instrument_id' => $this->string($row['instId'] ?? ''),
             'symbol' => $this->instruments->symbol($this->string($row['instId'] ?? '')),
             'order_id' => $this->string($row['ordId'] ?? ''),
             'client_order_id' => $this->stringOrNull($row['clOrdId'] ?? null),
@@ -152,7 +157,7 @@ final readonly class OkxPrivateReadMapper
             'size' => $this->number($row['fillSz'] ?? $row['sz'] ?? '0'),
             'price' => $this->number($row['fillPx'] ?? $row['px'] ?? '0'),
             'fee_currency' => $this->stringOrNull($row['feeCcy'] ?? null),
-            'create_time' => is_numeric($row['ts'] ?? null) ? (int) $row['ts'] : null,
+            'create_time' => $this->intOrNull($row['fillTime'] ?? null) ?? $this->intOrNull($row['ts'] ?? null),
             'raw_reference' => $this->redacted($row),
         ];
         if (array_key_exists('fee', $row)) {
@@ -200,7 +205,49 @@ final readonly class OkxPrivateReadMapper
 
     private function orderSide(mixed $side): OrderSide
     {
-        return strtolower((string) $side) === 'sell' ? OrderSide::SELL : OrderSide::BUY;
+        return match (strtolower((string) $side)) {
+            'buy' => OrderSide::BUY,
+            'sell' => OrderSide::SELL,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
+        };
+    }
+
+    /** @param array<string,mixed> $row */
+    private function assertKnownEnums(array $row): void
+    {
+        $this->assertKnownEnum($row, 'side', ['buy', 'sell']);
+        $this->assertKnownEnum($row, 'state', [
+            'filled', 'partially_filled', 'canceled', 'cancelled', 'mmp_canceled', 'rejected', 'live',
+            'effective', 'partially_effective', 'order_failed', 'partially_failed', 'pause',
+        ]);
+        $this->assertKnownEnum($row, 'ordType', [
+            'limit', 'market', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc',
+            'conditional', 'trigger', 'oco', 'move_order_stop', 'iceberg', 'twap',
+        ]);
+        $this->assertKnownEnum($row, 'posSide', ['long', 'short', 'net']);
+        $this->assertKnownEnum($row, 'tdMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'mgnMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'reduceOnly', ['true', 'false']);
+    }
+
+    /** @param list<string> $allowed */
+    /**
+     * @param array<string,mixed> $row
+     * @param list<string> $allowed
+     */
+    private function assertKnownEnum(array $row, string $key, array $allowed): void
+    {
+        if (!array_key_exists($key, $row) || $row[$key] === null) {
+            return;
+        }
+
+        $value = is_scalar($row[$key]) ? strtolower(trim((string) $row[$key])) : null;
+        if ($value === '' && in_array($key, ['posSide', 'tdMode', 'mgnMode'], true)) {
+            return;
+        }
+        if ($value === null || !in_array($value, $allowed, true)) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
     }
 
     private function exchangeOrderSide(mixed $side): ExchangeOrderSide
@@ -246,9 +293,11 @@ final readonly class OkxPrivateReadMapper
             return OrderType::STOP;
         }
 
-        return strtolower($this->string($row['ordType'] ?? '')) === 'market'
-            ? OrderType::MARKET
-            : OrderType::LIMIT;
+        return match (strtolower($this->string($row['ordType'] ?? ''))) {
+            'market' => OrderType::MARKET,
+            'limit', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc' => OrderType::LIMIT,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
+        };
     }
 
     private function orderStatus(mixed $state): OrderStatus
@@ -256,9 +305,11 @@ final readonly class OkxPrivateReadMapper
         return match (strtolower((string) $state)) {
             'filled' => OrderStatus::FILLED,
             'partially_filled' => OrderStatus::PARTIALLY_FILLED,
-            'canceled', 'cancelled' => OrderStatus::CANCELLED,
-            'rejected' => OrderStatus::REJECTED,
-            default => OrderStatus::PENDING,
+            'canceled', 'cancelled', 'mmp_canceled' => OrderStatus::CANCELLED,
+            'rejected', 'order_failed', 'partially_failed' => OrderStatus::REJECTED,
+            'effective' => OrderStatus::FILLED,
+            'live', 'partially_effective', 'pause' => OrderStatus::PENDING,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
         };
     }
 

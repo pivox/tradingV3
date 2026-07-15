@@ -14,6 +14,8 @@ use App\Exchange\Okx\OkxRestClientInterface;
 
 final class OkxOrderGateway implements OrderProviderInterface
 {
+    private const PRIVATE_PAGE_SIZE = 100;
+    private const PRIVATE_SNAPSHOT_MAX_ITEMS = 1_000;
     private const TERMINAL_ALGO_HISTORY_STATES = ['effective', 'canceled', 'order_failed'];
 
     private OkxPublicReadMapper $mapper;
@@ -220,6 +222,12 @@ final class OkxOrderGateway implements OrderProviderInterface
         return $this->fetchOpenOrders($symbol, __METHOD__);
     }
 
+    /** @return list<OrderDto> */
+    public function getOpenOrdersForSnapshotOrFail(): array
+    {
+        return $this->fetchOpenOrdersSnapshot(__METHOD__);
+    }
+
     /**
      * @return array<int, mixed>
      */
@@ -311,6 +319,114 @@ final class OkxOrderGateway implements OrderProviderInterface
         }
 
         return $orders;
+    }
+
+    /** @return list<OrderDto> */
+    private function fetchOpenOrdersSnapshot(string $operation): array
+    {
+        $query = ['instType' => 'SWAP', 'limit' => self::PRIVATE_PAGE_SIZE];
+        $orders = [];
+        $algoQuery = $query + ['ordType' => 'conditional'];
+        $this->appendPaginatedOpenOrders(
+            $orders,
+            '/api/v5/trade/orders-pending',
+            $query,
+            'ordId',
+            false,
+            $operation,
+        );
+        $this->appendPaginatedOpenOrders(
+            $orders,
+            '/api/v5/trade/orders-algo-pending',
+            $algoQuery,
+            'algoId',
+            true,
+            $operation,
+        );
+
+        return $orders;
+    }
+
+    /**
+     * @param list<OrderDto>          $orders
+     * @param array<string, mixed>    $baseQuery
+     */
+    private function appendPaginatedOpenOrders(
+        array &$orders,
+        string $path,
+        array $baseQuery,
+        string $cursorField,
+        bool $algo,
+        string $operation,
+    ): void {
+        $after = null;
+        $seenCursors = [];
+
+        do {
+            $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
+            $rows = $this->snapshotDataRows($this->privateGet($path, $query, $operation), $operation);
+            if (\count($orders) + \count($rows) > self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
+                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
+            }
+
+            $nextAfter = null;
+            if (\count($rows) === self::PRIVATE_PAGE_SIZE) {
+                $nextAfter = $this->snapshotPaginationCursor(
+                    $rows[\count($rows) - 1],
+                    $cursorField,
+                    $operation,
+                );
+                if (isset($seenCursors[$nextAfter])) {
+                    throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', $operation);
+                }
+            }
+
+            foreach ($rows as $row) {
+                $orders[] = $this->privateMapper->order($row, $algo);
+            }
+
+            if ($nextAfter === null) {
+                return;
+            }
+
+            $seenCursors[$nextAfter] = true;
+            $after = $nextAfter;
+        } while (true);
+    }
+
+    /** @param array<string, mixed> $row */
+    private function snapshotPaginationCursor(array $row, string $cursorField, string $operation): string
+    {
+        $value = $row[$cursorField] ?? null;
+        if (!\is_string($value) && !\is_int($value)) {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        $cursor = trim((string) $value);
+        if ($cursor === '') {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        return $cursor;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return list<array<string, mixed>>
+     */
+    private function snapshotDataRows(array $payload, string $operation): array
+    {
+        $rows = $this->dataRows($payload, $operation);
+        $data = $payload['data'] ?? null;
+        if (
+            !\is_array($data)
+            || \count($rows) !== \count($data)
+            || \count($data) > self::PRIVATE_PAGE_SIZE
+        ) {
+            throw new OkxProviderUnavailableException('okx_private_snapshot_page_invalid', $operation);
+        }
+
+        return $rows;
     }
 
     /**

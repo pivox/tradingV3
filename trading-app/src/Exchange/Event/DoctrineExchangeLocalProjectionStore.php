@@ -11,12 +11,15 @@ use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\PositionRepository;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
+use App\Exchange\Value\ExactOrderQuantities;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -42,6 +45,64 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
 
         return $order->clientOrderId !== null
             && $this->orders->findOneByClientOrderId($order->clientOrderId, $context) !== null;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        $context = new ExchangeContext($exchange, $marketType);
+        $result = [];
+        foreach ($this->orders->findOpenOrders($context) as $order) {
+            $status = $this->mapOpenOrderStatus($order->getStatus());
+            if (!in_array($status, [ExchangeOrderStatus::PENDING, ExchangeOrderStatus::OPEN, ExchangeOrderStatus::PARTIALLY_FILLED], true)) {
+                continue;
+            }
+            $sides = $this->storedOrderSides($order->getSide());
+            $type = ExchangeOrderType::tryFrom((string) $order->getType());
+            $orderId = $order->getOrderId();
+            if ($sides === null || $type === null || $orderId === null) {
+                continue;
+            }
+            [$side, $positionSide] = $sides;
+            $quantityDecimal = $order->getQuantityDecimal();
+            $filledQuantityDecimal = $order->getFilledQuantityDecimal();
+            $quantity = (float) ($quantityDecimal ?? $order->getSize() ?? 0);
+            $filled = (float) ($filledQuantityDecimal ?? $order->getFilledSize() ?? 0);
+            $metadata = ['source' => 'local_projection'];
+            if ($quantityDecimal !== null && $filledQuantityDecimal !== null) {
+                $metadata += ExactOrderQuantities::fromQuantityAndFilled(
+                    $quantityDecimal,
+                    $filledQuantityDecimal,
+                )->toArray();
+            }
+            $result[] = new ExchangeOrderDto(
+                $exchange, $marketType, $order->getSymbol(), $orderId, $order->getClientOrderId(), $side, $positionSide,
+                $type, $status, $quantity, $filled, max(0.0, $quantity - $filled),
+                $order->getPrice() !== null ? (float) $order->getPrice() : null, null, null, false, false, null,
+                $order->getCreatedAt(), $order->getUpdatedAt(), $metadata,
+            );
+        }
+        return $result;
+    }
+
+    /** @return array{ExchangeOrderSide, ExchangePositionSide}|null */
+    private function storedOrderSides(?int $side): ?array
+    {
+        return match ($side) {
+            1 => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG],
+            2 => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG],
+            3 => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT],
+            4 => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT],
+            default => null,
+        };
+    }
+
+    private function mapOpenOrderStatus(?string $status): ?ExchangeOrderStatus
+    {
+        return match (strtolower((string) $status)) {
+            'new', 'sent', 'submitted', '1' => ExchangeOrderStatus::PENDING,
+            '2' => ExchangeOrderStatus::PARTIALLY_FILLED,
+            default => ExchangeOrderStatus::tryFrom((string) $status),
+        };
     }
 
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
@@ -74,13 +135,19 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
     public function project(ExchangeEventInterface $event): void
     {
         if ($event instanceof AbstractExchangeOrderEvent) {
-            $this->orderSync->syncOrderFromApi($this->orderPayload($event->order(), $event));
+            if ($this->orderSync->syncOrderFromApi($this->orderPayload($event->order(), $event)) === null) {
+                throw new \RuntimeException('exchange_order_projection_failed');
+            }
+
             return;
         }
 
         if ($event instanceof ExchangeFillReceived) {
             $this->fillCostLedger->ingestExchangeFill($event);
-            $this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event));
+            if ($this->orderSync->syncTradeFromApi($this->fillPayload($event->fill(), $event)) === null) {
+                throw new \RuntimeException('exchange_fill_projection_failed');
+            }
+
             return;
         }
 
@@ -94,6 +161,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
      */
     private function orderPayload(ExchangeOrderDto $order, ExchangeEventInterface $event): array
     {
+        $exactQuantities = ExactOrderQuantities::fromArray($order->metadata)?->toArray() ?? [];
         $filledNotional = $order->averagePrice !== null && $order->filledQuantity > 0.0
             ? (string)($order->averagePrice * $order->filledQuantity)
             : null;
@@ -108,8 +176,11 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             'type' => $order->orderType->value,
             'status' => $order->status->value,
             'price' => $order->price !== null ? (string)$order->price : null,
+            'average_price' => $order->averagePrice !== null ? (string)$order->averagePrice : null,
+            'stop_price' => $order->stopPrice !== null ? (string)$order->stopPrice : null,
             'size' => (int)round($order->quantity),
             'filled_size' => (int)round($order->filledQuantity),
+            ...$exactQuantities,
             'filled_notional' => $filledNotional,
             'open_type' => $order->metadata['open_type'] ?? $order->metadata['margin_mode'] ?? null,
             'position_mode' => 1,
@@ -122,6 +193,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             'raw' => [
                 'event_type' => $event->eventType(),
                 'order_type' => $order->orderType->value,
+                'stop_price' => $order->stopPrice !== null ? (string)$order->stopPrice : null,
                 'position_side' => $order->positionSide?->value,
                 'remaining_quantity' => $order->remainingQuantity,
                 'reduce_only' => $order->reduceOnly,
@@ -138,7 +210,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
      */
     private function fillPayload(ExchangeFillDto $fill, ExchangeEventInterface $event): array
     {
-        return [
+        $payload = [
             'exchange' => $fill->exchange->value,
             'market_type' => $fill->marketType->value,
             'trade_id' => $this->projectionFillId($fill),
@@ -158,6 +230,37 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
                 'payload' => $event->payload(),
             ],
         ];
+        $quantityDecimal = $this->fillQuantityDecimal($fill, $event);
+        if ($quantityDecimal !== null) {
+            $payload['quantity_decimal'] = $quantityDecimal;
+        }
+
+        return $payload;
+    }
+
+    private function fillQuantityDecimal(ExchangeFillDto $fill, ExchangeEventInterface $event): ?string
+    {
+        $metadata = $fill->metadata['quantity_decimal'] ?? null;
+        $eventPayload = $event->payload()['quantity_decimal'] ?? null;
+        if ($metadata !== null && (!\is_string($metadata) || ($eventPayload !== null && $eventPayload !== $metadata))) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
+        if ($eventPayload !== null && !\is_string($eventPayload)) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
+        $value = $metadata ?? $eventPayload;
+        if ($value === null) {
+            return null;
+        }
+
+        try {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
+            ExactOrderQuantities::fromQuantityAndFilled($canonical, '0');
+
+            return $canonical;
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
     }
 
     private function projectPosition(AbstractExchangePositionEvent $event): void
@@ -210,8 +313,8 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
     {
         return match ([$side, $positionSide]) {
             [ExchangeOrderSide::BUY, ExchangePositionSide::LONG] => 1,
-            [ExchangeOrderSide::SELL, ExchangePositionSide::LONG] => 3,
-            [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT] => 2,
+            [ExchangeOrderSide::SELL, ExchangePositionSide::LONG] => 2,
+            [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT] => 3,
             [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT] => 4,
             default => $side === ExchangeOrderSide::BUY ? 1 : 4,
         };

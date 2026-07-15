@@ -46,6 +46,9 @@ class FuturesOrderTrade
     #[ORM\Column(type: Types::INTEGER)]
     private int $size;
 
+    #[ORM\Column(name: 'quantity_decimal', type: Types::DECIMAL, precision: 36, scale: 18, nullable: true)]
+    private ?string $quantityDecimal = null;
+
     #[ORM\Column(type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
     private ?string $fee = null;
 
@@ -55,6 +58,7 @@ class FuturesOrderTrade
     #[ORM\Column(type: Types::BIGINT)]
     private int $tradeTime; // timestamp millis
 
+    /** @var array<string,mixed> */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $rawData = [];
 
@@ -165,6 +169,17 @@ class FuturesOrderTrade
     public function setSize(int $size): self
     {
         $this->size = $size;
+        return $this->touch();
+    }
+
+    public function getQuantityDecimal(): ?string
+    {
+        return $this->quantityDecimal;
+    }
+
+    public function setQuantityDecimal(?string $quantityDecimal): self
+    {
+        $this->quantityDecimal = $quantityDecimal;
         return $this->touch();
     }
 

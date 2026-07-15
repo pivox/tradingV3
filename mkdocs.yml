@@ -58,6 +58,7 @@ nav:
       - Investigation: runbooks/investigation.md
       - Demo/Testnet kill switch: runbooks/demo-testnet-kill-switch.md
       - Demo/Testnet operations: runbooks/demo-testnet-operations.md
+      - OKX private WS observability: runbooks/okx-private-ws-observability.md
       - Hyperliquid testnet controlled trading: runbooks/hyperliquid-testnet-controlled-trading.md
       - Recette orchestrateur R1-R16: runbooks/orchestrator-runtime-recipe-r1-r16.md
   - Rapports:

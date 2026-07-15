@@ -59,10 +59,13 @@ parameters:
     env(OKX_API_BASE_URI): ''
     env(OKX_WS_PUBLIC_URI): ''
     env(OKX_WS_PRIVATE_URI): ''
+    env(OKX_WS_BUSINESS_URI): ''
     env(OKX_SIMULATED_TRADING): '0'
     env(DEMO_TRADING_ENABLED): '0'
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
+    env(REDIS_HOST): '127.0.0.1'
+    env(REDIS_PORT): '6379'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
     env(POSITION_TRADE_ANALYSIS_REPORTING_SOURCE): 'v2'
     app.trade_entry_default_mode: 'scalper_micro'
@@ -216,6 +219,35 @@ services:
         class: App\Runtime\Concurrency\MockRedis
         public: true
 
+    App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient:
+        factory: ['@App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisFactory', 'createClient']
+        arguments:
+            $host: '%env(string:REDIS_HOST)%'
+            $port: '%env(int:REDIS_PORT)%'
+            $connectTimeout: 1.0
+            $readTimeout: 1.0
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisClientInterface:
+        alias: App\Exchange\Okx\PrivateWebSocket\ExtRedisOkxPrivateWebSocketClient
+
+    okx.private_ws.transport.private:
+        class: App\Exchange\Okx\PrivateWebSocket\PawlOkxPrivateWebSocketTransport
+
+    okx.private_ws.transport.business:
+        class: App\Exchange\Okx\PrivateWebSocket\PawlOkxPrivateWebSocketTransport
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketTransportInterface:
+        alias: okx.private_ws.transport.private
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketStatusStoreInterface:
+        alias: App\Exchange\Okx\PrivateWebSocket\RedisOkxPrivateWebSocketStatusStore
+
+    App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketWorker:
+        arguments:
+            $transport: '@okx.private_ws.transport.private'
+            $businessTransport: '@okx.private_ws.transport.business'
+            $logger: '@monolog.logger.okx_private_ws'
+
     # Service Redis réel pour OrderWatcherPublisher (Pub/Sub)
     App\Provider\Redis\RedisPubSubClient:
         class: App\Provider\Redis\RedisPubSubClient
@@ -285,6 +317,7 @@ services:
             $apiBaseUri: '%env(string:OKX_API_BASE_URI)%'
             $wsPublicUri: '%env(string:OKX_WS_PUBLIC_URI)%'
             $wsPrivateUri: '%env(string:OKX_WS_PRIVATE_URI)%'
+            $wsBusinessUri: '%env(string:OKX_WS_BUSINESS_URI)%'
             $simulatedTrading: '%env(bool:OKX_SIMULATED_TRADING)%'
             $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
             $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'

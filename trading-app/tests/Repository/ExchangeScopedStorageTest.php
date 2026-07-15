@@ -8,6 +8,8 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
 use App\Entity\FuturesOrder;
+use App\Entity\FuturesOrderTrade;
+use App\Entity\FuturesPlanOrder;
 use App\Entity\IndicatorSnapshot;
 use App\Entity\MtfState;
 use App\Entity\OrderIntent;
@@ -16,12 +18,15 @@ use App\Entity\Position;
 use App\Entity\SymbolExecutionLock;
 use App\MtfValidator\Entity\MtfAudit;
 use App\MtfValidator\Repository\MtfAuditRepository;
+use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Entity\Contract;
 use App\Provider\Entity\Kline;
 use App\Provider\Repository\ContractRepository;
 use App\Provider\Repository\KlineRepository;
 use App\Repository\FuturesOrderRepository;
+use App\Repository\FuturesOrderTradeRepository;
+use App\Repository\FuturesPlanOrderRepository;
 use App\Repository\IndicatorSnapshotRepository;
 use App\Repository\MtfStateRepository;
 use App\Repository\OrderIntentRepository;
@@ -31,6 +36,10 @@ use App\Service\SymbolExecutionLockManager;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Storage\FuturesOrderOrderStateRepository;
 use App\Trading\Storage\PositionPositionStateRepository;
+use App\Trading\Dto\OrderDto as TradingOrderDto;
+use App\Common\Enum\OrderSide;
+use App\Common\Enum\OrderStatus;
+use App\Common\Enum\OrderType;
 use Brick\Math\BigDecimal;
 use Doctrine\DBAL\Platforms\SqlitePlatform;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
@@ -283,7 +292,6 @@ final class ExchangeScopedStorageTest extends KernelTestCase
                 OrderIntent::STATUS_SENT => 'BTCUSDT',
                 OrderIntent::STATUS_FAILED => 'ETHUSDT',
                 OrderIntent::STATUS_CANCELLED => 'SOLUSDT',
-                default => 'XRPUSDT',
             };
             $params = $this->orderIntentParams(
                 decisionKey: sprintf('bitmart:perpetual:%s:1m:%d:long:scalper_micro:v1', $symbol, 1764160800 + ($index * 60)),
@@ -729,12 +737,14 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         $this->em->flush();
 
         $binanceContext = new ExchangeContext(Exchange::BINANCE, MarketType::PERPETUAL);
+        /** @var PositionRepository $positionRepository */
+        $positionRepository = $this->em->getRepository(Position::class);
         $positionState = new PositionPositionStateRepository(
-            $this->em->getRepository(Position::class),
+            $positionRepository,
             $this->em,
         );
         $orderState = new FuturesOrderOrderStateRepository(
-            $this->em->getRepository(FuturesOrder::class),
+            $this->futuresOrderRepository(),
             $this->em,
         );
 
@@ -745,6 +755,333 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('1', $orderState->findLocalOrder('ETHUSDT', 'shared-order')?->quantity->__toString());
         self::assertSame('2', $orderState->findLocalOrder('ETHUSDT', 'shared-order', $binanceContext)?->quantity->__toString());
         self::assertCount(1, $orderState->findLocalOpenOrders(['ETHUSDT'], $binanceContext));
+    }
+
+    public function testOrderStatePrefersAndPersistsExactDecimalQuantitiesOnReplay(): void
+    {
+        $legacy = $this->newFuturesOrder('bitmart', 'exact-read', '1')
+            ->setFilledSize(0)
+            ->setQuantityDecimal('1.123456789012345678')
+            ->setFilledQuantityDecimal('0.400000000000000001');
+        $this->em->persist($legacy);
+        $this->em->flush();
+        $repository = new FuturesOrderOrderStateRepository(
+            $this->futuresOrderRepository(),
+            $this->em,
+        );
+
+        $read = $repository->findLocalOrder('ETHUSDT', 'exact-read');
+        self::assertInstanceOf(TradingOrderDto::class, $read);
+        self::assertSame('1.123456789012345678', $read->quantity->__toString());
+        self::assertSame('0.400000000000000001', $read->filledQuantity->__toString());
+
+        $dto = new TradingOrderDto(
+            orderId: 'exact-write',
+            clientOrderId: 'exact-client',
+            symbol: 'BTCUSDT',
+            side: OrderSide::BUY,
+            type: OrderType::LIMIT,
+            status: OrderStatus::PARTIALLY_FILLED,
+            price: BigDecimal::of('25000'),
+            quantity: BigDecimal::of('1.123456789012345678'),
+            filledQuantity: BigDecimal::of('0.400000000000000001'),
+            avgFilledPrice: BigDecimal::of('25000'),
+            createdAt: new \DateTimeImmutable('2026-01-01 UTC'),
+            updatedAt: new \DateTimeImmutable('2026-01-01 UTC'),
+            raw: ['exchange' => 'bitmart', 'market_type' => 'perpetual'],
+        );
+        $repository->saveOrder($dto);
+        $repository->saveOrder($dto);
+
+        $saved = $this->futuresOrderRepository()->findOneByOrderId('exact-write');
+        self::assertInstanceOf(FuturesOrder::class, $saved);
+        self::assertSame('1.123456789012345678', $saved->getQuantityDecimal());
+        self::assertSame('0.400000000000000001', $saved->getFilledQuantityDecimal());
+        self::assertCount(1, $this->futuresOrderRepository()->findBy(['orderId' => 'exact-write']));
+
+        if ($this->em->getConnection()->getDatabasePlatform() instanceof PostgreSQLPlatform) {
+            $this->em->clear();
+            $reloaded = $this->futuresOrderRepository()->findOneByOrderId('exact-write');
+            self::assertInstanceOf(FuturesOrder::class, $reloaded);
+            self::assertSame('1.123456789012345678', $reloaded->getQuantityDecimal());
+            self::assertSame('0.400000000000000001', $reloaded->getFilledQuantityDecimal());
+        }
+    }
+
+    public function testFuturesOrderSyncPersistsValidatedExactQuantitiesIdempotently(): void
+    {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $payload = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-exact',
+            'symbol' => 'BTCUSDT',
+            'size' => 1,
+            'filled_size' => 0,
+            'quantity_decimal' => '1.123456789012345678',
+            'filled_quantity_decimal' => '0.400000000000000001',
+            'remaining_quantity_decimal' => '0.723456789012345677',
+        ];
+
+        $first = $service->syncOrderFromApi($payload);
+        $second = $service->syncOrderFromApi($payload);
+
+        self::assertInstanceOf(FuturesOrder::class, $first);
+        self::assertSame($first, $second);
+        self::assertSame('1.123456789012345678', $second->getQuantityDecimal());
+        self::assertSame('0.400000000000000001', $second->getFilledQuantityDecimal());
+        self::assertSame('0.723456789012345677', $second->getRawData()['remaining_quantity_decimal'] ?? null);
+    }
+
+    public function testLegacyQuantityUpdatesReplaceStaleCanonicalDecimalsAndReplay(): void
+    {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $base = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-stale',
+            'symbol' => 'BTCUSDT',
+        ];
+        self::assertInstanceOf(FuturesOrder::class, $service->syncOrderFromApi($base + [
+            'size' => 1,
+            'filled_size' => 0,
+            'quantity_decimal' => '1.123456789012345678',
+            'filled_quantity_decimal' => '0.400000000000000001',
+            'remaining_quantity_decimal' => '0.723456789012345677',
+        ]));
+
+        $quantityOnly = $service->syncOrderFromApi($base + ['size' => 2]);
+        self::assertInstanceOf(FuturesOrder::class, $quantityOnly);
+        self::assertSame('2', $quantityOnly->getQuantityDecimal());
+        self::assertSame('0.400000000000000001', $quantityOnly->getFilledQuantityDecimal());
+
+        $filledOnly = $service->syncOrderFromApi($base + ['filled_size' => 1]);
+        $replay = $service->syncOrderFromApi($base + ['filled_size' => 1]);
+        self::assertInstanceOf(FuturesOrder::class, $filledOnly);
+        self::assertSame($filledOnly, $replay);
+        self::assertSame('2', $replay->getQuantityDecimal());
+        self::assertSame('1', $replay->getFilledQuantityDecimal());
+
+        $state = new FuturesOrderOrderStateRepository($this->futuresOrderRepository(), $this->em);
+        $read = $state->findLocalOrder('BTCUSDT', 'sync-stale', new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL));
+        self::assertInstanceOf(TradingOrderDto::class, $read);
+        self::assertSame('2', $read->quantity->__toString());
+        self::assertSame('1', $read->filledQuantity->__toString());
+
+        $unchanged = $service->syncOrderFromApi($base + ['status' => 'open']);
+        self::assertInstanceOf(FuturesOrder::class, $unchanged);
+        self::assertSame('2', $unchanged->getQuantityDecimal());
+        self::assertSame('1', $unchanged->getFilledQuantityDecimal());
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidProspectiveLegacyQuantityProvider')]
+    public function testRejectedProspectiveLegacyQuantitiesDoNotMutateManagedOrder(
+        string $quantityKey,
+        int|string $quantityValue,
+    ): void {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $base = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-prospective-' . $quantityKey,
+            'symbol' => 'BTCUSDT',
+            'status' => 'open',
+            'size' => 2,
+            'filled_size' => 1,
+            'quantity_decimal' => '2',
+            'filled_quantity_decimal' => '1',
+            'remaining_quantity_decimal' => '1',
+        ];
+        $order = $service->syncOrderFromApi($base);
+        self::assertInstanceOf(FuturesOrder::class, $order);
+        $updatedAt = $order->getUpdatedAt();
+        $rawData = $order->getRawData();
+
+        $rejected = $base;
+        unset(
+            $rejected['size'],
+            $rejected['filled_size'],
+            $rejected['quantity_decimal'],
+            $rejected['filled_quantity_decimal'],
+            $rejected['remaining_quantity_decimal'],
+        );
+        $rejected['symbol'] = 'ETHUSDT';
+        $rejected['status'] = 'closed';
+        $rejected[$quantityKey] = $quantityValue;
+
+        self::assertNull($service->syncOrderFromApi($rejected));
+        self::assertNull($service->syncOrderFromApi($rejected), 'Rejected replay must remain stable.');
+        self::assertSame('BTCUSDT', $order->getSymbol());
+        self::assertSame('open', $order->getStatus());
+        self::assertSame(2, $order->getSize());
+        self::assertSame(1, $order->getFilledSize());
+        self::assertSame('2', $order->getQuantityDecimal());
+        self::assertSame('1', $order->getFilledQuantityDecimal());
+        self::assertSame($rawData, $order->getRawData());
+        self::assertSame($updatedAt, $order->getUpdatedAt());
+
+        $this->em->flush();
+        $this->em->clear();
+        $reloaded = $this->futuresOrderRepository()->findOneByOrderId(
+            $base['order_id'],
+            new ExchangeContext(Exchange::OKX, MarketType::PERPETUAL),
+        );
+        self::assertInstanceOf(FuturesOrder::class, $reloaded);
+        self::assertSame('BTCUSDT', $reloaded->getSymbol());
+        self::assertSame('open', $reloaded->getStatus());
+        self::assertSame('2', $reloaded->getQuantityDecimal());
+        self::assertSame('1', $reloaded->getFilledQuantityDecimal());
+        self::assertSame($rawData, $reloaded->getRawData());
+    }
+
+    /** @return iterable<string,array{string,int|string}> */
+    public static function invalidProspectiveLegacyQuantityProvider(): iterable
+    {
+        yield 'filled exceeds existing quantity' => ['filled_size', 3];
+        yield 'quantity below existing filled' => ['size', 0];
+        yield 'decimal quantity string' => ['size', '2.5'];
+        yield 'decimal filled string' => ['filled_size', '1.5'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidNewLegacyQuantityProvider')]
+    public function testNewOrderRejectsInvalidLegacyIntegerBeforePersistenceAndReplay(
+        string $quantityKey,
+        int|float|string $quantityValue,
+    ): void {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $payload = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-invalid-new-' . md5($quantityKey . ':' . (string) $quantityValue),
+            'symbol' => 'BTCUSDT',
+            $quantityKey => $quantityValue,
+        ];
+
+        self::assertNull($service->syncOrderFromApi($payload));
+        self::assertNull($service->syncOrderFromApi($payload), 'Rejected replay must remain stable.');
+        self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $payload['order_id']]));
+
+        $this->em->flush();
+        self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $payload['order_id']]));
+    }
+
+    /** @return iterable<string,array{string,int|float|string}> */
+    public static function invalidNewLegacyQuantityProvider(): iterable
+    {
+        yield 'decimal size string' => ['size', '2.5'];
+        yield 'decimal filled string' => ['filled_size', '1.5'];
+        yield 'float size' => ['size', 2.0];
+        yield 'signed size' => ['size', '+2'];
+        yield 'negative filled' => ['filled_size', '-1'];
+        yield 'leading whitespace' => ['size', ' 2'];
+        yield 'trailing whitespace' => ['filled_size', '1 '];
+    }
+
+    public function testNewIncompleteLegacyOrderDefersCanonicalQuantitiesUntilPairIsAvailable(): void
+    {
+        $service = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->em,
+            new NullLogger(),
+        );
+        $base = [
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'sync-deferred',
+            'symbol' => 'BTCUSDT',
+        ];
+
+        $deferred = $service->syncOrderFromApi($base + ['size' => '2']);
+        self::assertInstanceOf(FuturesOrder::class, $deferred);
+        self::assertSame(2, $deferred->getSize());
+        self::assertNull($deferred->getFilledSize());
+        self::assertNull($deferred->getQuantityDecimal());
+        self::assertNull($deferred->getFilledQuantityDecimal());
+
+        $completed = $service->syncOrderFromApi($base + ['filled_size' => 1]);
+        self::assertInstanceOf(FuturesOrder::class, $completed);
+        self::assertSame(2, $completed->getSize());
+        self::assertSame(1, $completed->getFilledSize());
+        self::assertSame('2', $completed->getQuantityDecimal());
+        self::assertSame('1', $completed->getFilledQuantityDecimal());
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidRepositoryQuantityProvider')]
+    public function testOrderStateRejectsInvalidDecimalBeforeFlush(string $quantity): void
+    {
+        $repository = new FuturesOrderOrderStateRepository($this->futuresOrderRepository(), $this->em);
+        $dto = new TradingOrderDto(
+            orderId: 'invalid-decimal-' . md5($quantity),
+            clientOrderId: null,
+            symbol: 'BTCUSDT',
+            side: OrderSide::BUY,
+            type: OrderType::LIMIT,
+            status: OrderStatus::PENDING,
+            price: BigDecimal::of('1'),
+            quantity: BigDecimal::of($quantity),
+            filledQuantity: BigDecimal::zero(),
+            avgFilledPrice: null,
+            createdAt: new \DateTimeImmutable('2026-01-01 UTC'),
+            updatedAt: null,
+            raw: ['exchange' => 'okx', 'market_type' => 'perpetual'],
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        try {
+            $repository->saveOrder($dto);
+        } finally {
+            self::assertSame(0, $this->futuresOrderRepository()->count(['orderId' => $dto->orderId]));
+        }
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function invalidRepositoryQuantityProvider(): iterable
+    {
+        yield 'scale 19' => ['1.0000000000000000000'];
+        yield 'precision 37' => ['1234567890123456789.123456789012345678'];
+    }
+
+    public function testOrderStateUsesExactFilledQuantityForAveragePrice(): void
+    {
+        $entity = $this->newFuturesOrder('bitmart', 'exact-average', '1')
+            ->setFilledSize(0)
+            ->setQuantityDecimal('1')
+            ->setFilledQuantityDecimal('0.4')
+            ->setFilledNotional('10');
+        $this->em->persist($entity);
+        $this->em->flush();
+        $repository = new FuturesOrderOrderStateRepository(
+            $this->futuresOrderRepository(),
+            $this->em,
+        );
+
+        self::assertSame('25', $repository->findLocalOrder('ETHUSDT', 'exact-average')?->avgFilledPrice?->__toString());
     }
 
     public function testMtfStateRepositoryScopesStateByExchangeAndMarketType(): void
@@ -784,10 +1121,35 @@ final class ExchangeScopedStorageTest extends KernelTestCase
 
         self::assertCount(1, $rows);
         self::assertSame('BTCUSDT', $rows[0]['symbol']);
+        // @phpstan-ignore-next-line The repository runtime row includes its exchange scope.
         self::assertSame('binance', $rows[0]['exchange']);
         self::assertSame('perpetual', $rows[0]['market_type']);
         self::assertSame('failed', $rows[0]['timeframes']['1m']['status']);
         self::assertSame('rsi_rejected', $rows[0]['timeframes']['1m']['cause']);
+    }
+
+    private function futuresOrderRepository(): FuturesOrderRepository
+    {
+        /** @var FuturesOrderRepository $repository */
+        $repository = $this->em->getRepository(FuturesOrder::class);
+
+        return $repository;
+    }
+
+    private function futuresPlanOrderRepository(): FuturesPlanOrderRepository
+    {
+        /** @var FuturesPlanOrderRepository $repository */
+        $repository = $this->em->getRepository(FuturesPlanOrder::class);
+
+        return $repository;
+    }
+
+    private function futuresOrderTradeRepository(): FuturesOrderTradeRepository
+    {
+        /** @var FuturesOrderTradeRepository $repository */
+        $repository = $this->em->getRepository(FuturesOrderTrade::class);
+
+        return $repository;
     }
 
     private function newKline(string $exchange, string $close, \DateTimeImmutable $openTime): Kline

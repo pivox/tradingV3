@@ -9,12 +9,14 @@ use App\Common\Enum\OrderStatus;
 use App\Common\Enum\OrderType;
 use App\Common\Enum\PositionSide;
 use App\Exchange\Okx\OkxRestClientInterface;
+use App\Provider\Okx\OkxPrivateReadMapper;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxOrderGateway;
 use App\Provider\Okx\OkxPositionGateway;
 use App\Provider\Okx\OkxProviderNotReadyException;
 use App\Provider\Okx\OkxProviderUnavailableException;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversNothing]
@@ -72,6 +74,164 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('25200', (string) $positions[0]->markPrice);
         self::assertSame('12.5', (string) $positions[0]->unrealizedPnl);
         self::assertSame('3', (string) $positions[0]->leverage);
+    }
+
+    /** @param array<string,mixed> $row */
+    #[DataProvider('unknownPrivateEnumProvider')]
+    public function testUnknownPresentPrivateEnumsFailTheRestMapper(array $row): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+
+        (new OkxPrivateReadMapper())->order($row, false);
+    }
+
+    /** @param array<string,mixed> $row */
+    #[DataProvider('unknownPrivateEnumProvider')]
+    public function testLegacyTradeRejectsUnknownPresentPrivateEnums(array $row): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+
+        (new OkxPrivateReadMapper())->legacyTrade($row);
+    }
+
+    public function testLegacyTradeUsesFillExecutionTimeBeforeRecordGenerationTime(): void
+    {
+        $trade = (new OkxPrivateReadMapper())->legacyTrade([
+            'fillTime' => '1767225600123',
+            'ts' => '1767225600456',
+        ]);
+
+        self::assertSame(1767225600123, $trade['create_time']);
+    }
+
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function missingRequiredOrderEnumProvider(): iterable
+    {
+        $row = [
+            'instId' => 'BTC-USDT-SWAP',
+            'ordId' => 'ord-missing',
+            'side' => 'buy',
+            'ordType' => 'limit',
+            'state' => 'live',
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ];
+        foreach (['side', 'ordType', 'state'] as $field) {
+            $candidate = $row;
+            unset($candidate[$field]);
+            yield $field => [$candidate];
+        }
+    }
+
+    /** @param array<string,mixed> $row */
+    #[DataProvider('missingRequiredOrderEnumProvider')]
+    public function testMissingRequiredOrderEnumsFailWithoutImplicitFallback(array $row): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+
+        (new OkxPrivateReadMapper())->order($row, false);
+    }
+
+    #[DataProvider('terminalAlgoStatusProvider')]
+    public function testMapsTerminalAlgoHistoryStates(string $state, OrderStatus $expected): void
+    {
+        $order = (new OkxPrivateReadMapper())->order([
+            'instId' => 'BTC-USDT-SWAP',
+            'algoId' => 'algo-terminal',
+            'side' => 'sell',
+            'ordType' => 'conditional',
+            'state' => $state,
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ], true);
+
+        self::assertSame($expected, $order->status);
+    }
+
+    #[DataProvider('activeAlgoStatusProvider')]
+    public function testMapsActiveAlgoStatesWithoutRejectingTheSnapshot(string $state): void
+    {
+        $order = (new OkxPrivateReadMapper())->order([
+            'instId' => 'BTC-USDT-SWAP',
+            'algoId' => 'algo-active',
+            'side' => 'sell',
+            'ordType' => 'conditional',
+            'state' => $state,
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ], true);
+
+        self::assertSame(OrderStatus::PENDING, $order->status);
+    }
+
+    public function testMapsMmpCanceledOrderHistoryState(): void
+    {
+        try {
+            $order = (new OkxPrivateReadMapper())->order([
+                'instId' => 'BTC-USDT-SWAP',
+                'ordId' => 'order-mmp-canceled',
+                'side' => 'sell',
+                'ordType' => 'limit',
+                'state' => 'mmp_canceled',
+                'sz' => '1',
+                'accFillSz' => '0',
+                'cTime' => '1767225600000',
+            ], false);
+        } catch (\InvalidArgumentException) {
+            self::fail('mmp_canceled must be accepted as a terminal order history state.');
+        }
+
+        self::assertSame(OrderStatus::CANCELLED, $order->status);
+    }
+
+    /** @return iterable<string,array{string,OrderStatus}> */
+    public static function terminalAlgoStatusProvider(): iterable
+    {
+        yield 'effective' => ['effective', OrderStatus::FILLED];
+        yield 'order failed' => ['order_failed', OrderStatus::REJECTED];
+        yield 'partially failed' => ['partially_failed', OrderStatus::REJECTED];
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function activeAlgoStatusProvider(): iterable
+    {
+        yield 'partially effective' => ['partially_effective'];
+        yield 'paused' => ['pause'];
+    }
+
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function unknownPrivateEnumProvider(): iterable
+    {
+        $base = [
+            'instId' => 'BTC-USDT-SWAP',
+            'ordId' => 'ord-unknown',
+            'side' => 'buy',
+            'ordType' => 'limit',
+            'state' => 'live',
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ];
+
+        foreach ([
+            ['side', 'hold'],
+            ['ordType', 'unexpected'],
+            ['state', 'garbage'],
+            ['posSide', 'unknown'],
+            ['tdMode', 'unknown'],
+            ['reduceOnly', 'unexpected'],
+            ['reduceOnly', ''],
+        ] as [$field, $value]) {
+            $row = $base;
+            $row[$field] = $value;
+            yield $field . ':' . (string) $value => [$row];
+        }
     }
 
     public function testOpenPositionsIsTolerantAndOrFailPropagates(): void

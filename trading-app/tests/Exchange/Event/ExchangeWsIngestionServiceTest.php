@@ -147,6 +147,11 @@ final class ExchangeWsIngestionServiceTest extends TestCase
 
 final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInterface
 {
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
     /** @var ExchangeEventInterface[] */
     public array $events = [];
 

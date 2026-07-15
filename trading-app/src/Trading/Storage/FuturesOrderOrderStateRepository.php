@@ -8,7 +8,9 @@ use App\Entity\FuturesOrder;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Trading\Dto\OrderDto;
+use App\Exchange\Value\ExactOrderQuantities;
 use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 use Doctrine\ORM\EntityManagerInterface;
 
 final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInterface
@@ -123,13 +125,19 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         }
 
         $price = $entity->getPrice() !== null ? BigDecimal::of($entity->getPrice()) : BigDecimal::zero();
-        $quantity = $entity->getSize() !== null ? BigDecimal::of((string)$entity->getSize()) : BigDecimal::zero();
-        $filledQuantity = $entity->getFilledSize() !== null ? BigDecimal::of((string)$entity->getFilledSize()) : BigDecimal::zero();
+        $quantity = $entity->getQuantityDecimal() !== null
+            ? BigDecimal::of($entity->getQuantityDecimal())
+            : ($entity->getSize() !== null ? BigDecimal::of((string)$entity->getSize()) : BigDecimal::zero());
+        $filledQuantity = $entity->getFilledQuantityDecimal() !== null
+            ? BigDecimal::of($entity->getFilledQuantityDecimal())
+            : ($entity->getFilledSize() !== null ? BigDecimal::of((string)$entity->getFilledSize()) : BigDecimal::zero());
 
-        // Calculer avgFilledPrice depuis filledNotional et filledSize
+        // Use the canonical decimal fill quantity; legacy rows already fell back above.
         $avgFilledPrice = null;
-        if ($entity->getFilledNotional() !== null && $entity->getFilledSize() !== null && $entity->getFilledSize() > 0) {
-            $avgFilledPrice = BigDecimal::of($entity->getFilledNotional())->dividedBy(BigDecimal::of((string)$entity->getFilledSize()));
+        if ($entity->getFilledNotional() !== null && $filledQuantity->compareTo(BigDecimal::zero()) > 0) {
+            $avgFilledPrice = BigDecimal::of($entity->getFilledNotional())
+                ->dividedBy($filledQuantity, 18, RoundingMode::HALF_UP)
+                ->stripTrailingZeros();
         }
 
         $createdAt = null;
@@ -164,6 +172,10 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
 
     private function mapDtoToEntity(OrderDto $dto, FuturesOrder $entity): void
     {
+        $exactQuantities = ExactOrderQuantities::fromQuantityAndFilled(
+            $dto->quantity->__toString(),
+            $dto->filledQuantity->__toString(),
+        );
         $context = $this->resolveContext($dto->raw);
         $entity->setExchange($context->exchange);
         $entity->setMarketType($context->marketType);
@@ -175,6 +187,8 @@ final class FuturesOrderOrderStateRepository implements OrderStateRepositoryInte
         $entity->setPrice($dto->price->__toString());
         $entity->setSize((int)$dto->quantity->__toString());
         $entity->setFilledSize((int)$dto->filledQuantity->__toString());
+        $entity->setQuantityDecimal($exactQuantities->quantity);
+        $entity->setFilledQuantityDecimal($exactQuantities->filled);
 
         if ($dto->avgFilledPrice !== null) {
             $filledNotional = $dto->avgFilledPrice->multipliedBy($dto->filledQuantity);

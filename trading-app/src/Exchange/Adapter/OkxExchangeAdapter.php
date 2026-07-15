@@ -58,7 +58,7 @@ final readonly class OkxExchangeAdapter implements ExchangeAdapterInterface, Exc
     {
         return new ExchangeCapabilities(
             supportsTestnet: true,
-            supportsWebSocketPrivate: false,
+            supportsWebSocketPrivate: true,
             supportsClientOrderId: true,
             supportsCancelByClientOrderId: true,
             supportsPostOnly: true,
