@@ -641,4 +641,11 @@ final class SnapshotRecordingProjectionStore implements ExchangeLocalProjectionS
     {
         $this->events[] = $event;
     }
+
+    public function projectAtomically(array $events): void
+    {
+        foreach ($events as $event) {
+            $this->project($event);
+        }
+    }
 }

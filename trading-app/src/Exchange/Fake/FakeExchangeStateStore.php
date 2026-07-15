@@ -200,7 +200,7 @@ final class FakeExchangeStateStore
     {
         $payload = $event->payload;
         if (!\array_key_exists('event_sequence', $event->payload)) {
-            $payload = ['event_sequence' => \count($this->events) + 1] + $payload;
+            $payload = ['event_sequence' => $this->nextEventSequence()] + $payload;
         }
 
         $orderId = $payload['order_id'] ?? null;
@@ -273,6 +273,21 @@ final class FakeExchangeStateStore
     public function openPositionCount(?string $symbol = null): int
     {
         return \count($this->getOpenPositions($symbol));
+    }
+
+    private function nextEventSequence(): int
+    {
+        $maximum = 0;
+        foreach ($this->events as $event) {
+            $sequence = $event->payload['event_sequence'] ?? null;
+            if (\is_int($sequence)) {
+                $maximum = max($maximum, $sequence);
+            } elseif (\is_string($sequence) && ctype_digit($sequence)) {
+                $maximum = max($maximum, (int)$sequence);
+            }
+        }
+
+        return $maximum + 1;
     }
 
     private function clientOrderKey(string $symbol, string $clientOrderId): string

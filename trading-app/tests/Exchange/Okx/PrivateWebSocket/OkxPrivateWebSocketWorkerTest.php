@@ -1642,6 +1642,24 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
             $this->timeline->events[] = 'project:' . $event->eventType();
         }
     }
+
+    public function projectAtomically(array $events): void
+    {
+        $projectedBefore = $this->events;
+        $timelineBefore = $this->timeline?->events;
+        try {
+            foreach ($events as $event) {
+                $this->project($event);
+            }
+        } catch (\Throwable $exception) {
+            $this->events = $projectedBefore;
+            if ($this->timeline !== null && $timelineBefore !== null) {
+                $this->timeline->events = $timelineBefore;
+            }
+
+            throw $exception;
+        }
+    }
 }
 
 #[CoversNothing]
