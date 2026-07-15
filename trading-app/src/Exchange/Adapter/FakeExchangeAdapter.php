@@ -33,6 +33,7 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
     private const FEE_RATE = 0.0005;
+    private const MARGIN_MODEL_VERSION = 'fake-derived-initial-margin-v1';
 
     public function __construct(
         private FakeExchangeStateStore $stateStore,
@@ -93,7 +94,36 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     {
         $this->throwInjectedFault(FakeExchangeOperation::GetBalances, FakeExchangeFaultOutcome::NotApplied);
 
-        return $this->stateStore->getBalances();
+        $usedMargin = $this->stateStore->usedMarginUsdt();
+        $availableMargin = $this->stateStore->availableMarginUsdt();
+        $total = $this->stateStore->totalBalanceUsdt();
+
+        return array_map(
+            static function (ExchangeBalanceDto $balance) use ($usedMargin, $availableMargin, $total): ExchangeBalanceDto {
+                if ($balance->currency !== 'USDT') {
+                    return $balance;
+                }
+
+                return new ExchangeBalanceDto(
+                    exchange: $balance->exchange,
+                    marketType: $balance->marketType,
+                    currency: $balance->currency,
+                    available: $availableMargin,
+                    total: $total,
+                    equity: $balance->equity,
+                    unrealizedPnl: $balance->unrealizedPnl,
+                    metadata: array_replace(
+                        ['source' => 'fake_exchange'],
+                        $balance->metadata,
+                        [
+                            'used_margin_usdt' => $usedMargin,
+                            'margin_model_version' => self::MARGIN_MODEL_VERSION,
+                        ],
+                    ),
+                );
+            },
+            $this->stateStore->getBalances(),
+        );
     }
 
     /**

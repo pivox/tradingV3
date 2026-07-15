@@ -43,11 +43,19 @@ final readonly class FakeExchangeMatchingEngine
         'attempt_number',
     ];
 
+    private FakeOrderValidator $orderValidator;
+
+    private FakeInstrumentProviderInterface $instruments;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
         private ClockInterface $clock,
+        ?FakeOrderValidator $orderValidator = null,
+        ?FakeInstrumentProviderInterface $instruments = null,
     ) {
+        $this->instruments = $instruments ?? new FakeInstrumentCatalog();
+        $this->orderValidator = $orderValidator ?? new FakeOrderValidator($this->instruments);
     }
 
     public function submit(PlaceOrderRequest $request): PlaceOrderResult
@@ -73,14 +81,36 @@ final readonly class FakeExchangeMatchingEngine
             );
         }
 
-        if ($request->postOnly && $this->wouldCross($request)) {
-            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, array_replace($this->requestMetadata($request), [
-                'reason' => 'post_only_would_cross',
-            ]));
-            $this->stateStore->saveOrder($order);
-            $this->appendEvent('order.rejected', $order, ['reason' => 'post_only_would_cross']);
+        $top = $this->orderBook->top($request->symbol);
+        $referencePrice = $request->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
+        $validationMetadata = [];
+        try {
+            $availableMargin = $this->stateStore->availableMarginUsdt();
+        } catch (\LogicException) {
+            $availableMargin = NAN;
+            $validationMetadata['quality_flags'] = ['margin_state_unavailable'];
+        }
+        $validation = $this->orderValidator->validate(
+            $request,
+            $referencePrice,
+            $availableMargin,
+        );
+        if (!$validation->accepted) {
+            return $this->rejectOrder(
+                $request,
+                $validation->reason ?? 'order_validation_failed',
+                $validation->metadata,
+                $validationMetadata,
+            );
+        }
 
-            return $this->placeResult(false, $request, $order);
+        if ($request->postOnly && $this->wouldCross($request)) {
+            return $this->rejectOrder($request, 'post_only_would_cross');
+        }
+
+        $instrument = $this->instruments->find($request->symbol);
+        if (!$instrument instanceof FakeInstrument) {
+            throw new \LogicException('fake_instrument_metadata_unavailable');
         }
 
         if ($this->isStandaloneProtection($request) && $this->stateStore->consumeProtectionRejectionFlag()) {
@@ -93,7 +123,11 @@ final readonly class FakeExchangeMatchingEngine
             return $this->placeResult(false, $request, $order);
         }
 
-        $order = $this->buildOrder($request, ExchangeOrderStatus::OPEN, $this->requestMetadata($request));
+        $order = $this->buildOrder(
+            $request,
+            ExchangeOrderStatus::OPEN,
+            $this->requestMetadata($request, $referencePrice, $instrument->contractSize),
+        );
         $this->stateStore->saveOrder($order);
         $this->appendEvent('order.created', $order);
 
@@ -277,7 +311,7 @@ final readonly class FakeExchangeMatchingEngine
     {
         return new ExchangeOrderDto(
             exchange: Exchange::FAKE,
-            marketType: MarketType::PERPETUAL,
+            marketType: $request->marketType,
             symbol: strtoupper($request->symbol),
             exchangeOrderId: $this->stateStore->nextOrderId(),
             clientOrderId: $request->clientOrderId,
@@ -302,7 +336,11 @@ final readonly class FakeExchangeMatchingEngine
     /**
      * @return array<string,mixed>
      */
-    private function requestMetadata(PlaceOrderRequest $request): array
+    private function requestMetadata(
+        PlaceOrderRequest $request,
+        ?float $marginReferencePrice = null,
+        ?string $marginContractSize = null,
+    ): array
     {
         return array_filter([
             'source' => 'fake_exchange',
@@ -311,7 +349,24 @@ final readonly class FakeExchangeMatchingEngine
             'client_order_id' => $request->clientOrderId,
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
+            'margin_reference_price' => $marginReferencePrice,
+            'margin_reference_source' => $marginReferencePrice !== null ? 'top_of_book' : null,
+            'margin_contract_size' => $marginContractSize,
         ], static fn (mixed $value): bool => $value !== null) + $request->metadata;
+    }
+
+    /**
+     * @param array<string,mixed> ...$metadata
+     */
+    private function rejectOrder(PlaceOrderRequest $request, string $reason, array ...$metadata): PlaceOrderResult
+    {
+        $metadata[] = ['reason' => $reason];
+        $rejectionMetadata = array_replace($this->requestMetadata($request), ...$metadata);
+        $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, $rejectionMetadata);
+        $this->stateStore->saveOrder($order);
+        $this->appendEvent('order.rejected', $order, array_replace(...$metadata));
+
+        return $this->placeResult(false, $request, $order);
     }
 
     private function intentMismatchReplayResult(PlaceOrderRequest $request, ExchangeOrderDto $existing): PlaceOrderResult
@@ -486,6 +541,7 @@ final readonly class FakeExchangeMatchingEngine
 
         $fillFee = $this->fillFee($fillQuantity, $executionPrice);
         $existing = $this->stateStore->getPosition($order->symbol, $order->positionSide);
+        $existingMetadata = $existing?->metadata ?? ['source' => 'fake_exchange'];
         if ($order->reduceOnly) {
             if (!$existing instanceof ExchangePositionDto) {
                 return;
@@ -526,6 +582,14 @@ final readonly class FakeExchangeMatchingEngine
             ? (($existing->entryPrice * $previousSize) + ($executionPrice * $fillQuantity)) / $newSize
             : $executionPrice;
         $leverage = $this->floatMetadata($order->metadata, 'leverage') ?? 1.0;
+        $contractSize = $this->marginContractSize($order->metadata);
+        $existingMargin = $existing?->margin;
+        if ($existing instanceof ExchangePositionDto && ($existingMargin === null || !\is_finite($existingMargin) || $existingMargin < 0.0)) {
+            throw new \LogicException('fake_position_margin_unavailable');
+        }
+        $existingMargin ??= 0.0;
+        $newMargin = $existingMargin + (($fillQuantity * $executionPrice * $contractSize) / max($leverage, 1.0));
+        $effectiveLeverage = ($newSize * $entryPrice * $contractSize) / $newMargin;
         $markPrice = $this->midPrice($order->symbol);
         $position = new ExchangePositionDto(
             exchange: Exchange::FAKE,
@@ -537,12 +601,15 @@ final readonly class FakeExchangeMatchingEngine
             markPrice: $markPrice,
             unrealizedPnl: 0.0,
             realizedPnl: 0.0,
-            margin: ($newSize * $entryPrice) / max($leverage, 1.0),
-            leverage: $leverage,
+            margin: $newMargin,
+            leverage: $effectiveLeverage,
             openedAt: $existing?->openedAt ?? $this->clock->now(),
             updatedAt: $this->clock->now(),
             metadata: $this->appendEntryLedger(
-                array_replace($this->lineageMetadata($order->metadata), $existing?->metadata ?? ['source' => 'fake_exchange']),
+                array_replace(
+                    $this->lineageMetadata($order->metadata),
+                    $existingMetadata,
+                ),
                 $order->exchangeOrderId,
                 $fillQuantity,
                 $executionPrice,
@@ -583,6 +650,10 @@ final readonly class FakeExchangeMatchingEngine
      */
     private function positionWithSize(ExchangePositionDto $position, float $size, ?array $metadata = null): ExchangePositionDto
     {
+        if ($position->margin === null || !\is_finite($position->margin) || $position->margin < 0.0 || $position->size <= 0.0) {
+            throw new \LogicException('fake_position_margin_unavailable');
+        }
+
         return new ExchangePositionDto(
             exchange: $position->exchange,
             marketType: $position->marketType,
@@ -593,7 +664,7 @@ final readonly class FakeExchangeMatchingEngine
             markPrice: $position->markPrice,
             unrealizedPnl: $position->unrealizedPnl,
             realizedPnl: $position->realizedPnl,
-            margin: ($size * $position->entryPrice) / max($position->leverage ?? 1.0, 1.0),
+            margin: $position->margin * ($size / $position->size),
             leverage: $position->leverage,
             openedAt: $position->openedAt,
             updatedAt: $this->clock->now(),
@@ -734,6 +805,19 @@ final readonly class FakeExchangeMatchingEngine
         return is_numeric($value) ? (float) $value : 0.0;
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function marginContractSize(array $metadata): float
+    {
+        $value = $metadata['margin_contract_size'] ?? 1.0;
+        if (!\is_numeric($value) || !\is_finite((float) $value) || (float) $value <= 0.0) {
+            throw new \LogicException('fake_order_margin_contract_size_unavailable');
+        }
+
+        return (float) $value;
+    }
+
     private function placeResult(bool $accepted, PlaceOrderRequest $request, ExchangeOrderDto $order): PlaceOrderResult
     {
         return new PlaceOrderResult(
@@ -768,7 +852,7 @@ final readonly class FakeExchangeMatchingEngine
 
     private function assertRequestContext(PlaceOrderRequest $request): void
     {
-        if ($request->exchange !== Exchange::FAKE || $request->marketType !== MarketType::PERPETUAL) {
+        if ($request->exchange !== Exchange::FAKE) {
             throw new \InvalidArgumentException(sprintf(
                 'Fake exchange adapter cannot handle "%s::%s"',
                 $request->exchange->value,
@@ -962,6 +1046,9 @@ final readonly class FakeExchangeMatchingEngine
 
     private function orderMatchesRequest(ExchangeOrderDto $order, PlaceOrderRequest $request): bool
     {
+        if ($order->marketType !== $request->marketType) {
+            return false;
+        }
         if ($order->side !== $request->side || $order->positionSide !== $request->positionSide) {
             return false;
         }

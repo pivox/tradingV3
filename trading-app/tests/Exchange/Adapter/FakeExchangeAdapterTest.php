@@ -8,7 +8,9 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
@@ -20,6 +22,10 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeInstrument;
+use App\Exchange\Fake\FakeInstrumentProviderInterface;
+use App\Exchange\Fake\FakeOrderValidator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -33,15 +39,410 @@ final class FakeExchangeAdapterTest extends TestCase
 {
     private FakeExchangeAdapter $adapter;
     private FakeExchangeScenarioService $scenario;
+    private FakeExchangeStateStore $state;
 
     protected function setUp(): void
     {
+        $this->state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($this->state);
+        $engine = new FakeExchangeMatchingEngine($this->state, $book, $this->fixedClock());
+
+        $this->adapter = new FakeExchangeAdapter($this->state, $book, $engine, $this->fixedClock());
+        $this->scenario = new FakeExchangeScenarioService($this->state, $book, $engine);
+    }
+
+    /**
+     * @return iterable<string,array{string,float,float,int,string}>
+     */
+    public static function validationRejectionCases(): iterable
+    {
+        yield 'price is not quantized' => ['BTCUSDT', 24950.01, 1.0, 3, 'price_not_quantized'];
+        yield 'quantity is not quantized' => ['BTCUSDT', 24950.0, 1.0001, 3, 'quantity_not_quantized'];
+        yield 'instrument is unknown' => ['SOLUSDT', 24950.0, 1.0, 3, 'instrument_unknown'];
+        yield 'notional is below minimum' => ['BTCUSDT', 4000.0, 0.001, 3, 'notional_below_minimum'];
+        yield 'leverage exceeds instrument cap' => ['BTCUSDT', 24950.0, 1.0, 101, 'leverage_above_maximum'];
+    }
+
+    #[DataProvider('validationRejectionCases')]
+    public function testValidationRejectsAreStructuredPersistedAndNeverRounded(
+        string $symbol,
+        float $price,
+        float $quantity,
+        int $leverage,
+        string $reason,
+    ): void {
+        $result = $this->adapter->placeOrder($this->request(
+            symbol: $symbol,
+            price: $price,
+            quantity: $quantity,
+            leverage: $leverage,
+        ));
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertSame($reason, $result->metadata['reason'] ?? null);
+        self::assertSame($reason, $result->order->metadata['reason'] ?? null);
+        self::assertSame($price, $result->order->price);
+        self::assertSame($quantity, $result->order->quantity);
+        self::assertSame($result->exchangeOrderId, $this->adapter->getOrder($symbol, (string) $result->exchangeOrderId)?->exchangeOrderId);
+
+        $events = $this->scenario->events('order.rejected');
+        self::assertCount(1, $events);
+        self::assertSame($result->exchangeOrderId, $events[0]->payload['order_id'] ?? null);
+        self::assertSame($reason, $events[0]->payload['reason'] ?? null);
+    }
+
+    public function testRejectedOrderReplayPrecedesValidationAndDoesNotReuseOrderId(): void
+    {
+        $rejected = $this->adapter->placeOrder($this->request(
+            price: 24950.01,
+            clientOrderId: 'cid-invalid',
+        ));
+        $replayed = $this->adapter->placeOrder($this->request(
+            price: 24950.01,
+            clientOrderId: 'cid-invalid',
+        ));
+        $accepted = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-valid',
+            postOnly: true,
+        ));
+
+        self::assertSame($rejected->exchangeOrderId, $replayed->exchangeOrderId);
+        self::assertTrue($replayed->metadata['idempotent_replay'] ?? false);
+        self::assertNotSame($rejected->exchangeOrderId, $accepted->exchangeOrderId);
+        self::assertCount(2, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('order.rejected'));
+    }
+
+    public function testRejectsQuantizedEntryWhenDerivedAvailableBalanceIsInsufficient(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-reservation',
+            postOnly: true,
+            quantity: 12.0,
+        ));
+
+        $result = $this->adapter->placeOrder($this->request(
+            price: 24940.0,
+            clientOrderId: 'cid-insufficient',
+            postOnly: true,
+            quantity: 0.1,
+        ));
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertSame('insufficient_balance', $result->metadata['reason'] ?? null);
+        self::assertSame(24940.0, $result->order->price);
+        self::assertSame(0.1, $result->order->quantity);
+    }
+
+    public function testUnavailablePositionMarginProducesAuditedFailClosedRejection(): void
+    {
+        $this->state->savePosition(new ExchangePositionDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangePositionSide::LONG,
+            size: 1.0,
+            entryPrice: 25000.0,
+            markPrice: 25000.0,
+            unrealizedPnl: 0.0,
+            realizedPnl: 0.0,
+            margin: null,
+            leverage: 3.0,
+        ));
+
+        try {
+            $result = $this->adapter->placeOrder($this->request(clientOrderId: 'cid-margin-unavailable'));
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('Expected a structured rejection, got LogicException: %s', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertSame('insufficient_balance', $result->metadata['reason'] ?? null);
+        self::assertSame(['margin_state_unavailable'], $result->metadata['quality_flags'] ?? null);
+        self::assertArrayNotHasKey('exception', $result->metadata);
+        self::assertArrayNotHasKey('exception_message', $result->metadata);
+        self::assertSame(
+            $result->exchangeOrderId,
+            $this->adapter->getOrder('BTCUSDT', (string) $result->exchangeOrderId)?->exchangeOrderId,
+        );
+
+        $events = $this->scenario->events('order.rejected');
+        self::assertCount(1, $events);
+        self::assertSame('insufficient_balance', $events[0]->payload['reason'] ?? null);
+        self::assertSame(['margin_state_unavailable'], $events[0]->payload['quality_flags'] ?? null);
+        self::assertArrayNotHasKey('exception', $events[0]->payload);
+        self::assertArrayNotHasKey('exception_message', $events[0]->payload);
+    }
+
+    public function testSpotMarketTypeProducesPersistedAuditedRejectionWithCoherentReplay(): void
+    {
+        try {
+            $rejected = $this->adapter->placeOrder($this->request(
+                clientOrderId: 'cid-spot',
+                marketType: MarketType::SPOT,
+            ));
+        } catch (\InvalidArgumentException $exception) {
+            self::fail(sprintf('Expected a structured rejection, got InvalidArgumentException: %s', $exception->getMessage()));
+        }
+
+        $replayed = $this->adapter->placeOrder($this->request(
+            clientOrderId: 'cid-spot',
+            marketType: MarketType::SPOT,
+        ));
+        $changedMarket = $this->adapter->placeOrder($this->request(
+            clientOrderId: 'cid-spot',
+            marketType: MarketType::PERPETUAL,
+        ));
+
+        self::assertFalse($rejected->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $rejected->status);
+        self::assertSame(MarketType::SPOT, $rejected->order->marketType);
+        self::assertSame('market_type_not_supported', $rejected->metadata['reason'] ?? null);
+        self::assertSame($rejected->exchangeOrderId, $replayed->exchangeOrderId);
+        self::assertTrue($replayed->metadata['idempotent_replay'] ?? false);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $changedMarket->metadata['reason'] ?? null);
+        self::assertSame(
+            $rejected->exchangeOrderId,
+            $this->adapter->getOrder('BTCUSDT', (string) $rejected->exchangeOrderId)?->exchangeOrderId,
+        );
+
+        $events = $this->scenario->events('order.rejected');
+        self::assertCount(1, $events);
+        self::assertSame('market_type_not_supported', $events[0]->payload['reason'] ?? null);
+    }
+
+    public function testBalancesExposeDerivedAvailableAndMarginMetadata(): void
+    {
+        $balance = $this->adapter->getBalances()[0];
+
+        self::assertSame('USDT', $balance->currency);
+        self::assertSame(100000.0, $balance->total);
+        self::assertSame(100000.0, $balance->equity);
+        self::assertSame(100000.0, $balance->available);
+        self::assertSame('fake_exchange', $balance->metadata['source'] ?? null);
+        self::assertSame(0.0, $balance->metadata['used_margin_usdt'] ?? null);
+        self::assertSame('fake-derived-initial-margin-v1', $balance->metadata['margin_model_version'] ?? null);
+    }
+
+    public function testAvailableMarginUsesLowerFiniteEquityAsCollateral(): void
+    {
+        $this->replaceUsdtBalance(total: 100000.0, equity: 75000.0);
+
+        $balance = $this->adapter->getBalances()[0];
+
+        self::assertSame(100000.0, $balance->total);
+        self::assertSame(75000.0, $balance->equity);
+        self::assertSame(75000.0, $balance->available);
+        self::assertSame(0.0, $balance->metadata['used_margin_usdt'] ?? null);
+    }
+
+    /**
+     * @return iterable<string,array{float,?float}>
+     */
+    public static function invalidCollateralCases(): iterable
+    {
+        yield 'negative total' => [-1.0, 100000.0];
+        yield 'non-finite total' => [INF, 100000.0];
+        yield 'negative equity' => [100000.0, -1.0];
+        yield 'non-finite equity' => [100000.0, INF];
+    }
+
+    #[DataProvider('invalidCollateralCases')]
+    public function testInvalidCollateralValuesFailClosed(float $total, ?float $equity): void
+    {
+        $this->replaceUsdtBalance($total, $equity);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('fake_usdt_margin_collateral_invalid');
+
+        $this->adapter->getBalances();
+    }
+
+    public function testOpenLimitOrderReservesRemainingInitialMarginAndCancelReleasesIt(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            postOnly: true,
+            leverage: 5,
+        ));
+
+        $reserved = $this->adapter->getBalances()[0];
+        self::assertEqualsWithDelta(4990.0, $reserved->metadata['used_margin_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(95010.0, $reserved->available, 0.000001);
+
+        $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $placed->exchangeOrderId,
+        ));
+
+        $released = $this->adapter->getBalances()[0];
+        self::assertSame(0.0, $released->metadata['used_margin_usdt'] ?? null);
+        self::assertSame(100000.0, $released->available);
+    }
+
+    public function testPartialFillCountsPositionAndRemainderMarginExactlyOnce(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            postOnly: true,
+            leverage: 5,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0];
+        $balance = $this->adapter->getBalances()[0];
+        self::assertEqualsWithDelta(1996.0, $position->margin, 0.000001);
+        self::assertEqualsWithDelta(4990.0, $balance->metadata['used_margin_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(95010.0, $balance->available, 0.000001);
+    }
+
+    public function testContractSizeMetadataDrivesOpenAndPartiallyFilledMargin(): void
+    {
+        $provider = $this->instrumentProvider(contractSize: '2');
         $state = new FakeExchangeStateStore();
         $book = new FakeExchangeOrderBook($state);
-        $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $this->fixedClock(),
+            new FakeOrderValidator($provider),
+            $provider,
+        );
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+        $scenario = new FakeExchangeScenarioService($state, $book, $engine);
 
-        $this->adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
-        $this->scenario = new FakeExchangeScenarioService($state, $book, $engine);
+        $placed = $adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-contract-size',
+            postOnly: true,
+            leverage: 5,
+        ));
+
+        self::assertSame('2', $placed->order->metadata['margin_contract_size'] ?? null);
+        self::assertEqualsWithDelta(9980.0, $adapter->getBalances()[0]->metadata['used_margin_usdt'] ?? null, 0.000001);
+
+        self::assertNotNull($placed->exchangeOrderId);
+        $scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $position = $adapter->getOpenPositions('BTCUSDT')[0];
+        self::assertEqualsWithDelta(3992.0, $position->margin, 0.000001);
+        self::assertEqualsWithDelta(9980.0, $adapter->getBalances()[0]->metadata['used_margin_usdt'] ?? null, 0.000001);
+    }
+
+    public function testLegacyOpenOrderWithoutContractSizeMetadataFallsBackToOne(): void
+    {
+        $this->state->saveOrder(new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'legacy-order',
+            clientOrderId: 'legacy-cid',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            status: ExchangeOrderStatus::OPEN,
+            quantity: 1.0,
+            filledQuantity: 0.0,
+            remainingQuantity: 1.0,
+            price: 24950.0,
+            averagePrice: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            timeInForce: ExchangeTimeInForce::GTC,
+            createdAt: $this->fixedClock()->now(),
+            metadata: ['leverage' => 5],
+        ));
+
+        self::assertEqualsWithDelta(4990.0, $this->state->usedMarginUsdt(), 0.000001);
+    }
+
+    public function testMixedLeverageEntriesAccumulateMarginAndReductionKeepsItProportional(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-leverage-5',
+            postOnly: false,
+            leverage: 5,
+        ));
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'entry-leverage-10',
+            postOnly: false,
+            leverage: 10,
+        ));
+
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0];
+        $expectedMargin = (25000.5 / 5.0) + (25000.5 / 10.0);
+        $expectedLeverage = (2.0 * 25000.5) / $expectedMargin;
+        self::assertEqualsWithDelta(2.0, $position->size, 0.000001);
+        self::assertEqualsWithDelta($expectedMargin, $position->margin, 0.000001);
+        self::assertEqualsWithDelta($expectedLeverage, $position->leverage, 0.000001);
+
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'reduce-mixed-leverage',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: false,
+            quantity: 0.5,
+        ));
+
+        $reduced = $this->adapter->getOpenPositions('BTCUSDT')[0];
+        self::assertEqualsWithDelta(1.5, $reduced->size, 0.000001);
+        self::assertEqualsWithDelta($expectedMargin * 0.75, $reduced->margin, 0.000001);
+        self::assertEqualsWithDelta($expectedLeverage, $reduced->leverage, 0.000001);
+    }
+
+    public function testDerivedAvailableMarginNeverBecomesNegative(): void
+    {
+        $this->state->savePosition(new ExchangePositionDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangePositionSide::LONG,
+            size: 1.0,
+            entryPrice: 25000.0,
+            markPrice: 25000.0,
+            unrealizedPnl: 0.0,
+            realizedPnl: 0.0,
+            margin: 120000.0,
+            leverage: 1.0,
+        ));
+
+        $balance = $this->adapter->getBalances()[0];
+        self::assertSame(0.0, $balance->available);
+        self::assertSame(120000.0, $balance->metadata['used_margin_usdt'] ?? null);
+    }
+
+    public function testReduceOnlyProtectionOrderDoesNotReserveInitialMargin(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::STOP_LOSS,
+            price: null,
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: false,
+            postOnly: false,
+            stopPrice: 24800.0,
+            leverage: 5,
+        ));
+
+        self::assertTrue($result->order->reduceOnly);
+        $balance = $this->adapter->getBalances()[0];
+        self::assertSame(0.0, $balance->metadata['used_margin_usdt'] ?? null);
+        self::assertSame(100000.0, $balance->available);
     }
 
     public function testPlaceLimitOrderLeavesOpenMakerOrder(): void
@@ -701,6 +1102,121 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    public function testConcurrentStateStoresReloadUnderLockAndPreserveBothOrders(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_concurrent_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $firstAdapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            $secondAdapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+
+            $first = $firstAdapter->placeOrder($this->request(
+                clientOrderId: 'concurrent-first',
+                postOnly: true,
+            ));
+            $second = $secondAdapter->placeOrder($this->request(
+                price: 24900.0,
+                clientOrderId: 'concurrent-second',
+                postOnly: true,
+            ));
+
+            self::assertNotSame($first->exchangeOrderId, $second->exchangeOrderId);
+            $restoredOrders = $this->adapterForState(new FakeExchangeStateStore($stateFile))->getOpenOrders('BTCUSDT');
+            self::assertCount(2, $restoredOrders);
+            self::assertSame(
+                ['concurrent-first', 'concurrent-second'],
+                array_map(static fn (ExchangeOrderDto $order): ?string => $order->clientOrderId, $restoredOrders),
+            );
+            self::assertFileExists($stateFile . '.lock');
+            self::assertStringNotContainsString($stateFile . '.lock', (string) file_get_contents($stateFile));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testStaleStateStoreReloadsBeforeCancelTransaction(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_cancel_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $firstAdapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            $staleAdapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            $placed = $firstAdapter->placeOrder($this->request(postOnly: true));
+
+            $cancelled = $staleAdapter->cancelOrder(new CancelOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                exchangeOrderId: $placed->exchangeOrderId,
+            ));
+
+            self::assertTrue($cancelled->cancelled);
+            $restored = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            self::assertCount(0, $restored->getOpenOrders('BTCUSDT'));
+            self::assertSame(ExchangeOrderStatus::CANCELLED, $restored->getOrdersSnapshot('BTCUSDT')[0]->status);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testMarketFailureRollsBackOpenOrderBeforeRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_market_rollback_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new class($stateFile) extends FakeExchangeStateStore {
+                private bool $failNextMarketOrderRead = false;
+
+                public function saveOrder(ExchangeOrderDto $order): void
+                {
+                    parent::saveOrder($order);
+                    if ($order->orderType === ExchangeOrderType::MARKET && $order->status === ExchangeOrderStatus::OPEN) {
+                        $this->failNextMarketOrderRead = true;
+                    }
+                }
+
+                public function getOrder(string $exchangeOrderId): ?ExchangeOrderDto
+                {
+                    if ($this->failNextMarketOrderRead) {
+                        $this->failNextMarketOrderRead = false;
+
+                        throw new \RuntimeException('forced_market_fill_failure');
+                    }
+
+                    return parent::getOrder($exchangeOrderId);
+                }
+            };
+            $adapter = $this->adapterForState($state);
+
+            try {
+                $adapter->placeOrder($this->request(
+                    orderType: ExchangeOrderType::MARKET,
+                    price: null,
+                    clientOrderId: 'market-rollback',
+                    postOnly: false,
+                ));
+                self::fail('Expected forced market fill failure.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('forced_market_fill_failure', $exception->getMessage());
+            }
+
+            $restored = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            self::assertCount(0, $restored->getOpenOrders('BTCUSDT'));
+            self::assertCount(0, $restored->getOrdersSnapshot('BTCUSDT'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testStateStoreRestoresProtectedPositionAndContinuesEventSequence(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
@@ -850,10 +1366,12 @@ final class FakeExchangeAdapterTest extends TestCase
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
         array $metadata = [],
+        ?int $leverage = 3,
+        MarketType $marketType = MarketType::PERPETUAL,
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
-            marketType: MarketType::PERPETUAL,
+            marketType: $marketType,
             symbol: $symbol,
             side: $side,
             positionSide: $positionSide,
@@ -864,7 +1382,7 @@ final class FakeExchangeAdapterTest extends TestCase
             stopPrice: $stopPrice,
             reduceOnly: $reduceOnly,
             postOnly: $postOnly,
-            leverage: 3,
+            leverage: $leverage,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
@@ -889,5 +1407,57 @@ final class FakeExchangeAdapterTest extends TestCase
         $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
 
         return new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+    }
+
+    private function instrumentProvider(string $contractSize): FakeInstrumentProviderInterface
+    {
+        $instrument = new FakeInstrument(
+            symbol: 'BTCUSDT',
+            marketType: MarketType::PERPETUAL,
+            baseAsset: 'BTC',
+            quoteAsset: 'USDT',
+            settleAsset: 'USDT',
+            priceTick: '0.10',
+            quantityStep: '0.001',
+            minQuantity: '0.001',
+            minNotional: '5',
+            contractSize: $contractSize,
+            maxLeverage: 100,
+            maintenanceMarginRate: '0.005',
+            allowedOrderTypes: [
+                ExchangeOrderType::LIMIT,
+                ExchangeOrderType::MARKET,
+                ExchangeOrderType::STOP_LOSS,
+                ExchangeOrderType::TAKE_PROFIT,
+            ],
+        );
+
+        return new class($instrument) implements FakeInstrumentProviderInterface {
+            public function __construct(private readonly FakeInstrument $instrument)
+            {
+            }
+
+            public function find(string $symbol): ?FakeInstrument
+            {
+                return $symbol === $this->instrument->symbol ? $this->instrument : null;
+            }
+        };
+    }
+
+    private function replaceUsdtBalance(float $total, ?float $equity): void
+    {
+        $property = new \ReflectionProperty(FakeExchangeStateStore::class, 'balances');
+        $property->setValue($this->state, [
+            'USDT' => new ExchangeBalanceDto(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                currency: 'USDT',
+                available: $total,
+                total: $total,
+                equity: $equity,
+                unrealizedPnl: 0.0,
+                metadata: ['source' => 'fake_exchange'],
+            ),
+        ]);
     }
 }
