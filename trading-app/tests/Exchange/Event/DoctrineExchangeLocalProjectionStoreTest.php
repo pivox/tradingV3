@@ -109,6 +109,23 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         yield 'open short' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 4];
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('numericSideProvider')]
+    public function testStoredNumericSideRestoresOrderAndPositionSides(
+        ExchangeOrderSide $expectedSide,
+        ExchangePositionSide $expectedPositionSide,
+        int $storedSide,
+    ): void {
+        $method = new \ReflectionMethod(DoctrineExchangeLocalProjectionStore::class, 'storedOrderSides');
+
+        /** @var array{ExchangeOrderSide, ExchangePositionSide}|null $sides */
+        $sides = $method->invoke(
+            $this->store($this->createStub(FuturesOrderSyncService::class), $this->createStub(FillCostLedgerEntryRepository::class)),
+            $storedSide,
+        );
+
+        self::assertSame([$expectedSide, $expectedPositionSide], $sides);
+    }
+
     public function testProtectiveOrderProjectionKeepsCompleteAllowlistedPayload(): void
     {
         $captured = null;

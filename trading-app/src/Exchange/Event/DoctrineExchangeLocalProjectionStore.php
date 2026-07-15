@@ -56,26 +56,35 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             if (!in_array($status, [ExchangeOrderStatus::PENDING, ExchangeOrderStatus::OPEN, ExchangeOrderStatus::PARTIALLY_FILLED], true)) {
                 continue;
             }
-            $side = match ($order->getSide()) {
-                1, 2 => ExchangeOrderSide::BUY,
-                3, 4 => ExchangeOrderSide::SELL,
-                default => null,
-            };
+            $sides = $this->storedOrderSides($order->getSide());
             $type = ExchangeOrderType::tryFrom((string) $order->getType());
             $orderId = $order->getOrderId();
-            if ($side === null || $type === null || $orderId === null) {
+            if ($sides === null || $type === null || $orderId === null) {
                 continue;
             }
+            [$side, $positionSide] = $sides;
             $quantity = (float) ($order->getQuantityDecimal() ?? $order->getSize() ?? 0);
             $filled = (float) ($order->getFilledQuantityDecimal() ?? $order->getFilledSize() ?? 0);
             $result[] = new ExchangeOrderDto(
-                $exchange, $marketType, $order->getSymbol(), $orderId, $order->getClientOrderId(), $side, null,
+                $exchange, $marketType, $order->getSymbol(), $orderId, $order->getClientOrderId(), $side, $positionSide,
                 $type, $status, $quantity, $filled, max(0.0, $quantity - $filled),
                 $order->getPrice() !== null ? (float) $order->getPrice() : null, null, null, false, false, null,
                 $order->getCreatedAt(), $order->getUpdatedAt(), ['source' => 'local_projection'],
             );
         }
         return $result;
+    }
+
+    /** @return array{ExchangeOrderSide, ExchangePositionSide}|null */
+    private function storedOrderSides(?int $side): ?array
+    {
+        return match ($side) {
+            1 => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG],
+            2 => [ExchangeOrderSide::SELL, ExchangePositionSide::LONG],
+            3 => [ExchangeOrderSide::BUY, ExchangePositionSide::SHORT],
+            4 => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT],
+            default => null,
+        };
     }
 
     private function mapOpenOrderStatus(?string $status): ?ExchangeOrderStatus
