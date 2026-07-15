@@ -219,6 +219,28 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         self::assertSame('0.723456789012345677', $captured['remaining_quantity_decimal']);
     }
 
+    public function testOrderPayloadOmitsExactQuantitiesWhenMetadataIsAbsent(): void
+    {
+        $captured = null;
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::once())
+            ->method('syncOrderFromApi')
+            ->willReturnCallback(function (array $payload) use (&$captured): FuturesOrder {
+                $captured = $payload;
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $store = $this->store($orderSync, $this->createStub(FillCostLedgerEntryRepository::class));
+        $order = $this->orderDto(ExchangeOrderSide::BUY, ExchangePositionSide::LONG);
+
+        $store->project(new ExchangeOrderUpdated($order, $order->createdAt));
+
+        self::assertIsArray($captured);
+        self::assertArrayNotHasKey('quantity_decimal', $captured);
+        self::assertArrayNotHasKey('filled_quantity_decimal', $captured);
+        self::assertArrayNotHasKey('remaining_quantity_decimal', $captured);
+    }
+
     public function testOkxPrivateOrderAndFillProjectionRawNeverContainsProviderSecrets(): void
     {
         $capturedOrder = null;

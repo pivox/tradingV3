@@ -157,7 +157,7 @@ final readonly class OkxPrivateReadMapper
             'size' => $this->number($row['fillSz'] ?? $row['sz'] ?? '0'),
             'price' => $this->number($row['fillPx'] ?? $row['px'] ?? '0'),
             'fee_currency' => $this->stringOrNull($row['feeCcy'] ?? null),
-            'create_time' => is_numeric($row['ts'] ?? null) ? (int) $row['ts'] : null,
+            'create_time' => $this->intOrNull($row['fillTime'] ?? null) ?? $this->intOrNull($row['ts'] ?? null),
             'raw_reference' => $this->redacted($row),
         ];
         if (array_key_exists('fee', $row)) {

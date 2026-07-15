@@ -96,6 +96,16 @@ final class OkxPrivateReadProviderTest extends TestCase
         (new OkxPrivateReadMapper())->legacyTrade($row);
     }
 
+    public function testLegacyTradeUsesFillExecutionTimeBeforeRecordGenerationTime(): void
+    {
+        $trade = (new OkxPrivateReadMapper())->legacyTrade([
+            'fillTime' => '1767225600123',
+            'ts' => '1767225600456',
+        ]);
+
+        self::assertSame(1767225600123, $trade['create_time']);
+    }
+
     /** @return iterable<string,array{array<string,mixed>}> */
     public static function missingRequiredOrderEnumProvider(): iterable
     {
