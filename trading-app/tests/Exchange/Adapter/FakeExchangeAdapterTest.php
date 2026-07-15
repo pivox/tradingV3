@@ -778,6 +778,28 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    public function testStateStoreWrapsTypedPropertyDeserializationFailure(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            new FakeExchangeStateStore($stateFile);
+            $raw = file_get_contents($stateFile);
+            self::assertIsString($raw);
+            $corrupted = str_replace('d:100000;', 's:6:"broken";', $raw, $replacements);
+            self::assertGreaterThan(0, $replacements);
+            file_put_contents($stateFile, $corrupted);
+
+            $this->expectException(FakeExchangeStateCorruptedException::class);
+            $this->expectExceptionMessage('fake_exchange_state_deserialization_failed');
+            new FakeExchangeStateStore($stateFile);
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
     public function testStateStoreRestoresLegacyPayloadAndUpgradesOnNextWrite(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');

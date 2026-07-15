@@ -395,7 +395,14 @@ final class FakeExchangeStateStore
             throw new FakeExchangeStateCorruptedException('fake_exchange_state_unreadable');
         }
 
-        $state = @unserialize($raw, ['allowed_classes' => self::allowedSerializedClasses()]);
+        try {
+            $state = @unserialize($raw, ['allowed_classes' => self::allowedSerializedClasses()]);
+        } catch (\Throwable $exception) {
+            throw new FakeExchangeStateCorruptedException(
+                'fake_exchange_state_deserialization_failed',
+                previous: $exception,
+            );
+        }
         if (!\is_array($state)) {
             throw new FakeExchangeStateCorruptedException('fake_exchange_state_invalid_payload');
         }
