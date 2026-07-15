@@ -221,7 +221,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             $privateTransport->connections,
         );
         self::assertSame(
-            ['wss://wspap.okx.com:8443/ws/v5/business'],
+            ['wss://wseeapap.okx.com:8443/ws/v5/business'],
             $businessTransport->connections,
         );
     }

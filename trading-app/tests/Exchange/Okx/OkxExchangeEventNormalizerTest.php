@@ -786,6 +786,7 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             'exchange_order_id' => 'safe-order',
             'client_order_id' => 'safe-client-order',
             'exchange_fill_id' => 'safe-trade',
+            'quantity_decimal' => '0.2',
         ], $events[1]->payload());
         self::assertSame([
             'source' => 'okx_ws_orders',
@@ -798,6 +799,7 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             'source' => 'okx_ws_orders',
             'instrument_id' => 'BTC-USDT-SWAP',
             'exchange_fill_id' => 'safe-trade',
+            'quantity_decimal' => '0.2',
         ], $events[1]->fill()->metadata);
 
         $serialized = serialize($events);
@@ -852,6 +854,7 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             'exchange_order_id' => 'fill-order',
             'client_order_id' => 'fill-client',
             'exchange_fill_id' => 'fill-trade',
+            'quantity_decimal' => '0.1',
         ], $fillEvents[0]->payload());
         self::assertSame([
             'source' => 'okx_ws_positions',
@@ -920,6 +923,36 @@ final class OkxExchangeEventNormalizerTest extends TestCase
             ]],
         ]);
 
+    }
+
+    /** @param float|string $quantity */
+    #[DataProvider('invalidExactFillQuantityProvider')]
+    public function testRejectsFillQuantityThatCannotBePreservedExactly(float|string $quantity): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_ws_message_invalid');
+
+        $this->normalizer->normalize([
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [[
+                'fillPx' => '25000.5',
+                'fillSz' => $quantity,
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordId' => 'fill-order',
+                'side' => 'buy',
+                'tradeId' => 'fill-trade',
+                'ts' => '1767225603123',
+            ]],
+        ]);
+    }
+
+    /** @return iterable<string,array{float|string}> */
+    public static function invalidExactFillQuantityProvider(): iterable
+    {
+        yield 'numeric JSON token' => [0.123456789012345678];
+        yield 'scale above eighteen' => ['0.1234567890123456789'];
+        yield 'scientific notation' => ['1e-1'];
     }
 
     public function testNormalizesPositionUpdateAndCloseEvents(): void

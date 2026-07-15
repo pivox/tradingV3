@@ -81,7 +81,7 @@ final class OkxPrivateWebSocketCommandTest extends TestCase
             'apiSecret' => 'demo-secret',
             'apiPassphrase' => 'demo-passphrase',
             'wsPrivateUri' => 'wss://wspap.okx.com:8443/ws/v5/private',
-            'wsBusinessUri' => 'wss://wspap.okx.com:8443/ws/v5/business',
+            'wsBusinessUri' => 'wss://wseeapap.okx.com:8443/ws/v5/business',
             'simulatedTrading' => true,
             'liveEnabled' => false,
         ], $overrides);

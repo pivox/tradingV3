@@ -71,9 +71,10 @@ Le worker démarre uniquement si toutes les conditions suivantes sont vraies :
 - `OKX_LIVE_ENABLED=0` ;
 - `OKX_DEMO_API_KEY`, `OKX_DEMO_API_SECRET` et
   `OKX_DEMO_API_PASSPHRASE` sont non vides ;
-- l'URI utilise le schéma `wss`, l'hôte `wspap.okx.com`, le port `8443` et le
-  chemin `/ws/v5/private` ;
-- la query est vide ou exactement égale à `brokerId=9999`.
+- l'URI privée utilise `wspap.okx.com:8443/ws/v5/private`, avec une query vide
+  ou exactement égale à `brokerId=9999` ;
+- l'URI business utilise exactement
+  `wss://wseeapap.okx.com:8443/ws/v5/business`, sans query.
 
 Les userinfo, fragments, ports alternatifs, suffixes d'hôte, redirections et toute
 autre query sont refusés. Le worker ne lit jamais de variables portant des noms de

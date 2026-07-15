@@ -210,7 +210,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
      */
     private function fillPayload(ExchangeFillDto $fill, ExchangeEventInterface $event): array
     {
-        return [
+        $payload = [
             'exchange' => $fill->exchange->value,
             'market_type' => $fill->marketType->value,
             'trade_id' => $this->projectionFillId($fill),
@@ -230,6 +230,37 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
                 'payload' => $event->payload(),
             ],
         ];
+        $quantityDecimal = $this->fillQuantityDecimal($fill, $event);
+        if ($quantityDecimal !== null) {
+            $payload['quantity_decimal'] = $quantityDecimal;
+        }
+
+        return $payload;
+    }
+
+    private function fillQuantityDecimal(ExchangeFillDto $fill, ExchangeEventInterface $event): ?string
+    {
+        $metadata = $fill->metadata['quantity_decimal'] ?? null;
+        $eventPayload = $event->payload()['quantity_decimal'] ?? null;
+        if ($metadata !== null && (!\is_string($metadata) || ($eventPayload !== null && $eventPayload !== $metadata))) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
+        if ($eventPayload !== null && !\is_string($eventPayload)) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
+        $value = $metadata ?? $eventPayload;
+        if ($value === null) {
+            return null;
+        }
+
+        try {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
+            ExactOrderQuantities::fromQuantityAndFilled($canonical, '0');
+
+            return $canonical;
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('exchange_fill_quantity_decimal_invalid');
+        }
     }
 
     private function projectPosition(AbstractExchangePositionEvent $event): void

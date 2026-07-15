@@ -338,6 +338,7 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         self::assertSame('cross', $capturedOrder['raw']['metadata']['margin_mode'] ?? null);
         self::assertSame('okx_ws_orders', $capturedOrder['raw']['payload']['source'] ?? null);
         self::assertSame('okx_ws_orders', $capturedFill['raw']['metadata']['source'] ?? null);
+        self::assertSame('0.2', $capturedFill['quantity_decimal'] ?? null);
         self::assertSame('safe-trade', $capturedFill['raw']['payload']['exchange_fill_id'] ?? null);
         self::assertStringNotContainsString('doctrine-secret-', serialize([$capturedOrder, $capturedFill, $savedLedgerEntry]));
         self::assertArrayNotHasKey('apiKey', $capturedOrder['raw']['metadata']);

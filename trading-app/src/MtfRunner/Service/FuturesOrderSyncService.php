@@ -267,6 +267,9 @@ class FuturesOrderSyncService
                 $trade = new FuturesOrderTrade();
             }
 
+            $size = $this->extractInt($tradeData, 'size', 0) ?? 0;
+            $quantityDecimal = $this->tradeQuantityDecimal($tradeData, $size, $trade);
+
             // Mapper les champs depuis l'API
             $trade->setExchange($context->exchange);
             $trade->setMarketType($context->marketType);
@@ -275,7 +278,8 @@ class FuturesOrderSyncService
             $trade->setSymbol($this->extractString($tradeData, 'symbol', ''));
             $trade->setSide($this->extractInt($tradeData, 'side', 0));
             $trade->setPrice($this->extractString($tradeData, 'price', '0'));
-            $trade->setSize($this->extractInt($tradeData, 'size', 0));
+            $trade->setSize($size);
+            $trade->setQuantityDecimal($quantityDecimal);
             $trade->setFee($this->extractString($tradeData, 'fee'));
             $trade->setFeeCurrency($this->extractString($tradeData, 'fee_currency'));
             $trade->setTradeTime($this->extractInt($tradeData, 'trade_time', 0));
@@ -406,6 +410,46 @@ class FuturesOrderSyncService
             return $default;
         }
         return (int) $value;
+    }
+
+    /** @param array<string,mixed> $data */
+    private function tradeQuantityDecimal(
+        array $data,
+        int $legacySize,
+        FuturesOrderTrade $trade,
+    ): ?string
+    {
+        $existing = $trade->getQuantityDecimal();
+        if (!array_key_exists('quantity_decimal', $data)) {
+            return $existing ?? ($legacySize > 0 ? (string) $legacySize : null);
+        }
+        if (!\is_string($data['quantity_decimal'])) {
+            throw new \InvalidArgumentException('futures_order_trade_quantity_decimal_invalid');
+        }
+
+        try {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($data['quantity_decimal']);
+            $incoming = ExactOrderQuantities::fromQuantityAndFilled($canonical, '0');
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('futures_order_trade_quantity_decimal_invalid');
+        }
+        if ($existing === null) {
+            return $canonical;
+        }
+
+        try {
+            $persisted = ExactOrderQuantities::fromQuantityAndFilled(
+                ExactOrderQuantities::canonicalNonNegative($existing),
+                '0',
+            );
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('futures_order_trade_quantity_decimal_invalid');
+        }
+        if ($persisted->quantityValue()->compareTo($incoming->quantityValue()) !== 0) {
+            throw new \InvalidArgumentException('futures_order_trade_quantity_decimal_conflict');
+        }
+
+        return $existing;
     }
 
     /** @param array<string,mixed> $data */

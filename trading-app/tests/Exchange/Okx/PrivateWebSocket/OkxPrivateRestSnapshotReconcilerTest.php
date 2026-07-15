@@ -55,7 +55,12 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         foreach ($store->events as $event) {
             self::assertSame(Exchange::OKX, $event->exchange());
             self::assertSame(MarketType::PERPETUAL, $event->marketType());
-            self::assertSame(['source' => 'okx_private_rest_snapshot'], $event->payload());
+            self::assertSame(
+                $event instanceof ExchangeFillReceived
+                    ? ['source' => 'okx_private_rest_snapshot', 'quantity_decimal' => '0.25']
+                    : ['source' => 'okx_private_rest_snapshot'],
+                $event->payload(),
+            );
         }
 
         $orderEvent = $store->events[0];
@@ -222,6 +227,10 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         self::assertCount(1, $wsEvents);
         self::assertInstanceOf(ExchangeFillReceived::class, $wsEvents[0]);
         self::assertSame($wsEvents[0]->fill()->fillId, $restEvent->fill()->fillId);
+        self::assertSame('0.25', $restEvent->fill()->metadata['quantity_decimal'] ?? null);
+        self::assertSame('0.25', $restEvent->payload()['quantity_decimal'] ?? null);
+        self::assertSame('0.25', $wsEvents[0]->fill()->metadata['quantity_decimal'] ?? null);
+        self::assertSame('0.25', $wsEvents[0]->payload()['quantity_decimal'] ?? null);
     }
 
     public function testNetModeRestFillKeepsPositionSideUnspecified(): void

@@ -54,7 +54,7 @@ export OKX_ENV_FILE="${OKX_ENV_FILE:-trading-app/.env.local}"
 Les valeurs non sensibles attendues sont `OKX_ENV=demo`,
 `OKX_SIMULATED_TRADING=1`,
 `OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999`,
-`OKX_WS_BUSINESS_URI=wss://wspap.okx.com:8443/ws/v5/business`,
+`OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com:8443/ws/v5/business`,
 `DEMO_TRADING_ENABLED=0`, `OKX_DEMO_TRADING_ENABLED=0` et
 `OKX_LIVE_ENABLED=0`. Le service Compose force ces trois gates consommees.
 

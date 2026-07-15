@@ -307,14 +307,15 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         }
 
         $symbol = $this->symbol($row);
-        $quantity = $this->fillQuantity($row);
+        $quantityDecimal = $this->exactFillQuantity($row);
+        $quantity = $quantityDecimal !== null ? (float) $quantityDecimal : 0.0;
         $price = $this->fillPrice($row);
         $exchangeOrderId = $this->orderId($row, $preferAlgoId);
         $fillId = OkxFillId::fromTradeId(
             $this->scalarString($row['instId'] ?? null),
             $this->scalarString($row['tradeId'] ?? null),
         );
-        if ($symbol === null || $fillId === null || $quantity <= 0.0 || $price <= 0.0 || $exchangeOrderId === '') {
+        if ($symbol === null || $fillId === null || $quantityDecimal === null || $price <= 0.0 || $exchangeOrderId === '') {
             return null;
         }
 
@@ -343,6 +344,7 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
                 'instrument_id' => $this->scalarString($row['instId'] ?? null),
                 'exchange_fill_id' => $this->scalarString($row['tradeId'] ?? null),
                 'liquidity_role' => $this->liquidityRole($row['execType'] ?? null),
+                'quantity_decimal' => $quantityDecimal,
             ]),
         );
     }
@@ -417,7 +419,37 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             'exchange_order_id' => $this->orderId($row, $preferAlgoId),
             'client_order_id' => $this->clientOrderId($row, $preferAlgoId),
             'exchange_fill_id' => $this->scalarString($row['tradeId'] ?? null),
+            'quantity_decimal' => $this->exactFillQuantity($row),
         ]);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function exactFillQuantity(array $row): ?string
+    {
+        if (!array_key_exists('fillSz', $row) || $row['fillSz'] === null) {
+            return null;
+        }
+        $value = $row['fillSz'];
+        if (!\is_string($value)) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+        if (trim($value) === '') {
+            return null;
+        }
+
+        try {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
+            if ((float) $canonical === 0.0) {
+                return null;
+            }
+            ExactOrderQuantities::fromQuantityAndFilled($canonical, '0');
+
+            return $canonical;
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
     }
 
     /**
@@ -777,14 +809,6 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
         }
 
         return (float) $value;
-    }
-
-    /**
-     * @param array<string,mixed> $row
-     */
-    private function fillQuantity(array $row): float
-    {
-        return $this->float($row['fillSz'] ?? null);
     }
 
     /**

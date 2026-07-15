@@ -454,7 +454,7 @@ services:
       OKX_API_BASE_URI: "${OKX_API_BASE_URI:-https://eea.okx.com}"
       OKX_WS_PUBLIC_URI: "${OKX_WS_PUBLIC_URI:-wss://wseeapap.okx.com:8443/ws/v5/public}"
       OKX_WS_PRIVATE_URI: "${OKX_WS_PRIVATE_URI:-wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999}"
-      OKX_WS_BUSINESS_URI: "${OKX_WS_BUSINESS_URI:-wss://wspap.okx.com:8443/ws/v5/business}"
+      OKX_WS_BUSINESS_URI: "${OKX_WS_BUSINESS_URI:-wss://wseeapap.okx.com:8443/ws/v5/business}"
       OKX_SIMULATED_TRADING: '1'
       DEMO_TRADING_ENABLED: '0'
       OKX_DEMO_TRADING_ENABLED: '0'

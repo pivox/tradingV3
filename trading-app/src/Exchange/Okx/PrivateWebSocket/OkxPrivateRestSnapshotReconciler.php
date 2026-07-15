@@ -24,6 +24,7 @@ use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
 use App\Exchange\Okx\OkxFillId;
 use App\Exchange\Okx\OkxInstrumentResolver;
+use App\Exchange\Value\ExactOrderQuantities;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\NumberFormatException;
 
@@ -208,6 +209,8 @@ final readonly class OkxPrivateRestSnapshotReconciler
             || ($positionSide === null && $item->positionSide !== 'net')) {
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
+        $quantityDecimal = $this->exactPositiveQuantity($item->size);
+        $payload = self::sourcePayload() + ['quantity_decimal' => $quantityDecimal];
 
         return new ExchangeFillReceived(new ExchangeFillDto(
             exchange: Exchange::OKX,
@@ -218,13 +221,13 @@ final readonly class OkxPrivateRestSnapshotReconciler
             fillId: $this->fillId($item),
             side: $side,
             positionSide: $positionSide,
-            quantity: $this->positive($item->size),
+            quantity: (float) $quantityDecimal,
             price: $this->positive($item->price),
             fee: $this->nullableNumber($item->fee),
             feeCurrency: $this->nullableRequired($item->feeCurrency),
             filledAt: $item->occurredAt,
-            metadata: self::sourcePayload(),
-        ), self::sourcePayload());
+            metadata: $payload,
+        ), $payload);
     }
 
     /**
@@ -425,6 +428,18 @@ final readonly class OkxPrivateRestSnapshotReconciler
     private function nullableNumber(?string $value): ?float
     {
         return $value === null ? null : $this->number($value);
+    }
+
+    private function exactPositiveQuantity(string $value): string
+    {
+        try {
+            $canonical = ExactOrderQuantities::canonicalNonNegative($value);
+            ExactOrderQuantities::fromQuantityAndFilled($canonical, '0');
+
+            return $canonical;
+        } catch (\InvalidArgumentException) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
     }
 
     private function number(string $value): float

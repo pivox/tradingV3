@@ -78,7 +78,7 @@ final readonly class OkxConfig
         }
 
         return $this->isDemo()
-            ? 'wss://wspap.okx.com:8443/ws/v5/business'
+            ? 'wss://wseeapap.okx.com:8443/ws/v5/business'
             : 'wss://ws.okx.com:8443/ws/v5/business';
     }
 

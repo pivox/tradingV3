@@ -22,8 +22,7 @@ final class OkxPrivateWebSocketEndpointGuardTest extends TestCase
         );
     }
 
-    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business'])]
-    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999'])]
+    #[TestWith(['wss://wseeapap.okx.com:8443/ws/v5/business'])]
     public function testAcceptsOnlyCanonicalDemoBusinessUri(string $uri): void
     {
         self::assertSame(
@@ -48,6 +47,9 @@ final class OkxPrivateWebSocketEndpointGuardTest extends TestCase
     #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999&x=1'])]
     #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=%39%39%39%39'])]
     #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private#fragment'])]
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business'])]
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999'])]
+    #[TestWith(['wss://wseeapap.okx.com:8443/ws/v5/business?brokerId=9999'])]
     public function testRejectsEveryNonAllowlistedUri(string $uri): void
     {
         $this->expectException(\InvalidArgumentException::class);
