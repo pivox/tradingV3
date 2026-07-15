@@ -188,6 +188,31 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         self::assertSame($wsEvents[0]->fill()->fillId, $restEvent->fill()->fillId);
     }
 
+    public function testNetModeRestFillKeepsPositionSideUnspecified(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $fill = new FillSnapshotItem(
+            'okx',
+            'BTCUSDT',
+            'order-1',
+            'client-1',
+            'trade-1',
+            'buy',
+            'net',
+            '0.25',
+            '25000',
+            '-0.01',
+            'USDT',
+            new \DateTimeImmutable(self::NOW),
+            'BTC-USDT-SWAP',
+        );
+
+        self::assertSame(1, $this->reconciler($store)->reconcile($this->snapshot(fills: [$fill])));
+        $event = $store->events[0];
+        self::assertInstanceOf(ExchangeFillReceived::class, $event);
+        self::assertNull($event->fill()->positionSide);
+    }
+
     public function testSameTradeIdOnTwoInstrumentsProducesTwoFills(): void
     {
         $store = new SnapshotRecordingProjectionStore();

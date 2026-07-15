@@ -201,8 +201,11 @@ final readonly class OkxPrivateRestSnapshotReconciler
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
         $side = ExchangeOrderSide::tryFrom($item->side);
-        $positionSide = ExchangePositionSide::tryFrom($item->positionSide);
-        if (!$side instanceof ExchangeOrderSide || !$positionSide instanceof ExchangePositionSide) {
+        $positionSide = $item->positionSide === 'net'
+            ? null
+            : ExchangePositionSide::tryFrom($item->positionSide);
+        if (!$side instanceof ExchangeOrderSide
+            || ($positionSide === null && $item->positionSide !== 'net')) {
             throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
         }
 
