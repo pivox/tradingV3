@@ -63,13 +63,22 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
                 continue;
             }
             [$side, $positionSide] = $sides;
-            $quantity = (float) ($order->getQuantityDecimal() ?? $order->getSize() ?? 0);
-            $filled = (float) ($order->getFilledQuantityDecimal() ?? $order->getFilledSize() ?? 0);
+            $quantityDecimal = $order->getQuantityDecimal();
+            $filledQuantityDecimal = $order->getFilledQuantityDecimal();
+            $quantity = (float) ($quantityDecimal ?? $order->getSize() ?? 0);
+            $filled = (float) ($filledQuantityDecimal ?? $order->getFilledSize() ?? 0);
+            $metadata = ['source' => 'local_projection'];
+            if ($quantityDecimal !== null && $filledQuantityDecimal !== null) {
+                $metadata += ExactOrderQuantities::fromQuantityAndFilled(
+                    $quantityDecimal,
+                    $filledQuantityDecimal,
+                )->toArray();
+            }
             $result[] = new ExchangeOrderDto(
                 $exchange, $marketType, $order->getSymbol(), $orderId, $order->getClientOrderId(), $side, $positionSide,
                 $type, $status, $quantity, $filled, max(0.0, $quantity - $filled),
                 $order->getPrice() !== null ? (float) $order->getPrice() : null, null, null, false, false, null,
-                $order->getCreatedAt(), $order->getUpdatedAt(), ['source' => 'local_projection'],
+                $order->getCreatedAt(), $order->getUpdatedAt(), $metadata,
             );
         }
         return $result;

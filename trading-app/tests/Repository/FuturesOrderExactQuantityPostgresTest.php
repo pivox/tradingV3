@@ -5,11 +5,17 @@ declare(strict_types=1);
 namespace App\Tests\Repository;
 
 use App\Entity\FuturesOrder;
+use App\Exchange\Event\DoctrineExchangeLocalProjectionStore;
 use App\Exchange\Value\ExactOrderQuantities;
 use App\MtfRunner\Service\FuturesOrderSyncService;
+use App\Repository\FillCostLedgerEntryRepository;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
+use App\Repository\PositionRepository;
+use App\Repository\TradeLineageRepository;
+use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Pnl\FillCostLedgerIngestionService;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
@@ -28,6 +34,7 @@ use Psr\Log\NullLogger;
 
 #[CoversClass(ExactOrderQuantities::class)]
 #[CoversClass(FuturesOrderSyncService::class)]
+#[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
 #[CoversClass(Version20260713150000::class)]
 final class FuturesOrderExactQuantityPostgresTest extends TestCase
 {
@@ -202,6 +209,47 @@ SQL,
         ));
     }
 
+    public function testLocalOpenOrderReplayPreservesExactQuantities(): void
+    {
+        $this->executeMigrationUp();
+        $sync = new FuturesOrderSyncService(
+            $this->futuresOrderRepository(),
+            $this->futuresPlanOrderRepository(),
+            $this->futuresOrderTradeRepository(),
+            $this->entityManager,
+            $this->failFastLogger(),
+        );
+        $sync->syncOrderFromApi([
+            'exchange' => 'okx',
+            'market_type' => 'perpetual',
+            'order_id' => 'local-decimal-order',
+            'symbol' => 'BTCUSDT',
+            'side' => 1,
+            'type' => 'limit',
+            'status' => 'open',
+            'price' => '25000',
+            'size' => 0,
+            'filled_size' => 0,
+            'quantity_decimal' => '0.250000000000000001',
+            'filled_quantity_decimal' => '0.100000000000000001',
+            'remaining_quantity_decimal' => '0.150000000000000000',
+        ]);
+        $this->entityManager->clear();
+
+        $orders = $this->projectionStore($sync)->openOrders(
+            \App\Common\Enum\Exchange::OKX,
+            \App\Common\Enum\MarketType::PERPETUAL,
+        );
+
+        self::assertCount(1, $orders);
+        self::assertSame([
+            'source' => 'local_projection',
+            'quantity_decimal' => '0.250000000000000001',
+            'filled_quantity_decimal' => '0.100000000000000001',
+            'remaining_quantity_decimal' => '0.150000000000000000',
+        ], $orders[0]->metadata);
+    }
+
     private function executeMigrationUp(): void
     {
         $migration = new Version20260713150000($this->connection, new NullLogger());
@@ -233,6 +281,27 @@ SQL,
     private function futuresOrderTradeRepository(): FuturesOrderTradeRepository
     {
         return new FuturesOrderTradeRepository($this->managerRegistry());
+    }
+
+    private function projectionStore(FuturesOrderSyncService $sync): DoctrineExchangeLocalProjectionStore
+    {
+        $registry = $this->managerRegistry();
+        $lineage = new TradeLineageManager(
+            new TradeLineageRepository($registry),
+            $this->entityManager,
+            new NullLogger(),
+        );
+
+        return new DoctrineExchangeLocalProjectionStore(
+            $sync,
+            new FuturesOrderRepository($registry),
+            new PositionRepository($registry),
+            $this->entityManager,
+            new FillCostLedgerIngestionService(
+                new FillCostLedgerEntryRepository($registry),
+                $lineage,
+            ),
+        );
     }
 
     private function managerRegistry(): ManagerRegistry
