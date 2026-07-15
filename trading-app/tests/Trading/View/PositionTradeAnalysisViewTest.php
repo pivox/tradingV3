@@ -63,6 +63,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     {
         if (isset($this->conn)) {
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
             $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
             $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
             $this->conn->close();
@@ -949,6 +950,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
         $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
         $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
 
