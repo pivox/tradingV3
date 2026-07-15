@@ -16,6 +16,7 @@ use App\Provider\Okx\OkxPositionGateway;
 use App\Provider\Okx\OkxProviderNotReadyException;
 use App\Provider\Okx\OkxProviderUnavailableException;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversNothing]
@@ -75,9 +76,49 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame('3', (string) $positions[0]->leverage);
     }
 
-    /** @dataProvider unknownPrivateEnumProvider */
     /** @param array<string,mixed> $row */
+    #[DataProvider('unknownPrivateEnumProvider')]
     public function testUnknownPresentPrivateEnumsFailTheRestMapper(array $row): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+
+        (new OkxPrivateReadMapper())->order($row, false);
+    }
+
+    /** @param array<string,mixed> $row */
+    #[DataProvider('unknownPrivateEnumProvider')]
+    public function testLegacyTradeRejectsUnknownPresentPrivateEnums(array $row): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');
+
+        (new OkxPrivateReadMapper())->legacyTrade($row);
+    }
+
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function missingRequiredOrderEnumProvider(): iterable
+    {
+        $row = [
+            'instId' => 'BTC-USDT-SWAP',
+            'ordId' => 'ord-missing',
+            'side' => 'buy',
+            'ordType' => 'limit',
+            'state' => 'live',
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ];
+        foreach (['side', 'ordType', 'state'] as $field) {
+            $candidate = $row;
+            unset($candidate[$field]);
+            yield $field => [$candidate];
+        }
+    }
+
+    /** @param array<string,mixed> $row */
+    #[DataProvider('missingRequiredOrderEnumProvider')]
+    public function testMissingRequiredOrderEnumsFailWithoutImplicitFallback(array $row): void
     {
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('okx_private_rest_snapshot_value_invalid');

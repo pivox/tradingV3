@@ -143,6 +143,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function legacyTrade(array $row): array
     {
+        $this->assertKnownEnums($row);
         $trade = [
             'exchange' => 'okx',
             'instrument_id' => $this->string($row['instId'] ?? ''),
@@ -204,7 +205,11 @@ final readonly class OkxPrivateReadMapper
 
     private function orderSide(mixed $side): OrderSide
     {
-        return strtolower((string) $side) === 'sell' ? OrderSide::SELL : OrderSide::BUY;
+        return match (strtolower((string) $side)) {
+            'buy' => OrderSide::BUY,
+            'sell' => OrderSide::SELL,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
+        };
     }
 
     /** @param array<string,mixed> $row */
@@ -287,9 +292,11 @@ final readonly class OkxPrivateReadMapper
             return OrderType::STOP;
         }
 
-        return strtolower($this->string($row['ordType'] ?? '')) === 'market'
-            ? OrderType::MARKET
-            : OrderType::LIMIT;
+        return match (strtolower($this->string($row['ordType'] ?? ''))) {
+            'market' => OrderType::MARKET,
+            'limit', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc' => OrderType::LIMIT,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
+        };
     }
 
     private function orderStatus(mixed $state): OrderStatus
@@ -299,7 +306,8 @@ final readonly class OkxPrivateReadMapper
             'partially_filled' => OrderStatus::PARTIALLY_FILLED,
             'canceled', 'cancelled' => OrderStatus::CANCELLED,
             'rejected' => OrderStatus::REJECTED,
-            default => OrderStatus::PENDING,
+            'live' => OrderStatus::PENDING,
+            default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
         };
     }
 
