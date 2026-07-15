@@ -11,7 +11,7 @@ use Throwable;
 
 final class PostgresIntegrationDatabaseGuard
 {
-    private const ERROR_MESSAGE = 'An isolated PostgreSQL database ending in "_test" is required.';
+    private const ERROR_MESSAGE = 'An isolated PostgreSQL database named "test" or ending in "_test" is required.';
 
     public static function assertIsolatedTestDatabase(
         #[SensitiveParameter]

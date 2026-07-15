@@ -40,7 +40,7 @@ final class PostgresIntegrationDatabaseGuardTest extends TestCase
             self::fail('Expected an unsafe database name to be rejected.');
         } catch (LogicException $exception) {
             self::assertSame(
-                'An isolated PostgreSQL database ending in "_test" is required.',
+                'An isolated PostgreSQL database named "test" or ending in "_test" is required.',
                 $exception->getMessage(),
             );
             self::assertStringNotContainsString($dsn, $exception->getMessage());
@@ -54,7 +54,7 @@ final class PostgresIntegrationDatabaseGuardTest extends TestCase
     public function testRejectsDsnWithoutDatabasePath(): void
     {
         $this->expectException(LogicException::class);
-        $this->expectExceptionMessage('An isolated PostgreSQL database ending in "_test" is required.');
+        $this->expectExceptionMessage('An isolated PostgreSQL database named "test" or ending in "_test" is required.');
 
         PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase(
             'postgresql://user:password@localhost:5432',
@@ -65,7 +65,7 @@ final class PostgresIntegrationDatabaseGuardTest extends TestCase
     public function testRejectsUnsafeDbnameQueryOverride(string $query): void
     {
         $this->expectException(LogicException::class);
-        $this->expectExceptionMessage('An isolated PostgreSQL database ending in "_test" is required.');
+        $this->expectExceptionMessage('An isolated PostgreSQL database named "test" or ending in "_test" is required.');
 
         PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase(
             'postgresql://user:password@localhost:5432/safe_test?' . $query,
@@ -89,7 +89,7 @@ final class PostgresIntegrationDatabaseGuardTest extends TestCase
             self::fail('Expected a malformed DSN to be rejected.');
         } catch (LogicException $exception) {
             self::assertSame(
-                'An isolated PostgreSQL database ending in "_test" is required.',
+                'An isolated PostgreSQL database named "test" or ending in "_test" is required.',
                 $exception->getMessage(),
             );
             self::assertNull($exception->getPrevious());

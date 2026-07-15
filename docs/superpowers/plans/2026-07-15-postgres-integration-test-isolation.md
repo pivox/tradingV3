@@ -4,7 +4,7 @@
 
 **Goal:** Prevent destructive PostgreSQL integration tests from ever targeting the development database and restore the locally removed schema objects.
 
-**Architecture:** A test-only guard parses the PostgreSQL DSN and requires a database name ending in `_test` before destructive suites connect. Local ignored configuration points to a dedicated migrated test database; missing development schema objects are restored additively from a temporary freshly migrated database.
+**Architecture:** A test-only guard parses the PostgreSQL DSN and requires a database named `test` or ending in `_test` before destructive suites connect. Local ignored configuration points to a dedicated migrated test database; missing development schema objects are restored additively from a temporary freshly migrated database.
 
 **Tech Stack:** PHP 8.2, PHPUnit, Doctrine DBAL/Migrations, PostgreSQL 15, Docker Compose.
 
