@@ -44,6 +44,29 @@ use Psr\Log\NullLogger;
 #[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
 final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
 {
+    public function testProjectsNormalizedBatchInsideOneEntityManagerTransaction(): void
+    {
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::exactly(2))
+            ->method('syncOrderFromApi')
+            ->willReturn($this->createStub(FuturesOrder::class));
+        $entityManager = $this->createMock(EntityManagerInterface::class);
+        $entityManager->expects(self::once())
+            ->method('wrapInTransaction')
+            ->willReturnCallback(static fn (callable $callback): mixed => $callback($entityManager));
+        $store = $this->storeWithPersistenceDoubles(
+            $orderSync,
+            $this->createStub(FillCostLedgerEntryRepository::class),
+            entityManager: $entityManager,
+        );
+        $event = new ExchangeOrderUpdated(
+            $this->orderDto(ExchangeOrderSide::BUY, ExchangePositionSide::LONG),
+            new \DateTimeImmutable('2026-01-01 UTC'),
+        );
+
+        $store->projectAtomically([$event, $event]);
+    }
+
     #[\PHPUnit\Framework\Attributes\DataProvider('numericSideProvider')]
     public function testOrderPayloadUsesCanonicalNumericSide(
         ExchangeOrderSide $side,

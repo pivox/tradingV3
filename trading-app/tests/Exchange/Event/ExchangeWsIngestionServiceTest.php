@@ -150,7 +150,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         $expectedStore = new RecordingProjectionStore();
         $this->service($expectedStore)->drain(new FakeExchangeWsClient($state));
 
-        $store = new RecordingProjectionStore(failNextProjection: true);
+        $store = new RecordingProjectionStore(failOnProjectionNumber: 2);
         $service = $this->service($store);
         $client = new FakeExchangeWsClient($state);
 
@@ -215,7 +215,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
             'order.created',
             'BTCUSDT',
             new \DateTimeImmutable('2026-01-01 00:00:02 UTC'),
-            ['event_sequence' => 4],
+            [],
         ));
 
         /** @var list<FakeExchangeEvent> $resumed */
@@ -280,7 +280,9 @@ final class ExchangeWsIngestionServiceTest extends TestCase
 
 final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInterface
 {
-    public function __construct(private bool $failNextProjection = false)
+    private int $projectionAttempts = 0;
+
+    public function __construct(private ?int $failOnProjectionNumber = null)
     {
     }
 
@@ -304,13 +306,28 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
 
     public function project(ExchangeEventInterface $event): void
     {
-        if ($this->failNextProjection) {
-            $this->failNextProjection = false;
+        ++$this->projectionAttempts;
+        if ($this->failOnProjectionNumber === $this->projectionAttempts) {
+            $this->failOnProjectionNumber = null;
 
             throw new \RuntimeException('test_projection_failed');
         }
 
         $this->events[] = $event;
+    }
+
+    public function projectAtomically(array $events): void
+    {
+        $before = $this->events;
+        try {
+            foreach ($events as $event) {
+                $this->project($event);
+            }
+        } catch (\Throwable $exception) {
+            $this->events = $before;
+
+            throw $exception;
+        }
     }
 
     /**

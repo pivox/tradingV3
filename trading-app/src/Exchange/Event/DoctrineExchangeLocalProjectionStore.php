@@ -156,6 +156,15 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
         }
     }
 
+    public function projectAtomically(array $events): void
+    {
+        $this->entityManager->wrapInTransaction(function () use ($events): void {
+            foreach ($events as $event) {
+                $this->project($event);
+            }
+        });
+    }
+
     /**
      * @return array<string,mixed>
      */

@@ -490,6 +490,13 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
         $this->events[] = $event;
     }
 
+    public function projectAtomically(array $events): void
+    {
+        foreach ($events as $event) {
+            $this->project($event);
+        }
+    }
+
     /**
      * @param class-string $class
      */

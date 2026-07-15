@@ -18,6 +18,11 @@ final readonly class ExchangeEventBus
     public function publish(ExchangeEventInterface $event): void
     {
         $this->projectionStore->project($event);
+        $this->logProjected($event);
+    }
+
+    private function logProjected(ExchangeEventInterface $event): void
+    {
         $this->logger->info('exchange_event.projected', [
             'event_type' => $event->eventType(),
             'exchange' => $event->exchange()->value,
@@ -32,12 +37,16 @@ final readonly class ExchangeEventBus
      */
     public function publishMany(iterable $events): int
     {
-        $count = 0;
-        foreach ($events as $event) {
-            $this->publish($event);
-            ++$count;
+        $batch = \is_array($events) ? array_values($events) : iterator_to_array($events, false);
+        if ($batch === []) {
+            return 0;
         }
 
-        return $count;
+        $this->projectionStore->projectAtomically($batch);
+        foreach ($batch as $event) {
+            $this->logProjected($event);
+        }
+
+        return \count($batch);
     }
 }

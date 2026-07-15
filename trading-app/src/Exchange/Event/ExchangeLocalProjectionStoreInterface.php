@@ -21,4 +21,9 @@ interface ExchangeLocalProjectionStoreInterface
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array;
 
     public function project(ExchangeEventInterface $event): void;
+
+    /**
+     * @param list<ExchangeEventInterface> $events
+     */
+    public function projectAtomically(array $events): void;
 }
