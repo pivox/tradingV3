@@ -153,6 +153,23 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame($expected, $order->status);
     }
 
+    #[DataProvider('activeAlgoStatusProvider')]
+    public function testMapsActiveAlgoStatesWithoutRejectingTheSnapshot(string $state): void
+    {
+        $order = (new OkxPrivateReadMapper())->order([
+            'instId' => 'BTC-USDT-SWAP',
+            'algoId' => 'algo-active',
+            'side' => 'sell',
+            'ordType' => 'conditional',
+            'state' => $state,
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ], true);
+
+        self::assertSame(OrderStatus::PENDING, $order->status);
+    }
+
     public function testMapsMmpCanceledOrderHistoryState(): void
     {
         try {
@@ -178,6 +195,14 @@ final class OkxPrivateReadProviderTest extends TestCase
     {
         yield 'effective' => ['effective', OrderStatus::FILLED];
         yield 'order failed' => ['order_failed', OrderStatus::REJECTED];
+        yield 'partially failed' => ['partially_failed', OrderStatus::REJECTED];
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function activeAlgoStatusProvider(): iterable
+    {
+        yield 'partially effective' => ['partially_effective'];
+        yield 'paused' => ['pause'];
     }
 
     /** @return iterable<string,array{array<string,mixed>}> */
