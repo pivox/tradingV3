@@ -1,0 +1,185 @@
+{
+  "schema_version": "fake-paper-golden-v1",
+  "scenarios": [
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceFillsLimitOrderAndCreatesPosition"],
+      "gap_codes": [],
+      "id": 1,
+      "name": "limit_maker_full_fill",
+      "requirement": "A resting maker limit order fills completely after the simulated book crosses it.",
+      "runner": "limit_maker_full_fill",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testNonCrossingIocLimitExpiresWithoutResting"],
+      "gap_codes": [],
+      "id": 2,
+      "name": "limit_unfilled_then_expired",
+      "requirement": "A non-crossing immediate limit order remains unfilled and expires deterministically.",
+      "runner": "limit_unfilled_then_expired",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testCancelledPartialClientOrderIdReplayPreservesFilledSemantics"],
+      "gap_codes": [],
+      "id": 3,
+      "name": "partial_fill_then_cancel",
+      "requirement": "A maker order can partially fill before its remaining quantity is cancelled.",
+      "runner": "partial_fill_then_cancel",
+      "status": "executable"
+    },
+    {
+      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
+      "gap_codes": ["fallback_taker_not_implemented"],
+      "id": 4,
+      "name": "fallback_taker",
+      "requirement": "An expired maker attempt can be replaced by a bounded taker fallback.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
+      "gap_codes": ["slippage_model_zero"],
+      "id": 5,
+      "name": "market_with_slippage",
+      "requirement": "A market fill applies and reports a deterministic non-zero slippage model.",
+      "runner": null,
+      "status": "partial"
+    },
+    {
+      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#runtime-check-fakepaper"],
+      "gap_codes": ["balance_margin_validation_not_implemented"],
+      "id": 6,
+      "name": "insufficient_balance",
+      "requirement": "An order whose initial margin exceeds available balance is rejected.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
+      "gap_codes": ["instrument_precision_validation_not_implemented"],
+      "id": 7,
+      "name": "precision_reject",
+      "requirement": "An order violating price or quantity precision is rejected before acceptance.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
+      "gap_codes": ["leverage_cap_validation_not_implemented"],
+      "id": 8,
+      "name": "leverage_cap_reject",
+      "requirement": "An order above the instrument leverage cap is rejected.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testClientOrderIdReplayDoesNotCreateSecondActiveOrder"],
+      "gap_codes": [],
+      "id": 9,
+      "name": "duplicate_client_order_id",
+      "requirement": "Replaying a client order identifier does not create a second order or fill.",
+      "runner": "duplicate_client_order_id",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeFaultInjectionTest.php::testTimeoutAfterAcceptedOrderIsAmbiguousAndReplayIsIdempotent"],
+      "gap_codes": [],
+      "id": 10,
+      "name": "timeout_after_acceptance",
+      "requirement": "A lost response after acceptance is ambiguous and an identical retry is idempotent.",
+      "runner": "timeout_after_acceptance",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testAcceptedAttachedProtectionCreatesReduceOnlyStopOrder"],
+      "gap_codes": [],
+      "id": 11,
+      "name": "stop_loss_attach_success",
+      "requirement": "A filled entry immediately creates a full-size reduce-only simulated stop loss.",
+      "runner": "stop_loss_attach_success",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/TradingCore/Execution/FakeExecutionPortTest.php::testFullFillWithStopAttachFailureRequiresFailSafe"],
+      "gap_codes": ["stop_attach_failure_compensation_not_integrated"],
+      "id": 12,
+      "name": "stop_loss_attach_failure",
+      "requirement": "A stop attachment failure is explicit and requires the documented compensation action.",
+      "runner": null,
+      "status": "partial"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceTriggersAttachedTakeProfitAndClosesPosition"],
+      "gap_codes": ["trailing_stop_not_implemented"],
+      "id": 13,
+      "name": "tp1_then_trailing",
+      "requirement": "A partial TP1 fill arms a trailing stop for the remaining position.",
+      "runner": null,
+      "status": "partial"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceTriggersAttachedStopLossAndClosesPosition"],
+      "gap_codes": [],
+      "id": 14,
+      "name": "gap_at_stop_loss",
+      "requirement": "A price gap through the stop fills at the next available simulated book price.",
+      "runner": "gap_at_stop_loss",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate"],
+      "gap_codes": [],
+      "id": 15,
+      "name": "websocket_disconnect_resync",
+      "requirement": "A deterministic private WebSocket disconnect resumes without event loss or duplication.",
+      "runner": "websocket_disconnect_resync",
+      "status": "executable"
+    },
+    {
+      "evidence": ["tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testSequenceGapRequiresResync"],
+      "gap_codes": ["out_of_order_event_injection_not_implemented"],
+      "id": 16,
+      "name": "duplicate_out_of_order_event",
+      "requirement": "Duplicate and out-of-order private events are injected, deduplicated and reconciled.",
+      "runner": null,
+      "status": "partial"
+    },
+    {
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testStateStoreRestoresProtectedPositionAndContinuesEventSequence"],
+      "gap_codes": [],
+      "id": 17,
+      "name": "restart_with_open_position",
+      "requirement": "A protected open position and event sequence survive a Paper state restart.",
+      "runner": "restart_with_open_position",
+      "status": "executable"
+    },
+    {
+      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
+      "gap_codes": ["funding_model_not_implemented"],
+      "id": 18,
+      "name": "funding",
+      "requirement": "Positive and negative funding are accrued and reported separately from fees.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
+      "gap_codes": ["one_way_conflict_guard_not_implemented"],
+      "id": 19,
+      "name": "one_way_conflict",
+      "requirement": "A conflicting One-Way position intent is rejected without changing exposure.",
+      "runner": null,
+      "status": "unsupported"
+    },
+    {
+      "evidence": ["tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol"],
+      "gap_codes": ["multi_profile_fake_recipe_not_consolidated"],
+      "id": 20,
+      "name": "dry_run_multi_profiles_same_symbol",
+      "requirement": "Two dry-run profiles targeting the same symbol preserve profile isolation and the global exposure lock.",
+      "runner": null,
+      "status": "partial"
+    }
+  ]
+}
