@@ -4,48 +4,63 @@
   "scenarios": [
     {
       "name": "order_accepted",
+      "php_fixture": "orderAccepted",
       "order_outcome": "accepted",
-      "fill_ratio": 0,
+      "fill_ratio": 0.0,
       "protection_outcome": "not_requested",
-      "quality_flags": []
+      "reject_reason": null,
+      "quality_flags": [],
+      "fail_safe_action": null
     },
     {
       "name": "order_rejected",
+      "php_fixture": "orderRejected",
       "order_outcome": "rejected",
-      "fill_ratio": 0,
+      "fill_ratio": 0.0,
       "protection_outcome": "not_requested",
       "reject_reason": "fake_exchange_rejected_order",
-      "quality_flags": []
+      "quality_flags": [],
+      "fail_safe_action": null
     },
     {
       "name": "full_fill_stop_attach_success",
+      "php_fixture": "fullFillStopAttachSuccess",
       "order_outcome": "accepted",
-      "fill_ratio": 1,
+      "fill_ratio": 1.0,
       "protection_outcome": "attached",
-      "quality_flags": []
+      "reject_reason": null,
+      "quality_flags": [],
+      "fail_safe_action": null
     },
     {
       "name": "full_fill_stop_attach_failure",
+      "php_fixture": "fullFillStopAttachFailure",
       "order_outcome": "accepted",
-      "fill_ratio": 1,
+      "fill_ratio": 1.0,
       "protection_outcome": "failed",
-      "fail_safe_action": "cancel_or_reduce_only_close_required",
-      "quality_flags": ["protection_attach_failed"]
+      "reject_reason": null,
+      "quality_flags": ["protection_attach_failed"],
+      "fail_safe_action": "cancel_or_reduce_only_close_required"
     },
     {
       "name": "partial_fill_stop_rejected",
+      "php_fixture": "partialFillStopRejected",
       "order_outcome": "accepted",
       "fill_ratio": 0.5,
       "protection_outcome": "rejected",
-      "fail_safe_action": "cancel_or_reduce_only_close_required",
-      "quality_flags": ["partial_fill", "partial_stop_rejected"]
+      "reject_reason": null,
+      "quality_flags": ["partial_fill", "partial_stop_rejected"],
+      "fail_safe_action": "cancel_or_reduce_only_close_required"
     },
     {
       "name": "cancel_accepted_order",
+      "php_fixture": "cancelAcceptedOrder",
       "order_outcome": "cancelled",
-      "fill_ratio": 0,
+      "fill_ratio": 0.0,
       "protection_outcome": "not_requested",
-      "quality_flags": []
+      "reject_reason": null,
+      "quality_flags": [],
+      "fail_safe_action": null
     }
   ]
 }

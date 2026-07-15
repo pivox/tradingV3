@@ -226,6 +226,62 @@ donc temporairement son chemin Fake local existant. Sa bascule vers cette gate s
 faite apres la golden suite et les metadata, afin de ne pas annoncer une readiness
 que le modele actuel ne couvre pas.
 
+## Golden suite Fake/Paper v1
+
+Le catalogue versionne des 20 scenarios obligatoires de #196 est disponible dans :
+
+```text
+trading-app/tests/fixtures/fake-paper/golden-scenarios-v1.json
+```
+
+Il utilise trois statuts stricts :
+
+- `executable` : le scenario possede un runner deterministe et est execute deux fois
+  depuis des etats frais ; les deux resultats normalises doivent etre identiques ;
+- `partial` : une partie du comportement existe, mais le critere golden complet reste
+  bloque par au moins un `gap_code` stable ;
+- `unsupported` : la capability necessaire n existe pas encore et aucun runner ne
+  peut etre declare.
+
+Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executable`
+avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
+peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
+
+Les neuf scenarios executes dans cette version sont : maker limit rempli, limit IOC
+expire sans fill, partial fill puis cancel, replay du `client_order_id`, timeout
+apres acceptation, attachement SL reussi, gap au SL au prochain prix disponible,
+deconnexion/reprise private WS, et restart avec position protegee ouverte.
+
+Les ecarts encore explicites sont :
+
+| Scenario | Statut | Gap stable |
+| --- | --- | --- |
+| fallback taker | `unsupported` | `fallback_taker_not_implemented` |
+| market avec slippage | `partial` | `slippage_model_zero` |
+| insufficient balance | `unsupported` | `balance_margin_validation_not_implemented` |
+| precision reject | `unsupported` | `instrument_precision_validation_not_implemented` |
+| leverage cap reject | `unsupported` | `leverage_cap_validation_not_implemented` |
+| echec attachement SL | `partial` | `stop_attach_failure_compensation_not_integrated` |
+| TP1 puis trailing | `partial` | `trailing_stop_not_implemented` |
+| duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
+| funding | `unsupported` | `funding_model_not_implemented` |
+| One-Way conflict | `unsupported` | `one_way_conflict_guard_not_implemented` |
+| dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
+
+Commande consolidee :
+
+```bash
+cd trading-app
+php vendor/bin/phpunit \
+  tests/Exchange/Fake/FakePaperGoldenScenarioCatalogTest.php \
+  tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php \
+  tests/TradingCore/Execution/FakeExecutionScenarioFixtureParityTest.php
+```
+
+La suite appelle uniquement les moteurs Fake locaux, avec horloge controlee et etat
+ephemere. Elle ne lit aucun secret, ne contacte aucun endpoint prive exchange et
+n envoie aucun ordre reel, demo ou testnet.
+
 ## Rollback
 
 Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au
