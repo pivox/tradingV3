@@ -14,9 +14,11 @@ use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
-final class FakeExchangeStateStore
+#[Autoconfigure(lazy: true)]
+class FakeExchangeStateStore
 {
     private const STATE_FORMAT_VERSION = 1;
     private const ENGINE_VERSION = 'fake-paper-state-v1';
@@ -93,6 +95,67 @@ final class FakeExchangeStateStore
             ),
         ];
         $this->persist();
+    }
+
+    /**
+     * @return array{configured:bool,writable:bool,recovery_ready:bool}
+     */
+    public function persistenceHealth(): array
+    {
+        return self::persistenceHealthForPath($this->stateFile);
+    }
+
+    /**
+     * @return array{configured:bool,writable:bool,recovery_ready:bool}
+     */
+    public static function persistenceHealthForPath(?string $stateFile): array
+    {
+        if ($stateFile === null) {
+            return ['configured' => false, 'writable' => false, 'recovery_ready' => false];
+        }
+
+        $directory = \dirname($stateFile);
+        if (!is_dir($directory) || !is_writable($directory)) {
+            return ['configured' => true, 'writable' => false, 'recovery_ready' => false];
+        }
+
+        $probeFile = tempnam($directory, '.fake-runtime-check-');
+        if ($probeFile === false) {
+            return ['configured' => true, 'writable' => false, 'recovery_ready' => false];
+        }
+        @unlink($probeFile);
+
+        try {
+            $probe = new self($probeFile);
+            $probe->setOrderBookTop('BTCUSDT', 24999.0, 25001.0);
+            $writable = is_file($probeFile) && is_readable($probeFile) && is_writable($probeFile);
+            if (!$writable) {
+                @unlink($probeFile);
+
+                return ['configured' => true, 'writable' => false, 'recovery_ready' => false];
+            }
+        } catch (\Throwable) {
+            @unlink($probeFile);
+
+            return ['configured' => true, 'writable' => false, 'recovery_ready' => false];
+        }
+
+        try {
+            $restored = new self($probeFile);
+            $metadata = $restored->recoveryMetadata();
+
+            return [
+                'configured' => true,
+                'writable' => true,
+                'recovery_ready' => $metadata['restored']
+                    && $metadata['format_version'] === self::STATE_FORMAT_VERSION
+                    && $metadata['engine_version'] === self::ENGINE_VERSION,
+            ];
+        } catch (\Throwable) {
+            return ['configured' => true, 'writable' => true, 'recovery_ready' => false];
+        } finally {
+            @unlink($probeFile);
+        }
     }
 
     public function nextOrderId(): string
@@ -205,6 +268,11 @@ final class FakeExchangeStateStore
         $symbol = strtoupper($symbol);
 
         return $this->orderBooks[$symbol] ?? ['bid' => 24999.5, 'ask' => 25000.5];
+    }
+
+    public function hasOrderBookTop(string $symbol): bool
+    {
+        return isset($this->orderBooks[strtoupper($symbol)]);
     }
 
     public function setOrderBookTop(string $symbol, float $bid, float $ask): void

@@ -14,9 +14,13 @@ use App\Contract\Provider\ExchangeProviderRegistryInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Provider\OrderProviderInterface;
 use App\Contract\Provider\SystemProviderInterface;
+use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Fake\FakeExchangeMatchingEngine;
+use App\Exchange\Fake\FakeExchangeOrderBook;
+use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient;
 use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Okx\OkxConfig;
@@ -25,9 +29,11 @@ use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketRedisClientInterface;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketStatusStoreInterface;
 use App\Exchange\Okx\PrivateWebSocket\RedisOkxPrivateWebSocketStatusStore;
 use App\Exchange\Okx\OkxRestClientInterface;
+use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Fake\FakeRuntimeCheck;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Registry\ExchangeProviderBundle;
@@ -42,6 +48,127 @@ use Symfony\Component\HttpClient\MockHttpClient;
 #[CoversClass(ExchangeRuntimeCheckCommand::class)]
 final class ExchangeRuntimeCheckCommandTest extends TestCase
 {
+    public function testFakeRuntimeNeverRequiresCredentialsOrEnablesLiveTrading(): void
+    {
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($this->adapter(
+                Exchange::FAKE,
+                MarketType::PERPETUAL,
+                supportsPrivateWs: true,
+                supportsTriggerOrders: true,
+            )),
+            $this->missingProviderRegistry(),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(),
+        );
+
+        $tester = new CommandTester($command);
+        self::assertSame(Command::SUCCESS, $tester->execute([
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+        ]));
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Credentials: not_required', $output);
+        self::assertStringContainsString('Live trading: disabled', $output);
+        self::assertStringContainsString('Dry-run only: yes', $output);
+        self::assertStringContainsString('Live allowed: no', $output);
+        self::assertStringContainsString('Recommended dry_run: true', $output);
+    }
+
+    public function testFakeRuntimeSurfacesFailClosedReadinessWithPlaceholderProvider(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MockClock('2026-01-01T00:00:00+00:00');
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
+        $runtimeCheck = new FakeRuntimeCheck($adapter, $state, $clock, controlledClock: true);
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($adapter),
+            $this->providerRegistry($this->providerBundle(
+                Exchange::FAKE,
+                MarketType::PERPETUAL,
+                contractsLoaded: false,
+            )),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(),
+            fakeRuntimeCheck: $runtimeCheck,
+        );
+
+        $tester = new CommandTester($command);
+        self::assertSame(Command::SUCCESS, $tester->execute([
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+        ]));
+
+        $output = $tester->getDisplay();
+        self::assertStringContainsString('Provider bundle: placeholder', $output);
+        self::assertStringContainsString('Fake/Paper mode: fake', $output);
+        self::assertStringContainsString('Readiness level: not_ready', $output);
+        self::assertStringContainsString('Readiness blocking errors: public_connectivity_unavailable, instruments_not_loaded, metadata_invalid, precision_invalid', $output);
+        self::assertStringContainsString('Readiness warnings: fake_paper_market_source_not_configured, fake_paper_slippage_model_zero, fake_paper_persistence_not_configured', $output);
+        self::assertStringContainsString('State persistence: not_configured', $output);
+        self::assertStringContainsString('State writable: not_required', $output);
+        self::assertStringContainsString('State recovery: not_required', $output);
+        self::assertStringContainsString('Clock: ready', $output);
+        self::assertStringContainsString('Fee model: ready', $output);
+        self::assertStringContainsString('Slippage model: explicit_zero', $output);
+        self::assertStringContainsString('Metadata fixtures: not_ready', $output);
+        self::assertStringContainsString('Precision model: not_ready', $output);
+        self::assertStringContainsString('Schedule ready: no', $output);
+        self::assertCount(0, $state->getOrders());
+        self::assertCount(0, $state->events());
+    }
+
+    public function testFakeScheduleRequiresProviderEvenWhenAdapterRuntimeIsLocallyReady(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MockClock('2026-01-01T00:00:00+00:00');
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
+        $runtimeCheck = new FakeRuntimeCheck($adapter, $state, $clock, controlledClock: true);
+        $report = $runtimeCheck->check(new ExchangeReadinessInput(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            environment: 'fake',
+            publicConnectivity: true,
+            privateReadConnectivity: true,
+            privateObservability: true,
+            instrumentsLoaded: true,
+            metadataValid: true,
+            precisionValid: true,
+            accountReadable: true,
+            permissionsRead: true,
+            mainnetWriteGuard: true,
+            demoTestnetWriteGuard: true,
+            stopLossCapability: true,
+            allowedMarkets: ['perpetual'],
+            maxNotional: 1.0,
+        ));
+        self::assertSame(ExchangeReadinessLevel::LocalDryRunReady, $report->readyLevel);
+
+        $command = new ExchangeRuntimeCheckCommand(
+            $this->adapterRegistry($adapter),
+            $this->missingProviderRegistry(),
+            new OkxConfig(environment: 'demo'),
+            new HyperliquidConfig(),
+            fakeRuntimeCheck: $runtimeCheck,
+        );
+        $method = new \ReflectionMethod($command, 'scheduleReady');
+
+        self::assertFalse($method->invoke(
+            $command,
+            Exchange::FAKE,
+            'found',
+            'missing',
+            null,
+            false,
+            $report,
+        ));
+    }
+
     public function testReportsUnreadyOkxRuntimeWithoutProviderOrCredentials(): void
     {
         $command = new ExchangeRuntimeCheckCommand(

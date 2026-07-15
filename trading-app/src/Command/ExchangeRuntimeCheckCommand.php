@@ -19,6 +19,7 @@ use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessReport;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Fake\FakeRuntimeCheck;
 use App\Provider\Hyperliquid\HyperliquidMutationReadinessProbeInterface;
 use App\Provider\Okx\OkxAccountGateway;
 use App\Provider\Okx\OkxRuntimeCheck;
@@ -53,6 +54,7 @@ final class ExchangeRuntimeCheckCommand extends Command
         private readonly ?OkxPrivateWebSocketStatusStoreInterface $okxPrivateWebSocketStatusStore = null,
         private readonly OkxPrivateWebSocketObservabilityPolicy $okxPrivateWebSocketObservabilityPolicy = new OkxPrivateWebSocketObservabilityPolicy(),
         ?ClockInterface $clock = null,
+        private readonly ?FakeRuntimeCheck $fakeRuntimeCheck = null,
     ) {
         $this->clock = $clock ?? new NativeClock(new \DateTimeZone('UTC'));
         parent::__construct();
@@ -86,6 +88,9 @@ final class ExchangeRuntimeCheckCommand extends Command
         [$providerStatus, $providerBundle] = $this->providerStatus($context);
         $credentials = $this->credentialsStatus($exchange);
         $privateWs = $this->privateWsStatus($adapter);
+        $fakeReadinessReport = $exchange === Exchange::FAKE
+            ? $this->currentFakeReadinessReport()
+            : null;
         $okxReadinessReport = $exchange === Exchange::OKX
             ? $this->okxReadinessReport($marketType, $adapterStatus, $providerStatus, $credentials, $adapter, $providerBundle)
             : null;
@@ -102,6 +107,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             $providerStatus,
             $okxReadinessReport,
             $hyperliquidMutationReady,
+            $fakeReadinessReport,
         );
         $liveTrading = $exchange === Exchange::HYPERLIQUID
             ? ($hyperliquidMutationReady ? 'enabled' : 'disabled')
@@ -118,6 +124,40 @@ final class ExchangeRuntimeCheckCommand extends Command
         $output->writeln('REST: unknown');
         $output->writeln(sprintf('Private WS: %s', $privateWs));
         $output->writeln(sprintf('Live trading: %s', $liveTrading));
+        if ($exchange === Exchange::FAKE) {
+            $output->writeln('Dry-run only: yes');
+            $output->writeln('Live allowed: no');
+            if ($fakeReadinessReport instanceof ExchangeReadinessReport) {
+                $fakeReadiness = $fakeReadinessReport->toArray();
+                $fakeBlockingErrors = $this->stringReasons($fakeReadiness['blocking_errors']);
+                $fakeWarnings = $this->stringReasons($fakeReadiness['warnings']);
+                $output->writeln(sprintf('Fake/Paper mode: %s', $fakeReadinessReport->environment));
+                $output->writeln(sprintf('Readiness level: %s', $fakeReadinessReport->readyLevel->value));
+                $output->writeln(sprintf('Readiness blocking errors: %s', $this->formatReasons($fakeBlockingErrors)));
+                $output->writeln(sprintf('Readiness warnings: %s', $this->formatReasons($fakeWarnings)));
+                $persistenceConfigured = !\in_array('fake_paper_persistence_not_configured', $fakeWarnings, true);
+                $output->writeln(sprintf('State persistence: %s', $persistenceConfigured ? 'configured' : 'not_configured'));
+                $output->writeln(sprintf('State writable: %s', $persistenceConfigured
+                    ? (\in_array('fake_paper_state_not_writable', $fakeBlockingErrors, true) ? 'not_ready' : 'ready')
+                    : 'not_required'));
+                $output->writeln(sprintf('State recovery: %s', $persistenceConfigured
+                    ? (\in_array('fake_paper_state_recovery_not_ready', $fakeBlockingErrors, true) ? 'not_ready' : 'ready')
+                    : 'not_required'));
+                $clockReady = !\in_array('fake_paper_clock_not_ready', $fakeBlockingErrors, true)
+                    && !\in_array('fake_paper_clock_not_controlled', $fakeBlockingErrors, true);
+                $output->writeln(sprintf('Clock: %s', $clockReady ? 'ready' : 'not_ready'));
+                $output->writeln(sprintf('Fee model: %s', \in_array('fake_paper_fee_model_not_ready', $fakeBlockingErrors, true) ? 'not_ready' : 'ready'));
+                $output->writeln(sprintf('Slippage model: %s', \in_array('fake_paper_slippage_model_zero', $fakeWarnings, true) ? 'explicit_zero' : 'ready'));
+                $output->writeln(sprintf('Metadata fixtures: %s', $fakeReadinessReport->metadataValid ? 'ready' : 'not_ready'));
+                $output->writeln(sprintf('Precision model: %s', $fakeReadinessReport->precisionValid ? 'ready' : 'not_ready'));
+                $output->writeln(sprintf('Stop loss capability: %s', $fakeReadinessReport->stopLossCapability ? 'yes' : 'no'));
+            } else {
+                $output->writeln('Fake/Paper mode: unknown');
+                $output->writeln('Readiness level: not_ready');
+                $output->writeln('Readiness blocking errors: fake_paper_runtime_check_unavailable');
+                $output->writeln('Readiness warnings: none');
+            }
+        }
         if ($exchange === Exchange::OKX) {
             // PR11: OKX is dry-run only. Surface the gate explicitly so that demo-trading
             // capability is never mistaken for live-trading authorization.
@@ -205,6 +245,9 @@ final class ExchangeRuntimeCheckCommand extends Command
     {
         try {
             $bundle = $this->providers->get($context);
+            if ($context->exchange === Exchange::FAKE && $bundle->contract()->getContracts() === []) {
+                return ['placeholder', $bundle];
+            }
 
             return ['found', $bundle];
         } catch (\Throwable) {
@@ -218,6 +261,7 @@ final class ExchangeRuntimeCheckCommand extends Command
             Exchange::BITMART => $this->hasBitmartCredentials() ? 'ok' : 'missing',
             Exchange::OKX => $this->hasOkxCredentials() ? 'ok' : 'missing',
             Exchange::HYPERLIQUID => $this->hasHyperliquidCredentials() ? 'ok' : 'missing',
+            Exchange::FAKE => 'not_required',
             default => 'ok',
         };
     }
@@ -256,7 +300,15 @@ final class ExchangeRuntimeCheckCommand extends Command
         string $providerStatus,
         ?ExchangeReadinessReport $okxReadinessReport = null,
         bool $hyperliquidMutationReady = false,
+        ?ExchangeReadinessReport $fakeReadinessReport = null,
     ): bool {
+        if ($exchange === Exchange::FAKE) {
+            return $adapterStatus === 'found'
+                && $providerStatus === 'found'
+                && $fakeReadinessReport instanceof ExchangeReadinessReport
+                && $fakeReadinessReport->readyLevel === ExchangeReadinessLevel::LocalDryRunReady;
+        }
+
         if ($adapterStatus !== 'found' || $providerStatus !== 'found') {
             return false;
         }
@@ -274,6 +326,19 @@ final class ExchangeRuntimeCheckCommand extends Command
         }
 
         return true;
+    }
+
+    private function currentFakeReadinessReport(): ?ExchangeReadinessReport
+    {
+        if (!$this->fakeRuntimeCheck instanceof FakeRuntimeCheck) {
+            return null;
+        }
+
+        try {
+            return $this->fakeRuntimeCheck->current();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function currentHyperliquidReadinessReport(): ExchangeReadinessReport
