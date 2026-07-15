@@ -19,7 +19,10 @@ use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Fake\FakeExchangeEvent;
+use App\Exchange\Fake\FakeExchangeFaultOutcome;
+use App\Exchange\Fake\FakeExchangeInjectedException;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
+use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
@@ -73,6 +76,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
      */
     public function getBalances(): array
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetBalances, FakeExchangeFaultOutcome::NotApplied);
+
         return $this->stateStore->getBalances();
     }
 
@@ -81,6 +86,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
      */
     public function getOpenPositions(?string $symbol = null): array
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOpenPositions, FakeExchangeFaultOutcome::NotApplied);
+
         return $this->stateStore->getOpenPositions($symbol);
     }
 
@@ -89,6 +96,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
      */
     public function getOpenOrders(?string $symbol = null): array
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOpenOrders, FakeExchangeFaultOutcome::NotApplied);
+
         return $this->stateStore->getOpenOrders($symbol);
     }
 
@@ -97,6 +106,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
      */
     public function getOrdersSnapshot(?string $symbol = null): array
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOrdersSnapshot, FakeExchangeFaultOutcome::NotApplied);
+
         return $this->stateStore->getOrders($symbol);
     }
 
@@ -105,6 +116,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
      */
     public function getFillsSnapshot(?string $symbol = null): array
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetFillsSnapshot, FakeExchangeFaultOutcome::NotApplied);
+
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $fills = [];
         foreach ($this->stateStore->events() as $index => $event) {
@@ -131,16 +144,36 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
-        return $this->matchingEngine->submit($request);
+        $this->throwInjectedFault(FakeExchangeOperation::PlaceOrder, FakeExchangeFaultOutcome::NotApplied);
+        $execution = $this->stateStore->runWithAppliedResponseLoss(
+            FakeExchangeOperation::PlaceOrder,
+            fn (): PlaceOrderResult => $this->matchingEngine->submit($request),
+        );
+        if ($execution['fault'] !== null) {
+            throw new FakeExchangeInjectedException($execution['fault']);
+        }
+
+        return $execution['result'];
     }
 
     public function cancelOrder(CancelOrderRequest $request): CancelOrderResult
     {
-        return $this->matchingEngine->cancel($request);
+        $this->throwInjectedFault(FakeExchangeOperation::CancelOrder, FakeExchangeFaultOutcome::NotApplied);
+        $execution = $this->stateStore->runWithAppliedResponseLoss(
+            FakeExchangeOperation::CancelOrder,
+            fn (): CancelOrderResult => $this->matchingEngine->cancel($request),
+        );
+        if ($execution['fault'] !== null) {
+            throw new FakeExchangeInjectedException($execution['fault']);
+        }
+
+        return $execution['result'];
     }
 
     public function getOrder(string $symbol, string $exchangeOrderId): ?ExchangeOrderDto
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOrder, FakeExchangeFaultOutcome::NotApplied);
+
         $order = $this->stateStore->getOrder($exchangeOrderId);
         if (!$order instanceof ExchangeOrderDto || $order->symbol !== strtoupper($symbol)) {
             return null;
@@ -151,11 +184,15 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
 
     public function getOrderBookTop(string $symbol): SymbolBidAskDto
     {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOrderBookTop, FakeExchangeFaultOutcome::NotApplied);
+
         return $this->orderBook->top($symbol);
     }
 
     public function setLeverage(string $symbol, int $leverage, string $marginMode): bool
     {
+        $this->throwInjectedFault(FakeExchangeOperation::SetLeverage, FakeExchangeFaultOutcome::NotApplied);
+
         if (trim($symbol) === '' || $leverage <= 0 || trim($marginMode) === '') {
             return false;
         }
@@ -165,6 +202,8 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
 
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult
     {
+        $this->throwInjectedFault(FakeExchangeOperation::Reconcile, FakeExchangeFaultOutcome::NotApplied);
+
         $startedAt = $this->clock->now();
 
         return new ExchangeReconciliationResult(
@@ -236,5 +275,15 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     private function fillFee(float $quantity, float $price): float
     {
         return round($quantity * $price * self::FEE_RATE, 12);
+    }
+
+    private function throwInjectedFault(
+        FakeExchangeOperation $operation,
+        FakeExchangeFaultOutcome $outcome,
+    ): void {
+        $fault = $this->stateStore->consumeFault($operation, $outcome);
+        if ($fault !== null) {
+            throw new FakeExchangeInjectedException($fault);
+        }
     }
 }

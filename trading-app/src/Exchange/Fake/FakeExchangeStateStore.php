@@ -52,6 +52,11 @@ final class FakeExchangeStateStore
 
     private bool $rejectNextProtectionOrder = false;
 
+    /** @var list<array{operation:string,kind:string,outcome:string,retry_after_seconds:?int}> */
+    private array $pendingFaults = [];
+
+    private bool $deferPersistence = false;
+
     public function __construct(
         #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
         ?string $stateFile = null,
@@ -74,6 +79,7 @@ final class FakeExchangeStateStore
         $this->orderBooks = [];
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
+        $this->pendingFaults = [];
         $this->balances = [
             'USDT' => new ExchangeBalanceDto(
                 exchange: Exchange::FAKE,
@@ -287,6 +293,96 @@ final class FakeExchangeStateStore
         return true;
     }
 
+    public function queueFault(FakeExchangeFault $fault): void
+    {
+        $this->pendingFaults[] = $fault->toArray();
+        $this->persist();
+    }
+
+    /**
+     * @return FakeExchangeFault[]
+     */
+    public function pendingFaults(): array
+    {
+        return array_map(
+            static fn (array $fault): FakeExchangeFault => FakeExchangeFault::fromArray($fault),
+            $this->pendingFaults,
+        );
+    }
+
+    public function consumeFault(
+        FakeExchangeOperation $operation,
+        FakeExchangeFaultOutcome $outcome,
+    ): ?FakeExchangeFault {
+        $index = $this->firstFaultIndex($operation);
+        if ($index === null) {
+            return null;
+        }
+
+        $fault = FakeExchangeFault::fromArray($this->pendingFaults[$index]);
+        if ($fault->outcome !== $outcome) {
+            return null;
+        }
+
+        $this->removeFaultAt($index);
+        $this->persist();
+
+        return $fault;
+    }
+
+    /**
+     * @template TResult
+     * @param callable(): TResult $operationCallback
+     * @return array{result:TResult,fault:?FakeExchangeFault}
+     */
+    public function runWithAppliedResponseLoss(
+        FakeExchangeOperation $operation,
+        callable $operationCallback,
+    ): array {
+        $index = $this->firstFaultIndex($operation);
+        if ($index === null) {
+            return ['result' => $operationCallback(), 'fault' => null];
+        }
+
+        $fault = FakeExchangeFault::fromArray($this->pendingFaults[$index]);
+        if ($fault->outcome !== FakeExchangeFaultOutcome::AppliedResponseLost) {
+            return ['result' => $operationCallback(), 'fault' => null];
+        }
+
+        return $this->transactional(function () use ($index, $fault, $operationCallback): array {
+            $eventsBefore = \count($this->events);
+            $this->removeFaultAt($index);
+            $this->persist();
+            $result = $operationCallback();
+
+            if (\count($this->events) === $eventsBefore) {
+                array_splice($this->pendingFaults, $index, 0, [$fault->toArray()]);
+                $this->persist();
+
+                return ['result' => $result, 'fault' => null];
+            }
+
+            return ['result' => $result, 'fault' => $fault];
+        });
+    }
+
+    private function firstFaultIndex(FakeExchangeOperation $operation): ?int
+    {
+        foreach ($this->pendingFaults as $index => $payload) {
+            if (FakeExchangeFault::fromArray($payload)->operation === $operation) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private function removeFaultAt(int $index): void
+    {
+        unset($this->pendingFaults[$index]);
+        $this->pendingFaults = array_values($this->pendingFaults);
+    }
+
     public function openOrderCount(?string $symbol = null): int
     {
         return \count($this->getOpenOrders($symbol));
@@ -298,7 +394,7 @@ final class FakeExchangeStateStore
     }
 
     /**
-     * @return array{format_version:int,engine_version:string,scenario_config_hash:string,restored:bool,legacy:bool,next_event_sequence:int}
+     * @return array{format_version:int,engine_version:string,scenario_config_hash:string,restored:bool,legacy:bool,next_event_sequence:int,pending_fault_count:int}
      */
     public function recoveryMetadata(): array
     {
@@ -309,6 +405,7 @@ final class FakeExchangeStateStore
             'restored' => $this->restored,
             'legacy' => $this->restoredLegacyState,
             'next_event_sequence' => $this->nextEventSequence,
+            'pending_fault_count' => \count($this->pendingFaults),
         ];
     }
 
@@ -421,6 +518,10 @@ final class FakeExchangeStateStore
 
     private function persist(): void
     {
+        if ($this->deferPersistence) {
+            return;
+        }
+
         if ($this->stateFile === null) {
             return;
         }
@@ -440,6 +541,7 @@ final class FakeExchangeStateStore
             'orderBooks' => $this->orderBooks,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
+            'pendingFaults' => $this->pendingFaults,
         ];
         $serialized = serialize([
             'format_version' => self::STATE_FORMAT_VERSION,
@@ -509,6 +611,7 @@ final class FakeExchangeStateStore
         $orderBooks = $state['orderBooks'] ?? null;
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
+        $pendingFaults = $state['pendingFaults'] ?? [];
         if (
             !\is_int($nextOrderSequence) || $nextOrderSequence < 1
             || !$this->isTypedMap($orders, ExchangeOrderDto::class)
@@ -518,6 +621,7 @@ final class FakeExchangeStateStore
             || !$this->isOrderBookMap($orderBooks)
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
+            || !$this->isFaultQueue($pendingFaults)
         ) {
             throw new FakeExchangeStateCorruptedException('fake_exchange_state_shape_invalid');
         }
@@ -530,6 +634,7 @@ final class FakeExchangeStateStore
         $this->orderBooks = $orderBooks;
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
+        $this->pendingFaults = array_values($pendingFaults);
 
         $nextEventSequence = $state['nextEventSequence'] ?? null;
         $this->nextEventSequence = \is_int($nextEventSequence) && $nextEventSequence > 0
@@ -642,5 +747,94 @@ final class FakeExchangeStateStore
         }
 
         return true;
+    }
+
+    private function isFaultQueue(mixed $value): bool
+    {
+        if (!\is_array($value) || !array_is_list($value)) {
+            return false;
+        }
+
+        foreach ($value as $fault) {
+            if (!\is_array($fault)) {
+                return false;
+            }
+
+            try {
+                FakeExchangeFault::fromArray($fault);
+            } catch (\InvalidArgumentException) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @template TResult
+     * @param callable(): TResult $callback
+     * @return TResult
+     */
+    private function transactional(callable $callback): mixed
+    {
+        if ($this->deferPersistence) {
+            throw new \LogicException('fake_exchange_state_nested_transaction_not_supported');
+        }
+
+        $snapshot = $this->runtimeState();
+        $this->deferPersistence = true;
+
+        try {
+            $result = $callback();
+            $this->deferPersistence = false;
+            $this->persist();
+
+            return $result;
+        } catch (\Throwable $exception) {
+            $this->deferPersistence = false;
+            $this->restoreRuntimeState($snapshot);
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function runtimeState(): array
+    {
+        return [
+            'nextOrderSequence' => $this->nextOrderSequence,
+            'nextEventSequence' => $this->nextEventSequence,
+            'restored' => $this->restored,
+            'restoredLegacyState' => $this->restoredLegacyState,
+            'orders' => $this->orders,
+            'clientOrderIndex' => $this->clientOrderIndex,
+            'positions' => $this->positions,
+            'balances' => $this->balances,
+            'orderBooks' => $this->orderBooks,
+            'events' => $this->events,
+            'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
+            'pendingFaults' => $this->pendingFaults,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $snapshot
+     */
+    private function restoreRuntimeState(array $snapshot): void
+    {
+        $this->nextOrderSequence = $snapshot['nextOrderSequence'];
+        $this->nextEventSequence = $snapshot['nextEventSequence'];
+        $this->restored = $snapshot['restored'];
+        $this->restoredLegacyState = $snapshot['restoredLegacyState'];
+        $this->orders = $snapshot['orders'];
+        $this->clientOrderIndex = $snapshot['clientOrderIndex'];
+        $this->positions = $snapshot['positions'];
+        $this->balances = $snapshot['balances'];
+        $this->orderBooks = $snapshot['orderBooks'];
+        $this->events = $snapshot['events'];
+        $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];
+        $this->pendingFaults = $snapshot['pendingFaults'];
     }
 }
