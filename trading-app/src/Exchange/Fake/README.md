@@ -51,3 +51,33 @@ The file-backed store writes a versioned `fake-paper-state-v1` envelope containi
 On restart, orders, the `client_order_id` index, positions, balances, order books, protection orders, events, and the pending protection-failure fixture are restored together. A legacy unversioned state file is accepted and upgraded on the next write. A present but unreadable, unsupported, or checksum-invalid file raises `FakeExchangeStateCorruptedException`; it is never silently replaced with an empty state.
 
 `FakeExchangeStateStore::recoveryMetadata()` exposes the effective format, engine/config identity, whether the instance restored persisted state, whether that state used the legacy format, and the next event sequence. This is local Paper evidence only and does not certify exchange reconciliation or enable any demo/live write path.
+
+## Deterministic adapter faults
+
+`FakeExchangeScenarioService::failNext()` queues a typed one-shot fault for one
+adapter operation. The supported kinds are `network_timeout`, `transport_error`,
+`http_429`, and `http_500`. A 429 fixture must provide a positive normalized
+`retry_after_seconds`; no raw transport response or request payload is retained.
+
+Faults default to `not_applied` and are consumed before the matching engine or
+read store is called. `place_order` and `cancel_order` also support
+`applied_response_lost` for timeout/transport failures: the mutation is committed,
+then `FakeExchangeInjectedException` reports an ambiguous outcome. Retrying the
+same client order or cancel request returns the existing result without a second
+order, fill, protection, or cancellation event.
+
+```php
+$scenario->failNext(new FakeExchangeFault(
+    FakeExchangeOperation::PlaceOrder,
+    FakeExchangeFaultKind::NetworkTimeout,
+    FakeExchangeFaultOutcome::AppliedResponseLost,
+));
+```
+
+The queue is FIFO per operation and survives a Paper restart. For an
+`applied_response_lost` fixture, the matching mutation and fault removal are
+committed in the same atomic state-file replacement. If the operation is a no-op
+or fails, the transaction restores the state and keeps the fault queued. No delay
+or `sleep` is used: timeout behavior is deterministic and does not contact a
+network. Faults run at the adapter boundary, so a `not_applied` fixture may reject
+a request before the matching engine performs its normal request validation.

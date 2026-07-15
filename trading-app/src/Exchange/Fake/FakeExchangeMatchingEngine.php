@@ -130,6 +130,17 @@ final readonly class FakeExchangeMatchingEngine
             $order = $this->stateStore->getOrderByClientOrderId($request->symbol, $request->clientOrderId);
         }
 
+        if ($order instanceof ExchangeOrderDto && $order->status === ExchangeOrderStatus::CANCELLED) {
+            return new CancelOrderResult(
+                cancelled: true,
+                symbol: $order->symbol,
+                exchangeOrderId: $order->exchangeOrderId,
+                clientOrderId: $order->clientOrderId,
+                status: ExchangeOrderStatus::CANCELLED,
+                metadata: ['idempotent_replay' => true],
+            );
+        }
+
         if (!$order instanceof ExchangeOrderDto || !$this->isActiveStatus($order->status)) {
             return $this->cancelNotActive($request);
         }

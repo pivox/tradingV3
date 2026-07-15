@@ -44,6 +44,19 @@ final readonly class FakeExchangeScenarioService
         $this->stateStore->rejectNextProtectionOrder();
     }
 
+    public function failNext(FakeExchangeFault $fault): void
+    {
+        $this->stateStore->queueFault($fault);
+    }
+
+    /**
+     * @return FakeExchangeFault[]
+     */
+    public function pendingFaults(): array
+    {
+        return $this->stateStore->pendingFaults();
+    }
+
     /**
      * @return FakeExchangeEvent[]
      */

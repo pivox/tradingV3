@@ -162,6 +162,38 @@ Cette reprise prouve uniquement la continuite locale Fake/Paper. Elle ne remplac
 ni une reconciliation REST/WS exchange, ni le ledger PostgreSQL, et n active
 aucune permission demo, testnet ou live.
 
+## Injection deterministe des erreurs adapter
+
+Le Fake Exchange de niveau adapter expose une file de fautes typees via
+`FakeExchangeScenarioService::failNext()`. Les fixtures supportees sont :
+
+| Kind | Statut HTTP normalise | Contexte |
+| --- | --- | --- |
+| `network_timeout` | absent | timeout immediat sans attente reelle |
+| `transport_error` | absent | echec transport generique |
+| `http_429` | `429` | `retry_after_seconds` positif obligatoire |
+| `http_500` | `500` | erreur serveur deterministe |
+
+Le resultat `not_applied` consomme la faute avant toute mutation. Pour
+`place_order` et `cancel_order`, `applied_response_lost` applique d abord la
+mutation puis leve `FakeExchangeInjectedException` avec `outcome_unknown=true`.
+Ce second mode reproduit une reponse perdue : le caller doit rejouer avec les memes
+identifiants, et le Fake restitue alors l ordre ou l annulation deja appliquee sans
+dupliquer les evenements.
+
+La file est FIFO, isolee par operation et persistee dans l enveloppe
+`fake-paper-state-v1`. Une faute armee survit donc au restart. Pour un resultat
+`applied_response_lost`, la mutation et le retrait de la faute sont commits dans
+le meme remplacement atomique du fichier d etat. Un no-op ou une exception restaure
+l etat et conserve la faute. Le contexte d erreur ne contient que le kind,
+l operation, le resultat, le statut HTTP normalise et le retry-after. Aucun payload
+brut, credential, URL ou header sensible n est conserve.
+
+Ce contrat couvre les erreurs adapter REST simulees. Il ne modelise pas encore un
+quota glissant, la latence/jitter avec seed, les erreurs de precision/marge, ni les
+divergences Bitmart. La deconnexion et le resync private WS sont couverts par la
+fixture separee `FakeExchangeWsClient`.
+
 ## Rollback
 
 Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au
