@@ -105,10 +105,11 @@ final class FuturesOrderRepository extends ServiceEntityRepository
         return $this->createQueryBuilder('o')
             ->andWhere('o.exchange = :exchange')
             ->andWhere('o.marketType = :marketType')
-            ->andWhere('o.status IN (:statuses)')
+            ->andWhere('(o.status IN (:statuses) OR o.status IN (:numericStatuses))')
             ->setParameter('exchange', ExchangeContext::exchangeValue($context))
             ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('statuses', self::OPEN_STATUSES)
+            ->setParameter('numericStatuses', self::OPEN_NUMERIC_STATES)
             ->getQuery()->getResult();
     }
 
