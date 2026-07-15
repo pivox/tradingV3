@@ -25,3 +25,21 @@ curl http://localhost:8082/fake-exchange/events
 ```
 
 The HTTP service state is stored in `var/fake_exchange_state.dat` so multi-step curl scenarios survive PHP-FPM request boundaries. Tests can instantiate `FakeExchangeStateStore` without a file path for isolated in-memory state, and should call `reset()` before each scenario when sharing a store.
+
+## Private WS disconnect/resync fixture
+
+`FakeExchangeWsClient` can inject one deterministic disconnect after a configured
+number of acknowledged raw events. The client then reports
+`fake_private_ws_disconnected` with state `resync_required`. A yielded sequence is
+acknowledged only after its normalization and projection complete, so a projection
+failure leaves that raw event available to the next drain. Numeric sequence gaps
+report `fake_private_ws_sequence_gap` and also require resync.
+
+After an injected disconnect, `reconnect()` resumes unacknowledged events. A
+sequence gap fails closed: plain reconnect is rejected until the caller reconciles
+orders, fills and positions from the Fake REST snapshots through
+`ExchangeReconciliationService`, then confirms that snapshot with
+`completeSnapshotResync()`. Events covered by that snapshot are not replayed and
+the next contiguous sequence is consumed normally. The one-shot disconnect is not
+reinjected. This fixture remains local, performs no network request and never
+sends an exchange order.
