@@ -149,6 +149,12 @@ le fallback volontaire est le polling REST public.
 | Trade fee | `GET /api/v5/account/trade-fee` | Maker/taker courants par `instFamily`. Implante dans OKX-005 pour metadata couts. |
 | Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
 
+L'observabilite temps reel utilise deux connexions authentifiees indissociables :
+`/ws/v5/private` pour les ordres standards, fills et positions, et
+`/ws/v5/business` pour `orders-algo`. La couverture ordres n'est prete qu'apres
+ACK des deux canaux `orders` et `orders-algo`; une panne de l'un des sockets
+invalide et reconnecte toute la paire.
+
 Configuration demo private OKX-004 :
 
 ```dotenv
@@ -157,6 +163,8 @@ OKX_DEMO_API_KEY=...
 OKX_DEMO_API_SECRET=...
 OKX_DEMO_API_PASSPHRASE=...
 OKX_API_BASE_URI=https://eea.okx.com
+OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
+OKX_WS_BUSINESS_URI=wss://wspap.okx.com:8443/ws/v5/business
 OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0

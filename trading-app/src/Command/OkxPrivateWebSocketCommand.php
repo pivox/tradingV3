@@ -65,5 +65,6 @@ final class OkxPrivateWebSocketCommand extends Command
         }
 
         $this->endpointGuard->assertAllowed($this->config->wsPrivateUri());
+        $this->endpointGuard->assertAllowed($this->config->wsBusinessUri());
     }
 }

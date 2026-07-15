@@ -10,7 +10,7 @@ avec la décision `blocked`, qui maintient les gates d'écriture fermées.
 
 L'implémentation doit :
 
-- se connecter uniquement au WebSocket privé OKX demo ;
+- se connecter uniquement aux WebSockets privé et business OKX demo ;
 - s'authentifier uniquement avec des credentials dédiés `OKX_DEMO_*` ;
 - observer les ordres, fills et positions ;
 - réconcilier un snapshot REST privé initial avant de devenir prête ;
@@ -93,9 +93,15 @@ secrets et la signature générée ne sont jamais loggés ni sérialisés dans l
 Après un acknowledgement de login réussi, le worker souscrit à :
 
 - `orders` avec `instType=SWAP` ;
+- `orders-algo` avec `instType=SWAP` sur `/ws/v5/business` ;
 - `positions` avec `instType=SWAP` ;
 - `balance_and_position` ;
 - `fills` lorsque le compte accepte cette souscription.
+
+Les endpoints `/ws/v5/private` et `/ws/v5/business` utilisent deux transports
+et deux heartbeats indépendants. Le statut agrégé n'est connecté/authentifié que
+si les deux sockets le sont, et `orders_stream_ready` exige les ACKs `orders` et
+`orders-algo`. Toute panne invalide et reconnecte la paire atomiquement.
 
 OKX réserve le canal `fills` aux niveaux de frais éligibles. L'erreur `64003` ne
 suffit donc pas, à elle seule, à rendre le worker indisponible. Dans cet unique

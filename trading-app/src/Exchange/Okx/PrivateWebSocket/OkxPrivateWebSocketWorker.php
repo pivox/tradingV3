@@ -7,6 +7,8 @@ namespace App\Exchange\Okx\PrivateWebSocket;
 use App\Exchange\Event\ExchangeEventBus;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Okx\OkxExchangeEventNormalizer;
+use DateTimeImmutable;
+use DateTimeZone;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use React\EventLoop\Loop;
@@ -15,6 +17,8 @@ use React\EventLoop\TimerInterface;
 
 final class OkxPrivateWebSocketWorker
 {
+    private const PRIVATE_ENDPOINT = 'private';
+    private const BUSINESS_ENDPOINT = 'business';
     private const RECONNECT_DELAYS = [1.0, 2.0, 4.0, 8.0, 15.0, 15.0];
     private const PING_INTERVAL_SECONDS = 5.0;
     private const PONG_TIMEOUT_SECONDS = 4.0;
@@ -26,12 +30,22 @@ final class OkxPrivateWebSocketWorker
     private string $endpointId = OkxPrivateWebSocketObservabilityStatus::ENDPOINT_ID;
     private bool $started = false;
     private ?int $lastStatusSaveTimestamp = null;
-    private ?string $uri = null;
+    private ?string $privateUri = null;
+    private ?string $businessUri = null;
     private int $reconnectAttempt = 0;
     private bool $reconnectScheduled = false;
     private bool $stopping = false;
-    private int $pingGeneration = 0;
-    private bool $awaitingPong = false;
+    /** @var array<string, int> */
+    private array $pingGenerations = [self::PRIVATE_ENDPOINT => 0, self::BUSINESS_ENDPOINT => 0];
+    /** @var array<string, bool> */
+    private array $awaitingPongs = [self::PRIVATE_ENDPOINT => false, self::BUSINESS_ENDPOINT => false];
+    /** @var array<string, bool> */
+    private array $connectedEndpoints = [self::PRIVATE_ENDPOINT => false, self::BUSINESS_ENDPOINT => false];
+    private ?DateTimeImmutable $businessConnectedAt = null;
+    private ?DateTimeImmutable $privateHeartbeatAt = null;
+    private ?DateTimeImmutable $businessHeartbeatAt = null;
+    private bool $businessAuthenticated = false;
+    private bool $businessSubscribed = false;
     private int $connectionGeneration = 0;
     private ?int $maxCycles = null;
     private int $connectionAttempts = 0;
@@ -44,6 +58,7 @@ final class OkxPrivateWebSocketWorker
 
     public function __construct(
         private readonly OkxPrivateWebSocketTransportInterface $transport,
+        private readonly OkxPrivateWebSocketTransportInterface $businessTransport,
         private readonly OkxConfig $config,
         private readonly OkxPrivateWebSocketEndpointGuard $endpointGuard,
         private readonly OkxPrivateWebSocketLoginSigner $loginSigner,
@@ -76,8 +91,9 @@ final class OkxPrivateWebSocketWorker
             return;
         }
 
-        $uri = $this->assertConfiguration();
-        $this->uri = $uri;
+        [$privateUri, $businessUri] = $this->assertConfiguration();
+        $this->privateUri = $privateUri;
+        $this->businessUri = $businessUri;
         $this->started = true;
         $this->sigtermHandler = function (): void {
             $this->stop();
@@ -91,33 +107,20 @@ final class OkxPrivateWebSocketWorker
             if ($this->stopping) {
                 return;
             }
-            $this->publishStatus($this->session->status());
+            $this->publishStatus($this->status());
         }));
         $this->trackTimer($this->loop->addPeriodicTimer(self::PING_INTERVAL_SECONDS, function (): void {
-            if (!$this->stopping && $this->session->status()->connected && !$this->awaitingPong) {
-                try {
-                    $this->transport->send(['op' => 'ping']);
-                } catch (\Throwable) {
-                    $this->failClosed('heartbeat', 'okx_private_ws_connection_failed');
-
-                    return;
-                }
-                $this->awaitingPong = true;
-                $generation = ++$this->pingGeneration;
-                $this->addOneShotTimer(self::PONG_TIMEOUT_SECONDS, function () use ($generation): void {
-                    if ($generation !== $this->pingGeneration || !$this->awaitingPong || $this->stopping) {
-                        return;
-                    }
-                    $this->awaitingPong = false;
-                    $this->failClosed('heartbeat', 'okx_private_ws_connection_failed');
-                });
-                $this->logger->info('okx_private_ws.state', $this->logContext('ping_sent', 'heartbeat'));
+            if ($this->stopping) {
+                return;
+            }
+            foreach ([self::PRIVATE_ENDPOINT, self::BUSINESS_ENDPOINT] as $endpoint) {
+                $this->sendPing($endpoint);
             }
         }));
-        if (!$this->publishStatus($this->session->status(), true)) {
+        if (!$this->publishStatus($this->status(), true)) {
             return;
         }
-        $this->connect($uri);
+        $this->connect($privateUri, $businessUri);
     }
 
     public function stop(): void
@@ -128,8 +131,7 @@ final class OkxPrivateWebSocketWorker
 
         $this->stopping = true;
         ++$this->connectionGeneration;
-        ++$this->pingGeneration;
-        $this->awaitingPong = false;
+        $this->resetEndpointState();
         $now = $this->clock->now();
         $status = new OkxPrivateWebSocketObservabilityStatus(
             connected: false,
@@ -169,6 +171,7 @@ final class OkxPrivateWebSocketWorker
             $this->sigintHandler = null;
         }
         $this->transport->close();
+        $this->businessTransport->close();
         $this->loop->stop();
     }
 
@@ -191,7 +194,7 @@ final class OkxPrivateWebSocketWorker
         return $timer;
     }
 
-    private function connect(string $uri): void
+    private function connect(string $privateUri, string $businessUri): void
     {
         if (null !== $this->maxCycles && $this->connectionAttempts >= $this->maxCycles) {
             $this->stop();
@@ -200,51 +203,64 @@ final class OkxPrivateWebSocketWorker
         }
         ++$this->connectionAttempts;
         $generation = ++$this->connectionGeneration;
-        $this->transport->connect(
+        $this->resetEndpointState();
+        $this->connectEndpoint(self::PRIVATE_ENDPOINT, $this->transport, $privateUri, $generation);
+        $this->connectEndpoint(self::BUSINESS_ENDPOINT, $this->businessTransport, $businessUri, $generation);
+        $this->armLoginDeadline($generation);
+    }
+
+    private function connectEndpoint(
+        string $endpoint,
+        OkxPrivateWebSocketTransportInterface $transport,
+        string $uri,
+        int $generation,
+    ): void {
+        $transport->connect(
             $uri,
-            function () use ($generation): void {
+            function () use ($endpoint, $transport, $generation): void {
                 if (!$this->isCurrentConnection($generation)) {
                     return;
                 }
                 $this->reconnectScheduled = false;
-                $this->awaitingPong = false;
-                ++$this->pingGeneration;
+                $this->connectedEndpoints[$endpoint] = true;
+                $this->awaitingPongs[$endpoint] = false;
+                ++$this->pingGenerations[$endpoint];
+                if (self::BUSINESS_ENDPOINT === $endpoint) {
+                    $this->businessConnectedAt = self::utc($this->clock->now());
+                    $this->businessHeartbeatAt = $this->businessConnectedAt;
+                } else {
+                    $this->privateHeartbeatAt = self::utc($this->clock->now());
+                }
                 try {
-                    $result = $this->session->onConnected(
-                        [$this->loginSigner->buildLoginArgs(
-                            $this->config->apiKey,
-                            $this->config->apiSecret,
-                            $this->config->apiPassphrase,
-                            (string) $this->clock->now()->getTimestamp(),
-                        )],
-                        $this->clock->now(),
-                    );
-                    foreach ($result->outgoingCommands as $command) {
-                        $this->transport->send($command);
+                    $loginCommand = $this->loginCommand();
+                    if (self::PRIVATE_ENDPOINT === $endpoint) {
+                        $result = $this->session->onConnected($loginCommand['args'], $this->clock->now());
+                        $this->sendSessionCommands($result->outgoingCommands);
+                    } else {
+                        $transport->send($loginCommand);
                     }
                 } catch (\Throwable) {
                     $this->failClosed('login', 'okx_private_ws_connection_failed');
 
                     return;
                 }
-                $this->armLoginDeadline($generation);
-                $this->logger->info('okx_private_ws.state', $this->logContext('login_sent'));
+                $this->logger->info('okx_private_ws.state', $this->logContext('login_sent', $endpoint));
             },
-            function (string $message) use ($generation): void {
+            function (string $message) use ($endpoint, $generation): void {
                 if (!$this->isCurrentConnection($generation)) {
                     return;
                 }
                 try {
-                    $this->onMessage($message, $generation);
+                    $this->onMessage($message, $generation, $endpoint);
                 } catch (\Throwable) {
                     $this->failClosed('message', 'okx_private_ws_message_invalid');
                 }
             },
-            function (?int $code) use ($generation): void {
+            function (?int $code) use ($endpoint, $generation): void {
                 if (!$this->isCurrentConnection($generation)) {
                     return;
                 }
-                $this->handleConnectionFailure('okx_private_ws_connection_closed', $code);
+                $this->handleConnectionFailure('okx_private_ws_connection_closed', $code, $endpoint);
             },
             function (\Throwable $error) use ($generation): void {
                 if (!$this->isCurrentConnection($generation)) {
@@ -255,11 +271,24 @@ final class OkxPrivateWebSocketWorker
         );
     }
 
+    /** @return array{op: string, args: list<array<string, string>>} */
+    private function loginCommand(): array
+    {
+        return [
+            'op' => 'login',
+            'args' => [$this->loginSigner->buildLoginArgs(
+                $this->config->apiKey,
+                $this->config->apiSecret,
+                $this->config->apiPassphrase,
+                (string) $this->clock->now()->getTimestamp(),
+            )],
+        ];
+    }
+
     private function failClosed(string $channel, string $code): void
     {
         $this->logger->error('okx_private_ws.state', $this->logContext('not_ready', $channel, $code));
         $this->handleConnectionFailure($code);
-        $this->transport->close();
     }
 
     private function isCurrentConnection(int $generation): bool
@@ -267,13 +296,20 @@ final class OkxPrivateWebSocketWorker
         return !$this->stopping && $generation === $this->connectionGeneration;
     }
 
-    private function onMessage(string $payload, int $generation): void
+    private function onMessage(string $payload, int $generation, string $endpoint): void
     {
         if ('pong' === $payload) {
-            $this->awaitingPong = false;
-            ++$this->pingGeneration;
-            $this->session->onHeartbeat($this->clock->now());
-            $this->publishStatus($this->session->status());
+            $previousHeartbeatAt = $this->status()->lastHeartbeatAt;
+            $this->awaitingPongs[$endpoint] = false;
+            ++$this->pingGenerations[$endpoint];
+            if (self::BUSINESS_ENDPOINT === $endpoint) {
+                $this->businessHeartbeatAt = self::utc($this->clock->now());
+            } else {
+                $this->privateHeartbeatAt = self::utc($this->clock->now());
+                $this->session->onHeartbeat($this->clock->now());
+            }
+            $status = $this->status();
+            $this->publishStatus($status, $status->lastHeartbeatAt > $previousHeartbeatAt);
 
             return;
         }
@@ -282,12 +318,35 @@ final class OkxPrivateWebSocketWorker
         if (!is_array($message) || array_is_list($message)) {
             throw new \InvalidArgumentException('okx_private_ws_message_invalid');
         }
+        if (self::BUSINESS_ENDPOINT === $endpoint) {
+            $this->businessHeartbeatAt = self::utc($this->clock->now());
+        } else {
+            $this->privateHeartbeatAt = self::utc($this->clock->now());
+        }
+
+        if (self::BUSINESS_ENDPOINT === $endpoint && 'login' === ($message['event'] ?? null)) {
+            $this->handleBusinessLogin($message);
+            $this->afterMessage($generation);
+
+            return;
+        }
+        if (self::BUSINESS_ENDPOINT === $endpoint
+            && !$this->businessAuthenticated
+            && 'error' === ($message['event'] ?? null)
+            && !array_key_exists('arg', $message)) {
+            $this->failClosed('login', 'okx_private_ws_authentication_failed');
+
+            return;
+        }
+        if (self::BUSINESS_ENDPOINT === $endpoint && !$this->businessAuthenticated) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+
+        $this->assertEndpointMessage($message, $endpoint);
 
         $wasAuthenticated = $this->session->status()->authenticated;
         $result = $this->session->onMessage($message, $this->clock->now());
-        foreach ($result->outgoingCommands as $command) {
-            $this->transport->send($command);
-        }
+        $this->sendSessionCommands($result->outgoingCommands);
         $this->eventBus->publishMany($result->normalizedEvents);
 
         $status = $this->session->status();
@@ -303,7 +362,10 @@ final class OkxPrivateWebSocketWorker
         }
 
         if (!$wasAuthenticated && $status->authenticated) {
-            $this->cancelDeadline($this->loginDeadlineTimer);
+            $this->subscribeBusinessIfReady();
+            if ($this->allAuthenticated()) {
+                $this->cancelDeadline($this->loginDeadlineTimer);
+            }
             $readinessStartedAt = $this->clock->now();
             $this->armReadinessDeadline($generation);
             try {
@@ -338,12 +400,199 @@ final class OkxPrivateWebSocketWorker
             }
         }
 
+        $this->afterMessage($generation);
+    }
+
+    /** @param array<string, mixed> $message */
+    private function handleBusinessLogin(array $message): void
+    {
+        if (!$this->connectedEndpoints[self::BUSINESS_ENDPOINT] || $this->businessAuthenticated) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+        if (array_key_exists('arg', $message) || array_key_exists('data', $message)) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+        $code = $message['code'] ?? null;
+        if ((!is_string($code) && !is_int($code)) || '0' !== (string) $code) {
+            $this->failClosed('login', 'okx_private_ws_authentication_failed');
+
+            return;
+        }
+        $this->businessAuthenticated = true;
+        $this->subscribeBusinessIfReady();
+        if ($this->allAuthenticated()) {
+            $this->cancelDeadline($this->loginDeadlineTimer);
+        }
+    }
+
+    /** @param array<string, mixed> $message */
+    private function assertEndpointMessage(array $message, string $endpoint): void
+    {
+        $arg = $message['arg'] ?? null;
+        if (!is_array($arg) || !is_string($arg['channel'] ?? null)) {
+            if (array_key_exists('data', $message)
+                || \in_array($message['event'] ?? null, ['subscribe', 'error'], true)) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+
+            return;
+        }
+
+        $channel = $arg['channel'];
+        if ((self::BUSINESS_ENDPOINT === $endpoint) !== ('orders-algo' === $channel)) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+        }
+    }
+
+    /** @param list<array<string, mixed>> $commands */
+    private function sendSessionCommands(array $commands): void
+    {
+        foreach ($commands as $command) {
+            if ('subscribe' !== ($command['op'] ?? null)) {
+                $this->transport->send($command);
+
+                continue;
+            }
+            $args = $command['args'] ?? [];
+            if (!is_array($args)) {
+                throw new \InvalidArgumentException('okx_private_ws_message_invalid');
+            }
+            $privateArgs = array_values(array_filter(
+                $args,
+                static fn (mixed $arg): bool => is_array($arg) && 'orders-algo' !== ($arg['channel'] ?? null),
+            ));
+            if ([] !== $privateArgs) {
+                $this->transport->send(['op' => 'subscribe', 'args' => $privateArgs]);
+            }
+        }
+    }
+
+    private function subscribeBusinessIfReady(): void
+    {
+        if ($this->businessSubscribed || !$this->businessAuthenticated || !$this->session->status()->authenticated) {
+            return;
+        }
+        $this->businessTransport->send([
+            'op' => 'subscribe',
+            'args' => [['channel' => 'orders-algo', 'instType' => 'SWAP']],
+        ]);
+        $this->businessSubscribed = true;
+    }
+
+    private function afterMessage(int $generation): void
+    {
+        if (!$this->isCurrentConnection($generation)) {
+            return;
+        }
         if ($this->isReady()) {
             $this->cancelDeadline($this->readinessDeadlineTimer);
             $this->reconnectAttempt = 0;
         }
+        $this->publishStatus($this->status());
+    }
 
-        $this->publishStatus($this->session->status());
+    private function sendPing(string $endpoint): void
+    {
+        if (!$this->connectedEndpoints[$endpoint] || $this->awaitingPongs[$endpoint]) {
+            return;
+        }
+        $generation = ++$this->pingGenerations[$endpoint];
+        $this->awaitingPongs[$endpoint] = true;
+        try {
+            $this->transportFor($endpoint)->send(['op' => 'ping']);
+        } catch (\Throwable) {
+            $this->awaitingPongs[$endpoint] = false;
+            $this->failClosed('heartbeat', 'okx_private_ws_connection_failed');
+
+            return;
+        }
+        $this->armPongDeadline($endpoint, $generation);
+        $this->logger->info('okx_private_ws.state', $this->logContext('ping_sent', $endpoint));
+    }
+
+    private function armPongDeadline(string $endpoint, int $generation): void
+    {
+        if (!$this->awaitingPongs[$endpoint]) {
+            return;
+        }
+        $this->addOneShotTimer(self::PONG_TIMEOUT_SECONDS, function () use ($endpoint, $generation): void {
+            if ($generation !== $this->pingGenerations[$endpoint]
+                || !$this->awaitingPongs[$endpoint]
+                || $this->stopping) {
+                return;
+            }
+            $this->awaitingPongs[$endpoint] = false;
+            $this->failClosed('heartbeat', 'okx_private_ws_connection_failed');
+        });
+    }
+
+    private function transportFor(string $endpoint): OkxPrivateWebSocketTransportInterface
+    {
+        return self::PRIVATE_ENDPOINT === $endpoint ? $this->transport : $this->businessTransport;
+    }
+
+    private function allAuthenticated(): bool
+    {
+        return $this->session->status()->authenticated && $this->businessAuthenticated;
+    }
+
+    private function allConnected(): bool
+    {
+        return $this->connectedEndpoints[self::PRIVATE_ENDPOINT]
+            && $this->connectedEndpoints[self::BUSINESS_ENDPOINT];
+    }
+
+    private function resetEndpointState(): void
+    {
+        foreach ([self::PRIVATE_ENDPOINT, self::BUSINESS_ENDPOINT] as $endpoint) {
+            $this->connectedEndpoints[$endpoint] = false;
+            $this->awaitingPongs[$endpoint] = false;
+            ++$this->pingGenerations[$endpoint];
+        }
+        $this->businessAuthenticated = false;
+        $this->businessSubscribed = false;
+        $this->businessConnectedAt = null;
+        $this->privateHeartbeatAt = null;
+        $this->businessHeartbeatAt = null;
+    }
+
+    private function status(): OkxPrivateWebSocketObservabilityStatus
+    {
+        $status = $this->session->status();
+        $connectedAt = $status->connectedAt;
+        if (null !== $connectedAt && null !== $this->businessConnectedAt
+            && $this->businessConnectedAt > $connectedAt) {
+            $connectedAt = $this->businessConnectedAt;
+        }
+        $lastHeartbeatAt = $this->privateHeartbeatAt ?? $status->lastHeartbeatAt;
+        if (null !== $this->businessHeartbeatAt && $this->businessHeartbeatAt < $lastHeartbeatAt) {
+            $lastHeartbeatAt = $this->businessHeartbeatAt;
+        }
+        $allConnected = $this->allConnected();
+        $allAuthenticated = $this->allAuthenticated();
+
+        return new OkxPrivateWebSocketObservabilityStatus(
+            connected: $allConnected,
+            authenticated: $allAuthenticated,
+            ordersStreamReady: $allAuthenticated && $status->ordersStreamReady,
+            fillsStreamReady: $status->fillsStreamReady,
+            fillsSource: $status->fillsSource,
+            positionsStreamReady: $status->positionsStreamReady,
+            initialSnapshotLoaded: $status->initialSnapshotLoaded,
+            reconciliationFresh: $status->reconciliationFresh,
+            reconnecting: $status->reconnecting || !$allConnected,
+            connectedAt: $allConnected ? $connectedAt : null,
+            lastHeartbeatAt: $lastHeartbeatAt,
+            lastEventAt: $status->lastEventAt,
+            observedAt: self::utc($this->clock->now()),
+            blockingErrors: $status->blockingErrors,
+            warnings: $status->warnings,
+        );
+    }
+
+    private static function utc(DateTimeImmutable $now): DateTimeImmutable
+    {
+        return $now->setTimezone(new DateTimeZone('UTC'));
     }
 
     private function armLoginDeadline(int $generation): void
@@ -353,7 +602,7 @@ final class OkxPrivateWebSocketWorker
             self::LOGIN_TIMEOUT_SECONDS,
             function () use ($generation): void {
                 if (!$this->isCurrentConnection($generation)
-                    || $this->session->status()->authenticated) {
+                    || $this->allAuthenticated()) {
                     return;
                 }
                 $this->failClosed('login', 'okx_private_ws_authentication_failed');
@@ -379,7 +628,7 @@ final class OkxPrivateWebSocketWorker
     {
         $status = $this->session->status();
 
-        return $status->authenticated
+        return $this->allAuthenticated()
             && $status->ordersStreamReady
             && $status->fillsStreamReady
             && $status->positionsStreamReady
@@ -397,7 +646,11 @@ final class OkxPrivateWebSocketWorker
         $timer = null;
     }
 
-    private function handleConnectionFailure(string $code, ?int $closeCode = null): void
+    private function handleConnectionFailure(
+        string $code,
+        ?int $closeCode = null,
+        ?string $failedEndpoint = null,
+    ): void
     {
         if ($this->stopping || $this->reconnectScheduled) {
             return;
@@ -406,10 +659,9 @@ final class OkxPrivateWebSocketWorker
         ++$this->connectionGeneration;
         $this->cancelDeadline($this->loginDeadlineTimer);
         $this->cancelDeadline($this->readinessDeadlineTimer);
-        $this->awaitingPong = false;
-        ++$this->pingGeneration;
+        $this->resetEndpointState();
         $this->session->onDisconnected($this->clock->now());
-        if (!$this->publishStatus($this->session->status(), true)) {
+        if (!$this->publishStatus($this->status(), true)) {
             return;
         }
         $this->logger->warning('okx_private_ws.state', $this->logContext(
@@ -419,6 +671,12 @@ final class OkxPrivateWebSocketWorker
         ));
 
         $this->scheduleReconnect();
+        if (self::PRIVATE_ENDPOINT !== $failedEndpoint) {
+            $this->transport->close();
+        }
+        if (self::BUSINESS_ENDPOINT !== $failedEndpoint) {
+            $this->businessTransport->close();
+        }
     }
 
     private function scheduleReconnect(): void
@@ -434,14 +692,16 @@ final class OkxPrivateWebSocketWorker
         $this->addOneShotTimer($delay, function (): void {
             $this->reconnectScheduled = false;
             if (!$this->stopping
-                && null !== $this->uri
-                && $this->publishStatus($this->session->status(), true)) {
-                $this->connect($this->uri);
+                && null !== $this->privateUri
+                && null !== $this->businessUri
+                && $this->publishStatus($this->status(), true)) {
+                $this->connect($this->privateUri, $this->businessUri);
             }
         });
     }
 
-    private function assertConfiguration(): string
+    /** @return array{string, string} */
+    private function assertConfiguration(): array
     {
         if ('demo' !== $this->config->environment) {
             throw new \RuntimeException('okx_private_ws_environment_invalid');
@@ -458,10 +718,13 @@ final class OkxPrivateWebSocketWorker
             throw new \RuntimeException('okx_private_ws_credentials_missing');
         }
 
-        $uri = $this->config->wsPrivateUri();
-        $this->endpointId = $this->endpointGuard->assertAllowed($uri);
+        $privateUri = $this->config->wsPrivateUri();
+        $businessUri = $this->config->wsBusinessUri();
+        $privateEndpointId = $this->endpointGuard->assertAllowed($privateUri);
+        $businessEndpointId = $this->endpointGuard->assertAllowed($businessUri);
+        $this->endpointId = $privateEndpointId . '+' . $businessEndpointId;
 
-        return $uri;
+        return [$privateUri, $businessUri];
     }
 
     private function publishStatus(OkxPrivateWebSocketObservabilityStatus $status, bool $force = false): bool
@@ -486,8 +749,10 @@ final class OkxPrivateWebSocketWorker
                 $this->cancelDeadline($this->loginDeadlineTimer);
                 $this->cancelDeadline($this->readinessDeadlineTimer);
                 $this->session->onDisconnected($this->clock->now());
+                $this->resetEndpointState();
                 $this->scheduleReconnect();
                 $this->transport->close();
+                $this->businessTransport->close();
             }
 
             return false;

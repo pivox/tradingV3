@@ -85,6 +85,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
             'op' => 'subscribe',
             'args' => [
                 ['channel' => 'orders', 'instType' => 'SWAP'],
+                ['channel' => 'orders-algo', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
                 ['channel' => 'fills'],
@@ -99,23 +100,39 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         $this->authenticate();
 
         $this->acknowledge('orders', 3);
+        self::assertFalse($this->session->status()->ordersStreamReady);
+        self::assertFalse($this->session->status()->positionsStreamReady);
+
+        $this->acknowledge('orders-algo', 4);
         self::assertTrue($this->session->status()->ordersStreamReady);
+
+        $this->acknowledge('positions', 5);
         self::assertFalse($this->session->status()->positionsStreamReady);
 
-        $this->acknowledge('positions', 4);
-        self::assertFalse($this->session->status()->positionsStreamReady);
-
-        $this->acknowledge('balance_and_position', 5);
+        $this->acknowledge('balance_and_position', 6);
         self::assertTrue($this->session->status()->positionsStreamReady);
         self::assertFalse($this->session->status()->fillsStreamReady);
 
-        $this->acknowledge('fills', 6);
+        $this->acknowledge('fills', 7);
         $status = $this->session->status();
         self::assertTrue($status->fillsStreamReady);
         self::assertSame('fills_channel', $status->fillsSource);
         self::assertSame([], $status->blockingErrors);
         self::assertSame([], $status->warnings);
-        self::assertEquals(self::at(6), $status->lastHeartbeatAt);
+        self::assertEquals(self::at(7), $status->lastHeartbeatAt);
+    }
+
+    public function testRegularOrdersAcknowledgementDoesNotCoverAlgoOrders(): void
+    {
+        $this->authenticate();
+
+        $this->acknowledge('orders', 3);
+
+        self::assertFalse($this->session->status()->ordersStreamReady);
+
+        $this->acknowledge('orders-algo', 4);
+
+        self::assertTrue($this->session->status()->ordersStreamReady);
     }
 
     public function testVipFillRejectionUsesOrdersPlusRestFallback(): void
@@ -215,7 +232,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         $this->session->applySnapshot(self::snapshot(true), self::at(20));
 
         $status = $this->session->status();
-        self::assertEquals(self::at(6), $status->lastHeartbeatAt);
+        self::assertEquals(self::at(7), $status->lastHeartbeatAt);
         self::assertNull($status->lastEventAt);
         self::assertEquals(self::at(20), $status->observedAt);
         $decision = self::policyDecision($status, 20);
@@ -594,6 +611,8 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
             [
                 'normalizer',
                 'status',
+                'ordersAcknowledged',
+                'algoOrdersAcknowledged',
                 'positionsAcknowledged',
                 'balanceAndPositionAcknowledged',
                 'loginExpected',
@@ -667,10 +686,11 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
     {
         $this->authenticate();
         $this->acknowledge('orders', 3);
-        $this->acknowledge('positions', 4);
-        $this->acknowledge('balance_and_position', 5);
-        $this->acknowledge('fills', 6);
-        $this->session->applySnapshot(self::snapshot(true), self::at(7));
+        $this->acknowledge('orders-algo', 4);
+        $this->acknowledge('positions', 5);
+        $this->acknowledge('balance_and_position', 6);
+        $this->acknowledge('fills', 7);
+        $this->session->applySnapshot(self::snapshot(true), self::at(8));
     }
 
     private static function snapshot(bool $complete): OkxPrivateRestSnapshot

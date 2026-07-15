@@ -22,6 +22,16 @@ final class OkxPrivateWebSocketEndpointGuardTest extends TestCase
         );
     }
 
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business'])]
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/business?brokerId=9999'])]
+    public function testAcceptsOnlyCanonicalDemoBusinessUri(string $uri): void
+    {
+        self::assertSame(
+            'okx_demo_business_v1',
+            (new OkxPrivateWebSocketEndpointGuard())->assertAllowed($uri),
+        );
+    }
+
     #[TestWith(['https://wspap.okx.com:8443/ws/v5/private'])]
     #[TestWith(['wss://ws.okx.com:8443/ws/v5/private'])]
     #[TestWith(['wss://wspap.okx.com.evil.test:8443/ws/v5/private'])]

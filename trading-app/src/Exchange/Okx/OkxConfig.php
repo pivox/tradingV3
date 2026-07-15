@@ -20,6 +20,7 @@ final readonly class OkxConfig
         public bool $simulatedTrading = false,
         public bool $demoTradingEnabled = false,
         public bool $liveEnabled = false,
+        public string $wsBusinessUri = '',
     ) {
     }
 
@@ -67,6 +68,18 @@ final readonly class OkxConfig
         return $this->isDemo()
             ? 'wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'
             : 'wss://ws.okx.com:8443/ws/v5/private';
+    }
+
+    public function wsBusinessUri(): string
+    {
+        $configured = trim($this->wsBusinessUri);
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        return $this->isDemo()
+            ? 'wss://wspap.okx.com:8443/ws/v5/business'
+            : 'wss://ws.okx.com:8443/ws/v5/business';
     }
 
     public function assertLiveAllowed(): void

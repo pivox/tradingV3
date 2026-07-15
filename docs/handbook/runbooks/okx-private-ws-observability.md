@@ -54,6 +54,7 @@ export OKX_ENV_FILE="${OKX_ENV_FILE:-trading-app/.env.local}"
 Les valeurs non sensibles attendues sont `OKX_ENV=demo`,
 `OKX_SIMULATED_TRADING=1`,
 `OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999`,
+`OKX_WS_BUSINESS_URI=wss://wspap.okx.com:8443/ws/v5/business`,
 `DEMO_TRADING_ENABLED=0`, `OKX_DEMO_TRADING_ENABLED=0` et
 `OKX_LIVE_ENABLED=0`. Le service Compose force ces trois gates consommees.
 
@@ -78,12 +79,16 @@ Les logs applicatifs dedies sont dans
 `trading-app/var/log/okx-private-ws-YYYY-MM-DD.log`. Ils ne doivent contenir que
 des transitions, phases et codes bornes, jamais de message WS brut.
 
-Le login est borne a 5 secondes. Une fois authentifie, l'ensemble
+Le worker ouvre deux connexions authentifiees : `/ws/v5/private` pour
+`orders`, `positions`, `balance_and_position` et `fills`, puis
+`/ws/v5/business` pour `orders-algo`. Le login de la paire est borne a 5
+secondes. Une fois authentifie, l'ensemble
 souscriptions + snapshot REST + reconciliation doit devenir pret en moins de
 10 secondes. Chaque lecture REST privee utilise un `timeout` et un
 `max_duration` de 2 secondes; le snapshot ne lit que account, positions, ordres
 ouverts et fills recents. Une erreur ou un depassement de ces bornes maintient
-le statut fail-closed, ferme la connexion courante et programme une reconnexion.
+le statut fail-closed, ferme les deux connexions et programme une seule
+reconnexion de la paire.
 
 ## Verification runtime
 
@@ -149,8 +154,10 @@ connexion et declenche le backoff de reconnexion.
 
 Symptomes : stream orders ou positions non pret. Rechercher les codes
 `okx_private_ws_subscription_failed` et le nom de phase dans le canal dedie.
-Verifier l'acces aux canaux `orders`, `positions` et `balance_and_position`, puis
-redemarrer le worker. Un canal requis manquant reste fail-closed. Un rejet de
+Verifier l'acces aux canaux `orders`, `positions`, `balance_and_position` et au
+canal `orders-algo` sur l'endpoint business, puis redemarrer le worker. Le champ
+`orders_stream_ready` exige les ACKs de `orders` et `orders-algo`. Un canal requis
+manquant reste fail-closed. Un rejet de
 souscription ou une readiness incomplete apres 10 secondes recycle la connexion.
 
 ### Snapshot et projection

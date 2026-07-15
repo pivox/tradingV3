@@ -14,6 +14,7 @@ final class OkxPrivateWebSocketSession
     /** @var list<string> */
     private const REQUIRED_CHANNELS = [
         'orders',
+        'orders-algo',
         'positions',
         'balance_and_position',
         'fills',
@@ -21,6 +22,8 @@ final class OkxPrivateWebSocketSession
 
     private readonly OkxExchangeEventNormalizer $normalizer;
     private OkxPrivateWebSocketObservabilityStatus $status;
+    private bool $ordersAcknowledged = false;
+    private bool $algoOrdersAcknowledged = false;
     private bool $positionsAcknowledged = false;
     private bool $balanceAndPositionAcknowledged = false;
     private bool $loginExpected = false;
@@ -45,6 +48,8 @@ final class OkxPrivateWebSocketSession
     ): OkxPrivateWebSocketSessionResult
     {
         $now = self::utc($now);
+        $this->ordersAcknowledged = false;
+        $this->algoOrdersAcknowledged = false;
         $this->positionsAcknowledged = false;
         $this->balanceAndPositionAcknowledged = false;
         $this->loginExpected = true;
@@ -138,6 +143,8 @@ final class OkxPrivateWebSocketSession
     public function reset(DateTimeImmutable $now): void
     {
         $now = self::utc($now);
+        $this->ordersAcknowledged = false;
+        $this->algoOrdersAcknowledged = false;
         $this->positionsAcknowledged = false;
         $this->balanceAndPositionAcknowledged = false;
         $this->loginExpected = false;
@@ -188,6 +195,8 @@ final class OkxPrivateWebSocketSession
         $code = $this->protocolCode($message, $now, required: true);
         $this->loginExpected = false;
         if ('0' !== $code) {
+            $this->ordersAcknowledged = false;
+            $this->algoOrdersAcknowledged = false;
             $this->positionsAcknowledged = false;
             $this->balanceAndPositionAcknowledged = false;
             $this->failedSubscriptions = [];
@@ -222,6 +231,7 @@ final class OkxPrivateWebSocketSession
             'op' => 'subscribe',
             'args' => [
                 ['channel' => 'orders', 'instType' => 'SWAP'],
+                ['channel' => 'orders-algo', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
                 ['channel' => 'fills'],
@@ -246,12 +256,8 @@ final class OkxPrivateWebSocketSession
         $this->recoverSubscription($channel);
         $blockingErrors = $this->subscriptionBlockingErrors();
         match ($channel) {
-            'orders' => $this->replaceStatus(
-                now: $now,
-                updateHeartbeat: true,
-                ordersStreamReady: true,
-                blockingErrors: $blockingErrors,
-            ),
+            'orders' => $this->acknowledgeOrders($now, $blockingErrors),
+            'orders-algo' => $this->acknowledgeAlgoOrders($now, $blockingErrors),
             'positions' => $this->acknowledgePositions($now, $blockingErrors),
             'balance_and_position' => $this->acknowledgeBalanceAndPosition($now, $blockingErrors),
             'fills' => $this->replaceStatus(
@@ -389,6 +395,10 @@ final class OkxPrivateWebSocketSession
         ];
 
         if ('orders' === $channel) {
+            $this->ordersAcknowledged = false;
+            $arguments['ordersStreamReady'] = false;
+        } elseif ('orders-algo' === $channel) {
+            $this->algoOrdersAcknowledged = false;
             $arguments['ordersStreamReady'] = false;
         } elseif ('fills' === $channel) {
             $arguments['fillsStreamReady'] = false;
@@ -403,6 +413,30 @@ final class OkxPrivateWebSocketSession
 
         /** @var array{now: DateTimeImmutable, updateHeartbeat: bool, blockingErrors: list<string>, ordersStreamReady?: bool, fillsStreamReady?: bool, clearFillsSource?: bool, positionsStreamReady?: bool} $arguments */
         $this->replaceStatus(...$arguments);
+    }
+
+    /** @param list<string> $blockingErrors */
+    private function acknowledgeOrders(DateTimeImmutable $now, array $blockingErrors): void
+    {
+        $this->ordersAcknowledged = true;
+        $this->replaceStatus(
+            now: $now,
+            updateHeartbeat: true,
+            ordersStreamReady: $this->algoOrdersAcknowledged,
+            blockingErrors: $blockingErrors,
+        );
+    }
+
+    /** @param list<string> $blockingErrors */
+    private function acknowledgeAlgoOrders(DateTimeImmutable $now, array $blockingErrors): void
+    {
+        $this->algoOrdersAcknowledged = true;
+        $this->replaceStatus(
+            now: $now,
+            updateHeartbeat: true,
+            ordersStreamReady: $this->ordersAcknowledged,
+            blockingErrors: $blockingErrors,
+        );
     }
 
     /**

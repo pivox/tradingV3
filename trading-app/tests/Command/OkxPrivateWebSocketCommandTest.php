@@ -66,6 +66,10 @@ final class OkxPrivateWebSocketCommandTest extends TestCase
             ['wsPrivateUri' => 'wss://ws.okx.com:8443/ws/v5/private'],
             'okx_demo_private_ws_endpoint_not_allowed',
         ];
+        yield 'business endpoint not allowlisted' => [
+            ['wsBusinessUri' => 'wss://ws.okx.com:8443/ws/v5/business'],
+            'okx_demo_private_ws_endpoint_not_allowed',
+        ];
     }
 
     /** @param array<string, mixed> $overrides */
@@ -77,6 +81,7 @@ final class OkxPrivateWebSocketCommandTest extends TestCase
             'apiSecret' => 'demo-secret',
             'apiPassphrase' => 'demo-passphrase',
             'wsPrivateUri' => 'wss://wspap.okx.com:8443/ws/v5/private',
+            'wsBusinessUri' => 'wss://wspap.okx.com:8443/ws/v5/business',
             'simulatedTrading' => true,
             'liveEnabled' => false,
         ], $overrides);

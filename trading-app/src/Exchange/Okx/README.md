@@ -168,10 +168,16 @@ OKX_DEMO_API_PASSPHRASE=
 OKX_API_BASE_URI=https://eea.okx.com
 OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
 OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
+OKX_WS_BUSINESS_URI=wss://wspap.okx.com:8443/ws/v5/business
 OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
 OKX_LIVE_ENABLED=0
 ```
+
+Le worker prive ouvre deux transports distincts. Le socket `/private` couvre
+`orders`, `fills` et `positions`; le socket `/business` couvre
+`orders-algo`. `orders_stream_ready` reste faux tant que les deux abonnements ne
+sont pas acquittes, et la perte d'un socket recycle la paire.
 
 Local safety checks:
 

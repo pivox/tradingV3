@@ -23,6 +23,7 @@ use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketLoginSigner;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketObservabilityPolicy;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketObservabilityStatus;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketStatusStoreInterface;
+use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketTransportInterface;
 use App\Exchange\Okx\PrivateWebSocket\OkxPrivateWebSocketWorker;
 use App\Exchange\Okx\PrivateWebSocket\OrderSnapshotItem;
 use App\Exchange\Okx\PrivateWebSocket\PawlOkxPrivateWebSocketTransport;
@@ -200,6 +201,217 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertSame('login', $transport->sent[0]['op']);
         self::assertSame('demo-key', $transport->sent[0]['args'][0]['apiKey']);
         self::assertNotSame('', $transport->sent[0]['args'][0]['sign']);
+    }
+
+    public function testStartConnectsPrivateAndBusinessEndpointsBeforeLogin(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $worker = $this->worker(
+            $privateTransport,
+            new DeterministicLoop(),
+            new RecordingStatusStore(),
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+
+        self::assertSame(
+            ['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'],
+            $privateTransport->connections,
+        );
+        self::assertSame(
+            ['wss://wspap.okx.com:8443/ws/v5/business'],
+            $businessTransport->connections,
+        );
+    }
+
+    public function testOrdersReadinessRequiresPrivateAndBusinessAcknowledgements(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker(
+            $privateTransport,
+            $loop,
+            $store,
+            clock: $clock,
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+        $privateTransport->open();
+        $businessTransport->open();
+        $privateTransport->message(['event' => 'login', 'code' => '0']);
+        $businessTransport->message(['event' => 'login', 'code' => '0']);
+
+        self::assertSame([
+            'op' => 'subscribe',
+            'args' => [
+                ['channel' => 'orders', 'instType' => 'SWAP'],
+                ['channel' => 'positions', 'instType' => 'SWAP'],
+                ['channel' => 'balance_and_position'],
+                ['channel' => 'fills'],
+            ],
+        ], $privateTransport->sent[1]);
+        self::assertSame([
+            'op' => 'subscribe',
+            'args' => [['channel' => 'orders-algo', 'instType' => 'SWAP']],
+        ], $businessTransport->sent[1]);
+
+        foreach ([
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+            ['channel' => 'fills'],
+        ] as $arg) {
+            $privateTransport->message(['event' => 'subscribe', 'arg' => $arg]);
+        }
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertFalse($status->ordersStreamReady);
+
+        $businessTransport->message([
+            'event' => 'subscribe',
+            'arg' => ['channel' => 'orders-algo', 'instType' => 'SWAP'],
+        ]);
+        $clock->sleep(3);
+        $loop->firePeriodicInterval(1.0);
+
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertTrue($status->ordersStreamReady);
+    }
+
+    public function testBusinessAlgoOrderUpdatesAreProjected(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $projectionStore = new RecordingProjectionStore();
+        $worker = $this->worker(
+            $privateTransport,
+            new DeterministicLoop(),
+            new RecordingStatusStore(),
+            projectionStore: $projectionStore,
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+        $privateTransport->open();
+        $businessTransport->open();
+        $privateTransport->message(['event' => 'login', 'code' => '0']);
+        $businessTransport->message(['event' => 'login', 'code' => '0']);
+        $businessTransport->message([
+            'arg' => ['channel' => 'orders-algo', 'instType' => 'SWAP'],
+            'data' => [[
+                'algoClOrdId' => 'OKXSL',
+                'algoId' => '90001',
+                'cTime' => '1767225600000',
+                'instId' => 'BTC-USDT-SWAP',
+                'instType' => 'SWAP',
+                'ordType' => 'conditional',
+                'posSide' => 'long',
+                'reduceOnly' => 'true',
+                'side' => 'sell',
+                'slOrdPx' => '-1',
+                'slTriggerPx' => '24800',
+                'state' => 'live',
+                'sz' => '0.01',
+                'tdMode' => 'cross',
+                'uTime' => '1767225600000',
+            ]],
+        ]);
+
+        self::assertCount(1, $projectionStore->events);
+        self::assertSame('exchange.protection_order.created', $projectionStore->events[0]->eventType());
+    }
+
+    public function testBusinessDisconnectInvalidatesAndReconnectsThePairOnce(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $worker = $this->worker(
+            $privateTransport,
+            $loop,
+            $store,
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+        $privateTransport->open();
+        $businessTransport->open();
+        $businessTransport->disconnect(1006);
+        $privateTransport->disconnect(1006);
+
+        $status = $store->load();
+        self::assertNotNull($status);
+        self::assertFalse($status->connected);
+        self::assertFalse($status->authenticated);
+        self::assertSame(1, $privateTransport->closeCount);
+        self::assertSame(1.0, $loop->fireNextTimer());
+        self::assertCount(2, $privateTransport->connections);
+        self::assertCount(2, $businessTransport->connections);
+    }
+
+    public function testPrivatePongCannotMaskMissingBusinessPong(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $worker = $this->worker(
+            $privateTransport,
+            $loop,
+            $store,
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+        $privateTransport->open();
+        $businessTransport->open();
+        $loop->firePeriodicInterval(5.0);
+        $privateTransport->message('pong');
+
+        self::assertSame(4.0, $loop->fireTimerInterval(4.0));
+        self::assertSame(0, $privateTransport->closeCount);
+        self::assertSame(4.0, $loop->fireTimerInterval(4.0));
+
+        self::assertFalse($store->load()?->connected);
+        self::assertSame(1, $privateTransport->closeCount);
+        self::assertSame(1.0, $loop->fireNextTimer());
+    }
+
+    public function testBusinessPongDoesNotRefreshPrivateHeartbeatTimestamp(): void
+    {
+        $privateTransport = new FakeOkxPrivateWebSocketTransport();
+        $businessTransport = new FakeOkxPrivateWebSocketTransport();
+        $loop = new DeterministicLoop();
+        $store = new RecordingStatusStore();
+        $clock = new MockClock('2026-07-13T10:00:00Z');
+        $worker = $this->worker(
+            $privateTransport,
+            $loop,
+            $store,
+            clock: $clock,
+            businessTransport: $businessTransport,
+        );
+
+        $worker->start();
+        $privateTransport->open();
+        $businessTransport->open();
+        $clock->sleep(3);
+        $businessTransport->message('pong');
+
+        self::assertEquals(
+            new \DateTimeImmutable('2026-07-13T10:00:00Z'),
+            $store->load()?->lastHeartbeatAt,
+        );
     }
 
     public function testLoginAckSubscribesLoadsSnapshotAndPublishesReadyStatus(): void
@@ -792,7 +1004,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertCount(1, $loop->timers);
         self::assertSame(1.0, $loop->fireNextTimer());
         self::assertCount(1, $transport->connections);
-        self::assertSame([], $loop->timers);
+        self::assertSame([5.0], array_column($loop->timers, 0));
         self::assertSame([1.0, 5.0], array_column($loop->periodicTimers, 0));
 
         $transport->open();
@@ -1184,6 +1396,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         ?MockClock $clock = null,
         ?LoggerInterface $logger = null,
         ?RecordingProjectionStore $projectionStore = null,
+        ?OkxPrivateWebSocketTransportInterface $businessTransport = null,
     ): OkxPrivateWebSocketWorker {
         $clock ??= new MockClock('2026-07-13T10:00:00Z');
         $normalizer = new OkxExchangeEventNormalizer(new OkxInstrumentResolver(), $clock);
@@ -1192,6 +1405,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
 
         return new OkxPrivateWebSocketWorker(
             transport: $transport,
+            businessTransport: $businessTransport ?? new AutoOkxBusinessWebSocketTransport(),
             config: self::demoConfig(),
             endpointGuard: new OkxPrivateWebSocketEndpointGuard(),
             loginSigner: new OkxPrivateWebSocketLoginSigner(new OkxAuthSigner()),
@@ -1217,6 +1431,53 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             simulatedTrading: true,
             liveEnabled: false,
         );
+    }
+}
+
+final class AutoOkxBusinessWebSocketTransport implements OkxPrivateWebSocketTransportInterface
+{
+    private ?\Closure $onMessage = null;
+
+    public function connect(
+        string $uri,
+        callable $onOpen,
+        callable $onMessage,
+        callable $onClose,
+        callable $onError,
+    ): void {
+        $this->onMessage = \Closure::fromCallable($onMessage);
+        $onOpen();
+    }
+
+    public function send(array $message): void
+    {
+        if (null === $this->onMessage) {
+            throw new \LogicException('transport_not_connected');
+        }
+        if (['op' => 'ping'] === $message) {
+            ($this->onMessage)('pong');
+
+            return;
+        }
+        if ('login' === ($message['op'] ?? null)) {
+            ($this->onMessage)(json_encode(['event' => 'login', 'code' => '0'], \JSON_THROW_ON_ERROR));
+
+            return;
+        }
+        if ('subscribe' === ($message['op'] ?? null)) {
+            foreach ($message['args'] ?? [] as $arg) {
+                ($this->onMessage)(json_encode([
+                    'event' => 'subscribe',
+                    'code' => '0',
+                    'arg' => $arg,
+                ], \JSON_THROW_ON_ERROR));
+            }
+        }
+    }
+
+    public function close(): void
+    {
+        $this->onMessage = null;
     }
 }
 
