@@ -126,6 +126,30 @@ final class OkxPrivateReadProviderTest extends TestCase
         (new OkxPrivateReadMapper())->order($row, false);
     }
 
+    #[DataProvider('terminalAlgoStatusProvider')]
+    public function testMapsTerminalAlgoHistoryStates(string $state, OrderStatus $expected): void
+    {
+        $order = (new OkxPrivateReadMapper())->order([
+            'instId' => 'BTC-USDT-SWAP',
+            'algoId' => 'algo-terminal',
+            'side' => 'sell',
+            'ordType' => 'conditional',
+            'state' => $state,
+            'sz' => '1',
+            'accFillSz' => '0',
+            'cTime' => '1767225600000',
+        ], true);
+
+        self::assertSame($expected, $order->status);
+    }
+
+    /** @return iterable<string,array{string,OrderStatus}> */
+    public static function terminalAlgoStatusProvider(): iterable
+    {
+        yield 'effective' => ['effective', OrderStatus::FILLED];
+        yield 'order failed' => ['order_failed', OrderStatus::REJECTED];
+    }
+
     /** @return iterable<string,array{array<string,mixed>}> */
     public static function unknownPrivateEnumProvider(): iterable
     {

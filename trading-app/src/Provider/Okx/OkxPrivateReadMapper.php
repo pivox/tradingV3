@@ -218,6 +218,7 @@ final readonly class OkxPrivateReadMapper
         $this->assertKnownEnum($row, 'side', ['buy', 'sell']);
         $this->assertKnownEnum($row, 'state', [
             'filled', 'partially_filled', 'canceled', 'cancelled', 'rejected', 'live',
+            'effective', 'order_failed',
         ]);
         $this->assertKnownEnum($row, 'ordType', [
             'limit', 'market', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc',
@@ -305,7 +306,8 @@ final readonly class OkxPrivateReadMapper
             'filled' => OrderStatus::FILLED,
             'partially_filled' => OrderStatus::PARTIALLY_FILLED,
             'canceled', 'cancelled' => OrderStatus::CANCELLED,
-            'rejected' => OrderStatus::REJECTED,
+            'rejected', 'order_failed' => OrderStatus::REJECTED,
+            'effective' => OrderStatus::FILLED,
             'live' => OrderStatus::PENDING,
             default => throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid'),
         };

@@ -41,10 +41,15 @@ final readonly class OrderSnapshotItem
     {
         $metadata = $order->metadata;
         $clientOrderId = self::knownString($metadata, ['client_order_id', 'clOrdId', 'algoClOrdId']);
+        $reduceOnly = self::knownBoolean($metadata, 'reduceOnly') ?? false;
         $positionSide = self::knownString($metadata, ['position_side', 'posSide']);
         if ($positionSide !== null) {
             $positionSide = strtolower($positionSide);
-            if (!\in_array($positionSide, ['long', 'short'], true)) {
+            if ($positionSide === 'net') {
+                $positionSide = $reduceOnly
+                    ? ($order->side->value === 'sell' ? 'long' : 'short')
+                    : null;
+            } elseif (!\in_array($positionSide, ['long', 'short'], true)) {
                 throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
             }
         }
@@ -83,7 +88,7 @@ final readonly class OrderSnapshotItem
             createdAt: $order->createdAt,
             clientOrderId: $clientOrderId,
             positionSide: $positionSide,
-            reduceOnly: self::knownBoolean($metadata, 'reduceOnly') ?? false,
+            reduceOnly: $reduceOnly,
             postOnly: $postOnly,
             averagePrice: $order->averagePrice === null ? null : (string) $order->averagePrice,
             updatedAt: $order->updatedAt,

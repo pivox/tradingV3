@@ -203,6 +203,15 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         self::assertSame('gtc', $order->timeInForce);
     }
 
+    public function testOrderSnapshotTreatsNetPositionSideAsUnspecified(): void
+    {
+        $order = OrderSnapshotItem::fromProviderDto(self::order([
+            'posSide' => 'net',
+        ]));
+
+        self::assertNull($order->positionSide);
+    }
+
     public function testFillOccurredAtPreservesMillisecondPrecision(): void
     {
         $first = FillSnapshotItem::fromProviderArray(['create_time' => 1783936800123]);
