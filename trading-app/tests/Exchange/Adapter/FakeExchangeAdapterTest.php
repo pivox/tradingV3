@@ -18,6 +18,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
+use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -695,6 +696,115 @@ final class FakeExchangeAdapterTest extends TestCase
 
             self::assertCount(1, $restoredAdapter->getOpenOrders('BTCUSDT'));
             self::assertSame('cid-1', $restoredAdapter->getOpenOrders('BTCUSDT')[0]->clientOrderId);
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
+    public function testStateStoreRestoresProtectedPositionAndContinuesEventSequence(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $adapter = $this->adapterForState($state);
+            $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                postOnly: false,
+                attachedStopLossPrice: 24800.0,
+            ));
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredAdapter = $this->adapterForState($restoredState);
+            $book = new FakeExchangeOrderBook($restoredState);
+            $engine = new FakeExchangeMatchingEngine($restoredState, $book, $this->fixedClock());
+            $scenario = new FakeExchangeScenarioService($restoredState, $book, $engine);
+
+            self::assertTrue($restoredState->recoveryMetadata()['restored']);
+            self::assertFalse($restoredState->recoveryMetadata()['legacy']);
+            self::assertCount(1, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertCount(1, $restoredAdapter->getOpenOrders('BTCUSDT'));
+
+            $replayed = $restoredAdapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                postOnly: false,
+                attachedStopLossPrice: 24800.0,
+            ));
+            self::assertTrue($replayed->metadata['idempotent_replay'] ?? false);
+            self::assertCount(1, $restoredAdapter->getOpenPositions('BTCUSDT'));
+
+            $scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+            self::assertCount(0, $restoredAdapter->getOpenPositions('BTCUSDT'));
+
+            $sequences = array_map(
+                static fn ($event): int => (int) ($event->payload['event_sequence'] ?? 0),
+                $scenario->events(),
+            );
+            self::assertSame($sequences, array_values(array_unique($sequences)));
+            $sortedSequences = $sequences;
+            sort($sortedSequences);
+            self::assertSame($sortedSequences, $sequences);
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
+    public function testStateStoreRejectsChecksumMismatchWithoutSilentReset(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $this->adapterForState($state)->placeOrder($this->request(price: 24950.0, postOnly: true));
+
+            $raw = file_get_contents($stateFile);
+            self::assertIsString($raw);
+            $envelope = unserialize($raw, ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            $envelope['payload_checksum'] = str_repeat('0', 64);
+            file_put_contents($stateFile, serialize($envelope));
+
+            $this->expectException(FakeExchangeStateCorruptedException::class);
+            $this->expectExceptionMessage('fake_exchange_state_checksum_mismatch');
+            new FakeExchangeStateStore($stateFile);
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
+    public function testStateStoreRestoresLegacyPayloadAndUpgradesOnNextWrite(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $this->adapterForState($state)->placeOrder($this->request(price: 24950.0, postOnly: true));
+
+            $raw = file_get_contents($stateFile);
+            self::assertIsString($raw);
+            $envelope = unserialize($raw, ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            self::assertIsArray($envelope['payload'] ?? null);
+            file_put_contents($stateFile, serialize($envelope['payload']));
+
+            $legacyState = new FakeExchangeStateStore($stateFile);
+            self::assertTrue($legacyState->recoveryMetadata()['restored']);
+            self::assertTrue($legacyState->recoveryMetadata()['legacy']);
+            self::assertCount(1, $legacyState->getOpenOrders('BTCUSDT'));
+
+            $legacyState->setOrderBookTop('BTCUSDT', 24998.0, 25002.0);
+            $upgraded = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($upgraded);
+            self::assertSame(1, $upgraded['format_version'] ?? null);
+            self::assertIsString($upgraded['payload_checksum'] ?? null);
         } finally {
             @unlink($stateFile);
         }

@@ -142,6 +142,26 @@ reste legacy.
   prouvent seulement que les branches locales de protection sont visibles avant
   toute tentative mutative.
 
+## Reprise persistante du Fake Exchange
+
+Le fake exchange de niveau adapter (`App\Exchange\Fake\*`), distinct du
+`FakeExecutionPort` TradingCore en memoire, conserve son etat HTTP local dans
+`var/fake_exchange_state.dat`. Son format v1 persiste ensemble les ordres,
+positions, balances, protections, evenements, index d idempotence et prochaine
+sequence d evenement.
+
+Le fichier porte une version de format, une version moteur, un hash de
+configuration de scenario et un checksum. Une ecriture passe par un fichier
+temporaire puis un remplacement atomique. Au restart, un etat present mais
+corrompu ou incompatible echoue explicitement avec
+`FakeExchangeStateCorruptedException`; il n est jamais transforme silencieusement
+en etat vide. L ancien payload non versionne reste lisible et est migre lors de
+la prochaine ecriture.
+
+Cette reprise prouve uniquement la continuite locale Fake/Paper. Elle ne remplace
+ni une reconciliation REST/WS exchange, ni le ledger PostgreSQL, et n active
+aucune permission demo, testnet ou live.
+
 ## Rollback
 
 Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au

@@ -9,15 +9,28 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
+use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 final class FakeExchangeStateStore
 {
+    private const STATE_FORMAT_VERSION = 1;
+    private const ENGINE_VERSION = 'fake-paper-state-v1';
+    private const SCENARIO_CONFIG_ID = 'fake-paper-default-v1';
+
     private ?string $stateFile;
 
     private int $nextOrderSequence = 1;
+
+    private int $nextEventSequence = 1;
+
+    private bool $restored = false;
+
+    private bool $restoredLegacyState = false;
 
     /** @var array<string, ExchangeOrderDto> */
     private array $orders = [];
@@ -42,8 +55,7 @@ final class FakeExchangeStateStore
     public function __construct(
         #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
         ?string $stateFile = null,
-    )
-    {
+    ) {
         $this->stateFile = $stateFile;
         if (!$this->restore()) {
             $this->reset();
@@ -53,6 +65,9 @@ final class FakeExchangeStateStore
     public function reset(): void
     {
         $this->nextOrderSequence = 1;
+        $this->nextEventSequence = 1;
+        $this->restored = false;
+        $this->restoredLegacyState = false;
         $this->orders = [];
         $this->clientOrderIndex = [];
         $this->positions = [];
@@ -200,7 +215,14 @@ final class FakeExchangeStateStore
     {
         $payload = $event->payload;
         if (!\array_key_exists('event_sequence', $event->payload)) {
-            $payload = ['event_sequence' => $this->nextEventSequence()] + $payload;
+            $payload = ['event_sequence' => $this->nextEventSequence++] + $payload;
+        } else {
+            $explicitSequence = $event->payload['event_sequence'];
+            if (\is_int($explicitSequence) && $explicitSequence > 0) {
+                $this->nextEventSequence = max($this->nextEventSequence, $explicitSequence + 1);
+            } elseif (\is_string($explicitSequence) && ctype_digit($explicitSequence)) {
+                $this->nextEventSequence = max($this->nextEventSequence, (int) $explicitSequence + 1);
+        }
         }
 
         $orderId = $payload['order_id'] ?? null;
@@ -275,19 +297,19 @@ final class FakeExchangeStateStore
         return \count($this->getOpenPositions($symbol));
     }
 
-    private function nextEventSequence(): int
+    /**
+     * @return array{format_version:int,engine_version:string,scenario_config_hash:string,restored:bool,legacy:bool,next_event_sequence:int}
+     */
+    public function recoveryMetadata(): array
     {
-        $maximum = 0;
-        foreach ($this->events as $event) {
-            $sequence = $event->payload['event_sequence'] ?? null;
-            if (\is_int($sequence)) {
-                $maximum = max($maximum, $sequence);
-            } elseif (\is_string($sequence) && ctype_digit($sequence)) {
-                $maximum = max($maximum, (int)$sequence);
-            }
-        }
-
-        return $maximum + 1;
+        return [
+            'format_version' => self::STATE_FORMAT_VERSION,
+            'engine_version' => self::ENGINE_VERSION,
+            'scenario_config_hash' => self::scenarioConfigHash(),
+            'restored' => $this->restored,
+            'legacy' => $this->restoredLegacyState,
+            'next_event_sequence' => $this->nextEventSequence,
+        ];
     }
 
     private function clientOrderKey(string $symbol, string $clientOrderId): string
@@ -370,24 +392,22 @@ final class FakeExchangeStateStore
 
         $raw = file_get_contents($this->stateFile);
         if ($raw === false || $raw === '') {
-            return false;
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_unreadable');
         }
 
-        $state = @unserialize($raw, ['allowed_classes' => true]);
+        $state = @unserialize($raw, ['allowed_classes' => self::allowedSerializedClasses()]);
         if (!\is_array($state)) {
-            return false;
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_invalid_payload');
         }
 
-        $this->nextOrderSequence = \is_int($state['nextOrderSequence'] ?? null) ? $state['nextOrderSequence'] : 1;
-        $this->orders = \is_array($state['orders'] ?? null) ? $state['orders'] : [];
-        $this->clientOrderIndex = \is_array($state['clientOrderIndex'] ?? null) ? $state['clientOrderIndex'] : [];
-        $this->positions = \is_array($state['positions'] ?? null) ? $state['positions'] : [];
-        $this->balances = \is_array($state['balances'] ?? null) ? $state['balances'] : [];
-        $this->orderBooks = \is_array($state['orderBooks'] ?? null) ? $state['orderBooks'] : [];
-        $this->events = \is_array($state['events'] ?? null) ? $state['events'] : [];
-        $this->rejectNextProtectionOrder = \is_bool($state['rejectNextProtectionOrder'] ?? null)
-            ? $state['rejectNextProtectionOrder']
-            : false;
+        $legacy = !\array_key_exists('format_version', $state);
+        if (!$legacy) {
+            $state = $this->validatedEnvelopePayload($state);
+        }
+
+        $this->hydrate($state);
+        $this->restored = true;
+        $this->restoredLegacyState = $legacy;
 
         return true;
     }
@@ -399,12 +419,13 @@ final class FakeExchangeStateStore
         }
 
         $directory = \dirname($this->stateFile);
-        if (!is_dir($directory)) {
-            mkdir($directory, 0775, true);
+        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+            throw new \RuntimeException('fake_exchange_state_directory_unavailable');
         }
 
-        file_put_contents($this->stateFile, serialize([
+        $payload = [
             'nextOrderSequence' => $this->nextOrderSequence,
+            'nextEventSequence' => $this->nextEventSequence,
             'orders' => $this->orders,
             'clientOrderIndex' => $this->clientOrderIndex,
             'positions' => $this->positions,
@@ -412,6 +433,207 @@ final class FakeExchangeStateStore
             'orderBooks' => $this->orderBooks,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
-        ]), \LOCK_EX);
+        ];
+        $serialized = serialize([
+            'format_version' => self::STATE_FORMAT_VERSION,
+            'engine_version' => self::ENGINE_VERSION,
+            'scenario_config_hash' => self::scenarioConfigHash(),
+            'payload_checksum' => hash('sha256', serialize($payload)),
+            'payload' => $payload,
+        ]);
+        $temporaryFile = tempnam($directory, basename($this->stateFile) . '.tmp.');
+        if ($temporaryFile === false) {
+            throw new \RuntimeException('fake_exchange_state_temporary_file_unavailable');
+        }
+
+        try {
+            $written = file_put_contents($temporaryFile, $serialized, \LOCK_EX);
+            if ($written !== strlen($serialized)) {
+                throw new \RuntimeException('fake_exchange_state_write_failed');
+            }
+            if (!rename($temporaryFile, $this->stateFile)) {
+                throw new \RuntimeException('fake_exchange_state_replace_failed');
+            }
+        } finally {
+            if (is_file($temporaryFile)) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $envelope
+     * @return array<string,mixed>
+     */
+    private function validatedEnvelopePayload(array $envelope): array
+    {
+        if (($envelope['format_version'] ?? null) !== self::STATE_FORMAT_VERSION) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_format_unsupported');
+        }
+        if (($envelope['engine_version'] ?? null) !== self::ENGINE_VERSION) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_engine_version_mismatch');
+        }
+        if (($envelope['scenario_config_hash'] ?? null) !== self::scenarioConfigHash()) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_config_mismatch');
+        }
+
+        $payload = $envelope['payload'] ?? null;
+        $checksum = $envelope['payload_checksum'] ?? null;
+        if (!\is_array($payload) || !\is_string($checksum)) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_envelope_invalid');
+        }
+        if (!hash_equals(hash('sha256', serialize($payload)), $checksum)) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_checksum_mismatch');
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private function hydrate(array $state): void
+    {
+        $nextOrderSequence = $state['nextOrderSequence'] ?? null;
+        $orders = $state['orders'] ?? null;
+        $clientOrderIndex = $state['clientOrderIndex'] ?? null;
+        $positions = $state['positions'] ?? null;
+        $balances = $state['balances'] ?? null;
+        $orderBooks = $state['orderBooks'] ?? null;
+        $events = $state['events'] ?? null;
+        $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
+        if (
+            !\is_int($nextOrderSequence) || $nextOrderSequence < 1
+            || !$this->isTypedMap($orders, ExchangeOrderDto::class)
+            || !$this->isStringMap($clientOrderIndex)
+            || !$this->isTypedMap($positions, ExchangePositionDto::class)
+            || !$this->isTypedMap($balances, ExchangeBalanceDto::class)
+            || !$this->isOrderBookMap($orderBooks)
+            || !$this->isTypedArray($events, FakeExchangeEvent::class)
+            || !\is_bool($rejectNextProtectionOrder)
+        ) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_shape_invalid');
+        }
+
+        $this->nextOrderSequence = $nextOrderSequence;
+        $this->orders = $orders;
+        $this->clientOrderIndex = $clientOrderIndex;
+        $this->positions = $positions;
+        $this->balances = $balances;
+        $this->orderBooks = $orderBooks;
+        $this->events = array_values($events);
+        $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
+
+        $nextEventSequence = $state['nextEventSequence'] ?? null;
+        $this->nextEventSequence = \is_int($nextEventSequence) && $nextEventSequence > 0
+            ? $nextEventSequence
+            : $this->inferNextEventSequence();
+    }
+
+    private function inferNextEventSequence(): int
+    {
+        $maximum = 0;
+        foreach ($this->events as $event) {
+            $sequence = $event->payload['event_sequence'] ?? null;
+            if (\is_int($sequence)) {
+                $maximum = max($maximum, $sequence);
+            } elseif (\is_string($sequence) && ctype_digit($sequence)) {
+                $maximum = max($maximum, (int) $sequence);
+            }
+        }
+
+        return $maximum + 1;
+    }
+
+    private static function scenarioConfigHash(): string
+    {
+        return hash('sha256', self::SCENARIO_CONFIG_ID);
+    }
+
+    /**
+     * @return list<class-string>
+     */
+    private static function allowedSerializedClasses(): array
+    {
+        return [
+            ExchangeBalanceDto::class,
+            ExchangeOrderDto::class,
+            ExchangePositionDto::class,
+            FakeExchangeEvent::class,
+            Exchange::class,
+            MarketType::class,
+            ExchangeOrderSide::class,
+            ExchangeOrderStatus::class,
+            ExchangeOrderType::class,
+            ExchangePositionSide::class,
+            ExchangeTimeInForce::class,
+            \DateTimeImmutable::class,
+            \DateTimeZone::class,
+        ];
+    }
+
+    private function isTypedArray(mixed $value, string $class): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $item) {
+            if (!$item instanceof $class) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isTypedMap(mixed $value, string $class): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $key => $item) {
+            if (!\is_string($key) || !$item instanceof $class) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isStringMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $key => $item) {
+            if (!\is_string($key) || !\is_string($item)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isOrderBookMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $symbol => $book) {
+            if (
+                !\is_string($symbol)
+                || !\is_array($book)
+                || !\is_float($book['bid'] ?? null)
+                || !\is_float($book['ask'] ?? null)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
