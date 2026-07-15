@@ -130,25 +130,41 @@ final class OkxAccountGateway implements AccountProviderInterface
                 throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', __METHOD__);
             }
 
+            $nextAfter = null;
+            if (\count($rows) === self::PRIVATE_PAGE_SIZE) {
+                $nextAfter = $this->snapshotPaginationCursor($rows[\count($rows) - 1], __METHOD__);
+                if (isset($seenCursors[$nextAfter])) {
+                    throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', __METHOD__);
+                }
+            }
+
             foreach ($rows as $row) {
                 $fills[] = $this->mapper->legacyTrade($row);
             }
 
-            if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
+            if ($nextAfter === null) {
                 return $fills;
-            }
-
-            $nextAfter = trim((string) ($rows[\count($rows) - 1]['billId'] ?? ''));
-            if ($nextAfter === '') {
-                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', __METHOD__);
-            }
-            if (isset($seenCursors[$nextAfter])) {
-                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', __METHOD__);
             }
 
             $seenCursors[$nextAfter] = true;
             $after = $nextAfter;
         } while (true);
+    }
+
+    /** @param array<string, mixed> $row */
+    private function snapshotPaginationCursor(array $row, string $operation): string
+    {
+        $value = $row['billId'] ?? null;
+        if (!\is_string($value) && !\is_int($value)) {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        $cursor = trim((string) $value);
+        if ($cursor === '') {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        return $cursor;
     }
 
     /**

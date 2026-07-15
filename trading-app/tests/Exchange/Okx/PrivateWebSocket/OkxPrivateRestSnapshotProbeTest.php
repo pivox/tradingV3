@@ -625,6 +625,80 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         }
     }
 
+    #[DataProvider('invalidSnapshotCursorProvider')]
+    public function testInvalidSnapshotCursorFailsClosedBeforeCastOrAfterRequest(
+        string $stream,
+        mixed $invalidCursor,
+    ): void {
+        $responses = match ($stream) {
+            'orders' => [
+                '/api/v5/trade/orders-pending' => [self::payload($this->rowsWithInvalidCursor(
+                    self::standardOrderRows(100, 300),
+                    'ordId',
+                    $invalidCursor,
+                ))],
+            ],
+            'algo' => [
+                '/api/v5/trade/orders-pending' => [self::payload([])],
+                '/api/v5/trade/orders-algo-pending' => [self::payload($this->rowsWithInvalidCursor(
+                    self::algoOrderRows(100, 300),
+                    'algoId',
+                    $invalidCursor,
+                ))],
+            ],
+            'fills' => [
+                '/api/v5/trade/fills' => [self::payload($this->rowsWithInvalidCursor(
+                    self::fillRows(100, 300),
+                    'billId',
+                    $invalidCursor,
+                ))],
+            ],
+            default => throw new \LogicException('Unsupported snapshot stream fixture.'),
+        };
+        $client = new ScriptedOkxPrivateRestClient($responses);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+        $warnings = [];
+        set_error_handler(static function (int $severity, string $message) use (&$warnings): bool {
+            $warnings[] = [$severity, $message];
+
+            return true;
+        });
+
+        try {
+            try {
+                match ($stream) {
+                    'orders', 'algo' => $reader->openOrders(),
+                    'fills' => $reader->fills(),
+                    default => throw new \LogicException('Unsupported snapshot stream fixture.'),
+                };
+                self::fail('An invalid snapshot cursor must fail closed.');
+            } catch (OkxProviderUnavailableException $exception) {
+                self::assertSame('okx_private_pagination_cursor_invalid', $exception->reason());
+            }
+        } finally {
+            restore_error_handler();
+        }
+
+        self::assertSame([], $warnings);
+        foreach ($client->privateGetCalls as [, $query]) {
+            self::assertArrayNotHasKey('after', $query);
+        }
+    }
+
+    /** @return iterable<string, array{string, mixed}> */
+    public static function invalidSnapshotCursorProvider(): iterable
+    {
+        yield 'standard order array cursor' => ['orders', ['201']];
+        yield 'standard order float cursor' => ['orders', 201.5];
+        yield 'algo order object cursor' => ['algo', new \stdClass()];
+        yield 'algo order null cursor' => ['algo', null];
+        yield 'fill boolean cursor' => ['fills', false];
+        yield 'fill blank string cursor' => ['fills', " \t "];
+    }
+
     public function testMissingOrderCursorFailsClosed(): void
     {
         $rows = self::standardOrderRows(100, 300);
@@ -898,6 +972,17 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
                 'ts' => '1783936800000',
             ];
         }
+
+        return $rows;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private function rowsWithInvalidCursor(array $rows, string $cursorField, mixed $invalidCursor): array
+    {
+        $rows[\count($rows) - 1][$cursorField] = $invalidCursor;
 
         return $rows;
     }

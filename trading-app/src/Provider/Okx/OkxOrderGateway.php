@@ -369,25 +369,45 @@ final class OkxOrderGateway implements OrderProviderInterface
                 throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
             }
 
+            $nextAfter = null;
+            if (\count($rows) === self::PRIVATE_PAGE_SIZE) {
+                $nextAfter = $this->snapshotPaginationCursor(
+                    $rows[\count($rows) - 1],
+                    $cursorField,
+                    $operation,
+                );
+                if (isset($seenCursors[$nextAfter])) {
+                    throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', $operation);
+                }
+            }
+
             foreach ($rows as $row) {
                 $orders[] = $this->privateMapper->order($row, $algo);
             }
 
-            if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
+            if ($nextAfter === null) {
                 return;
-            }
-
-            $nextAfter = trim((string) ($rows[\count($rows) - 1][$cursorField] ?? ''));
-            if ($nextAfter === '') {
-                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
-            }
-            if (isset($seenCursors[$nextAfter])) {
-                throw new OkxProviderUnavailableException('okx_private_pagination_cursor_repeated', $operation);
             }
 
             $seenCursors[$nextAfter] = true;
             $after = $nextAfter;
         } while (true);
+    }
+
+    /** @param array<string, mixed> $row */
+    private function snapshotPaginationCursor(array $row, string $cursorField, string $operation): string
+    {
+        $value = $row[$cursorField] ?? null;
+        if (!\is_string($value) && !\is_int($value)) {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        $cursor = trim((string) $value);
+        if ($cursor === '') {
+            throw new OkxProviderUnavailableException('okx_private_pagination_cursor_invalid', $operation);
+        }
+
+        return $cursor;
     }
 
     /**
