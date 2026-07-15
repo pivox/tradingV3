@@ -81,3 +81,24 @@ or fails, the transaction restores the state and keeps the fault queued. No dela
 or `sleep` is used: timeout behavior is deterministic and does not contact a
 network. Faults run at the adapter boundary, so a `not_applied` fixture may reject
 a request before the matching engine performs its normal request validation.
+
+## Runtime check
+
+`app:exchange:runtime-check fake perpetual` evaluates the local Fake adapter
+without credentials or network access. The adapter check probes an explicitly
+loaded order book, balances, a controlled clock, the fee model, stop-loss
+capability, and local persistence/recovery. The persistence probe uses a separate
+temporary state file in the same directory and never mutates the active orders,
+events, positions, balances, or queued faults. Persistence alone does not promote
+the runtime to Paper: a real/replay market source must be configured separately.
+When the active state file is absent, the check probes the directory without
+creating that file.
+
+The contract is intentionally dry-run only: trade permission is always false,
+the kill switch remains active, and no demo/testnet or live write path can be
+enabled. The current additional slippage model is explicitly zero and is exposed
+as `fake_paper_slippage_model_zero`. The application runtime also reports a
+non-controlled clock and a missing explicit market source as blockers. Until a
+operational Fake provider bundle, versioned instrument metadata, precision
+fixtures, and those runtime inputs are available, `Schedule ready` remains `no`; the adapter must not
+be presented as a complete Paper runtime.

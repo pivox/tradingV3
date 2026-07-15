@@ -194,6 +194,38 @@ quota glissant, la latence/jitter avec seed, les erreurs de precision/marge, ni 
 divergences Bitmart. La deconnexion et le resync private WS sont couverts par la
 fixture separee `FakeExchangeWsClient`.
 
+## Runtime-check Fake/Paper
+
+La commande suivante controle l adapter local sans credential ni appel reseau :
+
+```bash
+php bin/console app:exchange:runtime-check fake perpetual
+```
+
+Elle verifie un carnet explicitement charge, la lecture des balances, une horloge
+explicitement controlee, le modele de frais, la capacite stop-loss et l ecriture
+puis la reprise d un fichier de sonde distinct. L etat actif (ordres, fills,
+positions, evenements, balances et fautes injectees) n est jamais modifie par cette
+sonde. Un fichier persistant ne suffit pas a qualifier le mode Paper : une source
+marche reelle ou replay doit aussi etre configuree.
+Si le fichier d etat actif est absent, la commande sonde uniquement son repertoire
+et ne cree pas ce fichier.
+
+Le resultat Fake/Paper impose toujours `dry_run=true`, `permissions_trade=false`,
+kill switch actif et ecriture demo/testnet desactivee. Les credentials sont
+`not_required`; le provider bundle Fake actuel reste un placeholder sans contrat
+actif et doit devenir operationnel pour rendre un schedule MTF pret. Aucun ordre
+exchange ne peut etre emis.
+Le modele de slippage additionnel actuellement nul reste visible via le warning
+`fake_paper_slippage_model_zero`.
+
+Tant que la source marche, l horloge controlee, les fixtures versionnees de metadata
+instruments, le modele de precision et le provider Fake ne sont pas livres, le
+niveau et le schedule restent fail-closed. Le runner de recette Python conserve
+donc temporairement son chemin Fake local existant. Sa bascule vers cette gate sera
+faite apres la golden suite et les metadata, afin de ne pas annoncer une readiness
+que le modele actuel ne couvre pas.
+
 ## Rollback
 
 Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au
