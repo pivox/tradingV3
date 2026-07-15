@@ -8,6 +8,8 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderType;
+use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\AbstractExchangeOrderEvent;
@@ -87,6 +89,43 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
             'source' => 'okx_private_rest_snapshot',
             'reason' => 'missing_from_rest_position_snapshot',
         ], $store->events[0]->payload());
+    }
+
+    public function testCompleteSnapshotProjectsMissingLocalOpenOrderAsUnknown(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $store->localOpenOrders = [$this->localOrder()];
+
+        self::assertSame(1, $this->reconciler($store)->reconcile($this->snapshot()));
+        self::assertInstanceOf(AbstractExchangeOrderEvent::class, $store->events[0]);
+        self::assertSame(ExchangeOrderStatus::UNKNOWN, $store->events[0]->order()->status);
+        self::assertSame('snapshot_order_missing', $store->events[0]->order()->metadata['quality_flag']);
+        self::assertSame('snapshot_order_missing', $store->events[0]->payload()['reason']);
+    }
+
+    public function testIncompleteSnapshotDoesNotProjectMissingLocalOrder(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $store->localOpenOrders = [$this->localOrder()];
+        $snapshot = new OkxPrivateRestSnapshot(new \DateTimeImmutable(self::NOW), false, [], [], [], false, ['okx_private_rest_orders_snapshot_failed']);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->reconciler($store)->reconcile($snapshot);
+        self::assertSame([], $store->events);
+    }
+
+    public function testPresentLocalOrderIsNotReconciled(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $store->localOpenOrders = [$this->localOrder()];
+
+        self::assertSame(1, $this->reconciler($store)->reconcile($this->snapshot(orders: [$this->order()])));
+        self::assertSame(ExchangeOrderStatus::OPEN, $store->events[0]->order()->status);
+    }
+
+    private function localOrder(): ExchangeOrderDto
+    {
+        return new ExchangeOrderDto(Exchange::OKX, MarketType::PERPETUAL, 'BTCUSDT', 'order-1', null, ExchangeOrderSide::BUY, null, ExchangeOrderType::LIMIT, ExchangeOrderStatus::OPEN, 1.0, 0.0, 1.0, 25000.0, null, null, false, false, null, new \DateTimeImmutable(self::NOW));
     }
 
     public function testExactDuplicatesAreProjectedOnlyOnce(): void
@@ -504,6 +543,9 @@ final class SnapshotRecordingProjectionStore implements ExchangeLocalProjectionS
     /** @var array<int,array{symbol: string, side: ExchangePositionSide, size: float}> */
     public array $localOpenPositions = [];
 
+    /** @var list<ExchangeOrderDto> */
+    public array $localOpenOrders = [];
+
     public function hasOrder(ExchangeOrderDto $order): bool
     {
         return false;
@@ -516,6 +558,11 @@ final class SnapshotRecordingProjectionStore implements ExchangeLocalProjectionS
         }
 
         return $this->localOpenPositions;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return $exchange === Exchange::OKX && $marketType === MarketType::PERPETUAL ? $this->localOpenOrders : [];
     }
 
     public function project(ExchangeEventInterface $event): void

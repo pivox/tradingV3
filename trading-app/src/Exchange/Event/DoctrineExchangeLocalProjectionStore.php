@@ -11,6 +11,8 @@ use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\MtfRunner\Service\FuturesOrderSyncService;
 use App\Provider\Context\ExchangeContext;
@@ -43,6 +45,37 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
 
         return $order->clientOrderId !== null
             && $this->orders->findOneByClientOrderId($order->clientOrderId, $context) !== null;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        $context = new ExchangeContext($exchange, $marketType);
+        $result = [];
+        foreach ($this->orders->findOpenOrders($context) as $order) {
+            $status = ExchangeOrderStatus::tryFrom((string) $order->getStatus());
+            if (!in_array($status, [ExchangeOrderStatus::PENDING, ExchangeOrderStatus::OPEN, ExchangeOrderStatus::PARTIALLY_FILLED], true)) {
+                continue;
+            }
+            $side = match ($order->getSide()) {
+                1, 2 => ExchangeOrderSide::BUY,
+                3, 4 => ExchangeOrderSide::SELL,
+                default => null,
+            };
+            $type = ExchangeOrderType::tryFrom((string) $order->getType());
+            $orderId = $order->getOrderId();
+            if ($side === null || $type === null || $orderId === null) {
+                continue;
+            }
+            $quantity = (float) ($order->getQuantityDecimal() ?? $order->getSize() ?? 0);
+            $filled = (float) ($order->getFilledQuantityDecimal() ?? $order->getFilledSize() ?? 0);
+            $result[] = new ExchangeOrderDto(
+                $exchange, $marketType, $order->getSymbol(), $orderId, $order->getClientOrderId(), $side, null,
+                $type, $status, $quantity, $filled, max(0.0, $quantity - $filled),
+                $order->getPrice() !== null ? (float) $order->getPrice() : null, null, null, false, false, null,
+                $order->getCreatedAt(), $order->getUpdatedAt(), ['source' => 'local_projection'],
+            );
+        }
+        return $result;
     }
 
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array

@@ -12,6 +12,9 @@ interface ExchangeLocalProjectionStoreInterface
 {
     public function hasOrder(ExchangeOrderDto $order): bool;
 
+    /** @return list<ExchangeOrderDto> */
+    public function openOrders(Exchange $exchange, MarketType $marketType): array;
+
     /**
      * @return array<int,array{symbol: string, side: \App\Exchange\Enum\ExchangePositionSide, size: float}>
      */

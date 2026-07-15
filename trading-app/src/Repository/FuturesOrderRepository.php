@@ -99,6 +99,19 @@ final class FuturesOrderRepository extends ServiceEntityRepository
         return false;
     }
 
+    /** @return FuturesOrder[] */
+    public function findOpenOrders(?ExchangeContext $context = null): array
+    {
+        return $this->createQueryBuilder('o')
+            ->andWhere('o.exchange = :exchange')
+            ->andWhere('o.marketType = :marketType')
+            ->andWhere('o.status IN (:statuses)')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
+            ->setParameter('statuses', self::OPEN_STATUSES)
+            ->getQuery()->getResult();
+    }
+
     public function markOpenOrdersCancelledForIntent(OrderIntent $intent): int
     {
         $ids = array_values(array_filter([

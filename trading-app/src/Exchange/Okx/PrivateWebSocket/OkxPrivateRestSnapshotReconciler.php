@@ -55,6 +55,20 @@ final readonly class OkxPrivateRestSnapshotReconciler
         foreach ($orders as $order) {
             $events[] = $this->orderEvent($order);
         }
+        foreach ($this->missingLocalOrders($orders) as $order) {
+            $events[] = new ExchangeOrderUpdated(
+                new ExchangeOrderDto(
+                    $order->exchange, $order->marketType, $order->symbol, $order->exchangeOrderId, $order->clientOrderId,
+                    $order->side, $order->positionSide, $order->orderType, ExchangeOrderStatus::UNKNOWN,
+                    $order->quantity, $order->filledQuantity, $order->remainingQuantity, $order->price,
+                    $order->averagePrice, $order->stopPrice, $order->reduceOnly, $order->postOnly,
+                    $order->timeInForce, $order->createdAt, $snapshot->observedAt,
+                    $order->metadata + ['quality_flag' => 'snapshot_order_missing'],
+                ),
+                $snapshot->observedAt,
+                self::sourcePayload() + ['reason' => 'snapshot_order_missing'],
+            );
+        }
         foreach ($positions as $position) {
             $events[] = $this->positionEvent($position, $snapshot->observedAt);
         }
@@ -233,6 +247,24 @@ final readonly class OkxPrivateRestSnapshotReconciler
         }
 
         return $missing;
+    }
+
+    /**
+     * @param list<OrderSnapshotItem> $orders
+     * @return list<ExchangeOrderDto>
+     */
+    private function missingLocalOrders(array $orders): array
+    {
+        $keys = [];
+        foreach ($orders as $order) {
+            $keys[$this->required($order->orderId)] = true;
+            if ($order->clientOrderId !== null) $keys[$order->clientOrderId] = true;
+        }
+        return array_values(array_filter(
+            $this->projectionStore->openOrders(Exchange::OKX, MarketType::PERPETUAL),
+            fn (ExchangeOrderDto $order): bool => !isset($keys[$order->exchangeOrderId])
+                && ($order->clientOrderId === null || !isset($keys[$order->clientOrderId])),
+        ));
     }
 
     /**
