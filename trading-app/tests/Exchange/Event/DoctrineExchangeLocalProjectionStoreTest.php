@@ -413,6 +413,27 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
         ), new \DateTimeImmutable('2026-01-01 00:00:01 UTC')));
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('legacyOpenOrderStatusProvider')]
+    public function testOpenOrdersMapsLegacyOpenStatusesToCanonicalStatuses(
+        string $legacyStatus,
+        ExchangeOrderStatus $expectedStatus,
+    ): void {
+        $method = new \ReflectionMethod(DoctrineExchangeLocalProjectionStore::class, 'mapOpenOrderStatus');
+        $result = $method->invoke($this->store($this->createStub(FuturesOrderSyncService::class), $this->createStub(FillCostLedgerEntryRepository::class)), $legacyStatus);
+
+        self::assertSame($expectedStatus, $result);
+    }
+
+    /** @return iterable<string, array{string, ExchangeOrderStatus}> */
+    public static function legacyOpenOrderStatusProvider(): iterable
+    {
+        yield 'new' => ['new', ExchangeOrderStatus::PENDING];
+        yield 'sent' => ['sent', ExchangeOrderStatus::PENDING];
+        yield 'submitted' => ['submitted', ExchangeOrderStatus::PENDING];
+        yield 'numeric pending' => ['1', ExchangeOrderStatus::PENDING];
+        yield 'numeric partial' => ['2', ExchangeOrderStatus::PARTIALLY_FILLED];
+    }
+
     public function testFillProjectionPersistsLedgerBeforeNullLegacySyncAndReplayIsIdempotent(): void
     {
         $orderSync = $this->createMock(FuturesOrderSyncService::class);

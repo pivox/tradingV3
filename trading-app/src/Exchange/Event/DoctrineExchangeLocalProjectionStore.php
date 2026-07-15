@@ -52,7 +52,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
         $context = new ExchangeContext($exchange, $marketType);
         $result = [];
         foreach ($this->orders->findOpenOrders($context) as $order) {
-            $status = ExchangeOrderStatus::tryFrom((string) $order->getStatus());
+            $status = $this->mapOpenOrderStatus($order->getStatus());
             if (!in_array($status, [ExchangeOrderStatus::PENDING, ExchangeOrderStatus::OPEN, ExchangeOrderStatus::PARTIALLY_FILLED], true)) {
                 continue;
             }
@@ -76,6 +76,15 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             );
         }
         return $result;
+    }
+
+    private function mapOpenOrderStatus(?string $status): ?ExchangeOrderStatus
+    {
+        return match (strtolower((string) $status)) {
+            'new', 'sent', 'submitted', '1' => ExchangeOrderStatus::PENDING,
+            '2' => ExchangeOrderStatus::PARTIALLY_FILLED,
+            default => ExchangeOrderStatus::tryFrom((string) $status),
+        };
     }
 
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
