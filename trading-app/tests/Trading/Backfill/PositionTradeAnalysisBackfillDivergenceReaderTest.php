@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Backfill;
 
+use App\Tests\Support\PostgresIntegrationDatabaseGuard;
 use App\Trading\Backfill\BackfillDivergenceCriteria;
 use App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader;
 use App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReportService;
@@ -32,6 +33,8 @@ final class PositionTradeAnalysisBackfillDivergenceReaderTest extends TestCase
         if (!is_string($dsn) || !preg_match('/^(postgres|postgresql|pdo-pgsql)/', $dsn)) {
             self::markTestSkipped('PostgreSQL DATABASE_URL required for the backfill divergence reader integration test.');
         }
+
+        PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase($dsn);
 
         try {
             $conn = DriverManager::getConnection(['url' => $dsn]);

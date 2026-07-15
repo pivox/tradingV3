@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\View;
 
+use App\Tests\Support\PostgresIntegrationDatabaseGuard;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
@@ -44,6 +45,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
             self::markTestSkipped('PostgreSQL DATABASE_URL required for the view integration test.');
         }
 
+        PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase($dsn);
+
         try {
             $this->conn = DriverManager::getConnection(['url' => $dsn]);
             $this->conn->executeQuery('SELECT 1');
@@ -60,6 +63,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     {
         if (isset($this->conn)) {
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
             $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
             $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
             $this->conn->close();
@@ -946,6 +950,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
         $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
         $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
 
