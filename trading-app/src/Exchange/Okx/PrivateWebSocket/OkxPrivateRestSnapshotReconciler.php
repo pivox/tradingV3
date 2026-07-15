@@ -258,15 +258,19 @@ final readonly class OkxPrivateRestSnapshotReconciler
      */
     private function missingLocalOrders(array $orders): array
     {
-        $keys = [];
+        $exchangeOrderIds = [];
+        $clientOrderIds = [];
         foreach ($orders as $order) {
-            $keys[$this->required($order->orderId)] = true;
-            if ($order->clientOrderId !== null) $keys[$order->clientOrderId] = true;
+            $exchangeOrderIds[$this->required($order->orderId)] = true;
+            if ($order->clientOrderId !== null) {
+                $clientOrderIds[$order->clientOrderId] = true;
+            }
         }
+
         return array_values(array_filter(
             $this->projectionStore->openOrders(Exchange::OKX, MarketType::PERPETUAL),
-            fn (ExchangeOrderDto $order): bool => !isset($keys[$order->exchangeOrderId])
-                && ($order->clientOrderId === null || !isset($keys[$order->clientOrderId])),
+            fn (ExchangeOrderDto $order): bool => !isset($exchangeOrderIds[$order->exchangeOrderId])
+                && ($order->clientOrderId === null || !isset($clientOrderIds[$order->clientOrderId])),
         ));
     }
 

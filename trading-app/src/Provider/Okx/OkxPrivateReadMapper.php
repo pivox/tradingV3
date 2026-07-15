@@ -217,7 +217,7 @@ final readonly class OkxPrivateReadMapper
     {
         $this->assertKnownEnum($row, 'side', ['buy', 'sell']);
         $this->assertKnownEnum($row, 'state', [
-            'filled', 'partially_filled', 'canceled', 'cancelled', 'rejected', 'live',
+            'filled', 'partially_filled', 'canceled', 'cancelled', 'mmp_canceled', 'rejected', 'live',
             'effective', 'order_failed',
         ]);
         $this->assertKnownEnum($row, 'ordType', [
@@ -305,7 +305,7 @@ final readonly class OkxPrivateReadMapper
         return match (strtolower((string) $state)) {
             'filled' => OrderStatus::FILLED,
             'partially_filled' => OrderStatus::PARTIALLY_FILLED,
-            'canceled', 'cancelled' => OrderStatus::CANCELLED,
+            'canceled', 'cancelled', 'mmp_canceled' => OrderStatus::CANCELLED,
             'rejected', 'order_failed' => OrderStatus::REJECTED,
             'effective' => OrderStatus::FILLED,
             'live' => OrderStatus::PENDING,

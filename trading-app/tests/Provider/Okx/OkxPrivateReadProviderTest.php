@@ -153,6 +153,26 @@ final class OkxPrivateReadProviderTest extends TestCase
         self::assertSame($expected, $order->status);
     }
 
+    public function testMapsMmpCanceledOrderHistoryState(): void
+    {
+        try {
+            $order = (new OkxPrivateReadMapper())->order([
+                'instId' => 'BTC-USDT-SWAP',
+                'ordId' => 'order-mmp-canceled',
+                'side' => 'sell',
+                'ordType' => 'limit',
+                'state' => 'mmp_canceled',
+                'sz' => '1',
+                'accFillSz' => '0',
+                'cTime' => '1767225600000',
+            ], false);
+        } catch (\InvalidArgumentException) {
+            self::fail('mmp_canceled must be accepted as a terminal order history state.');
+        }
+
+        self::assertSame(OrderStatus::CANCELLED, $order->status);
+    }
+
     /** @return iterable<string,array{string,OrderStatus}> */
     public static function terminalAlgoStatusProvider(): iterable
     {

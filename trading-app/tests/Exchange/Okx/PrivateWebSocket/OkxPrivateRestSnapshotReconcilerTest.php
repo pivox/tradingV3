@@ -125,6 +125,42 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         self::assertSame(ExchangeOrderStatus::OPEN, $event->order()->status);
     }
 
+    public function testRemoteClientOrderIdDoesNotMatchLocalExchangeOrderId(): void
+    {
+        $store = new SnapshotRecordingProjectionStore();
+        $store->localOpenOrders = [new ExchangeOrderDto(
+            Exchange::OKX,
+            MarketType::PERPETUAL,
+            'BTCUSDT',
+            'shared-id',
+            null,
+            ExchangeOrderSide::BUY,
+            null,
+            ExchangeOrderType::LIMIT,
+            ExchangeOrderStatus::OPEN,
+            1.0,
+            0.0,
+            1.0,
+            25000.0,
+            null,
+            null,
+            false,
+            false,
+            null,
+            new \DateTimeImmutable(self::NOW),
+        )];
+
+        $count = $this->reconciler($store)->reconcile($this->snapshot(orders: [
+            $this->order(orderId: 'remote-order', clientOrderId: 'shared-id'),
+        ]));
+
+        self::assertSame(2, $count);
+        self::assertCount(2, $store->events);
+        self::assertInstanceOf(AbstractExchangeOrderEvent::class, $store->events[1]);
+        self::assertSame('shared-id', $store->events[1]->order()->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::UNKNOWN, $store->events[1]->order()->status);
+    }
+
     private function localOrder(): ExchangeOrderDto
     {
         return new ExchangeOrderDto(Exchange::OKX, MarketType::PERPETUAL, 'BTCUSDT', 'order-1', null, ExchangeOrderSide::BUY, null, ExchangeOrderType::LIMIT, ExchangeOrderStatus::OPEN, 1.0, 0.0, 1.0, 25000.0, null, null, false, false, null, new \DateTimeImmutable(self::NOW));
