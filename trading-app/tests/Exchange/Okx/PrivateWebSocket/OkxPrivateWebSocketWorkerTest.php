@@ -1355,6 +1355,11 @@ final class CountingSnapshotSource implements OkxPrivateRestSnapshotSourceInterf
 
 final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInterface
 {
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
     /** @var list<ExchangeEventInterface> */
     public array $events = [];
 

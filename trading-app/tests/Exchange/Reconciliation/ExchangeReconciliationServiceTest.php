@@ -459,6 +459,11 @@ final readonly class SnapshotReconciliationAdapter implements ExchangeAdapterInt
 
 final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInterface
 {
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
     /** @var ExchangeEventInterface[] */
     public array $events = [];
 
