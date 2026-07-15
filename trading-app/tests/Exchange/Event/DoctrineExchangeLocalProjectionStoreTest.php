@@ -31,6 +31,7 @@ use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Pnl\FillCostLedgerIngestionConflict;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
+use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Persisters\Entity\EntityPersister;
@@ -44,16 +45,29 @@ use Psr\Log\NullLogger;
 #[CoversClass(DoctrineExchangeLocalProjectionStore::class)]
 final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
 {
-    public function testProjectsNormalizedBatchInsideOneEntityManagerTransaction(): void
+    public function testFailedAtomicBatchCanRetryWithSameEntityManager(): void
     {
+        $projectionAttempt = 0;
         $orderSync = $this->createMock(FuturesOrderSyncService::class);
-        $orderSync->expects(self::exactly(2))
+        $orderSync->expects(self::exactly(3))
             ->method('syncOrderFromApi')
-            ->willReturn($this->createStub(FuturesOrder::class));
+            ->willReturnCallback(function () use (&$projectionAttempt): FuturesOrder {
+                ++$projectionAttempt;
+                if ($projectionAttempt === 2) {
+                    throw new \RuntimeException('transient_projection_failure');
+                }
+
+                return $this->createStub(FuturesOrder::class);
+            });
+        $connection = $this->createMock(Connection::class);
+        $connection->expects(self::exactly(2))
+            ->method('transactional')
+            ->willReturnCallback(static fn (callable $callback): mixed => $callback($connection));
         $entityManager = $this->createMock(EntityManagerInterface::class);
-        $entityManager->expects(self::once())
-            ->method('wrapInTransaction')
-            ->willReturnCallback(static fn (callable $callback): mixed => $callback($entityManager));
+        $entityManager->method('getConnection')->willReturn($connection);
+        $entityManager->method('isOpen')->willReturn(true);
+        $entityManager->expects(self::once())->method('clear');
+        $entityManager->expects(self::never())->method('close');
         $store = $this->storeWithPersistenceDoubles(
             $orderSync,
             $this->createStub(FillCostLedgerEntryRepository::class),
@@ -64,7 +78,15 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
             new \DateTimeImmutable('2026-01-01 UTC'),
         );
 
-        $store->projectAtomically([$event, $event]);
+        try {
+            $store->projectAtomically([$event, $event]);
+            self::fail('The second projection must fail the first batch.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('transient_projection_failure', $exception->getMessage());
+        }
+
+        $store->projectAtomically([$event]);
+        self::assertSame(3, $projectionAttempt);
     }
 
     #[\PHPUnit\Framework\Attributes\DataProvider('numericSideProvider')]
