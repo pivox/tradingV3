@@ -522,6 +522,88 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         self::assertSame(0, $client->privatePostCalls);
     }
 
+    public function testPublicOpenOrderReadsRemainSinglePageAndIgnoreSnapshotPaginationPolicy(): void
+    {
+        $strictClient = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [
+                self::payload(self::standardOrderRows(100, 300)),
+                self::payload(self::standardOrderRows(1, 200)),
+            ],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+        ]);
+        $strictGateway = new OkxOrderGateway($strictClient);
+
+        self::assertCount(100, $strictGateway->getOpenOrdersOrFail());
+        self::assertSame([
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP']],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'ordType' => 'conditional']],
+        ], $strictClient->privateGetCalls);
+
+        $tolerantClient = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [self::payload(self::standardOrderRows(100, 300))],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+        ]);
+        self::assertCount(100, (new OkxOrderGateway($tolerantClient))->getOpenOrders());
+        self::assertSame([
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP']],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'ordType' => 'conditional']],
+        ], $tolerantClient->privateGetCalls);
+
+        $lookupClient = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => [self::payload(self::standardOrderRows(1, 300))],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+        ]);
+        self::assertSame('300', (new OkxOrderGateway($lookupClient))->getOrder('BTCUSDT', '300')?->orderId);
+        self::assertSame([
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'instId' => 'BTC-USDT-SWAP']],
+            ['/api/v5/trade/orders-algo-pending', ['instType' => 'SWAP', 'instId' => 'BTC-USDT-SWAP', 'ordType' => 'conditional']],
+        ], $lookupClient->privateGetCalls);
+    }
+
+    public function testMalformedSecondStandardOrderPageFailsSnapshotClosed(): void
+    {
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/account/balance' => [self::payload([['details' => []]])],
+            '/api/v5/account/positions' => [self::payload([])],
+            '/api/v5/trade/orders-pending' => [
+                self::payload(self::standardOrderRows(100, 300)),
+                ['code' => '0', 'data' => 'not-an-array'],
+            ],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+            '/api/v5/trade/fills' => [self::payload([])],
+        ]);
+        $snapshot = (new OkxPrivateRestSnapshotProbe(new OkxGatewayPrivateRestSnapshotSource(
+            new OkxGatewayPrivateRestReader(new OkxAccountGateway($client), new OkxOrderGateway($client)),
+        )))->probe(new DateTimeImmutable(self::NOW));
+
+        self::assertFalse($snapshot->complete);
+        self::assertSame(['okx_private_rest_orders_snapshot_failed'], $snapshot->blockingErrors);
+        self::assertSame([], $snapshot->openOrders);
+    }
+
+    public function testMalformedSecondFillPageFailsSnapshotClosed(): void
+    {
+        $malformedPage = self::fillRows(1, 200);
+        $malformedPage[] = 'not-an-array';
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/account/balance' => [self::payload([['details' => []]])],
+            '/api/v5/account/positions' => [self::payload([])],
+            '/api/v5/trade/orders-pending' => [self::payload([])],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+            '/api/v5/trade/fills' => [
+                self::payload(self::fillRows(100, 300)),
+                ['code' => '0', 'data' => $malformedPage],
+            ],
+        ]);
+        $snapshot = (new OkxPrivateRestSnapshotProbe(new OkxGatewayPrivateRestSnapshotSource(
+            new OkxGatewayPrivateRestReader(new OkxAccountGateway($client), new OkxOrderGateway($client)),
+        )))->probe(new DateTimeImmutable(self::NOW));
+
+        self::assertFalse($snapshot->complete);
+        self::assertSame(['okx_private_rest_fills_snapshot_failed'], $snapshot->blockingErrors);
+        self::assertSame([], $snapshot->fills);
+    }
+
     public function testRepeatedOrderCursorFailsClosed(): void
     {
         $client = new ScriptedOkxPrivateRestClient([
@@ -563,12 +645,34 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         }
     }
 
-    public function testSnapshotItemCapFailsClosedInsteadOfReturningTruncatedOrders(): void
+    public function testExactlyOneThousandSnapshotOrdersRequireAndAcceptTerminalConfirmationPage(): void
     {
         $pages = [];
         for ($page = 0; $page < 10; ++$page) {
             $pages[] = self::payload(self::standardOrderRows(100, 2_000 - ($page * 100)));
         }
+        $pages[] = self::payload([]);
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/orders-pending' => $pages,
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        self::assertCount(1_000, $reader->openOrders());
+        self::assertCount(12, $client->privateGetCalls);
+        self::assertSame('1001', $client->privateGetCalls[10][1]['after'] ?? null);
+    }
+
+    public function testSnapshotItemCapFailsClosedWhenConfirmationPageContainsAnotherOrder(): void
+    {
+        $pages = [];
+        for ($page = 0; $page < 10; ++$page) {
+            $pages[] = self::payload(self::standardOrderRows(100, 2_000 - ($page * 100)));
+        }
+        $pages[] = self::payload(self::standardOrderRows(1, 1_000));
         $client = new ScriptedOkxPrivateRestClient([
             '/api/v5/trade/orders-pending' => $pages,
         ]);
@@ -579,11 +683,31 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
 
         try {
             $reader->openOrders();
-            self::fail('A full page at the defensive item cap must fail closed.');
+            self::fail('An order beyond the defensive item cap must fail closed.');
         } catch (OkxProviderUnavailableException $exception) {
             self::assertSame('okx_private_pagination_limit_exceeded', $exception->reason());
         }
-        self::assertCount(10, $client->privateGetCalls);
+        self::assertCount(11, $client->privateGetCalls);
+    }
+
+    public function testExactlyOneThousandSnapshotFillsRequireAndAcceptTerminalConfirmationPage(): void
+    {
+        $pages = [];
+        for ($page = 0; $page < 10; ++$page) {
+            $pages[] = self::payload(self::fillRows(100, 2_000 - ($page * 100)));
+        }
+        $pages[] = self::payload([]);
+        $client = new ScriptedOkxPrivateRestClient([
+            '/api/v5/trade/fills' => $pages,
+        ]);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        self::assertCount(1_000, $reader->fills());
+        self::assertCount(11, $client->privateGetCalls);
+        self::assertSame('1001', $client->privateGetCalls[10][1]['after'] ?? null);
     }
 
     public function testLaterPageFailureMakesProbeSnapshotIncomplete(): void
@@ -595,6 +719,7 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
                 self::payload(self::standardOrderRows(100, 300)),
                 new RuntimeException('page failed with api_secret=demo-secret'),
             ],
+            '/api/v5/trade/orders-algo-pending' => [self::payload([])],
             '/api/v5/trade/fills' => [self::payload([])],
         ]);
         $reader = new OkxGatewayPrivateRestReader(
@@ -608,6 +733,13 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         self::assertFalse($snapshot->complete);
         self::assertSame(['okx_private_rest_orders_snapshot_failed'], $snapshot->blockingErrors);
         self::assertSame([], $snapshot->openOrders);
+        self::assertSame([
+            ['/api/v5/account/balance', []],
+            ['/api/v5/account/positions', ['instType' => 'SWAP']],
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'limit' => 100]],
+            ['/api/v5/trade/orders-pending', ['instType' => 'SWAP', 'limit' => 100, 'after' => '201']],
+            ['/api/v5/trade/fills', ['instType' => 'SWAP', 'limit' => 100]],
+        ], $client->privateGetCalls);
     }
 
     public function testSourceContractAndSnapshotExposeOnlyReadOnlyState(): void

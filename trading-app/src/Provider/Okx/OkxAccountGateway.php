@@ -122,7 +122,7 @@ final class OkxAccountGateway implements AccountProviderInterface
 
         do {
             $pageQuery = $after === null ? $query : $query + ['after' => $after];
-            $rows = $this->dataRows(
+            $rows = $this->snapshotDataRows(
                 $this->privateGet('/api/v5/trade/fills', $pageQuery, __METHOD__),
                 __METHOD__,
             );
@@ -137,9 +137,6 @@ final class OkxAccountGateway implements AccountProviderInterface
             if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
                 return $fills;
             }
-            if (\count($fills) >= self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
-                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', __METHOD__);
-            }
 
             $nextAfter = trim((string) ($rows[\count($rows) - 1]['billId'] ?? ''));
             if ($nextAfter === '') {
@@ -152,6 +149,21 @@ final class OkxAccountGateway implements AccountProviderInterface
             $seenCursors[$nextAfter] = true;
             $after = $nextAfter;
         } while (true);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return list<array<string, mixed>>
+     */
+    private function snapshotDataRows(array $payload, string $operation): array
+    {
+        $rows = $this->dataRows($payload, $operation);
+        $data = $payload['data'] ?? null;
+        if (!\is_array($data) || \count($rows) !== \count($data)) {
+            throw new OkxProviderUnavailableException('okx_private_snapshot_page_invalid', $operation);
+        }
+
+        return $rows;
     }
 
     /**

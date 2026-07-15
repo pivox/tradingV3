@@ -222,6 +222,12 @@ final class OkxOrderGateway implements OrderProviderInterface
         return $this->fetchOpenOrders($symbol, __METHOD__);
     }
 
+    /** @return list<OrderDto> */
+    public function getOpenOrdersForSnapshotOrFail(): array
+    {
+        return $this->fetchOpenOrdersSnapshot(__METHOD__);
+    }
+
     /**
      * @return array<int, mixed>
      */
@@ -297,11 +303,28 @@ final class OkxOrderGateway implements OrderProviderInterface
      */
     private function fetchOpenOrders(?string $symbol, string $operation): array
     {
-        $query = ['instType' => 'SWAP', 'limit' => self::PRIVATE_PAGE_SIZE];
+        $query = ['instType' => 'SWAP'];
         if ($symbol !== null) {
             $query['instId'] = $this->resolver()->instId($symbol);
         }
 
+        $orders = [];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-pending', $query, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, false);
+        }
+
+        $algoQuery = $query + ['ordType' => 'conditional'];
+        foreach ($this->dataRows($this->privateGet('/api/v5/trade/orders-algo-pending', $algoQuery, $operation), $operation) as $row) {
+            $orders[] = $this->privateMapper->order($row, true);
+        }
+
+        return $orders;
+    }
+
+    /** @return list<OrderDto> */
+    private function fetchOpenOrdersSnapshot(string $operation): array
+    {
+        $query = ['instType' => 'SWAP', 'limit' => self::PRIVATE_PAGE_SIZE];
         $orders = [];
         $algoQuery = $query + ['ordType' => 'conditional'];
         $this->appendPaginatedOpenOrders(
@@ -341,7 +364,7 @@ final class OkxOrderGateway implements OrderProviderInterface
 
         do {
             $query = $after === null ? $baseQuery : $baseQuery + ['after' => $after];
-            $rows = $this->dataRows($this->privateGet($path, $query, $operation), $operation);
+            $rows = $this->snapshotDataRows($this->privateGet($path, $query, $operation), $operation);
             if (\count($orders) + \count($rows) > self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
                 throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
             }
@@ -352,9 +375,6 @@ final class OkxOrderGateway implements OrderProviderInterface
 
             if (\count($rows) < self::PRIVATE_PAGE_SIZE) {
                 return;
-            }
-            if (\count($orders) >= self::PRIVATE_SNAPSHOT_MAX_ITEMS) {
-                throw new OkxProviderUnavailableException('okx_private_pagination_limit_exceeded', $operation);
             }
 
             $nextAfter = trim((string) ($rows[\count($rows) - 1][$cursorField] ?? ''));
@@ -368,6 +388,21 @@ final class OkxOrderGateway implements OrderProviderInterface
             $seenCursors[$nextAfter] = true;
             $after = $nextAfter;
         } while (true);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return list<array<string, mixed>>
+     */
+    private function snapshotDataRows(array $payload, string $operation): array
+    {
+        $rows = $this->dataRows($payload, $operation);
+        $data = $payload['data'] ?? null;
+        if (!\is_array($data) || \count($rows) !== \count($data)) {
+            throw new OkxProviderUnavailableException('okx_private_snapshot_page_invalid', $operation);
+        }
+
+        return $rows;
     }
 
     /**

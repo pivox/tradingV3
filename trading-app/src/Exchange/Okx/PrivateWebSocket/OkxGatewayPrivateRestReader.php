@@ -31,7 +31,7 @@ final readonly class OkxGatewayPrivateRestReader implements OkxPrivateRestGatewa
     /** @return list<OrderDto> */
     public function openOrders(): array
     {
-        return $this->orderGateway->getOpenOrdersOrFail(null);
+        return $this->orderGateway->getOpenOrdersForSnapshotOrFail();
     }
 
     /** @return list<mixed> */
