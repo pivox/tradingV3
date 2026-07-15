@@ -699,6 +699,54 @@ final class OkxPrivateRestSnapshotProbeTest extends TestCase
         yield 'fill blank string cursor' => ['fills', " \t "];
     }
 
+    #[DataProvider('oversizedSnapshotPageProvider')]
+    public function testSnapshotPageLargerThanRequestedLimitFailsClosed(string $stream): void
+    {
+        $responses = match ($stream) {
+            'orders' => [
+                '/api/v5/trade/orders-pending' => [self::payload(self::standardOrderRows(101, 300))],
+            ],
+            'algo' => [
+                '/api/v5/trade/orders-pending' => [self::payload([])],
+                '/api/v5/trade/orders-algo-pending' => [self::payload(self::algoOrderRows(101, 300))],
+            ],
+            'fills' => [
+                '/api/v5/trade/fills' => [self::payload(self::fillRows(101, 300))],
+            ],
+            default => throw new \LogicException('Unsupported snapshot stream fixture.'),
+        };
+        $client = new ScriptedOkxPrivateRestClient($responses);
+        $reader = new OkxGatewayPrivateRestReader(
+            new OkxAccountGateway($client),
+            new OkxOrderGateway($client),
+        );
+
+        try {
+            match ($stream) {
+                'orders', 'algo' => $reader->openOrders(),
+                'fills' => $reader->fills(),
+                default => throw new \LogicException('Unsupported snapshot stream fixture.'),
+            };
+            self::fail('A snapshot page larger than the requested limit must fail closed.');
+        } catch (OkxProviderUnavailableException $exception) {
+            self::assertSame('okx_private_snapshot_page_invalid', $exception->reason());
+        }
+
+        self::assertCount($stream === 'algo' ? 2 : 1, $client->privateGetCalls);
+        foreach ($client->privateGetCalls as [, $query]) {
+            self::assertSame(100, $query['limit'] ?? null);
+            self::assertArrayNotHasKey('after', $query);
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function oversizedSnapshotPageProvider(): iterable
+    {
+        yield 'standard orders' => ['orders'];
+        yield 'algo orders' => ['algo'];
+        yield 'fills' => ['fills'];
+    }
+
     public function testMissingOrderCursorFailsClosed(): void
     {
         $rows = self::standardOrderRows(100, 300);

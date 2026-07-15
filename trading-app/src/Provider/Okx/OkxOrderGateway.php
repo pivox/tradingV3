@@ -418,7 +418,11 @@ final class OkxOrderGateway implements OrderProviderInterface
     {
         $rows = $this->dataRows($payload, $operation);
         $data = $payload['data'] ?? null;
-        if (!\is_array($data) || \count($rows) !== \count($data)) {
+        if (
+            !\is_array($data)
+            || \count($rows) !== \count($data)
+            || \count($data) > self::PRIVATE_PAGE_SIZE
+        ) {
             throw new OkxProviderUnavailableException('okx_private_snapshot_page_invalid', $operation);
         }
 
