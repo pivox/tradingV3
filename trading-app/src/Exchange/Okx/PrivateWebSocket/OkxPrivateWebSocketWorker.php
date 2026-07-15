@@ -72,7 +72,11 @@ final class OkxPrivateWebSocketWorker
         ?LoopInterface $loop = null,
     ) {
         $this->loop = $loop ?? Loop::get();
-        $this->session = new OkxPrivateWebSocketSession($normalizer, $clock->now());
+        $this->session = new OkxPrivateWebSocketSession(
+            $normalizer,
+            $clock->now(),
+            fillsChannelEnabled: false,
+        );
     }
 
     public function run(?int $maxCycles = null): void

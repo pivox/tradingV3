@@ -12,8 +12,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(OkxPrivateWebSocketEndpointGuard::class)]
 final class OkxPrivateWebSocketEndpointGuardTest extends TestCase
 {
-    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private'])]
-    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'])]
+    #[TestWith(['wss://wseeapap.okx.com:8443/ws/v5/private'])]
     public function testAcceptsOnlyCanonicalDemoPrivateUri(string $uri): void
     {
         self::assertSame(
@@ -32,6 +31,8 @@ final class OkxPrivateWebSocketEndpointGuardTest extends TestCase
     }
 
     #[TestWith(['https://wspap.okx.com:8443/ws/v5/private'])]
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private'])]
+    #[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'])]
     #[TestWith(['wss://ws.okx.com:8443/ws/v5/private'])]
     #[TestWith(['wss://wspap.okx.com.evil.test:8443/ws/v5/private'])]
     #[TestWith(['wss://user@wspap.okx.com:8443/ws/v5/private'])]

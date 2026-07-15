@@ -71,8 +71,8 @@ Le worker démarre uniquement si toutes les conditions suivantes sont vraies :
 - `OKX_LIVE_ENABLED=0` ;
 - `OKX_DEMO_API_KEY`, `OKX_DEMO_API_SECRET` et
   `OKX_DEMO_API_PASSPHRASE` sont non vides ;
-- l'URI privée utilise `wspap.okx.com:8443/ws/v5/private`, avec une query vide
-  ou exactement égale à `brokerId=9999` ;
+- l'URI privée utilise exactement
+  `wss://wseeapap.okx.com:8443/ws/v5/private`, sans query ;
 - l'URI business utilise exactement
   `wss://wseeapap.okx.com:8443/ws/v5/business`, sans query.
 
@@ -98,6 +98,10 @@ Après un acknowledgement de login réussi, le worker souscrit à :
 - `positions` avec `instType=SWAP` ;
 - `balance_and_position` ;
 - `fills` lorsque le compte accepte cette souscription.
+
+Pour le domaine EEA `wseeapap`, le canal `fills` n'est pas expose et renvoie
+`60028` sans `arg`. Le worker EEA ne l'envoie donc pas et active le fallback
+`orders_plus_rest` uniquement apres un snapshot REST complet.
 
 Les endpoints `/ws/v5/private` et `/ws/v5/business` utilisent deux transports
 et deux heartbeats indépendants. Le statut agrégé n'est connecté/authentifié que

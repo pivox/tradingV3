@@ -38,11 +38,12 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         $this->session = $this->newSession();
     }
 
-    private function newSession(): OkxPrivateWebSocketSession
+    private function newSession(bool $fillsChannelEnabled = true): OkxPrivateWebSocketSession
     {
         return new OkxPrivateWebSocketSession(
             new OkxExchangeEventNormalizer(new OkxInstrumentResolver(), $this->fixedClock()),
             self::at(0),
+            fillsChannelEnabled: $fillsChannelEnabled,
         );
     }
 
@@ -93,6 +94,64 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
         ]], $result->outgoingCommands);
         self::assertSame([], $result->normalizedEvents);
         self::assertTrue($this->session->status()->authenticated);
+    }
+
+    public function testEeaModeUsesOrdersPlusRestInsteadOfUnsupportedFillsChannel(): void
+    {
+        $session = $this->newSession(fillsChannelEnabled: false);
+        $session->onConnected([['sign' => self::SECRET]], self::at(1));
+
+        $result = $session->onMessage(['event' => 'login', 'code' => '0'], self::at(2));
+
+        self::assertSame([[
+            'op' => 'subscribe',
+            'args' => [
+                ['channel' => 'orders', 'instType' => 'SWAP'],
+                ['channel' => 'orders-algo', 'instType' => 'SWAP'],
+                ['channel' => 'positions', 'instType' => 'SWAP'],
+                ['channel' => 'balance_and_position'],
+            ],
+        ]], $result->outgoingCommands);
+
+        $session->applySnapshot(self::snapshot(true), self::at(3));
+
+        self::assertTrue($session->status()->fillsStreamReady);
+        self::assertSame('orders_plus_rest', $session->status()->fillsSource);
+        self::assertSame([], $session->status()->warnings);
+    }
+
+    /** @param array<string, mixed> $message */
+    #[DataProvider('unsolicitedEeaFillsMessages')]
+    public function testEeaModeRejectsUnsolicitedFillsMessages(array $message): void
+    {
+        $session = $this->newSession(fillsChannelEnabled: false);
+        $session->onConnected([['sign' => self::SECRET]], self::at(1));
+        $session->onMessage(['event' => 'login', 'code' => '0'], self::at(2));
+        $session->applySnapshot(self::snapshot(true), self::at(3));
+
+        try {
+            $session->onMessage($message, self::at(4));
+            self::fail('Expected unsolicited EEA fills message to fail closed.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame('okx_private_ws_message_invalid', $exception->getMessage());
+        }
+
+        self::assertContains('okx_private_ws_message_invalid', $session->status()->blockingErrors);
+        self::assertSame('orders_plus_rest', $session->status()->fillsSource);
+        self::assertSame([], $session->status()->warnings);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function unsolicitedEeaFillsMessages(): iterable
+    {
+        yield 'acknowledgement' => [[
+            'event' => 'subscribe',
+            'arg' => ['channel' => 'fills'],
+        ]];
+        yield 'data' => [[
+            'arg' => ['channel' => 'fills', 'instType' => 'SWAP'],
+            'data' => [],
+        ]];
     }
 
     public function testAllRequiredAcknowledgementsAreNeededForStreamReadiness(): void
@@ -617,6 +676,7 @@ final class OkxPrivateWebSocketSessionTest extends TestCase
                 'balanceAndPositionAcknowledged',
                 'loginExpected',
                 'failedSubscriptions',
+                'fillsChannelEnabled',
             ],
             array_map(static fn (\ReflectionProperty $property): string => $property->getName(), $reflection->getProperties()),
         );

@@ -150,10 +150,15 @@ le fallback volontaire est le polling REST public.
 | Bills / ledger account | Endpoint account bills si retenu | Frais/funding non presents dans les fills. |
 
 L'observabilite temps reel utilise deux connexions authentifiees indissociables :
-`/ws/v5/private` pour les ordres standards, fills et positions, et
+`/ws/v5/private` pour les ordres standards et positions, et
 `/ws/v5/business` pour `orders-algo`. La couverture ordres n'est prete qu'apres
 ACK des deux canaux `orders` et `orders-algo`; une panne de l'un des sockets
 invalide et reconnecte toute la paire.
+
+Sur l'API EEA, `/ws/v5/private` couvre les ordres et positions mais pas le canal
+`fills`, absent de la documentation EEA et refuse avec `60028`. La couverture
+fills repose explicitement sur `orders` et le snapshot REST recent, avec
+`fills_source=orders_plus_rest`.
 
 Configuration demo private OKX-004 :
 
@@ -163,7 +168,7 @@ OKX_DEMO_API_KEY=...
 OKX_DEMO_API_SECRET=...
 OKX_DEMO_API_PASSPHRASE=...
 OKX_API_BASE_URI=https://eea.okx.com
-OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
+OKX_WS_PRIVATE_URI=wss://wseeapap.okx.com:8443/ws/v5/private
 OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com:8443/ws/v5/business
 OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0

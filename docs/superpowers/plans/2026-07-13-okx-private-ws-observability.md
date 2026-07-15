@@ -56,8 +56,7 @@
 - [x] **Étape 1 : Écrire les tests en échec**
 
 ```php
-#[TestWith(['wss://wspap.okx.com:8443/ws/v5/private'])]
-#[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'])]
+#[TestWith(['wss://wseeapap.okx.com:8443/ws/v5/private'])]
 public function testAcceptsOnlyCanonicalDemoPrivateUri(string $uri): void
 {
     self::assertSame('okx_demo_private_v1', (new OkxPrivateWebSocketEndpointGuard())->assertAllowed($uri));
@@ -68,7 +67,7 @@ public function testAcceptsOnlyCanonicalDemoPrivateUri(string $uri): void
 #[TestWith(['wss://wspap.okx.com.evil.test:8443/ws/v5/private'])]
 #[TestWith(['wss://wspap.okx.com/ws/v5/private'])]
 #[TestWith(['wss://wspap.okx.com:8443/ws/v5/public'])]
-#[TestWith(['wss://wspap.okx.com:8443/ws/v5/private?x=1'])]
+#[TestWith(['wss://wseeapap.okx.com:8443/ws/v5/private?x=1'])]
 public function testRejectsEveryNonAllowlistedUri(string $uri): void
 {
     $this->expectExceptionMessage('okx_demo_private_ws_endpoint_not_allowed');
@@ -106,8 +105,7 @@ final class OkxPrivateWebSocketEndpointGuard
     private const ENDPOINT_ID = 'okx_demo_private_v1';
 
     private const ALLOWED_URIS = [
-        'wss://wspap.okx.com:8443/ws/v5/private',
-        'wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999',
+        'wss://wseeapap.okx.com:8443/ws/v5/private',
     ];
 
     public function assertAllowed(string $uri): string

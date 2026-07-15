@@ -36,15 +36,14 @@ the Pawl transport. `OkxPrivateWebSocketSession` owns login, channel
 subscriptions, normalized events and readiness state. It never builds, submits,
 cancels or amends an order.
 
-The login deadline is 5 seconds. After a successful login, the worker first
-sends the subscription command for `orders`, `fills`, `positions` and
+The login deadline is 5 seconds. After a successful login, the EEA worker first
+sends the subscription command for `orders`, `positions` and
 `balance_and_position`, then immediately executes and projects the private REST
 snapshot for account, positions, open orders, algo orders and recent fills. It
 does not wait for subscription acknowledgements before starting the snapshot.
-The VIP-only `fills` channel may be rejected by OKX; in that case the explicit
-supported fallback is the `orders` stream plus the recent-fills REST snapshot.
-The status then reports `fills_source=orders_plus_rest` and the allow-listed
-warning `okx_fills_channel_vip_unavailable`.
+The EEA API does not expose the private `fills` channel, so fill observability
+uses the `orders` stream plus the recent-fills REST snapshot. The status reports
+`fills_source=orders_plus_rest` only after that snapshot is complete.
 
 Each private REST read has a 2-second timeout and 2-second maximum duration. The
 whole readiness phase is bounded to 10 seconds. Readiness is published only
@@ -167,7 +166,7 @@ OKX_DEMO_API_SECRET=
 OKX_DEMO_API_PASSPHRASE=
 OKX_API_BASE_URI=https://eea.okx.com
 OKX_WS_PUBLIC_URI=wss://wseeapap.okx.com:8443/ws/v5/public
-OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999
+OKX_WS_PRIVATE_URI=wss://wseeapap.okx.com:8443/ws/v5/private
 OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com:8443/ws/v5/business
 OKX_SIMULATED_TRADING=1
 OKX_DEMO_TRADING_ENABLED=0
@@ -175,7 +174,7 @@ OKX_LIVE_ENABLED=0
 ```
 
 Le worker prive ouvre deux transports distincts. Le socket `/private` couvre
-`orders`, `fills` et `positions`; le socket `/business` couvre
+`orders` et `positions`; le socket `/business` couvre
 `orders-algo`. `orders_stream_ready` reste faux tant que les deux abonnements ne
 sont pas acquittes, et la perte d'un socket recycle la paire.
 

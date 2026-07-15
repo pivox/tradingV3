@@ -63,7 +63,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
 
         $opened = false;
         $transport->connect(
-            'wss://wspap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com:8443/ws/v5/private',
             static function () use (&$opened): void {
                 $opened = true;
             },
@@ -88,7 +88,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             connector: static fn (string $uri): PromiseInterface => resolve($connection),
         );
         $transport->connect(
-            'wss://wspap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com:8443/ws/v5/private',
             static function (): void {},
             static function (): void {},
             static function (): void {},
@@ -109,7 +109,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             connector: static fn (string $uri): PromiseInterface => $deferred->promise(),
         );
         $transport->connect(
-            'wss://wspap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com:8443/ws/v5/private',
             static function () use (&$opened): void { $opened = true; },
             static function (): void {},
             static function (): void {},
@@ -135,14 +135,14 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         );
         $oldCallbacks = ['message' => 0, 'close' => 0, 'error' => 0];
         $transport->connect(
-            'wss://wspap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com:8443/ws/v5/private',
             static function (): void {},
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['message']; },
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['close']; },
             static function () use (&$oldCallbacks): void { ++$oldCallbacks['error']; },
         );
         $transport->connect(
-            'wss://wspap.okx.com:8443/ws/v5/private',
+            'wss://wseeapap.okx.com:8443/ws/v5/private',
             static function (): void {},
             static function (): void {},
             static function (): void {},
@@ -165,7 +165,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $received = [];
         foreach (['old', 'current'] as $label) {
             $transport->connect(
-                'wss://wspap.okx.com:8443/ws/v5/private',
+                'wss://wseeapap.okx.com:8443/ws/v5/private',
                 static function (): void {},
                 static function (string $message) use (&$received, $label): void {
                     $received[] = $label . ':' . $message;
@@ -190,7 +190,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $worker->start();
 
         self::assertSame(
-            ['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'],
+            ['wss://wseeapap.okx.com:8443/ws/v5/private'],
             $transport->connections,
         );
         self::assertFalse($store->saved[0]->connected);
@@ -217,7 +217,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $worker->start();
 
         self::assertSame(
-            ['wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'],
+            ['wss://wseeapap.okx.com:8443/ws/v5/private'],
             $privateTransport->connections,
         );
         self::assertSame(
@@ -253,7 +253,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
                 ['channel' => 'orders', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
-                ['channel' => 'fills'],
             ],
         ], $privateTransport->sent[1]);
         self::assertSame([
@@ -265,7 +264,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $privateTransport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -434,7 +432,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
                 ['channel' => 'orders', 'instType' => 'SWAP'],
                 ['channel' => 'positions', 'instType' => 'SWAP'],
                 ['channel' => 'balance_and_position'],
-                ['channel' => 'fills'],
             ],
         ], $transport->sent[1]);
 
@@ -442,7 +439,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -454,6 +450,8 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertTrue($status->authenticated);
         self::assertTrue($status->ordersStreamReady);
         self::assertTrue($status->fillsStreamReady);
+        self::assertSame('orders_plus_rest', $status->fillsSource);
+        self::assertSame([], $status->warnings);
         self::assertTrue($status->positionsStreamReady);
         self::assertTrue($status->initialSnapshotLoaded);
         self::assertTrue($status->reconciliationFresh);
@@ -482,7 +480,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -540,7 +537,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -595,7 +591,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         self::assertFalse($store->load()?->connected);
     }
 
-    public function testFillsVipFailureKeepsOrdersPlusRestSessionAndDoesNotReconnect(): void
+    public function testUnsolicitedFillsErrorFailsClosedAndReconnects(): void
     {
         $transport = new FakeOkxPrivateWebSocketTransport();
         $loop = new DeterministicLoop();
@@ -621,11 +617,12 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
         $clock->sleep(3);
         $loop->firePeriodicInterval(1.0);
 
-        self::assertSame(0, $transport->closeCount);
+        self::assertSame(1, $transport->closeCount);
+        self::assertContains(1.0, $loop->timerIntervals());
         $status = $store->load();
         self::assertNotNull($status);
-        self::assertSame('orders_plus_rest', $status->fillsSource);
-        self::assertSame([], $status->blockingErrors);
+        self::assertFalse($status->connected);
+        self::assertContains('okx_private_ws_connection_failed', $status->blockingErrors);
     }
 
     #[DataProvider('failedSnapshotSources')]
@@ -744,7 +741,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -835,7 +831,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -874,7 +869,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -968,7 +962,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -1180,7 +1173,6 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             ['channel' => 'orders', 'instType' => 'SWAP'],
             ['channel' => 'positions', 'instType' => 'SWAP'],
             ['channel' => 'balance_and_position'],
-            ['channel' => 'fills'],
         ] as $arg) {
             $transport->message(['event' => 'subscribe', 'arg' => $arg]);
         }
@@ -1427,7 +1419,7 @@ final class OkxPrivateWebSocketWorkerTest extends TestCase
             apiKey: 'demo-key',
             apiSecret: 'demo-secret',
             apiPassphrase: 'demo-passphrase',
-            wsPrivateUri: 'wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999',
+            wsPrivateUri: 'wss://wseeapap.okx.com:8443/ws/v5/private',
             simulatedTrading: true,
             liveEnabled: false,
         );

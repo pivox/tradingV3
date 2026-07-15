@@ -34,6 +34,7 @@ final class OkxPrivateWebSocketSession
     public function __construct(
         OkxExchangeEventNormalizer $normalizer,
         DateTimeImmutable $now,
+        private readonly bool $fillsChannelEnabled = true,
     ) {
         $this->normalizer = $normalizer;
         $this->status = OkxPrivateWebSocketObservabilityStatus::connecting(self::utc($now));
@@ -112,6 +113,8 @@ final class OkxPrivateWebSocketSession
             $this->replaceStatus(
                 now: $now,
                 updateHeartbeat: false,
+                fillsStreamReady: $this->fillsChannelEnabled ? null : true,
+                fillsSource: $this->fillsChannelEnabled ? null : 'orders_plus_rest',
                 initialSnapshotLoaded: true,
                 reconciliationFresh: true,
                 blockingErrors: self::withoutCode(
@@ -227,15 +230,19 @@ final class OkxPrivateWebSocketSession
             ),
         );
 
+        $subscriptionArgs = [
+            ['channel' => 'orders', 'instType' => 'SWAP'],
+            ['channel' => 'orders-algo', 'instType' => 'SWAP'],
+            ['channel' => 'positions', 'instType' => 'SWAP'],
+            ['channel' => 'balance_and_position'],
+        ];
+        if ($this->fillsChannelEnabled) {
+            $subscriptionArgs[] = ['channel' => 'fills'];
+        }
+
         return new OkxPrivateWebSocketSessionResult(outgoingCommands: [[
             'op' => 'subscribe',
-            'args' => [
-                ['channel' => 'orders', 'instType' => 'SWAP'],
-                ['channel' => 'orders-algo', 'instType' => 'SWAP'],
-                ['channel' => 'positions', 'instType' => 'SWAP'],
-                ['channel' => 'balance_and_position'],
-                ['channel' => 'fills'],
-            ],
+            'args' => $subscriptionArgs,
         ]]);
     }
 
@@ -339,6 +346,7 @@ final class OkxPrivateWebSocketSession
         if (!in_array($channel, self::REQUIRED_CHANNELS, true)) {
             return new OkxPrivateWebSocketSessionResult();
         }
+        $this->assertChannelEnabled($channel, $now);
 
         $data = $message['data'];
         if (!is_array($data)
@@ -449,6 +457,7 @@ final class OkxPrivateWebSocketSession
         if (!is_string($channel) || !in_array($channel, self::REQUIRED_CHANNELS, true)) {
             $this->rejectInvalidMessage($now);
         }
+        $this->assertChannelEnabled($channel, $now);
 
         $actual = $arg;
         $expected = self::expectedSubscriptionArg($channel);
@@ -459,6 +468,13 @@ final class OkxPrivateWebSocketSession
         }
 
         return $channel;
+    }
+
+    private function assertChannelEnabled(string $channel, DateTimeImmutable $now): void
+    {
+        if ('fills' === $channel && !$this->fillsChannelEnabled) {
+            $this->rejectInvalidMessage($now);
+        }
     }
 
     /** @return array<string, string> */
