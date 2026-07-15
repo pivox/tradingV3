@@ -434,6 +434,8 @@ services:
     mem_limit: 256m
     working_dir: /var/www/html
     read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     volumes:
       - app-cache:/var/www/html/var/cache
       - ./trading-app/var/log:/var/www/html/var/log
