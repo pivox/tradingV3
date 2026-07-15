@@ -120,7 +120,9 @@ final class OkxPrivateRestSnapshotReconcilerTest extends TestCase
         $store->localOpenOrders = [$this->localOrder()];
 
         self::assertSame(1, $this->reconciler($store)->reconcile($this->snapshot(orders: [$this->order()])));
-        self::assertSame(ExchangeOrderStatus::OPEN, $store->events[0]->order()->status);
+        $event = $store->events[0];
+        self::assertInstanceOf(AbstractExchangeOrderEvent::class, $event);
+        self::assertSame(ExchangeOrderStatus::OPEN, $event->order()->status);
     }
 
     private function localOrder(): ExchangeOrderDto
