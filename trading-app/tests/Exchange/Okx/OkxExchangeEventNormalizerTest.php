@@ -1111,6 +1111,28 @@ final class OkxExchangeEventNormalizerTest extends TestCase
         ]];
     }
 
+    /** @return iterable<string,array{array<string,mixed>}> */
+    public static function unknownPrivateEnumProvider(): iterable
+    {
+        yield 'unknown order side' => [self::validPrivateOrderEvent([], ['side' => 'hold'])];
+        yield 'unknown order state' => [self::validPrivateOrderEvent([], ['state' => 'garbage'])];
+        yield 'unknown order type' => [self::validPrivateOrderEvent([], ['ordType' => 'unexpected'])];
+        yield 'unknown position side' => [self::validPrivateOrderEvent([], ['posSide' => 'unknown'])];
+        yield 'unknown margin mode' => [self::validPrivateOrderEvent([], ['tdMode' => 'unknown'])];
+        yield 'unknown reduce only' => [self::validPrivateOrderEvent([], ['reduceOnly' => 'unexpected'])];
+        yield 'empty reduce only' => [self::validPrivateOrderEvent([], ['reduceOnly' => ''])];
+    }
+
+    /** @param array<string,mixed> $event */
+    #[DataProvider('unknownPrivateEnumProvider')]
+    public function testUnknownPresentPrivateEnumsThrowCanonicalException(array $event): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_private_ws_message_invalid');
+
+        $this->normalizer->normalize($event);
+    }
+
     public function testAcceptsAnyInstTypeSubscriptionsAndFiltersRows(): void
     {
         $events = $this->normalizer->normalize([

@@ -58,6 +58,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function position(array $row): ?PositionDto
     {
+        $this->assertKnownEnums($row);
         $size = $this->float($row['pos'] ?? null);
         if (abs($size) <= 0.00000001) {
             return null;
@@ -88,6 +89,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function order(array $row, bool $algo): OrderDto
     {
+        $this->assertKnownEnums($row);
         $quantity = BigDecimal::of($this->number($row['sz'] ?? '0'));
         $filled = BigDecimal::of($this->number($row['accFillSz'] ?? '0'));
         $orderType = $this->orderType($row, $algo);
@@ -116,6 +118,7 @@ final readonly class OkxPrivateReadMapper
      */
     public function fill(array $row): ExchangeFillDto
     {
+        $this->assertKnownEnums($row);
         return new ExchangeFillDto(
             exchange: Exchange::OKX,
             marketType: MarketType::PERPETUAL,
@@ -202,6 +205,43 @@ final readonly class OkxPrivateReadMapper
     private function orderSide(mixed $side): OrderSide
     {
         return strtolower((string) $side) === 'sell' ? OrderSide::SELL : OrderSide::BUY;
+    }
+
+    /** @param array<string,mixed> $row */
+    private function assertKnownEnums(array $row): void
+    {
+        $this->assertKnownEnum($row, 'side', ['buy', 'sell']);
+        $this->assertKnownEnum($row, 'state', [
+            'filled', 'partially_filled', 'canceled', 'cancelled', 'rejected', 'live',
+        ]);
+        $this->assertKnownEnum($row, 'ordType', [
+            'limit', 'market', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc',
+            'conditional', 'trigger', 'oco', 'move_order_stop', 'iceberg', 'twap',
+        ]);
+        $this->assertKnownEnum($row, 'posSide', ['long', 'short', 'net']);
+        $this->assertKnownEnum($row, 'tdMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'mgnMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'reduceOnly', ['true', 'false']);
+    }
+
+    /** @param list<string> $allowed */
+    /**
+     * @param array<string,mixed> $row
+     * @param list<string> $allowed
+     */
+    private function assertKnownEnum(array $row, string $key, array $allowed): void
+    {
+        if (!array_key_exists($key, $row) || $row[$key] === null) {
+            return;
+        }
+
+        $value = is_scalar($row[$key]) ? strtolower(trim((string) $row[$key])) : null;
+        if ($value === '' && in_array($key, ['posSide', 'tdMode', 'mgnMode'], true)) {
+            return;
+        }
+        if ($value === null || !in_array($value, $allowed, true)) {
+            throw new \InvalidArgumentException('okx_private_rest_snapshot_value_invalid');
+        }
     }
 
     private function exchangeOrderSide(mixed $side): ExchangeOrderSide

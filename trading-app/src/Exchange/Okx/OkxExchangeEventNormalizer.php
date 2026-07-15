@@ -844,6 +844,21 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
     /** @param array<string,mixed> $row */
     private function assertValidRowValues(array $row, string $channel): void
     {
+        $this->assertKnownEnum($row, 'side', ['buy', 'sell']);
+        $this->assertKnownEnum($row, 'state', [
+            'filled', 'partially_filled', 'canceled', 'cancelled', 'mmp_canceled',
+            'rejected', 'order_failed', 'partially_failed', 'effective',
+            'partially_effective', 'live',
+        ]);
+        $this->assertKnownEnum($row, 'ordType', [
+            'limit', 'market', 'post_only', 'ioc', 'fok', 'optimal_limit_ioc',
+            'conditional', 'trigger', 'oco', 'move_order_stop', 'iceberg', 'twap',
+        ]);
+        $this->assertKnownEnum($row, 'posSide', ['long', 'short', 'net']);
+        $this->assertKnownEnum($row, 'tdMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'mgnMode', ['cross', 'isolated', 'cash', 'simulated']);
+        $this->assertKnownEnum($row, 'reduceOnly', ['true', 'false']);
+
         foreach ([
             'accFillSz',
             'avgPx',
@@ -903,6 +918,25 @@ final readonly class OkxExchangeEventNormalizer implements ExchangeEventNormaliz
             if ($this->hasProvidedValue($row, $key) && !$this->isValidTimestamp($this->scalarString($row[$key]) ?? '')) {
                 throw new \InvalidArgumentException('okx_private_ws_message_invalid');
             }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param list<string> $allowed
+     */
+    private function assertKnownEnum(array $row, string $key, array $allowed): void
+    {
+        if (!array_key_exists($key, $row) || $row[$key] === null) {
+            return;
+        }
+
+        $value = $this->lowerScalar($row[$key]);
+        if ($value === '' && in_array($key, ['posSide', 'tdMode', 'mgnMode'], true)) {
+            return;
+        }
+        if (!in_array($value, $allowed, true)) {
+            throw new \InvalidArgumentException('okx_private_ws_message_invalid');
         }
     }
 
