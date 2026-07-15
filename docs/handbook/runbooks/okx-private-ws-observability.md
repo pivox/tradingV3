@@ -53,7 +53,7 @@ export OKX_ENV_FILE="${OKX_ENV_FILE:-trading-app/.env.local}"
 
 Les valeurs non sensibles attendues sont `OKX_ENV=demo`,
 `OKX_SIMULATED_TRADING=1`,
-`OKX_WS_PRIVATE_URI=wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999`,
+`OKX_WS_PRIVATE_URI=wss://wseeapap.okx.com:8443/ws/v5/private`,
 `OKX_WS_BUSINESS_URI=wss://wseeapap.okx.com:8443/ws/v5/business`,
 `DEMO_TRADING_ENABLED=0`, `OKX_DEMO_TRADING_ENABLED=0` et
 `OKX_LIVE_ENABLED=0`. Le service Compose force ces trois gates consommees.
@@ -80,7 +80,7 @@ Les logs applicatifs dedies sont dans
 des transitions, phases et codes bornes, jamais de message WS brut.
 
 Le worker ouvre deux connexions authentifiees : `/ws/v5/private` pour
-`orders`, `positions`, `balance_and_position` et `fills`, puis
+`orders`, `positions` et `balance_and_position`, puis
 `/ws/v5/business` pour `orders-algo`. Le login de la paire est borne a 5
 secondes. Une fois authentifie, l'ensemble
 souscriptions + snapshot REST + reconciliation doit devenir pret en moins de
@@ -175,13 +175,14 @@ contradictoire, projection Doctrine impossible ou budget global de 10 secondes
 depasse entrainent une reconnexion. Ne pas marquer manuellement le snapshot
 comme charge et ne pas ignorer une projection partielle.
 
-### Fills VIP
+### Fills EEA
 
-Le rejet du canal VIP `fills` est attendu pour certains comptes. Le statut doit
-alors exposer `fills_source=orders_plus_rest` et
-`okx_fills_channel_vip_unavailable`. Le stream `orders` et le snapshot REST des
-fills doivent tous deux etre operationnels; sinon la couverture fills reste non
-prete.
+L'API EEA ne documente pas le canal prive `fills` et le refuse avec `60028` sur
+`/private`. Le worker EEA ne souscrit donc pas a ce canal. Le statut expose
+`fills_source=orders_plus_rest` seulement apres chargement complet du snapshot
+REST. Le stream `orders` et le snapshot REST des fills doivent tous deux etre
+operationnels; sinon la couverture fills reste non prete. Ne pas inferer le
+canal concerne depuis une erreur `60028` sans `arg`.
 
 ### Redis
 

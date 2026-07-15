@@ -66,7 +66,7 @@ final readonly class OkxConfig
         }
 
         return $this->isDemo()
-            ? 'wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999'
+            ? 'wss://wseeapap.okx.com:8443/ws/v5/private'
             : 'wss://ws.okx.com:8443/ws/v5/private';
     }
 
