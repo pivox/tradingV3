@@ -416,7 +416,7 @@ final class FakeExchangeFaultInjectionTest extends TestCase
         @unlink($stateFile);
 
         try {
-            new FakeExchangeStateStore($stateFile);
+            (new FakeExchangeStateStore($stateFile))->reset();
             $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
             self::assertIsArray($envelope);
             self::assertIsArray($envelope['payload'] ?? null);

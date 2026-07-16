@@ -299,6 +299,31 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame([], $this->state->leverageSettings());
     }
 
+    public function testStateStoreInitializesMissingStateInMemoryUntilExplicitReset(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_initial_state_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+
+            self::assertFileDoesNotExist($stateFile);
+            self::assertSame(100000.0, $state->totalBalanceUsdt());
+            self::assertFalse($state->recoveryMetadata()['restored']);
+            self::assertFileDoesNotExist($stateFile);
+
+            $state->reset();
+
+            self::assertFileExists($stateFile);
+            $restored = new FakeExchangeStateStore($stateFile);
+            self::assertTrue($restored->recoveryMetadata()['restored']);
+            self::assertSame(100000.0, $restored->totalBalanceUsdt());
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
     public function testLeverageSettingSurvivesRestart(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_leverage_');
@@ -331,7 +356,7 @@ final class FakeExchangeAdapterTest extends TestCase
         @unlink($stateFile);
 
         try {
-            new FakeExchangeStateStore($stateFile);
+            (new FakeExchangeStateStore($stateFile))->reset();
             $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
             self::assertIsArray($envelope);
             self::assertIsArray($envelope['payload'] ?? null);
@@ -366,7 +391,7 @@ final class FakeExchangeAdapterTest extends TestCase
         @unlink($stateFile);
 
         try {
-            new FakeExchangeStateStore($stateFile);
+            (new FakeExchangeStateStore($stateFile))->reset();
             $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
             self::assertIsArray($envelope);
             self::assertIsArray($envelope['payload'] ?? null);
@@ -1482,7 +1507,7 @@ final class FakeExchangeAdapterTest extends TestCase
         @unlink($stateFile);
 
         try {
-            new FakeExchangeStateStore($stateFile);
+            (new FakeExchangeStateStore($stateFile))->reset();
             $raw = file_get_contents($stateFile);
             self::assertIsString($raw);
             $corrupted = str_replace('d:100000;', 's:6:"broken";', $raw, $replacements);

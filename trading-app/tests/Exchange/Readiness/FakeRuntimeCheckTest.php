@@ -38,13 +38,25 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertFalse($report->permissionsTrade);
         self::assertTrue($report->mainnetWriteGuard);
         self::assertTrue($report->stopLossCapability);
-        self::assertContains('instruments_not_loaded', $report->blockingErrors);
-        self::assertContains('metadata_invalid', $report->blockingErrors);
-        self::assertContains('precision_invalid', $report->blockingErrors);
+        self::assertNotContains('instruments_not_loaded', $report->blockingErrors);
+        self::assertNotContains('metadata_invalid', $report->blockingErrors);
+        self::assertNotContains('precision_invalid', $report->blockingErrors);
         self::assertContains('public_connectivity_unavailable', $report->blockingErrors);
         self::assertContains('fake_paper_market_source_not_configured', $report->warnings);
         self::assertContains('fake_paper_persistence_not_configured', $report->warnings);
         self::assertContains('fake_paper_slippage_model_zero', $report->warnings);
+    }
+
+    public function testRuntimeMetadataUsesCanonicalCatalogVersions(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($state);
+        $clock = $this->clock();
+        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $metadata = (new FakeExchangeAdapter($state, $book, $engine, $clock))->runtimeModelMetadata();
+
+        self::assertSame('fake-instrument-catalog-v1', $metadata['metadata_fixture_version']);
+        self::assertSame('brick-math-exact-multiple-v1', $metadata['precision_model_version']);
     }
 
     public function testPersistentPaperProbesWritableRecoveryWithoutTouchingActiveState(): void

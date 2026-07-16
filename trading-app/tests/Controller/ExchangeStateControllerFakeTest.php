@@ -11,14 +11,12 @@ use App\Contract\Provider\AccountProviderInterface;
 use App\Controller\ExchangeStateController;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Context\ExchangeContextResolver;
-use App\Provider\Fake\FakeAccountProvider;
-use App\Provider\Fake\FakeContractProvider;
 use App\Provider\Fake\FakeKlineProvider;
-use App\Provider\Fake\FakeOrderProvider;
 use App\Provider\Fake\FakeSystemProvider;
 use App\Provider\MainProvider;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\Provider\Registry\ExchangeProviderRegistry;
+use App\Tests\Provider\Fake\FakeProviderFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -36,14 +34,15 @@ final class ExchangeStateControllerFakeTest extends TestCase
 {
     private function buildController(): ExchangeStateController
     {
+        $fake = FakeProviderFixture::create();
         $registry = new ExchangeProviderRegistry(
             [
                 new ExchangeProviderBundle(
                     new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
                     new FakeKlineProvider(),
-                    new FakeContractProvider(),
-                    new FakeOrderProvider(),
-                    new FakeAccountProvider(),
+                    $fake->contract,
+                    $fake->order,
+                    $fake->account,
                     new FakeSystemProvider(),
                 ),
             ],
@@ -79,6 +78,11 @@ final class ExchangeStateControllerFakeTest extends TestCase
         self::assertSame(['open_positions' => [], 'open_orders' => []], $payload);
     }
 
+    public function testFakeProviderFixtureExposesRealInitialBalance(): void
+    {
+        self::assertSame(100000.0, FakeProviderFixture::create()->account->getAccountBalance());
+    }
+
     public function testInvalidExchangeReturnsBadRequest(): void
     {
         $controller = $this->buildController();
@@ -97,14 +101,15 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $throwingAccount = $this->createMock(AccountProviderInterface::class);
         $throwingAccount->method('getOpenPositionsOrFail')
             ->willThrowException(new \RuntimeException('bitmart unavailable'));
+        $fake = FakeProviderFixture::create();
 
         $registry = new ExchangeProviderRegistry(
             [
                 new ExchangeProviderBundle(
                     new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
                     new FakeKlineProvider(),
-                    new FakeContractProvider(),
-                    new FakeOrderProvider(),
+                    $fake->contract,
+                    $fake->order,
                     $throwingAccount,
                     new FakeSystemProvider(),
                 ),

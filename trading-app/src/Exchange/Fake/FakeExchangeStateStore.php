@@ -68,11 +68,17 @@ class FakeExchangeStateStore
     ) {
         $this->stateFile = $stateFile;
         if (!$this->restore()) {
-            $this->reset();
+            $this->initializeDefaults();
         }
     }
 
     public function reset(): void
+    {
+        $this->initializeDefaults();
+        $this->persist();
+    }
+
+    private function initializeDefaults(): void
     {
         $this->nextOrderSequence = 1;
         $this->nextEventSequence = 1;
@@ -98,7 +104,6 @@ class FakeExchangeStateStore
                 metadata: ['source' => 'fake_exchange'],
             ),
         ];
-        $this->persist();
     }
 
     /**

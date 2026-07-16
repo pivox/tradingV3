@@ -79,17 +79,19 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     }
 
     /**
-     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,metadata_fixture_version:?string,precision_model_version:?string}
+     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,metadata_fixture_version:string,precision_model_version:string}
      */
     public function runtimeModelMetadata(): array
     {
+        $catalog = new FakeInstrumentCatalog();
+
         return [
             'fee_model' => 'fixed_notional_fee_v1',
             'fee_rate' => self::FEE_RATE,
             'fill_model' => 'top_of_book_v1',
             'slippage_model' => 'explicit_zero_additional_slippage_v1',
-            'metadata_fixture_version' => null,
-            'precision_model_version' => null,
+            'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
+            'precision_model_version' => $catalog->precisionModelVersion(),
         ];
     }
 
