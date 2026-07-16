@@ -471,6 +471,10 @@ class FakeExchangeStateStore
     public function configurePrivateWsScenario(FakePrivateWsScenario $scenario): void
     {
         $this->transactional(function () use ($scenario): void {
+            if ($this->privateWs['connection_state'] === self::PRIVATE_WS_RESYNC_REQUIRED) {
+                throw new \LogicException('fake_private_ws_snapshot_resync_required');
+            }
+
             $this->privateWs = self::defaultPrivateWsState();
             $this->privateWs['scenario'] = $scenario->toArray();
         });

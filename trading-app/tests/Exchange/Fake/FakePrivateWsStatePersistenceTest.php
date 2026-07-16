@@ -79,6 +79,59 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         self::assertSame(2, $restored->privateWsExpectedNumericSequence());
     }
 
+    public function testScenarioReconfigurationCannotClearGapResyncState(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->configurePrivateWsScenario($this->scenario([1, 3]));
+
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+        $auditBefore = $state->privateWsAudit();
+
+        try {
+            $state->configurePrivateWsScenario($this->scenario([1, 2]));
+            self::fail('A new scenario must not clear a gap without snapshot reconciliation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
+        }
+
+        self::assertSame($auditBefore, $state->privateWsAudit());
+        self::assertSame($auditBefore, (new FakeExchangeStateStore($this->stateFile))->privateWsAudit());
+    }
+
+    public function testScenarioReconfigurationCannotClearConflictResyncState(): void
+    {
+        $firstEvent = $this->event(1, ['status' => 'open']);
+        $conflictingEvent = $this->event(1, ['status' => 'filled']);
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'conflict-reconfiguration-v1',
+            [$firstEvent, $conflictingEvent],
+        ));
+
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $conflict = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $conflict);
+        $state->markPrivateWsConflict($conflict);
+        $auditBefore = $state->privateWsAudit();
+
+        try {
+            $state->configurePrivateWsScenario($this->scenario([1, 2]));
+            self::fail('A new scenario must not clear a conflict without snapshot reconciliation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
+        }
+
+        self::assertSame($auditBefore, $state->privateWsAudit());
+        self::assertSame($auditBefore, (new FakeExchangeStateStore($this->stateFile))->privateWsAudit());
+    }
+
     public function testSnapshotCompletionAdvancesCoveredDeliveriesWithoutSortingFixture(): void
     {
         $state = new FakeExchangeStateStore($this->stateFile);
