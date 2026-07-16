@@ -3085,6 +3085,8 @@ final class FakeExchangeAdapterTest extends TestCase
             self::assertTrue($legacyState->recoveryMetadata()['restored']);
             self::assertTrue($legacyState->recoveryMetadata()['legacy']);
             self::assertCount(1, $legacyState->getOpenOrders('BTCUSDT'));
+            self::assertFalse($legacyState->hasPrivateWsScenario());
+            self::assertSame('connected', $legacyState->privateWsAudit()['connection_state']);
 
             $legacyState->setOrderBookTop('BTCUSDT', 24998.0, 25002.0);
             $upgraded = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);

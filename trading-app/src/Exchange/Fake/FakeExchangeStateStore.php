@@ -23,6 +23,9 @@ class FakeExchangeStateStore
     private const STATE_FORMAT_VERSION = 1;
     private const ENGINE_VERSION = 'fake-paper-state-v1';
     private const SCENARIO_CONFIG_ID = 'fake-paper-default-v1';
+    private const PRIVATE_WS_AUDIT_LIMIT = 100;
+    private const PRIVATE_WS_CONNECTED = 'connected';
+    private const PRIVATE_WS_RESYNC_REQUIRED = 'resync_required';
 
     private ?string $stateFile;
 
@@ -60,6 +63,9 @@ class FakeExchangeStateStore
     /** @var list<array{operation:string,kind:string,outcome:string,retry_after_seconds:?int}> */
     private array $pendingFaults = [];
 
+    /** @var array<string,mixed> */
+    private array $privateWs = [];
+
     private bool $deferPersistence = false;
 
     public function __construct(
@@ -92,6 +98,7 @@ class FakeExchangeStateStore
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
         $this->pendingFaults = [];
+        $this->privateWs = self::defaultPrivateWsState();
         $this->balances = [
             'USDT' => new ExchangeBalanceDto(
                 exchange: Exchange::FAKE,
@@ -460,6 +467,215 @@ class FakeExchangeStateStore
         ));
     }
 
+    public function configurePrivateWsScenario(FakePrivateWsScenario $scenario): void
+    {
+        $this->transactional(function () use ($scenario): void {
+            $this->privateWs = self::defaultPrivateWsState();
+            $this->privateWs['scenario'] = $scenario->toArray();
+        });
+    }
+
+    public function hasPrivateWsScenario(): bool
+    {
+        return $this->privateWs['scenario'] !== null;
+    }
+
+    public function privateWsCurrentDelivery(): ?FakePrivateWsDelivery
+    {
+        $scenario = $this->privateWsScenario();
+        if (!$scenario instanceof FakePrivateWsScenario) {
+            return null;
+        }
+
+        return $scenario->deliveries[$this->privateWs['next_delivery_index']] ?? null;
+    }
+
+    public function privateWsAcknowledgedFingerprint(string $sequence): ?string
+    {
+        $fingerprint = $this->privateWs['acknowledged_fingerprints'][$sequence] ?? null;
+
+        return \is_string($fingerprint) ? $fingerprint : null;
+    }
+
+    public function privateWsLastAcknowledgedSequence(): ?string
+    {
+        return $this->privateWs['last_acknowledged_sequence'];
+    }
+
+    public function privateWsExpectedNumericSequence(): int
+    {
+        return $this->privateWs['last_observed_numeric_sequence'] + 1;
+    }
+
+    public function acknowledgePrivateWsDelivery(FakePrivateWsDelivery $delivery): void
+    {
+        $this->transactional(function () use ($delivery): void {
+            $current = $this->assertCurrentPrivateWsDelivery($delivery);
+            $known = $this->privateWsAcknowledgedFingerprint($current->sequence);
+            if ($known !== null && !hash_equals($known, $current->fingerprint)) {
+                throw new \LogicException('fake_private_ws_delivery_acknowledgement_conflict');
+            }
+
+            $this->privateWs['acknowledged_fingerprints'][$current->sequence] = $current->fingerprint;
+            $this->privateWs['last_acknowledged_sequence'] = $current->sequence;
+            $this->observePrivateWsNumericSequence($current->sequence);
+            ++$this->privateWs['next_delivery_index'];
+            ++$this->privateWs['counters']['acknowledged_total'];
+        });
+    }
+
+    public function skipExactPrivateWsDuplicate(FakePrivateWsDelivery $delivery): void
+    {
+        $this->transactional(function () use ($delivery): void {
+            $current = $this->assertCurrentPrivateWsDelivery($delivery);
+            $known = $this->privateWsAcknowledgedFingerprint($current->sequence);
+            if ($known === null || !hash_equals($known, $current->fingerprint)) {
+                throw new \LogicException('fake_private_ws_duplicate_identity_invalid');
+            }
+
+            ++$this->privateWs['next_delivery_index'];
+            $this->observePrivateWsNumericSequence($current->sequence);
+            ++$this->privateWs['counters']['duplicate_total'];
+            $this->appendPrivateWsRecord([
+                'kind' => 'duplicate',
+                'sequence' => $current->sequence,
+                'fixture_entry_id' => $current->fixtureEntryId,
+                'fingerprint_prefix' => substr($current->fingerprint, 0, 12),
+            ]);
+        });
+    }
+
+    public function markPrivateWsGap(
+        string $expectedSequence,
+        string $actualSequence,
+        FakePrivateWsDelivery $delivery,
+    ): void {
+        $this->transactional(function () use ($expectedSequence, $actualSequence, $delivery): void {
+            $current = $this->assertCurrentPrivateWsDelivery($delivery);
+            if (
+                trim($expectedSequence) === ''
+                || trim($actualSequence) === ''
+                || $actualSequence !== $current->sequence
+            ) {
+                throw new \LogicException('fake_private_ws_gap_identity_invalid');
+            }
+
+            $this->privateWs['connection_state'] = self::PRIVATE_WS_RESYNC_REQUIRED;
+            $this->privateWs['resync_reason'] = 'fake_private_ws_sequence_gap';
+            ++$this->privateWs['counters']['gap_total'];
+            $this->appendPrivateWsRecord([
+                'kind' => 'gap',
+                'sequence' => $current->sequence,
+                'expected_sequence' => $expectedSequence,
+                'actual_sequence' => $actualSequence,
+                'fixture_entry_id' => $current->fixtureEntryId,
+                'fingerprint_prefix' => substr($current->fingerprint, 0, 12),
+            ]);
+        });
+    }
+
+    public function markPrivateWsConflict(FakePrivateWsDelivery $delivery): void
+    {
+        $this->transactional(function () use ($delivery): void {
+            $current = $this->assertCurrentPrivateWsDelivery($delivery);
+            $known = $this->privateWsAcknowledgedFingerprint($current->sequence);
+            if ($known === null || hash_equals($known, $current->fingerprint)) {
+                throw new \LogicException('fake_private_ws_conflict_identity_invalid');
+            }
+
+            $this->privateWs['connection_state'] = self::PRIVATE_WS_RESYNC_REQUIRED;
+            $this->privateWs['resync_reason'] = 'fake_private_ws_sequence_conflict';
+            ++$this->privateWs['counters']['conflict_total'];
+            $this->appendPrivateWsRecord([
+                'kind' => 'conflict',
+                'sequence' => $current->sequence,
+                'fixture_entry_id' => $current->fixtureEntryId,
+                'fingerprint_prefix' => substr($current->fingerprint, 0, 12),
+            ]);
+        });
+    }
+
+    public function completePrivateWsSnapshotResync(): void
+    {
+        $this->transactional(function (): void {
+            if ($this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED) {
+                throw new \LogicException('fake_private_ws_snapshot_resync_not_required');
+            }
+
+            $watermark = $this->maximumCanonicalNumericEventSequence();
+            $scenario = $this->privateWsScenario();
+            if (!$scenario instanceof FakePrivateWsScenario) {
+                throw new \LogicException('fake_private_ws_scenario_not_configured');
+            }
+
+            while (isset($scenario->deliveries[$this->privateWs['next_delivery_index']])) {
+                $delivery = $scenario->deliveries[$this->privateWs['next_delivery_index']];
+                if (!ctype_digit($delivery->sequence) || (int) $delivery->sequence > $watermark) {
+                    break;
+                }
+
+                $this->privateWs['acknowledged_fingerprints'][$delivery->sequence] = $delivery->fingerprint;
+                ++$this->privateWs['next_delivery_index'];
+            }
+
+            $this->privateWs['last_observed_numeric_sequence'] = max(
+                $this->privateWs['last_observed_numeric_sequence'],
+                $watermark,
+            );
+            $lastAcknowledged = $this->privateWs['last_acknowledged_sequence'];
+            $lastAcknowledgedNumeric = \is_string($lastAcknowledged) && ctype_digit($lastAcknowledged)
+                ? (int) $lastAcknowledged
+                : 0;
+            if ($watermark > $lastAcknowledgedNumeric) {
+                $this->privateWs['last_acknowledged_sequence'] = (string) $watermark;
+            }
+            $this->privateWs['connection_state'] = self::PRIVATE_WS_CONNECTED;
+            $this->privateWs['resync_reason'] = null;
+            ++$this->privateWs['counters']['resync_total'];
+            $this->appendPrivateWsRecord([
+                'kind' => 'resync_completed',
+                'sequence' => (string) $watermark,
+            ]);
+        });
+    }
+
+    /**
+     * @return array{
+     *     scenario_id:?string,
+     *     next_delivery_index:int,
+     *     acknowledged_total:int,
+     *     duplicate_total:int,
+     *     gap_total:int,
+     *     conflict_total:int,
+     *     resync_total:int,
+     *     connection_state:string,
+     *     resync_reason:?string,
+     *     last_acknowledged_sequence:?string,
+     *     last_observed_numeric_sequence:int,
+     *     records:list<array<string,string>>
+     * }
+     */
+    public function privateWsAudit(): array
+    {
+        $scenario = $this->privateWsScenario();
+        $counters = $this->privateWs['counters'];
+
+        return [
+            'scenario_id' => $scenario?->scenarioId,
+            'next_delivery_index' => $this->privateWs['next_delivery_index'],
+            'acknowledged_total' => $counters['acknowledged_total'],
+            'duplicate_total' => $counters['duplicate_total'],
+            'gap_total' => $counters['gap_total'],
+            'conflict_total' => $counters['conflict_total'],
+            'resync_total' => $counters['resync_total'],
+            'connection_state' => $this->privateWs['connection_state'],
+            'resync_reason' => $this->privateWs['resync_reason'],
+            'last_acknowledged_sequence' => $this->privateWs['last_acknowledged_sequence'],
+            'last_observed_numeric_sequence' => $this->privateWs['last_observed_numeric_sequence'],
+            'records' => $this->privateWs['records'],
+        ];
+    }
+
     public function rejectNextProtectionOrder(): void
     {
         $this->rejectNextProtectionOrder = true;
@@ -597,7 +813,17 @@ class FakeExchangeStateStore
     }
 
     /**
-     * @return array{format_version:int,engine_version:string,scenario_config_hash:string,restored:bool,legacy:bool,next_event_sequence:int,pending_fault_count:int}
+     * @return array{
+     *     format_version:int,
+     *     engine_version:string,
+     *     scenario_config_hash:string,
+     *     restored:bool,
+     *     legacy:bool,
+     *     next_event_sequence:int,
+     *     pending_fault_count:int,
+     *     private_ws_scenario_active:bool,
+     *     private_ws_connection_state:string
+     * }
      */
     public function recoveryMetadata(): array
     {
@@ -609,6 +835,8 @@ class FakeExchangeStateStore
             'legacy' => $this->restoredLegacyState,
             'next_event_sequence' => $this->nextEventSequence,
             'pending_fault_count' => \count($this->pendingFaults),
+            'private_ws_scenario_active' => $this->hasPrivateWsScenario(),
+            'private_ws_connection_state' => $this->privateWs['connection_state'],
         ];
     }
 
@@ -764,6 +992,7 @@ class FakeExchangeStateStore
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
+            'privateWs' => $this->privateWs,
         ];
         $serialized = serialize([
             'format_version' => self::STATE_FORMAT_VERSION,
@@ -835,6 +1064,7 @@ class FakeExchangeStateStore
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
         $pendingFaults = $state['pendingFaults'] ?? [];
+        $privateWs = $state['privateWs'] ?? self::defaultPrivateWsState();
         if (
             !\is_int($nextOrderSequence) || $nextOrderSequence < 1
             || !$this->isTypedMap($orders, ExchangeOrderDto::class)
@@ -846,6 +1076,7 @@ class FakeExchangeStateStore
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
             || !$this->isFaultQueue($pendingFaults)
+            || !$this->isPrivateWsState($privateWs)
         ) {
             throw new FakeExchangeStateCorruptedException('fake_exchange_state_shape_invalid');
         }
@@ -860,6 +1091,7 @@ class FakeExchangeStateStore
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
         $this->pendingFaults = array_values($pendingFaults);
+        $this->privateWs = $privateWs;
 
         $nextEventSequence = $state['nextEventSequence'] ?? null;
         $this->nextEventSequence = \is_int($nextEventSequence) && $nextEventSequence > 0
@@ -1023,6 +1255,243 @@ class FakeExchangeStateStore
         return true;
     }
 
+    /** @return array<string,mixed> */
+    private static function defaultPrivateWsState(): array
+    {
+        return [
+            'scenario' => null,
+            'next_delivery_index' => 0,
+            'acknowledged_fingerprints' => [],
+            'last_acknowledged_sequence' => null,
+            'last_observed_numeric_sequence' => 0,
+            'connection_state' => self::PRIVATE_WS_CONNECTED,
+            'resync_reason' => null,
+            'counters' => [
+                'acknowledged_total' => 0,
+                'duplicate_total' => 0,
+                'gap_total' => 0,
+                'conflict_total' => 0,
+                'resync_total' => 0,
+            ],
+            'records' => [],
+        ];
+    }
+
+    private function isPrivateWsState(mixed $value): bool
+    {
+        if (!\is_array($value) || !$this->hasExactKeys($value, array_keys(self::defaultPrivateWsState()))) {
+            return false;
+        }
+
+        $scenarioPayload = $value['scenario'];
+        if ($scenarioPayload !== null && !\is_array($scenarioPayload)) {
+            return false;
+        }
+        try {
+            $scenario = \is_array($scenarioPayload) ? FakePrivateWsScenario::fromArray($scenarioPayload) : null;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
+
+        if (
+            !\is_int($value['next_delivery_index'])
+            || $value['next_delivery_index'] < 0
+            || ($scenario instanceof FakePrivateWsScenario
+                && $value['next_delivery_index'] > \count($scenario->deliveries))
+            || ($scenario === null && $value['next_delivery_index'] !== 0)
+            || !$this->isPrivateWsFingerprintMap($value['acknowledged_fingerprints'])
+            || ($value['last_acknowledged_sequence'] !== null
+                && (!\is_string($value['last_acknowledged_sequence'])
+                    || trim($value['last_acknowledged_sequence']) === ''))
+            || !\is_int($value['last_observed_numeric_sequence'])
+            || $value['last_observed_numeric_sequence'] < 0
+            || !\in_array($value['connection_state'], [
+                self::PRIVATE_WS_CONNECTED,
+                self::PRIVATE_WS_RESYNC_REQUIRED,
+            ], true)
+            || !$this->isPrivateWsResyncReason($value['connection_state'], $value['resync_reason'])
+            || !$this->isPrivateWsCounters($value['counters'])
+            || !$this->isPrivateWsRecords($value['records'])
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function isPrivateWsFingerprintMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $sequence => $fingerprint) {
+            if (
+                (string) $sequence === ''
+                || !\is_string($fingerprint)
+                || !preg_match('/^[a-f0-9]{64}$/D', $fingerprint)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isPrivateWsResyncReason(mixed $connectionState, mixed $reason): bool
+    {
+        if ($connectionState === self::PRIVATE_WS_CONNECTED) {
+            return $reason === null;
+        }
+
+        return \is_string($reason) && \in_array($reason, [
+            'fake_private_ws_sequence_gap',
+            'fake_private_ws_sequence_conflict',
+        ], true);
+    }
+
+    private function isPrivateWsCounters(mixed $value): bool
+    {
+        $keys = [
+            'acknowledged_total',
+            'duplicate_total',
+            'gap_total',
+            'conflict_total',
+            'resync_total',
+        ];
+        if (!\is_array($value) || !$this->hasExactKeys($value, $keys)) {
+            return false;
+        }
+
+        foreach ($keys as $key) {
+            if (!\is_int($value[$key]) || $value[$key] < 0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isPrivateWsRecords(mixed $value): bool
+    {
+        if (!\is_array($value) || !array_is_list($value) || \count($value) > self::PRIVATE_WS_AUDIT_LIMIT) {
+            return false;
+        }
+
+        foreach ($value as $record) {
+            if (!\is_array($record) || !\is_string($record['kind'] ?? null)) {
+                return false;
+            }
+
+            $keys = match ($record['kind']) {
+                'duplicate', 'conflict' => [
+                    'kind',
+                    'sequence',
+                    'fixture_entry_id',
+                    'fingerprint_prefix',
+                ],
+                'gap' => [
+                    'kind',
+                    'sequence',
+                    'expected_sequence',
+                    'actual_sequence',
+                    'fixture_entry_id',
+                    'fingerprint_prefix',
+                ],
+                'resync_completed' => ['kind', 'sequence'],
+                default => null,
+            };
+            if ($keys === null || !$this->hasExactKeys($record, $keys)) {
+                return false;
+            }
+            foreach ($keys as $key) {
+                if (!\is_string($record[$key]) || $record[$key] === '') {
+                    return false;
+                }
+            }
+            if (
+                isset($record['fingerprint_prefix'])
+                && !preg_match('/^[a-f0-9]{12}$/D', $record['fingerprint_prefix'])
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<array-key,mixed> $value
+     * @param list<string> $expectedKeys
+     */
+    private function hasExactKeys(array $value, array $expectedKeys): bool
+    {
+        $actualKeys = array_keys($value);
+        sort($actualKeys);
+        sort($expectedKeys);
+
+        return $actualKeys === $expectedKeys;
+    }
+
+    private function privateWsScenario(): ?FakePrivateWsScenario
+    {
+        $payload = $this->privateWs['scenario'];
+
+        return \is_array($payload) ? FakePrivateWsScenario::fromArray($payload) : null;
+    }
+
+    private function assertCurrentPrivateWsDelivery(FakePrivateWsDelivery $expected): FakePrivateWsDelivery
+    {
+        $current = $this->privateWsCurrentDelivery();
+        if (
+            !$current instanceof FakePrivateWsDelivery
+            || $current->fixtureEntryId !== $expected->fixtureEntryId
+            || $current->sequence !== $expected->sequence
+            || !hash_equals($current->fingerprint, $expected->fingerprint)
+        ) {
+            throw new \LogicException('fake_private_ws_delivery_cursor_mismatch');
+        }
+
+        return $current;
+    }
+
+    private function observePrivateWsNumericSequence(string $sequence): void
+    {
+        if (ctype_digit($sequence)) {
+            $this->privateWs['last_observed_numeric_sequence'] = max(
+                $this->privateWs['last_observed_numeric_sequence'],
+                (int) $sequence,
+            );
+        }
+    }
+
+    /** @param array<string,string> $record */
+    private function appendPrivateWsRecord(array $record): void
+    {
+        $this->privateWs['records'][] = $record;
+        if (\count($this->privateWs['records']) > self::PRIVATE_WS_AUDIT_LIMIT) {
+            $this->privateWs['records'] = array_slice(
+                $this->privateWs['records'],
+                -self::PRIVATE_WS_AUDIT_LIMIT,
+            );
+        }
+    }
+
+    private function maximumCanonicalNumericEventSequence(): int
+    {
+        $watermark = 0;
+        foreach ($this->events as $event) {
+            $sequence = $event->payload['event_sequence'] ?? null;
+            if (\is_int($sequence) && $sequence >= 0) {
+                $watermark = max($watermark, $sequence);
+            } elseif (\is_string($sequence) && ctype_digit($sequence)) {
+                $watermark = max($watermark, (int) $sequence);
+            }
+        }
+
+        return $watermark;
+    }
+
     /**
      * @template TResult
      * @param callable(): TResult $callback
@@ -1110,6 +1579,7 @@ class FakeExchangeStateStore
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
+            'privateWs' => $this->privateWs,
         ];
     }
 
@@ -1131,5 +1601,6 @@ class FakeExchangeStateStore
         $this->events = $snapshot['events'];
         $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];
         $this->pendingFaults = $snapshot['pendingFaults'];
+        $this->privateWs = $snapshot['privateWs'];
     }
 }
