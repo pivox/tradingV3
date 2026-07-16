@@ -9,6 +9,7 @@ Supported scenarios:
 - partially fill and then complete an order with `fillOrder()`;
 - convert the exact remainder of an end-of-zone maker order to a deterministic
   market fallback with `fallbackTaker()`;
+- reduce an opted-in position at TP1 and trail the exact Fake/Paper remainder;
 - create local positions after entry fills;
 - create or reject attached SL/TP protection orders;
 - close a fully filled entry with an immediate reduce-only market order when
@@ -73,6 +74,74 @@ protection-rejection fixtures use the same persisted-state transaction boundary,
 so stale scenario instances reload before mutation. No network client,
 credential, or exchange adapter write path is involved.
 
+## Deterministic TP1 then trailing stop
+
+Fake/Paper entries can opt into `fake-tp1-trailing-v1` through
+`FakeTp1TrailingPolicy::toMetadata()`. The policy is a fixture contract, not a
+strategy profile. It contains an explicit enabled flag, an exact TP1 quantity,
+and a fixed absolute trailing offset in quote-price units. An entry requesting
+the capability must also provide attached SL and TP prices, and its TP1 quantity
+must be strictly smaller than its total quantity. A missing field, unsupported
+version, disabled capability, non-decimal quantity, non-positive offset, or
+incoherent protection request fails explicitly. When none of the policy keys is
+present, existing full-size attached-protection behavior is unchanged.
+
+Only the four typed policy fields and the existing scalar lineage whitelist are
+persisted from request metadata. Watermark, derived stop, parent IDs, activation
+ID, state status, and deterministic trailing client ID are engine-derived.
+Arbitrary metadata, credentials, and raw payloads are not copied.
+
+The attached SL initially covers the complete filled exposure. The attached TP1
+covers exactly the configured partial quantity. A partial execution of the TP1
+order leaves the initial SL active. Once TP1 is completely executed and exposure
+remains, one existing Fake state transaction:
+
+1. books the reduce-only TP1 fill and costs;
+2. updates the position to the exact decimal remainder;
+3. cancels the initial SL with `tp1_replaced_by_trailing`;
+4. creates one reduce-only `TRIGGER` for that remainder;
+5. initializes its watermark from the TP1 execution price;
+6. appends `trailing_stop.armed`.
+
+For a long, the active stop is `watermark - absolute_offset`; only a higher mid
+price can advance the watermark and stop. For a short, it is
+`watermark + absolute_offset`; only a lower mid price can advance them. Each
+favorable change is persisted on the `TRIGGER` order and emits one
+`trailing_stop.updated`. An adverse or duplicate price is a no-op and can never
+loosen the stop.
+
+A gap through the stop uses ordinary trigger matching and the ordinary fill
+path, so the next available simulated bid/ask is the execution price rather than
+the stop price. The order becomes `triggered`, emits one
+`trailing_stop.triggered`, and closes only its reduce-only remainder. Full
+closure cancels remaining sibling protection. TP1 and trailing fills retain the
+ordinary fee, spread/slippage, quantity, PnL, and cost-model ledger; no missing
+cost is converted to zero by this capability.
+
+The active `TRIGGER` order is the versioned persistent state. Its metadata stores
+the current watermark, fixed offset, derived stop decimal, activation lineage,
+and `active`/`triggered` status inside the existing `fake-paper-state-v1`
+envelope. Restart therefore resumes the same watermark and event sequence without
+a migration. Exact entry replay returns the existing order; a different policy
+on the same client ID is an intent mismatch. Replayed TP1 fills, prices, gaps,
+and terminal fills create no duplicate order, lifecycle, fee, or PnL booking.
+
+The SL/TP race is deterministic under the state lock. SL-first closes the
+position and cancels TP1, making a later TP1 fill a no-op. TP1-first atomically
+replaces SL with the trailing trigger, making the stale SL a no-op. Any exception
+during replacement restores position, orders, events, and ledgers together.
+
+The versioned long and short inputs live in
+`tests/fixtures/fake-paper/tp1-trailing-v1.json`; golden scenario 13 executes
+both. This path uses no network client, credential, demo/testnet adapter, or live
+write permission.
+
+Rollback removes the policy and matching branches and restores scenario 13 to
+`partial` with `trailing_stop_not_implemented`. Archive or quarantine every Fake
+state file containing `fake-tp1-trailing-v1` before running a revision that does
+not understand the additive order metadata. Never silently reuse such a file or
+turn rollback into an exchange write activation.
+
 ## Attached-protection fail-safe
 
 When the one-shot scenario fixture rejects attached protection after an entry
@@ -117,7 +186,7 @@ sends an exchange order.
 
 The file-backed store writes a versioned `fake-paper-state-v1` envelope containing the engine version, a deterministic scenario configuration hash, a payload checksum, and the next event sequence. Writes use a temporary file followed by an atomic replacement.
 
-On restart, orders, the `client_order_id` index, positions, balances, order books, protection orders, events, and the pending protection-failure fixture are restored together. A legacy unversioned state file is accepted and upgraded on the next write. A present but unreadable, unsupported, or checksum-invalid file raises `FakeExchangeStateCorruptedException`; it is never silently replaced with an empty state.
+On restart, orders, the `client_order_id` index, positions, balances, order books, protection orders, versioned trailing-order metadata, events, and the pending protection-failure fixture are restored together. A legacy unversioned state file is accepted and upgraded on the next write. A present but unreadable, unsupported, or checksum-invalid file raises `FakeExchangeStateCorruptedException`; it is never silently replaced with an empty state.
 
 `FakeExchangeStateStore::recoveryMetadata()` exposes the effective format, engine/config identity, whether the instance restored persisted state, whether that state used the legacy format, and the next event sequence. This is local Paper evidence only and does not certify exchange reconciliation or enable any demo/live write path.
 

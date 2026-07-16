@@ -297,6 +297,59 @@ l etat persiste sous le meme verrou avant modification. Ce trigger est une
 fixture Fake/Paper locale : il n appelle aucun provider, ne lit aucun credential
 et ne peut ecrire ni en mainnet, ni en demo, ni en testnet.
 
+## TP1 partiel puis trailing deterministe
+
+Le moteur Fake/Paper accepte la politique opt-in versionnee
+`fake-tp1-trailing-v1`. Elle est fournie uniquement par une fixture locale et
+contient un flag actif, une quantite TP1 decimale exacte et un offset trailing
+absolu en unite de prix. Elle n est lue dans aucun profil de strategie. Une
+capability demandee mais incomplete, desactivee, malformee, sans SL/TP attaches,
+ou dont la quantite TP1 n est pas strictement inferieure a la quantite d entree
+echoue explicitement avant mutation. Sans aucune cle de cette politique, le
+comportement SL/TP historique reste inchange.
+
+Le SL initial couvre toute l exposition et TP1 couvre seulement la quantite
+declaree par la fixture. Un fill incomplet de l ordre TP1 conserve le SL. Quand
+TP1 atteint sa quantite configuree, la transaction fichier existante enchaine le
+fill reduce-only, le ledger de couts, le reliquat decimal exact, l annulation du
+SL avec `tp1_replaced_by_trailing`, puis la creation d un `TRIGGER` reduce-only
+sur ce reliquat. La transition normalisee `trailing_stop.armed` porte le lineage
+derive et redacted.
+
+Le `TRIGGER` est l etat trailing versionne et persistant : ses metadata portent
+la version, le statut `active` ou `triggered`, l ordre TP1 d activation, le
+watermark favorable, l offset fixe et les decimaux derives. Aucun registre BDD ni
+migration n est ajoute. Un restart restaure donc watermark, stop, ordre, position
+et sequence d evenements depuis `fake-paper-state-v1`.
+
+L algorithme est monotone :
+
+- long : `watermark = max(watermark, mid)` et
+  `stop = watermark - offset` ; le stop ne peut que monter ;
+- short : `watermark = min(watermark, mid)` et
+  `stop = watermark + offset` ; le stop ne peut que descendre ;
+- prix adverse ou duplique : aucune reecriture et aucun evenement ;
+- nouveau watermark : une seule transition `trailing_stop.updated`.
+
+Un gap au-dela du stop remplit au prochain bid/ask Fake disponible par le chemin
+de fill ordinaire, ferme seulement le reliquat reduce-only, puis emet une seule
+transition `trailing_stop.triggered`. La fermeture complete annule les
+protections residuelles. Entree, TP1 et trailing gardent les frais, slippage,
+spread, PnL et versions de modele du ledger normal ; un cout inconnu ne devient
+pas zero silencieusement.
+
+La race est serialisee par le verrou d etat. SL-first ferme et annule TP1 ; TP1
+devient ensuite un no-op. TP1-first remplace atomiquement le SL ; le SL stale
+devient un no-op. Une exception pendant le remplacement restaure ensemble
+position, ordres, evenements et ledger. Les replays d entree comparent aussi la
+politique immutable ; TP1, prix, gap ou fill terminal rejoues ne dupliquent ni
+ordre, ni evenement, ni cout, ni PnL.
+
+Les cas long et short sont explicites dans
+`trading-app/tests/fixtures/fake-paper/tp1-trailing-v1.json`. Ils ne contactent
+aucun reseau, ne lisent aucun secret et n activent ni demo, ni testnet, ni
+mainnet.
+
 ## Golden suite Fake/Paper v1
 
 Le catalogue versionne des 20 scenarios obligatoires de #196 est disponible dans :
@@ -318,19 +371,19 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les quinze scenarios executes dans cette version sont : maker limit rempli, limit
+Les seize scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
-market reduce-only, gap au SL au prochain prix disponible, deconnexion/reprise
-private WS, et restart avec position protegee ouverte.
+market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
+prochain prix disponible, deconnexion/reprise private WS, et restart avec
+position protegee ouverte.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
-| TP1 puis trailing | `partial` | `trailing_stop_not_implemented` |
 | duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
 | funding | `unsupported` | `funding_model_not_implemented` |
 | One-Way conflict | `unsupported` | `one_way_conflict_guard_not_implemented` |
@@ -367,6 +420,14 @@ puis restaurer le scenario golden 4 en `unsupported` avec
 `fallback_taker_not_implemented`. Le fichier d etat doit etre archive ou
 quarantaine avant de lancer une revision qui ne connait pas ses metadata
 additives. Ce rollback ne doit jamais servir a activer une ecriture exchange.
+
+Le rollback de TP1/trailing doit retirer `FakeTp1TrailingPolicy`, les transitions
+locales d armement/ratchet/trigger et la fixture long/short, puis restaurer le
+scenario golden 13 en `partial` avec `trailing_stop_not_implemented`. Tout fichier
+d etat Fake contenant `fake-tp1-trailing-v1` doit etre archive ou place en
+quarantaine avant une revision qui ne connait pas ces metadata additives. Il ne
+doit jamais etre reutilise silencieusement ni servir a activer demo, testnet ou
+mainnet.
 
 ## Suite
 
