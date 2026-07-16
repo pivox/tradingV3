@@ -218,6 +218,17 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'resumed_without_duplicate_or_loss' => true,
             'resync_required_before_reconnect' => true,
         ],
+        'duplicate_out_of_order_event' => [
+            'conflict_code' => 'fake_private_ws_sequence_conflict',
+            'conflict_total' => 1,
+            'duplicate_total' => 1,
+            'gap_code' => 'fake_private_ws_sequence_gap',
+            'gap_total' => 1,
+            'no_projection_after_gap' => true,
+            'resync_total' => 1,
+            'restart_preserved_resync' => true,
+            'resumed_contiguously' => true,
+        ],
         'restart_with_open_position' => [
             'event_sequence_continued' => true,
             'historical_events_preserved' => true,
@@ -243,7 +254,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(16, $catalogKeys);
+        self::assertCount(17, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

@@ -26,7 +26,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'tp1_then_trailing' => ['executable', []],
         'gap_at_stop_loss' => ['executable', []],
         'websocket_disconnect_resync' => ['executable', []],
-        'duplicate_out_of_order_event' => ['partial', ['out_of_order_event_injection_not_implemented']],
+        'duplicate_out_of_order_event' => ['executable', []],
         'restart_with_open_position' => ['executable', []],
         'funding' => ['unsupported', ['funding_model_not_implemented']],
         'one_way_conflict' => ['unsupported', ['one_way_conflict_guard_not_implemented']],

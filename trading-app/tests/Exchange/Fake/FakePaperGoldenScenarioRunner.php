@@ -28,9 +28,18 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakePrivateWsException;
+use App\Exchange\Fake\FakePrivateWsScenario;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeTp1TrailingPolicy;
+use App\Exchange\Event\ExchangeEventBus;
+use App\Exchange\Event\ExchangeEventInterface;
+use App\Exchange\Event\ExchangeEventNormalizerRegistry;
+use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
+use App\Exchange\Fake\FakeExchangeEventNormalizer;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use App\Exchange\Ws\ExchangeWsIngestionService;
 use Psr\Clock\ClockInterface;
+use Psr\Log\NullLogger;
 
 final class FakePaperGoldenScenarioRunner
 {
@@ -50,6 +59,7 @@ final class FakePaperGoldenScenarioRunner
         'tp1_then_trailing',
         'gap_at_stop_loss',
         'websocket_disconnect_resync',
+        'duplicate_out_of_order_event',
         'restart_with_open_position',
     ];
 
@@ -84,6 +94,7 @@ final class FakePaperGoldenScenarioRunner
             'tp1_then_trailing' => $this->tp1ThenTrailing(),
             'gap_at_stop_loss' => $this->gapAtStopLoss(),
             'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
+            'duplicate_out_of_order_event' => $this->duplicateOutOfOrderEvent(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
         };
 
@@ -758,6 +769,155 @@ final class FakePaperGoldenScenarioRunner
     }
 
     /** @return array<string,mixed> */
+    private function duplicateOutOfOrderEvent(): array
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_private_ws_');
+        $conflictStateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_private_ws_conflict_');
+        if ($stateFile === false || $conflictStateFile === false) {
+            throw new \RuntimeException('Unable to allocate the private WS golden state files.');
+        }
+        @unlink($stateFile);
+        @unlink($conflictStateFile);
+
+        try {
+            $fixture = $this->privateWsFixture();
+            $scenarioPayload = $fixture['scenario'] ?? null;
+            $conflictPayload = $fixture['conflict_scenario'] ?? null;
+            $resumePayload = $fixture['resume_event'] ?? null;
+            if (!\is_array($scenarioPayload) || !\is_array($conflictPayload) || !\is_array($resumePayload)) {
+                throw new \LogicException('The private WS golden fixture shape is invalid.');
+            }
+
+            [$state, $adapter] = $this->exchange($stateFile);
+            $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'golden-private-ws',
+            ));
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromArray($scenarioPayload));
+
+            $projectionStore = new GoldenPrivateWsProjectionStore();
+            $bus = new ExchangeEventBus($projectionStore, new NullLogger());
+            $ingestion = new ExchangeWsIngestionService(
+                new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+                $bus,
+                new NullLogger(),
+            );
+            $client = new FakeExchangeWsClient($state);
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('The private WS golden fixture did not create a gap.');
+            } catch (FakePrivateWsException $exception) {
+                $gapCode = $exception->errorCode;
+            }
+
+            $projectedAtGap = $projectionStore->projectedCount;
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('The private WS golden fixture projected while resync was required.');
+            } catch (FakePrivateWsException $exception) {
+                if ($exception->errorCode !== 'fake_private_ws_snapshot_resync_required') {
+                    throw $exception;
+                }
+            }
+            $noProjectionAfterGap = $projectionStore->projectedCount === $projectedAtGap;
+            $gapAudit = $client->audit();
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredClient = new FakeExchangeWsClient($restoredState);
+            $restartPreservedResync = $restoredClient->requiresResync()
+                && $restoredClient->audit()['resync_reason'] === 'fake_private_ws_sequence_gap';
+
+            [, $restoredAdapter] = $this->exchangeForState($restoredState);
+            (new ExchangeReconciliationService(
+                $bus,
+                $projectionStore,
+                $this->clock(),
+                new NullLogger(),
+            ))->reconcile($restoredAdapter, 'BTCUSDT');
+            $restoredClient->completeSnapshotResync();
+
+            $restoredState->appendEvent($this->fakeEventFromArray($resumePayload));
+            $resumed = $ingestion->drain($restoredClient);
+            $resyncAudit = $restoredClient->audit();
+            $resumedContiguously = $resumed->rawEventsRead === 1
+                && $resyncAudit['last_acknowledged_sequence'] === '4';
+
+            $conflictState = new FakeExchangeStateStore($conflictStateFile);
+            $conflictState->configurePrivateWsScenario(FakePrivateWsScenario::fromArray($conflictPayload));
+            try {
+                $ingestion->drain(new FakeExchangeWsClient($conflictState));
+                throw new \LogicException('The private WS conflict fixture did not fail closed.');
+            } catch (FakePrivateWsException $exception) {
+                $conflictCode = $exception->errorCode;
+            }
+            $conflictAudit = $conflictState->privateWsAudit();
+
+            return [
+                'conflict_code' => $conflictCode,
+                'conflict_total' => $conflictAudit['conflict_total'],
+                'duplicate_total' => $gapAudit['duplicate_total'],
+                'gap_code' => $gapCode,
+                'gap_total' => $gapAudit['gap_total'],
+                'no_projection_after_gap' => $noProjectionAfterGap,
+                'resync_total' => $resyncAudit['resync_total'],
+                'restart_preserved_resync' => $restartPreservedResync,
+                'resumed_contiguously' => $resumedContiguously,
+            ];
+        } finally {
+            foreach ([$stateFile, $conflictStateFile] as $file) {
+                @unlink($file);
+                @unlink($file . '.lock');
+                foreach (glob($file . '.tmp.*') ?: [] as $temporaryFile) {
+                    @unlink($temporaryFile);
+                }
+            }
+        }
+    }
+
+    /** @return array<string,mixed> */
+    private function privateWsFixture(): array
+    {
+        $path = dirname(__DIR__, 2) . '/fixtures/fake-paper/private-ws-out-of-order-v1.json';
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new \LogicException('The private WS golden fixture is unavailable.');
+        }
+
+        /** @var array<string,mixed> $fixture */
+        $fixture = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+        if (($fixture['schema_version'] ?? null) !== 'fake-private-ws-out-of-order-v1') {
+            throw new \LogicException('The private WS golden fixture version is unsupported.');
+        }
+
+        return $fixture;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function fakeEventFromArray(array $payload): FakeExchangeEvent
+    {
+        $type = $payload['type'] ?? null;
+        $symbol = $payload['symbol'] ?? null;
+        $occurredAt = $payload['occurred_at'] ?? null;
+        $eventPayload = $payload['payload'] ?? null;
+        if (
+            !\is_string($type)
+            || !\is_string($symbol)
+            || !\is_string($occurredAt)
+            || !\is_array($eventPayload)
+        ) {
+            throw new \LogicException('The private WS resume event is invalid.');
+        }
+
+        return new FakeExchangeEvent(
+            $type,
+            $symbol,
+            new \DateTimeImmutable($occurredAt),
+            $eventPayload,
+        );
+    }
+
+    /** @return array<string,mixed> */
     private function restartWithOpenPosition(): array
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_restart_');
@@ -921,5 +1081,44 @@ final class FakePaperGoldenScenarioRunner
                 return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
             }
         };
+    }
+}
+
+final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionStoreInterface
+{
+    public int $projectedCount = 0;
+
+    public function hasOrder(ExchangeOrderDto $order): bool
+    {
+        return false;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
+    public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
+    {
+        return [];
+    }
+
+    public function project(ExchangeEventInterface $event): void
+    {
+        ++$this->projectedCount;
+    }
+
+    public function projectAtomically(array $events): void
+    {
+        $before = $this->projectedCount;
+        try {
+            foreach ($events as $event) {
+                $this->project($event);
+            }
+        } catch (\Throwable $exception) {
+            $this->projectedCount = $before;
+
+            throw $exception;
+        }
     }
 }
