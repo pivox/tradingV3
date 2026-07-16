@@ -58,6 +58,40 @@ use Psr\Log\NullLogger;
 #[CoversClass(ExchangePositionUpdated::class)]
 final class ExchangeReconciliationServiceTest extends TestCase
 {
+    public function testSnapshotProofAttestationHasNoStandalonePublicApi(): void
+    {
+        self::assertFalse(
+            interface_exists('App\\Exchange\\Reconciliation\\ExchangeReconciliationSnapshotProofProviderInterface'),
+            'The standalone snapshot-proof provider interface exposes attestation outside reconciliation orchestration.',
+        );
+        $orchestratorMethods = array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            (new \ReflectionClass(
+                \App\Exchange\Reconciliation\ExchangeReconciliationSnapshotProofOrchestratorInterface::class,
+            ))->getMethods(\ReflectionMethod::IS_PUBLIC),
+        );
+        self::assertSame(['reconcileWithSnapshotProof'], $orchestratorMethods);
+
+        $adapterPublicMethods = array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            (new \ReflectionClass(FakeExchangeAdapter::class))->getMethods(\ReflectionMethod::IS_PUBLIC),
+        );
+        self::assertNotContains(
+            'attestReconciliationSnapshotProof',
+            $adapterPublicMethods,
+            'The Fake adapter must not expose standalone snapshot-proof attestation.',
+        );
+
+        $stateStoreAttestation = new \ReflectionMethod(
+            FakeExchangeStateStore::class,
+            'attestPrivateWsSnapshotProof',
+        );
+        self::assertTrue(
+            $stateStoreAttestation->isPrivate(),
+            'The state-store attestation operation must be private to real reconciliation orchestration.',
+        );
+    }
+
     public function testRestReconciliationProjectsMissedFillAndFlagsUnprotectedPosition(): void
     {
         $state = new FakeExchangeStateStore();

@@ -41,14 +41,21 @@ final readonly class ExchangeReconciliationService
 
     public function reconcile(ExchangeAdapterInterface $adapter, ?string $symbol = null): ExchangeReconciliationResult
     {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+        if (
+            $normalizedSymbol === null
+            && $adapter instanceof ExchangeReconciliationSnapshotProofOrchestratorInterface
+        ) {
+            return $adapter->reconcileWithSnapshotProof($this, $normalizedSymbol);
+        }
+
+        return $this->reconcileBase($adapter, $normalizedSymbol);
+    }
+
+    public function reconcileBase(ExchangeAdapterInterface $adapter, ?string $symbol = null): ExchangeReconciliationResult
+    {
         $startedAt = $this->clock->now();
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
-        $snapshotProofProvider = $adapter instanceof ExchangeReconciliationSnapshotProofProviderInterface
-            ? $adapter
-            : null;
-        $pendingSnapshotProof = $snapshotProofProvider instanceof ExchangeReconciliationSnapshotProofProviderInterface
-            ? $snapshotProofProvider->captureReconciliationSnapshotProof($normalizedSymbol)
-            : null;
         $orders = $adapter instanceof ExchangeRestSnapshotProviderInterface
             ? $adapter->getOrdersSnapshot($normalizedSymbol)
             : $adapter->getOpenOrders($normalizedSymbol);
@@ -110,19 +117,12 @@ final readonly class ExchangeReconciliationService
 
         $unprotectedPositions = $this->detectUnprotectedPositions($adapter, $positions);
         $completedAt = $this->clock->now();
-        $snapshotProof = $pendingSnapshotProof !== null
-            && $snapshotProofProvider instanceof ExchangeReconciliationSnapshotProofProviderInterface
-                ? $snapshotProofProvider->attestReconciliationSnapshotProof($pendingSnapshotProof)
-                : null;
         $metadata = [
             'unknown_order_ids' => $unknownOrders,
             'unprotected_positions' => $unprotectedPositions,
             'events_projected' => $eventsProjected,
             'position_snapshot_authoritative' => $positionSnapshotAuthoritative,
         ];
-        if ($snapshotProof !== null) {
-            $metadata['fake_private_ws_snapshot_proof'] = $snapshotProof;
-        }
 
         $result = new ExchangeReconciliationResult(
             exchange: $adapter->exchange(),

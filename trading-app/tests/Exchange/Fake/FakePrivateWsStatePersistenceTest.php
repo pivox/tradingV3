@@ -6,15 +6,25 @@ namespace App\Tests\Exchange\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangeReconciliationResult;
+use App\Exchange\Event\ExchangeEventBus;
+use App\Exchange\Event\ExchangeEventInterface;
+use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Fake\FakeExchangeEvent;
+use App\Exchange\Fake\FakeExchangeMatchingEngine;
+use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakePrivateWsDelivery;
 use App\Exchange\Fake\FakePrivateWsScenario;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Psr\Clock\ClockInterface;
+use Psr\Log\NullLogger;
 
 #[CoversClass(FakeExchangeStateStore::class)]
 final class FakePrivateWsStatePersistenceTest extends TestCase
@@ -371,19 +381,28 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
 
     private function successfulGlobalReconciliation(FakeExchangeStateStore $state): ExchangeReconciliationResult
     {
-        $now = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
-        $pendingProof = $state->capturePrivateWsSnapshotProof();
-        self::assertIsArray($pendingProof);
-        $proof = $state->attestPrivateWsSnapshotProof($pendingProof);
-
-        return new ExchangeReconciliationResult(
-            exchange: Exchange::FAKE,
-            marketType: MarketType::PERPETUAL,
-            symbol: null,
-            startedAt: $now,
-            completedAt: $now,
-            metadata: ['fake_private_ws_snapshot_proof' => $proof],
+        $clock = new class implements ClockInterface {
+            public function now(): \DateTimeImmutable
+            {
+                return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+            }
+        };
+        $projectionStore = new PrivateWsPersistenceProjectionStore();
+        $reconciliation = new ExchangeReconciliationService(
+            new ExchangeEventBus($projectionStore, new NullLogger()),
+            $projectionStore,
+            $clock,
+            new NullLogger(),
         );
+        $book = new FakeExchangeOrderBook($state);
+        $adapter = new FakeExchangeAdapter(
+            $state,
+            $book,
+            new FakeExchangeMatchingEngine($state, $book, $clock),
+            $clock,
+        );
+
+        return $reconciliation->reconcile($adapter);
     }
 
     /**
@@ -397,5 +416,31 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
             new \DateTimeImmutable(sprintf('2026-01-01T00:00:%02d+00:00', $sequence)),
             ['event_sequence' => $sequence] + $payload,
         );
+    }
+}
+
+final class PrivateWsPersistenceProjectionStore implements ExchangeLocalProjectionStoreInterface
+{
+    public function hasOrder(ExchangeOrderDto $order): bool
+    {
+        return false;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
+    public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
+    {
+        return [];
+    }
+
+    public function project(ExchangeEventInterface $event): void
+    {
+    }
+
+    public function projectAtomically(array $events): void
+    {
     }
 }

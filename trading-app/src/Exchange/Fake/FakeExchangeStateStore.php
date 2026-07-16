@@ -6,6 +6,7 @@ namespace App\Exchange\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
@@ -15,6 +16,7 @@ use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -704,6 +706,41 @@ class FakeExchangeStateStore
         });
     }
 
+    public function reconcileWithPrivateWsSnapshotProof(
+        ExchangeReconciliationService $reconciliation,
+        FakeExchangeAdapter $adapter,
+        ?string $symbol = null,
+    ): ExchangeReconciliationResult
+    {
+        if ($symbol !== null) {
+            return $reconciliation->reconcileBase($adapter, $symbol);
+        }
+
+        $pendingProof = $this->capturePrivateWsSnapshotProof();
+        $result = $reconciliation->reconcileBase($adapter);
+        if ($pendingProof === null || $result->errors !== []) {
+            return $result;
+        }
+
+        $proof = $this->attestPrivateWsSnapshotProof($pendingProof);
+
+        return new ExchangeReconciliationResult(
+            exchange: $result->exchange,
+            marketType: $result->marketType,
+            symbol: $result->symbol,
+            startedAt: $result->startedAt,
+            completedAt: $result->completedAt,
+            ordersChecked: $result->ordersChecked,
+            positionsChecked: $result->positionsChecked,
+            fillsImported: $result->fillsImported,
+            correctionsApplied: $result->correctionsApplied,
+            staleOrdersClosed: $result->staleOrdersClosed,
+            unknownOrdersDetected: $result->unknownOrdersDetected,
+            errors: $result->errors,
+            metadata: array_replace($result->metadata, ['fake_private_ws_snapshot_proof' => $proof]),
+        );
+    }
+
     /**
      * @param array<string,mixed> $pendingProof
      * @return array{
@@ -717,7 +754,7 @@ class FakeExchangeStateStore
      *     attestation_id:string
      * }
      */
-    public function attestPrivateWsSnapshotProof(array $pendingProof): array
+    private function attestPrivateWsSnapshotProof(array $pendingProof): array
     {
         return $this->transactional(function () use ($pendingProof): array {
             if ($this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED) {
