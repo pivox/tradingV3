@@ -396,14 +396,22 @@ Le contrat runtime est le suivant :
   `reconnect()` est refuse ;
 - crash du client, exception de projection ou rollback DB avant reprise du
   generateur laisse le meme evenement disponible apres restart ;
+- un lease de consommation non bloquant reste tenu pendant le `yield`; un
+  second consommateur recoit `fake_private_ws_consumer_busy` avant lecture ou
+  projection, pour un store memoire partage comme pour deux stores sur le meme
+  `stateFile` ;
 - le filtre symbole ne consomme jamais une livraison d un autre symbole.
 
-La reprise impose d abord `ExchangeReconciliationService` sur les snapshots REST
-Fake locaux. Ensuite seulement, `completeSnapshotResync()` utilise la sequence
-numerique maximale de l etat canonique comme watermark, avance dans l ordre
-declare sur toutes les livraisons couvertes, y compris `3` puis `2`, et
-incremente `resync_total` une fois. Un evenement canonique ajoute apres ce
-watermark prolonge la fixture active et reprend sur la sequence contigue.
+La reprise impose d abord un `ExchangeReconciliationService` global sur les
+snapshots REST Fake locaux. En mode scenario, `completeSnapshotResync()` exige
+le `ExchangeReconciliationResult` Fake/Perpetual correspondant, avec
+`symbol === null` et aucune erreur. Une preuve absente, echouee ou limitee a un
+symbole ne modifie ni curseur ni `resync_required`. Ensuite seulement, la
+sequence numerique maximale de l etat canonique sert de watermark : le curseur
+avance dans l ordre declare sur toutes les livraisons couvertes, y compris `3`
+puis `2`, et incremente `resync_total` une fois. Un evenement canonique ajoute
+apres ce watermark prolonge la fixture active et reprend sur la sequence
+contigue.
 
 `privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
 watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :

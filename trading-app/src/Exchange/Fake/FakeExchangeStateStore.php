@@ -9,6 +9,7 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeBalanceDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
+use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
@@ -654,48 +655,65 @@ class FakeExchangeStateStore
         });
     }
 
-    public function completePrivateWsSnapshotResync(): void
+    public function completePrivateWsSnapshotResync(ExchangeReconciliationResult $reconciliation): void
     {
-        $this->transactional(function (): void {
-            if ($this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED) {
-                throw new \LogicException('fake_private_ws_snapshot_resync_not_required');
+        $lease = $this->acquirePrivateWsConsumptionLease();
+
+        try {
+            if (
+                $reconciliation->exchange !== Exchange::FAKE
+                || $reconciliation->marketType !== MarketType::PERPETUAL
+                || $reconciliation->symbol !== null
+            ) {
+                throw new \LogicException('fake_private_ws_global_reconciliation_required');
+            }
+            if ($reconciliation->errors !== []) {
+                throw new \LogicException('fake_private_ws_reconciliation_failed');
             }
 
-            $watermark = $this->maximumCanonicalNumericEventSequence();
-            $scenario = $this->privateWsScenario();
-            if (!$scenario instanceof FakePrivateWsScenario) {
-                throw new \LogicException('fake_private_ws_scenario_not_configured');
-            }
-
-            while (isset($scenario->deliveries[$this->privateWs['next_delivery_index']])) {
-                $delivery = $scenario->deliveries[$this->privateWs['next_delivery_index']];
-                if (!ctype_digit($delivery->sequence) || (int) $delivery->sequence > $watermark) {
-                    break;
+            $this->transactional(function (): void {
+                if ($this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED) {
+                    throw new \LogicException('fake_private_ws_snapshot_resync_not_required');
                 }
 
-                $this->privateWs['acknowledged_fingerprints'][$delivery->sequence] = $delivery->fingerprint;
-                ++$this->privateWs['next_delivery_index'];
-            }
+                $watermark = $this->maximumCanonicalNumericEventSequence();
+                $scenario = $this->privateWsScenario();
+                if (!$scenario instanceof FakePrivateWsScenario) {
+                    throw new \LogicException('fake_private_ws_scenario_not_configured');
+                }
 
-            $this->privateWs['last_observed_numeric_sequence'] = max(
-                $this->privateWs['last_observed_numeric_sequence'],
-                $watermark,
-            );
-            $lastAcknowledged = $this->privateWs['last_acknowledged_sequence'];
-            $lastAcknowledgedNumeric = \is_string($lastAcknowledged) && ctype_digit($lastAcknowledged)
-                ? (int) $lastAcknowledged
-                : 0;
-            if ($watermark > $lastAcknowledgedNumeric) {
-                $this->privateWs['last_acknowledged_sequence'] = (string) $watermark;
-            }
-            $this->privateWs['connection_state'] = self::PRIVATE_WS_CONNECTED;
-            $this->privateWs['resync_reason'] = null;
-            ++$this->privateWs['counters']['resync_total'];
-            $this->appendPrivateWsRecord([
-                'kind' => 'resync_completed',
-                'sequence' => (string) $watermark,
-            ]);
-        });
+                while (isset($scenario->deliveries[$this->privateWs['next_delivery_index']])) {
+                    $delivery = $scenario->deliveries[$this->privateWs['next_delivery_index']];
+                    if (!ctype_digit($delivery->sequence) || (int) $delivery->sequence > $watermark) {
+                        break;
+                    }
+
+                    $this->privateWs['acknowledged_fingerprints'][$delivery->sequence] = $delivery->fingerprint;
+                    ++$this->privateWs['next_delivery_index'];
+                }
+
+                $this->privateWs['last_observed_numeric_sequence'] = max(
+                    $this->privateWs['last_observed_numeric_sequence'],
+                    $watermark,
+                );
+                $lastAcknowledged = $this->privateWs['last_acknowledged_sequence'];
+                $lastAcknowledgedNumeric = \is_string($lastAcknowledged) && ctype_digit($lastAcknowledged)
+                    ? (int) $lastAcknowledged
+                    : 0;
+                if ($watermark > $lastAcknowledgedNumeric) {
+                    $this->privateWs['last_acknowledged_sequence'] = (string) $watermark;
+                }
+                $this->privateWs['connection_state'] = self::PRIVATE_WS_CONNECTED;
+                $this->privateWs['resync_reason'] = null;
+                ++$this->privateWs['counters']['resync_total'];
+                $this->appendPrivateWsRecord([
+                    'kind' => 'resync_completed',
+                    'sequence' => (string) $watermark,
+                ]);
+            });
+        } finally {
+            $lease->release();
+        }
     }
 
     /**

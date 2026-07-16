@@ -281,7 +281,7 @@ final class ExchangeReconciliationServiceTest extends TestCase
                 $this->fixedClock(),
                 new NullLogger(),
             );
-            $reconciliation->reconcile($restoredAdapter, 'BTCUSDT');
+            $reconciliationResult = $reconciliation->reconcile($restoredAdapter);
 
             self::assertSame([], $store->openOrders(Exchange::FAKE, MarketType::PERPETUAL));
             self::assertSame([[
@@ -291,7 +291,7 @@ final class ExchangeReconciliationServiceTest extends TestCase
             ]], $store->openPositions(Exchange::FAKE, MarketType::PERPETUAL, 'BTCUSDT'));
             self::assertTrue($restoredClient->requiresResync());
 
-            $restoredClient->completeSnapshotResync();
+            $restoredClient->completeSnapshotResync($reconciliationResult);
             self::assertFalse($restoredClient->requiresResync());
             self::assertSame(1, $restoredClient->audit()['resync_total']);
             self::assertSame(3, $restoredClient->audit()['next_delivery_index']);
@@ -309,7 +309,95 @@ final class ExchangeReconciliationServiceTest extends TestCase
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
         }
+    }
+
+    public function testScenarioSnapshotCompletionAcceptsOnlySuccessfulGlobalReconciliation(): void
+    {
+        $btcOne = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:01+00:00'),
+            ['event_sequence' => 1],
+        );
+        $ethTwo = new FakeExchangeEvent(
+            'order.created',
+            'ETHUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:02+00:00'),
+            ['event_sequence' => 2],
+        );
+        $ethThree = new FakeExchangeEvent(
+            'order.created',
+            'ETHUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:03+00:00'),
+            ['event_sequence' => 3],
+        );
+        $state = new FakeExchangeStateStore();
+        foreach ([$btcOne, $ethTwo, $ethThree] as $event) {
+            $state->appendEvent($event);
+        }
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'global-reconciliation-v1',
+            [$btcOne, $ethThree, $ethTwo],
+        ));
+        $first = $state->privateWsCurrentDelivery();
+        self::assertNotNull($first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertNotNull($gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+
+        $client = new FakeExchangeWsClient($state);
+        $auditBefore = $client->audit();
+        try {
+            $client->completeSnapshotResync();
+            self::fail('Scenario snapshot completion requires an explicit reconciliation result.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_global_reconciliation_required', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $failedGlobal = new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: null,
+            startedAt: $this->fixedClock()->now(),
+            completedAt: $this->fixedClock()->now(),
+            errors: ['snapshot_projection_failed'],
+        );
+        try {
+            $client->completeSnapshotResync($failedGlobal);
+            self::fail('A failed global reconciliation must not complete scenario resync.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_reconciliation_failed', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $store = new RecordingProjectionStore();
+        $reconciliation = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $adapter = $this->adapter($state);
+        $btcOnly = $reconciliation->reconcile($adapter, 'BTCUSDT');
+        try {
+            $client->completeSnapshotResync($btcOnly);
+            self::fail('BTC-only reconciliation must not advance pending ETH deliveries.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_global_reconciliation_required', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+        self::assertSame('ETHUSDT', $state->privateWsCurrentDelivery()?->event->symbol);
+
+        $global = $reconciliation->reconcile($adapter);
+        $client->completeSnapshotResync($global);
+
+        self::assertFalse($client->requiresResync());
+        self::assertSame(3, $client->audit()['next_delivery_index']);
+        self::assertSame(1, $client->audit()['resync_total']);
     }
 
     private function adapter(FakeExchangeStateStore $state): FakeExchangeAdapter

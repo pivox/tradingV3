@@ -830,13 +830,13 @@ final class FakePaperGoldenScenarioRunner
                 && $restoredClient->audit()['resync_reason'] === 'fake_private_ws_sequence_gap';
 
             [, $restoredAdapter] = $this->exchangeForState($restoredState);
-            (new ExchangeReconciliationService(
+            $reconciliationResult = (new ExchangeReconciliationService(
                 $bus,
                 $projectionStore,
                 $this->clock(),
                 new NullLogger(),
-            ))->reconcile($restoredAdapter, 'BTCUSDT');
-            $restoredClient->completeSnapshotResync();
+            ))->reconcile($restoredAdapter);
+            $restoredClient->completeSnapshotResync($reconciliationResult);
 
             $restoredState->appendEvent($this->fakeEventFromArray($resumePayload));
             $resumed = $ingestion->drain($restoredClient);

@@ -211,6 +211,10 @@ Delivery semantics are fail-closed:
   succeeds;
 - destroying the client, a projection exception, or a DB rollback before that
   point leaves the delivery pending for the next client or process;
+- one non-blocking consumption lease is held across each yielded delivery; a
+  concurrent consumer receives `fake_private_ws_consumer_busy` before reading
+  or projecting it, whether it shares the in-memory store or only the persisted
+  state file;
 - a repeated sequence with the same fingerprint is skipped before
   normalization, increments `duplicate_total`, and produces one redacted audit
   record;
@@ -224,14 +228,17 @@ Delivery semantics are fail-closed:
 
 While a gap or conflict is active, every drain raises
 `fake_private_ws_snapshot_resync_required`; plain `reconnect()` cannot clear it.
-The operator must first run `ExchangeReconciliationService` against the local
-Fake REST snapshots. Only after that reconciliation succeeds may
-`completeSnapshotResync()` persist the maximum numeric canonical event sequence
-as the snapshot watermark. It advances over every covered fixture entry in its
-declared order (for example both `3` then `2`), records their fingerprints,
-increments `resync_total` once, and reconnects the stream. A canonical event
-appended later extends the active finite plan and must be contiguous with the
-rebuilt watermark.
+The operator must first run `ExchangeReconciliationService` globally against
+the local Fake REST snapshots. Scenario-mode `completeSnapshotResync()` requires
+that successful `ExchangeReconciliationResult`: it must target Fake/Perpetual,
+have `symbol === null`, and contain no errors. A missing, failed, or
+symbol-scoped result leaves the cursor and `resync_required` state unchanged.
+Only the validated global result may persist the maximum numeric canonical
+event sequence as the snapshot watermark. It advances over every covered
+fixture entry in its declared order (for example both `3` then `2`), records
+their fingerprints, increments `resync_total` once, and reconnects the stream.
+A canonical event appended later extends the active finite plan and must be
+contiguous with the rebuilt watermark.
 
 When no scenario is configured, the per-client traversal, independent replay,
 disconnect injection, reconnect, and gap behavior delivered by #274 are

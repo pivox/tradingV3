@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Exchange\Fake;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
@@ -149,7 +152,7 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         $state->markPrivateWsGap('2', '3', $gap);
 
         $restored = new FakeExchangeStateStore($this->stateFile);
-        $restored->completePrivateWsSnapshotResync();
+        $restored->completePrivateWsSnapshotResync($this->successfulGlobalReconciliation());
         $audit = $restored->privateWsAudit();
 
         self::assertSame('connected', $audit['connection_state']);
@@ -265,6 +268,19 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         return FakePrivateWsScenario::fromEvents(
             'restart-v1',
             array_map(fn (int $sequence): FakeExchangeEvent => $this->event($sequence), $sequences),
+        );
+    }
+
+    private function successfulGlobalReconciliation(): ExchangeReconciliationResult
+    {
+        $now = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+
+        return new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: null,
+            startedAt: $now,
+            completedAt: $now,
         );
     }
 

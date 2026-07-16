@@ -6,6 +6,7 @@ namespace App\Exchange\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Ws\ExchangeWsClientInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
@@ -146,10 +147,14 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
         $this->resyncReason = null;
     }
 
-    public function completeSnapshotResync(): void
+    public function completeSnapshotResync(?ExchangeReconciliationResult $reconciliation = null): void
     {
         if ($this->stateStore->hasPrivateWsScenario()) {
-            $this->stateStore->completePrivateWsSnapshotResync();
+            if (!$reconciliation instanceof ExchangeReconciliationResult) {
+                throw new \LogicException('fake_private_ws_global_reconciliation_required');
+            }
+
+            $this->stateStore->completePrivateWsSnapshotResync($reconciliation);
 
             return;
         }
