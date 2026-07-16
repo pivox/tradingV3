@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Exchange\Fake;
 
 use App\Exchange\Dto\PlaceOrderRequest;
+use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderType;
 use Brick\Math\BigDecimal;
 
@@ -34,16 +35,20 @@ final readonly class FakeOrderValidator
 
         if ($request->price !== null && (
             !\is_finite($request->price)
-            || !$instrument->isPriceQuantized(self::decimal($request->price))
+            || !$instrument->isPriceQuantized((string) $request->exactPrice())
         )) {
             return FakeOrderValidationResult::rejected('price_not_quantized');
         }
 
-        foreach ([$request->stopPrice, $request->attachedStopLossPrice, $request->attachedTakeProfitPrice] as $stopPrice) {
-            if ($stopPrice !== null && (
-                !\is_finite($stopPrice)
-                || !$instrument->isPriceQuantized(self::decimal($stopPrice))
-            )) {
+        foreach ([
+            [$request->stopPrice, $request->exactStopPrice(...)],
+            [$request->attachedStopLossPrice, $request->exactAttachedStopLossPrice(...)],
+            [$request->attachedTakeProfitPrice, $request->exactAttachedTakeProfitPrice(...)],
+        ] as [$stopPrice, $exactStopPrice]) {
+            if ($stopPrice === null) {
+                continue;
+            }
+            if (!\is_finite($stopPrice) || !$instrument->isPriceQuantized((string) $exactStopPrice())) {
                 return FakeOrderValidationResult::rejected('stop_price_not_quantized');
             }
         }
@@ -52,7 +57,7 @@ final readonly class FakeOrderValidator
             return FakeOrderValidationResult::rejected('quantity_not_quantized');
         }
 
-        $quantity = BigDecimal::of(self::decimal($request->quantity));
+        $quantity = BigDecimal::of($request->exactQuantity());
         if (!$instrument->isQuantityQuantized((string) $quantity)) {
             return FakeOrderValidationResult::rejected('quantity_not_quantized');
         }
@@ -62,13 +67,18 @@ final readonly class FakeOrderValidator
         }
 
         $notionalPrice = $request->orderType === ExchangeOrderType::LIMIT
-            ? $request->price
+            ? $request->exactPrice()
             : $referencePrice;
-        if ($notionalPrice === null || !\is_finite($notionalPrice) || $notionalPrice <= 0.0) {
+        if (
+            $notionalPrice === null
+            || !is_numeric($notionalPrice)
+            || !\is_finite((float) $notionalPrice)
+            || (float) $notionalPrice <= 0.0
+        ) {
             return FakeOrderValidationResult::rejected('notional_below_minimum');
         }
         $notional = $quantity
-            ->multipliedBy(self::decimal($notionalPrice))
+            ->multipliedBy((string) $notionalPrice)
             ->multipliedBy($instrument->contractSize);
         if ($notional->isLessThan($instrument->minNotional)) {
             return FakeOrderValidationResult::rejected('notional_below_minimum');
@@ -93,8 +103,18 @@ final readonly class FakeOrderValidator
             true,
         );
         if (!$request->reduceOnly && !$protectionOrder) {
+            $marginPrice = $request->orderType === ExchangeOrderType::LIMIT
+                && $request->side !== ExchangeOrderSide::SELL
+                ? (float) $notionalPrice
+                : max((float) $notionalPrice, $referencePrice);
+            if (!\is_finite($marginPrice) || $marginPrice <= 0.0) {
+                return FakeOrderValidationResult::rejected('insufficient_balance');
+            }
+            $marginNotional = $quantity
+                ->multipliedBy(self::decimal($marginPrice))
+                ->multipliedBy($instrument->contractSize);
             $availableLeveragedMargin = BigDecimal::of(self::decimal($availableMargin))->multipliedBy($leverage);
-            if ($notional->isGreaterThan($availableLeveragedMargin)) {
+            if ($marginNotional->isGreaterThan($availableLeveragedMargin)) {
                 return FakeOrderValidationResult::rejected('insufficient_balance');
             }
         }

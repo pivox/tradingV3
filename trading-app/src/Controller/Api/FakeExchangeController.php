@@ -197,7 +197,19 @@ final readonly class FakeExchangeController
     private function placeOrderRequest(array $payload): PlaceOrderRequest
     {
         $orderType = ExchangeOrderType::from(strtolower((string) ($payload['order_type'] ?? $payload['type'] ?? 'limit')));
-        $price = $this->optionalFloat($payload, 'price');
+        [$quantityDecimal, $quantity] = $this->requiredDecimal($payload, 'quantity', 'qty');
+        [$priceDecimal, $price] = $orderType === ExchangeOrderType::MARKET
+            ? [null, null]
+            : $this->optionalDecimal($payload, 'price');
+        [$stopPriceDecimal, $stopPrice] = $this->optionalDecimal($payload, 'stop_price');
+        [$attachedStopLossPriceDecimal, $attachedStopLossPrice] = $this->optionalDecimal(
+            $payload,
+            'attached_stop_loss_price',
+        );
+        [$attachedTakeProfitPriceDecimal, $attachedTakeProfitPrice] = $this->optionalDecimal(
+            $payload,
+            'attached_take_profit_price',
+        );
 
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -207,17 +219,22 @@ final readonly class FakeExchangeController
             positionSide: ExchangePositionSide::from(strtolower((string) ($payload['position_side'] ?? 'long'))),
             orderType: $orderType,
             timeInForce: ExchangeTimeInForce::from(strtolower((string) ($payload['time_in_force'] ?? 'gtc'))),
-            quantity: $this->requiredFloat($payload, 'quantity', 'qty'),
-            price: $orderType === ExchangeOrderType::MARKET ? null : $price,
-            stopPrice: $this->optionalFloat($payload, 'stop_price'),
+            quantity: $quantity,
+            price: $price,
+            stopPrice: $stopPrice,
             reduceOnly: $this->boolPayload($payload, 'reduce_only'),
             postOnly: $this->boolPayload($payload, 'post_only'),
             leverage: $this->optionalInt($payload, 'leverage'),
             marginMode: (string) ($payload['margin_mode'] ?? 'isolated'),
             clientOrderId: trim((string) ($payload['client_order_id'] ?? uniqid('fake_', true))),
-            attachedStopLossPrice: $this->optionalFloat($payload, 'attached_stop_loss_price'),
-            attachedTakeProfitPrice: $this->optionalFloat($payload, 'attached_take_profit_price'),
+            attachedStopLossPrice: $attachedStopLossPrice,
+            attachedTakeProfitPrice: $attachedTakeProfitPrice,
             metadata: \is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [],
+            quantityDecimal: $quantityDecimal,
+            priceDecimal: $priceDecimal,
+            stopPriceDecimal: $stopPriceDecimal,
+            attachedStopLossPriceDecimal: $attachedStopLossPriceDecimal,
+            attachedTakeProfitPriceDecimal: $attachedTakeProfitPriceDecimal,
         );
     }
 
@@ -257,6 +274,38 @@ final readonly class FakeExchangeController
         }
 
         return (float) $value;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{string,float}
+     */
+    private function requiredDecimal(array $payload, string $key, ?string $alias = null): array
+    {
+        $value = $payload[$key] ?? ($alias !== null ? ($payload[$alias] ?? null) : null);
+        if (!\is_string($value) || $value === '') {
+            throw new \InvalidArgumentException(sprintf('%s must be a positive decimal string', $key));
+        }
+
+        $projection = (float) $value;
+        if (!\is_finite($projection) || $projection <= 0.0) {
+            throw new \InvalidArgumentException(sprintf('%s must be a positive decimal string', $key));
+        }
+
+        return [$value, $projection];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{?string,?float}
+     */
+    private function optionalDecimal(array $payload, string $key): array
+    {
+        if (!\array_key_exists($key, $payload) || $payload[$key] === null || $payload[$key] === '') {
+            return [null, null];
+        }
+
+        return $this->requiredDecimal($payload, $key);
     }
 
     /**

@@ -17,6 +17,8 @@ use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\MathException;
 use Psr\Clock\ClockInterface;
 
 final readonly class FakeExchangeMatchingEngine
@@ -41,6 +43,7 @@ final readonly class FakeExchangeMatchingEngine
         'mtf_profile',
         'origin',
         'attempt_number',
+        'decision_key',
     ];
 
     private FakeOrderValidator $orderValidator;
@@ -349,10 +352,15 @@ final readonly class FakeExchangeMatchingEngine
             'client_order_id' => $request->clientOrderId,
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
+            'quantity_decimal' => $request->exactQuantity(),
+            'price_decimal' => $request->exactPrice(),
+            'stop_price_decimal' => $request->exactStopPrice(),
+            'attached_stop_loss_price_decimal' => $request->exactAttachedStopLossPrice(),
+            'attached_take_profit_price_decimal' => $request->exactAttachedTakeProfitPrice(),
             'margin_reference_price' => $marginReferencePrice,
             'margin_reference_source' => $marginReferencePrice !== null ? 'top_of_book' : null,
             'margin_contract_size' => $marginContractSize,
-        ], static fn (mixed $value): bool => $value !== null) + $request->metadata;
+        ], static fn (mixed $value): bool => $value !== null) + $this->lineageMetadata($request->metadata);
     }
 
     /**
@@ -381,7 +389,7 @@ final readonly class FakeExchangeMatchingEngine
             order: $existing,
             metadata: array_replace($existing->metadata, [
                 'reason' => 'duplicate_client_order_id_intent_mismatch',
-                'idempotent_replay' => true,
+                'idempotent_replay' => false,
             ]),
         );
     }
@@ -1055,13 +1063,28 @@ final readonly class FakeExchangeMatchingEngine
         if ($order->orderType !== $request->orderType) {
             return false;
         }
-        if (abs($order->quantity - $request->quantity) > 0.00000001) {
+        if (!$this->exactDecimalMatches(
+            $order->metadata,
+            'quantity_decimal',
+            $order->quantity,
+            $request->exactQuantity(),
+        )) {
             return false;
         }
-        if ($request->orderType !== ExchangeOrderType::MARKET && !$this->nullableFloatMatches($order->price, $request->price)) {
+        if ($request->orderType !== ExchangeOrderType::MARKET && !$this->exactDecimalMatches(
+            $order->metadata,
+            'price_decimal',
+            $order->price,
+            $request->exactPrice(),
+        )) {
             return false;
         }
-        if (!$this->nullableFloatMatches($order->stopPrice, $request->stopPrice)) {
+        if (!$this->exactDecimalMatches(
+            $order->metadata,
+            'stop_price_decimal',
+            $order->stopPrice,
+            $request->exactStopPrice(),
+        )) {
             return false;
         }
         if ($order->reduceOnly !== ($request->reduceOnly || $this->isStandaloneProtection($request))) {
@@ -1070,13 +1093,23 @@ final readonly class FakeExchangeMatchingEngine
         if ($order->postOnly !== $request->postOnly || $order->timeInForce !== $request->timeInForce) {
             return false;
         }
-        if (!$this->metadataPriceMatches($order->metadata, 'attached_stop_loss_price', $request->attachedStopLossPrice)) {
+        if (!$this->exactMetadataDecimalMatches(
+            $order->metadata,
+            'attached_stop_loss_price_decimal',
+            'attached_stop_loss_price',
+            $request->exactAttachedStopLossPrice(),
+        )) {
             return false;
         }
-        if (!$this->metadataPriceMatches($order->metadata, 'attached_take_profit_price', $request->attachedTakeProfitPrice)) {
+        if (!$this->exactMetadataDecimalMatches(
+            $order->metadata,
+            'attached_take_profit_price_decimal',
+            'attached_take_profit_price',
+            $request->exactAttachedTakeProfitPrice(),
+        )) {
             return false;
         }
-        if (\array_key_exists('leverage', $order->metadata) && !$this->metadataFloatMatches($order->metadata, 'leverage', $request->leverage)) {
+        if (\array_key_exists('leverage', $order->metadata) && !$this->metadataIntMatches($order->metadata, 'leverage', $request->leverage)) {
             return false;
         }
         $storedMarginMode = $order->metadata['margin_mode'] ?? null;
@@ -1087,45 +1120,78 @@ final readonly class FakeExchangeMatchingEngine
         return true;
     }
 
-    private function nullableFloatMatches(?float $left, ?float $right): bool
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function exactDecimalMatches(
+        array $metadata,
+        string $decimalKey,
+        ?float $floatValue,
+        ?string $expected,
+    ): bool
     {
-        if ($left === null || $right === null) {
-            return $left === null && $right === null;
+        if ($expected === null || $floatValue === null) {
+            return $expected === null && $floatValue === null;
         }
 
-        return abs($left - $right) <= 0.00000001;
+        $actual = $metadata[$decimalKey] ?? null;
+        if (!\is_string($actual)) {
+            $actual = self::canonicalFloat($floatValue);
+        }
+
+        return self::sameDecimal($actual, $expected);
     }
 
     /**
      * @param array<string,mixed> $metadata
      */
-    private function metadataPriceMatches(array $metadata, string $key, ?float $expected): bool
+    private function exactMetadataDecimalMatches(
+        array $metadata,
+        string $decimalKey,
+        string $floatKey,
+        ?string $expected,
+    ): bool
     {
-        $actual = $metadata[$key] ?? null;
+        $actual = $metadata[$decimalKey] ?? null;
         if ($expected === null) {
-            return $actual === null || $actual === '' || (is_numeric($actual) && abs((float)$actual) <= 0.00000001);
+            return $actual === null && !\array_key_exists($floatKey, $metadata);
         }
-        if (!is_numeric($actual)) {
-            return false;
+        if (!\is_string($actual)) {
+            $floatValue = $metadata[$floatKey] ?? null;
+            if (!is_numeric($floatValue)) {
+                return false;
+            }
+            $actual = self::canonicalFloat((float) $floatValue);
         }
 
-        return abs((float)$actual - $expected) <= 0.00000001;
+        return self::sameDecimal($actual, $expected);
     }
 
     /**
      * @param array<string,mixed> $metadata
      */
-    private function metadataFloatMatches(array $metadata, string $key, ?float $expected): bool
+    private function metadataIntMatches(array $metadata, string $key, ?int $expected): bool
     {
         $actual = $metadata[$key] ?? null;
         if ($expected === null) {
-            return $actual === null || $actual === '' || (is_numeric($actual) && abs((float)$actual) <= 0.00000001);
-        }
-        if (!is_numeric($actual)) {
-            return false;
+            return $actual === null || $actual === '';
         }
 
-        return abs((float)$actual - $expected) <= 0.00000001;
+        return \is_int($actual) ? $actual === $expected : ctype_digit((string) $actual) && (int) $actual === $expected;
+    }
+
+    private static function canonicalFloat(float $value): string
+    {
+        return json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+    }
+
+    private static function sameDecimal(string $actual, string $expected): bool
+    {
+        try {
+            return BigDecimal::of($actual)->isEqualTo(BigDecimal::of($expected));
+        } catch (MathException) {
+            return false;
+        }
     }
 
     /**

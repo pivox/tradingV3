@@ -166,6 +166,7 @@ final class FakeProvidersTest extends TestCase
                 'time_in_force' => 'gtc',
                 'attached_stop_loss_price' => 24500.0,
                 'attached_take_profit_price' => 26000.0,
+                'decision_key' => 'decision-safe-1',
             ],
         );
 
@@ -174,6 +175,7 @@ final class FakeProvidersTest extends TestCase
         self::assertSame('legacy-1', $placed->metadata['client_order_id']);
         self::assertSame('long', $placed->metadata['position_side']);
         self::assertTrue($placed->metadata['post_only']);
+        self::assertSame('decision-safe-1', $placed->metadata['decision_key'] ?? null);
         self::assertEquals($placed, $this->fixture->order->getOrder('BTCUSDT', $placed->orderId));
         self::assertEquals([$placed], $this->fixture->order->getOpenOrders('BTCUSDT'));
         self::assertEquals([$placed], $this->fixture->order->getOpenOrdersOrFail('BTCUSDT'));
@@ -267,6 +269,37 @@ final class FakeProvidersTest extends TestCase
             static fn ($order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS
                 && $order->stopPrice === 24500.0,
         ));
+    }
+
+    public function testLimitOrderWithStopPriceRemainsTriggeredProtection(): void
+    {
+        $entry = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            1.0,
+            options: ['client_order_id' => 'triggered-protection-entry'],
+        );
+        $stop = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::SELL,
+            OrderType::LIMIT,
+            1.0,
+            24500.0,
+            24500.0,
+            options: [
+                'client_order_id' => 'triggered-protection-stop',
+                'side' => 3,
+                'reduce_only' => true,
+            ],
+        );
+
+        self::assertNotNull($entry);
+        self::assertSame(OrderStatus::FILLED, $entry->status);
+        self::assertNotNull($stop);
+        self::assertSame(OrderStatus::PENDING, $stop->status);
+        self::assertSame('24500', (string) $stop->stopPrice);
+        self::assertCount(1, $this->fixture->account->getOpenPositions('BTCUSDT'));
     }
 
     public function testOrderProviderMapsEveryBitmartLegacySideCode(): void

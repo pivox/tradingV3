@@ -46,11 +46,36 @@ unsupported order types are not inferred from another instrument.
 
 ## Precision and rejection behavior
 
-Prices and quantities are converted to decimal text and checked with Brick Math
-exact remainder operations. A price must be an exact multiple of `priceTick`; a
-quantity must be an exact multiple of `quantityStep`. The adapter never rounds,
-truncates, snaps, or otherwise quantizes an invalid request. The original price
-and quantity are retained on the persisted rejected order.
+Prices and quantities are checked with Brick Math exact remainder operations. A
+price must be an exact multiple of `priceTick`; a quantity must be an exact
+multiple of `quantityStep`. `PlaceOrderRequest` can carry the exact decimal text
+alongside its float projection, and the Fake HTTP placement endpoint requires
+precision-sensitive fields (`quantity`, `price`, stop prices) as positive plain
+decimal JSON strings. JSON numbers are rejected at that boundary because their
+lexical precision cannot be recovered after decoding. Internal callers that only
+have a float use its canonical JSON decimal projection.
+
+The adapter never rounds, truncates, snaps, or otherwise quantizes an invalid
+request. The original exact decimal is retained in redacted order metadata for
+validation and replay comparison.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8082/fake-exchange/orders \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "position_side": "long",
+    "order_type": "limit",
+    "quantity": "0.001",
+    "price": "24950.0",
+    "client_order_id": "fake-risk-example-1",
+    "post_only": true,
+    "leverage": 3
+  }'
+```
 
 Validation is ordered and returns one stable reason. Relevant reasons for the
 canonical golden scenarios are:
@@ -61,9 +86,10 @@ canonical golden scenarios are:
 
 A rejected request produces one persisted order with status `rejected` and one
 redacted `order.rejected` event. It creates no active order and no position.
-Rejected requests still have deterministic local order identity, which makes
-same-state audit and client-order replay unambiguous without exposing raw
-payloads or credentials.
+Only explicitly allowed scalar lineage keys are copied from request metadata;
+credentials, authorization headers, nested raw payloads, and arbitrary metadata
+are not persisted or emitted. Rejected requests still have deterministic local
+order identity, which makes same-state audit and client-order replay unambiguous.
 
 ## Margin and collateral
 
@@ -74,9 +100,12 @@ notional = quantity * reference_price * contract_size
 initial_margin = notional / leverage
 ```
 
-A limit order uses its submitted limit price. A market order uses the
-deterministic top of book for its side. Reduce-only and protection orders do not
-reserve new initial margin, but they still pass instrument and precision checks.
+A limit BUY uses its submitted limit price because execution cannot occur above
+that cap. A limit SELL uses the greater of its submitted limit and the current
+best bid, so a deeply crossing sell is checked against the actual higher
+executable price. A market order uses the deterministic top of book for its
+side. Reduce-only and protection orders do not reserve new initial margin, but
+they still pass instrument and precision checks.
 
 Used margin is derived rather than maintained as a second reservation balance:
 
@@ -111,9 +140,11 @@ remains supported because the Fake adapter does not require a separate leverage
 submission; it still must respect the catalog cap.
 
 Order idempotence remains keyed by symbol and `clientOrderId`. Replaying the same
-intent returns the existing local order identity with `idempotent_replay`; reusing
-the identifier for a different intent fails closed instead of creating a second
-active order.
+numeric intent returns the existing local order identity with
+`idempotent_replay=true`; equivalent decimal scales such as `0.001` and `0.0010`
+match. Reusing the identifier for a different exact decimal or another changed
+intent fails closed with `duplicate_client_order_id_intent_mismatch` and
+`idempotent_replay=false` instead of creating a second active order.
 
 ## Providers and runtime readiness
 
@@ -122,6 +153,11 @@ order book. The account provider exposes the derived USDT balance and positions.
 The order provider delegates local placement, reads, cancellation, and leverage
 updates to `FakeExchangeAdapter`. These providers do not contact an exchange or
 expose serialized state payloads.
+
+The contextual provider path accepts only the injected `exchange=fake` and
+`market_type=perpetual` options. Legacy `LIMIT` protection submissions carrying
+a non-null `stopPrice` are mapped to a triggered stop-loss order, preserving
+stop-limit semantics instead of crossing the book immediately.
 
 Runtime readiness recognizes non-empty catalog and precision versions as loaded
 metadata. Unconfigured persistence adds the
@@ -143,9 +179,11 @@ kill switch on. It cannot enable mainnet, demo, or testnet writes.
 
 Constructing a file-backed `FakeExchangeStateStore` for an absent path initializes
 defaults in memory and does not create the active state file. Balance, catalog,
-provider, and readiness reads do not create orders, positions, or events. The
-persistence readiness probe uses and deletes a separate temporary file; it does
-not rewrite active state or consume queued faults.
+provider, and readiness reads do not create orders, positions, events, or the
+active state file. Fault lookup transactions persist only when they consume a
+queued fault or another mutation changes runtime state. The persistence readiness
+probe uses and deletes a separate temporary file; it does not rewrite active
+state or consume queued faults.
 
 Explicit mutation persists when a state path is configured. Examples include
 `reset()`, setting a book top, placing or cancelling an order, filling an order,

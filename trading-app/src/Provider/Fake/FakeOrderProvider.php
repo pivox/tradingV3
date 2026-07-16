@@ -44,6 +44,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         array $options = [],
     ): ?OrderDto {
         $this->assertSupportedOptions($options);
+        $this->assertContextOptions($options);
         $clientOrderId = $options['client_order_id'] ?? null;
         if (!\is_string($clientOrderId) || trim($clientOrderId) === '') {
             throw new \InvalidArgumentException('Fake legacy orders require a non-blank client_order_id option.');
@@ -60,7 +61,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         }
         $canonicalSide = $legacySide['side'] ?? $requestedSide;
         $canonicalType = match ($type) {
-            OrderType::LIMIT => ExchangeOrderType::LIMIT,
+            OrderType::LIMIT => $stopPrice !== null ? ExchangeOrderType::STOP_LOSS : ExchangeOrderType::LIMIT,
             OrderType::MARKET => ExchangeOrderType::MARKET,
             OrderType::STOP => ExchangeOrderType::STOP_LOSS,
             OrderType::STOP_LIMIT => throw new \InvalidArgumentException('Fake legacy order type STOP_LIMIT is unsupported.'),
@@ -260,6 +261,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
     private function assertSupportedOptions(array $options): void
     {
         $supported = [
+            'exchange', 'market_type',
             'client_order_id', 'side', 'mode', 'position_side', 'margin_mode', 'open_type', 'leverage',
             'reduce_only', 'post_only', 'time_in_force',
             'attached_stop_loss_price', 'attached_take_profit_price',
@@ -282,6 +284,17 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             if (array_key_exists($key, $options) && $options[$key] !== 1) {
                 throw new \InvalidArgumentException(sprintf('%s only supports the mark-price type 1.', $key));
             }
+        }
+    }
+
+    /** @param array<string,mixed> $options */
+    private function assertContextOptions(array $options): void
+    {
+        if (($options['exchange'] ?? Exchange::FAKE->value) !== Exchange::FAKE->value) {
+            throw new \InvalidArgumentException('Fake legacy orders require exchange=fake.');
+        }
+        if (($options['market_type'] ?? MarketType::PERPETUAL->value) !== MarketType::PERPETUAL->value) {
+            throw new \InvalidArgumentException('Fake legacy orders require market_type=perpetual.');
         }
     }
 

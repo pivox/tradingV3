@@ -1028,7 +1028,7 @@ class FakeExchangeStateStore
 
         try {
             if ($this->stateFile !== null && !$this->restore()) {
-                $this->reset();
+                $this->initializeDefaults();
             }
 
             $snapshot = $this->runtimeState();
@@ -1037,7 +1037,9 @@ class FakeExchangeStateStore
             try {
                 $result = $callback();
                 $this->deferPersistence = false;
-                $this->persist();
+                if ($this->runtimeState() !== $snapshot) {
+                    $this->persist();
+                }
 
                 return $result;
             } catch (\Throwable $exception) {

@@ -138,6 +138,150 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(0.1, $result->order->quantity);
     }
 
+    public function testCrossingSellLimitUsesExecutableBidForMarginValidation(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            price: 10000.0,
+            clientOrderId: 'cid-crossing-sell-insufficient',
+            positionSide: ExchangePositionSide::SHORT,
+            side: ExchangeOrderSide::SELL,
+            quantity: 50.0,
+            leverage: 5,
+        ));
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertSame('insufficient_balance', $result->metadata['reason'] ?? null);
+        self::assertSame([], $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertSame(100000.0, $this->adapter->getBalances()[0]->available);
+    }
+
+    public function testRejectedOrderMetadataIsWhitelistedBeforePersistenceAndEvents(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            price: 24950.01,
+            clientOrderId: 'cid-redacted-rejection',
+            metadata: [
+                'internal_trade_id' => 'trade-safe-1',
+                'api_key' => 'TOP-SECRET',
+                'authorization' => 'Bearer SECRET',
+                'raw_payload' => ['secret' => 'nested-secret'],
+            ],
+        ));
+
+        $persisted = $this->adapter->getOrder('BTCUSDT', (string) $result->exchangeOrderId);
+        $event = $this->scenario->events('order.rejected')[0] ?? null;
+        $serialized = json_encode([$persisted?->metadata, $event?->payload], JSON_THROW_ON_ERROR);
+
+        self::assertSame('trade-safe-1', $persisted?->metadata['internal_trade_id'] ?? null);
+        self::assertStringNotContainsString('TOP-SECRET', $serialized);
+        self::assertStringNotContainsString('Bearer SECRET', $serialized);
+        self::assertStringNotContainsString('nested-secret', $serialized);
+        self::assertStringNotContainsString('api_key', $serialized);
+        self::assertStringNotContainsString('authorization', $serialized);
+        self::assertStringNotContainsString('raw_payload', $serialized);
+    }
+
+    public function testReplayWithDifferentExactQuantityCannotPassAsIdempotentWithinFloatEpsilon(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-exact-replay',
+            postOnly: true,
+            quantity: 0.001,
+            quantityDecimal: '0.001',
+        ));
+        $replay = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-exact-replay',
+            postOnly: true,
+            quantity: 0.001000001,
+            quantityDecimal: '0.001000001',
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertFalse($replay->accepted);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $replay->metadata['reason'] ?? null);
+        self::assertFalse($replay->metadata['idempotent_replay'] ?? false);
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testReplayWithEquivalentDecimalScaleRemainsIdempotent(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-equivalent-decimal-scale',
+            postOnly: true,
+            quantity: 0.001,
+            quantityDecimal: '0.001',
+            priceDecimal: '24950.0',
+        ));
+        $replay = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-equivalent-decimal-scale',
+            postOnly: true,
+            quantity: 0.001,
+            quantityDecimal: '0.0010',
+            priceDecimal: '24950.00',
+        ));
+
+        self::assertTrue($first->accepted);
+        self::assertTrue($replay->accepted);
+        self::assertTrue($replay->metadata['idempotent_replay'] ?? false);
+        self::assertSame($first->exchangeOrderId, $replay->exchangeOrderId);
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testReplayWithMalformedLegacyDecimalMetadataFailsClosed(): void
+    {
+        $first = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-malformed-legacy-decimal',
+            postOnly: true,
+            quantity: 0.001,
+            quantityDecimal: '0.001',
+        ));
+        self::assertNotNull($first->order);
+
+        $order = $first->order;
+        $this->state->saveOrder(new ExchangeOrderDto(
+            exchange: $order->exchange,
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $order->side,
+            positionSide: $order->positionSide,
+            orderType: $order->orderType,
+            status: $order->status,
+            quantity: $order->quantity,
+            filledQuantity: $order->filledQuantity,
+            remainingQuantity: $order->remainingQuantity,
+            price: $order->price,
+            averagePrice: $order->averagePrice,
+            stopPrice: $order->stopPrice,
+            reduceOnly: $order->reduceOnly,
+            postOnly: $order->postOnly,
+            timeInForce: $order->timeInForce,
+            createdAt: $order->createdAt,
+            updatedAt: $order->updatedAt,
+            metadata: array_replace($order->metadata, ['quantity_decimal' => 'not-a-decimal']),
+        ));
+
+        $replay = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-malformed-legacy-decimal',
+            postOnly: true,
+            quantity: 0.001,
+            quantityDecimal: '0.001',
+        ));
+
+        self::assertFalse($replay->accepted);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $replay->metadata['reason'] ?? null);
+        self::assertFalse($replay->metadata['idempotent_replay'] ?? false);
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
     public function testUnavailablePositionMarginProducesAuditedFailClosedRejection(): void
     {
         $this->state->savePosition(new ExchangePositionDto(
@@ -321,6 +465,23 @@ final class FakeExchangeAdapterTest extends TestCase
             self::assertSame(100000.0, $restored->totalBalanceUsdt());
         } finally {
             @unlink($stateFile);
+        }
+    }
+
+    public function testReadOnlyBalanceLookupDoesNotCreateMissingStateFile(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_read_only_balance_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $adapter = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+
+            self::assertSame(100000.0, $adapter->getBalances()[0]->available);
+            self::assertFileDoesNotExist($stateFile);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
         }
     }
 
@@ -1058,8 +1219,9 @@ final class FakeExchangeAdapterTest extends TestCase
     public function testClientOrderIdReplayDoesNotCreateSecondActiveOrder(): void
     {
         $first = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
-        $second = $this->adapter->placeOrder($this->request(price: 24900.0, postOnly: true));
+        $second = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: true));
 
+        self::assertTrue($second->accepted);
         self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
         self::assertTrue($second->metadata['idempotent_replay'] ?? false);
         self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
@@ -1574,6 +1736,8 @@ final class FakeExchangeAdapterTest extends TestCase
         array $metadata = [],
         ?int $leverage = 3,
         MarketType $marketType = MarketType::PERPETUAL,
+        ?string $quantityDecimal = null,
+        ?string $priceDecimal = null,
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -1594,6 +1758,8 @@ final class FakeExchangeAdapterTest extends TestCase
             attachedStopLossPrice: $attachedStopLossPrice,
             attachedTakeProfitPrice: $attachedTakeProfitPrice,
             metadata: $metadata,
+            quantityDecimal: $quantityDecimal,
+            priceDecimal: $priceDecimal,
         );
     }
 

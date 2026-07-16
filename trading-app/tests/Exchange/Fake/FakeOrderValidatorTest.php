@@ -276,6 +276,21 @@ final class FakeOrderValidatorTest extends TestCase
         self::assertSame('price_not_quantized', $result->reason);
     }
 
+    public function testUsesExactQuantityDecimalInsteadOfRoundedFloatProjection(): void
+    {
+        $result = $this->validator()->validate(
+            self::request(
+                quantity: 0.001,
+                quantityDecimal: '0.00100000000000000001',
+            ),
+            25000.0,
+            1000.0,
+        );
+
+        self::assertFalse($result->accepted);
+        self::assertSame('quantity_not_quantized', $result->reason);
+    }
+
     public function testDoesNotRoundAvailableMarginUp(): void
     {
         $result = $this->validator()->validate(
@@ -434,6 +449,8 @@ final class FakeOrderValidatorTest extends TestCase
         string $marginMode = 'isolated',
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
+        ?string $quantityDecimal = null,
+        ?string $priceDecimal = null,
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -453,6 +470,8 @@ final class FakeOrderValidatorTest extends TestCase
             clientOrderId: 'validator-test',
             attachedStopLossPrice: $attachedStopLossPrice,
             attachedTakeProfitPrice: $attachedTakeProfitPrice,
+            quantityDecimal: $quantityDecimal,
+            priceDecimal: $priceDecimal,
         );
     }
 }

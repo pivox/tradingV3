@@ -6,6 +6,9 @@ namespace App\Tests\Provider\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Common\Enum\OrderSide;
+use App\Common\Enum\OrderStatus;
+use App\Common\Enum\OrderType;
 use App\Contract\Provider\ExchangeProviderRegistryInterface;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Fake\FakeAccountProvider;
@@ -93,5 +96,32 @@ final class FakeExchangeBundleRegistryTest extends KernelTestCase
         self::assertSame([], $scoped->getAccountProvider()->getOpenPositions());
         self::assertSame([], $scoped->getOrderProvider()->getOpenOrders());
         self::assertSame(100000.0, $scoped->getAccountProvider()->getAccountBalance());
+    }
+
+    public function testMainProviderContextCanPlaceFakePerpetualOrder(): void
+    {
+        $registry = new ExchangeProviderRegistry(
+            [$this->fakeBundle(MarketType::PERPETUAL)],
+            Exchange::FAKE,
+            MarketType::PERPETUAL,
+        );
+
+        $placed = (new MainProvider($registry))
+            ->forContext(new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL))
+            ->getOrderProvider()
+            ->placeOrder(
+                'BTCUSDT',
+                OrderSide::BUY,
+                OrderType::LIMIT,
+                1.0,
+                24950.0,
+                options: [
+                    'client_order_id' => 'main-provider-fake-context',
+                    'post_only' => true,
+                ],
+            );
+
+        self::assertNotNull($placed);
+        self::assertSame(OrderStatus::PENDING, $placed->status);
     }
 }
