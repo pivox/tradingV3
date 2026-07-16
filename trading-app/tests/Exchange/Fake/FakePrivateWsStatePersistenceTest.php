@@ -152,7 +152,7 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         $state->markPrivateWsGap('2', '3', $gap);
 
         $restored = new FakeExchangeStateStore($this->stateFile);
-        $restored->completePrivateWsSnapshotResync($this->successfulGlobalReconciliation());
+        $restored->completePrivateWsSnapshotResync($this->successfulGlobalReconciliation($restored));
         $audit = $restored->privateWsAudit();
 
         self::assertSame('connected', $audit['connection_state']);
@@ -226,6 +226,53 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         self::assertSame([], $audit['records']);
     }
 
+    public function testLegacyPrivateWsStateWithoutSnapshotProofFieldsStillHydrates(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->configurePrivateWsScenario($this->scenario([1, 3]));
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+
+        $envelope = unserialize((string) file_get_contents($this->stateFile), ['allowed_classes' => true]);
+        self::assertIsArray($envelope);
+        self::assertIsArray($envelope['payload']['privateWs'] ?? null);
+        unset(
+            $envelope['payload']['privateWs']['resync_cycle_id'],
+            $envelope['payload']['privateWs']['snapshot_proof'],
+        );
+        $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+        file_put_contents($this->stateFile, serialize($envelope));
+
+        $restored = new FakeExchangeStateStore($this->stateFile);
+
+        self::assertTrue((new FakeExchangeWsClient($restored))->requiresResync());
+        self::assertSame($state->privateWsAudit(), $restored->privateWsAudit());
+    }
+
+    public function testMalformedPresentSnapshotProofStateFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->reset();
+
+        $envelope = unserialize((string) file_get_contents($this->stateFile), ['allowed_classes' => true]);
+        self::assertIsArray($envelope);
+        self::assertIsArray($envelope['payload']['privateWs'] ?? null);
+        $envelope['payload']['privateWs']['resync_cycle_id'] = str_repeat('a', 64);
+        $envelope['payload']['privateWs']['snapshot_proof'] = [
+            'schema_version' => 'malformed',
+        ];
+        $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+        file_put_contents($this->stateFile, serialize($envelope));
+
+        $this->expectException(FakeExchangeStateCorruptedException::class);
+        $this->expectExceptionMessage('fake_exchange_state_shape_invalid');
+        new FakeExchangeStateStore($this->stateFile);
+    }
+
     public function testMalformedPrivateWsStateFailsClosed(): void
     {
         $state = new FakeExchangeStateStore($this->stateFile);
@@ -271,9 +318,11 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         );
     }
 
-    private function successfulGlobalReconciliation(): ExchangeReconciliationResult
+    private function successfulGlobalReconciliation(FakeExchangeStateStore $state): ExchangeReconciliationResult
     {
         $now = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+        $proof = $state->capturePrivateWsSnapshotProof();
+        self::assertIsArray($proof);
 
         return new ExchangeReconciliationResult(
             exchange: Exchange::FAKE,
@@ -281,6 +330,7 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
             symbol: null,
             startedAt: $now,
             completedAt: $now,
+            metadata: ['fake_private_ws_snapshot_proof' => $proof],
         );
     }
 

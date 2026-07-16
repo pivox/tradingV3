@@ -43,6 +43,9 @@ final readonly class ExchangeReconciliationService
     {
         $startedAt = $this->clock->now();
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+        $snapshotProof = $adapter instanceof ExchangeReconciliationSnapshotProofProviderInterface
+            ? $adapter->captureReconciliationSnapshotProof($normalizedSymbol)
+            : null;
         $orders = $adapter instanceof ExchangeRestSnapshotProviderInterface
             ? $adapter->getOrdersSnapshot($normalizedSymbol)
             : $adapter->getOpenOrders($normalizedSymbol);
@@ -104,6 +107,16 @@ final readonly class ExchangeReconciliationService
 
         $unprotectedPositions = $this->detectUnprotectedPositions($adapter, $positions);
         $completedAt = $this->clock->now();
+        $metadata = [
+            'unknown_order_ids' => $unknownOrders,
+            'unprotected_positions' => $unprotectedPositions,
+            'events_projected' => $eventsProjected,
+            'position_snapshot_authoritative' => $positionSnapshotAuthoritative,
+        ];
+        if ($snapshotProof !== null) {
+            $metadata['fake_private_ws_snapshot_proof'] = $snapshotProof;
+        }
+
         $result = new ExchangeReconciliationResult(
             exchange: $adapter->exchange(),
             marketType: $adapter->marketType(),
@@ -115,12 +128,7 @@ final readonly class ExchangeReconciliationService
             fillsImported: \count($fills),
             correctionsApplied: $eventsProjected,
             unknownOrdersDetected: \count($unknownOrders),
-            metadata: [
-                'unknown_order_ids' => $unknownOrders,
-                'unprotected_positions' => $unprotectedPositions,
-                'events_projected' => $eventsProjected,
-                'position_snapshot_authoritative' => $positionSnapshotAuthoritative,
-            ],
+            metadata: $metadata,
         );
 
         $this->logger->info('exchange_reconciliation.completed', [

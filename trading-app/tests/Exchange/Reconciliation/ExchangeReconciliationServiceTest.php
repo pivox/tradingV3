@@ -400,6 +400,321 @@ final class ExchangeReconciliationServiceTest extends TestCase
         self::assertSame(1, $client->audit()['resync_total']);
     }
 
+    public function testScenarioSnapshotCompletionLeavesPostSnapshotEventEligibleForPrivateWsDelivery(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $adapter = $this->adapter($state);
+        $adapter->placeOrder($this->marketRequest());
+        $events = $state->events();
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'snapshot-watermark-v1',
+            [$events[0], $events[2], $events[1]],
+        ));
+
+        $store = new RecordingProjectionStore();
+        $ingestion = new ExchangeWsIngestionService(
+            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+            new ExchangeEventBus($store, new NullLogger()),
+            new NullLogger(),
+        );
+        $client = new FakeExchangeWsClient($state);
+        try {
+            $ingestion->drain($client);
+            self::fail('The out-of-order fixture must stop on its gap.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_gap', $exception->errorCode);
+        }
+
+        $reconciliation = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $snapshotResult = $reconciliation->reconcile($adapter);
+
+        $postSnapshotPayload = $events[0]->payload;
+        unset($postSnapshotPayload['event_sequence']);
+        $state->appendEvent(new FakeExchangeEvent(
+            $events[0]->type,
+            $events[0]->symbol,
+            new \DateTimeImmutable('2026-01-01T00:00:04+00:00'),
+            $postSnapshotPayload,
+        ));
+
+        $client->completeSnapshotResync($snapshotResult);
+        self::assertSame(3, $client->audit()['next_delivery_index']);
+
+        $resumed = $ingestion->drain($client);
+
+        self::assertSame(1, $resumed->rawEventsRead);
+        self::assertSame(4, $client->audit()['next_delivery_index']);
+        self::assertSame('4', $client->audit()['last_acknowledged_sequence']);
+    }
+
+    public function testScenarioSnapshotCompletionRejectsMissingMalformedAndStaleProofsWithoutAuditMutation(): void
+    {
+        [$state, $client] = $this->stateWithPrivateWsGap('proof-validation-v1');
+        $auditBefore = $client->audit();
+        $now = $this->fixedClock()->now();
+        $missingProof = new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: null,
+            startedAt: $now,
+            completedAt: $now,
+        );
+
+        try {
+            $client->completeSnapshotResync($missingProof);
+            self::fail('A manually constructed result without a snapshot proof must fail closed.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_required', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $adapter = $this->adapter($state);
+        $firstProof = $service->reconcile($adapter);
+        $proof = $firstProof->metadata['fake_private_ws_snapshot_proof'] ?? null;
+        self::assertIsArray($proof);
+
+        $malformed = $this->reconciliationWithMetadata($firstProof, [
+            'fake_private_ws_snapshot_proof' => ['schema_version' => 'malformed'],
+        ]);
+        try {
+            $client->completeSnapshotResync($malformed);
+            self::fail('A malformed snapshot proof must fail closed.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_invalid', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $wrongScenarioProof = $proof;
+        $wrongScenarioProof['scenario_id'] = 'another-scenario';
+        $wrongScenario = $this->reconciliationWithMetadata($firstProof, [
+            'fake_private_ws_snapshot_proof' => $wrongScenarioProof,
+        ]);
+        try {
+            $client->completeSnapshotResync($wrongScenario);
+            self::fail('A proof for another scenario must fail closed.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_stale', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $wrongCycleProof = $proof;
+        $wrongCycleProof['resync_cycle_id'] = str_repeat('f', 64);
+        $wrongCycle = $this->reconciliationWithMetadata($firstProof, [
+            'fake_private_ws_snapshot_proof' => $wrongCycleProof,
+        ]);
+        try {
+            $client->completeSnapshotResync($wrongCycle);
+            self::fail('A proof for another resync cycle must fail closed.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_stale', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $latestProof = $service->reconcile($adapter);
+        try {
+            $client->completeSnapshotResync($firstProof);
+            self::fail('Issuing a newer snapshot proof must invalidate the previous proof.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_stale', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $client->completeSnapshotResync($latestProof);
+        self::assertFalse($client->requiresResync());
+    }
+
+    public function testNewPrivateWsResyncCycleInvalidatesCompletedCycleProof(): void
+    {
+        [$state, $client] = $this->stateWithPrivateWsGap('proof-cycle-v1');
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $adapter = $this->adapter($state);
+        $completedCycleProof = $service->reconcile($adapter);
+        $client->completeSnapshotResync($completedCycleProof);
+
+        $state->appendEvent(new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:05+00:00'),
+            ['event_sequence' => 5],
+        ));
+        try {
+            iterator_to_array($client->drainPrivateEvents());
+            self::fail('Sequence five must open a new resync cycle when four is missing.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_gap', $exception->errorCode);
+        }
+
+        $auditBefore = $client->audit();
+        try {
+            $client->completeSnapshotResync($completedCycleProof);
+            self::fail('A proof from the completed cycle must not complete a new resync cycle.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_stale', $exception->getMessage());
+        }
+        self::assertSame($auditBefore, $client->audit());
+
+        $client->completeSnapshotResync($service->reconcile($adapter));
+        self::assertFalse($client->requiresResync());
+    }
+
+    public function testSnapshotBoundProofSurvivesRestartAndRetainsItsCapturedWatermark(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_snapshot_proof_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $adapter = $this->adapter($state);
+            $adapter->placeOrder($this->marketRequest());
+            $events = $state->events();
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+                'persisted-snapshot-proof-v1',
+                [$events[0], $events[2], $events[1]],
+            ));
+            $first = $state->privateWsCurrentDelivery();
+            self::assertNotNull($first);
+            $state->acknowledgePrivateWsDelivery($first);
+            $gap = $state->privateWsCurrentDelivery();
+            self::assertNotNull($gap);
+            $state->markPrivateWsGap('2', '3', $gap);
+
+            $store = new RecordingProjectionStore();
+            $service = new ExchangeReconciliationService(
+                new ExchangeEventBus($store, new NullLogger()),
+                $store,
+                $this->fixedClock(),
+                new NullLogger(),
+            );
+            $snapshotResult = $service->reconcile($adapter);
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $postSnapshotPayload = $events[0]->payload;
+            unset($postSnapshotPayload['event_sequence']);
+            $restored->appendEvent(new FakeExchangeEvent(
+                $events[0]->type,
+                $events[0]->symbol,
+                new \DateTimeImmutable('2026-01-01T00:00:04+00:00'),
+                $postSnapshotPayload,
+            ));
+
+            $restartedAgain = new FakeExchangeStateStore($stateFile);
+            $client = new FakeExchangeWsClient($restartedAgain);
+            $client->completeSnapshotResync($snapshotResult);
+
+            self::assertSame(3, $client->audit()['next_delivery_index']);
+            self::assertSame('4', $restartedAgain->privateWsCurrentDelivery()?->sequence);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
+        }
+    }
+
+    public function testSnapshotProofDoesNotCoverDeliveryAppendedLaterWithAnOlderSequence(): void
+    {
+        [$state, $client] = $this->stateWithPrivateWsGap('proof-delivery-boundary-v1');
+        $store = new RecordingProjectionStore();
+        $service = new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $snapshotResult = $service->reconcile($this->adapter($state));
+
+        $state->appendEvent($state->events()[0]);
+        $client->completeSnapshotResync($snapshotResult);
+
+        self::assertSame(3, $client->audit()['next_delivery_index']);
+        self::assertSame('1', $state->privateWsCurrentDelivery()?->sequence);
+
+        iterator_to_array($client->drainPrivateEvents());
+        self::assertSame(1, $client->audit()['duplicate_total']);
+        self::assertSame(4, $client->audit()['next_delivery_index']);
+    }
+
+    /**
+     * @return array{FakeExchangeStateStore,FakeExchangeWsClient}
+     */
+    private function stateWithPrivateWsGap(string $scenarioId): array
+    {
+        $one = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:01+00:00'),
+            ['event_sequence' => 1],
+        );
+        $two = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:02+00:00'),
+            ['event_sequence' => 2],
+        );
+        $three = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:03+00:00'),
+            ['event_sequence' => 3],
+        );
+        $state = new FakeExchangeStateStore();
+        foreach ([$one, $two, $three] as $event) {
+            $state->appendEvent($event);
+        }
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            $scenarioId,
+            [$one, $three, $two],
+        ));
+        $first = $state->privateWsCurrentDelivery();
+        self::assertNotNull($first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertNotNull($gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+
+        return [$state, new FakeExchangeWsClient($state)];
+    }
+
+    /** @param array<string,mixed> $metadata */
+    private function reconciliationWithMetadata(
+        ExchangeReconciliationResult $result,
+        array $metadata,
+    ): ExchangeReconciliationResult {
+        return new ExchangeReconciliationResult(
+            exchange: $result->exchange,
+            marketType: $result->marketType,
+            symbol: $result->symbol,
+            startedAt: $result->startedAt,
+            completedAt: $result->completedAt,
+            ordersChecked: $result->ordersChecked,
+            positionsChecked: $result->positionsChecked,
+            fillsImported: $result->fillsImported,
+            correctionsApplied: $result->correctionsApplied,
+            staleOrdersClosed: $result->staleOrdersClosed,
+            unknownOrdersDetected: $result->unknownOrdersDetected,
+            errors: $result->errors,
+            metadata: $metadata,
+        );
+    }
+
     private function adapter(FakeExchangeStateStore $state): FakeExchangeAdapter
     {
         $book = new FakeExchangeOrderBook($state);

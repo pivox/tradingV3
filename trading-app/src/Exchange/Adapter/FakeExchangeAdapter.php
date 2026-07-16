@@ -29,11 +29,15 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
+use App\Exchange\Reconciliation\ExchangeReconciliationSnapshotProofProviderInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
 #[AutoconfigureTag('app.exchange_adapter')]
-final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
+final readonly class FakeExchangeAdapter implements
+    ExchangeAdapterInterface,
+    ExchangeRestSnapshotProviderInterface,
+    ExchangeReconciliationSnapshotProofProviderInterface
 {
     private const FEE_RATE = 0.0005;
     private const MARGIN_MODEL_VERSION = 'fake-derived-initial-margin-v1';
@@ -196,6 +200,15 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
     {
         return true;
+    }
+
+    public function captureReconciliationSnapshotProof(?string $symbol = null): ?array
+    {
+        if ($symbol !== null) {
+            return null;
+        }
+
+        return $this->stateStore->capturePrivateWsSnapshotProof();
     }
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
