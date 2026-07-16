@@ -66,6 +66,10 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             OrderType::STOP => ExchangeOrderType::STOP_LOSS,
             OrderType::STOP_LIMIT => throw new \InvalidArgumentException('Fake legacy order type STOP_LIMIT is unsupported.'),
         };
+        $canonicalPrice = $canonicalType === ExchangeOrderType::MARKET ? null : $price;
+        $this->assertFinite($quantity, 'quantity');
+        $this->assertNullableFinite($canonicalPrice, 'price');
+        $this->assertNullableFinite($stopPrice, 'stopPrice');
         $positionSide = $this->positionSide($options['position_side'] ?? null, $canonicalSide);
         if ($legacySide !== null) {
             if (array_key_exists('position_side', $options) && $positionSide !== $legacySide['positionSide']) {
@@ -120,7 +124,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             orderType: $canonicalType,
             timeInForce: $timeInForce,
             quantity: $quantity,
-            price: $price,
+            price: $canonicalPrice,
             stopPrice: $stopPrice,
             reduceOnly: $reduceOnly,
             postOnly: $postOnly,
@@ -421,6 +425,20 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         }
 
         return (float) $value;
+    }
+
+    private function assertFinite(float $value, string $field): void
+    {
+        if (!\is_finite($value)) {
+            throw new \InvalidArgumentException(sprintf('%s must be finite.', $field));
+        }
+    }
+
+    private function assertNullableFinite(?float $value, string $field): void
+    {
+        if ($value !== null) {
+            $this->assertFinite($value, $field);
+        }
     }
 
     /**

@@ -142,6 +142,55 @@ final class FakeProvidersTest extends TestCase
         self::assertSame('2500.1', (string) $account->positionDeposit);
     }
 
+    public function testOrderProviderIgnoresLegacyPriceForMarketExecution(): void
+    {
+        $order = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            1.0,
+            20000.0,
+            options: ['client_order_id' => 'market-price-ignored-1'],
+        );
+
+        self::assertNotNull($order);
+        self::assertSame(OrderStatus::FILLED, $order->status);
+        self::assertNull($order->price);
+        self::assertSame('25001', (string) $order->averagePrice);
+
+        $position = $this->fixture->account->getPosition('BTCUSDT');
+        self::assertNotNull($position);
+        self::assertSame('25001', (string) $position->entryPrice);
+    }
+
+    public function testOrderProviderRejectsNonFiniteLegacyNumbersBeforePersistence(): void
+    {
+        $cases = [
+            ['quantity', OrderType::MARKET, NAN, null, null],
+            ['price', OrderType::LIMIT, 1.0, INF, null],
+            ['stopPrice', OrderType::STOP, 1.0, null, INF],
+        ];
+
+        foreach ($cases as [$field, $type, $quantity, $price, $stopPrice]) {
+            try {
+                $this->fixture->order->placeOrder(
+                    'BTCUSDT',
+                    OrderSide::BUY,
+                    $type,
+                    $quantity,
+                    $price,
+                    $stopPrice,
+                    ['client_order_id' => 'non-finite-' . $field],
+                );
+                self::fail(sprintf('Expected non-finite %s to throw.', $field));
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame(sprintf('%s must be finite.', $field), $exception->getMessage());
+            }
+        }
+
+        self::assertSame([], $this->fixture->adapter->getOrdersSnapshot());
+    }
+
     public function testOrderProviderAppliesPersistedSymbolLeverageWhenOrderOmitsIt(): void
     {
         self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
