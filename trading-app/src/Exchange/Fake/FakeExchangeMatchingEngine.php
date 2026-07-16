@@ -1420,8 +1420,7 @@ final readonly class FakeExchangeMatchingEngine
 
     private function isPersistedTrailingOrder(ExchangeOrderDto $order): bool
     {
-        return $order->orderType === ExchangeOrderType::TRIGGER
-            || $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing'
+        return $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing'
             || \array_key_exists('trailing_state_version', $order->metadata)
             || \array_key_exists('trailing_state_status', $order->metadata)
             || \array_key_exists('trailing_activation_order_id', $order->metadata)

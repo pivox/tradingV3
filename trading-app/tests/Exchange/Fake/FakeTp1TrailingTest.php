@@ -787,6 +787,52 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertSame(0.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
     }
 
+    public function testOrdinaryPersistedTriggerWithoutTrailingStateRemainsExecutable(): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $trailing = $this->armFixture($adapter, $scenario, $this->fixture('long'));
+        $metadata = $trailing->metadata;
+        foreach ([
+            'protection_kind',
+            'trailing_state_version',
+            'trailing_state_status',
+            'trailing_activation_order_id',
+            'trailing_watermark',
+            'trailing_watermark_decimal',
+        ] as $key) {
+            unset($metadata[$key]);
+        }
+        $ordinaryTrigger = new ExchangeOrderDto(
+            exchange: $trailing->exchange,
+            marketType: $trailing->marketType,
+            symbol: $trailing->symbol,
+            exchangeOrderId: $trailing->exchangeOrderId,
+            clientOrderId: $trailing->clientOrderId,
+            side: $trailing->side,
+            positionSide: $trailing->positionSide,
+            orderType: $trailing->orderType,
+            status: $trailing->status,
+            quantity: $trailing->quantity,
+            filledQuantity: $trailing->filledQuantity,
+            remainingQuantity: $trailing->remainingQuantity,
+            price: $trailing->price,
+            averagePrice: $trailing->averagePrice,
+            stopPrice: $trailing->stopPrice,
+            reduceOnly: $trailing->reduceOnly,
+            postOnly: $trailing->postOnly,
+            timeInForce: $trailing->timeInForce,
+            createdAt: $trailing->createdAt,
+            updatedAt: $trailing->updatedAt,
+            metadata: $metadata,
+        );
+        $state->saveOrder($ordinaryTrigger);
+
+        $filled = $scenario->fillOrder($ordinaryTrigger->exchangeOrderId);
+
+        self::assertSame(ExchangeOrderStatus::FILLED, $filled?->status);
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+    }
+
     /**
      * @param array<string,mixed> $fixture
      * @param array<string,mixed> $extraMetadata
