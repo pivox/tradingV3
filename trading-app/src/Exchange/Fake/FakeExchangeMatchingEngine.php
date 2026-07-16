@@ -249,13 +249,6 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         $requestedFillQuantity = min($quantity ?? $order->remainingQuantity, $order->remainingQuantity);
-        if (
-            $this->isActiveTrailingOrder($order)
-            && $requestedFillQuantity > 0.00000001
-            && $requestedFillQuantity < $order->remainingQuantity - 0.00000001
-        ) {
-            throw new \LogicException('fake_tp1_trailing_partial_fill_unsupported');
-        }
         $fillQuantity = $requestedFillQuantity;
         $cancelReduceRemainder = false;
         if ($order->reduceOnly) {
@@ -268,6 +261,13 @@ final readonly class FakeExchangeMatchingEngine
 
             $fillQuantity = min($requestedFillQuantity, $position->size);
             $cancelReduceRemainder = $fillQuantity < $requestedFillQuantity - 0.00000001;
+        }
+        if (
+            $this->isActiveTrailingOrder($order)
+            && $fillQuantity > 0.00000001
+            && $fillQuantity < $order->remainingQuantity - 0.00000001
+        ) {
+            throw new \LogicException('fake_tp1_trailing_partial_fill_unsupported');
         }
 
         if ($fillQuantity <= 0.0) {

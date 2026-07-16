@@ -879,6 +879,55 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount(1, $state->events('trailing_stop.triggered'));
     }
 
+    #[DataProvider('directionProvider')]
+    public function testReduceOnlyCapCannotPartiallyFillActiveTrailingOrder(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $trailing = $this->armFixture($adapter, $scenario, $this->fixture($direction));
+        $manualExit = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: $trailing->side,
+            positionSide: $trailing->positionSide,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.2,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'manual-reduce-before-trailing-' . $direction,
+            quantityDecimal: '0.2',
+        ));
+        self::assertTrue($manualExit->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $manualExit->status);
+        self::assertSame(0.4, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(
+            ExchangeOrderStatus::OPEN,
+            $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId)?->status,
+        );
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+        $fillsBefore = $adapter->getFillsSnapshot('BTCUSDT');
+
+        try {
+            $scenario->fillOrder($trailing->exchangeOrderId);
+            self::fail('Expected a reduce-only capped trailing fill to be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_partial_fill_unsupported', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertEquals($fillsBefore, $adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount(0, $state->events('trailing_stop.triggered'));
+    }
+
     public function testOrdinaryPersistedTriggerWithoutTrailingStateRemainsExecutable(): void
     {
         [$state, $adapter, $scenario] = $this->exchange();
