@@ -51,6 +51,12 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
      */
     public function drainPrivateEvents(?string $symbol = null): iterable
     {
+        if ($this->stateStore->hasPrivateWsScenario()) {
+            yield from $this->drainPrivateWsScenario($symbol);
+
+            return;
+        }
+
         if ($this->resyncRequired) {
             throw $this->resyncReason === 'fake_private_ws_sequence_gap'
                 ? FakePrivateWsException::snapshotResyncRequired($this->lastAcknowledgedSequence)
@@ -106,16 +112,32 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
 
     public function requiresResync(): bool
     {
+        if ($this->stateStore->hasPrivateWsScenario()) {
+            return $this->stateStore->privateWsAudit()['connection_state'] === self::STATE_RESYNC_REQUIRED;
+        }
+
         return $this->resyncRequired;
     }
 
     public function connectionState(): string
     {
+        if ($this->stateStore->hasPrivateWsScenario()) {
+            return $this->stateStore->privateWsAudit()['connection_state'];
+        }
+
         return $this->resyncRequired ? self::STATE_RESYNC_REQUIRED : self::STATE_CONNECTED;
     }
 
     public function reconnect(): void
     {
+        if ($this->stateStore->hasPrivateWsScenario()) {
+            if ($this->requiresResync()) {
+                throw new \LogicException('fake_private_ws_snapshot_resync_required');
+            }
+
+            return;
+        }
+
         if ($this->resyncReason === 'fake_private_ws_sequence_gap') {
             throw new \LogicException('fake_private_ws_snapshot_resync_required');
         }
@@ -126,6 +148,12 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
 
     public function completeSnapshotResync(): void
     {
+        if ($this->stateStore->hasPrivateWsScenario()) {
+            $this->stateStore->completePrivateWsSnapshotResync();
+
+            return;
+        }
+
         foreach ($this->stateStore->events() as $index => $event) {
             $sequence = $this->sequence($event, $index);
             $this->consumedSequences[$sequence] = true;
@@ -138,6 +166,84 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
 
         $this->resyncRequired = false;
         $this->resyncReason = null;
+    }
+
+    /**
+     * @return array{
+     *     scenario_id:?string,
+     *     next_delivery_index:int,
+     *     acknowledged_total:int,
+     *     duplicate_total:int,
+     *     gap_total:int,
+     *     conflict_total:int,
+     *     resync_total:int,
+     *     connection_state:string,
+     *     resync_reason:?string,
+     *     last_acknowledged_sequence:?string,
+     *     last_observed_numeric_sequence:int,
+     *     records:list<array<string,string>>
+     * }
+     */
+    public function privateWsAudit(): array
+    {
+        return $this->stateStore->privateWsAudit();
+    }
+
+    /** @return array<string,mixed> */
+    public function audit(): array
+    {
+        return $this->privateWsAudit();
+    }
+
+    /**
+     * @return \Generator<int,FakeExchangeEvent>
+     */
+    private function drainPrivateWsScenario(?string $symbol): \Generator
+    {
+        if ($this->requiresResync()) {
+            throw FakePrivateWsException::snapshotResyncRequired(
+                $this->stateStore->privateWsLastAcknowledgedSequence(),
+            );
+        }
+
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+        while (($delivery = $this->stateStore->privateWsCurrentDelivery()) !== null) {
+            if ($normalizedSymbol !== null && strtoupper($delivery->event->symbol) !== $normalizedSymbol) {
+                return;
+            }
+
+            $known = $this->stateStore->privateWsAcknowledgedFingerprint($delivery->sequence);
+            if ($known !== null) {
+                if (!hash_equals($known, $delivery->fingerprint)) {
+                    $this->stateStore->markPrivateWsConflict($delivery);
+
+                    throw FakePrivateWsException::sequenceConflict(
+                        $this->stateStore->privateWsLastAcknowledgedSequence(),
+                        $delivery->sequence,
+                    );
+                }
+
+                $this->stateStore->skipExactPrivateWsDuplicate($delivery);
+
+                continue;
+            }
+
+            $expected = $this->stateStore->privateWsExpectedNumericSequence();
+            $actual = ctype_digit($delivery->sequence) ? (int) $delivery->sequence : null;
+            if ($actual !== null && $actual > $expected) {
+                $this->stateStore->markPrivateWsGap((string) $expected, $delivery->sequence, $delivery);
+
+                throw FakePrivateWsException::sequenceGap(
+                    $this->stateStore->privateWsLastAcknowledgedSequence(),
+                    (string) $expected,
+                    $delivery->sequence,
+                );
+            }
+
+            yield $delivery->event;
+
+            $this->stateStore->acknowledgePrivateWsDelivery($delivery);
+        }
     }
 
     private function sequence(FakeExchangeEvent $event, int $index): string

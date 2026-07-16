@@ -27,6 +27,7 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakePrivateWsException;
+use App\Exchange\Fake\FakePrivateWsScenario;
 use App\Exchange\Ws\ExchangeWsIngestionResult;
 use App\Exchange\Ws\ExchangeWsIngestionService;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -222,6 +223,232 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         $resumed = array_values(iterator_to_array($client->drainPrivateEvents()));
         self::assertCount(1, $resumed);
         self::assertSame(4, $resumed[0]->payload['event_sequence'] ?? null);
+    }
+
+    public function testExactDuplicateIsAuditedWithoutProjection(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $this->adapter($state)->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'duplicate-cid',
+        ));
+        $event = $state->events()[0];
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'duplicate-v1',
+            [$event, $event],
+        ));
+
+        $store = new RecordingProjectionStore();
+        $result = $this->service($store)->drain(new FakeExchangeWsClient($state));
+        $audit = $state->privateWsAudit();
+
+        self::assertSame(1, $result->rawEventsRead);
+        self::assertCount(1, $store->events);
+        self::assertSame(1, $audit['acknowledged_total']);
+        self::assertSame(1, $audit['duplicate_total']);
+        self::assertSame(2, $audit['next_delivery_index']);
+    }
+
+    public function testOutOfOrderOneThreeTwoRequiresSnapshotBeforeFurtherProjection(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $this->adapter($state)->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'out-of-order-cid',
+        ));
+        $events = $state->events();
+        self::assertSame([1, 2, 3], array_map(
+            static fn (FakeExchangeEvent $event): mixed => $event->payload['event_sequence'] ?? null,
+            $events,
+        ));
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'one-three-two-v1',
+            [$events[0], $events[2], $events[1]],
+        ));
+
+        $store = new RecordingProjectionStore();
+        $service = $this->service($store);
+        $client = new FakeExchangeWsClient($state);
+
+        try {
+            $service->drain($client);
+            self::fail('Sequence 3 must create a gap before projection.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_gap', $exception->errorCode);
+            self::assertSame('2', $exception->expectedSequence);
+            self::assertSame('3', $exception->actualSequence);
+        }
+
+        self::assertCount(1, $store->events);
+        self::assertSame(1, $state->privateWsAudit()['gap_total']);
+
+        try {
+            $service->drain($client);
+            self::fail('No fixture delivery may project while resync is required.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_snapshot_resync_required', $exception->errorCode);
+        }
+
+        self::assertCount(1, $store->events);
+        self::assertSame(1, $state->privateWsAudit()['next_delivery_index']);
+    }
+
+    public function testSameSequenceWithConflictingPayloadFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $this->adapter($state)->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'conflict-cid',
+        ));
+        $first = $state->events()[0];
+        $conflict = new FakeExchangeEvent(
+            $first->type,
+            $first->symbol,
+            $first->occurredAt,
+            $first->payload + ['conflict_marker' => 'changed'],
+        );
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'conflict-v1',
+            [$first, $conflict],
+        ));
+
+        $store = new RecordingProjectionStore();
+
+        try {
+            $this->service($store)->drain(new FakeExchangeWsClient($state));
+            self::fail('A reused sequence with a changed envelope must fail closed.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_conflict', $exception->errorCode);
+            self::assertSame('resync_required', $exception->state);
+            self::assertSame('1', $exception->actualSequence);
+        }
+
+        self::assertCount(1, $store->events);
+        self::assertSame(1, $state->privateWsAudit()['conflict_total']);
+        self::assertSame('resync_required', $state->privateWsAudit()['connection_state']);
+    }
+
+    public function testClientCrashBeforeAcknowledgementRetriesSameDeliveryAfterRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_crash_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $event = new FakeExchangeEvent(
+                'order.created',
+                'BTCUSDT',
+                new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+                ['event_sequence' => 1],
+            );
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('crash-v1', [$event]));
+
+            $generator = (new FakeExchangeWsClient($state))->drainPrivateEvents();
+            self::assertInstanceOf(\Generator::class, $generator);
+            $firstAttempt = $generator->current();
+            self::assertSame($event->toArray(), $firstAttempt->toArray());
+            unset($generator);
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $retry = (new FakeExchangeWsClient($restored))->drainPrivateEvents();
+            self::assertInstanceOf(\Generator::class, $retry);
+            self::assertSame($event->toArray(), $retry->current()->toArray());
+            self::assertSame(0, $restored->privateWsAudit()['acknowledged_total']);
+            self::assertSame(0, $restored->privateWsAudit()['next_delivery_index']);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testProjectionRollbackRetriesScenarioDeliveryWithoutDuplicate(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_rollback_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $this->adapter($state)->placeOrder($this->marketRequest(
+                symbol: 'BTCUSDT',
+                clientOrderId: 'rollback-cid',
+            ));
+            $created = $state->events()[0];
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('rollback-v1', [$created]));
+
+            $store = new RecordingProjectionStore(failOnProjectionNumber: 1);
+            $service = $this->service($store);
+
+            try {
+                $service->drain(new FakeExchangeWsClient($state));
+                self::fail('The first projection attempt must roll back.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('test_projection_failed', $exception->getMessage());
+            }
+
+            self::assertCount(0, $store->events);
+            self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $retried = $service->drain(new FakeExchangeWsClient($restored));
+
+            self::assertSame(1, $retried->rawEventsRead);
+            self::assertCount(1, $store->events);
+            self::assertSame(1, $restored->privateWsAudit()['acknowledged_total']);
+            self::assertSame(0, $restored->privateWsAudit()['duplicate_total']);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testScenarioRawEventStillProjectsNormalizedBatchAtomically(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $this->adapter($state)->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'atomic-batch-cid',
+        ));
+        $filled = $state->events('order.filled')[0];
+        $filled = new FakeExchangeEvent(
+            $filled->type,
+            $filled->symbol,
+            $filled->occurredAt,
+            ['event_sequence' => 1] + $filled->payload,
+        );
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('atomic-v1', [$filled]));
+
+        $store = new RecordingProjectionStore(failOnProjectionNumber: 2);
+
+        try {
+            $this->service($store)->drain(new FakeExchangeWsClient($state));
+            self::fail('The normalized order/fill batch must fail atomically.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('test_projection_failed', $exception->getMessage());
+        }
+
+        self::assertCount(0, $store->events);
+        self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+        self::assertSame(0, $state->privateWsAudit()['next_delivery_index']);
+    }
+
+    public function testScenarioSymbolFilterDoesNotAdvanceAnotherSymbolsDelivery(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $event = new FakeExchangeEvent(
+            'order.created',
+            'ETHUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            ['event_sequence' => 1],
+        );
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('symbol-filter-v1', [$event]));
+        $client = new FakeExchangeWsClient($state);
+
+        self::assertSame([], iterator_to_array($client->drainPrivateEvents('BTCUSDT')));
+        self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+        self::assertSame(0, $state->privateWsAudit()['next_delivery_index']);
+        self::assertCount(1, iterator_to_array($client->drainPrivateEvents('ETHUSDT')));
     }
 
     private function service(RecordingProjectionStore $store): ExchangeWsIngestionService

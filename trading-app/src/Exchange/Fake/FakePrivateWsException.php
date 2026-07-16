@@ -41,6 +41,18 @@ final class FakePrivateWsException extends \RuntimeException
         );
     }
 
+    public static function sequenceConflict(
+        ?string $lastAcknowledgedSequence,
+        string $actualSequence,
+    ): self {
+        return new self(
+            errorCode: 'fake_private_ws_sequence_conflict',
+            state: self::RESYNC_REQUIRED,
+            lastAcknowledgedSequence: $lastAcknowledgedSequence,
+            actualSequence: $actualSequence,
+        );
+    }
+
     public static function snapshotResyncRequired(?string $lastAcknowledgedSequence): self
     {
         return new self(
