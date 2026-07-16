@@ -22,6 +22,7 @@ use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeTp1TrailingPolicy;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 
@@ -29,6 +30,208 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(FakeTp1TrailingPolicy::class)]
 final class FakeTp1TrailingTest extends TestCase
 {
+    #[DataProvider('directionProvider')]
+    public function testGapThroughTrailingClosesOnlyRemainderAndCleansProtections(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        foreach ($fixture['favorable_prices'] as $favorablePrice) {
+            $scenario->movePrice((string) $fixture['symbol'], (float) $favorablePrice, 0.0);
+        }
+
+        $move = $scenario->movePrice(
+            (string) $fixture['symbol'],
+            (float) $fixture['gap_price'],
+            0.0,
+        );
+        $filled = $move['matched_orders'][0] ?? null;
+        $persisted = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+
+        self::assertInstanceOf(ExchangeOrderDto::class, $filled);
+        self::assertSame($trailing->exchangeOrderId, $filled->exchangeOrderId);
+        self::assertSame(ExchangeOrderStatus::FILLED, $filled->status);
+        self::assertTrue($filled->reduceOnly);
+        self::assertSame(0.6, $filled->filledQuantity);
+        self::assertSame((float) $fixture['gap_price'], round((float) $filled->averagePrice, 6));
+        self::assertSame('triggered', $persisted?->metadata['trailing_state_status'] ?? null);
+        self::assertSame($filled->averagePrice, $persisted?->metadata['trailing_trigger_price'] ?? null);
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $state->events('trailing_stop.triggered'));
+
+        $orderCount = \count($state->getOrders('BTCUSDT'));
+        $eventCount = \count($state->events());
+        $scenario->movePrice((string) $fixture['symbol'], (float) $fixture['gap_price'], 0.0);
+        $scenario->fillOrder($trailing->exchangeOrderId);
+        self::assertCount($orderCount, $state->getOrders('BTCUSDT'));
+        self::assertCount($eventCount, $state->events());
+        self::assertCount(1, $state->events('trailing_stop.triggered'));
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testTp1AndTrailingCostsAndPnlAreBookedExactlyOnce(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        foreach ($fixture['favorable_prices'] as $favorablePrice) {
+            $scenario->movePrice((string) $fixture['symbol'], (float) $favorablePrice, 0.0);
+        }
+        $scenario->movePrice((string) $fixture['symbol'], (float) $fixture['gap_price'], 0.0);
+
+        $fills = $adapter->getFillsSnapshot('BTCUSDT');
+        $closed = $state->events('position.closed')[0] ?? null;
+        self::assertInstanceOf(FakeExchangeEvent::class, $closed);
+        self::assertCount(3, $fills);
+        self::assertSame([1.0, 0.4, 0.6], array_map(
+            static fn ($fill): float => $fill->quantity,
+            $fills,
+        ));
+        self::assertSame(1.0, $closed->payload['entry_qty'] ?? null);
+        self::assertSame(1.0, $closed->payload['exit_qty'] ?? null);
+        self::assertSame(0.0, $closed->payload['remaining_qty'] ?? null);
+        self::assertTrue($closed->payload['quantity_coherent'] ?? false);
+        self::assertTrue($closed->payload['position_fully_closed'] ?? false);
+        self::assertTrue($closed->payload['fills_complete'] ?? false);
+        self::assertSame('complete', $closed->payload['cost_completeness'] ?? null);
+        self::assertSame('fake_paper_fill_ledger_v1', $closed->payload['pnl_source'] ?? null);
+        self::assertSame('fixed_adverse_slippage_bps_v1', $closed->payload['cost_model_version'] ?? null);
+        self::assertSame('top_of_book_embedded_spread_v1', $closed->payload['spread_model_version'] ?? null);
+        self::assertGreaterThan(0.0, $closed->payload['entry_fee_usdt'] ?? 0.0);
+        self::assertGreaterThan(0.0, $closed->payload['exit_fee_usdt'] ?? 0.0);
+
+        $reduceFillEvents = array_values(array_filter(
+            $state->events('order.filled'),
+            static fn (FakeExchangeEvent $event): bool => \in_array(
+                $event->payload['order_id'] ?? null,
+                [$tp1->exchangeOrderId, $trailing->exchangeOrderId],
+                true,
+            ),
+        ));
+        $exitFeeFromFills = array_sum(array_map(
+            static fn (FakeExchangeEvent $event): float => (float) ($event->payload['fill_fee'] ?? 0.0),
+            $reduceFillEvents,
+        ));
+        self::assertCount(2, $reduceFillEvents);
+        self::assertSame(round($exitFeeFromFills, 12), $closed->payload['exit_fee_usdt'] ?? null);
+
+        $eventsBeforeReplay = \count($state->events());
+        $recordedPnl = $closed->payload['recorded_pnl_usdt'] ?? null;
+        $scenario->fillOrder($trailing->exchangeOrderId);
+        self::assertCount($eventsBeforeReplay, $state->events());
+        self::assertSame($recordedPnl, $state->events('position.closed')[0]->payload['recorded_pnl_usdt'] ?? null);
+    }
+
+    public function testRestartPreservesRatchetWatermarkAndContinuesWithoutDuplicateUpdate(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_tp1_trailing_ratchet_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            [$state, $adapter, $scenario] = $this->exchange($stateFile);
+            $fixture = $this->fixture('long');
+            $trailing = $this->armFixture($adapter, $scenario, $fixture);
+            $scenario->movePrice('BTCUSDT', 25300.0, 0.0);
+            self::assertCount(1, $state->events('trailing_stop.updated'));
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            [, $restoredAdapter, $restoredScenario] = $this->exchangeForState($restoredState);
+            $restored = $restoredAdapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+            self::assertSame(25300.0, $restored?->metadata['trailing_watermark'] ?? null);
+            self::assertSame(25200.0, $restored?->stopPrice);
+
+            $eventCount = \count($restoredState->events());
+            $restoredScenario->movePrice('BTCUSDT', 25300.0, 0.0);
+            self::assertCount($eventCount, $restoredState->events());
+            self::assertCount(1, $restoredState->events('trailing_stop.updated'));
+
+            $restoredScenario->movePrice('BTCUSDT', 25400.0, 0.0);
+            $advanced = $restoredAdapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+            self::assertSame(25400.0, $advanced?->metadata['trailing_watermark'] ?? null);
+            self::assertSame(25300.0, $advanced?->stopPrice);
+            self::assertCount(2, $restoredState->events('trailing_stop.updated'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testFavorableMovementRatchetsWatermarkAndStopForBothSides(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+
+        foreach ($fixture['favorable_prices'] as $index => $favorablePrice) {
+            $scenario->movePrice((string) $fixture['symbol'], (float) $favorablePrice, 0.0);
+            $persisted = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+
+            self::assertSame((float) $favorablePrice, $persisted?->metadata['trailing_watermark'] ?? null);
+            self::assertSame(
+                (float) $fixture['expected_favorable_stops'][$index],
+                $persisted?->stopPrice,
+            );
+        }
+
+        self::assertCount(2, $state->events('trailing_stop.updated'));
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testAdverseMovementNeverLoosensTrailingStop(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        foreach ($fixture['favorable_prices'] as $favorablePrice) {
+            $scenario->movePrice((string) $fixture['symbol'], (float) $favorablePrice, 0.0);
+        }
+        $beforeAdverse = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        $updateCount = \count($state->events('trailing_stop.updated'));
+
+        $scenario->movePrice((string) $fixture['symbol'], (float) $fixture['adverse_price'], 0.0);
+        $afterAdverse = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        $lastFavorableIndex = array_key_last($fixture['favorable_prices']);
+        $lastStopIndex = array_key_last($fixture['expected_favorable_stops']);
+
+        self::assertInstanceOf(ExchangeOrderDto::class, $beforeAdverse);
+        self::assertInstanceOf(ExchangeOrderDto::class, $afterAdverse);
+        self::assertIsInt($lastFavorableIndex);
+        self::assertIsInt($lastStopIndex);
+        self::assertSame((float) $fixture['favorable_prices'][$lastFavorableIndex], $beforeAdverse->metadata['trailing_watermark'] ?? null);
+        self::assertSame((float) $fixture['expected_favorable_stops'][$lastStopIndex], $beforeAdverse->stopPrice);
+        self::assertSame($beforeAdverse->metadata['trailing_watermark'], $afterAdverse->metadata['trailing_watermark'] ?? null);
+        self::assertSame($beforeAdverse->stopPrice, $afterAdverse->stopPrice);
+        self::assertCount($updateCount, $state->events('trailing_stop.updated'));
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testDuplicatePriceEventDoesNotRewriteStateOrDuplicateLifecycle(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        $favorablePrice = (float) $fixture['favorable_prices'][0];
+        $scenario->movePrice((string) $fixture['symbol'], $favorablePrice, 0.0);
+        $afterFirst = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        $eventCount = \count($state->events());
+        $updateCount = \count($state->events('trailing_stop.updated'));
+
+        $scenario->movePrice((string) $fixture['symbol'], $favorablePrice, 0.0);
+        $afterDuplicate = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+
+        self::assertSame((float) $fixture['expected_favorable_stops'][0], $afterFirst?->stopPrice);
+        self::assertEquals($afterFirst, $afterDuplicate);
+        self::assertCount($eventCount, $state->events());
+        self::assertCount($updateCount, $state->events('trailing_stop.updated'));
+    }
+
     public function testTp1UsesConfiguredQuantityAndAtomicallyArmsTrailingForRemainder(): void
     {
         [$state, $adapter, $scenario] = $this->exchange();
@@ -123,6 +326,26 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount(1, $state->events('trailing_stop.armed'));
     }
 
+    public function testEntryReplayWithDifferentTrailingPolicyIsRejectedAsIntentMismatch(): void
+    {
+        [$state, $adapter] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $first = $this->placeFixtureEntry($adapter, $fixture);
+        $orderCount = \count($state->getOrders('BTCUSDT'));
+        $eventCount = \count($state->events());
+        $conflictingFixture = array_replace($fixture, ['trailing_offset' => '120.0']);
+
+        $replay = $this->placeFixtureEntry($adapter, $conflictingFixture);
+
+        self::assertTrue($first->accepted);
+        self::assertFalse($replay->accepted);
+        self::assertSame($first->exchangeOrderId, $replay->exchangeOrderId);
+        self::assertSame('duplicate_client_order_id_intent_mismatch', $replay->metadata['reason'] ?? null);
+        self::assertFalse($replay->metadata['idempotent_replay'] ?? true);
+        self::assertCount($orderCount, $state->getOrders('BTCUSDT'));
+        self::assertCount($eventCount, $state->events());
+    }
+
     public function testRestartRestoresActiveTrailingStateAndRedactsUntrustedMetadata(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_tp1_trailing_restart_');
@@ -200,7 +423,7 @@ final class FakeTp1TrailingTest extends TestCase
 
     public function testTrailingCreationFailureRollsBackTp1PositionProtectionAndEvents(): void
     {
-        $state = new class extends FakeExchangeStateStore {
+        $faultState = new class extends FakeExchangeStateStore {
             public bool $rejectTrailingSave = false;
 
             public function saveOrder(ExchangeOrderDto $order): void
@@ -216,13 +439,13 @@ final class FakeTp1TrailingTest extends TestCase
                 parent::saveOrder($order);
             }
         };
-        [$state, $adapter, $scenario] = $this->exchangeForState($state);
+        [, $adapter, $scenario] = $this->exchangeForState($faultState);
         $fixture = $this->fixture('long');
         $this->placeFixtureEntry($adapter, $fixture);
         $stop = $this->orderByType($adapter, ExchangeOrderType::STOP_LOSS);
         $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
-        $eventsBefore = \count($state->events());
-        $state->rejectTrailingSave = true;
+        $eventsBefore = \count($faultState->events());
+        $faultState->rejectTrailingSave = true;
 
         try {
             $scenario->fillOrder($tp1->exchangeOrderId, null, 25200.0);
@@ -235,8 +458,8 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertSame(ExchangeOrderStatus::OPEN, $adapter->getOrder('BTCUSDT', $stop->exchangeOrderId)?->status);
         self::assertSame(ExchangeOrderStatus::OPEN, $adapter->getOrder('BTCUSDT', $tp1->exchangeOrderId)?->status);
         self::assertCount(2, $adapter->getOpenOrders('BTCUSDT'));
-        self::assertCount($eventsBefore, $state->events());
-        self::assertCount(0, $state->events('trailing_stop.armed'));
+        self::assertCount($eventsBefore, $faultState->events());
+        self::assertCount(0, $faultState->events('trailing_stop.armed'));
     }
 
     /**
@@ -291,6 +514,32 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertInstanceOf(ExchangeOrderDto::class, $order);
 
         return $order;
+    }
+
+    /**
+     * @param array<string,mixed> $fixture
+     */
+    private function armFixture(
+        FakeExchangeAdapter $adapter,
+        FakeExchangeScenarioService $scenario,
+        array $fixture,
+    ): ExchangeOrderDto {
+        $this->placeFixtureEntry($adapter, $fixture);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $scenario->fillOrder(
+            $tp1->exchangeOrderId,
+            null,
+            (float) $fixture['tp1_price'],
+        );
+
+        return $this->orderByType($adapter, ExchangeOrderType::TRIGGER);
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function directionProvider(): iterable
+    {
+        yield 'long' => ['long'];
+        yield 'short' => ['short'];
     }
 
     /** @return array<string,mixed> */

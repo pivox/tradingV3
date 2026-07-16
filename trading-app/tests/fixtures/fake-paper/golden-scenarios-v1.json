@@ -114,13 +114,17 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceTriggersAttachedTakeProfitAndClosesPosition"],
-      "gap_codes": ["trailing_stop_not_implemented"],
+      "evidence": [
+        "tests/Exchange/Fake/FakeTp1TrailingTest.php::testTp1UsesConfiguredQuantityAndAtomicallyArmsTrailingForRemainder",
+        "tests/Exchange/Fake/FakeTp1TrailingTest.php::testGapThroughTrailingClosesOnlyRemainderAndCleansProtections",
+        "tests/Exchange/Fake/FakeTp1TrailingTest.php::testRestartPreservesRatchetWatermarkAndContinuesWithoutDuplicateUpdate"
+      ],
+      "gap_codes": [],
       "id": 13,
       "name": "tp1_then_trailing",
       "requirement": "A partial TP1 fill arms a trailing stop for the remaining position.",
-      "runner": null,
-      "status": "partial"
+      "runner": "tp1_then_trailing",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceTriggersAttachedStopLossAndClosesPosition"],

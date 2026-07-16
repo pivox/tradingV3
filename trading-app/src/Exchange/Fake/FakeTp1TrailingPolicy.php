@@ -61,10 +61,11 @@ final readonly class FakeTp1TrailingPolicy
         if (($metadata[self::VERSION_KEY] ?? null) !== self::VERSION) {
             throw new \InvalidArgumentException('fake_tp1_trailing_policy_invalid');
         }
-        if (($metadata[self::ENABLED_KEY] ?? null) === false) {
+        $enabled = $metadata[self::ENABLED_KEY] ?? null;
+        if ($enabled === false) {
             throw new \InvalidArgumentException('fake_tp1_trailing_policy_disabled');
         }
-        if (($metadata[self::ENABLED_KEY] ?? null) !== true) {
+        if ($enabled !== true) {
             throw new \InvalidArgumentException('fake_tp1_trailing_policy_invalid');
         }
 

@@ -289,6 +289,13 @@ final readonly class FakeExchangeMatchingEngine
                 'remaining_quantity_decimal' => $newRemainingDecimal,
             ],
         );
+        if ($status === ExchangeOrderStatus::FILLED && $this->isActiveTrailingOrder($order)) {
+            $metadata = array_replace($metadata, [
+                'trailing_state_status' => 'triggered',
+                'trailing_trigger_price' => $executionPrice,
+                'trailing_trigger_price_decimal' => self::canonicalFloat($executionPrice),
+            ]);
+        }
         $metadata = $cancelReduceRemainder
             ? array_replace($metadata, [
                 'reason' => 'reduce_only_position_size_capped',
@@ -350,6 +357,15 @@ final readonly class FakeExchangeMatchingEngine
                 'cost_completeness' => 'complete',
             ],
         );
+        if ($status === ExchangeOrderStatus::FILLED && $this->isActiveTrailingOrder($updated)) {
+            $this->appendEvent('trailing_stop.triggered', $updated, [
+                'state_version' => FakeTp1TrailingPolicy::VERSION,
+                'watermark' => $this->floatMetadata($updated->metadata, 'trailing_watermark'),
+                'stop_price' => $updated->stopPrice,
+                'fill_quantity' => $fillQuantity,
+                'fill_price' => $executionPrice,
+            ]);
+        }
 
         if ($cancelReduceRemainder) {
             $this->appendEvent('order.cancelled', $updated, ['reason' => 'reduce_only_position_size_capped']);
@@ -640,6 +656,8 @@ final readonly class FakeExchangeMatchingEngine
      */
     public function matchOpenOrders(string $symbol): array
     {
+        $this->ratchetTrailingStops($symbol);
+
         $filled = [];
         foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
             if ($order->orderType === ExchangeOrderType::LIMIT) {
@@ -657,6 +675,65 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $filled;
+    }
+
+    private function ratchetTrailingStops(string $symbol): void
+    {
+        $midPrice = $this->midPrice($symbol);
+        foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
+            if (!$this->isActiveTrailingOrder($order)) {
+                continue;
+            }
+
+            $policy = FakeTp1TrailingPolicy::fromMetadata($order->metadata);
+            $watermark = $this->floatMetadata($order->metadata, 'trailing_watermark');
+            if (
+                !$policy instanceof FakeTp1TrailingPolicy
+                || !$order->positionSide instanceof ExchangePositionSide
+                || $order->stopPrice === null
+                || $order->stopPrice <= 0.0
+                || $watermark === null
+                || $watermark <= 0.0
+                || $this->stringMetadata($order->metadata, 'trailing_state_version') !== FakeTp1TrailingPolicy::VERSION
+                || $this->stringMetadata($order->metadata, 'trailing_state_status') !== 'active'
+                || $this->stringMetadata($order->metadata, 'parent_order_id') === null
+                || $this->stringMetadata($order->metadata, 'trailing_activation_order_id') === null
+            ) {
+                throw new \LogicException('fake_tp1_trailing_persisted_state_invalid');
+            }
+
+            $favorable = $order->positionSide === ExchangePositionSide::LONG
+                ? $midPrice > $watermark + 0.00000001
+                : $midPrice < $watermark - 0.00000001;
+            if (!$favorable) {
+                continue;
+            }
+
+            $newStopPrice = $order->positionSide === ExchangePositionSide::LONG
+                ? $midPrice - $policy->trailingOffsetFloat()
+                : $midPrice + $policy->trailingOffsetFloat();
+            $monotone = $order->positionSide === ExchangePositionSide::LONG
+                ? $newStopPrice >= $order->stopPrice - 0.00000001
+                : $newStopPrice <= $order->stopPrice + 0.00000001;
+            if (!\is_finite($newStopPrice) || $newStopPrice <= 0.0 || !$monotone) {
+                throw new \LogicException('fake_tp1_trailing_ratchet_invalid');
+            }
+
+            $metadata = array_replace($order->metadata, [
+                'trailing_watermark' => $midPrice,
+                'trailing_watermark_decimal' => self::canonicalFloat($midPrice),
+                'stop_price_decimal' => self::canonicalFloat($newStopPrice),
+            ]);
+            $updated = $this->withTrailingState($order, $newStopPrice, $metadata);
+            $this->stateStore->saveOrder($updated);
+            $this->appendEvent('trailing_stop.updated', $updated, [
+                'state_version' => FakeTp1TrailingPolicy::VERSION,
+                'previous_watermark' => $watermark,
+                'watermark' => $midPrice,
+                'previous_stop_price' => $order->stopPrice,
+                'stop_price' => $newStopPrice,
+            ]);
+        }
     }
 
     /**
@@ -1150,6 +1227,45 @@ final readonly class FakeExchangeMatchingEngine
     {
         return $order->orderType === ExchangeOrderType::TAKE_PROFIT
             && $this->stringMetadata($order->metadata, 'protection_kind') === 'tp1';
+    }
+
+    private function isActiveTrailingOrder(ExchangeOrderDto $order): bool
+    {
+        return $order->orderType === ExchangeOrderType::TRIGGER
+            && $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing';
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function withTrailingState(
+        ExchangeOrderDto $order,
+        float $stopPrice,
+        array $metadata,
+    ): ExchangeOrderDto {
+        return new ExchangeOrderDto(
+            exchange: $order->exchange,
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $order->side,
+            positionSide: $order->positionSide,
+            orderType: $order->orderType,
+            status: $order->status,
+            quantity: $order->quantity,
+            filledQuantity: $order->filledQuantity,
+            remainingQuantity: $order->remainingQuantity,
+            price: $order->price,
+            averagePrice: $order->averagePrice,
+            stopPrice: $stopPrice,
+            reduceOnly: $order->reduceOnly,
+            postOnly: $order->postOnly,
+            timeInForce: $order->timeInForce,
+            createdAt: $order->createdAt,
+            updatedAt: $this->clock->now(),
+            metadata: $metadata,
+        );
     }
 
     /**
@@ -2221,8 +2337,29 @@ final readonly class FakeExchangeMatchingEngine
         if ($storedMarginMode !== null && $storedMarginMode !== '' && $storedMarginMode !== $request->marginMode) {
             return false;
         }
+        if (!$this->tp1TrailingPolicyMatchesRequest($order->metadata, $request->metadata)) {
+            return false;
+        }
 
         return true;
+    }
+
+    /**
+     * @param array<string,mixed> $persistedMetadata
+     * @param array<string,mixed> $requestMetadata
+     */
+    private function tp1TrailingPolicyMatchesRequest(
+        array $persistedMetadata,
+        array $requestMetadata,
+    ): bool {
+        $persisted = FakeTp1TrailingPolicy::fromMetadata($persistedMetadata);
+        $requested = FakeTp1TrailingPolicy::fromMetadata($requestMetadata);
+        if (!$persisted instanceof FakeTp1TrailingPolicy || !$requested instanceof FakeTp1TrailingPolicy) {
+            return $persisted === null && $requested === null;
+        }
+
+        return self::sameDecimal($persisted->tp1Quantity, $requested->tp1Quantity)
+            && self::sameDecimal($persisted->trailingOffset, $requested->trailingOffset);
     }
 
     /**
