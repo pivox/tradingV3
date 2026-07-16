@@ -125,6 +125,19 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'protection_reduce_only' => true,
             'protection_status' => 'accepted',
         ],
+        'stop_loss_attach_failure' => [
+            'compensation_order_status' => 'filled',
+            'compensation_order_type' => 'market',
+            'compensation_outcome' => 'position_closed',
+            'compensation_reduce_only' => true,
+            'compensation_status' => 'completed',
+            'entry_status' => 'filled',
+            'fail_safe_action' => 'reduce_only_market_close',
+            'open_order_count' => 0,
+            'open_position_count' => 0,
+            'position_closed_count' => 1,
+            'protection_status' => 'rejected',
+        ],
         'gap_at_stop_loss' => [
             'fill_price' => 24790.0,
             'open_position_count' => 0,
@@ -163,7 +176,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(13, $catalogKeys);
+        self::assertCount(14, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

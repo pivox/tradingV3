@@ -9,6 +9,8 @@ Supported scenarios:
 - partially fill and then complete an order with `fillOrder()`;
 - create local positions after entry fills;
 - create or reject attached SL/TP protection orders;
+- close a fully filled entry with an immediate reduce-only market order when
+  attached protection is rejected;
 - cancel by exchange order id or client order id;
 - replay the same active `clientOrderId` without creating a second active order;
 - inspect simulated events such as `order.created`, `order.filled`, `position.opened`, `protection_order.created`, and `protection_order.rejected`.
@@ -25,6 +27,28 @@ curl http://localhost:8082/fake-exchange/events
 ```
 
 The HTTP service state is stored in `var/fake_exchange_state.dat` so multi-step curl scenarios survive PHP-FPM request boundaries. Tests can instantiate `FakeExchangeStateStore` without a file path for isolated in-memory state, and should call `reset()` before each scenario when sharing a store.
+
+## Attached-protection fail-safe
+
+When the one-shot scenario fixture rejects attached protection after an entry
+has filled, the entry remains recorded as filled and
+`protection_status=rejected`. The matching engine then submits a deterministic
+market reduce-only order for the failed entry's exact filled quantity through
+its normal `submit()` and `fillOrder()` path. The entry metadata records
+`fail_safe_action=reduce_only_market_close`, the compensation order identifiers,
+`compensation_status=completed`, the compensation quantity, and position sizes
+before and after the close.
+
+This sequence preserves normal fill costs, lineage, `order.filled`, and the
+ordinary `position.updated` or `position.closed` evidence. Replaying the
+original `clientOrderId` returns the same entry and compensation identifiers
+without another close. The rejection, compensation, and exposure invariant run
+inside the existing state transaction.
+A standalone entry becomes flat. If the fill increased an older protected
+position, only the failed increase is removed and the residual position must
+still have full active stop coverage. A wrong close quantity or unprotected
+residual raises an exception and restores the whole local operation. No
+credential, raw request payload, or external exchange mutation is involved.
 
 ## Private WS disconnect/resync fixture
 

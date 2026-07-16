@@ -51,6 +51,11 @@ final class ProtectionEnforcer
         }
 
         if ($attachedProtectionRequested) {
+            $adapterCompensation = $this->adapterCompensation($adapter, $plan, $entryResult, $decisionKey);
+            if ($adapterCompensation instanceof ProtectionEnforcementResult) {
+                return $adapterCompensation;
+            }
+
             try {
                 $confirmed = $this->findConfirmedStopLoss($adapter, $plan);
             } catch (\Throwable $e) {
@@ -177,6 +182,135 @@ final class ProtectionEnforcer
         array $extra = [],
     ): ProtectionEnforcementResult {
         return $this->failAndEmergencyClose($adapter, $plan, $entryClientOrderId, $decisionKey, $reason, $extra);
+    }
+
+    private function adapterCompensation(
+        ExchangeAdapterInterface $adapter,
+        OrderPlanModel $plan,
+        PlaceOrderResult $entryResult,
+        ?string $decisionKey,
+    ): ?ProtectionEnforcementResult {
+        $metadata = $entryResult->order?->metadata ?? [];
+        $compensationOrderId = $metadata['compensation_order_id'] ?? null;
+        $compensationOutcome = $metadata['compensation_outcome'] ?? null;
+        $compensationQuantity = $metadata['compensation_quantity'] ?? null;
+        $positionSizeAfterCompensation = $metadata['position_size_after_compensation'] ?? null;
+        if (
+            ($metadata['protection_status'] ?? null) !== 'rejected'
+            || ($metadata['fail_safe_action'] ?? null) !== 'reduce_only_market_close'
+            || ($metadata['compensation_status'] ?? null) !== 'completed'
+            || !\in_array($compensationOutcome, ['position_closed', 'entry_exposure_closed'], true)
+            || ($metadata['failed_entry_exposure_closed'] ?? null) !== true
+            || ($metadata['remaining_position_protected_after_compensation'] ?? null) !== true
+            || !\is_string($compensationOrderId)
+            || trim($compensationOrderId) === ''
+            || !\is_numeric($compensationQuantity)
+            || (float) $compensationQuantity <= 0.00000001
+            || !\is_numeric($positionSizeAfterCompensation)
+            || (float) $positionSizeAfterCompensation < 0.0
+        ) {
+            return null;
+        }
+        $expectedPositionSize = (float) $positionSizeAfterCompensation;
+        $positionFlat = ($metadata['position_flat_after_compensation'] ?? null) === true;
+        if (
+            $positionFlat !== ($expectedPositionSize <= 0.00000001)
+            || ($positionFlat && $compensationOutcome !== 'position_closed')
+            || (!$positionFlat && $compensationOutcome !== 'entry_exposure_closed')
+        ) {
+            return null;
+        }
+
+        try {
+            $compensation = $adapter->getOrder($plan->symbol, $compensationOrderId);
+            if (
+                !$compensation instanceof ExchangeOrderDto
+                || $compensation->status !== ExchangeOrderStatus::FILLED
+                || $compensation->orderType !== ExchangeOrderType::MARKET
+                || !$compensation->reduceOnly
+                || $compensation->positionSide !== $this->positionSide($plan->side)
+                || $compensation->side !== $this->exitOrderSide($plan->side)
+                || abs($compensation->filledQuantity - (float) $compensationQuantity) > 0.00000001
+            ) {
+                return null;
+            }
+
+            $actualPositionSize = 0.0;
+            foreach ($adapter->getOpenPositions($plan->symbol) as $position) {
+                if (
+                    $position instanceof ExchangePositionDto
+                    && $position->side === $this->positionSide($plan->side)
+                ) {
+                    $actualPositionSize += max(0.0, $position->size);
+                }
+            }
+            if (abs($actualPositionSize - $expectedPositionSize) > 0.00000001) {
+                return null;
+            }
+            if ($actualPositionSize > 0.00000001 && !$this->hasStopCoverage($adapter, $plan, $actualPositionSize)) {
+                return null;
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $this->metrics->incr('protection_failed');
+        $this->metrics->incr('emergency_close');
+        $this->positionsLogger->critical('protection.failed_adapter_compensated', [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'stop' => $plan->stop,
+            'decision_key' => $decisionKey,
+            'compensation_order_id' => $compensationOrderId,
+            'reason' => 'attached_stop_loss_not_confirmed',
+        ]);
+
+        return new ProtectionEnforcementResult(
+            status: ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED,
+            protected: false,
+            emergencyOrderId: $compensationOrderId,
+            metadata: [
+                'reason' => 'attached_stop_loss_not_confirmed',
+                'adapter_compensation' => true,
+                'compensation_status' => 'completed',
+                'compensation_outcome' => $compensationOutcome,
+                'compensation_quantity' => (float) $compensationQuantity,
+                'position_size_after_compensation' => $expectedPositionSize,
+                'remaining_position_protected_after_compensation' => true,
+                'emergency_close' => [
+                    'reason' => 'adapter_protection_compensation',
+                    'close_status' => $compensation->status->value,
+                    'close_accepted' => true,
+                    'position_still_open' => $expectedPositionSize > 0.00000001,
+                ],
+                'stale_protection_cancel' => null,
+            ],
+        );
+    }
+
+    private function hasStopCoverage(
+        ExchangeAdapterInterface $adapter,
+        OrderPlanModel $plan,
+        float $requiredQuantity,
+    ): bool {
+        $coveredQuantity = 0.0;
+        foreach ($adapter->getOpenOrders($plan->symbol) as $order) {
+            if (
+                !\in_array($order->orderType, [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TRIGGER], true)
+                || !$order->reduceOnly
+                || $order->positionSide !== $this->positionSide($plan->side)
+                || $order->side !== $this->exitOrderSide($plan->side)
+            ) {
+                continue;
+            }
+
+            $coveredQuantity += $order->remainingQuantity;
+            if ($coveredQuantity + 0.00000001 >= $requiredQuantity) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

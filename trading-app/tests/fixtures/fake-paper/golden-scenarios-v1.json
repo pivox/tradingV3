@@ -101,13 +101,13 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/TradingCore/Execution/FakeExecutionPortTest.php::testFullFillWithStopAttachFailureRequiresFailSafe"],
-      "gap_codes": ["stop_attach_failure_compensation_not_integrated"],
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testRejectedAttachedProtectionClosesPositionWithReduceOnlyCompensation"],
+      "gap_codes": [],
       "id": 12,
       "name": "stop_loss_attach_failure",
       "requirement": "A stop attachment failure is explicit and requires the documented compensation action.",
-      "runner": null,
-      "status": "partial"
+      "runner": "stop_loss_attach_failure",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testMovePriceTriggersAttachedTakeProfitAndClosesPosition"],

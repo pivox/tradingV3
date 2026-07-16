@@ -402,8 +402,19 @@ final class FakeProvidersTest extends TestCase
         self::assertSame(OrderStatus::FILLED, $placed->status);
         self::assertSame('rejected', $placed->metadata['protection_status'] ?? null);
         self::assertArrayNotHasKey('protection_order_ids', $placed->metadata);
+        self::assertSame('reduce_only_market_close', $placed->metadata['fail_safe_action'] ?? null);
+        self::assertSame('completed', $placed->metadata['compensation_status'] ?? null);
+        self::assertSame('position_closed', $placed->metadata['compensation_outcome'] ?? null);
+        self::assertIsString($placed->metadata['compensation_order_id'] ?? null);
+        self::assertIsString($placed->metadata['compensation_client_order_id'] ?? null);
+        self::assertSame(1.0, $placed->metadata['compensation_quantity'] ?? null);
+        self::assertSame(1.0, $placed->metadata['position_size_before_compensation'] ?? null);
+        self::assertSame(0.0, $placed->metadata['position_size_after_compensation'] ?? null);
+        self::assertSame(true, $placed->metadata['failed_entry_exposure_closed'] ?? null);
+        self::assertSame(true, $placed->metadata['remaining_position_protected_after_compensation'] ?? null);
+        self::assertSame(true, $placed->metadata['position_flat_after_compensation'] ?? null);
         self::assertSame([], $this->fixture->adapter->getOpenOrders('BTCUSDT'));
-        self::assertCount(1, $this->fixture->account->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->fixture->account->getOpenPositions('BTCUSDT'));
     }
 
     public function testLimitOrderWithStopPriceRemainsTriggeredProtection(): void

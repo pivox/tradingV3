@@ -42,6 +42,7 @@ final class FakePaperGoldenScenarioRunner
         'duplicate_client_order_id',
         'timeout_after_acceptance',
         'stop_loss_attach_success',
+        'stop_loss_attach_failure',
         'gap_at_stop_loss',
         'websocket_disconnect_resync',
         'restart_with_open_position',
@@ -73,6 +74,7 @@ final class FakePaperGoldenScenarioRunner
             'duplicate_client_order_id' => $this->duplicateClientOrderId(),
             'timeout_after_acceptance' => $this->timeoutAfterAcceptance(),
             'stop_loss_attach_success' => $this->stopLossAttachSuccess(),
+            'stop_loss_attach_failure' => $this->stopLossAttachFailure(),
             'gap_at_stop_loss' => $this->gapAtStopLoss(),
             'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
@@ -370,6 +372,37 @@ final class FakePaperGoldenScenarioRunner
             'entry_status' => $entry->status->value,
             'open_protection_count' => \count($protectionOrders),
             'protection_reduce_only' => $protection?->reduceOnly,
+            'protection_status' => $entry->order?->metadata['protection_status'] ?? null,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function stopLossAttachFailure(): array
+    {
+        [, $adapter, $scenario] = $this->exchange();
+        $scenario->rejectNextProtectionOrder();
+        $entry = $adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'golden-stop-attach-failure',
+            attachedStopLossPrice: 24800.0,
+        ));
+        $compensationOrderId = $entry->order?->metadata['compensation_order_id'] ?? null;
+        $compensation = \is_string($compensationOrderId)
+            ? $adapter->getOrder('BTCUSDT', $compensationOrderId)
+            : null;
+
+        return [
+            'compensation_order_status' => $compensation?->status->value,
+            'compensation_order_type' => $compensation?->orderType->value,
+            'compensation_outcome' => $entry->order?->metadata['compensation_outcome'] ?? null,
+            'compensation_reduce_only' => $compensation?->reduceOnly,
+            'compensation_status' => $entry->order?->metadata['compensation_status'] ?? null,
+            'entry_status' => $entry->status->value,
+            'fail_safe_action' => $entry->order?->metadata['fail_safe_action'] ?? null,
+            'open_order_count' => \count($adapter->getOpenOrders('BTCUSDT')),
+            'open_position_count' => \count($adapter->getOpenPositions('BTCUSDT')),
+            'position_closed_count' => \count($scenario->events('position.closed')),
             'protection_status' => $entry->order?->metadata['protection_status'] ?? null,
         ];
     }

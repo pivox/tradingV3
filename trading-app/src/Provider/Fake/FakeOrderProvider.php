@@ -505,6 +505,10 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         foreach ([
             'reason', 'idempotent_replay', 'quality_flags', 'leverage', 'margin_mode', 'attached_stop_loss_price',
             'attached_take_profit_price', 'protection_status', 'protection_order_ids', 'internal_trade_id',
+            'fail_safe_action', 'compensation_status', 'compensation_outcome', 'compensation_order_id',
+            'compensation_client_order_id', 'compensation_quantity', 'position_size_before_compensation',
+            'position_size_after_compensation', 'failed_entry_exposure_closed',
+            'remaining_position_protected_after_compensation', 'position_flat_after_compensation',
             'trade_id', 'internal_position_id', 'position_id', 'exchange_position_id', 'order_intent_id',
             'run_id', 'correlation_run_id', 'orchestration_run_id', 'orchestration_set_id',
             'orchestration_dashboard_id', 'mtf_profile', 'origin', 'attempt_number', 'decision_key',

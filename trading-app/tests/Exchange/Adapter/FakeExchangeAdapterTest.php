@@ -1151,7 +1151,7 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->scenario->events('protection_order.created'));
     }
 
-    public function testRejectedAttachedProtectionKeepsEntryFillAndEmitsEvent(): void
+    public function testRejectedAttachedProtectionClosesPositionWithReduceOnlyCompensation(): void
     {
         $this->scenario->rejectNextProtectionOrder();
 
@@ -1160,14 +1160,135 @@ final class FakeExchangeAdapterTest extends TestCase
             price: null,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: ['internal_trade_id' => 'itd-stop-compensation'],
         ));
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
         self::assertSame('rejected', $result->order->metadata['protection_status'] ?? null);
+        self::assertSame('reduce_only_market_close', $result->order->metadata['fail_safe_action'] ?? null);
+        self::assertSame('completed', $result->order->metadata['compensation_status'] ?? null);
+        self::assertSame('position_closed', $result->order->metadata['compensation_outcome'] ?? null);
+        self::assertSame(true, $result->order->metadata['failed_entry_exposure_closed'] ?? null);
+        self::assertSame(1.0, $result->order->metadata['compensation_quantity'] ?? null);
+        self::assertSame(1.0, $result->order->metadata['position_size_before_compensation'] ?? null);
+        self::assertSame(0.0, $result->order->metadata['position_size_after_compensation'] ?? null);
+        self::assertSame(true, $result->order->metadata['remaining_position_protected_after_compensation'] ?? null);
+        self::assertSame(true, $result->order->metadata['position_flat_after_compensation'] ?? null);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
-        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+
+        $orders = $this->adapter->getOrdersSnapshot('BTCUSDT');
+        self::assertCount(2, $orders);
+        $compensation = array_values(array_filter(
+            $orders,
+            static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+        ))[0] ?? null;
+        self::assertInstanceOf(ExchangeOrderDto::class, $compensation);
+        self::assertSame(ExchangeOrderType::MARKET, $compensation->orderType);
+        self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
+        self::assertSame(ExchangeOrderSide::SELL, $compensation->side);
+        self::assertSame(
+            $compensation->exchangeOrderId,
+            $result->order->metadata['compensation_order_id'] ?? null,
+        );
+        self::assertSame(
+            $compensation->clientOrderId,
+            $result->order->metadata['compensation_client_order_id'] ?? null,
+        );
         self::assertCount(1, $this->scenario->events('protection_order.rejected'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+        self::assertCount(2, $this->scenario->events('order.filled'));
+        self::assertSame(
+            'itd-stop-compensation',
+            $this->scenario->events('position.closed')[0]->payload['internal_trade_id'] ?? null,
+        );
+    }
+
+    public function testRejectedProtectionCompensatesOnlyFailedEntryExposure(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-existing-protected-position',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+        $this->scenario->rejectNextProtectionOrder();
+
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-failed-position-increase',
+            postOnly: false,
+            quantity: 0.4,
+            attachedStopLossPrice: 24800.0,
+        ));
+
+        $positions = $this->adapter->getOpenPositions('BTCUSDT');
+        $openStops = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ));
+        $compensations = array_values(array_filter(
+            $this->adapter->getOrdersSnapshot('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::MARKET
+                && $order->reduceOnly,
+        ));
+
+        self::assertSame('entry_exposure_closed', $result->order?->metadata['compensation_outcome'] ?? null);
+        self::assertSame(true, $result->order?->metadata['failed_entry_exposure_closed'] ?? null);
+        self::assertEqualsWithDelta(
+            0.4,
+            $result->order?->metadata['compensation_quantity'] ?? null,
+            0.00000001,
+        );
+        self::assertEqualsWithDelta(
+            1.4,
+            $result->order?->metadata['position_size_before_compensation'] ?? null,
+            0.00000001,
+        );
+        self::assertEqualsWithDelta(
+            1.0,
+            $result->order?->metadata['position_size_after_compensation'] ?? null,
+            0.00000001,
+        );
+        self::assertSame(false, $result->order?->metadata['position_flat_after_compensation'] ?? null);
+        self::assertSame(true, $result->order?->metadata['remaining_position_protected_after_compensation'] ?? null);
+        self::assertCount(1, $positions);
+        self::assertEqualsWithDelta(1.0, $positions[0]->size, 0.00000001);
+        self::assertCount(1, $openStops);
+        self::assertEqualsWithDelta(1.0, $openStops[0]->remainingQuantity, 0.00000001);
+        self::assertCount(1, $compensations);
+        self::assertEqualsWithDelta(0.4, $compensations[0]->quantity, 0.00000001);
+    }
+
+    public function testProtectionCompensationIsNotDuplicatedOnEntryReplay(): void
+    {
+        $this->scenario->rejectNextProtectionOrder();
+        $request = $this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-stop-compensation-replay',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        );
+
+        $first = $this->adapter->placeOrder($request);
+        $second = $this->adapter->placeOrder($request);
+
+        self::assertTrue($first->accepted);
+        self::assertTrue($second->accepted);
+        self::assertSame(true, $second->metadata['idempotent_replay'] ?? null);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(
+            $first->order?->metadata['compensation_order_id'] ?? null,
+            $second->order?->metadata['compensation_order_id'] ?? null,
+        );
+        self::assertCount(2, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(2, $this->scenario->events('order.filled'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
     public function testMovePriceTriggersAttachedStopLossAndClosesPosition(): void
@@ -1798,6 +1919,52 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    public function testProtectionCompensationFailureRollsBackEntryAndCloseBeforeRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_compensation_rollback_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new class($stateFile) extends FakeExchangeStateStore {
+                public function appendEvent(\App\Exchange\Fake\FakeExchangeEvent $event): void
+                {
+                    if ($event->type === 'position.closed') {
+                        throw new \RuntimeException('forced_compensation_close_event_failure');
+                    }
+
+                    parent::appendEvent($event);
+                }
+            };
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            (new FakeExchangeScenarioService($state, $book, $engine))->rejectNextProtectionOrder();
+
+            try {
+                $adapter->placeOrder($this->request(
+                    orderType: ExchangeOrderType::MARKET,
+                    price: null,
+                    clientOrderId: 'stop-compensation-rollback',
+                    postOnly: false,
+                    attachedStopLossPrice: 24800.0,
+                ));
+                self::fail('Expected forced compensation close event failure.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('forced_compensation_close_event_failure', $exception->getMessage());
+            }
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredAdapter = $this->adapterForState($restoredState);
+            self::assertCount(0, $restoredAdapter->getOrdersSnapshot('BTCUSDT'));
+            self::assertCount(0, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertCount(0, $restoredState->events());
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testStateStoreRestoresProtectedPositionAndContinuesEventSequence(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
@@ -1847,6 +2014,88 @@ final class FakeExchangeAdapterTest extends TestCase
             self::assertSame($sortedSequences, $sequences);
         } finally {
             @unlink($stateFile);
+        }
+    }
+
+    public function testStateStoreRestoresRejectedProtectionCompensationAndFlatPosition(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_stop_compensation_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            $scenario = new FakeExchangeScenarioService($state, $book, $engine);
+            $scenario->rejectNextProtectionOrder();
+
+            $result = $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'cid-stop-compensation-restart',
+                postOnly: false,
+                attachedStopLossPrice: 24800.0,
+                metadata: [
+                    'internal_trade_id' => 'itd-stop-compensation-restart',
+                    'api_key' => 'TOP-SECRET',
+                    'raw_payload' => ['authorization' => 'Bearer SECRET'],
+                ],
+            ));
+            $compensationOrderId = $result->order?->metadata['compensation_order_id'] ?? null;
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredAdapter = $this->adapterForState($restoredState);
+            $restoredBook = new FakeExchangeOrderBook($restoredState);
+            $restoredScenario = new FakeExchangeScenarioService(
+                $restoredState,
+                $restoredBook,
+                new FakeExchangeMatchingEngine(
+                    $restoredState,
+                    $restoredBook,
+                    $this->fixedClock(),
+                ),
+            );
+            $orders = $restoredAdapter->getOrdersSnapshot('BTCUSDT');
+            $entry = array_values(array_filter(
+                $orders,
+                static fn (ExchangeOrderDto $order): bool => !$order->reduceOnly,
+            ))[0] ?? null;
+            $compensation = array_values(array_filter(
+                $orders,
+                static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+            ))[0] ?? null;
+
+            self::assertTrue($restoredState->recoveryMetadata()['restored']);
+            self::assertCount(2, $orders);
+            self::assertCount(0, $restoredAdapter->getOpenOrders('BTCUSDT'));
+            self::assertCount(0, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertInstanceOf(ExchangeOrderDto::class, $entry);
+            self::assertSame('rejected', $entry->metadata['protection_status'] ?? null);
+            self::assertSame('completed', $entry->metadata['compensation_status'] ?? null);
+            self::assertSame($compensationOrderId, $entry->metadata['compensation_order_id'] ?? null);
+            self::assertInstanceOf(ExchangeOrderDto::class, $compensation);
+            self::assertSame($compensationOrderId, $compensation->exchangeOrderId);
+            self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
+            self::assertSame(ExchangeOrderType::MARKET, $compensation->orderType);
+            self::assertTrue($compensation->reduceOnly);
+            self::assertCount(1, $restoredScenario->events('protection_order.rejected'));
+            self::assertCount(2, $restoredScenario->events('order.filled'));
+            self::assertCount(1, $restoredScenario->events('position.closed'));
+            self::assertSame(
+                'itd-stop-compensation-restart',
+                $restoredScenario->events('position.closed')[0]->payload['internal_trade_id'] ?? null,
+            );
+
+            $serializedState = (string) file_get_contents($stateFile);
+            self::assertStringNotContainsString('TOP-SECRET', $serializedState);
+            self::assertStringNotContainsString('Bearer SECRET', $serializedState);
+            self::assertStringNotContainsString('api_key', $serializedState);
+            self::assertStringNotContainsString('raw_payload', $serializedState);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
         }
     }
 
