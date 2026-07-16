@@ -849,6 +849,36 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertSame(0.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
     }
 
+    #[DataProvider('directionProvider')]
+    public function testPartialTrailingFillIsRejectedAtomicallyAndFullFillRemainsUsable(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $trailing = $this->armFixture($adapter, $scenario, $this->fixture($direction));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+        $fillsBefore = $adapter->getFillsSnapshot('BTCUSDT');
+
+        try {
+            $scenario->fillOrder($trailing->exchangeOrderId, 0.2);
+            self::fail('Expected a partial trailing fill to be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_partial_fill_unsupported', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertEquals($fillsBefore, $adapter->getFillsSnapshot('BTCUSDT'));
+
+        $filled = $scenario->fillOrder($trailing->exchangeOrderId);
+
+        self::assertSame(ExchangeOrderStatus::FILLED, $filled->status);
+        self::assertSame(0.6, $filled->filledQuantity);
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(1, $state->events('trailing_stop.triggered'));
+    }
+
     public function testOrdinaryPersistedTriggerWithoutTrailingStateRemainsExecutable(): void
     {
         [$state, $adapter, $scenario] = $this->exchange();
