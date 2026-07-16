@@ -244,6 +244,9 @@ final readonly class FakeExchangeMatchingEngine
         if (!$order instanceof ExchangeOrderDto || !$this->isActiveStatus($order->status)) {
             return $order;
         }
+        if ($this->isPersistedTrailingOrder($order)) {
+            $this->assertPersistedActiveTrailingOrderValid($order);
+        }
 
         $requestedFillQuantity = min($quantity ?? $order->remainingQuantity, $order->remainingQuantity);
         $fillQuantity = $requestedFillQuantity;
@@ -680,8 +683,15 @@ final readonly class FakeExchangeMatchingEngine
 
     private function ratchetTrailingStops(string $symbol): void
     {
+        $openOrders = $this->stateStore->getOpenOrders($symbol);
+        foreach ($openOrders as $order) {
+            if ($this->isPersistedTrailingOrder($order)) {
+                $this->assertPersistedActiveTrailingOrderValid($order);
+            }
+        }
+
         $midPrice = $this->midPrice($symbol);
-        foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
+        foreach ($openOrders as $order) {
             if (!$this->isActiveTrailingOrder($order)) {
                 continue;
             }
@@ -868,6 +878,9 @@ final readonly class FakeExchangeMatchingEngine
         if ($stopLoss === null && $takeProfit === null) {
             return $entryOrder;
         }
+        if ($trailingPolicy instanceof FakeTp1TrailingPolicy) {
+            $this->assertTp1QuantityBelowProtectedExposure($entryOrder, $trailingPolicy);
+        }
 
         $metadata = array_replace($entryOrder->metadata, ['attached_protection_processed' => true]);
 
@@ -915,6 +928,23 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $this->createAttachedProtectionOrders($parent);
+    }
+
+    private function assertTp1QuantityBelowProtectedExposure(
+        ExchangeOrderDto $entryOrder,
+        FakeTp1TrailingPolicy $policy,
+    ): void {
+        try {
+            $tp1Quantity = BigDecimal::of($policy->tp1Quantity);
+            $protectedExposure = BigDecimal::of(self::canonicalFloat(
+                $this->protectionQuantity($entryOrder),
+            ));
+        } catch (MathException) {
+            throw new \LogicException('fake_tp1_trailing_quantity_invalid');
+        }
+        if ($tp1Quantity->isGreaterThanOrEqualTo($protectedExposure)) {
+            throw new \LogicException('fake_tp1_trailing_quantity_invalid');
+        }
     }
 
     private function compensateRejectedProtection(ExchangeOrderDto $entryOrder): ExchangeOrderDto
@@ -1367,6 +1397,85 @@ final readonly class FakeExchangeMatchingEngine
     {
         return $order->orderType === ExchangeOrderType::TRIGGER
             && $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing';
+    }
+
+    private function isPersistedTrailingOrder(ExchangeOrderDto $order): bool
+    {
+        return $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing';
+    }
+
+    private function assertPersistedActiveTrailingOrderValid(ExchangeOrderDto $order): void
+    {
+        try {
+            $policy = FakeTp1TrailingPolicy::fromMetadata($order->metadata);
+        } catch (\InvalidArgumentException) {
+            throw new \LogicException('fake_tp1_trailing_persisted_state_invalid');
+        }
+
+        $positionSide = $order->positionSide;
+        $expectedSide = $positionSide === ExchangePositionSide::LONG
+            ? ExchangeOrderSide::SELL
+            : ExchangeOrderSide::BUY;
+        $quantityDecimal = $order->metadata['quantity_decimal'] ?? null;
+        $filledQuantityDecimal = $order->metadata['filled_quantity_decimal'] ?? null;
+        $remainingQuantityDecimal = $order->metadata['remaining_quantity_decimal'] ?? null;
+        $stopPriceDecimal = $order->metadata['stop_price_decimal'] ?? null;
+        $watermark = $order->metadata['trailing_watermark'] ?? null;
+        $watermarkDecimal = $order->metadata['trailing_watermark_decimal'] ?? null;
+        if (
+            !$policy instanceof FakeTp1TrailingPolicy
+            || !$positionSide instanceof ExchangePositionSide
+            || !$order->reduceOnly
+            || $order->side !== $expectedSide
+            || $order->orderType !== ExchangeOrderType::TRIGGER
+            || $order->status !== ExchangeOrderStatus::OPEN
+            || !\is_finite($order->quantity)
+            || $order->quantity <= 0.0
+            || $order->filledQuantity !== 0.0
+            || !\is_finite($order->remainingQuantity)
+            || $order->remainingQuantity <= 0.0
+            || !\is_string($quantityDecimal)
+            || !\is_string($filledQuantityDecimal)
+            || !\is_string($remainingQuantityDecimal)
+            || !\is_string($stopPriceDecimal)
+            || $order->stopPrice === null
+            || !\is_finite($order->stopPrice)
+            || $order->stopPrice <= 0.0
+            || !\is_scalar($watermark)
+            || !is_numeric($watermark)
+            || !\is_finite((float) $watermark)
+            || (float) $watermark <= 0.0
+            || !\is_string($watermarkDecimal)
+            || $this->stringMetadata($order->metadata, 'trailing_state_version') !== FakeTp1TrailingPolicy::VERSION
+            || $this->stringMetadata($order->metadata, 'trailing_state_status') !== 'active'
+            || $this->stringMetadata($order->metadata, 'parent_order_id') === null
+            || $this->stringMetadata($order->metadata, 'trailing_activation_order_id') === null
+            || !self::sameDecimal($quantityDecimal, self::canonicalFloat($order->quantity))
+            || !self::sameDecimal($filledQuantityDecimal, '0')
+            || !self::sameDecimal($remainingQuantityDecimal, self::canonicalFloat($order->remainingQuantity))
+            || !self::sameDecimal($quantityDecimal, $remainingQuantityDecimal)
+            || !self::sameDecimal(
+                self::canonicalFloat($order->quantity),
+                self::canonicalFloat($order->remainingQuantity),
+            )
+            || !self::sameDecimal($stopPriceDecimal, self::canonicalFloat($order->stopPrice))
+            || !self::sameDecimal($watermarkDecimal, self::canonicalFloat((float) $watermark))
+        ) {
+            throw new \LogicException('fake_tp1_trailing_persisted_state_invalid');
+        }
+
+        $validation = $this->derivedProtectionValidation(
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            positionSide: $positionSide,
+            marginMode: 'isolated',
+            orderType: ExchangeOrderType::STOP_LOSS,
+            quantityDecimal: $remainingQuantityDecimal,
+            stopPriceDecimal: $stopPriceDecimal,
+        );
+        if (!$validation->accepted) {
+            throw new \LogicException('fake_tp1_trailing_persisted_state_invalid');
+        }
     }
 
     /**

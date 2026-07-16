@@ -458,6 +458,82 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertSame(0.6, $this->orderByType($adapter, ExchangeOrderType::TRIGGER)->quantity);
     }
 
+    #[DataProvider('fallbackProtectionFailureProvider')]
+    public function testFallbackProtectionRejectsTp1ThatWouldConsumePartialExposureWithoutMutation(
+        bool $rejectFallbackOrder,
+    ): void {
+        $state = new class extends FakeExchangeStateStore {
+            public bool $rejectEntryOrder = false;
+
+            public function availableMarginUsdt(): float
+            {
+                return $this->rejectEntryOrder ? 0.0 : parent::availableMarginUsdt();
+            }
+        };
+        [, $adapter, $scenario] = $this->exchangeForState($state);
+        $fixture = $this->fixture('long');
+        $trailingPolicy = new FakeTp1TrailingPolicy('0.4', '100.0');
+        $fallbackPolicy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: $rejectFallbackOrder ? 25100.0 : 24999.0,
+            maxSlippageBps: 30.0,
+        );
+        $parent = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: 24950.0,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'tp1-trailing-partial-fallback-' . ($rejectFallbackOrder ? 'order' : 'price'),
+            attachedStopLossPrice: (float) $fixture['initial_stop'],
+            attachedTakeProfitPrice: (float) $fixture['tp1_price'],
+            metadata: $trailingPolicy->toMetadata() + $fallbackPolicy->toMetadata(),
+            quantityDecimal: '1.0',
+            priceDecimal: '24950.0',
+            attachedStopLossPriceDecimal: (string) $fixture['initial_stop'],
+            attachedTakeProfitPriceDecimal: (string) $fixture['tp1_price'],
+        ));
+        self::assertNotNull($parent->exchangeOrderId);
+        $scenario->fillOrder($parent->exchangeOrderId, 0.2, 24950.0);
+        $state->rejectEntryOrder = $rejectFallbackOrder;
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+        $bookBefore = $state->getOrderBookTop('BTCUSDT');
+
+        try {
+            $scenario->fallbackTaker($parent->exchangeOrderId);
+            self::fail('Expected TP1 equal to or above partial protected exposure to fail.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_quantity_invalid', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertSame($bookBefore, $state->getOrderBookTop('BTCUSDT'));
+        self::assertSame(0.2, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertCount(1, $state->getOrders('BTCUSDT'));
+        self::assertCount(0, array_filter(
+            $adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => \in_array(
+                $order->orderType,
+                [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TAKE_PROFIT],
+                true,
+            ),
+        ));
+    }
+
     public function testRestartRestoresActiveTrailingStateAndRedactsUntrustedMetadata(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_tp1_trailing_restart_');
@@ -660,6 +736,56 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount(0, $faultState->events('trailing_stop.armed'));
     }
 
+    #[DataProvider('malformedPersistedTrailingStateProvider')]
+    public function testMalformedPersistedActiveTrailingStateFailsAtomicallyBeforeRatchetOrTrigger(
+        string $conflict,
+    ): void {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        $state->saveOrder($this->malformedPersistedTrailingOrder($trailing, $conflict));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+        $bookBefore = $state->getOrderBookTop('BTCUSDT');
+
+        try {
+            $scenario->movePrice('BTCUSDT', 25000.0, 0.0);
+            self::fail(sprintf('Expected malformed trailing state "%s" to fail.', $conflict));
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_persisted_state_invalid', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertSame($bookBefore, $state->getOrderBookTop('BTCUSDT'));
+        self::assertSame(0.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertCount(1, $adapter->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testMalformedPersistedTrailingStateFailsBeforeDirectTriggerFill(): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $trailing = $this->armFixture($adapter, $scenario, $this->fixture('long'));
+        $state->saveOrder($this->malformedPersistedTrailingOrder($trailing, 'reduce_only'));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+
+        try {
+            $scenario->fillOrder($trailing->exchangeOrderId);
+            self::fail('Expected malformed trailing state to fail before a direct trigger fill.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_persisted_state_invalid', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertSame(0.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+    }
+
     /**
      * @param array<string,mixed> $fixture
      * @param array<string,mixed> $extraMetadata
@@ -738,6 +864,40 @@ final class FakeTp1TrailingTest extends TestCase
     {
         yield 'long' => ['long'];
         yield 'short' => ['short'];
+    }
+
+    /** @return iterable<string,array{bool}> */
+    public static function fallbackProtectionFailureProvider(): iterable
+    {
+        yield 'fallback price rejected' => [false];
+        yield 'fallback order rejected' => [true];
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function malformedPersistedTrailingStateProvider(): iterable
+    {
+        foreach ([
+            'reduce_only',
+            'side',
+            'position_side',
+            'order_type',
+            'active_status',
+            'filled_quantity',
+            'quantity',
+            'remaining_quantity',
+            'quantity_decimal',
+            'quantity_decimal_missing',
+            'filled_quantity_decimal',
+            'remaining_quantity_decimal',
+            'stop_price',
+            'stop_price_decimal',
+            'stop_price_decimal_missing',
+            'watermark',
+            'watermark_decimal',
+            'watermark_decimal_missing',
+        ] as $conflict) {
+            yield $conflict => [$conflict];
+        }
     }
 
     /** @return iterable<string,array{string}> */
@@ -950,6 +1110,77 @@ final class FakeTp1TrailingTest extends TestCase
             reduceOnly: $reduceOnly,
             postOnly: $postOnly,
             timeInForce: $timeInForce,
+            createdAt: $order->createdAt,
+            updatedAt: $order->updatedAt,
+            metadata: $metadata,
+        );
+    }
+
+    private function malformedPersistedTrailingOrder(
+        ExchangeOrderDto $order,
+        string $conflict,
+    ): ExchangeOrderDto {
+        $side = $order->side;
+        $positionSide = $order->positionSide;
+        $orderType = $order->orderType;
+        $status = $order->status;
+        $quantity = $order->quantity;
+        $filledQuantity = $order->filledQuantity;
+        $remainingQuantity = $order->remainingQuantity;
+        $stopPrice = $order->stopPrice;
+        $reduceOnly = $order->reduceOnly;
+        $metadata = $order->metadata;
+
+        if (\in_array($conflict, [
+            'quantity_decimal_missing',
+            'stop_price_decimal_missing',
+            'watermark_decimal_missing',
+        ], true)) {
+            unset($metadata[match ($conflict) {
+                'quantity_decimal_missing' => 'quantity_decimal',
+                'stop_price_decimal_missing' => 'stop_price_decimal',
+                'watermark_decimal_missing' => 'trailing_watermark_decimal',
+            }]);
+        } else {
+            match ($conflict) {
+                'reduce_only' => $reduceOnly = false,
+                'side' => $side = ExchangeOrderSide::BUY,
+                'position_side' => $positionSide = ExchangePositionSide::SHORT,
+                'order_type' => $orderType = ExchangeOrderType::STOP_LOSS,
+                'active_status' => $status = ExchangeOrderStatus::PENDING,
+                'filled_quantity' => $filledQuantity = 0.1,
+                'quantity' => $quantity = 0.0,
+                'remaining_quantity' => $remainingQuantity = 0.5,
+                'quantity_decimal' => $metadata['quantity_decimal'] = '0.7',
+                'filled_quantity_decimal' => $metadata['filled_quantity_decimal'] = '0.1',
+                'remaining_quantity_decimal' => $metadata['remaining_quantity_decimal'] = '0.5',
+                'stop_price' => $stopPrice = 25100.03,
+                'stop_price_decimal' => $metadata['stop_price_decimal'] = '25100.1',
+                'watermark' => $metadata['trailing_watermark'] = 25200.1,
+                'watermark_decimal' => $metadata['trailing_watermark_decimal'] = '25200.1',
+                default => throw new \LogicException('Unknown persisted trailing conflict ' . $conflict),
+            };
+        }
+
+        return new ExchangeOrderDto(
+            exchange: $order->exchange,
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: $orderType,
+            status: $status,
+            quantity: $quantity,
+            filledQuantity: $filledQuantity,
+            remainingQuantity: $remainingQuantity,
+            price: $order->price,
+            averagePrice: $order->averagePrice,
+            stopPrice: $stopPrice,
+            reduceOnly: $reduceOnly,
+            postOnly: $order->postOnly,
+            timeInForce: $order->timeInForce,
             createdAt: $order->createdAt,
             updatedAt: $order->updatedAt,
             metadata: $metadata,
