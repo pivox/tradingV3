@@ -158,6 +158,53 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'position_closed_count' => 1,
             'protection_status' => 'rejected',
         ],
+        'tp1_then_trailing' => [
+            'fixture_version' => 'fake-tp1-trailing-fixtures-v1',
+            'long' => [
+                'activation_stop' => 25100.0,
+                'armed_event_count' => 1,
+                'cost_completeness' => 'complete',
+                'duplicate_price_idempotent' => true,
+                'entry_quantity' => 1.0,
+                'fill_count' => 3,
+                'gap_fill_price' => 25250.0,
+                'metadata_redacted' => true,
+                'open_order_count' => 0,
+                'open_position_count' => 0,
+                'quantity_coherent' => true,
+                'restart_restored' => true,
+                'stop_monotone' => true,
+                'terminal_replay_idempotent' => true,
+                'tp1_quantity' => 0.4,
+                'trailing_offset' => 100.0,
+                'trailing_quantity' => 0.6,
+                'triggered_event_count' => 1,
+                'updated_event_count' => 2,
+                'watermark_after_restart' => 25300.0,
+            ],
+            'short' => [
+                'activation_stop' => 24900.0,
+                'armed_event_count' => 1,
+                'cost_completeness' => 'complete',
+                'duplicate_price_idempotent' => true,
+                'entry_quantity' => 1.0,
+                'fill_count' => 3,
+                'gap_fill_price' => 24750.0,
+                'metadata_redacted' => true,
+                'open_order_count' => 0,
+                'open_position_count' => 0,
+                'quantity_coherent' => true,
+                'restart_restored' => true,
+                'stop_monotone' => true,
+                'terminal_replay_idempotent' => true,
+                'tp1_quantity' => 0.4,
+                'trailing_offset' => 100.0,
+                'trailing_quantity' => 0.6,
+                'triggered_event_count' => 1,
+                'updated_event_count' => 2,
+                'watermark_after_restart' => 24700.0,
+            ],
+        ],
         'gap_at_stop_loss' => [
             'fill_price' => 24790.0,
             'open_position_count' => 0,
@@ -196,7 +243,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(15, $catalogKeys);
+        self::assertCount(16, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

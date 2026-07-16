@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
@@ -28,6 +29,7 @@ use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakePrivateWsException;
 use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Exchange\Fake\FakeTp1TrailingPolicy;
 use Psr\Clock\ClockInterface;
 
 final class FakePaperGoldenScenarioRunner
@@ -45,6 +47,7 @@ final class FakePaperGoldenScenarioRunner
         'timeout_after_acceptance',
         'stop_loss_attach_success',
         'stop_loss_attach_failure',
+        'tp1_then_trailing',
         'gap_at_stop_loss',
         'websocket_disconnect_resync',
         'restart_with_open_position',
@@ -78,6 +81,7 @@ final class FakePaperGoldenScenarioRunner
             'timeout_after_acceptance' => $this->timeoutAfterAcceptance(),
             'stop_loss_attach_success' => $this->stopLossAttachSuccess(),
             'stop_loss_attach_failure' => $this->stopLossAttachFailure(),
+            'tp1_then_trailing' => $this->tp1ThenTrailing(),
             'gap_at_stop_loss' => $this->gapAtStopLoss(),
             'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
@@ -478,6 +482,211 @@ final class FakePaperGoldenScenarioRunner
             'position_closed_count' => \count($scenario->events('position.closed')),
             'protection_status' => $entry->order?->metadata['protection_status'] ?? null,
         ];
+    }
+
+    /** @return array<string,mixed> */
+    private function tp1ThenTrailing(): array
+    {
+        $fixtures = $this->tp1TrailingFixtures();
+        $facts = ['fixture_version' => $fixtures['schema_version']];
+        foreach ($fixtures['cases'] as $fixture) {
+            $name = $fixture['name'] ?? null;
+            if (!\is_string($name) || !\in_array($name, ['long', 'short'], true)) {
+                throw new \LogicException('The TP1 trailing fixture direction is invalid.');
+            }
+
+            $facts[$name] = $this->tp1TrailingDirectionFacts($fixture);
+        }
+
+        return $facts;
+    }
+
+    /**
+     * @param array<string,mixed> $fixture
+     * @return array<string,mixed>
+     */
+    private function tp1TrailingDirectionFacts(array $fixture): array
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_tp1_trailing_');
+        if ($stateFile === false) {
+            throw new \RuntimeException('Unable to allocate the TP1 trailing golden state file.');
+        }
+        @unlink($stateFile);
+
+        try {
+            [$state, $adapter, $scenario] = $this->exchange($stateFile);
+            $adapter->placeOrder($this->tp1TrailingRequest($fixture));
+            $tp1 = $this->goldenOrderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+            $scenario->fillOrder(
+                $tp1->exchangeOrderId,
+                null,
+                (float) $fixture['tp1_price'],
+            );
+            $trailing = $this->goldenOrderByType($adapter, ExchangeOrderType::TRIGGER);
+            $activationStop = $trailing->stopPrice;
+            $firstFavorable = (float) $fixture['favorable_prices'][0];
+            $scenario->movePrice((string) $fixture['symbol'], $firstFavorable, 0.0);
+            $firstRatcheted = $adapter->getOrder((string) $fixture['symbol'], $trailing->exchangeOrderId);
+            $eventsBeforeRestart = \count($state->events());
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            [, $restoredAdapter, $restoredScenario] = $this->exchangeForState($restoredState);
+            $restoredTrailing = $restoredAdapter->getOrder(
+                (string) $fixture['symbol'],
+                $trailing->exchangeOrderId,
+            );
+            $watermarkAfterRestart = $restoredTrailing?->metadata['trailing_watermark'] ?? null;
+            $restartRestored = $restoredState->recoveryMetadata()['restored']
+                && $watermarkAfterRestart === $firstFavorable
+                && \count($restoredState->events()) === $eventsBeforeRestart;
+
+            $eventsBeforeDuplicate = \count($restoredState->events());
+            $restoredScenario->movePrice((string) $fixture['symbol'], $firstFavorable, 0.0);
+            $duplicatePriceIdempotent = \count($restoredState->events()) === $eventsBeforeDuplicate;
+
+            $secondFavorable = (float) $fixture['favorable_prices'][1];
+            $restoredScenario->movePrice((string) $fixture['symbol'], $secondFavorable, 0.0);
+            $finalTrailing = $restoredAdapter->getOrder(
+                (string) $fixture['symbol'],
+                $trailing->exchangeOrderId,
+            );
+            $gap = $restoredScenario->movePrice(
+                (string) $fixture['symbol'],
+                (float) $fixture['gap_price'],
+                0.0,
+            );
+            $gapFill = $gap['matched_orders'][0] ?? null;
+            if (!$gapFill instanceof ExchangeOrderDto) {
+                throw new \LogicException('The TP1 trailing golden gap did not fill.');
+            }
+
+            $ordersBeforeReplay = \count($restoredState->getOrders((string) $fixture['symbol']));
+            $eventsBeforeReplay = \count($restoredState->events());
+            $restoredScenario->movePrice(
+                (string) $fixture['symbol'],
+                (float) $fixture['gap_price'],
+                0.0,
+            );
+            $restoredScenario->fillOrder($trailing->exchangeOrderId);
+            $terminalReplayIdempotent = $ordersBeforeReplay
+                    === \count($restoredState->getOrders((string) $fixture['symbol']))
+                && $eventsBeforeReplay === \count($restoredState->events());
+
+            $closed = $restoredState->events('position.closed')[0] ?? null;
+            if (!$closed instanceof FakeExchangeEvent) {
+                throw new \LogicException('The TP1 trailing golden fixture did not close its position.');
+            }
+            $serialized = (string) file_get_contents($stateFile);
+            $positionSide = ExchangePositionSide::from((string) $fixture['position_side']);
+            $firstStop = $firstRatcheted?->stopPrice;
+            $finalStop = $finalTrailing?->stopPrice;
+            $stopMonotone = $activationStop !== null && $firstStop !== null && $finalStop !== null
+                && ($positionSide === ExchangePositionSide::LONG
+                    ? $activationStop <= $firstStop && $firstStop <= $finalStop
+                    : $activationStop >= $firstStop && $firstStop >= $finalStop);
+
+            return [
+                'activation_stop' => $activationStop,
+                'armed_event_count' => \count($restoredState->events('trailing_stop.armed')),
+                'cost_completeness' => $closed->payload['cost_completeness'] ?? null,
+                'duplicate_price_idempotent' => $duplicatePriceIdempotent,
+                'entry_quantity' => (float) $fixture['quantity'],
+                'fill_count' => \count($restoredAdapter->getFillsSnapshot((string) $fixture['symbol'])),
+                'gap_fill_price' => round((float) $gapFill->averagePrice, 6),
+                'metadata_redacted' => !str_contains($serialized, 'TOP-SECRET')
+                    && !str_contains($serialized, 'Bearer SECRET')
+                    && !str_contains($serialized, 'api_key')
+                    && !str_contains($serialized, 'raw_payload'),
+                'open_order_count' => \count($restoredAdapter->getOpenOrders((string) $fixture['symbol'])),
+                'open_position_count' => \count($restoredAdapter->getOpenPositions((string) $fixture['symbol'])),
+                'quantity_coherent' => $closed->payload['quantity_coherent'] ?? null,
+                'restart_restored' => $restartRestored,
+                'stop_monotone' => $stopMonotone,
+                'terminal_replay_idempotent' => $terminalReplayIdempotent,
+                'tp1_quantity' => $tp1->quantity,
+                'trailing_offset' => (float) $fixture['trailing_offset'],
+                'trailing_quantity' => $trailing->quantity,
+                'triggered_event_count' => \count($restoredState->events('trailing_stop.triggered')),
+                'updated_event_count' => \count($restoredState->events('trailing_stop.updated')),
+                'watermark_after_restart' => $watermarkAfterRestart,
+            ];
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    /**
+     * @return array{schema_version:string,cases:list<array<string,mixed>>}
+     */
+    private function tp1TrailingFixtures(): array
+    {
+        $path = dirname(__DIR__, 2) . '/fixtures/fake-paper/tp1-trailing-v1.json';
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new \LogicException('The TP1 trailing golden fixture is unavailable.');
+        }
+
+        /** @var array{schema_version:string,cases:list<array<string,mixed>>} $fixtures */
+        $fixtures = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+        if ($fixtures['schema_version'] !== 'fake-tp1-trailing-fixtures-v1') {
+            throw new \LogicException('The TP1 trailing golden fixture version is unsupported.');
+        }
+
+        return $fixtures;
+    }
+
+    /** @param array<string,mixed> $fixture */
+    private function tp1TrailingRequest(array $fixture): PlaceOrderRequest
+    {
+        $policy = new FakeTp1TrailingPolicy(
+            (string) $fixture['tp1_quantity'],
+            (string) $fixture['trailing_offset'],
+        );
+
+        return new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: (string) $fixture['symbol'],
+            side: ExchangeOrderSide::from((string) $fixture['entry_side']),
+            positionSide: ExchangePositionSide::from((string) $fixture['position_side']),
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: (float) $fixture['quantity'],
+            price: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'golden-tp1-trailing-' . $fixture['name'],
+            attachedStopLossPrice: (float) $fixture['initial_stop'],
+            attachedTakeProfitPrice: (float) $fixture['tp1_price'],
+            metadata: $policy->toMetadata() + [
+                'internal_trade_id' => 'golden-tp1-trailing-' . $fixture['name'],
+                'api_key' => 'TOP-SECRET',
+                'raw_payload' => ['authorization' => 'Bearer SECRET'],
+            ],
+            quantityDecimal: (string) $fixture['quantity'],
+            attachedStopLossPriceDecimal: (string) $fixture['initial_stop'],
+            attachedTakeProfitPriceDecimal: (string) $fixture['tp1_price'],
+        );
+    }
+
+    private function goldenOrderByType(
+        FakeExchangeAdapter $adapter,
+        ExchangeOrderType $type,
+    ): ExchangeOrderDto {
+        foreach ($adapter->getOrdersSnapshot('BTCUSDT') as $order) {
+            if ($order->orderType === $type) {
+                return $order;
+            }
+        }
+
+        throw new \LogicException(sprintf('Missing golden %s order.', $type->value));
     }
 
     /** @return array<string,mixed> */
