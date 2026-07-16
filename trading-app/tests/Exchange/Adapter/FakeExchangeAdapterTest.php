@@ -63,6 +63,24 @@ final class FakeExchangeAdapterTest extends TestCase
         yield 'leverage exceeds instrument cap' => ['BTCUSDT', 24950.0, 1.0, 101, 'leverage_above_maximum'];
     }
 
+    /**
+     * @return iterable<string,array{float,float,?float,?float,string,string}>
+     */
+    public static function nonFiniteValidationRejectionCases(): iterable
+    {
+        yield 'quantity NAN' => [24950.0, NAN, null, null, 'quantity_not_quantized', 'quantity_decimal'];
+        yield 'price INF' => [INF, 1.0, null, null, 'price_not_quantized', 'price_decimal'];
+        yield 'stop price INF' => [24950.0, 1.0, INF, null, 'stop_price_not_quantized', 'stop_price_decimal'];
+        yield 'attached stop loss INF' => [
+            24950.0,
+            1.0,
+            null,
+            INF,
+            'stop_price_not_quantized',
+            'attached_stop_loss_price_decimal',
+        ];
+    }
+
     #[DataProvider('validationRejectionCases')]
     public function testValidationRejectsAreStructuredPersistedAndNeverRounded(
         string $symbol,
@@ -89,6 +107,34 @@ final class FakeExchangeAdapterTest extends TestCase
         $events = $this->scenario->events('order.rejected');
         self::assertCount(1, $events);
         self::assertSame($result->exchangeOrderId, $events[0]->payload['order_id'] ?? null);
+        self::assertSame($reason, $events[0]->payload['reason'] ?? null);
+    }
+
+    #[DataProvider('nonFiniteValidationRejectionCases')]
+    public function testNonFiniteValidationRejectsRemainPersistedAndAudited(
+        float $price,
+        float $quantity,
+        ?float $stopPrice,
+        ?float $attachedStopLossPrice,
+        string $reason,
+        string $invalidDecimalKey,
+    ): void {
+        $result = $this->adapter->placeOrder($this->request(
+            price: $price,
+            quantity: $quantity,
+            stopPrice: $stopPrice,
+            attachedStopLossPrice: $attachedStopLossPrice,
+            clientOrderId: 'cid-non-finite-' . $invalidDecimalKey,
+        ));
+
+        self::assertFalse($result->accepted);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->status);
+        self::assertSame($reason, $result->metadata['reason'] ?? null);
+        self::assertArrayNotHasKey($invalidDecimalKey, $result->order?->metadata ?? []);
+        self::assertNotNull($this->adapter->getOrder('BTCUSDT', (string) $result->exchangeOrderId));
+
+        $events = $this->scenario->events('order.rejected');
+        self::assertCount(1, $events);
         self::assertSame($reason, $events[0]->payload['reason'] ?? null);
     }
 

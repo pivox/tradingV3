@@ -57,7 +57,7 @@ final readonly class FakeOrderValidator
             return FakeOrderValidationResult::rejected('quantity_not_quantized');
         }
 
-        $quantity = BigDecimal::of($request->exactQuantity());
+        $quantity = BigDecimal::of((string) $request->exactQuantity());
         if (!$instrument->isQuantityQuantized((string) $quantity)) {
             return FakeOrderValidationResult::rejected('quantity_not_quantized');
         }

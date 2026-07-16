@@ -84,7 +84,7 @@ final readonly class PlaceOrderRequest
         );
     }
 
-    public function exactQuantity(): string
+    public function exactQuantity(): ?string
     {
         return $this->quantityDecimal ?? self::canonicalFloat($this->quantity);
     }
@@ -147,8 +147,12 @@ final readonly class PlaceOrderRequest
         }
     }
 
-    private static function canonicalFloat(float $value): string
+    private static function canonicalFloat(float $value): ?string
     {
+        if (!\is_finite($value)) {
+            return null;
+        }
+
         return json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
     }
 }
