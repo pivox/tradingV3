@@ -1856,6 +1856,52 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    public function testProtectionCompensationFailureRollsBackEntryAndCloseBeforeRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_compensation_rollback_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new class($stateFile) extends FakeExchangeStateStore {
+                public function appendEvent(\App\Exchange\Fake\FakeExchangeEvent $event): void
+                {
+                    if ($event->type === 'position.closed') {
+                        throw new \RuntimeException('forced_compensation_close_event_failure');
+                    }
+
+                    parent::appendEvent($event);
+                }
+            };
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            (new FakeExchangeScenarioService($state, $book, $engine))->rejectNextProtectionOrder();
+
+            try {
+                $adapter->placeOrder($this->request(
+                    orderType: ExchangeOrderType::MARKET,
+                    price: null,
+                    clientOrderId: 'stop-compensation-rollback',
+                    postOnly: false,
+                    attachedStopLossPrice: 24800.0,
+                ));
+                self::fail('Expected forced compensation close event failure.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('forced_compensation_close_event_failure', $exception->getMessage());
+            }
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredAdapter = $this->adapterForState($restoredState);
+            self::assertCount(0, $restoredAdapter->getOrdersSnapshot('BTCUSDT'));
+            self::assertCount(0, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertCount(0, $restoredState->events());
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testStateStoreRestoresProtectedPositionAndContinuesEventSequence(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');

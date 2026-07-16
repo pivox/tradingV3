@@ -162,6 +162,27 @@ Cette reprise prouve uniquement la continuite locale Fake/Paper. Elle ne remplac
 ni une reconciliation REST/WS exchange, ni le ledger PostgreSQL, et n active
 aucune permission demo, testnet ou live.
 
+## Compensation d echec d attachement SL
+
+Le Fake Exchange de niveau adapter traite maintenant le rejet d une protection
+attachee apres fill complet comme une sequence fail-closed :
+
+1. le fill d entree et `protection_status=rejected` restent visibles ;
+2. un ordre market reduce-only deterministe ferme la taille exacte de la
+   position via le chemin normal du matching engine ;
+3. les couts, le lineage, `order.filled` et `position.closed` sont produits par
+   les mecanismes ordinaires ;
+4. l entree conserve les identifiants de compensation, l action
+   `reduce_only_market_close`, le statut `completed` et la preuve de position
+   plate.
+
+Le replay du `client_order_id` d entree restitue les memes identifiants sans
+second fill compensatoire. La sequence complete appartient a la transaction de
+l etat Fake : si la compensation echoue ou laisse une taille residuelle, l
+operation leve une exception et l etat local revient au snapshot precedent.
+Cette integration adapter est distincte de la fixture declarative
+`FakeExecutionPort::fullFillStopAttachFailure()` de COMMON-005.
+
 ## Injection deterministe des erreurs adapter
 
 Le Fake Exchange de niveau adapter expose une file de fautes typees via
@@ -254,19 +275,19 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les treize scenarios executes dans cette version sont : maker limit rempli, limit
+Les quatorze scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, market avec slippage 5 bps,
 insufficient balance, precision reject, leverage cap reject, replay du
-`client_order_id`, timeout apres acceptation, attachement SL reussi, gap au SL au
-prochain prix disponible, deconnexion/reprise private WS, et restart avec
-position protegee ouverte.
+`client_order_id`, timeout apres acceptation, attachement SL reussi, echec
+d attachement SL compense par fermeture market reduce-only, gap au SL au prochain
+prix disponible, deconnexion/reprise private WS, et restart avec position
+protegee ouverte.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
 | fallback taker | `unsupported` | `fallback_taker_not_implemented` |
-| echec attachement SL | `partial` | `stop_attach_failure_compensation_not_integrated` |
 | TP1 puis trailing | `partial` | `trailing_stop_not_implemented` |
 | duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
 | funding | `unsupported` | `funding_model_not_implemented` |
@@ -293,6 +314,11 @@ Le rollback de COMMON-005 consiste a retirer le mode scenario et revenir au
 `FakeExecutionPort` par defaut. Aucun schema, aucun secret, aucune config runtime
 et aucun endpoint n'est modifie. Les tests de recette demo peuvent alors revenir
 au simple resultat `dry_run` deterministe.
+
+Le rollback de la compensation adapter doit aussi restaurer le scenario golden
+12 en `partial` avec un `gap_code` explicite. Le fichier d etat Fake doit etre
+archive puis retire ou valide contre la revision cible avant reprise locale ; il
+ne doit jamais etre reutilise silencieusement par une version incompatible.
 
 ## Suite
 

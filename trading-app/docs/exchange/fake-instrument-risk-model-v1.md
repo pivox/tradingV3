@@ -166,6 +166,24 @@ match. Reusing the identifier for a different exact decimal or another changed
 intent fails closed with `duplicate_client_order_id_intent_mismatch` and
 `idempotent_replay=false` instead of creating a second active order.
 
+## Attached-protection compensation
+
+An attached stop rejection after a full entry fill is never represented as a
+protected position. The entry keeps `protection_status=rejected` and the stable
+rejection reason. The matching engine immediately submits a deterministic
+market reduce-only close for the exact persisted position size through the same
+validation, fill-cost, position, event, and lineage path as any other Fake order.
+
+Successful compensation records the close order identifiers,
+`fail_safe_action=reduce_only_market_close`,
+`compensation_status=completed`, `compensation_outcome=position_closed`, and
+`position_flat_after_compensation=true` on the entry. Replaying the entry
+`clientOrderId` returns those same identifiers and does not create another fill.
+The complete rejection and compensation sequence is part of the existing
+file-backed state transaction. If the close is rejected, does not fill, or leaves
+residual size, the operation raises and the local state rolls back to its
+pre-request snapshot.
+
 ## Providers and runtime readiness
 
 The Fake contract provider reads the canonical instrument catalog and local
@@ -225,8 +243,8 @@ runtime:
    an incompatible serialized payload.
 4. Clear the application cache, restart local workers, and run
    `app:exchange:runtime-check fake perpetual` before resuming local scenarios.
-5. Restore scenario classifications 5-8 to explicit gaps if their executable
-   runners are rolled back.
+5. Restore golden scenario 12 to an explicit gap if the attached-protection
+   compensation runner is rolled back.
 
 Do not use rollback as a path to live, demo, or testnet trading. No credential,
 exchange endpoint, or network operation is part of this model.
@@ -242,10 +260,10 @@ golden catalog and readiness evidence:
 - funding accrual;
 - one-way position conflict handling;
 - TP1-to-trailing-stop behavior;
-- stop-attachment compensation integration;
 - duplicate/out-of-order event injection coverage;
 - consolidated multi-profile Fake/Paper recipe and exposure behavior.
 
 Trade history completeness and any other cataloged partial behavior also remain
-outside this slice. Therefore this document and scenarios 5-8 are evidence for
-narrow deterministic increments, not evidence that issue #196 is complete.
+outside this slice. Therefore this document and the executable golden scenarios
+are evidence for narrow deterministic increments, not evidence that issue #196
+is complete.
