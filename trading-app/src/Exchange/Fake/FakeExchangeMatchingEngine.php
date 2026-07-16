@@ -722,9 +722,14 @@ final readonly class FakeExchangeMatchingEngine
 
             try {
                 $midPriceDecimal = BigDecimal::of(self::canonicalFloat($midPrice));
-                $newStopPriceDecimal = $order->positionSide === ExchangePositionSide::LONG
+                $rawStopPriceDecimal = $order->positionSide === ExchangePositionSide::LONG
                     ? $midPriceDecimal->minus($policy->trailingOffset)
                     : $midPriceDecimal->plus($policy->trailingOffset);
+                $newStopPriceDecimal = $this->quantizeRuntimeTrailingStop(
+                    $order->symbol,
+                    $order->positionSide,
+                    $rawStopPriceDecimal,
+                );
             } catch (MathException) {
                 throw new \LogicException('fake_tp1_trailing_ratchet_invalid');
             }
@@ -1166,9 +1171,14 @@ final readonly class FakeExchangeMatchingEngine
 
         try {
             $watermarkDecimalValue = BigDecimal::of(self::canonicalFloat($watermark));
-            $stopPriceDecimalValue = $tp1Order->positionSide === ExchangePositionSide::LONG
+            $rawStopPriceDecimalValue = $tp1Order->positionSide === ExchangePositionSide::LONG
                 ? $watermarkDecimalValue->minus($policy->trailingOffset)
                 : $watermarkDecimalValue->plus($policy->trailingOffset);
+            $stopPriceDecimalValue = $this->quantizeRuntimeTrailingStop(
+                $tp1Order->symbol,
+                $tp1Order->positionSide,
+                $rawStopPriceDecimalValue,
+            );
         } catch (MathException) {
             throw new \LogicException('fake_tp1_trailing_stop_invalid');
         }
@@ -1315,6 +1325,31 @@ final readonly class FakeExchangeMatchingEngine
         ]);
 
         return $trailing;
+    }
+
+    private function quantizeRuntimeTrailingStop(
+        string $symbol,
+        ExchangePositionSide $positionSide,
+        BigDecimal $rawStopPrice,
+    ): BigDecimal {
+        $instrument = $this->instruments->find(strtoupper($symbol));
+        if (!$instrument instanceof FakeInstrument) {
+            throw new \LogicException('fake_tp1_trailing_stop_invalid');
+        }
+
+        try {
+            $tick = BigDecimal::of($instrument->priceTick);
+            $remainder = $rawStopPrice->remainder($tick);
+            if ($remainder->isZero()) {
+                return $rawStopPrice;
+            }
+
+            return $positionSide === ExchangePositionSide::LONG
+                ? $rawStopPrice->minus($remainder)
+                : $rawStopPrice->plus($tick->minus($remainder));
+        } catch (MathException) {
+            throw new \LogicException('fake_tp1_trailing_stop_invalid');
+        }
     }
 
     private function trailingChildMatchesActivation(

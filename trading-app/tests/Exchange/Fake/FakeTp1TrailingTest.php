@@ -21,6 +21,7 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeFallbackTakerPolicy;
+use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeTp1TrailingPolicy;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -233,26 +234,20 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount($updateCount, $state->events('trailing_stop.updated'));
     }
 
-    public function testRatchetDerivedStopMustObeyInstrumentTickAndRollsBackPriceMove(): void
+    public function testRatchetDerivedStopQuantizesToInstrumentTick(): void
     {
         [$state, $adapter, $scenario] = $this->exchange();
         $fixture = $this->fixture('long');
         $trailing = $this->armFixture($adapter, $scenario, $fixture);
-        $orderBefore = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
-        $bookBefore = $state->getOrderBookTop('BTCUSDT');
-        $eventsBefore = $state->events();
 
-        try {
-            $scenario->movePrice('BTCUSDT', 25300.03, 0.0);
-            self::fail('Expected the non-quantized ratcheted stop to fail.');
-        } catch (\LogicException $exception) {
-            self::assertSame('fake_tp1_trailing_ratchet_invalid', $exception->getMessage());
-        }
+        $scenario->movePrice('BTCUSDT', 25300.03, 0.0);
 
-        self::assertEquals($orderBefore, $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId));
-        self::assertSame($bookBefore, $state->getOrderBookTop('BTCUSDT'));
-        self::assertEquals($eventsBefore, $state->events());
-        self::assertCount(0, $state->events('trailing_stop.updated'));
+        $updated = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        self::assertSame(25200.0, $updated?->stopPrice);
+        $stopPriceDecimal = $updated?->metadata['stop_price_decimal'] ?? null;
+        self::assertIsString($stopPriceDecimal);
+        self::assertTrue((new FakeInstrumentCatalog())->find('BTCUSDT')?->isPriceQuantized($stopPriceDecimal));
+        self::assertCount(1, $state->events('trailing_stop.updated'));
     }
 
     public function testTp1UsesConfiguredQuantityAndAtomicallyArmsTrailingForRemainder(): void
@@ -284,6 +279,35 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertSame('100.0', $trailing->metadata[FakeTp1TrailingPolicy::TRAILING_OFFSET_KEY] ?? null);
         self::assertSame($tp1->exchangeOrderId, $trailing->metadata['trailing_activation_order_id'] ?? null);
         self::assertCount(1, $state->events('trailing_stop.armed'));
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testDefaultSpreadActivationAndNonTickRatchetQuantizeRuntimeStop(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $this->placeFixtureEntry($adapter, $fixture);
+
+        $scenario->movePrice('BTCUSDT', (float) $fixture['tp1_price']);
+
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $trailing = $this->orderByType($adapter, ExchangeOrderType::TRIGGER);
+        $instrument = (new FakeInstrumentCatalog())->find('BTCUSDT');
+        self::assertNotNull($instrument);
+        self::assertSame(ExchangeOrderStatus::FILLED, $tp1->status);
+        self::assertSame(ExchangeOrderStatus::OPEN, $trailing->status);
+        self::assertIsString($trailing->metadata['stop_price_decimal'] ?? null);
+        self::assertTrue($instrument->isPriceQuantized($trailing->metadata['stop_price_decimal']));
+        self::assertCount(1, $state->events('trailing_stop.armed'));
+
+        $favorableMid = $direction === 'long' ? 25300.03 : 24699.97;
+        $scenario->movePrice('BTCUSDT', $favorableMid);
+
+        $ratcheted = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        self::assertNotNull($ratcheted);
+        self::assertIsString($ratcheted->metadata['stop_price_decimal'] ?? null);
+        self::assertTrue($instrument->isPriceQuantized($ratcheted->metadata['stop_price_decimal']));
+        self::assertCount(1, $state->events('trailing_stop.updated'));
     }
 
     public function testPartialTp1FillKeepsInitialStopUntilConfiguredQuantityCompletes(): void
