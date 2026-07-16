@@ -60,16 +60,6 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             throw new \InvalidArgumentException('Legacy side code conflicts with the OrderSide parameter.');
         }
         $canonicalSide = $legacySide['side'] ?? $requestedSide;
-        $canonicalType = match ($type) {
-            OrderType::LIMIT => $stopPrice !== null ? ExchangeOrderType::STOP_LOSS : ExchangeOrderType::LIMIT,
-            OrderType::MARKET => ExchangeOrderType::MARKET,
-            OrderType::STOP => ExchangeOrderType::STOP_LOSS,
-            OrderType::STOP_LIMIT => throw new \InvalidArgumentException('Fake legacy order type STOP_LIMIT is unsupported.'),
-        };
-        $canonicalPrice = $canonicalType === ExchangeOrderType::MARKET ? null : $price;
-        $this->assertFinite($quantity, 'quantity');
-        $this->assertNullableFinite($canonicalPrice, 'price');
-        $this->assertNullableFinite($stopPrice, 'stopPrice');
         $positionSide = $this->positionSide($options['position_side'] ?? null, $canonicalSide);
         if ($legacySide !== null) {
             if (array_key_exists('position_side', $options) && $positionSide !== $legacySide['positionSide']) {
@@ -91,6 +81,20 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             }
             $reduceOnly = $legacySide['reduceOnly'];
         }
+        $legacyEntryStopPrice = $type === OrderType::LIMIT && !$reduceOnly ? $stopPrice : null;
+        $canonicalType = match ($type) {
+            OrderType::LIMIT => $stopPrice !== null && $reduceOnly
+                ? ExchangeOrderType::STOP_LOSS
+                : ExchangeOrderType::LIMIT,
+            OrderType::MARKET => ExchangeOrderType::MARKET,
+            OrderType::STOP => ExchangeOrderType::STOP_LOSS,
+            OrderType::STOP_LIMIT => throw new \InvalidArgumentException('Fake legacy order type STOP_LIMIT is unsupported.'),
+        };
+        $canonicalPrice = $canonicalType === ExchangeOrderType::MARKET ? null : $price;
+        $canonicalStopPrice = $legacyEntryStopPrice !== null ? null : $stopPrice;
+        $this->assertFinite($quantity, 'quantity');
+        $this->assertNullableFinite($canonicalPrice, 'price');
+        $this->assertNullableFinite($stopPrice, 'stopPrice');
         $legacyMode = $this->legacyMode($options['mode'] ?? null);
         if ($legacyMode !== null) {
             $expectedTimeInForce = match ($legacyMode) {
@@ -110,7 +114,9 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             }
         }
         $attachedStopLoss = $this->nullablePositiveFloat(
-            $options['attached_stop_loss_price'] ?? $options['preset_stop_loss_price'] ?? null,
+            $options['attached_stop_loss_price']
+                ?? $options['preset_stop_loss_price']
+                ?? $legacyEntryStopPrice,
             'attached_stop_loss_price',
         );
         $attachedTakeProfit = $this->nullablePositiveFloat(
@@ -128,7 +134,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
             timeInForce: $timeInForce,
             quantity: $quantity,
             price: $canonicalPrice,
-            stopPrice: $stopPrice,
+            stopPrice: $canonicalStopPrice,
             reduceOnly: $reduceOnly,
             postOnly: $postOnly,
             leverage: $leverage,

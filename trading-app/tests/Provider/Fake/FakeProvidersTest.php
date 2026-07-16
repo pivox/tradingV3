@@ -438,6 +438,47 @@ final class FakeProvidersTest extends TestCase
         self::assertCount(1, $this->fixture->account->getOpenPositions('BTCUSDT'));
     }
 
+    public function testLegacyOpenLimitWithStopCompatibilityKeepsEntryOrderType(): void
+    {
+        $cases = [
+            1 => [OrderSide::BUY, 24950.0, 24500.0, 26000.0, 'long'],
+            4 => [OrderSide::SELL, 25050.0, 25500.0, 24000.0, 'short'],
+        ];
+
+        foreach ($cases as $sideCode => [$side, $price, $stopPrice, $takeProfitPrice, $positionSide]) {
+            $fixture = FakeProviderFixture::create();
+            $placed = $fixture->order->placeOrder(
+                'BTCUSDT',
+                $side,
+                OrderType::LIMIT,
+                1.0,
+                $price,
+                $stopPrice,
+                options: [
+                    'client_order_id' => 'legacy-open-with-stop-' . $sideCode,
+                    'side' => $sideCode,
+                    'open_type' => 'isolated',
+                    'preset_stop_loss_price' => (string) $stopPrice,
+                    'preset_stop_loss_price_type' => 1,
+                    'preset_take_profit_price' => (string) $takeProfitPrice,
+                    'preset_take_profit_price_type' => 1,
+                ],
+            );
+
+            self::assertNotNull($placed);
+            self::assertSame(OrderStatus::PENDING, $placed->status);
+            self::assertSame($positionSide, $placed->metadata['position_side']);
+            self::assertFalse($placed->metadata['reduce_only']);
+
+            $canonical = $fixture->adapter->getOrder('BTCUSDT', $placed->orderId);
+            self::assertNotNull($canonical);
+            self::assertSame(ExchangeOrderType::LIMIT, $canonical->orderType);
+            self::assertNull($canonical->stopPrice);
+            self::assertSame($stopPrice, $canonical->metadata['attached_stop_loss_price'] ?? null);
+            self::assertSame($takeProfitPrice, $canonical->metadata['attached_take_profit_price'] ?? null);
+        }
+    }
+
     public function testOrderProviderRejectsConflictingReduceOnlyAliases(): void
     {
         try {
