@@ -22,7 +22,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'duplicate_client_order_id' => ['executable', []],
         'timeout_after_acceptance' => ['executable', []],
         'stop_loss_attach_success' => ['executable', []],
-        'stop_loss_attach_failure' => ['partial', ['stop_attach_failure_compensation_not_integrated']],
+        'stop_loss_attach_failure' => ['executable', []],
         'tp1_then_trailing' => ['partial', ['trailing_stop_not_implemented']],
         'gap_at_stop_loss' => ['executable', []],
         'websocket_disconnect_resync' => ['executable', []],
