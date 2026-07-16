@@ -186,6 +186,23 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         new FakeExchangeStateStore($this->stateFile);
     }
 
+    public function testExplicitNullPrivateWsStateFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->reset();
+
+        $envelope = unserialize((string) file_get_contents($this->stateFile), ['allowed_classes' => true]);
+        self::assertIsArray($envelope);
+        self::assertIsArray($envelope['payload'] ?? null);
+        $envelope['payload']['privateWs'] = null;
+        $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+        file_put_contents($this->stateFile, serialize($envelope));
+
+        $this->expectException(FakeExchangeStateCorruptedException::class);
+        $this->expectExceptionMessage('fake_exchange_state_shape_invalid');
+        new FakeExchangeStateStore($this->stateFile);
+    }
+
     /**
      * @param list<int> $sequences
      */

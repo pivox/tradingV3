@@ -1065,7 +1065,9 @@ class FakeExchangeStateStore
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
         $pendingFaults = $state['pendingFaults'] ?? [];
-        $privateWs = $state['privateWs'] ?? self::defaultPrivateWsState();
+        $privateWs = array_key_exists('privateWs', $state)
+            ? $state['privateWs']
+            : self::defaultPrivateWsState();
         if (
             !\is_int($nextOrderSequence) || $nextOrderSequence < 1
             || !$this->isTypedMap($orders, ExchangeOrderDto::class)
