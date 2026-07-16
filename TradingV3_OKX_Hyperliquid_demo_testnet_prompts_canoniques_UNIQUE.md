@@ -10,7 +10,7 @@
 | Ordre | Prompt | Statut | Branche | PR | HEAD validé | Profil final | CI | Revue Codex | Terminé UTC |
 |---:|---|---|---|---:|---|---|---|---|---|
 | 1 | #196 — Fallback taker de fin de zone | done | issue/196-fake-fallback-taker-v1 | #282 | 4186abf243a035af16f7672bc493c225d31112d3 | worker_critical → review_fix | verte | favorable sur 4186abf243 | 2026-07-16T14:18:05Z |
-| 2 | #196 — TP1 puis trailing stop | in_progress | issue/196-fake-tp1-trailing-v1 | — | — | worker_critical | — | — | — |
+| 2 | #196 — TP1 puis trailing stop | done | issue/196-fake-tp1-trailing-v1 | #283 | 39b92b9f051d5e423c75fc0ac0964f462b39530e | worker_critical → review_fix → review_escalated | verte | favorable sur 39b92b9f05 | 2026-07-16T19:11:21Z |
 | 3 | #196 — Injection out-of-order | pending | — | — | — | — | — | — | — |
 | 4 | #196 — Funding positif/négatif | pending | — | — | — | — | — | — | — |
 | 5 | #196 — Garde One-Way | pending | — | — | — | — | — | — | — |
