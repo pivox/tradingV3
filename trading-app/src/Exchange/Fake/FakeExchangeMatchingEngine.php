@@ -1189,9 +1189,17 @@ final readonly class FakeExchangeMatchingEngine
             $protectedQuantityDecimalValue = BigDecimal::of(self::canonicalFloat(
                 $this->protectionQuantity($parentOrder),
             ));
-            $quantityDecimalValue = $protectedQuantityDecimalValue
+            $protectedRemainderDecimalValue = $protectedQuantityDecimalValue
                 ->minus($this->orderFilledQuantityDecimal($tp1Order))
                 ->stripTrailingZeros();
+            $positionRemainingDecimalValue = BigDecimal::of(self::canonicalFloat(
+                $positionRemainingQuantity,
+            ));
+            $quantityDecimalValue = $protectedRemainderDecimalValue->isLessThan(
+                $positionRemainingDecimalValue,
+            )
+                ? $protectedRemainderDecimalValue
+                : $positionRemainingDecimalValue;
             $watermarkDecimalValue = BigDecimal::of(self::canonicalFloat($watermark));
             $rawStopPriceDecimalValue = $tp1Order->positionSide === ExchangePositionSide::LONG
                 ? $watermarkDecimalValue->minus($policy->trailingOffset)

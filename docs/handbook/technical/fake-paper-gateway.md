@@ -316,6 +316,13 @@ SL avec `tp1_replaced_by_trailing`, puis la creation d un `TRIGGER` reduce-only
 sur ce reliquat. La transition normalisee `trailing_stop.armed` porte le lineage
 derive et redacted.
 
+Si une sortie reduce-only manuelle a deja diminue la position avant la fin de
+TP1, la quantite trailing est le minimum entre le reliquat protege planifie et
+l exposition agregee encore ouverte apres TP1. Elle ne peut donc ni depasser la
+position courante, ni absorber une exposition anterieure au-dela du reliquat de
+l entree protegee. Le modele Fake agrege les positions par symbole et cote : il
+ne pretend pas attribuer cette reduction manuelle a un lot d entree precis.
+
 Si l entree utilise aussi le fallback taker de fin de zone, la politique trailing
 est propagee a l enfant `MARKET`. La quantite TP1 est alors validee contre
 l exposition logique totale parent plus enfant, jamais contre le seul petit

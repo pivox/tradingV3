@@ -305,18 +305,83 @@ final class FakeTp1TrailingTest extends TestCase
         $fixture = $this->fixture('long');
         $this->placeFixtureEntry($adapter, $fixture);
         self::assertSame(2.0, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        $manualExit = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::SELL,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.1,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'pre-existing-long-manual-reduce',
+            quantityDecimal: '0.1',
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $manualExit->status);
+        self::assertSame(1.9, $adapter->getOpenPositions('BTCUSDT')[0]->size);
 
         $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
         $scenario->fillOrder($tp1->exchangeOrderId, null, (float) $fixture['tp1_price']);
 
         $trailing = $this->orderByType($adapter, ExchangeOrderType::TRIGGER);
-        self::assertSame(1.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(1.5, $adapter->getOpenPositions('BTCUSDT')[0]->size);
         self::assertSame(0.6, $trailing->quantity);
         self::assertSame('0.6', $trailing->metadata['quantity_decimal'] ?? null);
 
         $scenario->fillOrder($trailing->exchangeOrderId);
 
-        self::assertSame(1.0, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(0.9, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+    }
+
+    #[DataProvider('directionProvider')]
+    public function testManualReductionBeforeTp1CapsTrailingToActualPostTp1Exposure(string $direction): void
+    {
+        [, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture($direction);
+        $this->placeFixtureEntry($adapter, $fixture);
+        $manualExit = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::from((string) $fixture['exit_side']),
+            positionSide: ExchangePositionSide::from((string) $fixture['position_side']),
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.1,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'manual-reduce-before-tp1-' . $direction,
+            quantityDecimal: '0.1',
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $manualExit->status);
+        self::assertSame(0.9, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+
+        $filledTp1 = $scenario->fillOrder(
+            $tp1->exchangeOrderId,
+            null,
+            (float) $fixture['tp1_price'],
+        );
+
+        $trailing = $this->orderByType($adapter, ExchangeOrderType::TRIGGER);
+        self::assertSame(ExchangeOrderStatus::FILLED, $filledTp1?->status);
+        self::assertSame(0.5, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(0.5, $trailing->quantity);
+        self::assertSame('0.5', $trailing->metadata['quantity_decimal'] ?? null);
+
+        $scenario->fillOrder($trailing->exchangeOrderId);
+
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
     }
 
     #[DataProvider('directionProvider')]
