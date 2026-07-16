@@ -20,6 +20,6 @@ enum FakeExchangeOperation: string
 
     public function isMutation(): bool
     {
-        return $this === self::PlaceOrder || $this === self::CancelOrder;
+        return \in_array($this, [self::PlaceOrder, self::CancelOrder, self::SetLeverage], true);
     }
 }

@@ -25,6 +25,8 @@ use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
@@ -35,12 +37,16 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     private const FEE_RATE = 0.0005;
     private const MARGIN_MODEL_VERSION = 'fake-derived-initial-margin-v1';
 
+    private FakeInstrumentProviderInterface $instruments;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
         private FakeExchangeMatchingEngine $matchingEngine,
         private ClockInterface $clock,
+        ?FakeInstrumentProviderInterface $instruments = null,
     ) {
+        $this->instruments = $instruments ?? new FakeInstrumentCatalog();
     }
 
     public function exchange(): Exchange
@@ -238,11 +244,48 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     {
         $this->throwInjectedFault(FakeExchangeOperation::SetLeverage, FakeExchangeFaultOutcome::NotApplied);
 
-        if (trim($symbol) === '' || $leverage <= 0 || trim($marginMode) === '') {
+        if (
+            $symbol === ''
+            || trim($symbol) !== $symbol
+            || strtoupper($symbol) !== $symbol
+            || $leverage <= 0
+            || !\in_array($marginMode, ['isolated', 'cross'], true)
+        ) {
             return false;
         }
 
-        return true;
+        $instrument = $this->instruments->find($symbol);
+        if ($instrument === null || $leverage > $instrument->maxLeverage) {
+            return false;
+        }
+
+        $execution = $this->stateStore->runWithAppliedResponseLoss(
+            FakeExchangeOperation::SetLeverage,
+            function () use ($symbol, $leverage, $marginMode): bool {
+                $setting = ['leverage' => $leverage, 'margin_mode' => $marginMode];
+                if ($this->stateStore->getLeverageSetting($symbol) === $setting) {
+                    return true;
+                }
+
+                $this->stateStore->setLeverageSetting($symbol, $leverage, $marginMode);
+                $this->stateStore->appendEvent(new FakeExchangeEvent(
+                    type: 'leverage.updated',
+                    symbol: $symbol,
+                    occurredAt: $this->clock->now(),
+                    payload: [
+                        'leverage' => $leverage,
+                        'margin_mode' => $marginMode,
+                    ],
+                ));
+
+                return true;
+            },
+        );
+        if ($execution['fault'] !== null) {
+            throw new FakeExchangeInjectedException($execution['fault']);
+        }
+
+        return $execution['result'];
     }
 
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult

@@ -229,6 +229,187 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame('fake-derived-initial-margin-v1', $balance->metadata['margin_model_version'] ?? null);
     }
 
+    /**
+     * @return iterable<string,array{string,int,string}>
+     */
+    public static function invalidLeverageSettings(): iterable
+    {
+        yield 'unknown symbol' => ['SOLUSDT', 25, 'isolated'];
+        yield 'lowercase symbol' => ['btcusdt', 25, 'isolated'];
+        yield 'zero leverage' => ['BTCUSDT', 0, 'isolated'];
+        yield 'negative leverage' => ['BTCUSDT', -1, 'isolated'];
+        yield 'above instrument maximum' => ['BTCUSDT', 101, 'isolated'];
+        yield 'unsupported margin mode' => ['BTCUSDT', 25, 'portfolio'];
+    }
+
+    #[DataProvider('invalidLeverageSettings')]
+    public function testSetLeverageRejectsInvalidSettingWithoutMutatingState(
+        string $symbol,
+        int $leverage,
+        string $marginMode,
+    ): void
+    {
+        self::assertFalse($this->adapter->setLeverage($symbol, $leverage, $marginMode));
+        self::assertSame([], $this->state->leverageSettings());
+        self::assertSame([], $this->state->events('leverage.updated'));
+    }
+
+    public function testSetLeveragePersistsStableSettingAndRedactedEvent(): void
+    {
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
+        self::assertSame(
+            ['leverage' => 25, 'margin_mode' => 'isolated'],
+            $this->state->getLeverageSetting('BTCUSDT'),
+        );
+        self::assertSame([
+            'BTCUSDT' => ['leverage' => 25, 'margin_mode' => 'isolated'],
+        ], $this->state->leverageSettings());
+
+        $events = $this->state->events('leverage.updated');
+        self::assertCount(1, $events);
+        self::assertSame('BTCUSDT', $events[0]->symbol);
+        self::assertEquals($this->fixedClock()->now(), $events[0]->occurredAt);
+        self::assertSame([
+            'event_sequence' => 1,
+            'leverage' => 25,
+            'margin_mode' => 'isolated',
+        ], $events[0]->payload);
+    }
+
+    public function testSetLeverageReplacesExistingSymbolSettingDeterministically(): void
+    {
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 10, 'cross'));
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
+
+        self::assertSame([
+            'BTCUSDT' => ['leverage' => 25, 'margin_mode' => 'isolated'],
+        ], $this->state->leverageSettings());
+        self::assertCount(2, $this->state->events('leverage.updated'));
+    }
+
+    public function testStateStoreRejectsInvalidLeverageSettingWithoutMutation(): void
+    {
+        try {
+            $this->state->setLeverageSetting('btcusdt', 25, 'isolated');
+            self::fail('The state store must reject a non-canonical symbol.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('fake_leverage_setting_invalid', $exception->getMessage());
+        }
+
+        self::assertSame([], $this->state->leverageSettings());
+    }
+
+    public function testLeverageSettingSurvivesRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_leverage_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            self::assertTrue($this->adapterForState($state)->setLeverage('BTCUSDT', 25, 'isolated'));
+
+            $restored = new FakeExchangeStateStore($stateFile);
+
+            self::assertSame(
+                ['leverage' => 25, 'margin_mode' => 'isolated'],
+                $restored->getLeverageSetting('BTCUSDT'),
+            );
+            self::assertSame([
+                'BTCUSDT' => ['leverage' => 25, 'margin_mode' => 'isolated'],
+            ], $restored->leverageSettings());
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testPreviousVersionedPayloadWithoutLeverageSettingsUpgradesOnNextWrite(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_leverage_v1_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            new FakeExchangeStateStore($stateFile);
+            $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            self::assertIsArray($envelope['payload'] ?? null);
+            unset($envelope['payload']['leverageSettings']);
+            $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+            file_put_contents($stateFile, serialize($envelope));
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            self::assertSame([], $restored->leverageSettings());
+
+            self::assertTrue($this->adapterForState($restored)->setLeverage('BTCUSDT', 25, 'isolated'));
+            $upgraded = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($upgraded);
+            self::assertIsArray($upgraded['payload'] ?? null);
+            self::assertSame([
+                'BTCUSDT' => ['leverage' => 25, 'margin_mode' => 'isolated'],
+            ], $upgraded['payload']['leverageSettings'] ?? null);
+            self::assertSame(
+                hash('sha256', serialize($upgraded['payload'])),
+                $upgraded['payload_checksum'] ?? null,
+            );
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testStateStoreRejectsMalformedPersistedLeverageSettings(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_leverage_shape_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            new FakeExchangeStateStore($stateFile);
+            $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            self::assertIsArray($envelope['payload'] ?? null);
+            $envelope['payload']['leverageSettings'] = [
+                'BTCUSDT' => ['leverage' => '25', 'margin_mode' => 'isolated'],
+            ];
+            $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+            file_put_contents($stateFile, serialize($envelope));
+
+            $this->expectException(FakeExchangeStateCorruptedException::class);
+            $this->expectExceptionMessage('fake_exchange_state_shape_invalid');
+            new FakeExchangeStateStore($stateFile);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testSetLeverageRollsBackSettingWhenEventAppendFails(): void
+    {
+        $state = new class extends FakeExchangeStateStore {
+            public function appendEvent(\App\Exchange\Fake\FakeExchangeEvent $event): void
+            {
+                if ($event->type === 'leverage.updated') {
+                    throw new \RuntimeException('forced_leverage_event_failure');
+                }
+
+                parent::appendEvent($event);
+            }
+        };
+        $adapter = $this->adapterForState($state);
+
+        try {
+            $adapter->setLeverage('BTCUSDT', 25, 'isolated');
+            self::fail('The event append failure must abort the leverage update.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('forced_leverage_event_failure', $exception->getMessage());
+        }
+
+        self::assertSame([], $state->leverageSettings());
+        self::assertSame([], $state->events('leverage.updated'));
+    }
+
     public function testAvailableMarginUsesLowerFiniteEquityAsCollateral(): void
     {
         $this->replaceUsdtBalance(total: 100000.0, equity: 75000.0);

@@ -49,6 +49,9 @@ class FakeExchangeStateStore
     /** @var array<string, array{bid: float, ask: float}> */
     private array $orderBooks = [];
 
+    /** @var array<string, array{leverage:int,margin_mode:string}> */
+    private array $leverageSettings = [];
+
     /** @var FakeExchangeEvent[] */
     private array $events = [];
 
@@ -79,6 +82,7 @@ class FakeExchangeStateStore
         $this->clientOrderIndex = [];
         $this->positions = [];
         $this->orderBooks = [];
+        $this->leverageSettings = [];
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
         $this->pendingFaults = [];
@@ -369,6 +373,30 @@ class FakeExchangeStateStore
         $this->persist();
     }
 
+    public function setLeverageSetting(string $symbol, int $leverage, string $marginMode): void
+    {
+        $setting = ['leverage' => $leverage, 'margin_mode' => $marginMode];
+        if (!$this->isLeverageSettingsMap([$symbol => $setting])) {
+            throw new \InvalidArgumentException('fake_leverage_setting_invalid');
+        }
+
+        $this->leverageSettings[$symbol] = $setting;
+        ksort($this->leverageSettings);
+        $this->persist();
+    }
+
+    /** @return array{leverage:int,margin_mode:string}|null */
+    public function getLeverageSetting(string $symbol): ?array
+    {
+        return $this->leverageSettings[$symbol] ?? null;
+    }
+
+    /** @return array<string, array{leverage:int,margin_mode:string}> */
+    public function leverageSettings(): array
+    {
+        return $this->leverageSettings;
+    }
+
     public function appendEvent(FakeExchangeEvent $event): void
     {
         $payload = $event->payload;
@@ -466,6 +494,15 @@ class FakeExchangeStateStore
         FakeExchangeOperation $operation,
         FakeExchangeFaultOutcome $outcome,
     ): ?FakeExchangeFault {
+        return $this->transactional(
+            fn (): ?FakeExchangeFault => $this->consumeFaultFromCurrentState($operation, $outcome),
+        );
+    }
+
+    private function consumeFaultFromCurrentState(
+        FakeExchangeOperation $operation,
+        FakeExchangeFaultOutcome $outcome,
+    ): ?FakeExchangeFault {
         $index = $this->firstFaultIndex($operation);
         if ($index === null) {
             return null;
@@ -477,7 +514,6 @@ class FakeExchangeStateStore
         }
 
         $this->removeFaultAt($index);
-        $this->persist();
 
         return $fault;
     }
@@ -709,6 +745,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
@@ -779,6 +816,7 @@ class FakeExchangeStateStore
         $positions = $state['positions'] ?? null;
         $balances = $state['balances'] ?? null;
         $orderBooks = $state['orderBooks'] ?? null;
+        $leverageSettings = $state['leverageSettings'] ?? [];
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
         $pendingFaults = $state['pendingFaults'] ?? [];
@@ -789,6 +827,7 @@ class FakeExchangeStateStore
             || !$this->isTypedMap($positions, ExchangePositionDto::class)
             || !$this->isTypedMap($balances, ExchangeBalanceDto::class)
             || !$this->isOrderBookMap($orderBooks)
+            || !$this->isLeverageSettingsMap($leverageSettings)
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
             || !$this->isFaultQueue($pendingFaults)
@@ -802,6 +841,7 @@ class FakeExchangeStateStore
         $this->positions = $positions;
         $this->balances = $balances;
         $this->orderBooks = $orderBooks;
+        $this->leverageSettings = $leverageSettings;
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
         $this->pendingFaults = array_values($pendingFaults);
@@ -919,6 +959,34 @@ class FakeExchangeStateStore
         return true;
     }
 
+    private function isLeverageSettingsMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $symbol => $setting) {
+            if (
+                !\is_string($symbol)
+                || $symbol === ''
+                || trim($symbol) !== $symbol
+                || strtoupper($symbol) !== $symbol
+                || !\is_array($setting)
+                || \count($setting) !== 2
+                || !\array_key_exists('leverage', $setting)
+                || !\array_key_exists('margin_mode', $setting)
+                || !\is_int($setting['leverage'])
+                || $setting['leverage'] <= 0
+                || !\is_string($setting['margin_mode'])
+                || !\in_array($setting['margin_mode'], ['isolated', 'cross'], true)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function isFaultQueue(mixed $value): bool
     {
         if (!\is_array($value) || !array_is_list($value)) {
@@ -1021,6 +1089,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
@@ -1041,6 +1110,7 @@ class FakeExchangeStateStore
         $this->positions = $snapshot['positions'];
         $this->balances = $snapshot['balances'];
         $this->orderBooks = $snapshot['orderBooks'];
+        $this->leverageSettings = $snapshot['leverageSettings'];
         $this->events = $snapshot['events'];
         $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];
         $this->pendingFaults = $snapshot['pendingFaults'];
