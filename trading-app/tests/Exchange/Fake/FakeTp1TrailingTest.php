@@ -459,7 +459,7 @@ final class FakeTp1TrailingTest extends TestCase
     }
 
     #[DataProvider('fallbackProtectionFailureProvider')]
-    public function testFallbackProtectionRejectsTp1ThatWouldConsumePartialExposureWithoutMutation(
+    public function testFallbackProtectionCompensatesWhenTp1WouldConsumePartialExposure(
         bool $rejectFallbackOrder,
     ): void {
         $state = new class extends FakeExchangeStateStore {
@@ -506,24 +506,25 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertNotNull($parent->exchangeOrderId);
         $scenario->fillOrder($parent->exchangeOrderId, 0.2, 24950.0);
         $state->rejectEntryOrder = $rejectFallbackOrder;
-        $ordersBefore = $state->getOrders('BTCUSDT');
-        $positionsBefore = $state->getOpenPositions('BTCUSDT');
-        $eventsBefore = $state->events();
-        $bookBefore = $state->getOrderBookTop('BTCUSDT');
+        $result = $scenario->fallbackTaker($parent->exchangeOrderId);
 
-        try {
-            $scenario->fallbackTaker($parent->exchangeOrderId);
-            self::fail('Expected TP1 equal to or above partial protected exposure to fail.');
-        } catch (\LogicException $exception) {
-            self::assertSame('fake_tp1_trailing_quantity_invalid', $exception->getMessage());
-        }
-
-        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
-        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
-        self::assertEquals($eventsBefore, $state->events());
-        self::assertSame($bookBefore, $state->getOrderBookTop('BTCUSDT'));
-        self::assertSame(0.2, $adapter->getOpenPositions('BTCUSDT')[0]->size);
-        self::assertCount(1, $state->getOrders('BTCUSDT'));
+        self::assertFalse($result->executed);
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertSame(
+            'reduce_only_market_close',
+            $result->parentOrder?->metadata['fail_safe_action'] ?? null,
+        );
+        self::assertSame(
+            'fake_tp1_trailing_quantity_invalid',
+            $result->parentOrder?->metadata['protection_reject_reason'] ?? null,
+        );
+        self::assertTrue($result->parentOrder?->metadata['position_flat_after_compensation'] ?? false);
+        self::assertCount(1, array_filter(
+            $state->getOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->reduceOnly
+                && $order->orderType === ExchangeOrderType::MARKET
+                && $order->status === ExchangeOrderStatus::FILLED,
+        ));
         self::assertCount(0, array_filter(
             $adapter->getOpenOrders('BTCUSDT'),
             static fn (ExchangeOrderDto $order): bool => \in_array(
@@ -895,6 +896,8 @@ final class FakeTp1TrailingTest extends TestCase
             'watermark',
             'watermark_decimal',
             'watermark_decimal_missing',
+            'protection_kind',
+            'protection_kind_missing',
         ] as $conflict) {
             yield $conflict => [$conflict];
         }
@@ -1135,11 +1138,13 @@ final class FakeTp1TrailingTest extends TestCase
             'quantity_decimal_missing',
             'stop_price_decimal_missing',
             'watermark_decimal_missing',
+            'protection_kind_missing',
         ], true)) {
             unset($metadata[match ($conflict) {
                 'quantity_decimal_missing' => 'quantity_decimal',
                 'stop_price_decimal_missing' => 'stop_price_decimal',
                 'watermark_decimal_missing' => 'trailing_watermark_decimal',
+                'protection_kind_missing' => 'protection_kind',
             }]);
         } else {
             match ($conflict) {
@@ -1158,6 +1163,7 @@ final class FakeTp1TrailingTest extends TestCase
                 'stop_price_decimal' => $metadata['stop_price_decimal'] = '25100.1',
                 'watermark' => $metadata['trailing_watermark'] = 25200.1,
                 'watermark_decimal' => $metadata['trailing_watermark_decimal'] = '25200.1',
+                'protection_kind' => $metadata['protection_kind'] = 'sl',
                 default => throw new \LogicException('Unknown persisted trailing conflict ' . $conflict),
             };
         }

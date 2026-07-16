@@ -879,7 +879,26 @@ final readonly class FakeExchangeMatchingEngine
             return $entryOrder;
         }
         if ($trailingPolicy instanceof FakeTp1TrailingPolicy) {
-            $this->assertTp1QuantityBelowProtectedExposure($entryOrder, $trailingPolicy);
+            try {
+                $this->assertTp1QuantityBelowProtectedExposure($entryOrder, $trailingPolicy);
+            } catch (\LogicException $exception) {
+                if ($exception->getMessage() !== 'fake_tp1_trailing_quantity_invalid') {
+                    throw $exception;
+                }
+
+                $metadata = array_replace($entryOrder->metadata, [
+                    'attached_protection_processed' => true,
+                    'protection_status' => 'rejected',
+                    'protection_reject_reason' => 'fake_tp1_trailing_quantity_invalid',
+                ]);
+                $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, $metadata);
+                $this->stateStore->saveOrder($updated);
+                $this->appendEvent('protection_order.rejected', $updated, [
+                    'reason' => 'fake_tp1_trailing_quantity_invalid',
+                ]);
+
+                return $this->compensateRejectedProtection($updated);
+            }
         }
 
         $metadata = array_replace($entryOrder->metadata, ['attached_protection_processed' => true]);
@@ -1401,7 +1420,13 @@ final readonly class FakeExchangeMatchingEngine
 
     private function isPersistedTrailingOrder(ExchangeOrderDto $order): bool
     {
-        return $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing';
+        return $order->orderType === ExchangeOrderType::TRIGGER
+            || $this->stringMetadata($order->metadata, 'protection_kind') === 'trailing'
+            || \array_key_exists('trailing_state_version', $order->metadata)
+            || \array_key_exists('trailing_state_status', $order->metadata)
+            || \array_key_exists('trailing_activation_order_id', $order->metadata)
+            || \array_key_exists('trailing_watermark', $order->metadata)
+            || \array_key_exists('trailing_watermark_decimal', $order->metadata);
     }
 
     private function assertPersistedActiveTrailingOrderValid(ExchangeOrderDto $order): void
@@ -1446,6 +1471,7 @@ final readonly class FakeExchangeMatchingEngine
             || !\is_finite((float) $watermark)
             || (float) $watermark <= 0.0
             || !\is_string($watermarkDecimal)
+            || $this->stringMetadata($order->metadata, 'protection_kind') !== 'trailing'
             || $this->stringMetadata($order->metadata, 'trailing_state_version') !== FakeTp1TrailingPolicy::VERSION
             || $this->stringMetadata($order->metadata, 'trailing_state_status') !== 'active'
             || $this->stringMetadata($order->metadata, 'parent_order_id') === null
