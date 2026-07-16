@@ -49,6 +49,9 @@ class FakeExchangeStateStore
     /** @var array<string, array{bid: float, ask: float}> */
     private array $orderBooks = [];
 
+    /** @var array<string, array{leverage:int,margin_mode:string}> */
+    private array $leverageSettings = [];
+
     /** @var FakeExchangeEvent[] */
     private array $events = [];
 
@@ -65,11 +68,17 @@ class FakeExchangeStateStore
     ) {
         $this->stateFile = $stateFile;
         if (!$this->restore()) {
-            $this->reset();
+            $this->initializeDefaults();
         }
     }
 
     public function reset(): void
+    {
+        $this->initializeDefaults();
+        $this->persist();
+    }
+
+    private function initializeDefaults(): void
     {
         $this->nextOrderSequence = 1;
         $this->nextEventSequence = 1;
@@ -79,6 +88,7 @@ class FakeExchangeStateStore
         $this->clientOrderIndex = [];
         $this->positions = [];
         $this->orderBooks = [];
+        $this->leverageSettings = [];
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
         $this->pendingFaults = [];
@@ -94,7 +104,6 @@ class FakeExchangeStateStore
                 metadata: ['source' => 'fake_exchange'],
             ),
         ];
-        $this->persist();
     }
 
     /**
@@ -260,6 +269,87 @@ class FakeExchangeStateStore
         return array_values($this->balances);
     }
 
+    public function totalBalanceUsdt(): float
+    {
+        $balance = $this->balances['USDT'] ?? null;
+        if (!$balance instanceof ExchangeBalanceDto) {
+            throw new \LogicException('fake_usdt_balance_unavailable');
+        }
+
+        $total = $balance->total ?? $balance->equity ?? $balance->available;
+        if (!\is_finite($total)) {
+            throw new \LogicException('fake_usdt_balance_total_invalid');
+        }
+
+        return $total;
+    }
+
+    public function usedMarginUsdt(): float
+    {
+        $usedMargin = 0.0;
+        foreach ($this->getOpenPositions() as $position) {
+            if ($position->margin === null || !\is_finite($position->margin) || $position->margin < 0.0) {
+                throw new \LogicException('fake_position_margin_unavailable');
+            }
+
+            $usedMargin += $position->margin;
+        }
+
+        foreach ($this->getOpenOrders() as $order) {
+            if ($order->reduceOnly) {
+                continue;
+            }
+
+            $price = $this->marginReferencePrice($order);
+            $leverage = $order->metadata['leverage'] ?? 1;
+            if (!\is_numeric($leverage) || !\is_finite((float) $leverage) || (float) $leverage <= 0.0) {
+                throw new \LogicException('fake_order_margin_leverage_unavailable');
+            }
+            if (!\is_finite($order->remainingQuantity) || $order->remainingQuantity < 0.0) {
+                throw new \LogicException('fake_order_remaining_quantity_invalid');
+            }
+
+            // Version-1 persisted orders predate contract-size metadata and use the original unit contract.
+            $contractSize = $order->metadata['margin_contract_size'] ?? 1;
+            if (!\is_numeric($contractSize) || !\is_finite((float) $contractSize) || (float) $contractSize <= 0.0) {
+                throw new \LogicException('fake_order_margin_contract_size_unavailable');
+            }
+
+            $usedMargin += ($order->remainingQuantity * $price * (float) $contractSize) / (float) $leverage;
+        }
+
+        if (!\is_finite($usedMargin) || $usedMargin < 0.0) {
+            throw new \LogicException('fake_used_margin_invalid');
+        }
+
+        return $usedMargin;
+    }
+
+    public function marginCollateralUsdt(): float
+    {
+        $balance = $this->balances['USDT'] ?? null;
+        if (!$balance instanceof ExchangeBalanceDto) {
+            throw new \LogicException('fake_usdt_balance_unavailable');
+        }
+
+        $total = $balance->total ?? $balance->equity ?? $balance->available;
+        $equity = $balance->equity;
+        if (
+            !\is_finite($total)
+            || $total < 0.0
+            || ($equity !== null && (!\is_finite($equity) || $equity < 0.0))
+        ) {
+            throw new \LogicException('fake_usdt_margin_collateral_invalid');
+        }
+
+        return $equity !== null ? min($total, $equity) : $total;
+    }
+
+    public function availableMarginUsdt(): float
+    {
+        return max($this->marginCollateralUsdt() - $this->usedMarginUsdt(), 0.0);
+    }
+
     /**
      * @return array{bid: float, ask: float}
      */
@@ -267,7 +357,10 @@ class FakeExchangeStateStore
     {
         $symbol = strtoupper($symbol);
 
-        return $this->orderBooks[$symbol] ?? ['bid' => 24999.5, 'ask' => 25000.5];
+        return $this->orderBooks[$symbol] ?? match ($symbol) {
+            'ETHUSDT' => ['bid' => 1799.5, 'ask' => 1800.5],
+            default => ['bid' => 24999.5, 'ask' => 25000.5],
+        };
     }
 
     public function hasOrderBookTop(string $symbol): bool
@@ -283,6 +376,30 @@ class FakeExchangeStateStore
 
         $this->orderBooks[strtoupper($symbol)] = ['bid' => $bid, 'ask' => $ask];
         $this->persist();
+    }
+
+    public function setLeverageSetting(string $symbol, int $leverage, string $marginMode): void
+    {
+        $setting = ['leverage' => $leverage, 'margin_mode' => $marginMode];
+        if (!$this->isLeverageSettingsMap([$symbol => $setting])) {
+            throw new \InvalidArgumentException('fake_leverage_setting_invalid');
+        }
+
+        $this->leverageSettings[$symbol] = $setting;
+        ksort($this->leverageSettings);
+        $this->persist();
+    }
+
+    /** @return array{leverage:int,margin_mode:string}|null */
+    public function getLeverageSetting(string $symbol): ?array
+    {
+        return $this->leverageSettings[$symbol] ?? null;
+    }
+
+    /** @return array<string, array{leverage:int,margin_mode:string}> */
+    public function leverageSettings(): array
+    {
+        return $this->leverageSettings;
     }
 
     public function appendEvent(FakeExchangeEvent $event): void
@@ -382,6 +499,15 @@ class FakeExchangeStateStore
         FakeExchangeOperation $operation,
         FakeExchangeFaultOutcome $outcome,
     ): ?FakeExchangeFault {
+        return $this->transactional(
+            fn (): ?FakeExchangeFault => $this->consumeFaultFromCurrentState($operation, $outcome),
+        );
+    }
+
+    private function consumeFaultFromCurrentState(
+        FakeExchangeOperation $operation,
+        FakeExchangeFaultOutcome $outcome,
+    ): ?FakeExchangeFault {
         $index = $this->firstFaultIndex($operation);
         if ($index === null) {
             return null;
@@ -393,7 +519,6 @@ class FakeExchangeStateStore
         }
 
         $this->removeFaultAt($index);
-        $this->persist();
 
         return $fault;
     }
@@ -407,17 +532,17 @@ class FakeExchangeStateStore
         FakeExchangeOperation $operation,
         callable $operationCallback,
     ): array {
-        $index = $this->firstFaultIndex($operation);
-        if ($index === null) {
-            return ['result' => $operationCallback(), 'fault' => null];
-        }
+        return $this->transactional(function () use ($operation, $operationCallback): array {
+            $index = $this->firstFaultIndex($operation);
+            if ($index === null) {
+                return ['result' => $operationCallback(), 'fault' => null];
+            }
 
-        $fault = FakeExchangeFault::fromArray($this->pendingFaults[$index]);
-        if ($fault->outcome !== FakeExchangeFaultOutcome::AppliedResponseLost) {
-            return ['result' => $operationCallback(), 'fault' => null];
-        }
+            $fault = FakeExchangeFault::fromArray($this->pendingFaults[$index]);
+            if ($fault->outcome !== FakeExchangeFaultOutcome::AppliedResponseLost) {
+                return ['result' => $operationCallback(), 'fault' => null];
+            }
 
-        return $this->transactional(function () use ($index, $fault, $operationCallback): array {
             $eventsBefore = \count($this->events);
             $this->removeFaultAt($index);
             $this->persist();
@@ -485,6 +610,24 @@ class FakeExchangeStateStore
     private function positionKey(string $symbol, ExchangePositionSide $side): string
     {
         return strtoupper($symbol) . '::' . $side->value;
+    }
+
+    private function marginReferencePrice(ExchangeOrderDto $order): float
+    {
+        $price = $order->price ?? $order->averagePrice;
+        if (
+            $price === null
+            && ($order->metadata['margin_reference_source'] ?? null) === 'top_of_book'
+            && \is_numeric($order->metadata['margin_reference_price'] ?? null)
+        ) {
+            $price = (float) $order->metadata['margin_reference_price'];
+        }
+
+        if ($price === null || !\is_finite($price) || $price <= 0.0) {
+            throw new \LogicException('fake_order_margin_reference_price_unavailable');
+        }
+
+        return $price;
     }
 
     private function isActiveStatus(ExchangeOrderStatus $status): bool
@@ -607,6 +750,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
@@ -677,6 +821,7 @@ class FakeExchangeStateStore
         $positions = $state['positions'] ?? null;
         $balances = $state['balances'] ?? null;
         $orderBooks = $state['orderBooks'] ?? null;
+        $leverageSettings = $state['leverageSettings'] ?? [];
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
         $pendingFaults = $state['pendingFaults'] ?? [];
@@ -687,6 +832,7 @@ class FakeExchangeStateStore
             || !$this->isTypedMap($positions, ExchangePositionDto::class)
             || !$this->isTypedMap($balances, ExchangeBalanceDto::class)
             || !$this->isOrderBookMap($orderBooks)
+            || !$this->isLeverageSettingsMap($leverageSettings)
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
             || !$this->isFaultQueue($pendingFaults)
@@ -700,6 +846,7 @@ class FakeExchangeStateStore
         $this->positions = $positions;
         $this->balances = $balances;
         $this->orderBooks = $orderBooks;
+        $this->leverageSettings = $leverageSettings;
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
         $this->pendingFaults = array_values($pendingFaults);
@@ -817,6 +964,34 @@ class FakeExchangeStateStore
         return true;
     }
 
+    private function isLeverageSettingsMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $symbol => $setting) {
+            if (
+                !\is_string($symbol)
+                || $symbol === ''
+                || trim($symbol) !== $symbol
+                || strtoupper($symbol) !== $symbol
+                || !\is_array($setting)
+                || \count($setting) !== 2
+                || !\array_key_exists('leverage', $setting)
+                || !\array_key_exists('margin_mode', $setting)
+                || !\is_int($setting['leverage'])
+                || $setting['leverage'] <= 0
+                || !\is_string($setting['margin_mode'])
+                || !\in_array($setting['margin_mode'], ['isolated', 'cross'], true)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function isFaultQueue(mixed $value): bool
     {
         if (!\is_array($value) || !array_is_list($value)) {
@@ -849,21 +1024,61 @@ class FakeExchangeStateStore
             throw new \LogicException('fake_exchange_state_nested_transaction_not_supported');
         }
 
-        $snapshot = $this->runtimeState();
-        $this->deferPersistence = true;
+        $lockHandle = $this->acquireTransactionLock();
 
         try {
-            $result = $callback();
-            $this->deferPersistence = false;
-            $this->persist();
+            if ($this->stateFile !== null && !$this->restore()) {
+                $this->initializeDefaults();
+            }
 
-            return $result;
-        } catch (\Throwable $exception) {
-            $this->deferPersistence = false;
-            $this->restoreRuntimeState($snapshot);
+            $snapshot = $this->runtimeState();
+            $this->deferPersistence = true;
 
-            throw $exception;
+            try {
+                $result = $callback();
+                $this->deferPersistence = false;
+                if ($this->runtimeState() !== $snapshot) {
+                    $this->persist();
+                }
+
+                return $result;
+            } catch (\Throwable $exception) {
+                $this->deferPersistence = false;
+                $this->restoreRuntimeState($snapshot);
+
+                throw $exception;
+            }
+        } finally {
+            if (\is_resource($lockHandle)) {
+                flock($lockHandle, \LOCK_UN);
+                fclose($lockHandle);
+            }
         }
+    }
+
+    /** @return resource|null */
+    private function acquireTransactionLock(): mixed
+    {
+        if ($this->stateFile === null) {
+            return null;
+        }
+
+        $directory = \dirname($this->stateFile);
+        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+            throw new \RuntimeException('fake_exchange_state_directory_unavailable');
+        }
+
+        $handle = fopen($this->stateFile . '.lock', 'c+');
+        if ($handle === false) {
+            throw new \RuntimeException('fake_exchange_state_lock_unavailable');
+        }
+        if (!flock($handle, \LOCK_EX)) {
+            fclose($handle);
+
+            throw new \RuntimeException('fake_exchange_state_lock_failed');
+        }
+
+        return $handle;
     }
 
     /**
@@ -881,6 +1096,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
             'pendingFaults' => $this->pendingFaults,
@@ -901,6 +1117,7 @@ class FakeExchangeStateStore
         $this->positions = $snapshot['positions'];
         $this->balances = $snapshot['balances'];
         $this->orderBooks = $snapshot['orderBooks'];
+        $this->leverageSettings = $snapshot['leverageSettings'];
         $this->events = $snapshot['events'];
         $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];
         $this->pendingFaults = $snapshot['pendingFaults'];

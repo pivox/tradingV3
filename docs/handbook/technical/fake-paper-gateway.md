@@ -213,18 +213,22 @@ et ne cree pas ce fichier.
 
 Le resultat Fake/Paper impose toujours `dry_run=true`, `permissions_trade=false`,
 kill switch actif et ecriture demo/testnet desactivee. Les credentials sont
-`not_required`; le provider bundle Fake actuel reste un placeholder sans contrat
-actif et doit devenir operationnel pour rendre un schedule MTF pret. Aucun ordre
-exchange ne peut etre emis.
+`not_required`; le provider bundle Fake est operationnel uniquement pour le
+contexte `fake/perpetual` et ne peut emettre aucun ordre exchange.
 Le modele de slippage additionnel actuellement nul reste visible via le warning
 `fake_paper_slippage_model_zero`.
 
-Tant que la source marche, l horloge controlee, les fixtures versionnees de metadata
-instruments, le modele de precision et le provider Fake ne sont pas livres, le
-niveau et le schedule restent fail-closed. Le runner de recette Python conserve
-donc temporairement son chemin Fake local existant. Sa bascule vers cette gate sera
-faite apres la golden suite et les metadata, afin de ne pas annoncer une readiness
-que le modele actuel ne couvre pas.
+Le modele d instrument versionne utilise Brick Math sur les textes decimaux
+exacts. L endpoint HTTP Fake exige des chaines decimales pour `quantity`, `price`
+et les prix stop; il refuse les nombres JSON dont la precision lexicale serait
+perdue au decodage. Les metadata de requete sont reduites a une whitelist de
+lineage scalaire avant persistance et emission d evenement.
+
+La readiness reste fail-closed si la source marche, l horloge controlee, les
+fixtures versionnees, le modele de precision ou la reprise persistante ne sont
+pas disponibles. La marge d un SELL limit crossing est verifiee avec le meilleur
+bid executable, et un `LIMIT` legacy accompagne d un `stopPrice` reste un ordre
+declenche au lieu d etre rempli immediatement.
 
 ## Golden suite Fake/Paper v1
 

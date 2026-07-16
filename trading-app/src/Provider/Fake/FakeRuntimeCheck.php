@@ -34,7 +34,6 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         $blockingErrors = [];
         $warnings = [];
         $model = $this->adapter->runtimeModelMetadata();
-        $activeStateAvailable = $this->stateFile === null || is_file($this->stateFile);
         $persistence = $this->stateFile === null
             ? $this->stateStore->persistenceHealth()
             : FakeExchangeStateStore::persistenceHealthForPath($this->stateFile);
@@ -42,7 +41,7 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         $precisionReady = \is_string($model['precision_model_version']) && trim($model['precision_model_version']) !== '';
 
         try {
-            if ($activeStateAvailable && $this->marketDataSourceReady && $this->stateStore->hasOrderBookTop('BTCUSDT')) {
+            if ($this->marketDataSourceReady && $this->stateStore->hasOrderBookTop('BTCUSDT')) {
                 $top = $this->stateStore->getOrderBookTop('BTCUSDT');
                 $marketDataReady = $top['bid'] > 0.0 && $top['ask'] > $top['bid'];
             } else {
@@ -56,7 +55,7 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         }
 
         try {
-            $stateReadable = $activeStateAvailable && $this->stateStore->getBalances() !== [];
+            $stateReadable = $this->stateStore->getBalances() !== [];
         } catch (\Throwable) {
             $stateReadable = false;
         }
@@ -90,7 +89,7 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
             $blockingErrors[] = 'fake_paper_stop_loss_capability_not_ready';
         }
 
-        $recovery = $activeStateAvailable ? $this->stateStore->recoveryMetadata() : null;
+        $recovery = $this->stateStore->recoveryMetadata();
 
         return $this->check(new ExchangeReadinessInput(
             exchange: Exchange::FAKE,
@@ -113,10 +112,10 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
             dryRun: true,
             allowedMarkets: [MarketType::PERPETUAL->value],
             maxNotional: 1.0,
-            configHash: $recovery['scenario_config_hash'] ?? null,
+            configHash: $recovery['scenario_config_hash'],
             blockingErrors: $blockingErrors,
             warnings: $warnings,
-            configProfile: $recovery['engine_version'] ?? null,
+            configProfile: $recovery['engine_version'],
         ));
     }
 

@@ -9,6 +9,7 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\PlaceOrderRequest;
+use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
@@ -25,6 +26,7 @@ use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakePrivateWsException;
+use App\Exchange\Fake\FakeInstrumentCatalog;
 use Psr\Clock\ClockInterface;
 
 final class FakePaperGoldenScenarioRunner
@@ -33,6 +35,9 @@ final class FakePaperGoldenScenarioRunner
         'limit_maker_full_fill',
         'limit_unfilled_then_expired',
         'partial_fill_then_cancel',
+        'insufficient_balance',
+        'precision_reject',
+        'leverage_cap_reject',
         'duplicate_client_order_id',
         'timeout_after_acceptance',
         'stop_loss_attach_success',
@@ -60,6 +65,9 @@ final class FakePaperGoldenScenarioRunner
             'limit_maker_full_fill' => $this->limitMakerFullFill(),
             'limit_unfilled_then_expired' => $this->limitUnfilledThenExpired(),
             'partial_fill_then_cancel' => $this->partialFillThenCancel(),
+            'insufficient_balance' => $this->insufficientBalance(),
+            'precision_reject' => $this->precisionReject(),
+            'leverage_cap_reject' => $this->leverageCapReject(),
             'duplicate_client_order_id' => $this->duplicateClientOrderId(),
             'timeout_after_acceptance' => $this->timeoutAfterAcceptance(),
             'stop_loss_attach_success' => $this->stopLossAttachSuccess(),
@@ -152,6 +160,108 @@ final class FakePaperGoldenScenarioRunner
             'position_size' => $position?->size,
             'protection_quantity' => $protection?->quantity,
             'remaining_quantity' => $cancelled?->remainingQuantity,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function insufficientBalance(): array
+    {
+        [$state, $adapter] = $this->exchange();
+        $availableMarginBefore = $adapter->getBalances()[0]->available;
+        $request = $this->request(
+            price: 24950.0,
+            clientOrderId: 'golden-insufficient-balance',
+            postOnly: true,
+            quantity: 13.0,
+        );
+        $result = $adapter->placeOrder($request);
+
+        return $this->rejectionAuditFacts($state, $adapter, $result, $availableMarginBefore) + [
+            'available_margin_before' => $availableMarginBefore,
+            'persisted_quantity' => $result->order?->quantity,
+            'requested_initial_margin' => round(
+                $request->quantity * (float) $request->price / (float) ($request->leverage ?? 1),
+                6,
+            ),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function precisionReject(): array
+    {
+        [$state, $adapter] = $this->exchange();
+        $availableMarginBefore = $adapter->getBalances()[0]->available;
+        $request = $this->request(
+            price: 24950.01,
+            clientOrderId: 'golden-precision-reject',
+            postOnly: true,
+        );
+        $result = $adapter->placeOrder($request);
+        $instrument = (new FakeInstrumentCatalog())->find('BTCUSDT');
+
+        return $this->rejectionAuditFacts($state, $adapter, $result, $availableMarginBefore) + [
+            'persisted_price' => $result->order?->price,
+            'price_tick' => $instrument?->priceTick,
+            'submitted_price' => $request->price,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function leverageCapReject(): array
+    {
+        [$state, $adapter] = $this->exchange();
+        $availableMarginBefore = $adapter->getBalances()[0]->available;
+        $instrument = (new FakeInstrumentCatalog())->find('BTCUSDT');
+        $request = $this->request(
+            price: 24950.0,
+            clientOrderId: 'golden-leverage-cap-reject',
+            postOnly: true,
+            leverage: 101,
+        );
+        $result = $adapter->placeOrder($request);
+
+        return $this->rejectionAuditFacts($state, $adapter, $result, $availableMarginBefore) + [
+            'leverage_setting_count' => \count($state->leverageSettings()),
+            'max_leverage' => $instrument?->maxLeverage,
+            'persisted_leverage' => $result->order?->metadata['leverage'] ?? null,
+            'requested_leverage' => $request->leverage,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function rejectionAuditFacts(
+        FakeExchangeStateStore $state,
+        FakeExchangeAdapter $adapter,
+        PlaceOrderResult $result,
+        float $availableMarginBefore,
+    ): array {
+        $events = $state->events();
+        $rejectionEvents = $state->events('order.rejected');
+        $persisted = $result->exchangeOrderId !== null
+            ? $adapter->getOrder($result->symbol, $result->exchangeOrderId)
+            : null;
+        $availableMarginAfter = $adapter->getBalances()[0]->available;
+
+        return [
+            'accepted' => $result->accepted,
+            'available_margin_unchanged' => $availableMarginBefore === $availableMarginAfter,
+            'event_count' => \count($events),
+            'event_types' => array_map(
+                static fn (FakeExchangeEvent $event): string => $event->type,
+                $events,
+            ),
+            'exchange_order_id' => $result->exchangeOrderId,
+            'open_order_count' => \count($adapter->getOpenOrders($result->symbol)),
+            'open_position_count' => \count($adapter->getOpenPositions($result->symbol)),
+            'order_count' => \count($adapter->getOrdersSnapshot($result->symbol)),
+            'order_status' => $result->status->value,
+            'persisted_filled_quantity' => $persisted?->filledQuantity,
+            'persisted_identity_matches_result' => $result->exchangeOrderId !== null
+                && $persisted?->exchangeOrderId === $result->exchangeOrderId,
+            'persisted_order_status' => $persisted?->status->value,
+            'reason' => $result->metadata['reason'] ?? null,
+            'rejection_event_count' => \count($rejectionEvents),
+            'rejection_event_order_id' => $rejectionEvents[0]->payload['order_id'] ?? null,
         ];
     }
 
@@ -380,6 +490,8 @@ final class FakePaperGoldenScenarioRunner
         bool $postOnly = false,
         ExchangeTimeInForce $timeInForce = ExchangeTimeInForce::GTC,
         ?float $attachedStopLossPrice = null,
+        float $quantity = 1.0,
+        ?int $leverage = 3,
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -389,12 +501,12 @@ final class FakePaperGoldenScenarioRunner
             positionSide: ExchangePositionSide::LONG,
             orderType: $orderType,
             timeInForce: $timeInForce,
-            quantity: 1.0,
+            quantity: $quantity,
             price: $price,
             stopPrice: null,
             reduceOnly: false,
             postOnly: $postOnly,
-            leverage: 3,
+            leverage: $leverage,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,

@@ -13,6 +13,7 @@ use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeFault;
 use App\Exchange\Fake\FakeExchangeFaultKind;
 use App\Exchange\Fake\FakeExchangeFaultOutcome;
@@ -178,6 +179,112 @@ final class FakeExchangeFaultInjectionTest extends TestCase
         self::assertCount(1, $this->state->events('order.cancelled'));
     }
 
+    public function testSetLeverageNotAppliedFaultDoesNotMutateState(): void
+    {
+        $this->scenario->failNext(new FakeExchangeFault(
+            FakeExchangeOperation::SetLeverage,
+            FakeExchangeFaultKind::NetworkTimeout,
+            FakeExchangeFaultOutcome::NotApplied,
+        ));
+
+        try {
+            $this->adapter->setLeverage('BTCUSDT', 25, 'isolated');
+            self::fail('The leverage update must fail before application.');
+        } catch (FakeExchangeInjectedException $exception) {
+            self::assertFalse($exception->outcomeUnknown());
+        }
+
+        self::assertSame([], $this->state->leverageSettings());
+        self::assertSame([], $this->state->events('leverage.updated'));
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
+    }
+
+    public function testSetLeverageNotAppliedFaultConsumptionPreservesNewerPersistedState(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_leverage_fault_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $faultState = new FakeExchangeStateStore($stateFile);
+            [, $faultScenario] = $this->services($faultState);
+            $faultScenario->failNext(new FakeExchangeFault(
+                FakeExchangeOperation::SetLeverage,
+                FakeExchangeFaultKind::NetworkTimeout,
+                FakeExchangeFaultOutcome::NotApplied,
+            ));
+
+            $staleState = new FakeExchangeStateStore($stateFile);
+            [$staleAdapter] = $this->services($staleState);
+
+            $freshState = new FakeExchangeStateStore($stateFile);
+            $freshState->setLeverageSetting('BTCUSDT', 10, 'cross');
+            $freshState->appendEvent(new FakeExchangeEvent(
+                type: 'leverage.updated',
+                symbol: 'BTCUSDT',
+                occurredAt: $this->clock()->now(),
+                payload: ['leverage' => 10, 'margin_mode' => 'cross'],
+            ));
+
+            try {
+                $staleAdapter->setLeverage('BTCUSDT', 25, 'isolated');
+                self::fail('The stale adapter must consume the not-applied fault.');
+            } catch (FakeExchangeInjectedException $exception) {
+                self::assertFalse($exception->outcomeUnknown());
+            }
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            self::assertSame(
+                ['leverage' => 10, 'margin_mode' => 'cross'],
+                $restored->getLeverageSetting('BTCUSDT'),
+            );
+            $events = $restored->events('leverage.updated');
+            self::assertCount(1, $events);
+            self::assertSame(1, $events[0]->payload['event_sequence'] ?? null);
+            self::assertSame([], $restored->pendingFaults());
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testSetLeverageAppliedResponseLostPersistsMutationBeforeThrowing(): void
+    {
+        $this->scenario->failNext(new FakeExchangeFault(
+            FakeExchangeOperation::SetLeverage,
+            FakeExchangeFaultKind::TransportError,
+            FakeExchangeFaultOutcome::AppliedResponseLost,
+        ));
+
+        try {
+            $this->adapter->setLeverage('BTCUSDT', 25, 'isolated');
+            self::fail('The applied leverage response must be lost.');
+        } catch (FakeExchangeInjectedException $exception) {
+            self::assertTrue($exception->outcomeUnknown());
+        }
+
+        self::assertSame(
+            ['leverage' => 25, 'margin_mode' => 'isolated'],
+            $this->state->getLeverageSetting('BTCUSDT'),
+        );
+        $eventsAfterLostResponse = $this->state->events('leverage.updated');
+        self::assertCount(1, $eventsAfterLostResponse);
+        self::assertSame([], $this->state->pendingFaults());
+
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
+
+        self::assertSame(
+            ['leverage' => 25, 'margin_mode' => 'isolated'],
+            $this->state->getLeverageSetting('BTCUSDT'),
+        );
+        $eventsAfterRetry = $this->state->events('leverage.updated');
+        self::assertCount(1, $eventsAfterRetry);
+        self::assertSame(
+            $eventsAfterLostResponse[0]->payload['event_sequence'] ?? null,
+            $eventsAfterRetry[0]->payload['event_sequence'] ?? null,
+        );
+    }
+
     public function testFaultQueueIsIsolatedByOperationAndPreservesFifo(): void
     {
         $this->scenario->failNext(new FakeExchangeFault(
@@ -309,7 +416,7 @@ final class FakeExchangeFaultInjectionTest extends TestCase
         @unlink($stateFile);
 
         try {
-            new FakeExchangeStateStore($stateFile);
+            (new FakeExchangeStateStore($stateFile))->reset();
             $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
             self::assertIsArray($envelope);
             self::assertIsArray($envelope['payload'] ?? null);

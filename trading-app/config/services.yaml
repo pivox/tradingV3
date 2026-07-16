@@ -427,17 +427,6 @@ services:
             $systemProvider: '@App\Provider\Fake\FakeSystemProvider'
         public: false
 
-    App\Provider\Registry\ExchangeProviderBundle.fake_spot:
-        class: App\Provider\Registry\ExchangeProviderBundle
-        arguments:
-            $context: '@App\Provider\Context\ExchangeContext.fake_spot'
-            $klineProvider: '@App\Provider\Fake\FakeKlineProvider'
-            $contractProvider: '@App\Provider\Fake\FakeContractProvider'
-            $orderProvider: '@App\Provider\Fake\FakeOrderProvider'
-            $accountProvider: '@App\Provider\Fake\FakeAccountProvider'
-            $systemProvider: '@App\Provider\Fake\FakeSystemProvider'
-        public: false
-
     # --- OKX provider bundle ---
     # OKX demo readiness provider bundle for perpetual/SWAP only. Public and
     # private read-only paths are implemented; writes still fail explicitly until
@@ -474,7 +463,6 @@ services:
                 - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.bitmart_spot'
                 - '@App\Provider\Registry\ExchangeProviderBundle.fake_perpetual'
-                - '@App\Provider\Registry\ExchangeProviderBundle.fake_spot'
                 - '@App\Provider\Registry\ExchangeProviderBundle.okx_perpetual'
                 - '@App\Provider\Registry\ExchangeProviderBundle.hyperliquid_perpetual'
             $defaultExchange: !php/const App\Common\Enum\Exchange::BITMART

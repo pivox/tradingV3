@@ -25,6 +25,8 @@ use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
@@ -33,13 +35,18 @@ use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
 {
     private const FEE_RATE = 0.0005;
+    private const MARGIN_MODEL_VERSION = 'fake-derived-initial-margin-v1';
+
+    private FakeInstrumentProviderInterface $instruments;
 
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
         private FakeExchangeMatchingEngine $matchingEngine,
         private ClockInterface $clock,
+        ?FakeInstrumentProviderInterface $instruments = null,
     ) {
+        $this->instruments = $instruments ?? new FakeInstrumentCatalog();
     }
 
     public function exchange(): Exchange
@@ -72,17 +79,19 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     }
 
     /**
-     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,metadata_fixture_version:?string,precision_model_version:?string}
+     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,metadata_fixture_version:string,precision_model_version:string}
      */
     public function runtimeModelMetadata(): array
     {
+        $catalog = new FakeInstrumentCatalog();
+
         return [
             'fee_model' => 'fixed_notional_fee_v1',
             'fee_rate' => self::FEE_RATE,
             'fill_model' => 'top_of_book_v1',
             'slippage_model' => 'explicit_zero_additional_slippage_v1',
-            'metadata_fixture_version' => null,
-            'precision_model_version' => null,
+            'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
+            'precision_model_version' => $catalog->precisionModelVersion(),
         ];
     }
 
@@ -93,7 +102,36 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     {
         $this->throwInjectedFault(FakeExchangeOperation::GetBalances, FakeExchangeFaultOutcome::NotApplied);
 
-        return $this->stateStore->getBalances();
+        $usedMargin = $this->stateStore->usedMarginUsdt();
+        $availableMargin = $this->stateStore->availableMarginUsdt();
+        $total = $this->stateStore->totalBalanceUsdt();
+
+        return array_map(
+            static function (ExchangeBalanceDto $balance) use ($usedMargin, $availableMargin, $total): ExchangeBalanceDto {
+                if ($balance->currency !== 'USDT') {
+                    return $balance;
+                }
+
+                return new ExchangeBalanceDto(
+                    exchange: $balance->exchange,
+                    marketType: $balance->marketType,
+                    currency: $balance->currency,
+                    available: $availableMargin,
+                    total: $total,
+                    equity: $balance->equity,
+                    unrealizedPnl: $balance->unrealizedPnl,
+                    metadata: array_replace(
+                        ['source' => 'fake_exchange'],
+                        $balance->metadata,
+                        [
+                            'used_margin_usdt' => $usedMargin,
+                            'margin_model_version' => self::MARGIN_MODEL_VERSION,
+                        ],
+                    ),
+                );
+            },
+            $this->stateStore->getBalances(),
+        );
     }
 
     /**
@@ -208,11 +246,48 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     {
         $this->throwInjectedFault(FakeExchangeOperation::SetLeverage, FakeExchangeFaultOutcome::NotApplied);
 
-        if (trim($symbol) === '' || $leverage <= 0 || trim($marginMode) === '') {
+        if (
+            $symbol === ''
+            || trim($symbol) !== $symbol
+            || strtoupper($symbol) !== $symbol
+            || $leverage <= 0
+            || !\in_array($marginMode, ['isolated', 'cross'], true)
+        ) {
             return false;
         }
 
-        return true;
+        $instrument = $this->instruments->find($symbol);
+        if ($instrument === null || $leverage > $instrument->maxLeverage) {
+            return false;
+        }
+
+        $execution = $this->stateStore->runWithAppliedResponseLoss(
+            FakeExchangeOperation::SetLeverage,
+            function () use ($symbol, $leverage, $marginMode): bool {
+                $setting = ['leverage' => $leverage, 'margin_mode' => $marginMode];
+                if ($this->stateStore->getLeverageSetting($symbol) === $setting) {
+                    return true;
+                }
+
+                $this->stateStore->setLeverageSetting($symbol, $leverage, $marginMode);
+                $this->stateStore->appendEvent(new FakeExchangeEvent(
+                    type: 'leverage.updated',
+                    symbol: $symbol,
+                    occurredAt: $this->clock->now(),
+                    payload: [
+                        'leverage' => $leverage,
+                        'margin_mode' => $marginMode,
+                    ],
+                ));
+
+                return true;
+            },
+        );
+        if ($execution['fault'] !== null) {
+            throw new FakeExchangeInjectedException($execution['fault']);
+        }
+
+        return $execution['result'];
     }
 
     public function reconcile(?string $symbol = null): ExchangeReconciliationResult

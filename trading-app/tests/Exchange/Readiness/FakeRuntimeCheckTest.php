@@ -38,13 +38,25 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertFalse($report->permissionsTrade);
         self::assertTrue($report->mainnetWriteGuard);
         self::assertTrue($report->stopLossCapability);
-        self::assertContains('instruments_not_loaded', $report->blockingErrors);
-        self::assertContains('metadata_invalid', $report->blockingErrors);
-        self::assertContains('precision_invalid', $report->blockingErrors);
+        self::assertNotContains('instruments_not_loaded', $report->blockingErrors);
+        self::assertNotContains('metadata_invalid', $report->blockingErrors);
+        self::assertNotContains('precision_invalid', $report->blockingErrors);
         self::assertContains('public_connectivity_unavailable', $report->blockingErrors);
         self::assertContains('fake_paper_market_source_not_configured', $report->warnings);
         self::assertContains('fake_paper_persistence_not_configured', $report->warnings);
         self::assertContains('fake_paper_slippage_model_zero', $report->warnings);
+    }
+
+    public function testRuntimeMetadataUsesCanonicalCatalogVersions(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($state);
+        $clock = $this->clock();
+        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $metadata = (new FakeExchangeAdapter($state, $book, $engine, $clock))->runtimeModelMetadata();
+
+        self::assertSame('fake-instrument-catalog-v1', $metadata['metadata_fixture_version']);
+        self::assertSame('brick-math-exact-multiple-v1', $metadata['precision_model_version']);
     }
 
     public function testPersistentPaperProbesWritableRecoveryWithoutTouchingActiveState(): void
@@ -80,6 +92,28 @@ final class FakeRuntimeCheckTest extends TestCase
             self::assertSame($stateBeforeCheck, file_get_contents($stateFile));
         } finally {
             @unlink($stateFile);
+        }
+    }
+
+    public function testMissingPersistentStateUsesInitializedMemoryWithoutCreatingActiveFile(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_runtime_check_initial_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $report = $this->runtimeCheck($state, stateFile: $stateFile)->current();
+
+            self::assertTrue($report->privateReadConnectivity);
+            self::assertTrue($report->accountReadable);
+            self::assertTrue($report->permissionsRead);
+            self::assertNotNull($report->configHash);
+            self::assertNotNull($report->configProfile);
+            self::assertFileDoesNotExist($stateFile);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
         }
     }
 
@@ -169,6 +203,7 @@ final class FakeRuntimeCheckTest extends TestCase
         ?ClockInterface $clock = null,
         bool $controlledClock = true,
         bool $marketDataSourceReady = false,
+        ?string $stateFile = null,
     ): FakeRuntimeCheck
     {
         $book = new FakeExchangeOrderBook($state);
@@ -181,6 +216,7 @@ final class FakeRuntimeCheckTest extends TestCase
             $clock,
             controlledClock: $controlledClock,
             marketDataSourceReady: $marketDataSourceReady,
+            stateFile: $stateFile,
         );
     }
 
