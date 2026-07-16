@@ -14,7 +14,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'limit_maker_full_fill' => ['executable', []],
         'limit_unfilled_then_expired' => ['executable', []],
         'partial_fill_then_cancel' => ['executable', []],
-        'fallback_taker' => ['unsupported', ['fallback_taker_not_implemented']],
+        'fallback_taker' => ['executable', []],
         'market_with_slippage' => ['executable', []],
         'insufficient_balance' => ['executable', []],
         'precision_reject' => ['executable', []],

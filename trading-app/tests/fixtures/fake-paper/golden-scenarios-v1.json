@@ -29,13 +29,17 @@
       "status": "executable"
     },
     {
-      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
-      "gap_codes": ["fallback_taker_not_implemented"],
+      "evidence": [
+        "tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testFallbackTakerConvertsOnlyTheExactPartiallyFilledMakerRemainder",
+        "tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testFallbackTakerReplayReturnsSameChildWithoutSecondOrderOrFill",
+        "tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testFallbackTakerRestartsFromPersistedExpiredMakerWithoutDuplicateExpiration"
+      ],
+      "gap_codes": [],
       "id": 4,
       "name": "fallback_taker",
       "requirement": "An expired maker attempt can be replaced by a bounded taker fallback.",
-      "runner": null,
-      "status": "unsupported"
+      "runner": "fallback_taker",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts"],

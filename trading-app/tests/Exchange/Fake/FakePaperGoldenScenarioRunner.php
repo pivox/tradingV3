@@ -25,6 +25,7 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
+use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakePrivateWsException;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use Psr\Clock\ClockInterface;
@@ -35,6 +36,7 @@ final class FakePaperGoldenScenarioRunner
         'limit_maker_full_fill',
         'limit_unfilled_then_expired',
         'partial_fill_then_cancel',
+        'fallback_taker',
         'market_with_slippage',
         'insufficient_balance',
         'precision_reject',
@@ -67,6 +69,7 @@ final class FakePaperGoldenScenarioRunner
             'limit_maker_full_fill' => $this->limitMakerFullFill(),
             'limit_unfilled_then_expired' => $this->limitUnfilledThenExpired(),
             'partial_fill_then_cancel' => $this->partialFillThenCancel(),
+            'fallback_taker' => $this->fallbackTaker(),
             'market_with_slippage' => $this->marketWithSlippage(),
             'insufficient_balance' => $this->insufficientBalance(),
             'precision_reject' => $this->precisionReject(),
@@ -164,6 +167,76 @@ final class FakePaperGoldenScenarioRunner
             'position_size' => $position?->size,
             'protection_quantity' => $protection?->quantity,
             'remaining_quantity' => $cancelled?->remainingQuantity,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function fallbackTaker(): array
+    {
+        [, $adapter, $scenario] = $this->exchange();
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'golden-fallback-taker',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata() + [
+                'internal_trade_id' => 'golden-fallback-trade',
+                'api_key' => 'TOP-SECRET',
+                'raw_payload' => ['authorization' => 'Bearer SECRET'],
+            ],
+        ));
+        $scenario->fillOrder((string) $placed->exchangeOrderId, 0.4, 24950.0);
+        $result = $scenario->fallbackTaker((string) $placed->exchangeOrderId);
+        $fills = $adapter->getFillsSnapshot('BTCUSDT');
+        $makerFill = $fills[0] ?? null;
+        $takerFill = $fills[1] ?? null;
+        $position = $adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+        $protection = $adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        $serialized = json_encode([
+            $result->parentOrder?->metadata,
+            $result->fallbackOrder?->metadata,
+            array_map(static fn (FakeExchangeEvent $event): array => $event->toArray(), $scenario->events()),
+        ], JSON_THROW_ON_ERROR);
+        $takerNotional = ($takerFill?->quantity ?? 0.0) * ($takerFill?->price ?? 0.0);
+        $takerSlippageCost = $takerFill?->metadata['slippage_cost_usdt'] ?? null;
+
+        return [
+            'fallback_client_linked' => $result->fallbackOrder?->clientOrderId !== null
+                && str_starts_with($result->fallbackOrder->clientOrderId, 'fake-fallback-')
+                && ($result->fallbackOrder->metadata['fallback_parent_order_id'] ?? null)
+                    === $result->parentOrder?->exchangeOrderId,
+            'fallback_quantity' => $result->fallbackOrder?->quantity,
+            'fallback_status' => $result->fallbackOrder?->status->value,
+            'fallback_trigger' => $result->fallbackOrder?->metadata['fallback_trigger'] ?? null,
+            'fallback_type' => $result->fallbackOrder?->orderType->value,
+            'maker_liquidity_role' => $makerFill?->metadata['liquidity_role'] ?? null,
+            'maker_slippage_cost_usdt' => $makerFill?->metadata['slippage_cost_usdt'] ?? null,
+            'metadata_redacted' => !str_contains($serialized, 'TOP-SECRET')
+                && !str_contains($serialized, 'Bearer SECRET')
+                && !str_contains($serialized, 'api_key')
+                && !str_contains($serialized, 'raw_payload'),
+            'parent_filled_quantity' => $result->parentOrder?->filledQuantity,
+            'parent_remaining_quantity' => $result->parentOrder?->remainingQuantity,
+            'parent_status' => $result->parentOrder?->status->value,
+            'position_entry_order_count' => $position?->metadata['entry_order_count'] ?? null,
+            'position_size' => $position?->size,
+            'protection_quantity' => $protection?->quantity,
+            'slippage_guard_bps' => $result->slippageBps !== null
+                ? round($result->slippageBps, 6)
+                : null,
+            'taker_liquidity_role' => $takerFill?->metadata['liquidity_role'] ?? null,
+            'taker_slippage_bps' => is_numeric($takerSlippageCost) && $takerNotional > 0.0
+                ? round(((float) $takerSlippageCost / $takerNotional) * 10_000.0, 6)
+                : null,
+            'taker_slippage_cost_usdt' => is_numeric($takerSlippageCost)
+                ? round((float) $takerSlippageCost, 6)
+                : null,
         ];
     }
 
@@ -549,6 +622,9 @@ final class FakePaperGoldenScenarioRunner
         ];
     }
 
+    /**
+     * @param array<string,mixed> $metadata
+     */
     private function request(
         string $symbol = 'BTCUSDT',
         ExchangeOrderType $orderType = ExchangeOrderType::LIMIT,
@@ -559,6 +635,7 @@ final class FakePaperGoldenScenarioRunner
         ?float $attachedStopLossPrice = null,
         float $quantity = 1.0,
         ?int $leverage = 3,
+        array $metadata = [],
     ): PlaceOrderRequest {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
@@ -577,6 +654,7 @@ final class FakePaperGoldenScenarioRunner
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
+            metadata: $metadata,
         );
     }
 

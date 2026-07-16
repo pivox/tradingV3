@@ -232,6 +232,34 @@ Explicit mutation persists when a state path is configured. Examples include
 queueing a fault, and accepting a leverage update. In-memory stores keep the same
 deterministic behavior without filesystem persistence.
 
+## End-of-zone fallback taker
+
+`fake-fallback-taker-v1` is an opt-in policy persisted in the parent post-only
+maker order metadata. It records the valid entry-zone bounds and maximum adverse
+slippage. The local scenario trigger expires an active parent once, accepts an
+already expired parent after restart, and converts only its exact unfilled
+decimal remainder to a deterministic child `MARKET` order. The bounded adverse
+total combines maker-limit-to-book displacement with the versioned 5 bps taker
+cost.
+
+The child uses the normal validation, margin, fill, cost, position, and
+protection paths. A partial maker fill retains explicit zero maker slippage while
+the fallback fill retains the versioned 5 bps taker cost. The attached protection
+and compensation invariant covers the aggregate parent-plus-child quantity.
+Deterministic parent/child identifiers and terminal audit metadata make success,
+guard rejection, and persisted restart replay idempotent.
+
+The trigger rejects or no-ops for a missing/disabled policy, invalid zone,
+excessive adverse slippage, cancelled parent, or zero remainder. Any partial
+maker exposure left by cancellation or a fallback rejection is protected for its
+actual filled quantity; a protection-fixture rejection compensates that exact
+partial exposure. Generic request metadata can persist only the five typed
+policy fields. Derived parent, remainder, trigger, measured-slippage, and
+aggregate-protection metadata is engine-owned, and replay validates the complete
+persisted child intent before accepting it. This capability exists only inside
+the Fake/Paper matching engine and introduces no live, demo, testnet, provider,
+or network write path.
+
 ## Rollback
 
 This model has no external exchange side effects. To roll back a local Fake/Paper
@@ -247,6 +275,9 @@ runtime:
    `app:exchange:runtime-check fake perpetual` before resuming local scenarios.
 5. Restore golden scenario 12 to an explicit gap if the attached-protection
    compensation runner is rolled back.
+6. Restore golden scenario 4 to `unsupported` with
+   `fallback_taker_not_implemented` if the fallback policy and trigger are rolled
+   back.
 
 Do not use rollback as a path to live, demo, or testnet trading. No credential,
 exchange endpoint, or network operation is part of this model.
@@ -258,7 +289,6 @@ golden catalog and readiness evidence:
 
 - daily loss cap;
 - liquidation guard and liquidation model;
-- maker-timeout fallback taker behavior;
 - funding accrual;
 - one-way position conflict handling;
 - TP1-to-trailing-stop behavior;

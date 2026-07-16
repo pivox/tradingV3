@@ -256,6 +256,47 @@ pas disponibles. La marge d un SELL limit crossing est verifiee avec le meilleur
 bid executable, et un `LIMIT` legacy accompagne d un `stopPrice` reste un ordre
 declenche au lieu d etre rempli immediatement.
 
+## Fallback taker deterministe de fin de zone
+
+Le moteur Fake/Paper supporte une politique opt-in versionnee
+`fake-fallback-taker-v1`, persistee dans les metadata d un ordre parent `LIMIT`
+post-only. Elle contient un flag d activation, les bornes de zone valides et le
+slippage adverse maximal en points de base. La politique absente, malformee ou
+desactivee echoue fermee. Seuls les cinq champs types de cette politique
+traversent les metadata d une requete ordinaire ; les identifiants parent, le
+reliquat, la quantite de protection, le trigger et le slippage mesure sont
+derives et injectes par le moteur.
+
+Quand la zone se termine,
+`FakeExchangeScenarioService::fallbackTaker(exchange_order_id)` execute une
+transition atomique locale :
+
+- le parent actif expire une seule fois ; un parent deja expire avant restart
+  peut reprendre sans dupliquer l evenement d expiration ;
+- la quantite deja remplie en maker reste acquise et seul le reliquat decimal
+  exact est soumis en `MARKET` ;
+- le `client_order_id` enfant derive deterministement de l identite du parent ;
+- le prix top-of-book executable doit rester dans la zone et sous le seuil de
+  slippage adverse total, qui additionne le deplacement depuis la limite maker
+  et les 5 bps du modele taker versionne ;
+- precision, marge, rejet persiste, fill, frais et position passent par les
+  chemins ordinaires du moteur Fake ;
+- le cout maker reste separe du cout taker et la protection couvre la quantite
+  logique totale parent plus enfant ;
+- si l attachement de protection echoue, la compensation reduce-only ferme cette
+  meme quantite logique totale.
+
+Un parent annule ou sans reliquat ne genere aucun enfant. Si une annulation ou un
+rejet zone/slippage/marge/validation laisse un fill maker partiel, son exposition
+exacte recoit le SL/TP attache ; un rejet de cette protection compense ce fill
+partiel. Le replay d un succes, d un rejet de garde ou d un restart persiste ne
+cree aucun second ordre, fill, frais, evenement ou stop. Un enfant persiste n est
+reconnu qu apres comparaison de son intention immutable complete et des metadata
+terminales du parent. Les mutations directes du service de scenario rechargent
+l etat persiste sous le meme verrou avant modification. Ce trigger est une
+fixture Fake/Paper locale : il n appelle aucun provider, ne lit aucun credential
+et ne peut ecrire ni en mainnet, ni en demo, ni en testnet.
+
 ## Golden suite Fake/Paper v1
 
 Le catalogue versionne des 20 scenarios obligatoires de #196 est disponible dans :
@@ -277,19 +318,18 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les quatorze scenarios executes dans cette version sont : maker limit rempli, limit
-IOC expire sans fill, partial fill puis cancel, market avec slippage 5 bps,
-insufficient balance, precision reject, leverage cap reject, replay du
-`client_order_id`, timeout apres acceptation, attachement SL reussi, echec
-d attachement SL compense par fermeture market reduce-only, gap au SL au prochain
-prix disponible, deconnexion/reprise private WS, et restart avec position
-protegee ouverte.
+Les quinze scenarios executes dans cette version sont : maker limit rempli, limit
+IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
+le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
+reject, leverage cap reject, replay du `client_order_id`, timeout apres
+acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
+market reduce-only, gap au SL au prochain prix disponible, deconnexion/reprise
+private WS, et restart avec position protegee ouverte.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
-| fallback taker | `unsupported` | `fallback_taker_not_implemented` |
 | TP1 puis trailing | `partial` | `trailing_stop_not_implemented` |
 | duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
 | funding | `unsupported` | `funding_model_not_implemented` |
@@ -321,6 +361,12 @@ Le rollback de la compensation adapter doit aussi restaurer le scenario golden
 12 en `partial` avec un `gap_code` explicite. Le fichier d etat Fake doit etre
 archive puis retire ou valide contre la revision cible avant reprise locale ; il
 ne doit jamais etre reutilise silencieusement par une version incompatible.
+
+Le rollback du fallback taker doit retirer la politique et le trigger locaux,
+puis restaurer le scenario golden 4 en `unsupported` avec
+`fallback_taker_not_implemented`. Le fichier d etat doit etre archive ou
+quarantaine avant de lancer une revision qui ne connait pas ses metadata
+additives. Ce rollback ne doit jamais servir a activer une ecriture exchange.
 
 ## Suite
 

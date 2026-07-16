@@ -33,6 +33,26 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'protection_quantity' => 0.4,
             'remaining_quantity' => 0.6,
         ],
+        'fallback_taker' => [
+            'fallback_client_linked' => true,
+            'fallback_quantity' => 0.6,
+            'fallback_status' => 'filled',
+            'fallback_trigger' => 'end_of_zone',
+            'fallback_type' => 'market',
+            'maker_liquidity_role' => 'maker',
+            'maker_slippage_cost_usdt' => 0.0,
+            'metadata_redacted' => true,
+            'parent_filled_quantity' => 0.4,
+            'parent_remaining_quantity' => 0.6,
+            'parent_status' => 'expired',
+            'position_entry_order_count' => 2,
+            'position_size' => 1.0,
+            'protection_quantity' => 1.0,
+            'slippage_guard_bps' => 25.240481,
+            'taker_liquidity_role' => 'taker',
+            'taker_slippage_bps' => 5.0,
+            'taker_slippage_cost_usdt' => 7.50015,
+        ],
         'market_with_slippage' => [
             'cost_model_version' => 'fixed_adverse_slippage_bps_v1',
             'execution_price' => 25000.5,
@@ -176,7 +196,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(14, $catalogKeys);
+        self::assertCount(15, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

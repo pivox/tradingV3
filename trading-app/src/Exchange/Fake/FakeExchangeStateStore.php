@@ -559,6 +559,16 @@ class FakeExchangeStateStore
         });
     }
 
+    /**
+     * @template TResult
+     * @param callable(): TResult $operationCallback
+     * @return TResult
+     */
+    public function runAtomically(callable $operationCallback): mixed
+    {
+        return $this->transactional($operationCallback);
+    }
+
     private function firstFaultIndex(FakeExchangeOperation $operation): ?int
     {
         foreach ($this->pendingFaults as $index => $payload) {
