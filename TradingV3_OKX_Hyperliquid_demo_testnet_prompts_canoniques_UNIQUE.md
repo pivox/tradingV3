@@ -11,7 +11,7 @@
 |---:|---|---|---|---:|---|---|---|---|---|
 | 1 | #196 — Fallback taker de fin de zone | done | issue/196-fake-fallback-taker-v1 | #282 | 4186abf243a035af16f7672bc493c225d31112d3 | worker_critical → review_fix | verte | favorable sur 4186abf243 | 2026-07-16T14:18:05Z |
 | 2 | #196 — TP1 puis trailing stop | done | issue/196-fake-tp1-trailing-v1 | #283 | 806f92dc1a162b50515a44e42a825f976f0610cb | worker_critical → review_fix → review_escalated | verte | favorable sur 806f92dc1a | 2026-07-16T19:32:05Z |
-| 3 | #196 — Injection out-of-order | in_progress | issue/196-fake-out-of-order-v1 | — | 8d0e1cc10540aaab034573a7320d372139c0b699 | worker_complex | — | — | — |
+| 3 | #196 — Injection out-of-order | in_progress | issue/196-fake-out-of-order-v1 | — | 95100f3f200f257cdfa1a59e9c3043e53697acd0 | worker_complex | — | — | — |
 | 4 | #196 — Funding positif/négatif | pending | — | — | — | — | — | — | — |
 | 5 | #196 — Garde One-Way | pending | — | — | — | — | — | — | — |
 | 6 | #196 — Recette Fake multi-profils | pending | — | — | — | — | — | — | — |
