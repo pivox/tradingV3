@@ -52,11 +52,13 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
      */
     public function drainPrivateEvents(?string $symbol = null): iterable
     {
+        $scenarioLease = $this->stateStore->acquirePrivateWsConsumptionLease();
         if ($this->stateStore->hasPrivateWsScenario()) {
-            yield from $this->drainPrivateWsScenario($symbol);
+            yield from $this->drainPrivateWsScenario($symbol, $scenarioLease);
 
             return;
         }
+        $scenarioLease->release();
 
         if ($this->resyncRequired) {
             throw $this->resyncReason === 'fake_private_ws_sequence_gap'
@@ -203,10 +205,10 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
     /**
      * @return \Generator<int,FakeExchangeEvent>
      */
-    private function drainPrivateWsScenario(?string $symbol): \Generator
-    {
-        $lease = $this->stateStore->acquirePrivateWsConsumptionLease();
-
+    private function drainPrivateWsScenario(
+        ?string $symbol,
+        FakePrivateWsConsumptionLease $lease,
+    ): \Generator {
         try {
             if ($this->requiresResync()) {
                 throw FakePrivateWsException::snapshotResyncRequired(

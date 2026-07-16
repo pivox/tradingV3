@@ -410,12 +410,13 @@ final class ExchangeWsIngestionServiceTest extends TestCase
                 ['event_sequence' => 1],
             );
             $configured = new FakeExchangeStateStore($stateFile);
+            $configured->appendEvent($event);
+            $secondState = new FakeExchangeStateStore($stateFile);
             $configured->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
                 'file-exclusive-v1',
                 [$event],
             ));
             $firstState = new FakeExchangeStateStore($stateFile);
-            $secondState = new FakeExchangeStateStore($stateFile);
 
             $first = (new FakeExchangeWsClient($firstState))->drainPrivateEvents();
             self::assertInstanceOf(\Generator::class, $first);
