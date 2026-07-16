@@ -716,7 +716,8 @@ final readonly class FakeExchangeMatchingEngine
             'margin_contract_size' => $marginContractSize,
         ], static fn (mixed $value): bool => $value !== null)
             + $this->lineageMetadata($request->metadata)
-            + $this->fallbackPolicyMetadata($request->metadata);
+            + $this->fallbackPolicyMetadata($request->metadata)
+            + $this->tp1TrailingPolicyMetadata($request->metadata);
     }
 
     /**
@@ -767,6 +768,7 @@ final readonly class FakeExchangeMatchingEngine
 
         $stopLoss = $this->floatMetadata($entryOrder->metadata, 'attached_stop_loss_price');
         $takeProfit = $this->floatMetadata($entryOrder->metadata, 'attached_take_profit_price');
+        $trailingPolicy = FakeTp1TrailingPolicy::fromMetadata($entryOrder->metadata);
         if ($stopLoss === null && $takeProfit === null) {
             return $entryOrder;
         }
@@ -799,7 +801,8 @@ final readonly class FakeExchangeMatchingEngine
                 $entryOrder,
                 ExchangeOrderType::TAKE_PROFIT,
                 $takeProfit,
-                'tp',
+                $trailingPolicy instanceof FakeTp1TrailingPolicy ? 'tp1' : 'tp',
+                $trailingPolicy?->tp1Quantity,
             )->exchangeOrderId;
         }
 
@@ -952,20 +955,28 @@ final readonly class FakeExchangeMatchingEngine
         ExchangeOrderType $type,
         float $stopPrice,
         string $suffix,
+        ?string $quantityDecimal = null,
     ): ExchangeOrderDto {
         $side = $entryOrder->positionSide === ExchangePositionSide::SHORT
             ? ExchangeOrderSide::BUY
             : ExchangeOrderSide::SELL;
-        $metadata = $this->lineageMetadata($entryOrder->metadata) + [
-            'source' => 'fake_exchange',
-            'parent_order_id' => $entryOrder->exchangeOrderId,
-            'parent_client_order_id' => $entryOrder->clientOrderId,
-            'protection_kind' => $suffix,
-        ];
+        $metadata = $this->lineageMetadata($entryOrder->metadata)
+            + $this->tp1TrailingPolicyMetadata($entryOrder->metadata)
+            + [
+                'source' => 'fake_exchange',
+                'parent_order_id' => $entryOrder->exchangeOrderId,
+                'parent_client_order_id' => $entryOrder->clientOrderId,
+                'protection_kind' => $suffix,
+            ];
         if (\array_key_exists('margin_contract_size', $entryOrder->metadata)) {
             $metadata['margin_contract_size'] = $entryOrder->metadata['margin_contract_size'];
         }
-        $protectionQuantity = $this->protectionQuantity($entryOrder);
+        $protectionQuantity = $quantityDecimal !== null
+            ? (float) $quantityDecimal
+            : $this->protectionQuantity($entryOrder);
+        $metadata['quantity_decimal'] = $quantityDecimal ?? self::canonicalFloat($protectionQuantity);
+        $metadata['filled_quantity_decimal'] = '0';
+        $metadata['remaining_quantity_decimal'] = $metadata['quantity_decimal'];
         $order = new ExchangeOrderDto(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
@@ -992,6 +1003,153 @@ final readonly class FakeExchangeMatchingEngine
         $this->appendEvent('protection_order.created', $order, ['parent_order_id' => $entryOrder->exchangeOrderId]);
 
         return $order;
+    }
+
+    private function activateTrailingStop(
+        ExchangeOrderDto $tp1Order,
+        float $remainingQuantity,
+        float $watermark,
+    ): ExchangeOrderDto {
+        $policy = FakeTp1TrailingPolicy::fromMetadata($tp1Order->metadata);
+        $parentOrderId = $this->stringMetadata($tp1Order->metadata, 'parent_order_id');
+        if (!$policy instanceof FakeTp1TrailingPolicy || $parentOrderId === null) {
+            throw new \LogicException('fake_tp1_trailing_activation_state_invalid');
+        }
+        if (!$tp1Order->positionSide instanceof ExchangePositionSide) {
+            throw new \LogicException('fake_tp1_trailing_position_side_unavailable');
+        }
+
+        $stopPrice = $tp1Order->positionSide === ExchangePositionSide::LONG
+            ? $watermark - $policy->trailingOffsetFloat()
+            : $watermark + $policy->trailingOffsetFloat();
+        if (!\is_finite($stopPrice) || $stopPrice <= 0.0 || $remainingQuantity <= 0.00000001) {
+            throw new \LogicException('fake_tp1_trailing_stop_invalid');
+        }
+
+        $clientOrderId = 'fake-trailing-' . substr(hash(
+            'sha256',
+            $parentOrderId . ':' . $tp1Order->exchangeOrderId,
+        ), 0, 32);
+        $existing = $this->stateStore->getOrderByClientOrderId($tp1Order->symbol, $clientOrderId);
+        if ($existing instanceof ExchangeOrderDto) {
+            if (!$this->trailingChildMatchesActivation(
+                $existing,
+                $tp1Order,
+                $remainingQuantity,
+                $watermark,
+                $stopPrice,
+            )) {
+                throw new \LogicException('fake_tp1_trailing_client_order_id_conflict');
+            }
+
+            return $existing;
+        }
+
+        $initialStopFound = false;
+        foreach ($this->stateStore->getOpenOrders($tp1Order->symbol) as $candidate) {
+            if (
+                $candidate->orderType !== ExchangeOrderType::STOP_LOSS
+                || $this->stringMetadata($candidate->metadata, 'parent_order_id') !== $parentOrderId
+            ) {
+                continue;
+            }
+
+            $initialStopFound = true;
+            $this->cancelOpenOrder($candidate, 'tp1_replaced_by_trailing');
+        }
+        if (!$initialStopFound) {
+            throw new \LogicException('fake_tp1_trailing_initial_stop_unavailable');
+        }
+
+        $quantityDecimal = self::canonicalFloat($remainingQuantity);
+        $watermarkDecimal = self::canonicalFloat($watermark);
+        $stopPriceDecimal = self::canonicalFloat($stopPrice);
+        $metadata = $this->lineageMetadata($tp1Order->metadata)
+            + $policy->toMetadata()
+            + [
+                'source' => 'fake_exchange',
+                'parent_order_id' => $parentOrderId,
+                'parent_client_order_id' => $this->stringMetadata($tp1Order->metadata, 'parent_client_order_id'),
+                'protection_kind' => 'trailing',
+                'trailing_state_version' => FakeTp1TrailingPolicy::VERSION,
+                'trailing_state_status' => 'active',
+                'trailing_activation_order_id' => $tp1Order->exchangeOrderId,
+                'trailing_watermark' => $watermark,
+                'trailing_watermark_decimal' => $watermarkDecimal,
+                'quantity_decimal' => $quantityDecimal,
+                'filled_quantity_decimal' => '0',
+                'remaining_quantity_decimal' => $quantityDecimal,
+                'stop_price_decimal' => $stopPriceDecimal,
+            ];
+        if (\array_key_exists('margin_contract_size', $tp1Order->metadata)) {
+            $metadata['margin_contract_size'] = $tp1Order->metadata['margin_contract_size'];
+        }
+
+        $trailing = new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: $tp1Order->marketType,
+            symbol: $tp1Order->symbol,
+            exchangeOrderId: $this->stateStore->nextOrderId(),
+            clientOrderId: $clientOrderId,
+            side: $tp1Order->side,
+            positionSide: $tp1Order->positionSide,
+            orderType: ExchangeOrderType::TRIGGER,
+            status: ExchangeOrderStatus::OPEN,
+            quantity: $remainingQuantity,
+            filledQuantity: 0.0,
+            remainingQuantity: $remainingQuantity,
+            price: null,
+            averagePrice: null,
+            stopPrice: $stopPrice,
+            reduceOnly: true,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: $this->clock->now(),
+            metadata: $metadata,
+        );
+        $this->stateStore->saveOrder($trailing);
+        $this->appendEvent('protection_order.created', $trailing, [
+            'parent_order_id' => $parentOrderId,
+        ]);
+        $this->appendEvent('trailing_stop.armed', $trailing, [
+            'parent_order_id' => $parentOrderId,
+            'activation_order_id' => $tp1Order->exchangeOrderId,
+            'state_version' => FakeTp1TrailingPolicy::VERSION,
+            'watermark' => $watermark,
+            'stop_price' => $stopPrice,
+            'remaining_quantity' => $remainingQuantity,
+        ]);
+
+        return $trailing;
+    }
+
+    private function trailingChildMatchesActivation(
+        ExchangeOrderDto $trailing,
+        ExchangeOrderDto $tp1Order,
+        float $remainingQuantity,
+        float $watermark,
+        float $stopPrice,
+    ): bool {
+        return $trailing->symbol === $tp1Order->symbol
+            && $trailing->marketType === $tp1Order->marketType
+            && $trailing->side === $tp1Order->side
+            && $trailing->positionSide === $tp1Order->positionSide
+            && $trailing->orderType === ExchangeOrderType::TRIGGER
+            && $trailing->status === ExchangeOrderStatus::OPEN
+            && $trailing->reduceOnly
+            && !$trailing->postOnly
+            && abs($trailing->quantity - $remainingQuantity) <= 0.00000001
+            && abs(($trailing->stopPrice ?? 0.0) - $stopPrice) <= 0.00000001
+            && $this->stringMetadata($trailing->metadata, 'trailing_state_version') === FakeTp1TrailingPolicy::VERSION
+            && $this->stringMetadata($trailing->metadata, 'trailing_state_status') === 'active'
+            && $this->stringMetadata($trailing->metadata, 'trailing_activation_order_id') === $tp1Order->exchangeOrderId
+            && abs(($this->floatMetadata($trailing->metadata, 'trailing_watermark') ?? 0.0) - $watermark) <= 0.00000001;
+    }
+
+    private function isTp1ProtectionOrder(ExchangeOrderDto $order): bool
+    {
+        return $order->orderType === ExchangeOrderType::TAKE_PROFIT
+            && $this->stringMetadata($order->metadata, 'protection_kind') === 'tp1';
     }
 
     /**
@@ -1077,7 +1235,13 @@ final readonly class FakeExchangeMatchingEngine
                 $fillFee,
                 $fillCost,
             );
-            $remainingSize = max(0.0, $existing->size - $fillQuantity);
+            try {
+                $remainingSize = max(0.0, (float) (string) BigDecimal::of(self::canonicalFloat($existing->size))
+                    ->minus(self::canonicalFloat($fillQuantity))
+                    ->stripTrailingZeros());
+            } catch (MathException) {
+                throw new \LogicException('fake_position_remaining_quantity_invalid');
+            }
             if ($remainingSize <= 0.00000001) {
                 $this->stateStore->removePosition($order->symbol, $order->positionSide);
                 $this->stateStore->appendEvent(new FakeExchangeEvent(
@@ -1098,7 +1262,11 @@ final readonly class FakeExchangeMatchingEngine
                 $this->clock->now(),
                 ['order_id' => $order->exchangeOrderId, 'size' => $remainingSize],
             ));
-            if ($this->isTriggerOrder($order)) {
+            if ($this->isTp1ProtectionOrder($order)) {
+                if ($order->status === ExchangeOrderStatus::FILLED) {
+                    $this->activateTrailingStop($order, $remainingSize, $executionPrice);
+                }
+            } elseif ($this->isTriggerOrder($order)) {
                 $this->cancelSiblingProtectionOrders($order);
             }
 
@@ -1373,6 +1541,27 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $fallback;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function tp1TrailingPolicyMetadata(array $metadata): array
+    {
+        $policy = [];
+        foreach (FakeTp1TrailingPolicy::METADATA_KEYS as $key) {
+            if (!\array_key_exists($key, $metadata)) {
+                continue;
+            }
+
+            $value = $metadata[$key];
+            if ($value === null || \is_scalar($value)) {
+                $policy[$key] = $value;
+            }
+        }
+
+        return $policy;
     }
 
     private function protectionQuantity(ExchangeOrderDto $entryOrder): float
@@ -1803,6 +1992,28 @@ final readonly class FakeExchangeMatchingEngine
                 $reduceIntent ? 'reduce-only' : 'entry',
                 $request->positionSide->value,
             ));
+        }
+
+        $trailingPolicy = FakeTp1TrailingPolicy::fromMetadata($request->metadata);
+        if (!$trailingPolicy instanceof FakeTp1TrailingPolicy) {
+            return;
+        }
+        if (
+            $reduceIntent
+            || $request->attachedStopLossPrice === null
+            || $request->attachedTakeProfitPrice === null
+        ) {
+            throw new \InvalidArgumentException('fake_tp1_trailing_protection_required');
+        }
+
+        try {
+            $tp1Quantity = BigDecimal::of($trailingPolicy->tp1Quantity);
+            $entryQuantity = BigDecimal::of($request->exactQuantity() ?? '');
+        } catch (MathException) {
+            throw new \InvalidArgumentException('fake_tp1_trailing_quantity_invalid');
+        }
+        if ($tp1Quantity->isGreaterThanOrEqualTo($entryQuantity)) {
+            throw new \InvalidArgumentException('fake_tp1_trailing_quantity_invalid');
         }
     }
 

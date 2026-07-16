@@ -1,0 +1,39 @@
+{
+  "schema_version": "fake-tp1-trailing-fixtures-v1",
+  "cases": [
+    {
+      "name": "long",
+      "symbol": "BTCUSDT",
+      "position_side": "long",
+      "entry_side": "buy",
+      "exit_side": "sell",
+      "quantity": "1.0",
+      "initial_stop": "24800.0",
+      "tp1_price": "25200.0",
+      "tp1_quantity": "0.4",
+      "trailing_offset": "100.0",
+      "activation_stop": "25100.0",
+      "favorable_prices": ["25300.0", "25400.0"],
+      "expected_favorable_stops": ["25200.0", "25300.0"],
+      "adverse_price": "25350.0",
+      "gap_price": "25250.0"
+    },
+    {
+      "name": "short",
+      "symbol": "BTCUSDT",
+      "position_side": "short",
+      "entry_side": "sell",
+      "exit_side": "buy",
+      "quantity": "1.0",
+      "initial_stop": "25200.0",
+      "tp1_price": "24800.0",
+      "tp1_quantity": "0.4",
+      "trailing_offset": "100.0",
+      "activation_stop": "24900.0",
+      "favorable_prices": ["24700.0", "24600.0"],
+      "expected_favorable_stops": ["24800.0", "24700.0"],
+      "adverse_price": "24650.0",
+      "gap_price": "24750.0"
+    }
+  ]
+}
