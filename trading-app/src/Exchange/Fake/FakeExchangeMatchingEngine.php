@@ -1157,7 +1157,7 @@ final readonly class FakeExchangeMatchingEngine
 
     private function activateTrailingStop(
         ExchangeOrderDto $tp1Order,
-        float $remainingQuantity,
+        float $positionRemainingQuantity,
         float $watermark,
     ): ExchangeOrderDto {
         $policy = FakeTp1TrailingPolicy::fromMetadata($tp1Order->metadata);
@@ -1168,8 +1168,23 @@ final readonly class FakeExchangeMatchingEngine
         if (!$tp1Order->positionSide instanceof ExchangePositionSide) {
             throw new \LogicException('fake_tp1_trailing_position_side_unavailable');
         }
+        $parentOrder = $this->stateStore->getOrder($parentOrderId);
+        if (
+            !$parentOrder instanceof ExchangeOrderDto
+            || $parentOrder->symbol !== $tp1Order->symbol
+            || $parentOrder->marketType !== $tp1Order->marketType
+            || $parentOrder->positionSide !== $tp1Order->positionSide
+        ) {
+            throw new \LogicException('fake_tp1_trailing_activation_state_invalid');
+        }
 
         try {
+            $protectedQuantityDecimalValue = BigDecimal::of(self::canonicalFloat(
+                $this->protectionQuantity($parentOrder),
+            ));
+            $quantityDecimalValue = $protectedQuantityDecimalValue
+                ->minus($this->orderFilledQuantityDecimal($tp1Order))
+                ->stripTrailingZeros();
             $watermarkDecimalValue = BigDecimal::of(self::canonicalFloat($watermark));
             $rawStopPriceDecimalValue = $tp1Order->positionSide === ExchangePositionSide::LONG
                 ? $watermarkDecimalValue->minus($policy->trailingOffset)
@@ -1182,11 +1197,18 @@ final readonly class FakeExchangeMatchingEngine
         } catch (MathException) {
             throw new \LogicException('fake_tp1_trailing_stop_invalid');
         }
-        $quantityDecimal = self::canonicalFloat($remainingQuantity);
+        $quantityDecimal = (string) $quantityDecimalValue;
+        $remainingQuantity = (float) $quantityDecimal;
         $watermarkDecimal = (string) $watermarkDecimalValue;
         $stopPriceDecimal = (string) $stopPriceDecimalValue;
         $stopPrice = (float) $stopPriceDecimal;
-        if (!\is_finite($stopPrice) || $stopPrice <= 0.0 || $remainingQuantity <= 0.00000001) {
+        if (
+            !\is_finite($stopPrice)
+            || $stopPrice <= 0.0
+            || !\is_finite($remainingQuantity)
+            || $remainingQuantity <= 0.00000001
+            || $remainingQuantity > $positionRemainingQuantity + 0.00000001
+        ) {
             throw new \LogicException('fake_tp1_trailing_stop_invalid');
         }
         $validation = $this->derivedProtectionValidation(
@@ -1252,6 +1274,10 @@ final readonly class FakeExchangeMatchingEngine
             if (
                 $initialStop->stopPrice === null
                 || !\is_finite($initialStop->stopPrice)
+                || !self::sameDecimal(
+                    $this->orderRemainingQuantityDecimal($initialStop),
+                    (string) $protectedQuantityDecimalValue,
+                )
                 || (
                     $tp1Order->positionSide === ExchangePositionSide::LONG
                     && $stopPrice < $initialStop->stopPrice

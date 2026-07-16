@@ -281,6 +281,44 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount(1, $state->events('trailing_stop.armed'));
     }
 
+    public function testTrailingProtectsOnlyNewEntryRemainderWhenSameSideExposureAlreadyExists(): void
+    {
+        [, $adapter, $scenario] = $this->exchange();
+        $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'pre-existing-long',
+            quantityDecimal: '1.0',
+        ));
+        $fixture = $this->fixture('long');
+        $this->placeFixtureEntry($adapter, $fixture);
+        self::assertSame(2.0, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $scenario->fillOrder($tp1->exchangeOrderId, null, (float) $fixture['tp1_price']);
+
+        $trailing = $this->orderByType($adapter, ExchangeOrderType::TRIGGER);
+        self::assertSame(1.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(0.6, $trailing->quantity);
+        self::assertSame('0.6', $trailing->metadata['quantity_decimal'] ?? null);
+
+        $scenario->fillOrder($trailing->exchangeOrderId);
+
+        self::assertSame(1.0, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+    }
+
     #[DataProvider('directionProvider')]
     public function testDefaultSpreadActivationAndNonTickRatchetQuantizeRuntimeStop(string $direction): void
     {
