@@ -1151,7 +1151,7 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->scenario->events('protection_order.created'));
     }
 
-    public function testRejectedAttachedProtectionKeepsEntryFillAndEmitsEvent(): void
+    public function testRejectedAttachedProtectionClosesPositionWithReduceOnlyCompensation(): void
     {
         $this->scenario->rejectNextProtectionOrder();
 
@@ -1160,14 +1160,72 @@ final class FakeExchangeAdapterTest extends TestCase
             price: null,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: ['internal_trade_id' => 'itd-stop-compensation'],
         ));
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
         self::assertSame('rejected', $result->order->metadata['protection_status'] ?? null);
+        self::assertSame('reduce_only_market_close', $result->order->metadata['fail_safe_action'] ?? null);
+        self::assertSame('completed', $result->order->metadata['compensation_status'] ?? null);
+        self::assertSame('position_closed', $result->order->metadata['compensation_outcome'] ?? null);
+        self::assertSame(true, $result->order->metadata['position_flat_after_compensation'] ?? null);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
-        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+
+        $orders = $this->adapter->getOrdersSnapshot('BTCUSDT');
+        self::assertCount(2, $orders);
+        $compensation = array_values(array_filter(
+            $orders,
+            static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+        ))[0] ?? null;
+        self::assertInstanceOf(ExchangeOrderDto::class, $compensation);
+        self::assertSame(ExchangeOrderType::MARKET, $compensation->orderType);
+        self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
+        self::assertSame(ExchangeOrderSide::SELL, $compensation->side);
+        self::assertSame(
+            $compensation->exchangeOrderId,
+            $result->order->metadata['compensation_order_id'] ?? null,
+        );
+        self::assertSame(
+            $compensation->clientOrderId,
+            $result->order->metadata['compensation_client_order_id'] ?? null,
+        );
         self::assertCount(1, $this->scenario->events('protection_order.rejected'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+        self::assertCount(2, $this->scenario->events('order.filled'));
+        self::assertSame(
+            'itd-stop-compensation',
+            $this->scenario->events('position.closed')[0]->payload['internal_trade_id'] ?? null,
+        );
+    }
+
+    public function testProtectionCompensationIsNotDuplicatedOnEntryReplay(): void
+    {
+        $this->scenario->rejectNextProtectionOrder();
+        $request = $this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-stop-compensation-replay',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        );
+
+        $first = $this->adapter->placeOrder($request);
+        $second = $this->adapter->placeOrder($request);
+
+        self::assertTrue($first->accepted);
+        self::assertTrue($second->accepted);
+        self::assertSame(true, $second->metadata['idempotent_replay'] ?? null);
+        self::assertSame($first->exchangeOrderId, $second->exchangeOrderId);
+        self::assertSame(
+            $first->order?->metadata['compensation_order_id'] ?? null,
+            $second->order?->metadata['compensation_order_id'] ?? null,
+        );
+        self::assertCount(2, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(2, $this->scenario->events('order.filled'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
     public function testMovePriceTriggersAttachedStopLossAndClosesPosition(): void

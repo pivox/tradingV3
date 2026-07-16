@@ -434,9 +434,9 @@ final readonly class FakeExchangeMatchingEngine
             $metadata['protection_reject_reason'] = 'protection_rejected_by_scenario';
             $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, $metadata);
             $this->stateStore->saveOrder($updated);
-            $this->appendEvent('protection_order.rejected', $entryOrder, ['reason' => 'protection_rejected_by_scenario']);
+            $this->appendEvent('protection_order.rejected', $updated, ['reason' => 'protection_rejected_by_scenario']);
 
-            return $updated;
+            return $this->compensateRejectedProtection($updated);
         }
 
         $metadata['protection_status'] = 'accepted';
@@ -460,6 +460,78 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, $metadata);
+        $this->stateStore->saveOrder($updated);
+
+        return $updated;
+    }
+
+    private function compensateRejectedProtection(ExchangeOrderDto $entryOrder): ExchangeOrderDto
+    {
+        if (!$entryOrder->positionSide instanceof ExchangePositionSide) {
+            throw new \LogicException('fake_protection_compensation_position_side_unavailable');
+        }
+
+        $position = $this->stateStore->getPosition($entryOrder->symbol, $entryOrder->positionSide);
+        if (!$position instanceof ExchangePositionDto || $position->size <= 0.00000001) {
+            throw new \LogicException('fake_protection_compensation_position_unavailable');
+        }
+
+        $clientOrderId = 'fake-comp-' . substr(hash(
+            'sha256',
+            $entryOrder->exchangeOrderId . ':' . ($entryOrder->clientOrderId ?? ''),
+        ), 0, 32);
+        $leverage = $this->floatMetadata($entryOrder->metadata, 'leverage');
+        $marginMode = $this->stringMetadata($entryOrder->metadata, 'margin_mode');
+        if (!\in_array($marginMode, ['isolated', 'cross'], true)) {
+            $marginMode = 'isolated';
+        }
+
+        $result = $this->submit(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: $entryOrder->marketType,
+            symbol: $entryOrder->symbol,
+            side: $entryOrder->positionSide === ExchangePositionSide::LONG
+                ? ExchangeOrderSide::SELL
+                : ExchangeOrderSide::BUY,
+            positionSide: $entryOrder->positionSide,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: $position->size,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: $leverage !== null && $leverage > 0.0 ? (int) $leverage : null,
+            marginMode: $marginMode,
+            clientOrderId: $clientOrderId,
+            metadata: $this->lineageMetadata($entryOrder->metadata),
+        ));
+        $compensation = $result->order;
+        if (
+            !$result->accepted
+            || !$compensation instanceof ExchangeOrderDto
+            || $compensation->status !== ExchangeOrderStatus::FILLED
+            || !$compensation->reduceOnly
+        ) {
+            throw new \LogicException('fake_protection_compensation_order_failed');
+        }
+
+        $remainingPosition = $this->stateStore->getPosition($entryOrder->symbol, $entryOrder->positionSide);
+        if ($remainingPosition instanceof ExchangePositionDto && $remainingPosition->size > 0.00000001) {
+            throw new \LogicException('fake_protection_compensation_position_not_flat');
+        }
+
+        $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, array_replace(
+            $entryOrder->metadata,
+            [
+                'fail_safe_action' => 'reduce_only_market_close',
+                'compensation_status' => 'completed',
+                'compensation_outcome' => 'position_closed',
+                'compensation_order_id' => $compensation->exchangeOrderId,
+                'compensation_client_order_id' => $compensation->clientOrderId,
+                'position_flat_after_compensation' => true,
+            ],
+        ));
         $this->stateStore->saveOrder($updated);
 
         return $updated;
