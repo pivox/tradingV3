@@ -424,7 +424,7 @@ final class FakeProvidersTest extends TestCase
             24500.0,
             options: [
                 'client_order_id' => 'triggered-protection-stop',
-                'side' => 3,
+                'side' => 2,
                 'reduce_only' => true,
                 'reduceOnly' => true,
             ],
@@ -463,8 +463,8 @@ final class FakeProvidersTest extends TestCase
     {
         $cases = [
             1 => [OrderSide::BUY, 'long', false],
-            '2' => [OrderSide::BUY, 'short', true],
-            3 => [OrderSide::SELL, 'long', true],
+            '2' => [OrderSide::SELL, 'long', true],
+            3 => [OrderSide::BUY, 'short', true],
             '4' => [OrderSide::SELL, 'short', false],
         ];
 

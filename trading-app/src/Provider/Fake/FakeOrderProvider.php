@@ -338,8 +338,8 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
 
         return match ($this->legacyCode($value, 'side')) {
             1 => ['side' => ExchangeOrderSide::BUY, 'positionSide' => ExchangePositionSide::LONG, 'reduceOnly' => false],
-            2 => ['side' => ExchangeOrderSide::BUY, 'positionSide' => ExchangePositionSide::SHORT, 'reduceOnly' => true],
-            3 => ['side' => ExchangeOrderSide::SELL, 'positionSide' => ExchangePositionSide::LONG, 'reduceOnly' => true],
+            2 => ['side' => ExchangeOrderSide::SELL, 'positionSide' => ExchangePositionSide::LONG, 'reduceOnly' => true],
+            3 => ['side' => ExchangeOrderSide::BUY, 'positionSide' => ExchangePositionSide::SHORT, 'reduceOnly' => true],
             4 => ['side' => ExchangeOrderSide::SELL, 'positionSide' => ExchangePositionSide::SHORT, 'reduceOnly' => false],
             default => throw new \LogicException('Validated legacy side code is outside the supported range.'),
         };
