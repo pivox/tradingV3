@@ -1138,6 +1138,9 @@ final class FakeTp1TrailingTest extends TestCase
             'filled_quantity',
             'quantity',
             'remaining_quantity',
+            'price',
+            'post_only',
+            'time_in_force',
             'quantity_decimal',
             'quantity_decimal_missing',
             'filled_quantity_decimal',
@@ -1382,8 +1385,11 @@ final class FakeTp1TrailingTest extends TestCase
         $quantity = $order->quantity;
         $filledQuantity = $order->filledQuantity;
         $remainingQuantity = $order->remainingQuantity;
+        $price = $order->price;
         $stopPrice = $order->stopPrice;
         $reduceOnly = $order->reduceOnly;
+        $postOnly = $order->postOnly;
+        $timeInForce = $order->timeInForce;
         $metadata = $order->metadata;
 
         if (\in_array($conflict, [
@@ -1408,6 +1414,9 @@ final class FakeTp1TrailingTest extends TestCase
                 'filled_quantity' => $filledQuantity = 0.1,
                 'quantity' => $quantity = 0.0,
                 'remaining_quantity' => $remainingQuantity = 0.5,
+                'price' => $price = 25100.0,
+                'post_only' => $postOnly = true,
+                'time_in_force' => $timeInForce = ExchangeTimeInForce::GTC,
                 'quantity_decimal' => $metadata['quantity_decimal'] = '0.7',
                 'filled_quantity_decimal' => $metadata['filled_quantity_decimal'] = '0.1',
                 'remaining_quantity_decimal' => $metadata['remaining_quantity_decimal'] = '0.5',
@@ -1433,12 +1442,12 @@ final class FakeTp1TrailingTest extends TestCase
             quantity: $quantity,
             filledQuantity: $filledQuantity,
             remainingQuantity: $remainingQuantity,
-            price: $order->price,
+            price: $price,
             averagePrice: $order->averagePrice,
             stopPrice: $stopPrice,
             reduceOnly: $reduceOnly,
-            postOnly: $order->postOnly,
-            timeInForce: $order->timeInForce,
+            postOnly: $postOnly,
+            timeInForce: $timeInForce,
             createdAt: $order->createdAt,
             updatedAt: $order->updatedAt,
             metadata: $metadata,

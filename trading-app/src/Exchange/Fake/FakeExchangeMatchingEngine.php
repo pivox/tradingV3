@@ -1534,6 +1534,9 @@ final readonly class FakeExchangeMatchingEngine
             || $order->filledQuantity !== 0.0
             || !\is_finite($order->remainingQuantity)
             || $order->remainingQuantity <= 0.0
+            || $order->price !== null
+            || $order->postOnly
+            || $order->timeInForce !== null
             || !\is_string($quantityDecimal)
             || !\is_string($filledQuantityDecimal)
             || !\is_string($remainingQuantityDecimal)
