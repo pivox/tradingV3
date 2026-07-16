@@ -449,6 +449,7 @@ class FakeExchangeStateStore
 
         $event = new FakeExchangeEvent($event->type, $event->symbol, $event->occurredAt, $payload);
         $this->events[] = $event;
+        $this->appendEventToActivePrivateWsScenario($event);
         $this->persist();
     }
 
@@ -1438,6 +1439,26 @@ class FakeExchangeStateStore
         $payload = $this->privateWs['scenario'];
 
         return \is_array($payload) ? FakePrivateWsScenario::fromArray($payload) : null;
+    }
+
+    private function appendEventToActivePrivateWsScenario(FakeExchangeEvent $event): void
+    {
+        $scenario = $this->privateWsScenario();
+        if (!$scenario instanceof FakePrivateWsScenario) {
+            return;
+        }
+
+        $delivery = FakePrivateWsDelivery::fromEvent(
+            sprintf(
+                '%s-appended-%04d',
+                $scenario->scenarioId,
+                \count($scenario->deliveries) + 1,
+            ),
+            $event,
+        );
+        $payload = $scenario->toArray();
+        $payload['deliveries'][] = $delivery->toArray();
+        $this->privateWs['scenario'] = $payload;
     }
 
     private function assertCurrentPrivateWsDelivery(FakePrivateWsDelivery $expected): FakePrivateWsDelivery

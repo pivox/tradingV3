@@ -25,6 +25,8 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeEventBus;
 use App\Exchange\Event\ExchangeEventInterface;
+use App\Exchange\Event\AbstractExchangeOrderEvent;
+use App\Exchange\Event\AbstractExchangePositionEvent;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Event\ExchangeOrderFilled;
@@ -32,10 +34,17 @@ use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionUpdated;
 use App\Exchange\Event\ExchangeProtectionOrderCreated;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
+use App\Exchange\Fake\FakeExchangeEvent;
+use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeExchangeWsClient;
+use App\Exchange\Fake\FakePrivateWsException;
+use App\Exchange\Fake\FakePrivateWsScenario;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
+use App\Exchange\Event\ExchangeEventNormalizerRegistry;
+use App\Exchange\Ws\ExchangeWsIngestionService;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -227,6 +236,80 @@ final class ExchangeReconciliationServiceTest extends TestCase
         $result = $service->reconcile($adapter, 'BTCUSDT');
 
         self::assertCount(1, $result->metadata['unprotected_positions'] ?? []);
+    }
+
+    public function testPrivateWsGapReconcilesSnapshotBeforeCompletionAndResumesContiguously(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_reconcile_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $adapter = $this->adapter($state);
+            $adapter->placeOrder($this->marketRequest());
+            $events = $state->events();
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+                'reconcile-v1',
+                [$events[0], $events[2], $events[1]],
+            ));
+
+            $store = new RecordingProjectionStore();
+            $bus = new ExchangeEventBus($store, new NullLogger());
+            $ingestion = new ExchangeWsIngestionService(
+                new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+                $bus,
+                new NullLogger(),
+            );
+
+            try {
+                $ingestion->drain(new FakeExchangeWsClient($state));
+                self::fail('The out-of-order fixture must stop on its gap.');
+            } catch (FakePrivateWsException $exception) {
+                self::assertSame('fake_private_ws_sequence_gap', $exception->errorCode);
+            }
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $restoredClient = new FakeExchangeWsClient($restored);
+            self::assertTrue($restoredClient->requiresResync());
+            self::assertSame('fake_private_ws_sequence_gap', $restoredClient->audit()['resync_reason']);
+
+            $restoredAdapter = $this->adapter($restored);
+            $reconciliation = new ExchangeReconciliationService(
+                $bus,
+                $store,
+                $this->fixedClock(),
+                new NullLogger(),
+            );
+            $reconciliation->reconcile($restoredAdapter, 'BTCUSDT');
+
+            self::assertSame([], $store->openOrders(Exchange::FAKE, MarketType::PERPETUAL));
+            self::assertSame([[
+                'symbol' => 'BTCUSDT',
+                'side' => ExchangePositionSide::LONG,
+                'size' => 10.0,
+            ]], $store->openPositions(Exchange::FAKE, MarketType::PERPETUAL, 'BTCUSDT'));
+            self::assertTrue($restoredClient->requiresResync());
+
+            $restoredClient->completeSnapshotResync();
+            self::assertFalse($restoredClient->requiresResync());
+            self::assertSame(1, $restoredClient->audit()['resync_total']);
+            self::assertSame(3, $restoredClient->audit()['next_delivery_index']);
+
+            $restored->appendEvent(new FakeExchangeEvent(
+                'order.created',
+                'BTCUSDT',
+                new \DateTimeImmutable('2026-01-01T00:00:04+00:00'),
+            ));
+            $resumed = $ingestion->drain($restoredClient);
+
+            self::assertSame(1, $resumed->rawEventsRead);
+            self::assertSame(2, $restoredClient->audit()['acknowledged_total']);
+            self::assertSame('4', $restoredClient->audit()['last_acknowledged_sequence']);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
     }
 
     private function adapter(FakeExchangeStateStore $state): FakeExchangeAdapter
@@ -459,9 +542,19 @@ final readonly class SnapshotReconciliationAdapter implements ExchangeAdapterInt
 
 final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInterface
 {
+    /** @var array<string,ExchangeOrderDto> */
+    private array $orders = [];
+
     public function openOrders(Exchange $exchange, MarketType $marketType): array
     {
-        return [];
+        return array_values(array_filter(
+            $this->orders,
+            static fn (ExchangeOrderDto $order): bool => \in_array($order->status, [
+                ExchangeOrderStatus::PENDING,
+                ExchangeOrderStatus::OPEN,
+                ExchangeOrderStatus::PARTIALLY_FILLED,
+            ], true),
+        ));
     }
 
     /** @var ExchangeEventInterface[] */
@@ -472,7 +565,7 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
 
     public function hasOrder(ExchangeOrderDto $order): bool
     {
-        return false;
+        return isset($this->orders[$order->exchangeOrderId]);
     }
 
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
@@ -488,6 +581,23 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
     public function project(ExchangeEventInterface $event): void
     {
         $this->events[] = $event;
+        if ($event instanceof AbstractExchangeOrderEvent) {
+            $this->orders[$event->order()->exchangeOrderId] = $event->order();
+        }
+        if ($event instanceof AbstractExchangePositionEvent) {
+            $key = $event->symbol() . ':' . $event->side()->value;
+            $this->localOpenPositions = array_values(array_filter(
+                $this->localOpenPositions,
+                static fn (array $position): bool => $position['symbol'] . ':' . $position['side']->value !== $key,
+            ));
+            if (!$event instanceof ExchangePositionClosed) {
+                $this->localOpenPositions[] = [
+                    'symbol' => $event->symbol(),
+                    'side' => $event->side(),
+                    'size' => $event->size(),
+                ];
+            }
+        }
     }
 
     public function projectAtomically(array $events): void

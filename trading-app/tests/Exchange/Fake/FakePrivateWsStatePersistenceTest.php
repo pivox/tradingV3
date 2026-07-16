@@ -7,6 +7,7 @@ namespace App\Tests\Exchange\Fake;
 use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakePrivateWsDelivery;
 use App\Exchange\Fake\FakePrivateWsScenario;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -65,13 +66,48 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         ]], $audit['records']);
 
         $restored = new FakeExchangeStateStore($this->stateFile);
+        $restoredClient = new FakeExchangeWsClient($restored);
 
         self::assertTrue($restored->hasPrivateWsScenario());
+        self::assertTrue($restoredClient->requiresResync());
+        self::assertSame('resync_required', $restoredClient->connectionState());
+        self::assertSame('fake_private_ws_sequence_gap', $restoredClient->audit()['resync_reason']);
         self::assertEquals($gap, $restored->privateWsCurrentDelivery());
         self::assertSame($first->fingerprint, $restored->privateWsAcknowledgedFingerprint('1'));
         self::assertSame($audit, $restored->privateWsAudit());
         self::assertSame('1', $restored->privateWsLastAcknowledgedSequence());
         self::assertSame(2, $restored->privateWsExpectedNumericSequence());
+    }
+
+    public function testSnapshotCompletionAdvancesCoveredDeliveriesWithoutSortingFixture(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        foreach ([1, 2, 3] as $sequence) {
+            $state->appendEvent($this->event($sequence));
+        }
+        $state->configurePrivateWsScenario($this->scenario([1, 3, 2, 4]));
+
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+
+        $restored = new FakeExchangeStateStore($this->stateFile);
+        $restored->completePrivateWsSnapshotResync();
+        $audit = $restored->privateWsAudit();
+
+        self::assertSame('connected', $audit['connection_state']);
+        self::assertNull($audit['resync_reason']);
+        self::assertSame(1, $audit['resync_total']);
+        self::assertSame(3, $audit['next_delivery_index']);
+        self::assertSame('3', $audit['last_acknowledged_sequence']);
+        self::assertSame(3, $audit['last_observed_numeric_sequence']);
+        self::assertSame($gap->fingerprint, $restored->privateWsAcknowledgedFingerprint('3'));
+        self::assertNotNull($restored->privateWsAcknowledgedFingerprint('2'));
+        self::assertSame('4', $restored->privateWsCurrentDelivery()?->sequence);
+        self::assertSame('resync_completed', $audit['records'][1]['kind'] ?? null);
     }
 
     public function testExactDuplicateAndConflictAuditAreRedactedAndPersistent(): void
