@@ -51,6 +51,11 @@ final class ProtectionEnforcer
         }
 
         if ($attachedProtectionRequested) {
+            $adapterCompensation = $this->adapterCompensation($adapter, $plan, $entryResult, $decisionKey);
+            if ($adapterCompensation instanceof ProtectionEnforcementResult) {
+                return $adapterCompensation;
+            }
+
             try {
                 $confirmed = $this->findConfirmedStopLoss($adapter, $plan);
             } catch (\Throwable $e) {
@@ -177,6 +182,82 @@ final class ProtectionEnforcer
         array $extra = [],
     ): ProtectionEnforcementResult {
         return $this->failAndEmergencyClose($adapter, $plan, $entryClientOrderId, $decisionKey, $reason, $extra);
+    }
+
+    private function adapterCompensation(
+        ExchangeAdapterInterface $adapter,
+        OrderPlanModel $plan,
+        PlaceOrderResult $entryResult,
+        ?string $decisionKey,
+    ): ?ProtectionEnforcementResult {
+        $metadata = $entryResult->order?->metadata ?? [];
+        $compensationOrderId = $metadata['compensation_order_id'] ?? null;
+        if (
+            ($metadata['protection_status'] ?? null) !== 'rejected'
+            || ($metadata['fail_safe_action'] ?? null) !== 'reduce_only_market_close'
+            || ($metadata['compensation_status'] ?? null) !== 'completed'
+            || ($metadata['compensation_outcome'] ?? null) !== 'position_closed'
+            || ($metadata['position_flat_after_compensation'] ?? null) !== true
+            || !\is_string($compensationOrderId)
+            || trim($compensationOrderId) === ''
+        ) {
+            return null;
+        }
+
+        try {
+            $compensation = $adapter->getOrder($plan->symbol, $compensationOrderId);
+            if (
+                !$compensation instanceof ExchangeOrderDto
+                || $compensation->status !== ExchangeOrderStatus::FILLED
+                || $compensation->orderType !== ExchangeOrderType::MARKET
+                || !$compensation->reduceOnly
+                || $compensation->positionSide !== $this->positionSide($plan->side)
+            ) {
+                return null;
+            }
+
+            foreach ($adapter->getOpenPositions($plan->symbol) as $position) {
+                if (
+                    $position instanceof ExchangePositionDto
+                    && $position->side === $this->positionSide($plan->side)
+                    && $position->size > 0.00000001
+                ) {
+                    return null;
+                }
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $this->metrics->incr('protection_failed');
+        $this->metrics->incr('emergency_close');
+        $this->positionsLogger->critical('protection.failed_adapter_compensated', [
+            'symbol' => $plan->symbol,
+            'side' => $plan->side->value,
+            'stop' => $plan->stop,
+            'decision_key' => $decisionKey,
+            'compensation_order_id' => $compensationOrderId,
+            'reason' => 'attached_stop_loss_not_confirmed',
+        ]);
+
+        return new ProtectionEnforcementResult(
+            status: ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED,
+            protected: false,
+            emergencyOrderId: $compensationOrderId,
+            metadata: [
+                'reason' => 'attached_stop_loss_not_confirmed',
+                'adapter_compensation' => true,
+                'compensation_status' => 'completed',
+                'compensation_outcome' => 'position_closed',
+                'emergency_close' => [
+                    'reason' => 'adapter_protection_compensation',
+                    'close_status' => $compensation->status->value,
+                    'close_accepted' => true,
+                    'position_still_open' => false,
+                ],
+                'stale_protection_cancel' => null,
+            ],
+        );
     }
 
     /**
