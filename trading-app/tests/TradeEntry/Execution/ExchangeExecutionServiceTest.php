@@ -21,8 +21,11 @@ use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\ExchangeReconciliationResult;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
+use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
+use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
@@ -204,6 +207,46 @@ final class ExchangeExecutionServiceTest extends TestCase
         self::assertSame('filled', $result->raw['protection']['emergency_close']['close_status']);
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
         self::assertSame(0, $this->metrics->snapshot()['critical_unprotected_position'] ?? 0);
+    }
+
+    public function testAdapterCompensationPreservesPriorProtectedExposure(): void
+    {
+        $this->adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'existing-protected-entry',
+            attachedStopLossPrice: 24800.0,
+        ));
+        $this->scenario->rejectNextProtectionOrder();
+
+        $result = $this->service()->execute($this->plan(orderType: 'market'), 'decision-protected-increase');
+
+        $positions = $this->adapter->getOpenPositions('BTCUSDT');
+        self::assertSame(ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED, $result->status);
+        self::assertSame(true, $result->raw['protection']['adapter_compensation']);
+        self::assertSame('entry_exposure_closed', $result->raw['protection']['compensation_outcome']);
+        self::assertSame(1.0, $result->raw['protection']['position_size_after_compensation']);
+        self::assertSame(true, $result->raw['protection']['remaining_position_protected_after_compensation']);
+        self::assertCount(1, $positions);
+        self::assertEqualsWithDelta(1.0, $positions[0]->size, 0.00000001);
+        self::assertCount(1, $this->stopLossOrders($this->adapter));
+        self::assertEqualsWithDelta(
+            1.0,
+            $this->stopLossOrders($this->adapter)[0]->remainingQuantity,
+            0.00000001,
+        );
     }
 
     public function testExchangeWithoutAttachedStopLossUsesSeparateReduceOnlyStop(): void

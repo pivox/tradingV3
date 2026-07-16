@@ -33,20 +33,22 @@ The HTTP service state is stored in `var/fake_exchange_state.dat` so multi-step 
 When the one-shot scenario fixture rejects attached protection after an entry
 has filled, the entry remains recorded as filled and
 `protection_status=rejected`. The matching engine then submits a deterministic
-market reduce-only order for the exact current position size through its normal
-`submit()` and `fillOrder()` path. The entry metadata records
+market reduce-only order for the failed entry's exact filled quantity through
+its normal `submit()` and `fillOrder()` path. The entry metadata records
 `fail_safe_action=reduce_only_market_close`, the compensation order identifiers,
-`compensation_status=completed`, `compensation_outcome=position_closed`, and the
-verified flat-position result.
+`compensation_status=completed`, the compensation quantity, and position sizes
+before and after the close.
 
-This sequence preserves normal fill costs, lineage, `order.filled`, and
-`position.closed` evidence. Replaying the original `clientOrderId` returns the
-same entry and compensation identifiers without another close. The rejection,
-compensation, and flat-position invariant run inside the existing state
-transaction; a failed compensation or non-flat result raises an exception and
-restores the whole local operation instead of persisting an unprotected
-position. No credential, raw request payload, or external exchange mutation is
-involved.
+This sequence preserves normal fill costs, lineage, `order.filled`, and the
+ordinary `position.updated` or `position.closed` evidence. Replaying the
+original `clientOrderId` returns the same entry and compensation identifiers
+without another close. The rejection, compensation, and exposure invariant run
+inside the existing state transaction.
+A standalone entry becomes flat. If the fill increased an older protected
+position, only the failed increase is removed and the residual position must
+still have full active stop coverage. A wrong close quantity or unprotected
+residual raises an exception and restores the whole local operation. No
+credential, raw request payload, or external exchange mutation is involved.
 
 ## Private WS disconnect/resync fixture
 

@@ -171,18 +171,20 @@ intent fails closed with `duplicate_client_order_id_intent_mismatch` and
 An attached stop rejection after a full entry fill is never represented as a
 protected position. The entry keeps `protection_status=rejected` and the stable
 rejection reason. The matching engine immediately submits a deterministic
-market reduce-only close for the exact persisted position size through the same
-validation, fill-cost, position, event, and lineage path as any other Fake order.
+market reduce-only close for the failed entry's exact filled quantity through
+the same validation, fill-cost, position, event, and lineage path as any other
+Fake order.
 
 Successful compensation records the close order identifiers,
 `fail_safe_action=reduce_only_market_close`,
-`compensation_status=completed`, `compensation_outcome=position_closed`, and
-`position_flat_after_compensation=true` on the entry. Replaying the entry
-`clientOrderId` returns those same identifiers and does not create another fill.
-The complete rejection and compensation sequence is part of the existing
-file-backed state transaction. If the close is rejected, does not fill, or leaves
-residual size, the operation raises and the local state rolls back to its
-pre-request snapshot.
+`compensation_status=completed`, the compensation quantity, the position sizes
+before/after, and proof that the failed entry exposure was removed. A standalone
+entry records `compensation_outcome=position_closed`; a position increase records
+`entry_exposure_closed` and preserves the prior size only when active stop orders
+still cover it fully. Replaying the entry `clientOrderId` returns the same
+identifiers and does not create another fill. If the close is rejected, removes
+the wrong quantity, or leaves an unprotected residual, the file-backed
+transaction rolls back to its pre-request snapshot.
 
 ## Providers and runtime readiness
 

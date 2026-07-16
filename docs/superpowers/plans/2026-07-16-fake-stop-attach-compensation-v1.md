@@ -14,15 +14,17 @@ and `fillOrder()` rather than duplicating fill or PnL logic.
 - Modify: `trading-app/tests/Exchange/Adapter/FakeExchangeAdapterTest.php`
 - Modify: `trading-app/src/Exchange/Fake/FakeExchangeMatchingEngine.php`
 
-1. Change the attached-protection rejection test to require a flat position,
-   one filled reduce-only market compensation order, normal close evidence, and
-   explicit compensation metadata on the entry.
+1. Change the attached-protection rejection test to require removal of the
+   failed entry fill, a flat position for the isolated baseline, one filled
+   reduce-only market compensation order, normal close evidence, and explicit
+   compensation metadata on the entry.
 2. Add replay coverage proving the original client order does not create a
    second compensation.
-3. Run the focused adapter tests and verify RED.
-4. Implement the minimal deterministic compensation branch.
-5. Re-run adapter tests and PHPStan.
-6. Commit.
+3. Add aggregate-position coverage proving prior protected exposure is preserved.
+4. Run the focused adapter tests and verify RED.
+5. Implement the minimal deterministic compensation branch.
+6. Re-run adapter tests and PHPStan.
+7. Commit.
 
 ## Task 2: Prove persistence and normalized lifecycle
 

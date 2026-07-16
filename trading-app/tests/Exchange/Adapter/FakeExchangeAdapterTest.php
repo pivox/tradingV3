@@ -1169,6 +1169,11 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame('reduce_only_market_close', $result->order->metadata['fail_safe_action'] ?? null);
         self::assertSame('completed', $result->order->metadata['compensation_status'] ?? null);
         self::assertSame('position_closed', $result->order->metadata['compensation_outcome'] ?? null);
+        self::assertSame(true, $result->order->metadata['failed_entry_exposure_closed'] ?? null);
+        self::assertSame(1.0, $result->order->metadata['compensation_quantity'] ?? null);
+        self::assertSame(1.0, $result->order->metadata['position_size_before_compensation'] ?? null);
+        self::assertSame(0.0, $result->order->metadata['position_size_after_compensation'] ?? null);
+        self::assertSame(true, $result->order->metadata['remaining_position_protected_after_compensation'] ?? null);
         self::assertSame(true, $result->order->metadata['position_flat_after_compensation'] ?? null);
         self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
         self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
@@ -1198,6 +1203,64 @@ final class FakeExchangeAdapterTest extends TestCase
             'itd-stop-compensation',
             $this->scenario->events('position.closed')[0]->payload['internal_trade_id'] ?? null,
         );
+    }
+
+    public function testRejectedProtectionCompensatesOnlyFailedEntryExposure(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-existing-protected-position',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+        $this->scenario->rejectNextProtectionOrder();
+
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-failed-position-increase',
+            postOnly: false,
+            quantity: 0.4,
+            attachedStopLossPrice: 24800.0,
+        ));
+
+        $positions = $this->adapter->getOpenPositions('BTCUSDT');
+        $openStops = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ));
+        $compensations = array_values(array_filter(
+            $this->adapter->getOrdersSnapshot('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::MARKET
+                && $order->reduceOnly,
+        ));
+
+        self::assertSame('entry_exposure_closed', $result->order?->metadata['compensation_outcome'] ?? null);
+        self::assertSame(true, $result->order?->metadata['failed_entry_exposure_closed'] ?? null);
+        self::assertEqualsWithDelta(
+            0.4,
+            $result->order?->metadata['compensation_quantity'] ?? null,
+            0.00000001,
+        );
+        self::assertEqualsWithDelta(
+            1.4,
+            $result->order?->metadata['position_size_before_compensation'] ?? null,
+            0.00000001,
+        );
+        self::assertEqualsWithDelta(
+            1.0,
+            $result->order?->metadata['position_size_after_compensation'] ?? null,
+            0.00000001,
+        );
+        self::assertSame(false, $result->order?->metadata['position_flat_after_compensation'] ?? null);
+        self::assertSame(true, $result->order?->metadata['remaining_position_protected_after_compensation'] ?? null);
+        self::assertCount(1, $positions);
+        self::assertEqualsWithDelta(1.0, $positions[0]->size, 0.00000001);
+        self::assertCount(1, $openStops);
+        self::assertEqualsWithDelta(1.0, $openStops[0]->remainingQuantity, 0.00000001);
+        self::assertCount(1, $compensations);
+        self::assertEqualsWithDelta(0.4, $compensations[0]->quantity, 0.00000001);
     }
 
     public function testProtectionCompensationIsNotDuplicatedOnEntryReplay(): void

@@ -168,18 +168,20 @@ Le Fake Exchange de niveau adapter traite maintenant le rejet d une protection
 attachee apres fill complet comme une sequence fail-closed :
 
 1. le fill d entree et `protection_status=rejected` restent visibles ;
-2. un ordre market reduce-only deterministe ferme la taille exacte de la
-   position via le chemin normal du matching engine ;
-3. les couts, le lineage, `order.filled` et `position.closed` sont produits par
-   les mecanismes ordinaires ;
+2. un ordre market reduce-only deterministe retire exactement la quantite fillee
+   par l entree en echec via le chemin normal du matching engine ;
+3. les couts, le lineage, `order.filled` et les evenements de position sont
+   produits par les mecanismes ordinaires ;
 4. l entree conserve les identifiants de compensation, l action
-   `reduce_only_market_close`, le statut `completed` et la preuve de position
-   plate.
+   `reduce_only_market_close`, le statut `completed` et la preuve que le fill
+   fautif a ete retire sans exposer la position residuelle.
 
 Le replay du `client_order_id` d entree restitue les memes identifiants sans
 second fill compensatoire. La sequence complete appartient a la transaction de
-l etat Fake : si la compensation echoue ou laisse une taille residuelle, l
-operation leve une exception et l etat local revient au snapshot precedent.
+l etat Fake. Une entree isolee devient plate. Si l entree augmentait une position
+anterieure protegee, seule cette augmentation est retiree et la taille residuelle
+doit rester integralement couverte par un stop actif. Une quantite fermee
+incorrecte ou un residuel non protege provoque un rollback au snapshot precedent.
 Cette integration adapter est distincte de la fixture declarative
 `FakeExecutionPort::fullFillStopAttachFailure()` de COMMON-005.
 

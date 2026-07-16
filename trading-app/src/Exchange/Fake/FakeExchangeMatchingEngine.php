@@ -475,6 +475,18 @@ final readonly class FakeExchangeMatchingEngine
         if (!$position instanceof ExchangePositionDto || $position->size <= 0.00000001) {
             throw new \LogicException('fake_protection_compensation_position_unavailable');
         }
+        $positionSizeBeforeCompensation = $position->size;
+        $compensationQuantity = $entryOrder->filledQuantity;
+        if ($compensationQuantity <= 0.00000001) {
+            throw new \LogicException('fake_protection_compensation_quantity_unavailable');
+        }
+        if ($positionSizeBeforeCompensation + 0.00000001 < $compensationQuantity) {
+            throw new \LogicException('fake_protection_compensation_quantity_exceeds_position');
+        }
+        $expectedPositionSizeAfterCompensation = max(
+            0.0,
+            $positionSizeBeforeCompensation - $compensationQuantity,
+        );
 
         $clientOrderId = 'fake-comp-' . substr(hash(
             'sha256',
@@ -496,7 +508,7 @@ final readonly class FakeExchangeMatchingEngine
             positionSide: $entryOrder->positionSide,
             orderType: ExchangeOrderType::MARKET,
             timeInForce: ExchangeTimeInForce::GTC,
-            quantity: $position->size,
+            quantity: $compensationQuantity,
             price: null,
             stopPrice: null,
             reduceOnly: true,
@@ -517,8 +529,18 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         $remainingPosition = $this->stateStore->getPosition($entryOrder->symbol, $entryOrder->positionSide);
-        if ($remainingPosition instanceof ExchangePositionDto && $remainingPosition->size > 0.00000001) {
-            throw new \LogicException('fake_protection_compensation_position_not_flat');
+        $positionSizeAfterCompensation = $remainingPosition?->size ?? 0.0;
+        if (abs($positionSizeAfterCompensation - $expectedPositionSizeAfterCompensation) > 0.00000001) {
+            throw new \LogicException('fake_protection_compensation_position_size_mismatch');
+        }
+        $positionFlatAfterCompensation = $positionSizeAfterCompensation <= 0.00000001;
+        $remainingPositionProtected = $positionFlatAfterCompensation || $this->hasStopCoverage(
+            $entryOrder->symbol,
+            $entryOrder->positionSide,
+            $positionSizeAfterCompensation,
+        );
+        if (!$remainingPositionProtected) {
+            throw new \LogicException('fake_protection_compensation_remaining_position_unprotected');
         }
 
         $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, array_replace(
@@ -526,15 +548,50 @@ final readonly class FakeExchangeMatchingEngine
             [
                 'fail_safe_action' => 'reduce_only_market_close',
                 'compensation_status' => 'completed',
-                'compensation_outcome' => 'position_closed',
+                'compensation_outcome' => $positionFlatAfterCompensation
+                    ? 'position_closed'
+                    : 'entry_exposure_closed',
                 'compensation_order_id' => $compensation->exchangeOrderId,
                 'compensation_client_order_id' => $compensation->clientOrderId,
-                'position_flat_after_compensation' => true,
+                'compensation_quantity' => $compensationQuantity,
+                'position_size_before_compensation' => $positionSizeBeforeCompensation,
+                'position_size_after_compensation' => $positionSizeAfterCompensation,
+                'failed_entry_exposure_closed' => true,
+                'remaining_position_protected_after_compensation' => $remainingPositionProtected,
+                'position_flat_after_compensation' => $positionFlatAfterCompensation,
             ],
         ));
         $this->stateStore->saveOrder($updated);
 
         return $updated;
+    }
+
+    private function hasStopCoverage(
+        string $symbol,
+        ExchangePositionSide $positionSide,
+        float $requiredQuantity,
+    ): bool {
+        $exitSide = $positionSide === ExchangePositionSide::LONG
+            ? ExchangeOrderSide::SELL
+            : ExchangeOrderSide::BUY;
+        $coveredQuantity = 0.0;
+        foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
+            if (
+                !\in_array($order->orderType, [ExchangeOrderType::STOP_LOSS, ExchangeOrderType::TRIGGER], true)
+                || !$order->reduceOnly
+                || $order->positionSide !== $positionSide
+                || $order->side !== $exitSide
+            ) {
+                continue;
+            }
+
+            $coveredQuantity += $order->remainingQuantity;
+            if ($coveredQuantity + 0.00000001 >= $requiredQuantity) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function createProtectionOrder(
