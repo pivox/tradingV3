@@ -18,7 +18,9 @@ final readonly class FakeExchangeScenarioService
 
     public function reset(): void
     {
-        $this->stateStore->reset();
+        $this->stateStore->runAtomically(function (): void {
+            $this->stateStore->reset();
+        });
     }
 
     /**
@@ -26,27 +28,44 @@ final readonly class FakeExchangeScenarioService
      */
     public function movePrice(string $symbol, float $midPrice, float $spreadBps = 2.0): array
     {
-        $book = $this->orderBook->movePrice($symbol, $midPrice, $spreadBps);
+        return $this->stateStore->runAtomically(function () use ($symbol, $midPrice, $spreadBps): array {
+            $book = $this->orderBook->movePrice($symbol, $midPrice, $spreadBps);
 
-        return [
-            'book' => $book,
-            'matched_orders' => $this->matchingEngine->matchOpenOrders($symbol),
-        ];
+            return [
+                'book' => $book,
+                'matched_orders' => $this->matchingEngine->matchOpenOrders($symbol),
+            ];
+        });
     }
 
     public function fillOrder(string $exchangeOrderId, ?float $quantity = null, ?float $price = null): ?ExchangeOrderDto
     {
-        return $this->matchingEngine->fillOrder($exchangeOrderId, $quantity, $price);
+        return $this->stateStore->runAtomically(
+            fn (): ?ExchangeOrderDto => $this->matchingEngine->fillOrder(
+                $exchangeOrderId,
+                $quantity,
+                $price,
+            ),
+        );
+    }
+
+    public function fallbackTaker(string $exchangeOrderId): FakeFallbackTakerResult
+    {
+        return $this->matchingEngine->fallbackTaker($exchangeOrderId);
     }
 
     public function rejectNextProtectionOrder(): void
     {
-        $this->stateStore->rejectNextProtectionOrder();
+        $this->stateStore->runAtomically(function (): void {
+            $this->stateStore->rejectNextProtectionOrder();
+        });
     }
 
     public function failNext(FakeExchangeFault $fault): void
     {
-        $this->stateStore->queueFault($fault);
+        $this->stateStore->runAtomically(function () use ($fault): void {
+            $this->stateStore->queueFault($fault);
+        });
     }
 
     /**

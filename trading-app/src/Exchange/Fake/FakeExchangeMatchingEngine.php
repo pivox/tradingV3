@@ -45,6 +45,16 @@ final readonly class FakeExchangeMatchingEngine
         'attempt_number',
         'decision_key',
     ];
+    /**
+     * @var string[]
+     */
+    private const FALLBACK_POLICY_METADATA_KEYS = [
+        FakeFallbackTakerPolicy::VERSION_KEY,
+        FakeFallbackTakerPolicy::ENABLED_KEY,
+        FakeFallbackTakerPolicy::ZONE_MIN_KEY,
+        FakeFallbackTakerPolicy::ZONE_MAX_KEY,
+        FakeFallbackTakerPolicy::MAX_SLIPPAGE_BPS_KEY,
+    ];
 
     private FakeOrderValidator $orderValidator;
 
@@ -66,6 +76,17 @@ final readonly class FakeExchangeMatchingEngine
     }
 
     public function submit(PlaceOrderRequest $request): PlaceOrderResult
+    {
+        return $this->submitWithTrustedFallbackMetadata($request);
+    }
+
+    /**
+     * @param array<string, bool|float|int|string|null> $trustedFallbackMetadata
+     */
+    private function submitWithTrustedFallbackMetadata(
+        PlaceOrderRequest $request,
+        array $trustedFallbackMetadata = [],
+    ): PlaceOrderResult
     {
         $this->assertRequestContext($request);
         $this->assertRequestIntent($request);
@@ -107,13 +128,14 @@ final readonly class FakeExchangeMatchingEngine
             return $this->rejectOrder(
                 $request,
                 $validation->reason ?? 'order_validation_failed',
+                $trustedFallbackMetadata,
                 $validation->metadata,
                 $validationMetadata,
             );
         }
 
         if ($request->postOnly && $this->wouldCross($request)) {
-            return $this->rejectOrder($request, 'post_only_would_cross');
+            return $this->rejectOrder($request, 'post_only_would_cross', $trustedFallbackMetadata);
         }
 
         $instrument = $this->instruments->find($request->symbol);
@@ -122,9 +144,15 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         if ($this->isStandaloneProtection($request) && $this->stateStore->consumeProtectionRejectionFlag()) {
-            $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, array_replace($this->requestMetadata($request), [
-                'reason' => 'protection_rejected_by_scenario',
-            ]));
+            $order = $this->buildOrder(
+                $request,
+                ExchangeOrderStatus::REJECTED,
+                array_replace(
+                    $this->requestMetadata($request),
+                    $trustedFallbackMetadata,
+                    ['reason' => 'protection_rejected_by_scenario'],
+                ),
+            );
             $this->stateStore->saveOrder($order);
             $this->appendEvent('protection_order.rejected', $order, ['reason' => 'protection_rejected_by_scenario']);
 
@@ -134,7 +162,10 @@ final readonly class FakeExchangeMatchingEngine
         $order = $this->buildOrder(
             $request,
             ExchangeOrderStatus::OPEN,
-            $this->requestMetadata($request, $referencePrice, $instrument->contractSize),
+            array_replace(
+                $this->requestMetadata($request, $referencePrice, $instrument->contractSize),
+                $trustedFallbackMetadata,
+            ),
         );
         $this->stateStore->saveOrder($order);
         $this->appendEvent('order.created', $order);
@@ -200,6 +231,13 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
+    public function fallbackTaker(string $exchangeOrderId): FakeFallbackTakerResult
+    {
+        return $this->stateStore->runAtomically(
+            fn (): FakeFallbackTakerResult => $this->fallbackTakerFromCurrentState($exchangeOrderId),
+        );
+    }
+
     public function fillOrder(string $exchangeOrderId, ?float $quantity = null, ?float $price = null): ?ExchangeOrderDto
     {
         $order = $this->stateStore->getOrder($exchangeOrderId);
@@ -227,16 +265,36 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         $executionPrice = $price ?? $this->executionPrice($order);
-        $newFilled = $order->filledQuantity + $fillQuantity;
-        $newRemaining = max(0.0, $order->quantity - $newFilled);
+        $quantityDecimal = $this->orderQuantityDecimal($order);
+        $previousFilledDecimal = $this->orderFilledQuantityDecimal($order);
+        $fillQuantityDecimal = self::canonicalFloat($fillQuantity);
+        try {
+            $newFilledDecimal = (string) BigDecimal::of($previousFilledDecimal)
+                ->plus($fillQuantityDecimal)
+                ->stripTrailingZeros();
+            $newRemainingDecimal = (string) BigDecimal::of($quantityDecimal)
+                ->minus($newFilledDecimal)
+                ->stripTrailingZeros();
+        } catch (MathException) {
+            throw new \LogicException('fake_fill_quantity_decimal_invalid');
+        }
+        $newFilled = (float) $newFilledDecimal;
+        $newRemaining = max(0.0, (float) $newRemainingDecimal);
         $averagePrice = $this->averagePrice($order, $fillQuantity, $executionPrice, $newFilled);
         $status = $this->fillStatus($newRemaining, $cancelReduceRemainder);
+        $metadata = array_replace(
+            $order->metadata,
+            [
+                'filled_quantity_decimal' => $newFilledDecimal,
+                'remaining_quantity_decimal' => $newRemainingDecimal,
+            ],
+        );
         $metadata = $cancelReduceRemainder
-            ? array_replace($order->metadata, [
+            ? array_replace($metadata, [
                 'reason' => 'reduce_only_position_size_capped',
                 'reduce_only_cancelled_remainder' => true,
             ])
-            : $order->metadata;
+            : $metadata;
         $contractSize = $this->marginContractSize($order->metadata);
         $fillCost = $this->fillCostModel->forFill(
             quantity: $fillQuantity,
@@ -302,6 +360,277 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $updated;
+    }
+
+    private function fallbackTakerFromCurrentState(string $exchangeOrderId): FakeFallbackTakerResult
+    {
+        $parent = $this->stateStore->getOrder($exchangeOrderId);
+        if (!$parent instanceof ExchangeOrderDto) {
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_parent_not_found',
+                parentOrder: null,
+                fallbackOrder: null,
+            );
+        }
+        if ($parent->remainingQuantity <= 0.00000001) {
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_remainder_zero',
+                parentOrder: $parent,
+                fallbackOrder: null,
+            );
+        }
+        $fallbackClientOrderId = $this->fallbackClientOrderId($parent);
+        $existingFallback = $this->stateStore->getOrderByClientOrderId(
+            $parent->symbol,
+            $fallbackClientOrderId,
+        );
+        if ($existingFallback instanceof ExchangeOrderDto) {
+            if (!$this->fallbackChildMatchesParent($parent, $existingFallback)) {
+                throw new \LogicException('fake_fallback_client_order_id_conflict');
+            }
+
+            $completed = $existingFallback->status === ExchangeOrderStatus::FILLED;
+
+            return new FakeFallbackTakerResult(
+                executed: $completed,
+                idempotentReplay: true,
+                reason: $completed
+                    ? 'fallback_completed'
+                    : ($this->stringMetadata($existingFallback->metadata, 'reason') ?? 'fallback_order_rejected'),
+                parentOrder: $parent,
+                fallbackOrder: $existingFallback,
+                slippageBps: $this->floatMetadata($parent->metadata, 'fallback_slippage_bps'),
+            );
+        }
+        if (($parent->metadata['fallback_status'] ?? null) === 'rejected') {
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: true,
+                reason: $this->stringMetadata($parent->metadata, 'fallback_reason')
+                    ?? 'fallback_rejected',
+                parentOrder: $parent,
+                fallbackOrder: null,
+                slippageBps: $this->floatMetadata($parent->metadata, 'fallback_slippage_bps'),
+            );
+        }
+        if ($parent->status === ExchangeOrderStatus::CANCELLED) {
+            $parent = $this->protectFallbackParentExposure($parent);
+
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_parent_cancelled',
+                parentOrder: $parent,
+                fallbackOrder: null,
+            );
+        }
+        $parentAlreadyExpired = $parent->status === ExchangeOrderStatus::EXPIRED;
+        if (
+            $parent->orderType !== ExchangeOrderType::LIMIT
+            || !$parent->postOnly
+            || !$parent->positionSide instanceof ExchangePositionSide
+            || (!$this->isActiveStatus($parent->status) && !$parentAlreadyExpired)
+            || $parent->price === null
+        ) {
+            throw new \LogicException('fake_fallback_parent_not_eligible');
+        }
+
+        $policy = FakeFallbackTakerPolicy::fromMetadata($parent->metadata);
+        if (!$policy instanceof FakeFallbackTakerPolicy) {
+            throw new \LogicException('fake_fallback_policy_unavailable');
+        }
+        if (!$policy->enabled) {
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_disabled',
+                parentOrder: $parent,
+                fallbackOrder: null,
+            );
+        }
+
+        $top = $this->orderBook->top($parent->symbol);
+        $executionPrice = $parent->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
+        $slippageBps = $this->fallbackSlippageBps($parent, $executionPrice);
+        $fallbackTrigger = $parentAlreadyExpired ? 'expired' : 'end_of_zone';
+
+        $parent = $this->withOrderStatus(
+            $parent,
+            ExchangeOrderStatus::EXPIRED,
+            array_replace(
+                $parent->metadata,
+                $parentAlreadyExpired ? [] : ['reason' => 'fallback_taker_triggered'],
+                [
+                    'fallback_status' => 'pending',
+                    'fallback_slippage_bps' => $slippageBps,
+                    'fallback_trigger' => $fallbackTrigger,
+                ],
+            ),
+        );
+        $this->stateStore->saveOrder($parent);
+        if (!$parentAlreadyExpired) {
+            $this->appendEvent('order.expired', $parent, ['reason' => 'fallback_taker_triggered']);
+        }
+        if ($executionPrice < $policy->zoneMin || $executionPrice > $policy->zoneMax) {
+            $parent = $this->withOrderStatus($parent, $parent->status, array_replace(
+                $parent->metadata,
+                [
+                    'fallback_status' => 'rejected',
+                    'fallback_reason' => 'fallback_price_outside_zone',
+                ],
+            ));
+            $this->stateStore->saveOrder($parent);
+            $this->appendEvent('fallback_taker.rejected', $parent, [
+                'reason' => 'fallback_price_outside_zone',
+                'slippage_bps' => $slippageBps,
+            ]);
+            $parent = $this->protectFallbackParentExposure($parent);
+
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_price_outside_zone',
+                parentOrder: $parent,
+                fallbackOrder: null,
+                slippageBps: $slippageBps,
+            );
+        }
+        if ($slippageBps > $policy->maxSlippageBps) {
+            $parent = $this->withOrderStatus($parent, $parent->status, array_replace(
+                $parent->metadata,
+                [
+                    'fallback_status' => 'rejected',
+                    'fallback_reason' => 'fallback_slippage_exceeded',
+                ],
+            ));
+            $this->stateStore->saveOrder($parent);
+            $this->appendEvent('fallback_taker.rejected', $parent, [
+                'reason' => 'fallback_slippage_exceeded',
+                'slippage_bps' => $slippageBps,
+            ]);
+            $parent = $this->protectFallbackParentExposure($parent);
+
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: 'fallback_slippage_exceeded',
+                parentOrder: $parent,
+                fallbackOrder: null,
+                slippageBps: $slippageBps,
+            );
+        }
+
+        $fallbackQuantityDecimal = $this->orderRemainingQuantityDecimal($parent);
+        $fallbackQuantity = (float) $fallbackQuantityDecimal;
+        $parentFilledQuantityDecimal = $this->orderFilledQuantityDecimal($parent);
+        $protectionQuantityDecimal = $this->orderQuantityDecimal($parent);
+        $fallbackResult = $this->submitWithTrustedFallbackMetadata(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: $parent->marketType,
+            symbol: $parent->symbol,
+            side: $parent->side,
+            positionSide: $parent->positionSide,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: $fallbackQuantity,
+            price: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            leverage: $this->positiveIntMetadata($parent->metadata, 'leverage'),
+            marginMode: $this->fallbackMarginMode($parent),
+            clientOrderId: $fallbackClientOrderId,
+            attachedStopLossPrice: $this->floatMetadata($parent->metadata, 'attached_stop_loss_price'),
+            attachedTakeProfitPrice: $this->floatMetadata($parent->metadata, 'attached_take_profit_price'),
+            metadata: $this->lineageMetadata($parent->metadata)
+                + $policy->toMetadata(),
+            quantityDecimal: $fallbackQuantityDecimal,
+            attachedStopLossPriceDecimal: $this->stringMetadata(
+                $parent->metadata,
+                'attached_stop_loss_price_decimal',
+            ),
+            attachedTakeProfitPriceDecimal: $this->stringMetadata(
+                $parent->metadata,
+                'attached_take_profit_price_decimal',
+            ),
+        ), [
+            'fallback_parent_order_id' => $parent->exchangeOrderId,
+            'fallback_parent_client_order_id' => $parent->clientOrderId,
+            'fallback_parent_filled_quantity' => $parent->filledQuantity,
+            'fallback_parent_filled_quantity_decimal' => $parentFilledQuantityDecimal,
+            'fallback_remainder_quantity' => $fallbackQuantity,
+            'fallback_remainder_quantity_decimal' => $fallbackQuantityDecimal,
+            'fallback_protection_quantity' => $parent->filledQuantity + $fallbackQuantity,
+            'fallback_protection_quantity_decimal' => $protectionQuantityDecimal,
+            'fallback_slippage_bps' => $slippageBps,
+            'fallback_trigger' => $fallbackTrigger,
+        ]);
+        $fallback = $fallbackResult->order;
+        if (!$fallback instanceof ExchangeOrderDto) {
+            throw new \LogicException('fake_fallback_order_failed');
+        }
+        if (!$fallbackResult->accepted) {
+            $reason = $this->stringMetadata($fallback->metadata, 'reason') ?? 'fallback_order_rejected';
+            $parent = $this->withOrderStatus($parent, $parent->status, array_replace(
+                $parent->metadata,
+                [
+                    'fallback_status' => 'rejected',
+                    'fallback_reason' => $reason,
+                    'fallback_order_id' => $fallback->exchangeOrderId,
+                    'fallback_client_order_id' => $fallback->clientOrderId,
+                    'fallback_quantity' => $fallbackQuantity,
+                ],
+            ));
+            $this->stateStore->saveOrder($parent);
+            $this->appendEvent('fallback_taker.rejected', $parent, [
+                'reason' => $reason,
+                'fallback_order_id' => $fallback->exchangeOrderId,
+                'fallback_quantity' => $fallbackQuantity,
+                'slippage_bps' => $slippageBps,
+            ]);
+            $parent = $this->protectFallbackParentExposure($parent);
+
+            return new FakeFallbackTakerResult(
+                executed: false,
+                idempotentReplay: false,
+                reason: $reason,
+                parentOrder: $parent,
+                fallbackOrder: $fallback,
+                slippageBps: $slippageBps,
+            );
+        }
+        if ($fallback->status !== ExchangeOrderStatus::FILLED) {
+            throw new \LogicException('fake_fallback_order_failed');
+        }
+
+        $parent = $this->withOrderStatus($parent, $parent->status, array_replace(
+            $parent->metadata,
+            [
+                'fallback_status' => 'completed',
+                'fallback_order_id' => $fallback->exchangeOrderId,
+                'fallback_client_order_id' => $fallback->clientOrderId,
+                'fallback_quantity' => $fallbackQuantity,
+            ],
+        ));
+        $this->stateStore->saveOrder($parent);
+        $this->appendEvent('fallback_taker.completed', $parent, [
+            'fallback_order_id' => $fallback->exchangeOrderId,
+            'fallback_quantity' => $fallbackQuantity,
+            'slippage_bps' => $slippageBps,
+        ]);
+
+        return new FakeFallbackTakerResult(
+            executed: true,
+            idempotentReplay: false,
+            reason: 'fallback_completed',
+            parentOrder: $parent,
+            fallbackOrder: $fallback,
+            slippageBps: $slippageBps,
+        );
     }
 
     /**
@@ -374,6 +703,8 @@ final readonly class FakeExchangeMatchingEngine
             'attached_stop_loss_price' => $request->attachedStopLossPrice,
             'attached_take_profit_price' => $request->attachedTakeProfitPrice,
             'quantity_decimal' => $request->exactQuantity(),
+            'filled_quantity_decimal' => '0',
+            'remaining_quantity_decimal' => $request->exactQuantity(),
             'price_decimal' => $request->exactPrice(),
             'stop_price_decimal' => $request->exactStopPrice(),
             'attached_stop_loss_price_decimal' => $request->exactAttachedStopLossPrice(),
@@ -381,16 +712,27 @@ final readonly class FakeExchangeMatchingEngine
             'margin_reference_price' => $marginReferencePrice,
             'margin_reference_source' => $marginReferencePrice !== null ? 'top_of_book' : null,
             'margin_contract_size' => $marginContractSize,
-        ], static fn (mixed $value): bool => $value !== null) + $this->lineageMetadata($request->metadata);
+        ], static fn (mixed $value): bool => $value !== null)
+            + $this->lineageMetadata($request->metadata)
+            + $this->fallbackPolicyMetadata($request->metadata);
     }
 
     /**
+     * @param array<string, bool|float|int|string|null> $trustedFallbackMetadata
      * @param array<string,mixed> ...$metadata
      */
-    private function rejectOrder(PlaceOrderRequest $request, string $reason, array ...$metadata): PlaceOrderResult
-    {
+    private function rejectOrder(
+        PlaceOrderRequest $request,
+        string $reason,
+        array $trustedFallbackMetadata = [],
+        array ...$metadata,
+    ): PlaceOrderResult {
         $metadata[] = ['reason' => $reason];
-        $rejectionMetadata = array_replace($this->requestMetadata($request), ...$metadata);
+        $rejectionMetadata = array_replace(
+            $this->requestMetadata($request),
+            $trustedFallbackMetadata,
+            ...$metadata,
+        );
         $order = $this->buildOrder($request, ExchangeOrderStatus::REJECTED, $rejectionMetadata);
         $this->stateStore->saveOrder($order);
         $this->appendEvent('order.rejected', $order, array_replace(...$metadata));
@@ -465,6 +807,15 @@ final readonly class FakeExchangeMatchingEngine
         return $updated;
     }
 
+    private function protectFallbackParentExposure(ExchangeOrderDto $parent): ExchangeOrderDto
+    {
+        if ($parent->filledQuantity <= 0.00000001) {
+            return $parent;
+        }
+
+        return $this->createAttachedProtectionOrders($parent);
+    }
+
     private function compensateRejectedProtection(ExchangeOrderDto $entryOrder): ExchangeOrderDto
     {
         if (!$entryOrder->positionSide instanceof ExchangePositionSide) {
@@ -476,7 +827,7 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_protection_compensation_position_unavailable');
         }
         $positionSizeBeforeCompensation = $position->size;
-        $compensationQuantity = $entryOrder->filledQuantity;
+        $compensationQuantity = $this->protectionQuantity($entryOrder);
         if ($compensationQuantity <= 0.00000001) {
             throw new \LogicException('fake_protection_compensation_quantity_unavailable');
         }
@@ -612,7 +963,7 @@ final readonly class FakeExchangeMatchingEngine
         if (\array_key_exists('margin_contract_size', $entryOrder->metadata)) {
             $metadata['margin_contract_size'] = $entryOrder->metadata['margin_contract_size'];
         }
-
+        $protectionQuantity = $this->protectionQuantity($entryOrder);
         $order = new ExchangeOrderDto(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
@@ -623,9 +974,9 @@ final readonly class FakeExchangeMatchingEngine
             positionSide: $entryOrder->positionSide,
             orderType: $type,
             status: ExchangeOrderStatus::OPEN,
-            quantity: $entryOrder->filledQuantity,
+            quantity: $protectionQuantity,
             filledQuantity: 0.0,
-            remainingQuantity: $entryOrder->filledQuantity,
+            remainingQuantity: $protectionQuantity,
             price: null,
             averagePrice: null,
             stopPrice: $stopPrice,
@@ -1003,6 +1354,87 @@ final readonly class FakeExchangeMatchingEngine
 
     /**
      * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function fallbackPolicyMetadata(array $metadata): array
+    {
+        $fallback = [];
+        foreach (self::FALLBACK_POLICY_METADATA_KEYS as $key) {
+            if (!\array_key_exists($key, $metadata)) {
+                continue;
+            }
+
+            $value = $metadata[$key];
+            if ($value === null || \is_scalar($value)) {
+                $fallback[$key] = $value;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private function protectionQuantity(ExchangeOrderDto $entryOrder): float
+    {
+        $fallbackParentOrderId = $this->stringMetadata(
+            $entryOrder->metadata,
+            'fallback_parent_order_id',
+        );
+        if ($fallbackParentOrderId === null) {
+            $quantity = $entryOrder->filledQuantity;
+        } else {
+            $parent = $this->stateStore->getOrder($fallbackParentOrderId);
+            if (
+                !$parent instanceof ExchangeOrderDto
+                || $entryOrder->clientOrderId !== $this->fallbackClientOrderId($parent)
+                || $entryOrder->symbol !== $parent->symbol
+                || $entryOrder->marketType !== $parent->marketType
+                || $entryOrder->side !== $parent->side
+                || $entryOrder->positionSide !== $parent->positionSide
+                || $entryOrder->orderType !== ExchangeOrderType::MARKET
+                || $entryOrder->reduceOnly
+                || $entryOrder->postOnly
+                || !self::sameDecimal(
+                    $this->decimalMetadata(
+                        $entryOrder->metadata,
+                        'fallback_parent_filled_quantity_decimal',
+                    ) ?? '',
+                    $this->orderFilledQuantityDecimal($parent),
+                )
+                || !self::sameDecimal(
+                    $this->decimalMetadata(
+                        $entryOrder->metadata,
+                        'fallback_remainder_quantity_decimal',
+                    ) ?? '',
+                    $this->orderQuantityDecimal($entryOrder),
+                )
+                || !self::sameDecimal(
+                    $this->decimalMetadata(
+                        $entryOrder->metadata,
+                        'fallback_protection_quantity_decimal',
+                    ) ?? '',
+                    $this->orderQuantityDecimal($parent),
+                )
+            ) {
+                throw new \LogicException('fake_fallback_protection_lineage_invalid');
+            }
+
+            try {
+                $quantity = (float) (string) BigDecimal::of($this->orderFilledQuantityDecimal($parent))
+                    ->plus($this->orderFilledQuantityDecimal($entryOrder))
+                    ->stripTrailingZeros();
+            } catch (MathException) {
+                throw new \LogicException('fake_fallback_protection_quantity_invalid');
+            }
+        }
+        if (!\is_finite($quantity) || $quantity <= 0.00000001) {
+            throw new \LogicException('fake_protection_quantity_unavailable');
+        }
+
+        return $quantity;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
      */
     private function metadataFloat(array $metadata, string $key): float
     {
@@ -1022,6 +1454,230 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return (float) $value;
+    }
+
+    private function orderQuantityDecimal(ExchangeOrderDto $order): string
+    {
+        return $this->decimalMetadata($order->metadata, 'quantity_decimal')
+            ?? self::canonicalFloat($order->quantity);
+    }
+
+    private function orderFilledQuantityDecimal(ExchangeOrderDto $order): string
+    {
+        return $this->decimalMetadata($order->metadata, 'filled_quantity_decimal')
+            ?? self::canonicalFloat($order->filledQuantity);
+    }
+
+    private function orderRemainingQuantityDecimal(ExchangeOrderDto $order): string
+    {
+        $persisted = $this->decimalMetadata($order->metadata, 'remaining_quantity_decimal');
+        if ($persisted !== null) {
+            return $persisted;
+        }
+
+        try {
+            return (string) BigDecimal::of($this->orderQuantityDecimal($order))
+                ->minus($this->orderFilledQuantityDecimal($order))
+                ->stripTrailingZeros();
+        } catch (MathException) {
+            throw new \LogicException('fake_order_remaining_quantity_decimal_invalid');
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function decimalMetadata(array $metadata, string $key): ?string
+    {
+        $value = $this->stringMetadata($metadata, $key);
+        if ($value === null) {
+            return null;
+        }
+
+        try {
+            return (string) BigDecimal::of($value)->stripTrailingZeros();
+        } catch (MathException) {
+            return null;
+        }
+    }
+
+    private function fallbackSlippageBps(ExchangeOrderDto $parent, float $executionPrice): float
+    {
+        if ($parent->price === null || $parent->price <= 0.0) {
+            throw new \LogicException('fake_fallback_reference_price_unavailable');
+        }
+
+        $adverseDifference = $parent->side === ExchangeOrderSide::BUY
+            ? max(0.0, $executionPrice - $parent->price)
+            : max(0.0, $parent->price - $executionPrice);
+
+        return round(
+            (($adverseDifference / $parent->price) * 10_000.0)
+            + FakeFillCostModel::TAKER_SLIPPAGE_BPS,
+            12,
+        );
+    }
+
+    private function fallbackClientOrderId(ExchangeOrderDto $parent): string
+    {
+        return 'fake-fallback-' . substr(hash(
+            'sha256',
+            $parent->exchangeOrderId . ':' . ($parent->clientOrderId ?? ''),
+        ), 0, 32);
+    }
+
+    private function fallbackMarginMode(ExchangeOrderDto $parent): string
+    {
+        $marginMode = $this->stringMetadata($parent->metadata, 'margin_mode');
+
+        return \in_array($marginMode, ['isolated', 'cross'], true) ? $marginMode : 'isolated';
+    }
+
+    private function fallbackChildMatchesParent(
+        ExchangeOrderDto $parent,
+        ExchangeOrderDto $fallback,
+    ): bool {
+        $parentFilledQuantity = $this->floatMetadata(
+            $fallback->metadata,
+            'fallback_parent_filled_quantity',
+        );
+        $remainderQuantity = $this->floatMetadata(
+            $fallback->metadata,
+            'fallback_remainder_quantity',
+        );
+        $protectionQuantity = $this->floatMetadata(
+            $fallback->metadata,
+            'fallback_protection_quantity',
+        );
+        $parentFilledQuantityDecimal = $this->decimalMetadata(
+            $fallback->metadata,
+            'fallback_parent_filled_quantity_decimal',
+        );
+        $remainderQuantityDecimal = $this->decimalMetadata(
+            $fallback->metadata,
+            'fallback_remainder_quantity_decimal',
+        );
+        $protectionQuantityDecimal = $this->decimalMetadata(
+            $fallback->metadata,
+            'fallback_protection_quantity_decimal',
+        );
+        $expectedParentFilledQuantityDecimal = $this->orderFilledQuantityDecimal($parent);
+        $expectedRemainderQuantityDecimal = $this->orderRemainingQuantityDecimal($parent);
+        $expectedProtectionQuantityDecimal = $this->orderQuantityDecimal($parent);
+        if (
+            $parentFilledQuantity === null
+            || $remainderQuantity === null
+            || $protectionQuantity === null
+            || $parentFilledQuantityDecimal === null
+            || $remainderQuantityDecimal === null
+            || $protectionQuantityDecimal === null
+            || $fallback->clientOrderId !== $this->fallbackClientOrderId($parent)
+            || $fallback->symbol !== $parent->symbol
+            || $fallback->marketType !== $parent->marketType
+            || $fallback->side !== $parent->side
+            || $fallback->positionSide !== $parent->positionSide
+            || $fallback->orderType !== ExchangeOrderType::MARKET
+            || $fallback->timeInForce !== ExchangeTimeInForce::GTC
+            || $fallback->reduceOnly
+            || $fallback->postOnly
+            || $fallback->price !== null
+            || $fallback->stopPrice !== null
+            || abs($fallback->quantity - $parent->remainingQuantity) > 0.00000001
+            || !self::sameDecimal(
+                $this->orderQuantityDecimal($fallback),
+                $expectedRemainderQuantityDecimal,
+            )
+            || $this->stringMetadata($fallback->metadata, 'fallback_parent_order_id')
+                !== $parent->exchangeOrderId
+            || $this->stringMetadata($fallback->metadata, 'fallback_parent_client_order_id')
+                !== $parent->clientOrderId
+            || abs($parentFilledQuantity - $parent->filledQuantity) > 0.00000001
+            || abs($remainderQuantity - $parent->remainingQuantity) > 0.00000001
+            || abs(
+                $protectionQuantity - ($parent->filledQuantity + $parent->remainingQuantity),
+            ) > 0.00000001
+            || !self::sameDecimal(
+                $parentFilledQuantityDecimal,
+                $expectedParentFilledQuantityDecimal,
+            )
+            || !self::sameDecimal($remainderQuantityDecimal, $expectedRemainderQuantityDecimal)
+            || !self::sameDecimal($protectionQuantityDecimal, $expectedProtectionQuantityDecimal)
+            || $this->positiveIntMetadata($fallback->metadata, 'leverage')
+                !== $this->positiveIntMetadata($parent->metadata, 'leverage')
+            || $this->fallbackMarginMode($fallback) !== $this->fallbackMarginMode($parent)
+            || !$this->sameOptionalDecimalMetadata(
+                $fallback->metadata,
+                $parent->metadata,
+                'attached_stop_loss_price_decimal',
+            )
+            || !$this->sameOptionalDecimalMetadata(
+                $fallback->metadata,
+                $parent->metadata,
+                'attached_take_profit_price_decimal',
+            )
+        ) {
+            return false;
+        }
+
+        $parentPolicy = FakeFallbackTakerPolicy::fromMetadata($parent->metadata);
+        $fallbackPolicy = FakeFallbackTakerPolicy::fromMetadata($fallback->metadata);
+        if (!$parentPolicy instanceof FakeFallbackTakerPolicy || !$fallbackPolicy instanceof FakeFallbackTakerPolicy) {
+            return false;
+        }
+        if (
+            $parentPolicy->enabled !== $fallbackPolicy->enabled
+            || $parentPolicy->zoneMin !== $fallbackPolicy->zoneMin
+            || $parentPolicy->zoneMax !== $fallbackPolicy->zoneMax
+            || $parentPolicy->maxSlippageBps !== $fallbackPolicy->maxSlippageBps
+        ) {
+            return false;
+        }
+
+        $terminalStatusMatches = match ($fallback->status) {
+            ExchangeOrderStatus::FILLED => ($parent->metadata['fallback_status'] ?? null) === 'completed'
+                && abs($fallback->filledQuantity - $fallback->quantity) <= 0.00000001,
+            ExchangeOrderStatus::REJECTED => ($parent->metadata['fallback_status'] ?? null) === 'rejected'
+                && $fallback->filledQuantity <= 0.00000001,
+            default => false,
+        };
+
+        return $parent->status === ExchangeOrderStatus::EXPIRED
+            && $terminalStatusMatches
+            && $this->stringMetadata($parent->metadata, 'fallback_order_id') === $fallback->exchangeOrderId
+            && $this->stringMetadata($parent->metadata, 'fallback_client_order_id') === $fallback->clientOrderId
+            && $this->stringMetadata($parent->metadata, 'fallback_trigger')
+                === $this->stringMetadata($fallback->metadata, 'fallback_trigger');
+    }
+
+    /**
+     * @param array<string,mixed> $left
+     * @param array<string,mixed> $right
+     */
+    private function sameOptionalDecimalMetadata(array $left, array $right, string $key): bool
+    {
+        $leftValue = $this->stringMetadata($left, $key);
+        $rightValue = $this->stringMetadata($right, $key);
+        if ($leftValue === null || $rightValue === null) {
+            return $leftValue === $rightValue;
+        }
+
+        return self::sameDecimal($leftValue, $rightValue);
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private function positiveIntMetadata(array $metadata, string $key): ?int
+    {
+        $value = $metadata[$key] ?? null;
+        if (\is_int($value) && $value > 0) {
+            return $value;
+        }
+        if (\is_string($value) && ctype_digit($value) && (int) $value > 0) {
+            return (int) $value;
+        }
+
+        return null;
     }
 
     private function placeResult(bool $accepted, PlaceOrderRequest $request, ExchangeOrderDto $order): PlaceOrderResult

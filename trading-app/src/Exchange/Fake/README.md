@@ -7,6 +7,8 @@ Supported scenarios:
 - place a maker limit order and fill it later with `FakeExchangeScenarioService::movePrice()`;
 - place a market order and fill it immediately;
 - partially fill and then complete an order with `fillOrder()`;
+- convert the exact remainder of an end-of-zone maker order to a deterministic
+  market fallback with `fallbackTaker()`;
 - create local positions after entry fills;
 - create or reject attached SL/TP protection orders;
 - close a fully filled entry with an immediate reduce-only market order when
@@ -27,6 +29,49 @@ curl http://localhost:8082/fake-exchange/events
 ```
 
 The HTTP service state is stored in `var/fake_exchange_state.dat` so multi-step curl scenarios survive PHP-FPM request boundaries. Tests can instantiate `FakeExchangeStateStore` without a file path for isolated in-memory state, and should call `reset()` before each scenario when sharing a store.
+
+## Deterministic end-of-zone taker fallback
+
+The local scenario API can arm a post-only maker `LIMIT` order with
+`FakeFallbackTakerPolicy::toMetadata()`, then explicitly trigger
+`FakeExchangeScenarioService::fallbackTaker()` when the entry zone ends. The
+policy persists a version, an enabled flag, the valid zone bounds, and the
+maximum adverse slippage in basis points. Missing, malformed, or disabled policy
+metadata fails closed. Only those typed policy fields may cross the ordinary
+request-metadata boundary; parent IDs, exact remainder, aggregate protection,
+trigger, and measured slippage are injected by the engine as trusted derived
+metadata.
+
+The trigger runs atomically with the persisted Fake state. An active maker is
+expired exactly once; a maker already expired before a process restart resumes
+without creating another expiration event. Any maker fill remains recorded, and
+only the exact decimal `quantity - filledQuantity` is submitted as the child
+`MARKET` order. Its
+`clientOrderId` is derived from the parent identity, so replay returns the same
+child only after its complete immutable intent and the parent's terminal audit
+metadata match. A mismatched persisted child fails as an ID conflict. A
+cancelled parent and a zero remainder never create a child.
+
+The current executable top-of-book price must remain inside the persisted zone
+and within the policy's total adverse-slippage limit. That limit includes both
+the displacement from the maker limit to top of book and the fixed 5 bps taker
+cost from `fixed_adverse_slippage_bps_v1`. A guard rejection is audited on the
+parent and is itself replay-idempotent. Once the guards pass, the child goes
+through the ordinary `submit()` and `fillOrder()` path: precision, margin, fee,
+fixed taker slippage, position updates, and rejection persistence are not
+bypassed. Maker and taker costs therefore stay separate.
+
+Attached SL/TP metadata and lineage are copied to the child. Protection uses the
+logical entry quantity, equal to the maker fill plus the fallback remainder, so
+a partial maker fill followed by a fallback is protected for the complete
+position. If protection is rejected, the deterministic reduce-only fail-safe
+also closes that complete logical quantity. If a zone/slippage/margin/validation
+rejection or prior cancellation leaves only a partial maker fill, that exact
+maker exposure is protected; a rejected protection compensates that partial
+exposure. Scenario reset, price movement, direct fill, fault injection, and
+protection-rejection fixtures use the same persisted-state transaction boundary,
+so stale scenario instances reload before mutation. No network client,
+credential, or exchange adapter write path is involved.
 
 ## Attached-protection fail-safe
 

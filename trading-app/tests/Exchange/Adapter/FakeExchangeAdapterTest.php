@@ -22,6 +22,7 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakeInstrument;
 use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Fake\FakeOrderValidator;
@@ -1108,6 +1109,849 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
     }
 
+    public function testFallbackTakerConvertsUnfilledMakerRemainderThroughNormalMarketAndProtectionPath(): void
+    {
+        self::assertTrue(
+            class_exists(FakeFallbackTakerPolicy::class),
+            'The Fake/Paper fallback must expose a typed deterministic policy.',
+        );
+        self::assertTrue(
+            method_exists($this->scenario, 'fallbackTaker'),
+            'The Fake/Paper scenario service must expose the deterministic fallback trigger.',
+        );
+
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-full',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata() + ['internal_trade_id' => 'itd-fallback-full'],
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertTrue($result->executed);
+        self::assertFalse($result->idempotentReplay);
+        self::assertSame('fallback_completed', $result->reason);
+        self::assertNotNull($result->parentOrder);
+        self::assertNotNull($result->fallbackOrder);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $result->parentOrder->status);
+        self::assertSame(0.0, $result->parentOrder->filledQuantity);
+        self::assertSame(1.0, $result->parentOrder->remainingQuantity);
+        self::assertSame(ExchangeOrderType::MARKET, $result->fallbackOrder->orderType);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result->fallbackOrder->status);
+        self::assertSame(1.0, $result->fallbackOrder->quantity);
+        self::assertSame(1.0, $result->fallbackOrder->filledQuantity);
+        self::assertStringStartsWith('fake-fallback-', (string) $result->fallbackOrder->clientOrderId);
+        self::assertSame(
+            $placed->exchangeOrderId,
+            $result->fallbackOrder->metadata['fallback_parent_order_id'] ?? null,
+        );
+        self::assertSame(
+            'cid-fallback-full',
+            $result->fallbackOrder->metadata['fallback_parent_client_order_id'] ?? null,
+        );
+        self::assertSame(
+            'itd-fallback-full',
+            $result->fallbackOrder->metadata['internal_trade_id'] ?? null,
+        );
+
+        $positions = $this->adapter->getOpenPositions('BTCUSDT');
+        $openOrders = $this->adapter->getOpenOrders('BTCUSDT');
+        self::assertCount(1, $positions);
+        self::assertSame(1.0, $positions[0]->size);
+        self::assertCount(1, $openOrders);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $openOrders[0]->orderType);
+        self::assertSame(1.0, $openOrders[0]->quantity);
+        self::assertTrue($openOrders[0]->reduceOnly);
+    }
+
+    public function testOrdinaryOrderMetadataCannotForgeFallbackProtectionQuantity(): void
+    {
+        $result = $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-forged-fallback-protection',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+            metadata: [
+                'fallback_parent_order_id' => 'fake-forged-parent',
+                'fallback_parent_filled_quantity' => 4.0,
+                'fallback_remainder_quantity' => 1.0,
+                'fallback_protection_quantity' => 5.0,
+                'fallback_trigger' => 'forged',
+            ],
+        ));
+
+        self::assertTrue($result->accepted);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
+        self::assertArrayNotHasKey('fallback_parent_order_id', $result->order->metadata);
+        self::assertArrayNotHasKey('fallback_protection_quantity', $result->order->metadata);
+
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($position);
+        self::assertNotNull($protection);
+        self::assertSame(1.0, $position->size);
+        self::assertSame(1.0, $protection->quantity);
+        self::assertSame(1.0, $protection->remainingQuantity);
+    }
+
+    public function testFallbackReplayRejectsPersistedChildWhoseIntentDoesNotMatchExactRemainder(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-replay-conflict',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        self::assertNotNull($placed->order);
+        $fallbackClientOrderId = 'fake-fallback-' . substr(hash(
+            'sha256',
+            $placed->exchangeOrderId . ':' . $placed->clientOrderId,
+        ), 0, 32);
+        $this->state->saveOrder(new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $this->state->nextOrderId(),
+            clientOrderId: $fallbackClientOrderId,
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            status: ExchangeOrderStatus::FILLED,
+            quantity: 0.2,
+            filledQuantity: 0.2,
+            remainingQuantity: 0.0,
+            price: null,
+            averagePrice: 25000.5,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: false,
+            timeInForce: ExchangeTimeInForce::GTC,
+            createdAt: $placed->order->createdAt,
+            updatedAt: $placed->order->updatedAt,
+            metadata: [
+                'fallback_parent_order_id' => $placed->exchangeOrderId,
+                'quantity_decimal' => '0.2',
+            ],
+        ));
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('fake_fallback_client_order_id_conflict');
+
+        $this->scenario->fallbackTaker($placed->exchangeOrderId);
+    }
+
+    public function testFallbackTakerConvertsOnlyTheExactPartiallyFilledMakerRemainder(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-partial',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertTrue($result->executed);
+        self::assertNotNull($result->parentOrder);
+        self::assertNotNull($result->fallbackOrder);
+        self::assertSame(0.4, $result->parentOrder->filledQuantity);
+        self::assertSame(0.6, $result->parentOrder->remainingQuantity);
+        self::assertSame(0.6, $result->fallbackOrder->quantity);
+        self::assertSame(0.6, $result->fallbackOrder->filledQuantity);
+        self::assertSame(1.0, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+    }
+
+    public function testFallbackTakerComputesExactDecimalRemainderAfterPointSevenFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-decimal-remainder',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.7, 24950.0);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertTrue($result->executed);
+        self::assertNotNull($result->fallbackOrder);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result->fallbackOrder->status);
+        self::assertSame(0.3, $result->fallbackOrder->quantity);
+        self::assertSame(0.3, $result->fallbackOrder->filledQuantity);
+        self::assertSame('0.3', $result->fallbackOrder->metadata['quantity_decimal'] ?? null);
+        self::assertSame(1.0, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+    }
+
+    public function testFallbackTakerSupportsShortMakerRemainderAndBuySideProtection(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 25050.0,
+            clientOrderId: 'cid-fallback-short',
+            positionSide: ExchangePositionSide::SHORT,
+            side: ExchangeOrderSide::SELL,
+            postOnly: true,
+            attachedStopLossPrice: 25200.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 25050.0);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertTrue($result->executed);
+        self::assertNotNull($result->fallbackOrder);
+        self::assertSame(ExchangeOrderSide::SELL, $result->fallbackOrder->side);
+        self::assertSame(ExchangePositionSide::SHORT, $result->fallbackOrder->positionSide);
+        self::assertSame(0.6, $result->fallbackOrder->quantity);
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($position);
+        self::assertNotNull($protection);
+        self::assertSame(ExchangePositionSide::SHORT, $position->side);
+        self::assertSame(1.0, $position->size);
+        self::assertSame(ExchangeOrderSide::BUY, $protection->side);
+        self::assertSame(1.0, $protection->quantity);
+    }
+
+    public function testFallbackTakerProtectionCoversMakerAndTakerExposureAfterPartialFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-partial-protection',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($position);
+        self::assertNotNull($protection);
+        self::assertSame(1.0, $position->size);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertTrue($protection->reduceOnly);
+        self::assertSame(1.0, $protection->quantity);
+        self::assertSame(1.0, $protection->remainingQuantity);
+    }
+
+    public function testFallbackTakerDoesNothingWhenMakerHasNoRemainder(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-no-remainder',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId);
+        $orderCountBefore = \count($this->adapter->getOrdersSnapshot('BTCUSDT'));
+        $fillCountBefore = \count($this->adapter->getFillsSnapshot('BTCUSDT'));
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('A zero remainder must be a deterministic no-op, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertFalse($result->idempotentReplay);
+        self::assertSame('fallback_remainder_zero', $result->reason);
+        self::assertSame(ExchangeOrderStatus::FILLED, $result->parentOrder?->status);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount($orderCountBefore, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount($fillCountBefore, $this->adapter->getFillsSnapshot('BTCUSDT'));
+    }
+
+    public function testFallbackTakerExpiresMakerWithoutChildWhenSlippageBudgetIsExceeded(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 10.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-slippage-guard',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('The slippage guard must return an audited rejection, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertFalse($result->idempotentReplay);
+        self::assertSame('fallback_slippage_exceeded', $result->reason);
+        self::assertNotNull($result->slippageBps);
+        self::assertGreaterThan(10.0, $result->slippageBps);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $result->parentOrder?->status);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount(1, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('fallback_taker.rejected'));
+        self::assertSame(
+            'fallback_slippage_exceeded',
+            $this->scenario->events('fallback_taker.rejected')[0]->payload['reason'] ?? null,
+        );
+    }
+
+    public function testFallbackSlippageGuardIncludesDeterministicTakerCostModel(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 22.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-total-slippage-guard',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_slippage_exceeded', $result->reason);
+        self::assertNotNull($result->slippageBps);
+        self::assertGreaterThan(22.0, $result->slippageBps);
+        self::assertEqualsWithDelta(25.240480961924, $result->slippageBps, 0.000000000001);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+    }
+
+    public function testFallbackTakerGuardRejectionReplayDoesNotDuplicateAuditEvent(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 10.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-guard-replay',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $first = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        $eventCountBeforeReplay = \count($this->scenario->events());
+
+        $replay = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($first->executed);
+        self::assertFalse($replay->executed);
+        self::assertTrue($replay->idempotentReplay);
+        self::assertSame('fallback_slippage_exceeded', $replay->reason);
+        self::assertSame($first->parentOrder?->exchangeOrderId, $replay->parentOrder?->exchangeOrderId);
+        self::assertNull($replay->fallbackOrder);
+        self::assertCount($eventCountBeforeReplay, $this->scenario->events());
+        self::assertCount(1, $this->scenario->events('fallback_taker.rejected'));
+    }
+
+    public function testFallbackGuardRejectionProtectsExistingMakerPartialFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 10.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-guard-partial-protection',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_slippage_exceeded', $result->reason);
+        self::assertSame(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
+        self::assertSame(0.4, $protection->remainingQuantity);
+    }
+
+    public function testFallbackTakerPersistsOrdinaryRejectionWhenMarginBecameInsufficient(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-margin',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->replaceUsdtBalance(total: 1000.0, equity: 1000.0);
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('A fallback margin rejection must remain persisted, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertFalse($result->idempotentReplay);
+        self::assertSame('insufficient_balance', $result->reason);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $result->parentOrder?->status);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->fallbackOrder?->status);
+        self::assertSame('insufficient_balance', $result->fallbackOrder?->metadata['reason'] ?? null);
+        self::assertCount(2, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('order.rejected'));
+        self::assertCount(1, $this->scenario->events('fallback_taker.rejected'));
+    }
+
+    public function testFallbackMarginRejectionProtectsExistingMakerPartialFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-margin-partial-protection',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->replaceUsdtBalance(total: 4000.0, equity: 4000.0);
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($result->executed);
+        self::assertSame('insufficient_balance', $result->reason);
+        self::assertNotNull($result->fallbackOrder);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $result->fallbackOrder->status);
+        self::assertSame(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
+        self::assertSame(0.4, $protection->remainingQuantity);
+    }
+
+    public function testFallbackRejectionProtectionFailureCompensatesExistingMakerPartialFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 10.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-rejection-partial-compensation',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->scenario->rejectNextProtectionOrder();
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_slippage_exceeded', $result->reason);
+        self::assertSame('rejected', $result->parentOrder?->metadata['protection_status'] ?? null);
+        self::assertSame('completed', $result->parentOrder?->metadata['compensation_status'] ?? null);
+        self::assertSame(0.4, $result->parentOrder?->metadata['compensation_quantity'] ?? null);
+        self::assertSame(0.0, $result->parentOrder?->metadata['position_size_after_compensation'] ?? null);
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+    }
+
+    public function testFallbackTakerReplayReturnsSameChildWithoutSecondOrderOrFill(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-replay',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $first = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        $orderCountBeforeReplay = \count($this->adapter->getOrdersSnapshot('BTCUSDT'));
+        $fillCountBeforeReplay = \count($this->adapter->getFillsSnapshot('BTCUSDT'));
+        $eventCountBeforeReplay = \count($this->scenario->events());
+
+        try {
+            $replay = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('Fallback replay must return the existing child, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertTrue($replay->executed);
+        self::assertTrue($replay->idempotentReplay);
+        self::assertSame('fallback_completed', $replay->reason);
+        self::assertSame($first->parentOrder?->exchangeOrderId, $replay->parentOrder?->exchangeOrderId);
+        self::assertSame($first->fallbackOrder?->exchangeOrderId, $replay->fallbackOrder?->exchangeOrderId);
+        self::assertSame($first->fallbackOrder?->clientOrderId, $replay->fallbackOrder?->clientOrderId);
+        self::assertCount($orderCountBeforeReplay, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount($fillCountBeforeReplay, $this->adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount($eventCountBeforeReplay, $this->scenario->events());
+    }
+
+    public function testFallbackTakerRestartsFromPersistedExpiredMakerWithoutDuplicateExpiration(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_fallback_restart_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $policy = new FakeFallbackTakerPolicy(
+                enabled: true,
+                zoneMin: 24900.0,
+                zoneMax: 25100.0,
+                maxSlippageBps: 30.0,
+            );
+            $state = new FakeExchangeStateStore($stateFile);
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            $placed = $adapter->placeOrder($this->request(
+                price: 24950.0,
+                clientOrderId: 'cid-fallback-restart',
+                postOnly: true,
+                timeInForce: ExchangeTimeInForce::IOC,
+                attachedStopLossPrice: 24800.0,
+                metadata: $policy->toMetadata(),
+            ));
+            self::assertSame(ExchangeOrderStatus::EXPIRED, $placed->status);
+            self::assertCount(1, $state->events('order.expired'));
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredBook = new FakeExchangeOrderBook($restoredState);
+            $restoredEngine = new FakeExchangeMatchingEngine(
+                $restoredState,
+                $restoredBook,
+                $this->fixedClock(),
+            );
+            $restoredAdapter = new FakeExchangeAdapter(
+                $restoredState,
+                $restoredBook,
+                $restoredEngine,
+                $this->fixedClock(),
+            );
+            $restoredScenario = new FakeExchangeScenarioService(
+                $restoredState,
+                $restoredBook,
+                $restoredEngine,
+            );
+
+            try {
+                $result = $restoredScenario->fallbackTaker((string) $placed->exchangeOrderId);
+            } catch (\LogicException $exception) {
+                self::fail(sprintf('Expired maker restart must remain eligible, got "%s".', $exception->getMessage()));
+            }
+
+            self::assertTrue($restoredState->recoveryMetadata()['restored']);
+            self::assertTrue($result->executed);
+            self::assertSame(ExchangeOrderStatus::EXPIRED, $result->parentOrder?->status);
+            self::assertSame(ExchangeOrderStatus::FILLED, $result->fallbackOrder?->status);
+            self::assertSame('expired', $result->fallbackOrder?->metadata['fallback_trigger'] ?? null);
+            self::assertCount(1, $restoredState->events('order.expired'));
+            self::assertCount(1, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertCount(1, $restoredAdapter->getOpenOrders('BTCUSDT'));
+
+            $restartedAgainState = new FakeExchangeStateStore($stateFile);
+            $restartedAgainBook = new FakeExchangeOrderBook($restartedAgainState);
+            $restartedAgainEngine = new FakeExchangeMatchingEngine(
+                $restartedAgainState,
+                $restartedAgainBook,
+                $this->fixedClock(),
+            );
+            $replay = (new FakeExchangeScenarioService(
+                $restartedAgainState,
+                $restartedAgainBook,
+                $restartedAgainEngine,
+            ))->fallbackTaker((string) $placed->exchangeOrderId);
+
+            self::assertTrue($replay->idempotentReplay);
+            self::assertNotNull($result->fallbackOrder);
+            self::assertNotNull($replay->fallbackOrder);
+            self::assertSame($result->fallbackOrder->exchangeOrderId, $replay->fallbackOrder->exchangeOrderId);
+            self::assertCount(1, $restartedAgainState->events('order.expired'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    public function testFallbackTakerExpiresMakerWithoutChildWhenCurrentPriceLeftConfiguredZone(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 24990.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-outside-zone',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('An out-of-zone fallback must return an audited rejection, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_price_outside_zone', $result->reason);
+        self::assertSame(ExchangeOrderStatus::EXPIRED, $result->parentOrder?->status);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount(1, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('fallback_taker.rejected'));
+        self::assertSame(
+            'fallback_price_outside_zone',
+            $this->scenario->events('fallback_taker.rejected')[0]->payload['reason'] ?? null,
+        );
+    }
+
+    public function testFallbackTakerIsForbiddenAfterMakerCancellation(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-cancelled',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $placed->exchangeOrderId,
+            clientOrderId: $placed->clientOrderId,
+        ));
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('A cancelled maker must produce a deterministic no-op, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_parent_cancelled', $result->reason);
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $result->parentOrder?->status);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount(1, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+    }
+
+    public function testFallbackAfterPartialMakerCancellationProtectsExistingExposureWithoutChild(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-cancelled-partial',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->adapter->cancelOrder(new CancelOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $placed->exchangeOrderId,
+            clientOrderId: $placed->clientOrderId,
+        ));
+
+        $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_parent_cancelled', $result->reason);
+        self::assertNull($result->fallbackOrder);
+        self::assertSame(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
+    }
+
+    public function testFallbackTakerProtectionFailureCompensatesFullMakerAndTakerExposure(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-protection-failure',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->scenario->rejectNextProtectionOrder();
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('Protection fail-safe must cover the full fallback exposure, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertTrue($result->executed);
+        self::assertSame('rejected', $result->fallbackOrder?->metadata['protection_status'] ?? null);
+        self::assertSame('completed', $result->fallbackOrder?->metadata['compensation_status'] ?? null);
+        self::assertSame('position_closed', $result->fallbackOrder?->metadata['compensation_outcome'] ?? null);
+        self::assertSame(1.0, $result->fallbackOrder?->metadata['compensation_quantity'] ?? null);
+        self::assertSame(1.0, $result->fallbackOrder?->metadata['position_size_before_compensation'] ?? null);
+        self::assertSame(0.0, $result->fallbackOrder?->metadata['position_size_after_compensation'] ?? null);
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('protection_order.rejected'));
+        self::assertCount(1, $this->scenario->events('position.closed'));
+    }
+
+    public function testFallbackTakerIsForbiddenWhenPersistedPolicyIsDisabled(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: false,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-disabled',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        try {
+            $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        } catch (\LogicException $exception) {
+            self::fail(sprintf('A disabled fallback policy must be an explicit no-op, got "%s".', $exception->getMessage()));
+        }
+
+        self::assertFalse($result->executed);
+        self::assertSame('fallback_disabled', $result->reason);
+        self::assertSame(ExchangeOrderStatus::OPEN, $result->parentOrder?->status);
+        self::assertNull($result->fallbackOrder);
+        self::assertCount(1, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $this->adapter->getOrdersSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getFillsSnapshot('BTCUSDT'));
+        self::assertCount(0, $this->scenario->events('fallback_taker.completed'));
+        self::assertCount(0, $this->scenario->events('fallback_taker.rejected'));
+    }
+
     public function testPartialTakerFillsAggregateSlippagePerFill(): void
     {
         $placed = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: false));
@@ -1861,6 +2705,44 @@ final class FakeExchangeAdapterTest extends TestCase
             $restored = $this->adapterForState(new FakeExchangeStateStore($stateFile));
             self::assertCount(0, $restored->getOpenOrders('BTCUSDT'));
             self::assertSame(ExchangeOrderStatus::CANCELLED, $restored->getOrdersSnapshot('BTCUSDT')[0]->status);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testStaleScenarioReloadsBeforePartialFillTransaction(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_scenario_fill_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $primaryState = new FakeExchangeStateStore($stateFile);
+            $staleState = new FakeExchangeStateStore($stateFile);
+            $staleBook = new FakeExchangeOrderBook($staleState);
+            $staleScenario = new FakeExchangeScenarioService(
+                $staleState,
+                $staleBook,
+                new FakeExchangeMatchingEngine($staleState, $staleBook, $this->fixedClock()),
+            );
+            $placed = $this->adapterForState($primaryState)->placeOrder($this->request(
+                clientOrderId: 'stale-scenario-fill',
+                postOnly: true,
+            ));
+            self::assertNotNull($placed->exchangeOrderId);
+
+            $partial = $staleScenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+            self::assertNotNull($partial);
+            self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial->status);
+            self::assertSame(0.4, $partial->filledQuantity);
+            self::assertSame(0.6, $partial->remainingQuantity);
+            $restored = $this->adapterForState(new FakeExchangeStateStore($stateFile));
+            self::assertSame(
+                ExchangeOrderStatus::PARTIALLY_FILLED,
+                $restored->getOrdersSnapshot('BTCUSDT')[0]->status ?? null,
+            );
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
