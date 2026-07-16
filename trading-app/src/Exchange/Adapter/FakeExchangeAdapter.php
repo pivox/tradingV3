@@ -55,6 +55,11 @@ final readonly class FakeExchangeAdapter implements
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
     }
 
+    public function isBackedByStateStore(FakeExchangeStateStore $stateStore): bool
+    {
+        return $this->stateStore === $stateStore;
+    }
+
     public function exchange(): Exchange
     {
         return Exchange::FAKE;

@@ -712,6 +712,10 @@ class FakeExchangeStateStore
         ?string $symbol = null,
     ): ExchangeReconciliationResult
     {
+        if (!$adapter->isBackedByStateStore($this)) {
+            throw new \LogicException('fake_exchange_state_store_mismatch');
+        }
+
         if ($symbol !== null) {
             return $reconciliation->reconcileBase($adapter, $symbol);
         }

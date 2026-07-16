@@ -92,6 +92,46 @@ final class ExchangeReconciliationServiceTest extends TestCase
         );
     }
 
+    public function testSnapshotProofReconciliationRejectsAdapterBackedByAnotherStateBeforeMutation(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_store_binding_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            [$stateA, $clientA] = $this->stateWithPrivateWsGap('store-binding-v1', $stateFile);
+            $stateB = new FakeExchangeStateStore();
+            $adapterB = $this->adapter($stateB);
+            $adapterB->placeOrder($this->marketRequest());
+            $projectionStore = new RecordingProjectionStore();
+            $service = new ExchangeReconciliationService(
+                new ExchangeEventBus($projectionStore, new NullLogger()),
+                $projectionStore,
+                $this->fixedClock(),
+                new NullLogger(),
+            );
+            $auditBefore = $clientA->audit();
+
+            try {
+                $stateA->reconcileWithPrivateWsSnapshotProof($service, $adapterB);
+                self::fail('A state store must reject snapshot reconciliation through an adapter backed by another store.');
+            } catch (\LogicException $exception) {
+                self::assertSame('fake_exchange_state_store_mismatch', $exception->getMessage());
+            }
+
+            self::assertSame($auditBefore, $clientA->audit());
+            self::assertSame([], $projectionStore->events);
+
+            $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            self::assertNull($envelope['payload']['privateWs']['snapshot_proof'] ?? null);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
+        }
+    }
+
     public function testRestReconciliationProjectsMissedFillAndFlagsUnprotectedPosition(): void
     {
         $state = new FakeExchangeStateStore();
@@ -790,7 +830,7 @@ final class ExchangeReconciliationServiceTest extends TestCase
     /**
      * @return array{FakeExchangeStateStore,FakeExchangeWsClient}
      */
-    private function stateWithPrivateWsGap(string $scenarioId): array
+    private function stateWithPrivateWsGap(string $scenarioId, ?string $stateFile = null): array
     {
         $one = new FakeExchangeEvent(
             'order.created',
@@ -810,7 +850,7 @@ final class ExchangeReconciliationServiceTest extends TestCase
             new \DateTimeImmutable('2026-01-01T00:00:03+00:00'),
             ['event_sequence' => 3],
         );
-        $state = new FakeExchangeStateStore();
+        $state = new FakeExchangeStateStore($stateFile);
         foreach ([$one, $two, $three] as $event) {
             $state->appendEvent($event);
         }
