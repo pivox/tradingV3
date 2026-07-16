@@ -165,8 +165,30 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 'order_status' => $order->status->value,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                ...$this->fillCostMetadata($event),
             ],
         );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fillCostMetadata(FakeExchangeEvent $event): array
+    {
+        $metadata = [];
+        foreach ([
+            'liquidity_role',
+            'spread_cost_usdt',
+            'slippage_cost_usdt',
+            'cost_model_version',
+            'spread_model_version',
+        ] as $key) {
+            if (array_key_exists($key, $event->payload)) {
+                $metadata[$key] = $event->payload[$key];
+            }
+        }
+
+        return $metadata;
     }
 
     /**

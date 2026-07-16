@@ -50,6 +50,20 @@ final readonly class FillCostLedgerIngestionService
         $feeCurrency = $this->string($fill->feeCurrency);
         $feeCurrency = $feeCurrency !== null ? strtoupper($feeCurrency) : null;
         $feeUsdt = $this->feeUsdt($fill, $metadata, $payload, $qualityFlags);
+        $spreadCostUsdt = $this->nonNegativeCostUsdt(
+            'spread_cost_usdt',
+            'spread_cost_invalid',
+            $metadata,
+            $payload,
+            $qualityFlags,
+        );
+        $slippageCostUsdt = $this->nonNegativeCostUsdt(
+            'slippage_cost_usdt',
+            'slippage_cost_invalid',
+            $metadata,
+            $payload,
+            $qualityFlags,
+        );
         $source = $this->source($metadata, $payload);
         $sourceVersion = $this->string($metadata['source_version'] ?? $payload['source_version'] ?? null)
             ?? $this->string($metadata['pnl_source'] ?? $payload['pnl_source'] ?? null)
@@ -77,8 +91,8 @@ final readonly class FillCostLedgerIngestionService
             'fee_currency' => $feeCurrency,
             'fee_usdt' => $feeUsdt,
             'funding_usdt' => null,
-            'spread_cost_usdt' => null,
-            'slippage_cost_usdt' => null,
+            'spread_cost_usdt' => $spreadCostUsdt,
+            'slippage_cost_usdt' => $slippageCostUsdt,
             'borrow_cost_usdt' => null,
             'liquidation_fee_usdt' => null,
             'occurred_at' => $fill->filledAt->format(\DateTimeInterface::ATOM),
@@ -319,6 +333,43 @@ final readonly class FillCostLedgerIngestionService
         $qualityFlags[] = 'fee_conversion_missing';
 
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $payload
+     * @param list<string> $qualityFlags
+     */
+    private function nonNegativeCostUsdt(
+        string $key,
+        string $invalidFlag,
+        array $metadata,
+        array $payload,
+        array &$qualityFlags,
+    ): ?string {
+        if (array_key_exists($key, $metadata)) {
+            $value = $metadata[$key];
+        } elseif (array_key_exists($key, $payload)) {
+            $value = $payload[$key];
+        } else {
+            return null;
+        }
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            $qualityFlags[] = $invalidFlag;
+            return null;
+        }
+
+        $cost = (float) $value;
+        if (!\is_finite($cost) || $cost < 0.0) {
+            $qualityFlags[] = $invalidFlag;
+            return null;
+        }
+
+        return $this->decimal($cost);
     }
 
     /**

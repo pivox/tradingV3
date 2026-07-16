@@ -1060,6 +1060,18 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertGreaterThan(0.0, $fills[0]->fee);
         self::assertSame('fake_paper_fill_ledger_v1', $fills[0]->metadata['pnl_source'] ?? null);
         self::assertSame('complete', $fills[0]->metadata['cost_completeness'] ?? null);
+        self::assertSame('taker', $fills[0]->metadata['liquidity_role'] ?? null);
+        self::assertSame(0.0, $fills[0]->metadata['spread_cost_usdt'] ?? null);
+        self::assertEqualsWithDelta(
+            $fills[0]->quantity * $fills[0]->price * 5.0 / 10_000.0,
+            $fills[0]->metadata['slippage_cost_usdt'] ?? null,
+            0.000000000001,
+        );
+        self::assertSame('fixed_adverse_slippage_bps_v1', $fills[0]->metadata['cost_model_version'] ?? null);
+        self::assertSame(
+            'top_of_book_embedded_spread_v1',
+            $fills[0]->metadata['spread_model_version'] ?? null,
+        );
     }
 
     public function testNonCrossingIocLimitExpiresWithoutResting(): void
