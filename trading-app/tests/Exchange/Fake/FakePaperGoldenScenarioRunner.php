@@ -8,7 +8,9 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
@@ -34,6 +36,9 @@ use App\Exchange\Fake\FakeTp1TrailingPolicy;
 use App\Exchange\Event\ExchangeEventBus;
 use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Event\ExchangeEventNormalizerRegistry;
+use App\Exchange\Event\AbstractExchangeOrderEvent;
+use App\Exchange\Event\AbstractExchangePositionEvent;
+use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
@@ -1115,11 +1120,7 @@ final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionSto
     public function project(ExchangeEventInterface $event): void
     {
         ++$this->projectedCount;
-        $this->signatures[] = implode('|', [
-            $event->eventType(),
-            $event->symbol(),
-            $event->occurredAt()->format(\DateTimeInterface::ATOM),
-        ]);
+        $this->signatures[] = $this->normalizedSignature($event);
     }
 
     public function projectAtomically(array $events): void
@@ -1142,5 +1143,145 @@ final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionSto
     public function normalizedSignatures(): array
     {
         return $this->signatures;
+    }
+
+    private function normalizedSignature(ExchangeEventInterface $event): string
+    {
+        $semantics = [
+            'event_type' => $event->eventType(),
+            'exchange' => $event->exchange()->value,
+            'market_type' => $event->marketType()->value,
+            'symbol' => $event->symbol(),
+            'occurred_at' => $event->occurredAt(),
+            'payload' => $event->payload(),
+        ];
+        if ($event instanceof AbstractExchangeOrderEvent) {
+            $semantics['order'] = $this->orderSemantics($event->order());
+        }
+        if ($event instanceof ExchangeFillReceived) {
+            $semantics['fill'] = $this->fillSemantics($event->fill());
+        }
+        if ($event instanceof AbstractExchangePositionEvent) {
+            $semantics['position_event'] = [
+                'side' => $event->side()->value,
+                'size' => $event->size(),
+                'position' => $event->position() instanceof ExchangePositionDto
+                    ? $this->positionSemantics($event->position())
+                    : null,
+            ];
+        }
+
+        return hash('sha256', json_encode(
+            $this->canonicalValue($semantics),
+            JSON_THROW_ON_ERROR
+                | JSON_PRESERVE_ZERO_FRACTION
+                | JSON_UNESCAPED_SLASHES
+                | JSON_UNESCAPED_UNICODE,
+        ));
+    }
+
+    /** @return array<string,mixed> */
+    private function orderSemantics(ExchangeOrderDto $order): array
+    {
+        return [
+            'exchange' => $order->exchange->value,
+            'market_type' => $order->marketType->value,
+            'symbol' => $order->symbol,
+            'exchange_order_id' => $order->exchangeOrderId,
+            'client_order_id' => $order->clientOrderId,
+            'side' => $order->side->value,
+            'position_side' => $order->positionSide?->value,
+            'order_type' => $order->orderType->value,
+            'status' => $order->status->value,
+            'quantity' => $order->quantity,
+            'filled_quantity' => $order->filledQuantity,
+            'remaining_quantity' => $order->remainingQuantity,
+            'price' => $order->price,
+            'average_price' => $order->averagePrice,
+            'stop_price' => $order->stopPrice,
+            'reduce_only' => $order->reduceOnly,
+            'post_only' => $order->postOnly,
+            'time_in_force' => $order->timeInForce?->value,
+            'created_at' => $order->createdAt,
+            'updated_at' => $order->updatedAt,
+            'metadata' => $order->metadata,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function fillSemantics(ExchangeFillDto $fill): array
+    {
+        return [
+            'exchange' => $fill->exchange->value,
+            'market_type' => $fill->marketType->value,
+            'symbol' => $fill->symbol,
+            'exchange_order_id' => $fill->exchangeOrderId,
+            'client_order_id' => $fill->clientOrderId,
+            'fill_id' => $fill->fillId,
+            'side' => $fill->side->value,
+            'position_side' => $fill->positionSide?->value,
+            'quantity' => $fill->quantity,
+            'price' => $fill->price,
+            'fee' => $fill->fee,
+            'fee_currency' => $fill->feeCurrency,
+            'filled_at' => $fill->filledAt,
+            'metadata' => $fill->metadata,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function positionSemantics(ExchangePositionDto $position): array
+    {
+        return [
+            'exchange' => $position->exchange->value,
+            'market_type' => $position->marketType->value,
+            'symbol' => $position->symbol,
+            'side' => $position->side->value,
+            'size' => $position->size,
+            'entry_price' => $position->entryPrice,
+            'mark_price' => $position->markPrice,
+            'unrealized_pnl' => $position->unrealizedPnl,
+            'realized_pnl' => $position->realizedPnl,
+            'margin' => $position->margin,
+            'leverage' => $position->leverage,
+            'opened_at' => $position->openedAt,
+            'updated_at' => $position->updatedAt,
+            'metadata' => $position->metadata,
+        ];
+    }
+
+    private function canonicalValue(mixed $value): mixed
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTimeImmutable::createFromInterface($value)
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format('Y-m-d\\TH:i:s.u\\Z');
+        }
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+        if (\is_float($value) && !\is_finite($value)) {
+            throw new \LogicException('Golden normalized semantics contain a non-finite number.');
+        }
+        if (!\is_array($value)) {
+            if ($value === null || \is_scalar($value)) {
+                return $value;
+            }
+
+            throw new \LogicException(sprintf(
+                'Golden normalized semantics contain unsupported value type %s.',
+                get_debug_type($value),
+            ));
+        }
+
+        $canonical = [];
+        foreach ($value as $key => $item) {
+            $canonical[$key] = $this->canonicalValue($item);
+        }
+        if (!array_is_list($canonical)) {
+            ksort($canonical, SORT_STRING);
+        }
+
+        return $canonical;
     }
 }
