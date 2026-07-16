@@ -458,6 +458,16 @@ final readonly class FakeExchangeMatchingEngine
         $side = $entryOrder->positionSide === ExchangePositionSide::SHORT
             ? ExchangeOrderSide::BUY
             : ExchangeOrderSide::SELL;
+        $metadata = $this->lineageMetadata($entryOrder->metadata) + [
+            'source' => 'fake_exchange',
+            'parent_order_id' => $entryOrder->exchangeOrderId,
+            'parent_client_order_id' => $entryOrder->clientOrderId,
+            'protection_kind' => $suffix,
+        ];
+        if (\array_key_exists('margin_contract_size', $entryOrder->metadata)) {
+            $metadata['margin_contract_size'] = $entryOrder->metadata['margin_contract_size'];
+        }
+
         $order = new ExchangeOrderDto(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
@@ -478,12 +488,7 @@ final readonly class FakeExchangeMatchingEngine
             postOnly: false,
             timeInForce: null,
             createdAt: $this->clock->now(),
-            metadata: $this->lineageMetadata($entryOrder->metadata) + [
-                'source' => 'fake_exchange',
-                'parent_order_id' => $entryOrder->exchangeOrderId,
-                'parent_client_order_id' => $entryOrder->clientOrderId,
-                'protection_kind' => $suffix,
-            ],
+            metadata: $metadata,
         );
         $this->stateStore->saveOrder($order);
         $this->appendEvent('protection_order.created', $order, ['parent_order_id' => $entryOrder->exchangeOrderId]);

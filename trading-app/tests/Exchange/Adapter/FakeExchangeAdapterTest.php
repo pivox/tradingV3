@@ -800,6 +800,52 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertEqualsWithDelta(150.0, $closedEvents[0]->payload['recorded_pnl_usdt'] ?? null, 0.000001);
     }
 
+    public function testAttachedProtectionKeepsContractSizeForFeesAndCertifiedClose(): void
+    {
+        $provider = $this->instrumentProvider(contractSize: '2');
+        $state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $this->fixedClock(),
+            new FakeOrderValidator($provider),
+            $provider,
+        );
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+        $scenario = new FakeExchangeScenarioService($state, $book, $engine);
+
+        $adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'cid-contract-protection-entry',
+            postOnly: false,
+            attachedStopLossPrice: 24800.0,
+        ));
+
+        $openOrders = $adapter->getOpenOrders('BTCUSDT');
+        self::assertCount(1, $openOrders);
+        self::assertSame('2', $openOrders[0]->metadata['margin_contract_size'] ?? null);
+
+        $scenario->movePrice('BTCUSDT', 24790.0, 0.0);
+
+        $filledEvents = $scenario->events('order.filled');
+        $closedEvents = $scenario->events('position.closed');
+        self::assertCount(2, $filledEvents);
+        self::assertCount(1, $closedEvents);
+
+        $entryPrice = (float) ($filledEvents[0]->payload['fill_price'] ?? 0.0);
+        $exitPrice = (float) ($filledEvents[1]->payload['fill_price'] ?? 0.0);
+        $expectedEntryFee = round($entryPrice * 2.0 * 0.0005, 12);
+        $expectedExitFee = round($exitPrice * 2.0 * 0.0005, 12);
+        $expectedGross = round(($exitPrice - $entryPrice) * 2.0, 12);
+
+        self::assertEqualsWithDelta($expectedExitFee, $filledEvents[1]->payload['fill_fee'] ?? null, 0.000001);
+        self::assertEqualsWithDelta($expectedGross, $closedEvents[0]->payload['gross_realized_pnl_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta($expectedEntryFee, $closedEvents[0]->payload['entry_fee_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta($expectedExitFee, $closedEvents[0]->payload['exit_fee_usdt'] ?? null, 0.000001);
+    }
+
     public function testLegacyOpenOrderWithoutContractSizeMetadataFallsBackToOne(): void
     {
         $this->state->saveOrder(new ExchangeOrderDto(
