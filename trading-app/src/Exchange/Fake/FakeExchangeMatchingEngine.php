@@ -453,6 +453,7 @@ final readonly class FakeExchangeMatchingEngine
             );
         }
 
+        $fallbackLeverage = $this->positiveIntMetadata($parent->metadata, 'leverage') ?? 1;
         $top = $this->orderBook->top($parent->symbol);
         $executionPrice = $parent->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
         $slippageBps = $this->fallbackSlippageBps($parent, $executionPrice);
@@ -465,6 +466,7 @@ final readonly class FakeExchangeMatchingEngine
                 $parent->metadata,
                 $parentAlreadyExpired ? [] : ['reason' => 'fallback_taker_triggered'],
                 [
+                    'leverage' => $fallbackLeverage,
                     'fallback_status' => 'pending',
                     'fallback_slippage_bps' => $slippageBps,
                     'fallback_trigger' => $fallbackTrigger,
@@ -541,7 +543,7 @@ final readonly class FakeExchangeMatchingEngine
             stopPrice: null,
             reduceOnly: false,
             postOnly: false,
-            leverage: $this->positiveIntMetadata($parent->metadata, 'leverage'),
+            leverage: $fallbackLeverage,
             marginMode: $this->fallbackMarginMode($parent),
             clientOrderId: $fallbackClientOrderId,
             attachedStopLossPrice: $this->floatMetadata($parent->metadata, 'attached_stop_loss_price'),

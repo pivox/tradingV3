@@ -1681,6 +1681,42 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertCount($eventCountBeforeReplay, $this->scenario->events());
     }
 
+    public function testFallbackTakerFreezesImplicitParentLeverageAcrossSettingMutationAndReplay(): void
+    {
+        $policy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-fallback-implicit-leverage',
+            postOnly: true,
+            metadata: $policy->toMetadata(),
+            leverage: null,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
+
+        $first = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+        $replay = $this->scenario->fallbackTaker($placed->exchangeOrderId);
+
+        self::assertTrue($first->executed);
+        self::assertFalse($first->idempotentReplay);
+        self::assertSame(1, $first->parentOrder?->metadata['leverage'] ?? null);
+        self::assertSame(1, $first->fallbackOrder?->metadata['leverage'] ?? null);
+        self::assertTrue($replay->executed);
+        self::assertTrue($replay->idempotentReplay);
+        self::assertSame($first->fallbackOrder?->exchangeOrderId, $replay->fallbackOrder?->exchangeOrderId);
+        self::assertSame(1, $replay->parentOrder?->metadata['leverage'] ?? null);
+        self::assertSame(1, $replay->fallbackOrder?->metadata['leverage'] ?? null);
+        self::assertSame(
+            ['leverage' => 25, 'margin_mode' => 'isolated'],
+            $this->state->getLeverageSetting('BTCUSDT'),
+        );
+    }
+
     public function testFallbackTakerRestartsFromPersistedExpiredMakerWithoutDuplicateExpiration(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_fallback_restart_');
