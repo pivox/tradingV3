@@ -21,6 +21,12 @@ final readonly class FakePrivateWsDelivery
         if (!preg_match('/^[a-f0-9]{64}$/D', $this->fingerprint)) {
             throw new \InvalidArgumentException('fake_private_ws_delivery_fingerprint_invalid');
         }
+        if ($this->sequence !== self::eventSequence($this->event)) {
+            throw new \InvalidArgumentException('fake_private_ws_delivery_sequence_invalid');
+        }
+        if (!hash_equals(self::fingerprint($this->event), $this->fingerprint)) {
+            throw new \InvalidArgumentException('fake_private_ws_delivery_fingerprint_invalid');
+        }
     }
 
     public static function fromEvent(string $fixtureEntryId, FakeExchangeEvent $event): self
@@ -72,15 +78,8 @@ final readonly class FakePrivateWsDelivery
         }
 
         $event = self::eventFromArray($eventPayload);
-        $delivery = new self($fixtureEntryId, $sequence, $event, $fingerprint);
-        if ($delivery->sequence !== self::eventSequence($event)) {
-            throw new \InvalidArgumentException('fake_private_ws_delivery_sequence_invalid');
-        }
-        if (!hash_equals(self::fingerprint($event), $delivery->fingerprint)) {
-            throw new \InvalidArgumentException('fake_private_ws_delivery_fingerprint_invalid');
-        }
 
-        return $delivery;
+        return new self($fixtureEntryId, $sequence, $event, $fingerprint);
     }
 
     private static function eventSequence(FakeExchangeEvent $event): string

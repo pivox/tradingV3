@@ -74,6 +74,22 @@ final class FakePrivateWsScenarioTest extends TestCase
         FakePrivateWsDelivery::fromArray($payload);
     }
 
+    public function testPublicDeliveryConstructorRejectsIncoherentIdentity(): void
+    {
+        $event = $this->event(['event_sequence' => 1]);
+
+        try {
+            new FakePrivateWsDelivery('entry-1', '2', $event, str_repeat('a', 64));
+            self::fail('The declared sequence must match the raw event.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('fake_private_ws_delivery_sequence_invalid', $exception->getMessage());
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fake_private_ws_delivery_fingerprint_invalid');
+        new FakePrivateWsDelivery('entry-1', '1', $event, str_repeat('a', 64));
+    }
+
     /** @param array<string,mixed> $payload */
     #[DataProvider('invalidDeliveryProvider')]
     public function testDeliveryRejectsInvalidIdentity(array $payload, string $message): void
