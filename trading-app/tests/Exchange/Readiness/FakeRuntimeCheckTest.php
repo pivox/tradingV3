@@ -95,6 +95,28 @@ final class FakeRuntimeCheckTest extends TestCase
         }
     }
 
+    public function testMissingPersistentStateUsesInitializedMemoryWithoutCreatingActiveFile(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_runtime_check_initial_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $report = $this->runtimeCheck($state, stateFile: $stateFile)->current();
+
+            self::assertTrue($report->privateReadConnectivity);
+            self::assertTrue($report->accountReadable);
+            self::assertTrue($report->permissionsRead);
+            self::assertNotNull($report->configHash);
+            self::assertNotNull($report->configProfile);
+            self::assertFileDoesNotExist($stateFile);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testResidualLocalBookDoesNotProveMarketSourceReadiness(): void
     {
         $state = new FakeExchangeStateStore();
@@ -181,6 +203,7 @@ final class FakeRuntimeCheckTest extends TestCase
         ?ClockInterface $clock = null,
         bool $controlledClock = true,
         bool $marketDataSourceReady = false,
+        ?string $stateFile = null,
     ): FakeRuntimeCheck
     {
         $book = new FakeExchangeOrderBook($state);
@@ -193,6 +216,7 @@ final class FakeRuntimeCheckTest extends TestCase
             $clock,
             controlledClock: $controlledClock,
             marketDataSourceReady: $marketDataSourceReady,
+            stateFile: $stateFile,
         );
     }
 

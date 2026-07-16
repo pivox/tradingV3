@@ -751,6 +751,55 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertEqualsWithDelta(9980.0, $adapter->getBalances()[0]->metadata['used_margin_usdt'] ?? null, 0.000001);
     }
 
+    public function testContractSizeScalesFillFeesAndCertifiedCloseLedger(): void
+    {
+        $provider = $this->instrumentProvider(contractSize: '2');
+        $state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $this->fixedClock(),
+            new FakeOrderValidator($provider),
+            $provider,
+        );
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+        $scenario = new FakeExchangeScenarioService($state, $book, $engine);
+
+        $entry = $adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-contract-ledger-entry',
+            postOnly: true,
+        ));
+        self::assertNotNull($entry->exchangeOrderId);
+        $scenario->fillOrder($entry->exchangeOrderId, 1.0, 24950.0);
+
+        $position = $adapter->getOpenPositions('BTCUSDT')[0];
+        self::assertEqualsWithDelta(49900.0, $position->metadata['entry_notional_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(24.95, $position->metadata['entry_fee_usdt'] ?? null, 0.000001);
+
+        $exit = $adapter->placeOrder($this->request(
+            price: 25050.0,
+            clientOrderId: 'cid-contract-ledger-exit',
+            side: ExchangeOrderSide::SELL,
+            reduceOnly: true,
+            postOnly: true,
+        ));
+        self::assertNotNull($exit->exchangeOrderId);
+        $scenario->fillOrder($exit->exchangeOrderId, 1.0, 25050.0);
+
+        $closedEvents = $scenario->events('position.closed');
+        $filledEvents = $scenario->events('order.filled');
+        self::assertCount(2, $filledEvents);
+        self::assertEqualsWithDelta(24.95, $filledEvents[0]->payload['fill_fee'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(25.05, $filledEvents[1]->payload['fill_fee'] ?? null, 0.000001);
+        self::assertCount(1, $closedEvents);
+        self::assertEqualsWithDelta(200.0, $closedEvents[0]->payload['gross_realized_pnl_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(24.95, $closedEvents[0]->payload['entry_fee_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(25.05, $closedEvents[0]->payload['exit_fee_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(150.0, $closedEvents[0]->payload['recorded_pnl_usdt'] ?? null, 0.000001);
+    }
+
     public function testLegacyOpenOrderWithoutContractSizeMetadataFallsBackToOne(): void
     {
         $this->state->saveOrder(new ExchangeOrderDto(

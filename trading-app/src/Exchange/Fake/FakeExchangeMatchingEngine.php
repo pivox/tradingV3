@@ -266,7 +266,11 @@ final readonly class FakeExchangeMatchingEngine
             [
                 'fill_quantity' => $fillQuantity,
                 'fill_price' => $executionPrice,
-                'fill_fee' => $this->fillFee($fillQuantity, $executionPrice),
+                'fill_fee' => $this->fillFee(
+                    $fillQuantity,
+                    $executionPrice,
+                    $this->marginContractSize($updated->metadata),
+                ),
                 'fee_currency' => 'USDT',
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
@@ -548,7 +552,8 @@ final readonly class FakeExchangeMatchingEngine
             return;
         }
 
-        $fillFee = $this->fillFee($fillQuantity, $executionPrice);
+        $contractSize = $this->marginContractSize($order->metadata);
+        $fillFee = $this->fillFee($fillQuantity, $executionPrice, $contractSize);
         $existing = $this->stateStore->getPosition($order->symbol, $order->positionSide);
         $existingMetadata = $existing?->metadata ?? ['source' => 'fake_exchange'];
         if ($order->reduceOnly) {
@@ -556,7 +561,13 @@ final readonly class FakeExchangeMatchingEngine
                 return;
             }
 
-            $exitLedger = $this->appendExitLedger($existing->metadata, $fillQuantity, $executionPrice, $fillFee);
+            $exitLedger = $this->appendExitLedger(
+                $existing->metadata,
+                $fillQuantity,
+                $executionPrice,
+                $contractSize,
+                $fillFee,
+            );
             $remainingSize = max(0.0, $existing->size - $fillQuantity);
             if ($remainingSize <= 0.00000001) {
                 $this->stateStore->removePosition($order->symbol, $order->positionSide);
@@ -591,7 +602,6 @@ final readonly class FakeExchangeMatchingEngine
             ? (($existing->entryPrice * $previousSize) + ($executionPrice * $fillQuantity)) / $newSize
             : $executionPrice;
         $leverage = $this->floatMetadata($order->metadata, 'leverage') ?? 1.0;
-        $contractSize = $this->marginContractSize($order->metadata);
         $existingMargin = $existing?->margin;
         if ($existing instanceof ExchangePositionDto && ($existingMargin === null || !\is_finite($existingMargin) || $existingMargin < 0.0)) {
             throw new \LogicException('fake_position_margin_unavailable');
@@ -622,6 +632,7 @@ final readonly class FakeExchangeMatchingEngine
                 $order->exchangeOrderId,
                 $fillQuantity,
                 $executionPrice,
+                $contractSize,
                 $fillFee,
             ),
         );
@@ -685,7 +696,14 @@ final readonly class FakeExchangeMatchingEngine
      * @param array<string,mixed> $metadata
      * @return array<string,mixed>
      */
-    private function appendEntryLedger(array $metadata, string $orderId, float $quantity, float $price, float $fee): array
+    private function appendEntryLedger(
+        array $metadata,
+        string $orderId,
+        float $quantity,
+        float $price,
+        float $contractSize,
+        float $fee,
+    ): array
     {
         $entryOrderIds = $this->entryOrderIds($metadata, $orderId);
 
@@ -695,7 +713,7 @@ final readonly class FakeExchangeMatchingEngine
             'entry_order_ids' => $entryOrderIds,
             'entry_order_count' => \count($entryOrderIds),
             'entry_qty' => $this->metadataFloat($metadata, 'entry_qty') + $quantity,
-            'entry_notional_usdt' => $this->metadataFloat($metadata, 'entry_notional_usdt') + ($quantity * $price),
+            'entry_notional_usdt' => $this->metadataFloat($metadata, 'entry_notional_usdt') + ($quantity * $price * $contractSize),
             'entry_fee_usdt' => $this->metadataFloat($metadata, 'entry_fee_usdt') + $fee,
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ]);
@@ -705,11 +723,17 @@ final readonly class FakeExchangeMatchingEngine
      * @param array<string,mixed> $metadata
      * @return array<string,mixed>
      */
-    private function appendExitLedger(array $metadata, float $quantity, float $price, float $fee): array
+    private function appendExitLedger(
+        array $metadata,
+        float $quantity,
+        float $price,
+        float $contractSize,
+        float $fee,
+    ): array
     {
         return array_replace($metadata, [
             'exit_qty' => $this->metadataFloat($metadata, 'exit_qty') + $quantity,
-            'exit_notional_usdt' => $this->metadataFloat($metadata, 'exit_notional_usdt') + ($quantity * $price),
+            'exit_notional_usdt' => $this->metadataFloat($metadata, 'exit_notional_usdt') + ($quantity * $price * $contractSize),
             'exit_fee_usdt' => $this->metadataFloat($metadata, 'exit_fee_usdt') + $fee,
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ]);
@@ -854,9 +878,9 @@ final readonly class FakeExchangeMatchingEngine
         ));
     }
 
-    private function fillFee(float $quantity, float $price): float
+    private function fillFee(float $quantity, float $price, float $contractSize): float
     {
-        return round($quantity * $price * self::FEE_RATE, 12);
+        return round($quantity * $price * $contractSize * self::FEE_RATE, 12);
     }
 
     private function withPersistedLeverageSetting(PlaceOrderRequest $request): PlaceOrderRequest
