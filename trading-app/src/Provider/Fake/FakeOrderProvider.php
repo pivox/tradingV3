@@ -461,9 +461,9 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         ];
         foreach ([
             'reason', 'idempotent_replay', 'quality_flags', 'leverage', 'margin_mode', 'attached_stop_loss_price',
-            'attached_take_profit_price', 'internal_trade_id', 'trade_id', 'internal_position_id',
-            'position_id', 'exchange_position_id', 'order_intent_id', 'run_id',
-            'correlation_run_id', 'orchestration_run_id', 'orchestration_set_id',
+            'attached_take_profit_price', 'protection_status', 'protection_order_ids', 'internal_trade_id',
+            'trade_id', 'internal_position_id', 'position_id', 'exchange_position_id', 'order_intent_id',
+            'run_id', 'correlation_run_id', 'orchestration_run_id', 'orchestration_set_id',
             'orchestration_dashboard_id', 'mtf_profile', 'origin', 'attempt_number', 'decision_key',
         ] as $key) {
             if (array_key_exists($key, $canonicalMetadata)) {

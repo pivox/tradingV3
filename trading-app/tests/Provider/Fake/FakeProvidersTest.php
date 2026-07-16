@@ -261,14 +261,43 @@ final class FakeProvidersTest extends TestCase
         self::assertSame('isolated', $placed->metadata['margin_mode']);
         self::assertSame(24500.0, $placed->metadata['attached_stop_loss_price']);
         self::assertSame(26000.0, $placed->metadata['attached_take_profit_price']);
+        self::assertSame('accepted', $placed->metadata['protection_status'] ?? null);
+        self::assertCount(2, $placed->metadata['protection_order_ids'] ?? []);
 
         $protectionOrders = $this->fixture->adapter->getOpenOrders('BTCUSDT');
         self::assertCount(2, $protectionOrders);
+        self::assertSame(
+            array_map(static fn ($order): string => $order->exchangeOrderId, $protectionOrders),
+            $placed->metadata['protection_order_ids'],
+        );
         self::assertTrue((bool) array_filter(
             $protectionOrders,
             static fn ($order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS
                 && $order->stopPrice === 24500.0,
         ));
+    }
+
+    public function testOrderProviderExposesRejectedAttachedProtectionOutcome(): void
+    {
+        $this->fixture->state->rejectNextProtectionOrder();
+
+        $placed = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            1.0,
+            options: [
+                'client_order_id' => 'rejected-protection-entry-1',
+                'attached_stop_loss_price' => 24500.0,
+            ],
+        );
+
+        self::assertNotNull($placed);
+        self::assertSame(OrderStatus::FILLED, $placed->status);
+        self::assertSame('rejected', $placed->metadata['protection_status'] ?? null);
+        self::assertArrayNotHasKey('protection_order_ids', $placed->metadata);
+        self::assertSame([], $this->fixture->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $this->fixture->account->getOpenPositions('BTCUSDT'));
     }
 
     public function testLimitOrderWithStopPriceRemainsTriggeredProtection(): void
