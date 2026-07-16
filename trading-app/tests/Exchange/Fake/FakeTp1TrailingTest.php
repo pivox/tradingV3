@@ -233,6 +233,28 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount($updateCount, $state->events('trailing_stop.updated'));
     }
 
+    public function testRatchetDerivedStopMustObeyInstrumentTickAndRollsBackPriceMove(): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $trailing = $this->armFixture($adapter, $scenario, $fixture);
+        $orderBefore = $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId);
+        $bookBefore = $state->getOrderBookTop('BTCUSDT');
+        $eventsBefore = $state->events();
+
+        try {
+            $scenario->movePrice('BTCUSDT', 25300.03, 0.0);
+            self::fail('Expected the non-quantized ratcheted stop to fail.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_ratchet_invalid', $exception->getMessage());
+        }
+
+        self::assertEquals($orderBefore, $adapter->getOrder('BTCUSDT', $trailing->exchangeOrderId));
+        self::assertSame($bookBefore, $state->getOrderBookTop('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertCount(0, $state->events('trailing_stop.updated'));
+    }
+
     public function testTp1UsesConfiguredQuantityAndAtomicallyArmsTrailingForRemainder(): void
     {
         [$state, $adapter, $scenario] = $this->exchange();
@@ -300,6 +322,40 @@ final class FakeTp1TrailingTest extends TestCase
             self::fail('Expected the incomplete trailing capability to fail.');
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('fake_tp1_trailing_policy_invalid', $exception->getMessage());
+        }
+
+        self::assertCount(0, $state->getOrders());
+        self::assertCount(0, $state->getOpenPositions());
+        self::assertCount(0, $state->events());
+    }
+
+    public function testTp1QuantityMustObeyInstrumentQuantityRulesBeforeMutation(): void
+    {
+        [$state, $adapter] = $this->exchange();
+        $fixture = array_replace($this->fixture('long'), ['tp1_quantity' => '0.0005']);
+
+        try {
+            $this->placeFixtureEntry($adapter, $fixture);
+            self::fail('Expected the non-quantized TP1 quantity to fail.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('fake_tp1_trailing_quantity_invalid', $exception->getMessage());
+        }
+
+        self::assertCount(0, $state->getOrders());
+        self::assertCount(0, $state->getOpenPositions());
+        self::assertCount(0, $state->events());
+    }
+
+    public function testDerivedInitialTrailingStopMustObeyInstrumentTickBeforeMutation(): void
+    {
+        [$state, $adapter] = $this->exchange();
+        $fixture = array_replace($this->fixture('long'), ['trailing_offset' => '100.03']);
+
+        try {
+            $this->placeFixtureEntry($adapter, $fixture);
+            self::fail('Expected the non-quantized derived trailing stop to fail.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('fake_tp1_trailing_stop_invalid', $exception->getMessage());
         }
 
         self::assertCount(0, $state->getOrders());
@@ -477,6 +533,92 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertCount(1, $state->events('trailing_stop.armed'));
     }
 
+    #[DataProvider('directionProvider')]
+    public function testTp1ActivationRejectsLooserStopAndRollsBackForBothSides(string $direction): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = array_replace($this->fixture($direction), ['trailing_offset' => '500.0']);
+        $this->placeFixtureEntry($adapter, $fixture);
+        $initialStop = $this->orderByType($adapter, ExchangeOrderType::STOP_LOSS);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+
+        try {
+            $scenario->fillOrder($tp1->exchangeOrderId, null, (float) $fixture['tp1_price']);
+            self::fail('Expected a looser derived trailing stop to fail activation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_stop_looser_than_initial_stop', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertSame(ExchangeOrderStatus::OPEN, $adapter->getOrder('BTCUSDT', $initialStop->exchangeOrderId)?->status);
+        self::assertSame(ExchangeOrderStatus::OPEN, $adapter->getOrder('BTCUSDT', $tp1->exchangeOrderId)?->status);
+        self::assertCount(0, $state->events('trailing_stop.armed'));
+    }
+
+    public function testExistingTrailingChildWithActiveInitialStopFailsExplicitlyAndRollsBack(): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $this->placeFixtureEntry($adapter, $fixture, ['internal_trade_id' => 'immutable-trade']);
+        $entry = $this->orderByType($adapter, ExchangeOrderType::MARKET);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $state->saveOrder($this->expectedTrailingChild($entry, $tp1, $fixture));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+
+        try {
+            $scenario->fillOrder($tp1->exchangeOrderId, null, (float) $fixture['tp1_price']);
+            self::fail('Expected the active initial stop to conflict with the existing trailing child.');
+        } catch (\LogicException $exception) {
+            self::assertSame(
+                'fake_tp1_trailing_existing_child_with_initial_stop_active',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertCount(0, $state->events('trailing_stop.armed'));
+    }
+
+    #[DataProvider('trailingChildConflictProvider')]
+    public function testExistingTrailingChildImmutableIntentConflictsRollBack(string $conflict): void
+    {
+        [$state, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $this->placeFixtureEntry($adapter, $fixture, ['internal_trade_id' => 'immutable-trade']);
+        $entry = $this->orderByType($adapter, ExchangeOrderType::MARKET);
+        $initialStop = $this->orderByType($adapter, ExchangeOrderType::STOP_LOSS);
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        $state->saveOrder($this->withStatus($initialStop, ExchangeOrderStatus::CANCELLED));
+        $state->saveOrder($this->conflictingTrailingChild(
+            $this->expectedTrailingChild($entry, $tp1, $fixture),
+            $conflict,
+        ));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $positionsBefore = $state->getOpenPositions('BTCUSDT');
+        $eventsBefore = $state->events();
+
+        try {
+            $scenario->fillOrder($tp1->exchangeOrderId, null, (float) $fixture['tp1_price']);
+            self::fail(sprintf('Expected trailing child conflict "%s" to fail.', $conflict));
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_tp1_trailing_client_order_id_conflict', $exception->getMessage());
+        }
+
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($positionsBefore, $state->getOpenPositions('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertCount(0, $state->events('trailing_stop.armed'));
+    }
+
     public function testTrailingCreationFailureRollsBackTp1PositionProtectionAndEvents(): void
     {
         $faultState = new class extends FakeExchangeStateStore {
@@ -596,6 +738,249 @@ final class FakeTp1TrailingTest extends TestCase
     {
         yield 'long' => ['long'];
         yield 'short' => ['short'];
+    }
+
+    /** @return iterable<string,array{string}> */
+    public static function trailingChildConflictProvider(): iterable
+    {
+        foreach ([
+            'exchange',
+            'market_type',
+            'side',
+            'position_side',
+            'order_type',
+            'status',
+            'quantity',
+            'filled_quantity',
+            'remaining_quantity',
+            'price',
+            'average_price',
+            'stop_price',
+            'reduce_only',
+            'post_only',
+            'time_in_force',
+            'source',
+            'protection_kind',
+            'parent_order_id',
+            'parent_client_order_id',
+            'lineage',
+            'policy_version',
+            'policy_enabled',
+            'policy_tp1_quantity_decimal',
+            'policy_offset_decimal',
+            'state_version',
+            'state_status',
+            'activation_order_id',
+            'watermark',
+            'quantity_decimal',
+            'filled_quantity_decimal',
+            'remaining_quantity_decimal',
+            'stop_price_decimal',
+            'watermark_decimal',
+            'margin_contract_size',
+        ] as $conflict) {
+            yield $conflict => [$conflict];
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $fixture
+     */
+    private function expectedTrailingChild(
+        ExchangeOrderDto $entry,
+        ExchangeOrderDto $tp1,
+        array $fixture,
+    ): ExchangeOrderDto {
+        $parentOrderId = (string) ($tp1->metadata['parent_order_id'] ?? '');
+        $clientOrderId = 'fake-trailing-' . substr(hash(
+            'sha256',
+            $parentOrderId . ':' . $tp1->exchangeOrderId,
+        ), 0, 32);
+        $quantity = (float) $fixture['quantity'] - (float) $fixture['tp1_quantity'];
+        $watermark = (float) $fixture['tp1_price'];
+        $stopPrice = $tp1->positionSide === ExchangePositionSide::LONG
+            ? $watermark - (float) $fixture['trailing_offset']
+            : $watermark + (float) $fixture['trailing_offset'];
+        $lineageKeys = [
+            'internal_trade_id',
+            'trade_id',
+            'internal_position_id',
+            'position_id',
+            'exchange_position_id',
+            'order_intent_id',
+            'client_order_id',
+            'run_id',
+            'correlation_run_id',
+            'orchestration_run_id',
+            'orchestration_set_id',
+            'orchestration_dashboard_id',
+            'mtf_profile',
+            'origin',
+            'attempt_number',
+            'decision_key',
+        ];
+        $metadata = array_intersect_key($tp1->metadata, array_flip($lineageKeys))
+            + (new FakeTp1TrailingPolicy(
+                (string) $fixture['tp1_quantity'],
+                (string) $fixture['trailing_offset'],
+            ))->toMetadata()
+            + [
+                'source' => 'fake_exchange',
+                'parent_order_id' => $parentOrderId,
+                'parent_client_order_id' => $tp1->metadata['parent_client_order_id'] ?? null,
+                'protection_kind' => 'trailing',
+                'trailing_state_version' => FakeTp1TrailingPolicy::VERSION,
+                'trailing_state_status' => 'active',
+                'trailing_activation_order_id' => $tp1->exchangeOrderId,
+                'trailing_watermark' => $watermark,
+                'trailing_watermark_decimal' => (string) $fixture['tp1_price'],
+                'quantity_decimal' => json_encode(
+                    $quantity,
+                    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR,
+                ),
+                'filled_quantity_decimal' => '0',
+                'remaining_quantity_decimal' => json_encode(
+                    $quantity,
+                    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR,
+                ),
+                'stop_price_decimal' => json_encode(
+                    $stopPrice,
+                    JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR,
+                ),
+                'margin_contract_size' => $tp1->metadata['margin_contract_size'] ?? null,
+            ];
+
+        return new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: (string) $fixture['symbol'],
+            exchangeOrderId: 'fake-existing-trailing',
+            clientOrderId: $clientOrderId,
+            side: $tp1->side,
+            positionSide: $tp1->positionSide,
+            orderType: ExchangeOrderType::TRIGGER,
+            status: ExchangeOrderStatus::OPEN,
+            quantity: $quantity,
+            filledQuantity: 0.0,
+            remainingQuantity: $quantity,
+            price: null,
+            averagePrice: null,
+            stopPrice: $stopPrice,
+            reduceOnly: true,
+            postOnly: false,
+            timeInForce: null,
+            createdAt: $entry->createdAt,
+            metadata: $metadata,
+        );
+    }
+
+    private function conflictingTrailingChild(ExchangeOrderDto $order, string $conflict): ExchangeOrderDto
+    {
+        $exchange = $order->exchange;
+        $marketType = $order->marketType;
+        $side = $order->side;
+        $positionSide = $order->positionSide;
+        $orderType = $order->orderType;
+        $status = $order->status;
+        $quantity = $order->quantity;
+        $filledQuantity = $order->filledQuantity;
+        $remainingQuantity = $order->remainingQuantity;
+        $price = $order->price;
+        $averagePrice = $order->averagePrice;
+        $stopPrice = $order->stopPrice;
+        $reduceOnly = $order->reduceOnly;
+        $postOnly = $order->postOnly;
+        $timeInForce = $order->timeInForce;
+        $metadata = $order->metadata;
+
+        match ($conflict) {
+            'exchange' => $exchange = Exchange::OKX,
+            'market_type' => $marketType = MarketType::SPOT,
+            'side' => $side = ExchangeOrderSide::BUY,
+            'position_side' => $positionSide = ExchangePositionSide::SHORT,
+            'order_type' => $orderType = ExchangeOrderType::STOP_LOSS,
+            'status' => $status = ExchangeOrderStatus::FILLED,
+            'quantity' => $quantity = 0.7,
+            'filled_quantity' => $filledQuantity = 0.1,
+            'remaining_quantity' => $remainingQuantity = 0.5,
+            'price' => $price = 25100.0,
+            'average_price' => $averagePrice = 25100.0,
+            'stop_price' => $stopPrice = 25100.1,
+            'reduce_only' => $reduceOnly = false,
+            'post_only' => $postOnly = true,
+            'time_in_force' => $timeInForce = ExchangeTimeInForce::GTC,
+            'source' => $metadata['source'] = 'other',
+            'protection_kind' => $metadata['protection_kind'] = 'sl',
+            'parent_order_id' => $metadata['parent_order_id'] = 'other-parent',
+            'parent_client_order_id' => $metadata['parent_client_order_id'] = 'other-client',
+            'lineage' => $metadata['internal_trade_id'] = 'other-trade',
+            'policy_version' => $metadata[FakeTp1TrailingPolicy::VERSION_KEY] = 'fake-tp1-trailing-v2',
+            'policy_enabled' => $metadata[FakeTp1TrailingPolicy::ENABLED_KEY] = false,
+            'policy_tp1_quantity_decimal' => $metadata[FakeTp1TrailingPolicy::TP1_QUANTITY_KEY] = '0.40',
+            'policy_offset_decimal' => $metadata[FakeTp1TrailingPolicy::TRAILING_OFFSET_KEY] = '100.00',
+            'state_version' => $metadata['trailing_state_version'] = 'fake-tp1-trailing-v2',
+            'state_status' => $metadata['trailing_state_status'] = 'triggered',
+            'activation_order_id' => $metadata['trailing_activation_order_id'] = 'other-activation',
+            'watermark' => $metadata['trailing_watermark'] = 25200.1,
+            'quantity_decimal' => $metadata['quantity_decimal'] = '0.60',
+            'filled_quantity_decimal' => $metadata['filled_quantity_decimal'] = '0.0',
+            'remaining_quantity_decimal' => $metadata['remaining_quantity_decimal'] = '0.60',
+            'stop_price_decimal' => $metadata['stop_price_decimal'] = '25100.00',
+            'watermark_decimal' => $metadata['trailing_watermark_decimal'] = '25200.00',
+            'margin_contract_size' => $metadata['margin_contract_size'] = '2',
+            default => throw new \LogicException('Unknown trailing child conflict ' . $conflict),
+        };
+
+        return new ExchangeOrderDto(
+            exchange: $exchange,
+            marketType: $marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $side,
+            positionSide: $positionSide,
+            orderType: $orderType,
+            status: $status,
+            quantity: $quantity,
+            filledQuantity: $filledQuantity,
+            remainingQuantity: $remainingQuantity,
+            price: $price,
+            averagePrice: $averagePrice,
+            stopPrice: $stopPrice,
+            reduceOnly: $reduceOnly,
+            postOnly: $postOnly,
+            timeInForce: $timeInForce,
+            createdAt: $order->createdAt,
+            updatedAt: $order->updatedAt,
+            metadata: $metadata,
+        );
+    }
+
+    private function withStatus(ExchangeOrderDto $order, ExchangeOrderStatus $status): ExchangeOrderDto
+    {
+        return new ExchangeOrderDto(
+            exchange: $order->exchange,
+            marketType: $order->marketType,
+            symbol: $order->symbol,
+            exchangeOrderId: $order->exchangeOrderId,
+            clientOrderId: $order->clientOrderId,
+            side: $order->side,
+            positionSide: $order->positionSide,
+            orderType: $order->orderType,
+            status: $status,
+            quantity: $order->quantity,
+            filledQuantity: $order->filledQuantity,
+            remainingQuantity: $order->remainingQuantity,
+            price: $order->price,
+            averagePrice: $order->averagePrice,
+            stopPrice: $order->stopPrice,
+            reduceOnly: $order->reduceOnly,
+            postOnly: $order->postOnly,
+            timeInForce: $order->timeInForce,
+            createdAt: $order->createdAt,
+            updatedAt: $order->updatedAt,
+            metadata: $order->metadata,
+        );
     }
 
     /** @return array<string,mixed> */
