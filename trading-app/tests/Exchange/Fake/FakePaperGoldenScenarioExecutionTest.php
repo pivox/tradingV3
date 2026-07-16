@@ -33,6 +33,16 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'protection_quantity' => 0.4,
             'remaining_quantity' => 0.6,
         ],
+        'market_with_slippage' => [
+            'cost_model_version' => 'fixed_adverse_slippage_bps_v1',
+            'execution_price' => 25000.5,
+            'liquidity_role' => 'taker',
+            'notional_usdt' => 25000.5,
+            'slippage_bps' => 5.0,
+            'slippage_cost_usdt' => 12.50025,
+            'spread_cost_usdt' => 0.0,
+            'spread_model_version' => 'top_of_book_embedded_spread_v1',
+        ],
         'insufficient_balance' => [
             'accepted' => false,
             'available_margin_unchanged' => true,
@@ -153,7 +163,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(12, $catalogKeys);
+        self::assertCount(13, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

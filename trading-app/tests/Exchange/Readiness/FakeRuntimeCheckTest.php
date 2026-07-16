@@ -44,7 +44,8 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertContains('public_connectivity_unavailable', $report->blockingErrors);
         self::assertContains('fake_paper_market_source_not_configured', $report->warnings);
         self::assertContains('fake_paper_persistence_not_configured', $report->warnings);
-        self::assertContains('fake_paper_slippage_model_zero', $report->warnings);
+        self::assertNotContains('fake_paper_slippage_model_zero', $report->warnings);
+        self::assertNotContains('fake_paper_slippage_model_not_ready', $report->blockingErrors);
     }
 
     public function testRuntimeMetadataUsesCanonicalCatalogVersions(): void
@@ -57,6 +58,28 @@ final class FakeRuntimeCheckTest extends TestCase
 
         self::assertSame('fake-instrument-catalog-v1', $metadata['metadata_fixture_version']);
         self::assertSame('brick-math-exact-multiple-v1', $metadata['precision_model_version']);
+        self::assertSame('fixed_adverse_slippage_bps_v1', $metadata['slippage_model']);
+        self::assertSame(5.0, $metadata['slippage_bps']);
+        self::assertSame('top_of_book_embedded_spread_v1', $metadata['spread_model']);
+    }
+
+    public function testSlippageRuntimeModelValidationFailsClosed(): void
+    {
+        $valid = [
+            'slippage_model' => 'fixed_adverse_slippage_bps_v1',
+            'slippage_bps' => 5.0,
+            'spread_model' => 'top_of_book_embedded_spread_v1',
+        ];
+
+        self::assertTrue(FakeRuntimeCheck::slippageModelReady($valid));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady(array_replace($valid, ['slippage_bps' => 0.0])));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady(array_replace($valid, ['slippage_bps' => -5.0])));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady(array_replace($valid, ['slippage_bps' => 'invalid'])));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady(array_replace($valid, ['slippage_model' => 'unsupported'])));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady(array_replace($valid, ['spread_model' => 'unsupported'])));
+        self::assertFalse(FakeRuntimeCheck::slippageModelReady([
+            'slippage_model' => 'fixed_adverse_slippage_bps_v1',
+        ]));
     }
 
     public function testPersistentPaperProbesWritableRecoveryWithoutTouchingActiveState(): void

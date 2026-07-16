@@ -107,13 +107,13 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         self::assertStringContainsString('Fake/Paper mode: fake', $output);
         self::assertStringContainsString('Readiness level: not_ready', $output);
         self::assertStringContainsString('Readiness blocking errors: public_connectivity_unavailable', $output);
-        self::assertStringContainsString('Readiness warnings: fake_paper_market_source_not_configured, fake_paper_slippage_model_zero, fake_paper_persistence_not_configured', $output);
+        self::assertStringContainsString('Readiness warnings: fake_paper_market_source_not_configured, fake_paper_persistence_not_configured', $output);
         self::assertStringContainsString('State persistence: not_configured', $output);
         self::assertStringContainsString('State writable: not_required', $output);
         self::assertStringContainsString('State recovery: not_required', $output);
         self::assertStringContainsString('Clock: ready', $output);
         self::assertStringContainsString('Fee model: ready', $output);
-        self::assertStringContainsString('Slippage model: explicit_zero', $output);
+        self::assertStringContainsString('Slippage model: ready', $output);
         self::assertStringContainsString('Metadata fixtures: ready', $output);
         self::assertStringContainsString('Precision model: ready', $output);
         self::assertStringContainsString('Schedule ready: no', $output);

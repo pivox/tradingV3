@@ -147,7 +147,7 @@ final class ExchangeRuntimeCheckCommand extends Command
                     && !\in_array('fake_paper_clock_not_controlled', $fakeBlockingErrors, true);
                 $output->writeln(sprintf('Clock: %s', $clockReady ? 'ready' : 'not_ready'));
                 $output->writeln(sprintf('Fee model: %s', \in_array('fake_paper_fee_model_not_ready', $fakeBlockingErrors, true) ? 'not_ready' : 'ready'));
-                $output->writeln(sprintf('Slippage model: %s', \in_array('fake_paper_slippage_model_zero', $fakeWarnings, true) ? 'explicit_zero' : 'ready'));
+                $output->writeln(sprintf('Slippage model: %s', \in_array('fake_paper_slippage_model_not_ready', $fakeBlockingErrors, true) ? 'not_ready' : 'ready'));
                 $output->writeln(sprintf('Metadata fixtures: %s', $fakeReadinessReport->metadataValid ? 'ready' : 'not_ready'));
                 $output->writeln(sprintf('Precision model: %s', $fakeReadinessReport->precisionValid ? 'ready' : 'not_ready'));
                 $output->writeln(sprintf('Stop loss capability: %s', $fakeReadinessReport->stopLossCapability ? 'yes' : 'no'));
