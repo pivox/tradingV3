@@ -484,6 +484,8 @@ final class ExchangeReconciliationServiceTest extends TestCase
         $firstProof = $service->reconcile($adapter);
         $proof = $firstProof->metadata['fake_private_ws_snapshot_proof'] ?? null;
         self::assertIsArray($proof);
+        self::assertSame('completed', $proof['status'] ?? null);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/D', (string) ($proof['attestation_id'] ?? ''));
 
         $malformed = $this->reconciliationWithMetadata($firstProof, [
             'fake_private_ws_snapshot_proof' => ['schema_version' => 'malformed'],
@@ -533,6 +535,105 @@ final class ExchangeReconciliationServiceTest extends TestCase
 
         $client->completeSnapshotResync($latestProof);
         self::assertFalse($client->requiresResync());
+    }
+
+    public function testCapturedPendingProofCannotCompleteResyncThroughFabricatedResult(): void
+    {
+        [$state, $client] = $this->stateWithPrivateWsGap('pending-proof-bypass-v1');
+        $pendingProof = $state->capturePrivateWsSnapshotProof();
+        self::assertIsArray($pendingProof);
+        self::assertSame('pending', $pendingProof['status']);
+        self::assertNull($pendingProof['attestation_id'] ?? null);
+        $now = $this->fixedClock()->now();
+        $fabricated = new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: null,
+            startedAt: $now,
+            completedAt: $now,
+            metadata: ['fake_private_ws_snapshot_proof' => $pendingProof],
+        );
+        $auditBefore = $client->audit();
+        $deliveryBefore = $state->privateWsCurrentDelivery();
+
+        try {
+            $client->completeSnapshotResync($fabricated);
+            self::fail('A merely captured pending proof must not attest successful reconciliation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_pending', $exception->getMessage());
+        }
+
+        self::assertSame($auditBefore, $client->audit());
+        self::assertEquals($deliveryBefore, $state->privateWsCurrentDelivery());
+    }
+
+    public function testProjectionFailureLeavesOnlyAnUnusablePendingProof(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_failed_reconciliation_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $adapter = $this->adapter($state);
+            $adapter->placeOrder($this->marketRequest());
+            $events = $state->events();
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+                'failed-reconciliation-v1',
+                [$events[0], $events[2], $events[1]],
+            ));
+            $first = $state->privateWsCurrentDelivery();
+            self::assertNotNull($first);
+            $state->acknowledgePrivateWsDelivery($first);
+            $gap = $state->privateWsCurrentDelivery();
+            self::assertNotNull($gap);
+            $state->markPrivateWsGap('2', '3', $gap);
+            $client = new FakeExchangeWsClient($state);
+            $auditBefore = $client->audit();
+
+            $store = new RecordingProjectionStore();
+            $store->failProjection = true;
+            $service = new ExchangeReconciliationService(
+                new ExchangeEventBus($store, new NullLogger()),
+                $store,
+                $this->fixedClock(),
+                new NullLogger(),
+            );
+            try {
+                $service->reconcile($adapter);
+                self::fail('The reconciliation projection must fail before proof attestation.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('forced_reconciliation_projection_failure', $exception->getMessage());
+            }
+
+            $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            $pendingProof = $envelope['payload']['privateWs']['snapshot_proof'] ?? null;
+            self::assertIsArray($pendingProof);
+            self::assertSame('pending', $pendingProof['status'] ?? null);
+            self::assertNull($pendingProof['attestation_id'] ?? null);
+            $now = $this->fixedClock()->now();
+            $fabricated = new ExchangeReconciliationResult(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: null,
+                startedAt: $now,
+                completedAt: $now,
+                metadata: ['fake_private_ws_snapshot_proof' => $pendingProof],
+            );
+
+            try {
+                $client->completeSnapshotResync($fabricated);
+                self::fail('A failed reconciliation must not leave a completion-capable proof.');
+            } catch (\LogicException $exception) {
+                self::assertSame('fake_private_ws_snapshot_proof_pending', $exception->getMessage());
+            }
+            self::assertSame($auditBefore, $client->audit());
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
+        }
     }
 
     public function testNewPrivateWsResyncCycleInvalidatesCompletedCycleProof(): void
@@ -963,6 +1064,8 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
     /** @var ExchangeEventInterface[] */
     public array $events = [];
 
+    public bool $failProjection = false;
+
     /** @var array<int,array{symbol: string, side: ExchangePositionSide, size: float}> */
     public array $localOpenPositions = [];
 
@@ -983,6 +1086,9 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
 
     public function project(ExchangeEventInterface $event): void
     {
+        if ($this->failProjection) {
+            throw new \RuntimeException('forced_reconciliation_projection_failure');
+        }
         $this->events[] = $event;
         if ($event instanceof AbstractExchangeOrderEvent) {
             $this->orders[$event->order()->exchangeOrderId] = $event->order();

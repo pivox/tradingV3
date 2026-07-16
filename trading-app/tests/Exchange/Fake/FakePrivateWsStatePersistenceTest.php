@@ -253,6 +253,57 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         self::assertSame($state->privateWsAudit(), $restored->privateWsAudit());
     }
 
+    public function testLegacyCapturedProofHydratesAsPendingAndCannotCompleteResync(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        foreach ([1, 2, 3] as $sequence) {
+            $state->appendEvent($this->event($sequence));
+        }
+        $state->configurePrivateWsScenario($this->scenario([1, 3, 2]));
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+        $pendingProof = $state->capturePrivateWsSnapshotProof();
+        self::assertIsArray($pendingProof);
+
+        $envelope = unserialize((string) file_get_contents($this->stateFile), ['allowed_classes' => true]);
+        self::assertIsArray($envelope);
+        self::assertIsArray($envelope['payload']['privateWs']['snapshot_proof'] ?? null);
+        unset(
+            $envelope['payload']['privateWs']['snapshot_proof']['status'],
+            $envelope['payload']['privateWs']['snapshot_proof']['attestation_id'],
+        );
+        $legacyProof = $envelope['payload']['privateWs']['snapshot_proof'];
+        $envelope['payload_checksum'] = hash('sha256', serialize($envelope['payload']));
+        file_put_contents($this->stateFile, serialize($envelope));
+
+        $restored = new FakeExchangeStateStore($this->stateFile);
+        $client = new FakeExchangeWsClient($restored);
+        $auditBefore = $client->audit();
+        $now = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+        $fabricated = new ExchangeReconciliationResult(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: null,
+            startedAt: $now,
+            completedAt: $now,
+            metadata: ['fake_private_ws_snapshot_proof' => $legacyProof],
+        );
+
+        try {
+            $client->completeSnapshotResync($fabricated);
+            self::fail('A legacy capture-only proof must not become a completed attestation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_invalid', $exception->getMessage());
+        }
+
+        self::assertSame($auditBefore, $client->audit());
+        self::assertTrue($client->requiresResync());
+    }
+
     public function testMalformedPresentSnapshotProofStateFailsClosed(): void
     {
         $state = new FakeExchangeStateStore($this->stateFile);
@@ -321,8 +372,9 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
     private function successfulGlobalReconciliation(FakeExchangeStateStore $state): ExchangeReconciliationResult
     {
         $now = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
-        $proof = $state->capturePrivateWsSnapshotProof();
-        self::assertIsArray($proof);
+        $pendingProof = $state->capturePrivateWsSnapshotProof();
+        self::assertIsArray($pendingProof);
+        $proof = $state->attestPrivateWsSnapshotProof($pendingProof);
 
         return new ExchangeReconciliationResult(
             exchange: Exchange::FAKE,

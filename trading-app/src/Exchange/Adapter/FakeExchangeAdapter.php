@@ -211,6 +211,11 @@ final readonly class FakeExchangeAdapter implements
         return $this->stateStore->capturePrivateWsSnapshotProof();
     }
 
+    public function attestReconciliationSnapshotProof(array $pendingProof): array
+    {
+        return $this->stateStore->attestPrivateWsSnapshotProof($pendingProof);
+    }
+
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
     {
         $this->throwInjectedFault(FakeExchangeOperation::PlaceOrder, FakeExchangeFaultOutcome::NotApplied);

@@ -667,7 +667,9 @@ class FakeExchangeStateStore
      *     resync_cycle_id:string,
      *     event_sequence_watermark:int,
      *     scenario_delivery_count:int,
-     *     proof_id:string
+     *     proof_id:string,
+     *     status:string,
+     *     attestation_id:?string
      * }|null
      */
     public function capturePrivateWsSnapshotProof(): ?array
@@ -693,10 +695,62 @@ class FakeExchangeStateStore
                 'event_sequence_watermark' => $this->maximumCanonicalNumericEventSequence(),
                 'scenario_delivery_count' => \count($scenario->deliveries),
                 'proof_id' => bin2hex(random_bytes(32)),
+                'status' => 'pending',
+                'attestation_id' => null,
             ];
             $this->privateWs['snapshot_proof'] = $proof;
 
             return $proof;
+        });
+    }
+
+    /**
+     * @param array<string,mixed> $pendingProof
+     * @return array{
+     *     schema_version:string,
+     *     scenario_id:string,
+     *     resync_cycle_id:string,
+     *     event_sequence_watermark:int,
+     *     scenario_delivery_count:int,
+     *     proof_id:string,
+     *     status:string,
+     *     attestation_id:string
+     * }
+     */
+    public function attestPrivateWsSnapshotProof(array $pendingProof): array
+    {
+        return $this->transactional(function () use ($pendingProof): array {
+            if ($this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED) {
+                throw new \LogicException('fake_private_ws_snapshot_resync_not_required');
+            }
+            $scenario = $this->privateWsScenario();
+            $storedProof = $this->privateWs['snapshot_proof'];
+            $cycleId = $this->privateWs['resync_cycle_id'];
+            if (
+                !$scenario instanceof FakePrivateWsScenario
+                || !$this->isPrivateWsSnapshotProof($pendingProof)
+                || $pendingProof['status'] !== 'pending'
+                || $pendingProof['attestation_id'] !== null
+                || !$this->isPrivateWsSnapshotProof($storedProof)
+                || $storedProof['status'] !== 'pending'
+                || !\is_string($cycleId)
+                || !$this->privateWsSnapshotProofEquals($pendingProof, $storedProof)
+                || $pendingProof['scenario_id'] !== $scenario->scenarioId
+                || !hash_equals($cycleId, $pendingProof['resync_cycle_id'])
+                || $pendingProof['event_sequence_watermark'] < $this->privateWs['last_observed_numeric_sequence']
+                || $pendingProof['event_sequence_watermark'] > $this->maximumCanonicalNumericEventSequence()
+                || $pendingProof['scenario_delivery_count'] < $this->privateWs['next_delivery_index']
+                || $pendingProof['scenario_delivery_count'] > \count($scenario->deliveries)
+            ) {
+                throw new \LogicException('fake_private_ws_snapshot_proof_stale');
+            }
+
+            $attestation = $storedProof;
+            $attestation['status'] = 'completed';
+            $attestation['attestation_id'] = bin2hex(random_bytes(32));
+            $this->privateWs['snapshot_proof'] = $attestation;
+
+            return $attestation;
         });
     }
 
@@ -732,11 +786,15 @@ class FakeExchangeStateStore
                 if (!$this->isPrivateWsSnapshotProof($providedProof)) {
                     throw new \LogicException('fake_private_ws_snapshot_proof_invalid');
                 }
+                if ($providedProof['status'] === 'pending') {
+                    throw new \LogicException('fake_private_ws_snapshot_proof_pending');
+                }
 
                 $storedProof = $this->privateWs['snapshot_proof'];
                 $cycleId = $this->privateWs['resync_cycle_id'];
                 if (
                     !$this->isPrivateWsSnapshotProof($storedProof)
+                    || $storedProof['status'] !== 'completed'
                     || !\is_string($cycleId)
                     || !$this->privateWsSnapshotProofEquals($providedProof, $storedProof)
                     || $providedProof['scenario_id'] !== $scenario->scenarioId
@@ -1492,14 +1550,27 @@ class FakeExchangeStateStore
     {
         $hasCycleId = \array_key_exists('resync_cycle_id', $value);
         $hasSnapshotProof = \array_key_exists('snapshot_proof', $value);
-        if ($hasCycleId || $hasSnapshotProof) {
-            return $value;
+        if (!$hasCycleId && !$hasSnapshotProof) {
+            $value['resync_cycle_id'] = ($value['connection_state'] ?? null) === self::PRIVATE_WS_RESYNC_REQUIRED
+                ? hash('sha256', 'legacy-private-ws-resync-cycle:' . serialize($value))
+                : null;
+            $value['snapshot_proof'] = null;
         }
 
-        $value['resync_cycle_id'] = ($value['connection_state'] ?? null) === self::PRIVATE_WS_RESYNC_REQUIRED
-            ? hash('sha256', 'legacy-private-ws-resync-cycle:' . serialize($value))
-            : null;
-        $value['snapshot_proof'] = null;
+        $snapshotProof = $value['snapshot_proof'] ?? null;
+        $legacyProofKeys = [
+            'schema_version',
+            'scenario_id',
+            'resync_cycle_id',
+            'event_sequence_watermark',
+            'scenario_delivery_count',
+            'proof_id',
+        ];
+        if (\is_array($snapshotProof) && $this->hasExactKeys($snapshotProof, $legacyProofKeys)) {
+            $snapshotProof['status'] = 'pending';
+            $snapshotProof['attestation_id'] = null;
+            $value['snapshot_proof'] = $snapshotProof;
+        }
 
         return $value;
     }
@@ -1543,11 +1614,21 @@ class FakeExchangeStateStore
             'event_sequence_watermark',
             'scenario_delivery_count',
             'proof_id',
+            'status',
+            'attestation_id',
         ];
 
-        return \is_array($value)
-            && $this->hasExactKeys($value, $keys)
-            && ($value['schema_version'] ?? null) === self::PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA
+        if (!\is_array($value)) {
+            return false;
+        }
+        if (!$this->hasExactKeys($value, $keys)) {
+            return false;
+        }
+
+        $status = $value['status'] ?? null;
+        $attestationId = $value['attestation_id'] ?? null;
+
+        return ($value['schema_version'] ?? null) === self::PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA
             && \is_string($value['scenario_id'] ?? null)
             && trim($value['scenario_id']) !== ''
             && \is_string($value['resync_cycle_id'] ?? null)
@@ -1557,7 +1638,12 @@ class FakeExchangeStateStore
             && \is_int($value['scenario_delivery_count'] ?? null)
             && $value['scenario_delivery_count'] >= 0
             && \is_string($value['proof_id'] ?? null)
-            && preg_match('/^[a-f0-9]{64}$/D', $value['proof_id']) === 1;
+            && preg_match('/^[a-f0-9]{64}$/D', $value['proof_id']) === 1
+            && \in_array($status, ['pending', 'completed'], true)
+            && ($status === 'pending'
+                ? $attestationId === null
+                : \is_string($attestationId)
+                    && preg_match('/^[a-f0-9]{64}$/D', $attestationId) === 1);
     }
 
     /**
@@ -1571,7 +1657,9 @@ class FakeExchangeStateStore
             && hash_equals($left['resync_cycle_id'], $right['resync_cycle_id'])
             && $left['event_sequence_watermark'] === $right['event_sequence_watermark']
             && $left['scenario_delivery_count'] === $right['scenario_delivery_count']
-            && hash_equals($left['proof_id'], $right['proof_id']);
+            && hash_equals($left['proof_id'], $right['proof_id'])
+            && $left['status'] === $right['status']
+            && $left['attestation_id'] === $right['attestation_id'];
     }
 
     private function isPrivateWsFingerprintMap(mixed $value): bool

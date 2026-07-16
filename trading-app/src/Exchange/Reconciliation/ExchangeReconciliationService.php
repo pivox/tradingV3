@@ -43,8 +43,11 @@ final readonly class ExchangeReconciliationService
     {
         $startedAt = $this->clock->now();
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
-        $snapshotProof = $adapter instanceof ExchangeReconciliationSnapshotProofProviderInterface
-            ? $adapter->captureReconciliationSnapshotProof($normalizedSymbol)
+        $snapshotProofProvider = $adapter instanceof ExchangeReconciliationSnapshotProofProviderInterface
+            ? $adapter
+            : null;
+        $pendingSnapshotProof = $snapshotProofProvider instanceof ExchangeReconciliationSnapshotProofProviderInterface
+            ? $snapshotProofProvider->captureReconciliationSnapshotProof($normalizedSymbol)
             : null;
         $orders = $adapter instanceof ExchangeRestSnapshotProviderInterface
             ? $adapter->getOrdersSnapshot($normalizedSymbol)
@@ -107,6 +110,10 @@ final readonly class ExchangeReconciliationService
 
         $unprotectedPositions = $this->detectUnprotectedPositions($adapter, $positions);
         $completedAt = $this->clock->now();
+        $snapshotProof = $pendingSnapshotProof !== null
+            && $snapshotProofProvider instanceof ExchangeReconciliationSnapshotProofProviderInterface
+                ? $snapshotProofProvider->attestReconciliationSnapshotProof($pendingSnapshotProof)
+                : null;
         $metadata = [
             'unknown_order_ids' => $unknownOrders,
             'unprotected_positions' => $unprotectedPositions,
