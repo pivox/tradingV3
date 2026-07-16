@@ -185,6 +185,69 @@ the next contiguous sequence is consumed normally. The one-shot disconnect is no
 reinjected. This fixture remains local, performs no network request and never
 sends an exchange order.
 
+### Explicit duplicate/out-of-order delivery plan
+
+An explicit `FakePrivateWsScenario` opts a client into a finite delivery plan.
+Each `FakePrivateWsDelivery` contains a stable fixture entry ID, its declared
+sequence, the complete raw `FakeExchangeEvent`, and a SHA-256 fingerprint. The
+fingerprint covers event type, upper-case symbol, ISO-8601 occurrence time, and
+the complete payload. Associative payload keys are sorted recursively while
+list order is preserved. Fixture list order is the only delivery order:
+`occurredAt` is evidence and is never used to sort or repair the stream.
+
+The plan, cursor, acknowledged fingerprints, sequence watermarks, connection
+state, counters, and at most 100 structured audit records are persisted inside
+the existing checksummed `fake-paper-state-v1` envelope. Audit records contain
+only stable kinds/codes, sequences, fixture IDs, and 12-character fingerprint
+prefixes. They never contain raw payloads, credentials, URLs, headers, or
+requests. An older envelope without `privateWs` restores as an inactive,
+connected scenario. A present malformed block fails with
+`fake_exchange_state_shape_invalid`.
+
+Delivery semantics are fail-closed:
+
+- the raw event is acknowledged and the cursor advanced only when the generator
+  resumes after normalization and the complete normalized projection batch
+  succeeds;
+- destroying the client, a projection exception, or a DB rollback before that
+  point leaves the delivery pending for the next client or process;
+- a repeated sequence with the same fingerprint is skipped before
+  normalization, increments `duplicate_total`, and produces one redacted audit
+  record;
+- a repeated sequence with a different fingerprint persists
+  `resync_required`, increments `conflict_total`, and raises
+  `fake_private_ws_sequence_conflict`;
+- a future numeric sequence persists `resync_required`, increments `gap_total`,
+  and raises `fake_private_ws_sequence_gap`;
+- a symbol-filtered drain never acknowledges or advances a delivery for another
+  symbol.
+
+While a gap or conflict is active, every drain raises
+`fake_private_ws_snapshot_resync_required`; plain `reconnect()` cannot clear it.
+The operator must first run `ExchangeReconciliationService` against the local
+Fake REST snapshots. Only after that reconciliation succeeds may
+`completeSnapshotResync()` persist the maximum numeric canonical event sequence
+as the snapshot watermark. It advances over every covered fixture entry in its
+declared order (for example both `3` then `2`), records their fingerprints,
+increments `resync_total` once, and reconnects the stream. A canonical event
+appended later extends the active finite plan and must be contiguous with the
+rebuilt watermark.
+
+When no scenario is configured, the per-client traversal, independent replay,
+disconnect injection, reconnect, and gap behavior delivered by #274 are
+unchanged. The versioned golden input is
+`tests/fixtures/fake-paper/private-ws-out-of-order-v1.json`; golden scenario 16
+executes the duplicate, `1,3,2`, restart/resync, contiguous resume, and conflict
+paths twice from fresh local files.
+
+This capability is local Fake/Paper only. It does not create an HTTP exchange
+client, read a credential, enable demo/testnet writes, or change strategy, MTF,
+EntryZone, sizing, leverage, SL/TP, fees, or slippage. Rollback is the atomic
+revert of the out-of-order change and restoration of golden scenario 16 to
+`partial` with `out_of_order_event_injection_not_implemented`. The additive
+`privateWs` field is ignored by the older hydrate path; no exchange-side cleanup
+exists or is required.
+
 ## Persistent recovery contract
 
 The file-backed store writes a versioned `fake-paper-state-v1` envelope containing the engine version, a deterministic scenario configuration hash, a payload checksum, and the next event sequence. Writes use a temporary file followed by an atomic replacement.

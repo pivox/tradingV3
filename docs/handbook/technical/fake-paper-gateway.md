@@ -362,6 +362,62 @@ Les cas long et short sont explicites dans
 aucun reseau, ne lisent aucun secret et n activent ni demo, ni testnet, ni
 mainnet.
 
+## Private WS explicite duplicate et out-of-order
+
+Le parcours ordinaire de `FakeExchangeWsClient` livre par #274 reste inchange :
+chaque nouvelle instance garde son propre curseur de replay, la deconnexion
+deterministe reste locale, et un acquittement n intervient qu apres projection
+reussie.
+
+Une fixture peut maintenant activer explicitement un
+`FakePrivateWsScenario`, liste finie et ordonnee de `FakePrivateWsDelivery`.
+Chaque entree porte un ID stable, une sequence declaree, l enveloppe brute
+complete et un fingerprint SHA-256. Le fingerprint couvre type, symbole en
+majuscules, timestamp ISO-8601 et payload complet. Les cles associatives sont
+triees recursivement mais l ordre des listes est conserve. Le timestamp ne sert
+jamais a trier les livraisons : seul l ordre ecrit dans la fixture fait foi.
+
+Scenario, curseur, fingerprints acquittes, watermarks, etat de connexion,
+compteurs et audit sont stockes dans le meme remplacement atomique checksumme
+`fake-paper-state-v1` que les evenements Fake. Un ancien payload sans bloc
+`privateWs` reste compatible et revient a un scenario inactif connecte. Un bloc
+present mais malforme echoue avec `fake_exchange_state_shape_invalid`.
+
+Le contrat runtime est le suivant :
+
+- un doublon exact est elimine avant normalisation/projection et incremente
+  `duplicate_total` ;
+- une meme sequence avec un autre fingerprint incremente `conflict_total`,
+  persiste `resync_required` et leve
+  `fake_private_ws_sequence_conflict` ;
+- une sequence numerique future incremente `gap_total`, persiste
+  `resync_required` et leve `fake_private_ws_sequence_gap` ;
+- aucun evenement suivant n est projete pendant cet etat et un simple
+  `reconnect()` est refuse ;
+- crash du client, exception de projection ou rollback DB avant reprise du
+  generateur laisse le meme evenement disponible apres restart ;
+- le filtre symbole ne consomme jamais une livraison d un autre symbole.
+
+La reprise impose d abord `ExchangeReconciliationService` sur les snapshots REST
+Fake locaux. Ensuite seulement, `completeSnapshotResync()` utilise la sequence
+numerique maximale de l etat canonique comme watermark, avance dans l ordre
+declare sur toutes les livraisons couvertes, y compris `3` puis `2`, et
+incremente `resync_total` une fois. Un evenement canonique ajoute apres ce
+watermark prolonge la fixture active et reprend sur la sequence contigue.
+
+`privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
+watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :
+kind, codes/sequences, ID de fixture et prefixe de fingerprint uniquement, sans
+payload brut, credential, URL ni header.
+
+La DSL executable est
+`trading-app/tests/fixtures/fake-paper/private-ws-out-of-order-v1.json`. Elle
+prouve le doublon, `1,3,2`, le restart en resync, la reconstruction snapshot, la
+reprise contigue et le conflit dans deux etats frais. Tout reste local : aucun
+appel reseau exchange, aucune permission demo/testnet/mainnet et aucun
+changement de strategie, MTF, EntryZone, sizing, levier, SL/TP, frais ou
+slippage.
+
 ## Golden suite Fake/Paper v1
 
 Le catalogue versionne des 20 scenarios obligatoires de #196 est disponible dans :
@@ -383,20 +439,19 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les seize scenarios executes dans cette version sont : maker limit rempli, limit
+Les dix-sept scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
 market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
-prochain prix disponible, deconnexion/reprise private WS, et restart avec
-position protegee ouverte.
+prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
+private WS avec snapshot resync, et restart avec position protegee ouverte.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
-| duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
 | funding | `unsupported` | `funding_model_not_implemented` |
 | One-Way conflict | `unsupported` | `one_way_conflict_guard_not_implemented` |
 | dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
@@ -440,6 +495,13 @@ d etat Fake contenant `fake-tp1-trailing-v1` doit etre archive ou place en
 quarantaine avant une revision qui ne connait pas ces metadata additives. Il ne
 doit jamais etre reutilise silencieusement ni servir a activer demo, testnet ou
 mainnet.
+
+Le rollback de l injection private WS out-of-order consiste a revertir le lot
+atomique, remettre le scenario golden 16 en `partial` avec
+`out_of_order_event_injection_not_implemented`, puis relancer les regressions
+#274. Le champ d etat `privateWs` est additif et sera ignore par l ancien chemin
+d hydratation. Aucun ordre exchange ni nettoyage demo/testnet/mainnet n est
+necessaire.
 
 ## Suite
 
