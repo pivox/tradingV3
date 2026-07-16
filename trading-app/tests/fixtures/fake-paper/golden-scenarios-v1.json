@@ -47,31 +47,31 @@
       "status": "partial"
     },
     {
-      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#runtime-check-fakepaper"],
-      "gap_codes": ["balance_margin_validation_not_implemented"],
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testRejectsQuantizedEntryWhenDerivedAvailableBalanceIsInsufficient"],
+      "gap_codes": [],
       "id": 6,
       "name": "insufficient_balance",
       "requirement": "An order whose initial margin exceeds available balance is rejected.",
-      "runner": null,
-      "status": "unsupported"
+      "runner": "insufficient_balance",
+      "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
-      "gap_codes": ["instrument_precision_validation_not_implemented"],
+      "evidence": ["tests/Exchange/Fake/FakeOrderValidatorTest.php::testDoesNotRoundNonQuantizedPriceToTick"],
+      "gap_codes": [],
       "id": 7,
       "name": "precision_reject",
       "requirement": "An order violating price or quantity precision is rejected before acceptance.",
-      "runner": null,
-      "status": "unsupported"
+      "runner": "precision_reject",
+      "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
-      "gap_codes": ["leverage_cap_validation_not_implemented"],
+      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testValidationRejectsAreStructuredPersistedAndNeverRounded"],
+      "gap_codes": [],
       "id": 8,
       "name": "leverage_cap_reject",
       "requirement": "An order above the instrument leverage cap is rejected.",
-      "runner": null,
-      "status": "unsupported"
+      "runner": "leverage_cap_reject",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testClientOrderIdReplayDoesNotCreateSecondActiveOrder"],
