@@ -21,6 +21,7 @@ use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeFaultOutcome;
 use App\Exchange\Fake\FakeExchangeInjectedException;
+use App\Exchange\Fake\FakeFillCostModel;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
@@ -79,7 +80,7 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     }
 
     /**
-     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,metadata_fixture_version:string,precision_model_version:string}
+     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,slippage_bps:float,spread_model:string,metadata_fixture_version:string,precision_model_version:string}
      */
     public function runtimeModelMetadata(): array
     {
@@ -89,7 +90,9 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
             'fee_model' => 'fixed_notional_fee_v1',
             'fee_rate' => self::FEE_RATE,
             'fill_model' => 'top_of_book_v1',
-            'slippage_model' => 'explicit_zero_additional_slippage_v1',
+            'slippage_model' => FakeFillCostModel::MODEL_VERSION,
+            'slippage_bps' => FakeFillCostModel::TAKER_SLIPPAGE_BPS,
+            'spread_model' => FakeFillCostModel::SPREAD_MODEL_VERSION,
             'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
             'precision_model_version' => $catalog->precisionModelVersion(),
         ];
@@ -358,8 +361,30 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
                 'source' => 'fake_exchange_rest_reconciliation',
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                ...$this->fillCostMetadata($event),
             ],
         );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function fillCostMetadata(FakeExchangeEvent $event): array
+    {
+        $metadata = [];
+        foreach ([
+            'liquidity_role',
+            'spread_cost_usdt',
+            'slippage_cost_usdt',
+            'cost_model_version',
+            'spread_model_version',
+        ] as $key) {
+            if (array_key_exists($key, $event->payload)) {
+                $metadata[$key] = $event->payload[$key];
+            }
+        }
+
+        return $metadata;
     }
 
     private function fillFee(float $quantity, float $price): float

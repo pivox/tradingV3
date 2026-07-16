@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeFillCostModel;
 use App\Exchange\Readiness\ExchangeReadinessEvaluator;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessReport;
@@ -72,8 +73,8 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         if ($model['fee_model'] !== 'fixed_notional_fee_v1' || $model['fee_rate'] !== 0.0005) {
             $blockingErrors[] = 'fake_paper_fee_model_not_ready';
         }
-        if ($model['slippage_model'] === 'explicit_zero_additional_slippage_v1') {
-            $warnings[] = 'fake_paper_slippage_model_zero';
+        if (!self::slippageModelReady($model)) {
+            $blockingErrors[] = 'fake_paper_slippage_model_not_ready';
         }
         if (!$persistence['configured']) {
             $warnings[] = 'fake_paper_persistence_not_configured';
@@ -158,5 +159,20 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
             warnings: $input->warnings,
             configProfile: $input->configProfile,
         ));
+    }
+
+    /**
+     * @param array<string,mixed> $model
+     * @internal
+     */
+    public static function slippageModelReady(array $model): bool
+    {
+        $slippageBps = $model['slippage_bps'] ?? null;
+
+        return ($model['slippage_model'] ?? null) === FakeFillCostModel::MODEL_VERSION
+            && (\is_int($slippageBps) || \is_float($slippageBps))
+            && \is_finite((float) $slippageBps)
+            && (float) $slippageBps === FakeFillCostModel::TAKER_SLIPPAGE_BPS
+            && ($model['spread_model'] ?? null) === FakeFillCostModel::SPREAD_MODEL_VERSION;
     }
 }

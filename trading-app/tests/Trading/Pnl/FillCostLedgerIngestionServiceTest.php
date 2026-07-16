@@ -93,7 +93,14 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
             price: 100.0,
             fee: 0.125,
             feeCurrency: 'USDT',
-            metadata: ['liquidity_role' => 'maker', 'source' => 'fake_exchange_ws'],
+            metadata: [
+                'liquidity_role' => 'maker',
+                'source' => 'fake_exchange_ws',
+                'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0125,
+                'cost_model_version' => 'fixed_adverse_slippage_bps_v1',
+                'spread_model_version' => 'top_of_book_embedded_spread_v1',
+            ],
         )));
 
         self::assertTrue($result->inserted);
@@ -115,6 +122,8 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertSame('0.125000000000', $entry->getFeeAmount());
         self::assertSame('USDT', $entry->getFeeCurrency());
         self::assertSame('0.125000000000', $entry->getFeeUsdt());
+        self::assertSame('0.000000000000', $entry->getSpreadCostUsdt());
+        self::assertSame('0.012500000000', $entry->getSlippageCostUsdt());
         self::assertSame([], $entry->getQualityFlags());
         self::assertSame([
             'source' => 'fake_exchange_ws',
@@ -280,6 +289,48 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
             fillId: 'fake-fill-conflict',
             price: 101.0,
         )));
+    }
+
+    public function testSameExchangeFillIdWithDifferentSlippageIsRejectedAsConflict(): void
+    {
+        $this->persistLineage('itd-ledger-cost-conflict', 'cid-cost-conflict', 'EX-COST-CONFLICT', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-COST-CONFLICT',
+            clientOrderId: 'cid-cost-conflict',
+            fillId: 'fake-fill-cost-conflict',
+            metadata: ['slippage_cost_usdt' => 0.05],
+        )));
+
+        $this->expectException(FillCostLedgerIngestionConflict::class);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-COST-CONFLICT',
+            clientOrderId: 'cid-cost-conflict',
+            fillId: 'fake-fill-cost-conflict',
+            metadata: ['slippage_cost_usdt' => 0.06],
+        )));
+    }
+
+    public function testInvalidExplicitCostsRemainNullAndAreFlagged(): void
+    {
+        $this->persistLineage('itd-ledger-invalid-costs', 'cid-invalid-costs', 'EX-INVALID-COSTS', null);
+
+        $this->service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-INVALID-COSTS',
+            clientOrderId: 'cid-invalid-costs',
+            fillId: 'fake-fill-invalid-costs',
+            metadata: [
+                'spread_cost_usdt' => -0.01,
+                'slippage_cost_usdt' => 'not-a-number',
+            ],
+        )));
+
+        $entry = $this->ledger->findByInternalTradeId('itd-ledger-invalid-costs')[0];
+        self::assertNull($entry->getSpreadCostUsdt());
+        self::assertNull($entry->getSlippageCostUsdt());
+        self::assertContains('spread_cost_invalid', $entry->getQualityFlags());
+        self::assertContains('slippage_cost_invalid', $entry->getQualityFlags());
     }
 
     public function testVenueScopedExchangeFillIdsCanBeReusedAcrossExchanges(): void

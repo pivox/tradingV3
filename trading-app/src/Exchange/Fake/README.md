@@ -96,9 +96,13 @@ creating that file.
 
 The contract is intentionally dry-run only: trade permission is always false,
 the kill switch remains active, and no demo/testnet or live write path can be
-enabled. The current additional slippage model is explicitly zero and is exposed
-as `fake_paper_slippage_model_zero`. The application runtime also reports a
-non-controlled clock and a missing explicit market source as blockers. Until a
-operational Fake provider bundle, versioned instrument metadata, precision
-fixtures, and those runtime inputs are available, `Schedule ready` remains `no`; the adapter must not
-be presented as a complete Paper runtime.
+enabled. Taker fills report a deterministic adverse cost of 5 bps under
+`fixed_adverse_slippage_bps_v1`; post-only maker fills report explicit zero.
+Execution prices remain at top of book, so the separate additional spread cost
+is zero under `top_of_book_embedded_spread_v1`. A missing, zero, malformed, or
+unsupported runtime model adds `fake_paper_slippage_model_not_ready`. The
+application runtime also reports a non-controlled clock and a missing explicit
+market source as blockers. Until an operational Fake provider bundle, versioned
+instrument metadata, precision fixtures, and those runtime inputs are available,
+`Schedule ready` remains `no`; the adapter must not be presented as a complete
+Paper runtime.

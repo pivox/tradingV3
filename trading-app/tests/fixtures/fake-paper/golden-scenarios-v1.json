@@ -38,13 +38,13 @@
       "status": "unsupported"
     },
     {
-      "evidence": ["tests/Exchange/Readiness/FakeRuntimeCheckTest.php::testInMemoryFakeReportsMissingPaperModelsWithoutClaimingReadiness"],
-      "gap_codes": ["slippage_model_zero"],
+      "evidence": ["tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts"],
+      "gap_codes": [],
       "id": 5,
       "name": "market_with_slippage",
       "requirement": "A market fill applies and reports a deterministic non-zero slippage model.",
-      "runner": null,
-      "status": "partial"
+      "runner": "market_with_slippage",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testRejectsQuantizedEntryWhenDerivedAvailableBalanceIsInsufficient"],

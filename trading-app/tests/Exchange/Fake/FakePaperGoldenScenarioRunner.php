@@ -35,6 +35,7 @@ final class FakePaperGoldenScenarioRunner
         'limit_maker_full_fill',
         'limit_unfilled_then_expired',
         'partial_fill_then_cancel',
+        'market_with_slippage',
         'insufficient_balance',
         'precision_reject',
         'leverage_cap_reject',
@@ -65,6 +66,7 @@ final class FakePaperGoldenScenarioRunner
             'limit_maker_full_fill' => $this->limitMakerFullFill(),
             'limit_unfilled_then_expired' => $this->limitUnfilledThenExpired(),
             'partial_fill_then_cancel' => $this->partialFillThenCancel(),
+            'market_with_slippage' => $this->marketWithSlippage(),
             'insufficient_balance' => $this->insufficientBalance(),
             'precision_reject' => $this->precisionReject(),
             'leverage_cap_reject' => $this->leverageCapReject(),
@@ -160,6 +162,38 @@ final class FakePaperGoldenScenarioRunner
             'position_size' => $position?->size,
             'protection_quantity' => $protection?->quantity,
             'remaining_quantity' => $cancelled?->remainingQuantity,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function marketWithSlippage(): array
+    {
+        [, $adapter] = $this->exchange();
+        $adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'golden-market-with-slippage',
+        ));
+        $fill = $adapter->getFillsSnapshot('BTCUSDT')[0] ?? null;
+        if ($fill === null) {
+            throw new \LogicException('The market-with-slippage fixture did not produce a fill.');
+        }
+
+        $notional = $fill->quantity * $fill->price;
+        $slippageCost = $fill->metadata['slippage_cost_usdt'] ?? null;
+        if (!is_numeric($slippageCost) || $notional <= 0.0) {
+            throw new \LogicException('The market-with-slippage fixture did not expose a valid cost.');
+        }
+
+        return [
+            'cost_model_version' => $fill->metadata['cost_model_version'] ?? null,
+            'execution_price' => round($fill->price, 6),
+            'liquidity_role' => $fill->metadata['liquidity_role'] ?? null,
+            'notional_usdt' => round($notional, 6),
+            'slippage_bps' => round(((float) $slippageCost / $notional) * 10_000.0, 6),
+            'slippage_cost_usdt' => round((float) $slippageCost, 6),
+            'spread_cost_usdt' => $fill->metadata['spread_cost_usdt'] ?? null,
+            'spread_model_version' => $fill->metadata['spread_model_version'] ?? null,
         ];
     }
 

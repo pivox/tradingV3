@@ -50,15 +50,19 @@ final readonly class FakeExchangeMatchingEngine
 
     private FakeInstrumentProviderInterface $instruments;
 
+    private FakeFillCostModel $fillCostModel;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
         private ClockInterface $clock,
         ?FakeOrderValidator $orderValidator = null,
         ?FakeInstrumentProviderInterface $instruments = null,
+        ?FakeFillCostModel $fillCostModel = null,
     ) {
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
         $this->orderValidator = $orderValidator ?? new FakeOrderValidator($this->instruments);
+        $this->fillCostModel = $fillCostModel ?? new FakeFillCostModel();
     }
 
     public function submit(PlaceOrderRequest $request): PlaceOrderResult
@@ -233,6 +237,13 @@ final readonly class FakeExchangeMatchingEngine
                 'reduce_only_cancelled_remainder' => true,
             ])
             : $order->metadata;
+        $contractSize = $this->marginContractSize($order->metadata);
+        $fillCost = $this->fillCostModel->forFill(
+            quantity: $fillQuantity,
+            price: $executionPrice,
+            contractSize: $contractSize,
+            postOnly: $order->postOnly,
+        );
 
         $updated = new ExchangeOrderDto(
             exchange: $order->exchange,
@@ -259,7 +270,7 @@ final readonly class FakeExchangeMatchingEngine
         );
 
         $this->stateStore->saveOrder($updated);
-        $this->applyPositionFill($updated, $fillQuantity, $executionPrice);
+        $this->applyPositionFill($updated, $fillQuantity, $executionPrice, $fillCost);
         $this->appendEvent(
             $status === ExchangeOrderStatus::FILLED ? 'order.filled' : 'order.partially_filled',
             $updated,
@@ -269,9 +280,14 @@ final readonly class FakeExchangeMatchingEngine
                 'fill_fee' => $this->fillFee(
                     $fillQuantity,
                     $executionPrice,
-                    $this->marginContractSize($updated->metadata),
+                    $contractSize,
                 ),
                 'fee_currency' => 'USDT',
+                'liquidity_role' => $fillCost->liquidityRole,
+                'spread_cost_usdt' => $fillCost->spreadCostUsdt,
+                'slippage_cost_usdt' => $fillCost->slippageCostUsdt,
+                'cost_model_version' => $fillCost->modelVersion,
+                'spread_model_version' => $fillCost->spreadModelVersion,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
             ],
@@ -551,7 +567,12 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
-    private function applyPositionFill(ExchangeOrderDto $order, float $fillQuantity, float $executionPrice): void
+    private function applyPositionFill(
+        ExchangeOrderDto $order,
+        float $fillQuantity,
+        float $executionPrice,
+        FakeFillCost $fillCost,
+    ): void
     {
         if ($order->positionSide === null) {
             return;
@@ -572,6 +593,7 @@ final readonly class FakeExchangeMatchingEngine
                 $executionPrice,
                 $contractSize,
                 $fillFee,
+                $fillCost,
             );
             $remainingSize = max(0.0, $existing->size - $fillQuantity);
             if ($remainingSize <= 0.00000001) {
@@ -639,6 +661,7 @@ final readonly class FakeExchangeMatchingEngine
                 $executionPrice,
                 $contractSize,
                 $fillFee,
+                $fillCost,
             ),
         );
         $this->stateStore->savePosition($position);
@@ -708,6 +731,7 @@ final readonly class FakeExchangeMatchingEngine
         float $price,
         float $contractSize,
         float $fee,
+        FakeFillCost $fillCost,
     ): array
     {
         $entryOrderIds = $this->entryOrderIds($metadata, $orderId);
@@ -720,6 +744,10 @@ final readonly class FakeExchangeMatchingEngine
             'entry_qty' => $this->metadataFloat($metadata, 'entry_qty') + $quantity,
             'entry_notional_usdt' => $this->metadataFloat($metadata, 'entry_notional_usdt') + ($quantity * $price * $contractSize),
             'entry_fee_usdt' => $this->metadataFloat($metadata, 'entry_fee_usdt') + $fee,
+            'entry_spread_cost_usdt' => $this->metadataFloat($metadata, 'entry_spread_cost_usdt') + $fillCost->spreadCostUsdt,
+            'entry_slippage_cost_usdt' => $this->metadataFloat($metadata, 'entry_slippage_cost_usdt') + $fillCost->slippageCostUsdt,
+            'cost_model_version' => $fillCost->modelVersion,
+            'spread_model_version' => $fillCost->spreadModelVersion,
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ]);
     }
@@ -734,12 +762,17 @@ final readonly class FakeExchangeMatchingEngine
         float $price,
         float $contractSize,
         float $fee,
+        FakeFillCost $fillCost,
     ): array
     {
         return array_replace($metadata, [
             'exit_qty' => $this->metadataFloat($metadata, 'exit_qty') + $quantity,
             'exit_notional_usdt' => $this->metadataFloat($metadata, 'exit_notional_usdt') + ($quantity * $price * $contractSize),
             'exit_fee_usdt' => $this->metadataFloat($metadata, 'exit_fee_usdt') + $fee,
+            'exit_spread_cost_usdt' => $this->metadataFloat($metadata, 'exit_spread_cost_usdt') + $fillCost->spreadCostUsdt,
+            'exit_slippage_cost_usdt' => $this->metadataFloat($metadata, 'exit_slippage_cost_usdt') + $fillCost->slippageCostUsdt,
+            'cost_model_version' => $fillCost->modelVersion,
+            'spread_model_version' => $fillCost->spreadModelVersion,
             'pnl_source' => 'fake_paper_fill_ledger_v1',
         ]);
     }
@@ -756,6 +789,10 @@ final readonly class FakeExchangeMatchingEngine
         $exitNotional = $this->metadataFloat($closeLedger, 'exit_notional_usdt');
         $entryFee = $this->metadataFloat($closeLedger, 'entry_fee_usdt');
         $exitFee = $this->metadataFloat($closeLedger, 'exit_fee_usdt');
+        $spreadCost = $this->metadataFloat($closeLedger, 'entry_spread_cost_usdt')
+            + $this->metadataFloat($closeLedger, 'exit_spread_cost_usdt');
+        $slippageCost = $this->metadataFloat($closeLedger, 'entry_slippage_cost_usdt')
+            + $this->metadataFloat($closeLedger, 'exit_slippage_cost_usdt');
         $entryOrderCount = max(1, (int) round($this->metadataFloat($closeLedger, 'entry_order_count')));
         $lineageSufficient = $entryOrderCount <= 1;
         $gross = $position->side === ExchangePositionSide::SHORT
@@ -764,15 +801,17 @@ final readonly class FakeExchangeMatchingEngine
 
         return $this->lineageMetadata($closeLedger) + [
             'gross_realized_pnl_usdt' => round($gross, 12),
-            'recorded_pnl_usdt' => round($gross - $entryFee - $exitFee, 12),
+            'recorded_pnl_usdt' => round($gross - $entryFee - $exitFee - $spreadCost - $slippageCost, 12),
             'entry_fee_usdt' => round($entryFee, 12),
             'exit_fee_usdt' => round($exitFee, 12),
             'other_trading_fees_usdt' => 0.0,
             'funding_usdt' => 0.0,
-            'spread_cost_usdt' => 0.0,
-            'slippage_cost_usdt' => 0.0,
+            'spread_cost_usdt' => round($spreadCost, 12),
+            'slippage_cost_usdt' => round($slippageCost, 12),
             'borrow_cost_usdt' => 0.0,
             'liquidation_fee_usdt' => 0.0,
+            'cost_model_version' => $this->stringMetadata($closeLedger, 'cost_model_version'),
+            'spread_model_version' => $this->stringMetadata($closeLedger, 'spread_model_version'),
             'entry_qty' => round($entryQty, 12),
             'exit_qty' => round($exitQty, 12),
             'remaining_qty' => 0.0,

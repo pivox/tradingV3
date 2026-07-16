@@ -71,10 +71,50 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertSame('USDT', $normalized[1]->fill()->feeCurrency);
         self::assertNotNull($normalized[1]->fill()->fee);
         self::assertSame('fake_paper_fill_ledger_v1', $normalized[1]->fill()->metadata['pnl_source'] ?? null);
+        self::assertSame('maker', $normalized[1]->fill()->metadata['liquidity_role'] ?? null);
+        self::assertSame(0.0, $normalized[1]->fill()->metadata['spread_cost_usdt'] ?? null);
+        self::assertSame(0.0, $normalized[1]->fill()->metadata['slippage_cost_usdt'] ?? null);
+        self::assertSame(
+            'fixed_adverse_slippage_bps_v1',
+            $normalized[1]->fill()->metadata['cost_model_version'] ?? null,
+        );
+        self::assertSame(
+            'top_of_book_embedded_spread_v1',
+            $normalized[1]->fill()->metadata['spread_model_version'] ?? null,
+        );
         self::assertSame('BTCUSDT', $normalized[1]->symbol());
         self::assertSame(
             $normalized[1]->fill()->fillId,
             $this->scenarioAdapter()->getFillsSnapshot('BTCUSDT')[0]->fillId,
+        );
+    }
+
+    public function testNormalizesTakerFillWithExplicitSlippageCosts(): void
+    {
+        $this->scenarioAdapter()->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            quantity: 2.0,
+            postOnly: false,
+        ));
+
+        $events = $this->scenario->events('order.filled');
+        $normalized = $this->normalizer->normalize($events[0]);
+
+        self::assertCount(2, $normalized);
+        self::assertInstanceOf(ExchangeFillReceived::class, $normalized[1]);
+        $fill = $normalized[1]->fill();
+        self::assertSame('taker', $fill->metadata['liquidity_role'] ?? null);
+        self::assertSame(0.0, $fill->metadata['spread_cost_usdt'] ?? null);
+        self::assertEqualsWithDelta(
+            $fill->quantity * $fill->price * 5.0 / 10_000.0,
+            $fill->metadata['slippage_cost_usdt'] ?? null,
+            0.000000000001,
+        );
+        self::assertSame('fixed_adverse_slippage_bps_v1', $fill->metadata['cost_model_version'] ?? null);
+        self::assertSame(
+            'top_of_book_embedded_spread_v1',
+            $fill->metadata['spread_model_version'] ?? null,
         );
     }
 

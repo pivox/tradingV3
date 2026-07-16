@@ -838,12 +838,30 @@ final class FakeExchangeAdapterTest extends TestCase
         $exitPrice = (float) ($filledEvents[1]->payload['fill_price'] ?? 0.0);
         $expectedEntryFee = round($entryPrice * 2.0 * 0.0005, 12);
         $expectedExitFee = round($exitPrice * 2.0 * 0.0005, 12);
+        $expectedEntrySlippage = round($entryPrice * 2.0 * 0.0005, 12);
+        $expectedExitSlippage = round($exitPrice * 2.0 * 0.0005, 12);
         $expectedGross = round(($exitPrice - $entryPrice) * 2.0, 12);
+        $expectedRecorded = round(
+            $expectedGross
+            - $expectedEntryFee
+            - $expectedExitFee
+            - $expectedEntrySlippage
+            - $expectedExitSlippage,
+            12,
+        );
 
         self::assertEqualsWithDelta($expectedExitFee, $filledEvents[1]->payload['fill_fee'] ?? null, 0.000001);
+        self::assertEqualsWithDelta($expectedEntrySlippage, $filledEvents[0]->payload['slippage_cost_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta($expectedExitSlippage, $filledEvents[1]->payload['slippage_cost_usdt'] ?? null, 0.000001);
         self::assertEqualsWithDelta($expectedGross, $closedEvents[0]->payload['gross_realized_pnl_usdt'] ?? null, 0.000001);
         self::assertEqualsWithDelta($expectedEntryFee, $closedEvents[0]->payload['entry_fee_usdt'] ?? null, 0.000001);
         self::assertEqualsWithDelta($expectedExitFee, $closedEvents[0]->payload['exit_fee_usdt'] ?? null, 0.000001);
+        self::assertEqualsWithDelta(
+            $expectedEntrySlippage + $expectedExitSlippage,
+            $closedEvents[0]->payload['slippage_cost_usdt'] ?? null,
+            0.000001,
+        );
+        self::assertEqualsWithDelta($expectedRecorded, $closedEvents[0]->payload['recorded_pnl_usdt'] ?? null, 0.000001);
     }
 
     public function testLegacyOpenOrderWithoutContractSizeMetadataFallsBackToOne(): void
@@ -1000,6 +1018,7 @@ final class FakeExchangeAdapterTest extends TestCase
 
     public function testMarketOrderFillsImmediately(): void
     {
+        $expectedAsk = $this->adapter->getOrderBookTop('BTCUSDT')->ask;
         $result = $this->adapter->placeOrder($this->request(
             orderType: ExchangeOrderType::MARKET,
             price: null,
@@ -1010,6 +1029,19 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderStatus::FILLED, $result->status);
         self::assertSame(1.0, $result->order->filledQuantity);
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+
+        $events = $this->scenario->events('order.filled');
+        self::assertCount(1, $events);
+        self::assertSame($expectedAsk, $events[0]->payload['fill_price'] ?? null);
+        self::assertSame('taker', $events[0]->payload['liquidity_role'] ?? null);
+        self::assertSame(0.0, $events[0]->payload['spread_cost_usdt'] ?? null);
+        self::assertEqualsWithDelta(
+            round($expectedAsk * 0.0005, 12),
+            $events[0]->payload['slippage_cost_usdt'] ?? null,
+            0.000000000001,
+        );
+        self::assertSame('fixed_adverse_slippage_bps_v1', $events[0]->payload['cost_model_version'] ?? null);
+        self::assertSame('top_of_book_embedded_spread_v1', $events[0]->payload['spread_model_version'] ?? null);
     }
 
     public function testFakeFillsExposeDeterministicUsdtFeesForCertificationFixtures(): void
@@ -1028,6 +1060,18 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertGreaterThan(0.0, $fills[0]->fee);
         self::assertSame('fake_paper_fill_ledger_v1', $fills[0]->metadata['pnl_source'] ?? null);
         self::assertSame('complete', $fills[0]->metadata['cost_completeness'] ?? null);
+        self::assertSame('taker', $fills[0]->metadata['liquidity_role'] ?? null);
+        self::assertSame(0.0, $fills[0]->metadata['spread_cost_usdt'] ?? null);
+        self::assertEqualsWithDelta(
+            $fills[0]->quantity * $fills[0]->price * 5.0 / 10_000.0,
+            $fills[0]->metadata['slippage_cost_usdt'] ?? null,
+            0.000000000001,
+        );
+        self::assertSame('fixed_adverse_slippage_bps_v1', $fills[0]->metadata['cost_model_version'] ?? null);
+        self::assertSame(
+            'top_of_book_embedded_spread_v1',
+            $fills[0]->metadata['spread_model_version'] ?? null,
+        );
     }
 
     public function testNonCrossingIocLimitExpiresWithoutResting(): void
@@ -1053,11 +1097,39 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial->status);
         self::assertEqualsWithDelta(0.4, $partial->filledQuantity, 0.000001);
         self::assertEqualsWithDelta(0.6, $partial->remainingQuantity, 0.000001);
+        $partialEvents = $this->scenario->events('order.partially_filled');
+        self::assertCount(1, $partialEvents);
+        self::assertSame('maker', $partialEvents[0]->payload['liquidity_role'] ?? null);
+        self::assertSame(0.0, $partialEvents[0]->payload['slippage_cost_usdt'] ?? null);
 
         $complete = $this->scenario->fillOrder((string) $placed->exchangeOrderId);
         self::assertSame(ExchangeOrderStatus::FILLED, $complete->status);
         self::assertEqualsWithDelta(1.0, $complete->filledQuantity, 0.000001);
         self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testPartialTakerFillsAggregateSlippagePerFill(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(price: 24950.0, postOnly: false));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0];
+        self::assertEqualsWithDelta(4.99, $position->metadata['entry_slippage_cost_usdt'] ?? null, 0.000000000001);
+
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.6, 24960.0);
+        $position = $this->adapter->getOpenPositions('BTCUSDT')[0];
+        self::assertEqualsWithDelta(12.478, $position->metadata['entry_slippage_cost_usdt'] ?? null, 0.000000000001);
+
+        $fillEvents = array_merge(
+            $this->scenario->events('order.partially_filled'),
+            $this->scenario->events('order.filled'),
+        );
+        self::assertCount(2, $fillEvents);
+        self::assertSame(['taker', 'taker'], array_map(
+            static fn ($event): mixed => $event->payload['liquidity_role'] ?? null,
+            $fillEvents,
+        ));
     }
 
     public function testAcceptedAttachedProtectionCreatesReduceOnlyStopOrder(): void

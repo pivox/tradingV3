@@ -215,8 +215,11 @@ Le resultat Fake/Paper impose toujours `dry_run=true`, `permissions_trade=false`
 kill switch actif et ecriture demo/testnet desactivee. Les credentials sont
 `not_required`; le provider bundle Fake est operationnel uniquement pour le
 contexte `fake/perpetual` et ne peut emettre aucun ordre exchange.
-Le modele de slippage additionnel actuellement nul reste visible via le warning
-`fake_paper_slippage_model_zero`.
+Les fills taker publient un cout adverse deterministe de 5 bps sous
+`fixed_adverse_slippage_bps_v1`; les fills maker post-only publient zero. Le prix
+d execution reste le top of book, donc le spread additionnel est explicitement
+zero sous `top_of_book_embedded_spread_v1`. Un modele absent, nul, malforme ou non
+supporte bloque la readiness avec `fake_paper_slippage_model_not_ready`.
 
 Le modele d instrument versionne utilise Brick Math sur les textes decimaux
 exacts. L endpoint HTTP Fake exige des chaines decimales pour `quantity`, `price`
@@ -251,20 +254,18 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les neuf scenarios executes dans cette version sont : maker limit rempli, limit IOC
-expire sans fill, partial fill puis cancel, replay du `client_order_id`, timeout
-apres acceptation, attachement SL reussi, gap au SL au prochain prix disponible,
-deconnexion/reprise private WS, et restart avec position protegee ouverte.
+Les treize scenarios executes dans cette version sont : maker limit rempli, limit
+IOC expire sans fill, partial fill puis cancel, market avec slippage 5 bps,
+insufficient balance, precision reject, leverage cap reject, replay du
+`client_order_id`, timeout apres acceptation, attachement SL reussi, gap au SL au
+prochain prix disponible, deconnexion/reprise private WS, et restart avec
+position protegee ouverte.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
 | fallback taker | `unsupported` | `fallback_taker_not_implemented` |
-| market avec slippage | `partial` | `slippage_model_zero` |
-| insufficient balance | `unsupported` | `balance_margin_validation_not_implemented` |
-| precision reject | `unsupported` | `instrument_precision_validation_not_implemented` |
-| leverage cap reject | `unsupported` | `leverage_cap_validation_not_implemented` |
 | echec attachement SL | `partial` | `stop_attach_failure_compensation_not_integrated` |
 | TP1 puis trailing | `partial` | `trailing_stop_not_implemented` |
 | duplicate/out-of-order event | `partial` | `out_of_order_event_injection_not_implemented` |
