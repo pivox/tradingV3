@@ -843,6 +843,7 @@ final class FakePaperGoldenScenarioRunner
             $resyncAudit = $restoredClient->audit();
             $resumedContiguously = $resumed->rawEventsRead === 1
                 && $resyncAudit['last_acknowledged_sequence'] === '4';
+            $normalizedSignatures = $projectionStore->normalizedSignatures();
 
             $conflictState = new FakeExchangeStateStore($conflictStateFile);
             $conflictState->configurePrivateWsScenario(FakePrivateWsScenario::fromArray($conflictPayload));
@@ -861,6 +862,9 @@ final class FakePaperGoldenScenarioRunner
                 'gap_code' => $gapCode,
                 'gap_total' => $gapAudit['gap_total'],
                 'no_projection_after_gap' => $noProjectionAfterGap,
+                'normalized_projection_count' => \count($normalizedSignatures),
+                'normalized_projection_signatures' => $normalizedSignatures,
+                'normalized_projections_unique' => \count($normalizedSignatures) === \count(array_unique($normalizedSignatures)),
                 'resync_total' => $resyncAudit['resync_total'],
                 'restart_preserved_resync' => $restartPreservedResync,
                 'resumed_contiguously' => $resumedContiguously,
@@ -1090,6 +1094,9 @@ final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionSto
 {
     public int $projectedCount = 0;
 
+    /** @var list<string> */
+    private array $signatures = [];
+
     public function hasOrder(ExchangeOrderDto $order): bool
     {
         return false;
@@ -1108,19 +1115,32 @@ final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionSto
     public function project(ExchangeEventInterface $event): void
     {
         ++$this->projectedCount;
+        $this->signatures[] = implode('|', [
+            $event->eventType(),
+            $event->symbol(),
+            $event->occurredAt()->format(\DateTimeInterface::ATOM),
+        ]);
     }
 
     public function projectAtomically(array $events): void
     {
         $before = $this->projectedCount;
+        $signaturesBefore = $this->signatures;
         try {
             foreach ($events as $event) {
                 $this->project($event);
             }
         } catch (\Throwable $exception) {
             $this->projectedCount = $before;
+            $this->signatures = $signaturesBefore;
 
             throw $exception;
         }
+    }
+
+    /** @return list<string> */
+    public function normalizedSignatures(): array
+    {
+        return $this->signatures;
     }
 }
