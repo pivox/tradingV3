@@ -426,6 +426,7 @@ final class FakeProvidersTest extends TestCase
                 'client_order_id' => 'triggered-protection-stop',
                 'side' => 3,
                 'reduce_only' => true,
+                'reduceOnly' => true,
             ],
         );
 
@@ -435,6 +436,27 @@ final class FakeProvidersTest extends TestCase
         self::assertSame(OrderStatus::PENDING, $stop->status);
         self::assertSame('24500', (string) $stop->stopPrice);
         self::assertCount(1, $this->fixture->account->getOpenPositions('BTCUSDT'));
+    }
+
+    public function testOrderProviderRejectsConflictingReduceOnlyAliases(): void
+    {
+        try {
+            $this->fixture->order->placeOrder(
+                'BTCUSDT',
+                OrderSide::BUY,
+                OrderType::LIMIT,
+                1.0,
+                24950.0,
+                options: [
+                    'client_order_id' => 'conflicting-reduce-only-aliases',
+                    'reduce_only' => true,
+                    'reduceOnly' => false,
+                ],
+            );
+            self::fail('Expected conflicting reduce-only aliases to throw.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('reduce_only conflicts with reduceOnly.', $exception->getMessage());
+        }
     }
 
     public function testOrderProviderMapsEveryBitmartLegacySideCode(): void

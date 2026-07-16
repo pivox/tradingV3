@@ -80,10 +80,13 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         $timeInForce = $this->timeInForce($options['time_in_force'] ?? null);
         $marginMode = $this->marginMode($options['margin_mode'] ?? $options['open_type'] ?? null);
         $leverage = $this->nullablePositiveInt($options['leverage'] ?? null, 'leverage');
-        $reduceOnly = $this->boolOption($options, 'reduce_only');
+        $reduceOnly = $this->boolAliasOption($options, 'reduce_only', 'reduceOnly');
         $postOnly = $this->boolOption($options, 'post_only');
         if ($legacySide !== null) {
-            if (array_key_exists('reduce_only', $options) && $reduceOnly !== $legacySide['reduceOnly']) {
+            if (
+                (array_key_exists('reduce_only', $options) || array_key_exists('reduceOnly', $options))
+                && $reduceOnly !== $legacySide['reduceOnly']
+            ) {
                 throw new \InvalidArgumentException('Legacy side code conflicts with reduce_only.');
             }
             $reduceOnly = $legacySide['reduceOnly'];
@@ -267,7 +270,7 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         $supported = [
             'exchange', 'market_type',
             'client_order_id', 'side', 'mode', 'position_side', 'margin_mode', 'open_type', 'leverage',
-            'reduce_only', 'post_only', 'time_in_force',
+            'reduce_only', 'reduceOnly', 'post_only', 'time_in_force',
             'attached_stop_loss_price', 'attached_take_profit_price',
             'preset_stop_loss_price', 'preset_take_profit_price',
             'preset_stop_loss_price_type', 'preset_take_profit_price_type',
@@ -401,6 +404,22 @@ final readonly class FakeOrderProvider implements OrderProviderInterface
         }
 
         return $options[$key];
+    }
+
+    /** @param array<string,mixed> $options */
+    private function boolAliasOption(array $options, string $canonicalKey, string $aliasKey): bool
+    {
+        $canonical = $this->boolOption($options, $canonicalKey);
+        $alias = $this->boolOption($options, $aliasKey);
+        if (
+            array_key_exists($canonicalKey, $options)
+            && array_key_exists($aliasKey, $options)
+            && $canonical !== $alias
+        ) {
+            throw new \InvalidArgumentException(sprintf('%s conflicts with %s.', $canonicalKey, $aliasKey));
+        }
+
+        return array_key_exists($canonicalKey, $options) ? $canonical : $alias;
     }
 
     private function nullablePositiveInt(mixed $value, string $field): ?int
