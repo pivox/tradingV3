@@ -30,6 +30,7 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
     {
         @unlink($this->stateFile);
         @unlink($this->stateFile . '.lock');
+        @unlink($this->stateFile . '.private-ws-consumer.lock');
         foreach (glob($this->stateFile . '.tmp.*') ?: [] as $temporaryFile) {
             @unlink($temporaryFile);
         }

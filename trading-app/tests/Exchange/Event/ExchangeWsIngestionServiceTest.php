@@ -328,6 +328,121 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         self::assertSame('resync_required', $state->privateWsAudit()['connection_state']);
     }
 
+    public function testConcurrentScenarioConsumersSharingInMemoryStateCannotReadSameDelivery(): void
+    {
+        $event = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            ['event_sequence' => 1],
+        );
+        $state = new FakeExchangeStateStore();
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('memory-exclusive-v1', [$event]));
+
+        $first = (new FakeExchangeWsClient($state))->drainPrivateEvents();
+        self::assertInstanceOf(\Generator::class, $first);
+        self::assertSame($event->toArray(), $first->current()->toArray());
+
+        try {
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+                'must-not-replace-in-flight-v1',
+                [$event],
+            ));
+            self::fail('Scenario configuration must not replace an in-flight delivery.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_consumer_busy', $exception->errorCode);
+        }
+
+        $second = (new FakeExchangeWsClient($state))->drainPrivateEvents();
+        self::assertInstanceOf(\Generator::class, $second);
+        try {
+            $second->current();
+            self::fail('A second in-memory consumer must fail before reading the in-flight delivery.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_consumer_busy', $exception->errorCode);
+            self::assertSame('connected', $exception->state);
+        }
+
+        self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+    }
+
+    public function testAbandonedInMemoryScenarioConsumerReleasesLeaseWithoutAcknowledgement(): void
+    {
+        $event = new FakeExchangeEvent(
+            'order.created',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            ['event_sequence' => 1],
+        );
+        $state = new FakeExchangeStateStore();
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents('memory-abandon-v1', [$event]));
+
+        $firstAttempt = (static function () use ($state): array {
+            $consumer = (new FakeExchangeWsClient($state))->drainPrivateEvents();
+            if (!$consumer instanceof \Generator) {
+                throw new \LogicException('The Fake scenario consumer must be a generator.');
+            }
+
+            return $consumer->current()->toArray();
+        })();
+        gc_collect_cycles();
+
+        self::assertSame($event->toArray(), $firstAttempt);
+        self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+
+        $retry = (new FakeExchangeWsClient($state))->drainPrivateEvents();
+        self::assertInstanceOf(\Generator::class, $retry);
+        self::assertSame($event->toArray(), $retry->current()->toArray());
+        self::assertSame(0, $state->privateWsAudit()['acknowledged_total']);
+    }
+
+    public function testConcurrentScenarioConsumersSharingStateFileCannotProjectBeforeCursorRefresh(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_exclusive_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $event = new FakeExchangeEvent(
+                'order.created',
+                'BTCUSDT',
+                new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+                ['event_sequence' => 1],
+            );
+            $configured = new FakeExchangeStateStore($stateFile);
+            $configured->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+                'file-exclusive-v1',
+                [$event],
+            ));
+            $firstState = new FakeExchangeStateStore($stateFile);
+            $secondState = new FakeExchangeStateStore($stateFile);
+
+            $first = (new FakeExchangeWsClient($firstState))->drainPrivateEvents();
+            self::assertInstanceOf(\Generator::class, $first);
+            self::assertSame($event->toArray(), $first->current()->toArray());
+
+            $second = (new FakeExchangeWsClient($secondState))->drainPrivateEvents();
+            self::assertInstanceOf(\Generator::class, $second);
+            try {
+                $second->current();
+                self::fail('A second file-backed consumer must fail before reading the in-flight delivery.');
+            } catch (FakePrivateWsException $exception) {
+                self::assertSame('fake_private_ws_consumer_busy', $exception->errorCode);
+            }
+
+            $first->next();
+            self::assertFalse($first->valid());
+
+            self::assertSame([], iterator_to_array((new FakeExchangeWsClient($secondState))->drainPrivateEvents()));
+            self::assertSame(1, $secondState->privateWsAudit()['acknowledged_total']);
+            self::assertSame(1, $secondState->privateWsAudit()['next_delivery_index']);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
+        }
+    }
+
     public function testClientCrashBeforeAcknowledgementRetriesSameDeliveryAfterRestart(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_private_ws_crash_');
@@ -359,6 +474,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
         }
     }
 
@@ -400,6 +516,7 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
         }
     }
 

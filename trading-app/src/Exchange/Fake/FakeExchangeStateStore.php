@@ -68,6 +68,8 @@ class FakeExchangeStateStore
 
     private bool $deferPersistence = false;
 
+    private bool $privateWsConsumptionActive = false;
+
     public function __construct(
         #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
         ?string $stateFile = null,
@@ -470,14 +472,66 @@ class FakeExchangeStateStore
 
     public function configurePrivateWsScenario(FakePrivateWsScenario $scenario): void
     {
-        $this->transactional(function () use ($scenario): void {
-            if ($this->privateWs['connection_state'] === self::PRIVATE_WS_RESYNC_REQUIRED) {
-                throw new \LogicException('fake_private_ws_snapshot_resync_required');
+        $lease = $this->acquirePrivateWsConsumptionLease();
+
+        try {
+            $this->transactional(function () use ($scenario): void {
+                if ($this->privateWs['connection_state'] === self::PRIVATE_WS_RESYNC_REQUIRED) {
+                    throw new \LogicException('fake_private_ws_snapshot_resync_required');
+                }
+
+                $this->privateWs = self::defaultPrivateWsState();
+                $this->privateWs['scenario'] = $scenario->toArray();
+            });
+        } finally {
+            $lease->release();
+        }
+    }
+
+    public function acquirePrivateWsConsumptionLease(): FakePrivateWsConsumptionLease
+    {
+        if ($this->privateWsConsumptionActive) {
+            throw FakePrivateWsException::consumerBusy($this->privateWsLastAcknowledgedSequence());
+        }
+
+        $lockHandle = null;
+        if ($this->stateFile !== null) {
+            $directory = \dirname($this->stateFile);
+            if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+                throw new \RuntimeException('fake_exchange_state_directory_unavailable');
             }
 
-            $this->privateWs = self::defaultPrivateWsState();
-            $this->privateWs['scenario'] = $scenario->toArray();
-        });
+            $lockHandle = fopen($this->stateFile . '.private-ws-consumer.lock', 'c+');
+            if ($lockHandle === false) {
+                throw new \RuntimeException('fake_private_ws_consumer_lock_unavailable');
+            }
+            if (!flock($lockHandle, \LOCK_EX | \LOCK_NB)) {
+                fclose($lockHandle);
+
+                throw FakePrivateWsException::consumerBusy($this->privateWsLastAcknowledgedSequence());
+            }
+        }
+
+        $this->privateWsConsumptionActive = true;
+        $lease = new FakePrivateWsConsumptionLease(
+            $lockHandle,
+            function (): void {
+                $this->privateWsConsumptionActive = false;
+            },
+        );
+
+        try {
+            if ($this->stateFile !== null) {
+                $this->transactional(static function (): void {
+                });
+            }
+        } catch (\Throwable $exception) {
+            $lease->release();
+
+            throw $exception;
+        }
+
+        return $lease;
     }
 
     public function hasPrivateWsScenario(): bool

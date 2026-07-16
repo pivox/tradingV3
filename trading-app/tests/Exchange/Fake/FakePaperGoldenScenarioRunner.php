@@ -624,6 +624,7 @@ final class FakePaperGoldenScenarioRunner
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
             foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
                 @unlink($temporaryFile);
             }
@@ -868,6 +869,7 @@ final class FakePaperGoldenScenarioRunner
             foreach ([$stateFile, $conflictStateFile] as $file) {
                 @unlink($file);
                 @unlink($file . '.lock');
+                @unlink($file . '.private-ws-consumer.lock');
                 foreach (glob($file . '.tmp.*') ?: [] as $temporaryFile) {
                     @unlink($temporaryFile);
                 }

@@ -200,49 +200,55 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
      */
     private function drainPrivateWsScenario(?string $symbol): \Generator
     {
-        if ($this->requiresResync()) {
-            throw FakePrivateWsException::snapshotResyncRequired(
-                $this->stateStore->privateWsLastAcknowledgedSequence(),
-            );
-        }
+        $lease = $this->stateStore->acquirePrivateWsConsumptionLease();
 
-        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
-        while (($delivery = $this->stateStore->privateWsCurrentDelivery()) !== null) {
-            if ($normalizedSymbol !== null && strtoupper($delivery->event->symbol) !== $normalizedSymbol) {
-                return;
+        try {
+            if ($this->requiresResync()) {
+                throw FakePrivateWsException::snapshotResyncRequired(
+                    $this->stateStore->privateWsLastAcknowledgedSequence(),
+                );
             }
 
-            $known = $this->stateStore->privateWsAcknowledgedFingerprint($delivery->sequence);
-            if ($known !== null) {
-                if (!hash_equals($known, $delivery->fingerprint)) {
-                    $this->stateStore->markPrivateWsConflict($delivery);
+            $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+            while (($delivery = $this->stateStore->privateWsCurrentDelivery()) !== null) {
+                if ($normalizedSymbol !== null && strtoupper($delivery->event->symbol) !== $normalizedSymbol) {
+                    return;
+                }
 
-                    throw FakePrivateWsException::sequenceConflict(
+                $known = $this->stateStore->privateWsAcknowledgedFingerprint($delivery->sequence);
+                if ($known !== null) {
+                    if (!hash_equals($known, $delivery->fingerprint)) {
+                        $this->stateStore->markPrivateWsConflict($delivery);
+
+                        throw FakePrivateWsException::sequenceConflict(
+                            $this->stateStore->privateWsLastAcknowledgedSequence(),
+                            $delivery->sequence,
+                        );
+                    }
+
+                    $this->stateStore->skipExactPrivateWsDuplicate($delivery);
+
+                    continue;
+                }
+
+                $expected = $this->stateStore->privateWsExpectedNumericSequence();
+                $actual = ctype_digit($delivery->sequence) ? (int) $delivery->sequence : null;
+                if ($actual !== null && $actual > $expected) {
+                    $this->stateStore->markPrivateWsGap((string) $expected, $delivery->sequence, $delivery);
+
+                    throw FakePrivateWsException::sequenceGap(
                         $this->stateStore->privateWsLastAcknowledgedSequence(),
+                        (string) $expected,
                         $delivery->sequence,
                     );
                 }
 
-                $this->stateStore->skipExactPrivateWsDuplicate($delivery);
+                yield $delivery->event;
 
-                continue;
+                $this->stateStore->acknowledgePrivateWsDelivery($delivery);
             }
-
-            $expected = $this->stateStore->privateWsExpectedNumericSequence();
-            $actual = ctype_digit($delivery->sequence) ? (int) $delivery->sequence : null;
-            if ($actual !== null && $actual > $expected) {
-                $this->stateStore->markPrivateWsGap((string) $expected, $delivery->sequence, $delivery);
-
-                throw FakePrivateWsException::sequenceGap(
-                    $this->stateStore->privateWsLastAcknowledgedSequence(),
-                    (string) $expected,
-                    $delivery->sequence,
-                );
-            }
-
-            yield $delivery->event;
-
-            $this->stateStore->acknowledgePrivateWsDelivery($delivery);
+        } finally {
+            $lease->release();
         }
     }
 
