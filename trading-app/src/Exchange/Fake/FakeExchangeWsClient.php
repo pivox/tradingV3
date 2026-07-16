@@ -240,6 +240,14 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
 
                 $expected = $this->stateStore->privateWsExpectedNumericSequence();
                 $actual = ctype_digit($delivery->sequence) ? (int) $delivery->sequence : null;
+                if ($actual !== null && $actual < $expected) {
+                    $this->stateStore->markPrivateWsConflict($delivery);
+
+                    throw FakePrivateWsException::sequenceConflict(
+                        $this->stateStore->privateWsLastAcknowledgedSequence(),
+                        $delivery->sequence,
+                    );
+                }
                 if ($actual !== null && $actual > $expected) {
                     $this->stateStore->markPrivateWsGap((string) $expected, $delivery->sequence, $delivery);
 

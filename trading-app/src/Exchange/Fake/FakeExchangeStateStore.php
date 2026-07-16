@@ -644,7 +644,12 @@ class FakeExchangeStateStore
         $this->transactional(function () use ($delivery): void {
             $current = $this->assertCurrentPrivateWsDelivery($delivery);
             $known = $this->privateWsAcknowledgedFingerprint($current->sequence);
-            if ($known === null || hash_equals($known, $current->fingerprint)) {
+            $actual = ctype_digit($current->sequence) ? (int) $current->sequence : null;
+            $isKnownConflict = $known !== null && !hash_equals($known, $current->fingerprint);
+            $isUnknownStaleSequence = $known === null
+                && $actual !== null
+                && $actual < $this->privateWsExpectedNumericSequence();
+            if (!$isKnownConflict && !$isUnknownStaleSequence) {
                 throw new \LogicException('fake_private_ws_conflict_identity_invalid');
             }
 

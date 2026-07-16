@@ -804,6 +804,68 @@ final class ExchangeReconciliationServiceTest extends TestCase
         }
     }
 
+    public function testSnapshotResyncRejectsUnknownStaleNumericDeliveryBeforeProjection(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $adapter = $this->adapter($state);
+        $adapter->placeOrder($this->marketRequest());
+        $events = $state->events();
+        $state->configurePrivateWsScenario(FakePrivateWsScenario::fromEvents(
+            'unknown-stale-after-resync-v1',
+            [$events[0], $events[2]],
+        ));
+
+        $projectionStore = new RecordingProjectionStore();
+        $bus = new ExchangeEventBus($projectionStore, new NullLogger());
+        $ingestion = new ExchangeWsIngestionService(
+            new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+            $bus,
+            new NullLogger(),
+        );
+        $client = new FakeExchangeWsClient($state);
+
+        try {
+            $ingestion->drain($client);
+            self::fail('Sequence three must create a gap before snapshot reconciliation.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_gap', $exception->errorCode);
+        }
+
+        $reconciliation = new ExchangeReconciliationService(
+            $bus,
+            $projectionStore,
+            $this->fixedClock(),
+            new NullLogger(),
+        );
+        $snapshotResult = $reconciliation->reconcile($adapter);
+        $state->appendEvent($events[1]);
+        $client->completeSnapshotResync($snapshotResult);
+
+        self::assertSame(4, $state->privateWsExpectedNumericSequence());
+        self::assertNull($state->privateWsAcknowledgedFingerprint('2'));
+        self::assertSame('2', $state->privateWsCurrentDelivery()?->sequence);
+        $auditBefore = $client->audit();
+        $projectedBefore = \count($projectionStore->events);
+
+        try {
+            $ingestion->drain($client);
+            self::fail('An unknown stale sequence below the reconciled watermark must fail before projection.');
+        } catch (FakePrivateWsException $exception) {
+            self::assertSame('fake_private_ws_sequence_conflict', $exception->errorCode);
+            self::assertSame('resync_required', $exception->state);
+            self::assertSame('2', $exception->actualSequence);
+        }
+
+        $auditAfter = $client->audit();
+        self::assertCount($projectedBefore, $projectionStore->events);
+        self::assertSame($auditBefore['next_delivery_index'], $auditAfter['next_delivery_index']);
+        self::assertSame($auditBefore['acknowledged_total'], $auditAfter['acknowledged_total']);
+        self::assertSame($auditBefore['duplicate_total'], $auditAfter['duplicate_total']);
+        self::assertSame($auditBefore['conflict_total'] + 1, $auditAfter['conflict_total']);
+        self::assertSame('fake_private_ws_sequence_conflict', $auditAfter['resync_reason']);
+        self::assertSame('2', $state->privateWsCurrentDelivery()->sequence);
+    }
+
     public function testSnapshotProofDoesNotCoverDeliveryAppendedLaterWithAnOlderSequence(): void
     {
         [$state, $client] = $this->stateWithPrivateWsGap('proof-delivery-boundary-v1');
