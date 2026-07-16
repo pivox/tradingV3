@@ -65,6 +65,7 @@ final readonly class FakeExchangeMatchingEngine
     {
         $this->assertRequestContext($request);
         $this->assertRequestIntent($request);
+        $request = $this->withPersistedLeverageSetting($request);
 
         $existing = $this->stateStore->getOrderByClientOrderId($request->symbol, $request->clientOrderId);
         if ($existing instanceof ExchangeOrderDto) {
@@ -856,6 +857,44 @@ final readonly class FakeExchangeMatchingEngine
     private function fillFee(float $quantity, float $price): float
     {
         return round($quantity * $price * self::FEE_RATE, 12);
+    }
+
+    private function withPersistedLeverageSetting(PlaceOrderRequest $request): PlaceOrderRequest
+    {
+        if ($request->leverage !== null) {
+            return $request;
+        }
+
+        $setting = $this->stateStore->getLeverageSetting($request->symbol);
+        if ($setting === null) {
+            return $request;
+        }
+
+        return new PlaceOrderRequest(
+            exchange: $request->exchange,
+            marketType: $request->marketType,
+            symbol: $request->symbol,
+            side: $request->side,
+            positionSide: $request->positionSide,
+            orderType: $request->orderType,
+            timeInForce: $request->timeInForce,
+            quantity: $request->quantity,
+            price: $request->price,
+            stopPrice: $request->stopPrice,
+            reduceOnly: $request->reduceOnly,
+            postOnly: $request->postOnly,
+            leverage: $setting['leverage'],
+            marginMode: $setting['margin_mode'],
+            clientOrderId: $request->clientOrderId,
+            attachedStopLossPrice: $request->attachedStopLossPrice,
+            attachedTakeProfitPrice: $request->attachedTakeProfitPrice,
+            metadata: $request->metadata,
+            quantityDecimal: $request->quantityDecimal,
+            priceDecimal: $request->priceDecimal,
+            stopPriceDecimal: $request->stopPriceDecimal,
+            attachedStopLossPriceDecimal: $request->attachedStopLossPriceDecimal,
+            attachedTakeProfitPriceDecimal: $request->attachedTakeProfitPriceDecimal,
+        );
     }
 
     private function assertRequestContext(PlaceOrderRequest $request): void

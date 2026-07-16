@@ -142,6 +142,63 @@ final class FakeProvidersTest extends TestCase
         self::assertSame('2500.1', (string) $account->positionDeposit);
     }
 
+    public function testOrderProviderAppliesPersistedSymbolLeverageWhenOrderOmitsIt(): void
+    {
+        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
+
+        $order = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            20.0,
+            options: ['client_order_id' => 'persisted-leverage-entry-1'],
+        );
+
+        self::assertNotNull($order);
+        self::assertSame(OrderStatus::FILLED, $order->status);
+        self::assertSame(10, $order->metadata['leverage'] ?? null);
+        self::assertSame('cross', $order->metadata['margin_mode'] ?? null);
+
+        $position = $this->fixture->account->getPosition('BTCUSDT');
+        self::assertNotNull($position);
+        self::assertSame('50002', (string) $position->margin);
+        self::assertSame('10', (string) $position->leverage);
+
+        $replay = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            20.0,
+            options: ['client_order_id' => 'persisted-leverage-entry-1'],
+        );
+
+        self::assertNotNull($replay);
+        self::assertSame($order->orderId, $replay->orderId);
+        self::assertTrue($replay->metadata['idempotent_replay'] ?? false);
+    }
+
+    public function testOrderProviderExplicitLeverageOverridesPersistedSymbolSetting(): void
+    {
+        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
+
+        $order = $this->fixture->order->placeOrder(
+            'BTCUSDT',
+            OrderSide::BUY,
+            OrderType::MARKET,
+            1.0,
+            options: [
+                'client_order_id' => 'explicit-leverage-entry-1',
+                'leverage' => 20,
+                'margin_mode' => 'isolated',
+            ],
+        );
+
+        self::assertNotNull($order);
+        self::assertSame(OrderStatus::FILLED, $order->status);
+        self::assertSame(20, $order->metadata['leverage'] ?? null);
+        self::assertSame('isolated', $order->metadata['margin_mode'] ?? null);
+    }
+
     public function testReadOnlyTradeAndTransactionHistoriesRemainExplicitlyEmpty(): void
     {
         self::assertSame([], $this->fixture->account->getTradeHistory('BTCUSDT'));

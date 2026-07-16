@@ -136,8 +136,12 @@ orders, positions, or event ledger.
 
 Version-1 state payloads that predate `leverageSettings` restore with an empty
 map and are upgraded on the next explicit write. Request-provided order leverage
-remains supported because the Fake adapter does not require a separate leverage
-submission; it still must respect the catalog cap.
+remains supported and takes priority because the Fake adapter does not require a
+separate leverage submission; it still must respect the catalog cap. When an
+order omits leverage, the persisted symbol leverage and margin mode are applied
+before validation, persistence, and position-margin accounting. Without either
+an order leverage or a persisted symbol setting, the deterministic fallback is
+1x.
 
 Order idempotence remains keyed by symbol and `clientOrderId`. Replaying the same
 numeric intent returns the existing local order identity with
