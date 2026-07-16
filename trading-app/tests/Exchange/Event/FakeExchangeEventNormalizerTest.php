@@ -14,6 +14,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
+use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
@@ -184,7 +185,7 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertEqualsWithDelta(0.0, $normalized[0]->order()->filledQuantity, 0.000001);
     }
 
-    public function testNormalizesProtectionRejectionEvent(): void
+    public function testNormalizesRejectedProtectionCompensationLifecycle(): void
     {
         $this->scenario->rejectNextProtectionOrder();
         $this->scenarioAdapter()->placeOrder($this->request(
@@ -193,14 +194,40 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             quantity: 10.0,
             postOnly: false,
             attachedStopLossPrice: 24800.0,
+            metadata: ['internal_trade_id' => 'itd-normalized-compensation'],
         ));
 
-        $events = $this->scenario->events('protection_order.rejected');
-        $normalized = $this->normalizer->normalize($events[0]);
+        $rejectionEvents = $this->scenario->events('protection_order.rejected');
+        $normalizedRejection = $this->normalizer->normalize($rejectionEvents[0]);
 
-        self::assertCount(1, $normalized);
-        self::assertInstanceOf(ExchangeProtectionOrderRejected::class, $normalized[0]);
-        self::assertSame('exchange.protection_order.rejected', $normalized[0]->eventType());
+        self::assertCount(1, $normalizedRejection);
+        self::assertInstanceOf(ExchangeProtectionOrderRejected::class, $normalizedRejection[0]);
+        self::assertSame('exchange.protection_order.rejected', $normalizedRejection[0]->eventType());
+        self::assertSame('rejected', $normalizedRejection[0]->order()->metadata['protection_status'] ?? null);
+
+        $fillEvents = $this->scenario->events('order.filled');
+        self::assertCount(2, $fillEvents);
+        $normalizedCompensation = $this->normalizer->normalize($fillEvents[1]);
+
+        self::assertCount(2, $normalizedCompensation);
+        self::assertInstanceOf(ExchangeOrderFilled::class, $normalizedCompensation[0]);
+        self::assertInstanceOf(ExchangeFillReceived::class, $normalizedCompensation[1]);
+        self::assertTrue($normalizedCompensation[0]->order()->reduceOnly);
+        self::assertSame(ExchangeOrderType::MARKET, $normalizedCompensation[0]->order()->orderType);
+        self::assertSame(
+            'itd-normalized-compensation',
+            $normalizedCompensation[0]->order()->metadata['internal_trade_id'] ?? null,
+        );
+
+        $closedEvents = $this->scenario->events('position.closed');
+        self::assertCount(1, $closedEvents);
+        $normalizedClose = $this->normalizer->normalize($closedEvents[0]);
+        self::assertCount(1, $normalizedClose);
+        self::assertInstanceOf(ExchangePositionClosed::class, $normalizedClose[0]);
+        self::assertSame(
+            'itd-normalized-compensation',
+            $normalizedClose[0]->payload()['internal_trade_id'] ?? null,
+        );
     }
 
     private function scenarioAdapter(): \App\Exchange\Adapter\FakeExchangeAdapter

@@ -1908,6 +1908,88 @@ final class FakeExchangeAdapterTest extends TestCase
         }
     }
 
+    public function testStateStoreRestoresRejectedProtectionCompensationAndFlatPosition(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_stop_compensation_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            $scenario = new FakeExchangeScenarioService($state, $book, $engine);
+            $scenario->rejectNextProtectionOrder();
+
+            $result = $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'cid-stop-compensation-restart',
+                postOnly: false,
+                attachedStopLossPrice: 24800.0,
+                metadata: [
+                    'internal_trade_id' => 'itd-stop-compensation-restart',
+                    'api_key' => 'TOP-SECRET',
+                    'raw_payload' => ['authorization' => 'Bearer SECRET'],
+                ],
+            ));
+            $compensationOrderId = $result->order?->metadata['compensation_order_id'] ?? null;
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredAdapter = $this->adapterForState($restoredState);
+            $restoredBook = new FakeExchangeOrderBook($restoredState);
+            $restoredScenario = new FakeExchangeScenarioService(
+                $restoredState,
+                $restoredBook,
+                new FakeExchangeMatchingEngine(
+                    $restoredState,
+                    $restoredBook,
+                    $this->fixedClock(),
+                ),
+            );
+            $orders = $restoredAdapter->getOrdersSnapshot('BTCUSDT');
+            $entry = array_values(array_filter(
+                $orders,
+                static fn (ExchangeOrderDto $order): bool => !$order->reduceOnly,
+            ))[0] ?? null;
+            $compensation = array_values(array_filter(
+                $orders,
+                static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+            ))[0] ?? null;
+
+            self::assertTrue($restoredState->recoveryMetadata()['restored']);
+            self::assertCount(2, $orders);
+            self::assertCount(0, $restoredAdapter->getOpenOrders('BTCUSDT'));
+            self::assertCount(0, $restoredAdapter->getOpenPositions('BTCUSDT'));
+            self::assertInstanceOf(ExchangeOrderDto::class, $entry);
+            self::assertSame('rejected', $entry->metadata['protection_status'] ?? null);
+            self::assertSame('completed', $entry->metadata['compensation_status'] ?? null);
+            self::assertSame($compensationOrderId, $entry->metadata['compensation_order_id'] ?? null);
+            self::assertInstanceOf(ExchangeOrderDto::class, $compensation);
+            self::assertSame($compensationOrderId, $compensation->exchangeOrderId);
+            self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
+            self::assertSame(ExchangeOrderType::MARKET, $compensation->orderType);
+            self::assertTrue($compensation->reduceOnly);
+            self::assertCount(1, $restoredScenario->events('protection_order.rejected'));
+            self::assertCount(2, $restoredScenario->events('order.filled'));
+            self::assertCount(1, $restoredScenario->events('position.closed'));
+            self::assertSame(
+                'itd-stop-compensation-restart',
+                $restoredScenario->events('position.closed')[0]->payload['internal_trade_id'] ?? null,
+            );
+
+            $serializedState = (string) file_get_contents($stateFile);
+            self::assertStringNotContainsString('TOP-SECRET', $serializedState);
+            self::assertStringNotContainsString('Bearer SECRET', $serializedState);
+            self::assertStringNotContainsString('api_key', $serializedState);
+            self::assertStringNotContainsString('raw_payload', $serializedState);
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testStateStoreRejectsChecksumMismatchWithoutSilentReset(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake_exchange_state_');
