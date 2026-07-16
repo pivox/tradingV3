@@ -65,7 +65,10 @@ bypassed. Maker and taker costs therefore stay separate.
 Attached SL/TP metadata and lineage are copied to the child. Protection uses the
 logical entry quantity, equal to the maker fill plus the fallback remainder, so
 a partial maker fill followed by a fallback is protected for the complete
-position. If protection is rejected, the deterministic reduce-only fail-safe
+position. When the parent also carries `fake-tp1-trailing-v1`, that policy is
+copied to the child and its TP1 quantity is validated against the logical total
+exposure rather than only the fallback remainder. If protection is rejected,
+the deterministic reduce-only fail-safe
 also closes that complete logical quantity. If a zone/slippage/margin/validation
 rejection or prior cancellation leaves only a partial maker fill, that exact
 maker exposure is protected; a rejected protection compensates that partial

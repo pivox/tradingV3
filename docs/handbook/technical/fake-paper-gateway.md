@@ -316,6 +316,11 @@ SL avec `tp1_replaced_by_trailing`, puis la creation d un `TRIGGER` reduce-only
 sur ce reliquat. La transition normalisee `trailing_stop.armed` porte le lineage
 derive et redacted.
 
+Si l entree utilise aussi le fallback taker de fin de zone, la politique trailing
+est propagee a l enfant `MARKET`. La quantite TP1 est alors validee contre
+l exposition logique totale parent plus enfant, jamais contre le seul petit
+reliquat fallback. Le replay de l enfant compare les deux politiques persistantes.
+
 Le `TRIGGER` est l etat trailing versionne et persistant : ses metadata portent
 la version, le statut `active` ou `triggered`, l ordre TP1 d activation, le
 watermark favorable, l offset fixe et les decimaux derives. Aucun registre BDD ni

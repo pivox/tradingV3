@@ -89,7 +89,7 @@ final readonly class FakeExchangeMatchingEngine
     ): PlaceOrderResult
     {
         $this->assertRequestContext($request);
-        $this->assertRequestIntent($request);
+        $this->assertRequestIntent($request, $trustedFallbackMetadata);
         $request = $this->withPersistedLeverageSetting($request);
 
         $existing = $this->stateStore->getOrderByClientOrderId($request->symbol, $request->clientOrderId);
@@ -565,7 +565,8 @@ final readonly class FakeExchangeMatchingEngine
             attachedStopLossPrice: $this->floatMetadata($parent->metadata, 'attached_stop_loss_price'),
             attachedTakeProfitPrice: $this->floatMetadata($parent->metadata, 'attached_take_profit_price'),
             metadata: $this->lineageMetadata($parent->metadata)
-                + $policy->toMetadata(),
+                + $policy->toMetadata()
+                + $this->tp1TrailingPolicyMetadata($parent->metadata),
             quantityDecimal: $fallbackQuantityDecimal,
             attachedStopLossPriceDecimal: $this->stringMetadata(
                 $parent->metadata,
@@ -1950,6 +1951,7 @@ final readonly class FakeExchangeMatchingEngine
 
         return $parent->status === ExchangeOrderStatus::EXPIRED
             && $terminalStatusMatches
+            && $this->tp1TrailingPolicyMatchesRequest($fallback->metadata, $parent->metadata)
             && $this->stringMetadata($parent->metadata, 'fallback_order_id') === $fallback->exchangeOrderId
             && $this->stringMetadata($parent->metadata, 'fallback_client_order_id') === $fallback->clientOrderId
             && $this->stringMetadata($parent->metadata, 'fallback_trigger')
@@ -2079,7 +2081,13 @@ final readonly class FakeExchangeMatchingEngine
         }
     }
 
-    private function assertRequestIntent(PlaceOrderRequest $request): void
+    /**
+     * @param array<string,bool|float|int|string|null> $trustedMetadata
+     */
+    private function assertRequestIntent(
+        PlaceOrderRequest $request,
+        array $trustedMetadata = [],
+    ): void
     {
         if ($request->postOnly && $request->orderType !== ExchangeOrderType::LIMIT) {
             throw new \InvalidArgumentException('postOnly is only supported for limit orders');
@@ -2124,7 +2132,11 @@ final readonly class FakeExchangeMatchingEngine
 
         try {
             $tp1Quantity = BigDecimal::of($trailingPolicy->tp1Quantity);
-            $entryQuantity = BigDecimal::of($request->exactQuantity() ?? '');
+            $logicalQuantity = $this->stringMetadata(
+                $trustedMetadata,
+                'fallback_protection_quantity_decimal',
+            ) ?? $request->exactQuantity() ?? '';
+            $entryQuantity = BigDecimal::of($logicalQuantity);
         } catch (MathException) {
             throw new \InvalidArgumentException('fake_tp1_trailing_quantity_invalid');
         }

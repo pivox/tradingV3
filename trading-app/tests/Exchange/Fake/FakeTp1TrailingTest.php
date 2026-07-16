@@ -20,6 +20,7 @@ use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakeTp1TrailingPolicy;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -344,6 +345,61 @@ final class FakeTp1TrailingTest extends TestCase
         self::assertFalse($replay->metadata['idempotent_replay'] ?? true);
         self::assertCount($orderCount, $state->getOrders('BTCUSDT'));
         self::assertCount($eventCount, $state->events());
+    }
+
+    public function testFallbackEntryPreservesTp1TrailingPolicyForLogicalTotalExposure(): void
+    {
+        [, $adapter, $scenario] = $this->exchange();
+        $fixture = $this->fixture('long');
+        $trailingPolicy = new FakeTp1TrailingPolicy('0.4', '100.0');
+        $fallbackPolicy = new FakeFallbackTakerPolicy(
+            enabled: true,
+            zoneMin: 24900.0,
+            zoneMax: 25100.0,
+            maxSlippageBps: 30.0,
+        );
+        $parent = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: 24950.0,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: 'tp1-trailing-fallback',
+            attachedStopLossPrice: (float) $fixture['initial_stop'],
+            attachedTakeProfitPrice: (float) $fixture['tp1_price'],
+            metadata: $trailingPolicy->toMetadata() + $fallbackPolicy->toMetadata(),
+            quantityDecimal: '1.0',
+            priceDecimal: '24950.0',
+            attachedStopLossPriceDecimal: (string) $fixture['initial_stop'],
+            attachedTakeProfitPriceDecimal: (string) $fixture['tp1_price'],
+        ));
+        self::assertNotNull($parent->exchangeOrderId);
+        $scenario->fillOrder($parent->exchangeOrderId, 0.8, 24950.0);
+
+        $fallback = $scenario->fallbackTaker($parent->exchangeOrderId);
+
+        self::assertTrue($fallback->executed);
+        self::assertSame(0.2, $fallback->fallbackOrder?->quantity);
+        self::assertSame(
+            FakeTp1TrailingPolicy::VERSION,
+            $fallback->fallbackOrder?->metadata[FakeTp1TrailingPolicy::VERSION_KEY] ?? null,
+        );
+        $tp1 = $this->orderByType($adapter, ExchangeOrderType::TAKE_PROFIT);
+        self::assertSame(0.4, $tp1->quantity);
+
+        $scenario->fillOrder($tp1->exchangeOrderId, null, 25200.0);
+
+        self::assertSame(0.6, $adapter->getOpenPositions('BTCUSDT')[0]->size);
+        self::assertSame(0.6, $this->orderByType($adapter, ExchangeOrderType::TRIGGER)->quantity);
     }
 
     public function testRestartRestoresActiveTrailingStateAndRedactsUntrustedMetadata(): void
