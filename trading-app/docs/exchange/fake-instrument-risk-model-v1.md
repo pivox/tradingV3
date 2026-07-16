@@ -16,11 +16,27 @@ leverage slice of the local Fake/Paper exchange. It does not complete issue
 | Golden scenario catalog | `fake-paper-golden-v1` |
 | Fee model | `fixed_notional_fee_v1` at `0.0005` |
 | Fill model | `top_of_book_v1` |
-| Additional slippage model | `explicit_zero_additional_slippage_v1` |
+| Additional slippage model | `fixed_adverse_slippage_bps_v1` at `5` bps for taker fills |
+| Spread model | `top_of_book_embedded_spread_v1` |
 
 `FakeExchangeAdapter::runtimeModelMetadata()` publishes the catalog,
 precision, fee, fill, and slippage versions. The margin version is published on
 the canonical USDT balance metadata.
+
+The execution price remains the deterministic top-of-book price. Spread is
+therefore already embedded in that price and is reported as an explicit
+additional `spread_cost_usdt=0`. Post-only fills are classified as maker and
+report `slippage_cost_usdt=0`; every other Fake fill is classified as taker and
+reports:
+
+```text
+slippage_cost_usdt = quantity * fill_price * contract_size * 5 / 10000
+```
+
+The matching engine records these values once in the fill event. REST and
+private-WS normalization copy them without recomputation. Ledger ingestion
+persists finite non-negative explicit values, leaves absent values `NULL`, and
+flags invalid values as `spread_cost_invalid` or `slippage_cost_invalid`.
 
 ## Instrument fixture
 
@@ -171,7 +187,9 @@ When persistence is configured, it must be writable and recovery-ready or the
 runtime reports a blocking error. Market/replay source connectivity, a controlled
 clock, readable state, and the other evaluator inputs still determine the overall
 gate. A residual local order book alone does not prove market-source readiness.
-Zero additional slippage remains a warning.
+The slippage gate requires the exact versioned 5 bps model and embedded-spread
+version; a missing, zero, malformed, or unsupported model reports the blocking
+error `fake_paper_slippage_model_not_ready`.
 
 The runtime contract accepts only `fake/perpetual`. Fake/spot requests fail
 closed: the runtime check rejects that context and canonical order validation
@@ -207,7 +225,7 @@ runtime:
    an incompatible serialized payload.
 4. Clear the application cache, restart local workers, and run
    `app:exchange:runtime-check fake perpetual` before resuming local scenarios.
-5. Restore scenario classifications 6-8 to explicit gaps if their executable
+5. Restore scenario classifications 5-8 to explicit gaps if their executable
    runners are rolled back.
 
 Do not use rollback as a path to live, demo, or testnet trading. No credential,
@@ -221,7 +239,6 @@ golden catalog and readiness evidence:
 - daily loss cap;
 - liquidation guard and liquidation model;
 - maker-timeout fallback taker behavior;
-- non-zero slippage;
 - funding accrual;
 - one-way position conflict handling;
 - TP1-to-trailing-stop behavior;
@@ -230,5 +247,5 @@ golden catalog and readiness evidence:
 - consolidated multi-profile Fake/Paper recipe and exposure behavior.
 
 Trade history completeness and any other cataloged partial behavior also remain
-outside this slice. Therefore this document and scenarios 6-8 are evidence for a
-narrow risk-model increment, not evidence that issue #196 is complete.
+outside this slice. Therefore this document and scenarios 5-8 are evidence for
+narrow deterministic increments, not evidence that issue #196 is complete.

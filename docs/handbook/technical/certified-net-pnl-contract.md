@@ -48,7 +48,8 @@ Aucun flag provider du type `quantity_coherent=true` ne remplace cette preuve qu
 | Fake/Paper | entry/exit fill price/qty | `FakeExchangeMatchingEngine` events + `getFillsSnapshot()` | brut fill | prix/qty positifs | au fill | fill | complet pour fixtures | non | fill event `fake_paper_fill_ledger_v1` | `FakeExchangeAdapterTest`, `NetPnlCertificationServiceTest` |
 | Fake/Paper | maker/taker | metadata fill/order | classification execution | `maker`/`taker` | au fill | fill | partiel, derive ordre | oui | metadata | test service |
 | Fake/Paper | fee par fill/devise | fee deterministe `notional * 0.0005`, `USDT` | cout explicite | positif | au fill | fill | complet | non | fill fee USDT | `testFakeFillsExpose...` |
-| Fake/Paper | funding/spread/slippage/borrow/liquidation | lifecycle `extra` explicite fixture | couts normalises | funding credit positif/debit negatif | a la cloture | trade | complet si fourni | non pour certification | `position_trade_analysis_v2` fixture | PostgreSQL view test |
+| Fake/Paper | spread/slippage | fill event explicite, REST/WS puis `fill_cost_ledger` | cout par fill | cout positif ou zero explicite | au fill | fill | complet pour fixtures Fake | non | `fixed_adverse_slippage_bps_v1`, `top_of_book_embedded_spread_v1` | adapter, normalizer et ledger tests |
+| Fake/Paper | funding/borrow/liquidation | lifecycle `extra` explicite fixture | couts normalises | funding credit positif/debit negatif | a la cloture | trade | complet si fourni | non pour certification | `position_trade_analysis_v2` fixture | PostgreSQL view test |
 | Bitmart | order fill price/qty | `OrderDto` / `/contract/private/order*` (`deal_avg_price`, `deal_size`) | brut order | positif | apres fill/order history | ordre | partiel | oui | payload brut metadata | adapter tests existants |
 | Bitmart | fee par fill/devise | `/contract/private/trades` (`paid_fees`, `fee_currency`) | cout fill | provider brut, non normalise garanti | apres REST sync | fill | partiel, pas relie au trade logique complet | oui | `FuturesOrderTrade` | projection tests partiels |
 | Bitmart | realized PnL provider | `/contract/private/transaction-history` flow_type=2 | inconnu brut/net | montant provider | apres cloture | transaction | non certifie | oui | transaction raw | sync tests existants |
@@ -74,6 +75,13 @@ La bascule progressive des consommateurs applicatifs v1 -> v2 est documentee dan
 Il introduit la table `fill_cost_ledger`, reliee au trade logique par `internal_trade_id` lorsque le lineage exact est disponible. L'idempotence est portee par `exchange + market_type + exchange_fill_id` quand l'exchange fournit un identifiant de fill, sinon par un identifiant interne deterministe documente.
 
 Les couts absents restent `NULL`. Les rows sans lineage exact restent visibles avec `quality_flags=["missing_lineage"]` et ne doivent pas etre considerees comme net PnL certifie.
+
+Pour les fills Fake/Paper, les couts de spread et slippage sont produits une seule
+fois par le matching engine puis copies par les surfaces REST/WS. Le ledger ne les
+recalcule pas : il persiste uniquement les valeurs explicites finies et
+non negatives. Une valeur negative, non numerique ou non finie reste `NULL` avec
+`spread_cost_invalid` ou `slippage_cost_invalid`. Le replay exact reste idempotent;
+un meme identifiant de fill avec un cout modifie est un conflit de payload.
 
 La quantite residuelle est calculee par `FillQuantityAggregationService` sur `internal_trade_id + exchange + market_type`. Le certificateur peut consommer le resultat via `certifyWithQuantityAggregation(...)`; si l'agregat n'autorise pas la certification, `net_pnl_usdt` et `realized_net_pnl_R` restent `NULL` meme lorsque les listes de fills passees au calcul semblent equilibrees.
 
