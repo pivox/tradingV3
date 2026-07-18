@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from types import SimpleNamespace
@@ -34,6 +35,21 @@ def _make_set(**kwargs: Any) -> OrchestratorSet:
     base = {"set_id": "s", "exchange": "fake"}
     base.update(kwargs)
     return OrchestratorSet(**base)
+
+
+def _expected_config_hash(payload: dict) -> str:
+    canonical_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"config_hash", "open_state_snapshot"}
+    }
+    canonical = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
@@ -216,7 +232,9 @@ def test_fetch_open_state_raises_on_non_list_arrays(open_positions, open_orders)
 def test_build_payload_applies_dry_run_override():
     live_set = _make_set(dry_run=False)
     # Override run-level dry_run=True => le payload force le dry-run.
-    assert build_mtf_payload(live_set, None, dry_run=True)["dry_run"] is True
+    overridden = build_mtf_payload(live_set, None, dry_run=True)
+    assert overridden["dry_run"] is True
+    assert overridden["config_hash"] == _expected_config_hash(overridden)
     # dry_run=None => on retombe sur la valeur du set (ici live).
     assert build_mtf_payload(live_set, None, dry_run=None)["dry_run"] is False
 
@@ -488,12 +506,16 @@ def test_effective_set_payload_equals_payload_sent_by_run_persisted_set():
 
     result = asyncio.run(_run())
     sent = dict(captured["json"])
-    # Retire la couche runtime exclue de effective_set_payload.
+    # Retire la couche runtime exclue de effective_set_payload et son empreinte,
+    # qui doit décrire le dry_run effectif après l'override.
     sent.pop("open_state_snapshot", None)
     sent.pop("dry_run", None)
+    sent_hash = sent.pop("config_hash")
     expected = dict(effective_set_payload(orm))
     expected.pop("dry_run", None)
+    configured_hash = expected.pop("config_hash")
     assert sent == expected
+    assert sent_hash != configured_hash
     # Et le payload effectif a bien clampé workers, comme l'envoi réel.
     assert expected["workers"] == 1 == result["payload_sent"]["workers"]
 
@@ -539,6 +561,33 @@ def test_run_persisted_set_dispatches_persisted_payload_with_snapshot_and_overri
     # Le payload persisté n'est pas muté (copie défensive).
     assert persisted["dry_run"] is False
     assert "open_state_snapshot" not in persisted
+
+
+def test_run_persisted_set_hashes_payload_after_dry_run_override():
+    orm = _orm_set(set_id="s", dry_run=False, symbols=["BTCUSDT"])
+    snapshot = {"open_positions": [], "open_orders": []}
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(
+                client,
+                "http://sym",
+                orm,
+                snapshot,
+                dry_run=True,
+            )
+
+    asyncio.run(_run())
+
+    sent = captured["json"]
+    assert sent["dry_run"] is True
+    assert sent["config_hash"] == _expected_config_hash(sent)
+    assert sent["config_hash"] != effective_set_payload(orm)["config_hash"]
 
 
 def test_run_persisted_set_forces_safety_flags_over_stored_payload():

@@ -296,12 +296,11 @@ def build_mtf_payload(
         mtf_profile=a_set.mtf_profile.value,
         symbols=a_set.symbols,
     )
-    _with_config_hash(payload)
     if dry_run is not None:
         payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
-    return payload
+    return _with_config_hash(payload)
 
 
 def _enum_value(value: Any) -> Any:
@@ -523,6 +522,7 @@ async def run_persisted_set(
         payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
+    _with_config_hash(payload)
     result = await _dispatch_mtf_run(
         client,
         base_url,
