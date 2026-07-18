@@ -255,6 +255,36 @@ revert of the out-of-order change and restoration of golden scenario 16 to
 `privateWs` field is ignored by the older hydrate path; no exchange-side cleanup
 exists or is required.
 
+## Deterministic perpetual funding
+
+`FakeFundingModel` applies the versioned
+`fake-funding-notional-rate-interval-v1` contract to an explicit
+`FakeFundingSchedule` and a position snapshot observed by a controlled clock.
+It uses decimal arithmetic at scale 12:
+
+```text
+notional = abs(size) * mark_price * contract_size
+amount = notional * rate * applied_interval_seconds / rate_interval_seconds
+LONG = -amount; SHORT = +amount
+```
+
+Positive normalized amounts are credits and negative amounts are debits. An
+absent rate returns `unknown` and emits nothing; no position returns
+`no_position`. Unknown currencies preserve their native signed amount while
+`amountUsdt` remains `null`.
+
+`settle()` persists one `funding.accrued` event per
+`position_id + due_at + model_version`. Exact replay, including after restart,
+is a no-op; a changed payload for that identity fails closed. Older deadlines
+may arrive after newer ones and are appended once under their own identity. The
+normalizer emits `ExchangeFundingReceived`, and the Doctrine projection writes
+only a `fill_role=funding` ledger row—never an entry/exit fill or legacy order.
+
+The golden fixture is `tests/fixtures/fake-paper/funding-model-v1.json`; golden
+scenario 18 covers both sides, positive/negative/absent rates, a partial
+interval, unknown currency, restart replay, and out-of-order settlement. This
+path is local-only and cannot enable demo, testnet, or mainnet writes.
+
 ## Persistent recovery contract
 
 The file-backed store writes a versioned `fake-paper-state-v1` envelope containing the engine version, a deterministic scenario configuration hash, a payload checksum, and the next event sequence. Writes use a temporary file followed by an atomic replacement.

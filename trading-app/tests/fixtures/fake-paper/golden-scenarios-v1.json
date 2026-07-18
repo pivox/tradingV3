@@ -166,13 +166,17 @@
       "status": "executable"
     },
     {
-      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
-      "gap_codes": ["funding_model_not_implemented"],
+      "evidence": [
+        "tests/fixtures/fake-paper/funding-model-v1.json",
+        "tests/Exchange/Fake/FakeFundingModelTest.php::testDuplicateSettlementAppendsOnePersistentEventAndOneSequence",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts"
+      ],
+      "gap_codes": [],
       "id": 18,
       "name": "funding",
-      "requirement": "Positive and negative funding are accrued and reported separately from fees.",
-      "runner": null,
-      "status": "unsupported"
+      "requirement": "Versioned positive, negative and absent funding fixtures accrue deterministically at explicit deadlines, survive restart, replay once, normalize without fills and preserve unknown monetary values.",
+      "runner": "funding",
+      "status": "executable"
     },
     {
       "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],

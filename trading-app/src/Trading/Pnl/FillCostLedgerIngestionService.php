@@ -12,6 +12,7 @@ use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
@@ -100,6 +101,85 @@ final readonly class FillCostLedgerIngestionService
             'source_version' => $sourceVersion,
             'quality_flags' => array_values(array_unique($qualityFlags)),
             'raw_reference' => $this->rawReference($event->eventType(), $source, $exchangeFillId, $fill->exchangeOrderId, $fill->clientOrderId),
+        ];
+
+        return $this->persistSnapshot($idempotencyKey, $snapshot);
+    }
+
+    public function ingestFunding(ExchangeFundingReceived $event): FillCostLedgerIngestionResult
+    {
+        $funding = $event->funding();
+        $identityHash = hash('sha256', json_encode([
+            'position_id' => $funding->positionId,
+            'due_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+            'model_version' => $funding->modelVersion,
+        ], JSON_THROW_ON_ERROR));
+        $idempotencyKey = sprintf(
+            '%s:%s:funding:%s',
+            $funding->exchange->value,
+            $funding->marketType->value,
+            $identityHash,
+        );
+        $lineage = $this->lineageManager->resolve(
+            new ExchangeContext($funding->exchange, $funding->marketType),
+            internalTradeId: $funding->internalTradeId,
+            positionId: $funding->positionId,
+        );
+        $qualityFlags = [];
+        if (!$lineage instanceof TradeLineage) {
+            $qualityFlags[] = 'missing_lineage';
+        }
+        if ($funding->amountUsdt === null) {
+            $qualityFlags[] = 'funding_currency_not_normalized';
+        }
+
+        $snapshot = [
+            'internal_trade_id' => $lineage?->getInternalTradeId() ?? $funding->internalTradeId,
+            'internal_position_id' => $lineage?->getInternalPositionId() ?? $funding->internalPositionId,
+            'position_id' => $lineage?->getPositionId() ?? $funding->positionId,
+            'exchange' => $funding->exchange->value,
+            'market_type' => $funding->marketType->value,
+            'symbol' => strtoupper($funding->symbol),
+            'side' => strtoupper($funding->positionSide->value),
+            'fill_id' => 'funding-' . substr($identityHash, 0, 48),
+            'exchange_fill_id' => null,
+            'exchange_order_id' => null,
+            'client_order_id' => null,
+            'order_intent_id' => $lineage?->getOrderIntent()?->getId(),
+            'fill_role' => 'funding',
+            'liquidity_role' => 'unknown',
+            'price' => null,
+            'quantity' => null,
+            'notional' => $funding->notional,
+            'fee_amount' => null,
+            'fee_currency' => null,
+            'fee_usdt' => null,
+            'funding_usdt' => $funding->amountUsdt,
+            'funding_native_amount' => $funding->amount,
+            'funding_currency' => strtoupper($funding->currency),
+            'funding_rate' => $funding->fundingRate,
+            'funding_rate_interval_seconds' => $funding->rateIntervalSeconds,
+            'funding_applied_interval_seconds' => $funding->appliedIntervalSeconds,
+            'spread_cost_usdt' => null,
+            'slippage_cost_usdt' => null,
+            'borrow_cost_usdt' => null,
+            'liquidation_fee_usdt' => null,
+            'occurred_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+            'source' => $funding->source,
+            'source_version' => $funding->modelVersion,
+            'quality_flags' => $qualityFlags,
+            'raw_reference' => $this->redactReference([
+                'event_type' => $event->eventType(),
+                'position_id' => $funding->positionId,
+                'due_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+                'model_version' => $funding->modelVersion,
+                'native_amount' => $funding->amount,
+                'currency' => strtoupper($funding->currency),
+                'funding_rate' => $funding->fundingRate,
+                'rate_interval_seconds' => $funding->rateIntervalSeconds,
+                'applied_interval_seconds' => $funding->appliedIntervalSeconds,
+                'funding_idempotency_key' => $event->payload()['funding_idempotency_key'] ?? null,
+            ]),
         ];
 
         return $this->persistSnapshot($idempotencyKey, $snapshot);
@@ -483,6 +563,11 @@ final readonly class FillCostLedgerIngestionService
             'fee_currency',
             'fee_usdt',
             'funding_usdt',
+            'funding_native_amount',
+            'funding_currency',
+            'funding_rate',
+            'funding_rate_interval_seconds',
+            'funding_applied_interval_seconds',
             'spread_cost_usdt',
             'slippage_cost_usdt',
             'borrow_cost_usdt',

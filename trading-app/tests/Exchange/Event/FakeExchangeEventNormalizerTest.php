@@ -13,6 +13,7 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
@@ -135,6 +136,65 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertInstanceOf(ExchangePositionOpened::class, $normalized[0]);
         self::assertSame('exchange.position.opened', $normalized[0]->eventType());
         self::assertEqualsWithDelta(10.0, $normalized[0]->size(), 0.000001);
+    }
+
+    public function testNormalizesFundingIntoOneCostEventAndNoFill(): void
+    {
+        $event = new FakeExchangeEvent(
+            'funding.accrued',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T08:00:00+00:00'),
+            [
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'position_id' => 'fake-position-long',
+                'internal_trade_id' => 'itd-funding-normalized',
+                'internal_position_id' => 'ipos-funding-normalized',
+                'position_side' => 'long',
+                'notional' => '20000.000000000000',
+                'funding_rate' => '0.0001',
+                'rate_interval_seconds' => 28800,
+                'applied_interval_seconds' => 28800,
+                'amount' => '-2.000000000000',
+                'currency' => 'USDT',
+                'amount_usdt' => '-2.000000000000',
+                'due_at' => '2026-01-01T08:00:00+00:00',
+                'source' => 'fake_funding_model',
+                'model_version' => 'fake-funding-notional-rate-interval-v1',
+                'metadata' => ['position_opened_at' => '2026-01-01T00:00:00+00:00'],
+                'funding_idempotency_key' => 'fake:perpetual:funding:identity',
+                'funding_payload_hash' => str_repeat('a', 64),
+                'event_sequence' => 9,
+            ],
+        );
+
+        $normalized = $this->normalizer->normalize($event);
+
+        self::assertCount(1, $normalized);
+        self::assertInstanceOf(ExchangeFundingReceived::class, $normalized[0]);
+        self::assertNotInstanceOf(ExchangeFillReceived::class, $normalized[0]);
+        self::assertSame('exchange.funding.received', $normalized[0]->eventType());
+        self::assertSame('-2.000000000000', $normalized[0]->funding()->amountUsdt);
+        self::assertSame('fake-position-long', $normalized[0]->funding()->positionId);
+        self::assertSame('itd-funding-normalized', $normalized[0]->funding()->internalTradeId);
+        self::assertSame('2026-01-01T08:00:00+00:00', $normalized[0]->funding()->dueAt->format(\DateTimeInterface::ATOM));
+        self::assertSame('fake-funding-notional-rate-interval-v1', $normalized[0]->funding()->modelVersion);
+    }
+
+    public function testMalformedFundingPayloadDoesNotBecomeZero(): void
+    {
+        $event = new FakeExchangeEvent(
+            'funding.accrued',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T08:00:00+00:00'),
+            [
+                'position_id' => 'fake-position-long',
+                'amount' => null,
+                'currency' => 'USDT',
+            ],
+        );
+
+        self::assertSame([], $this->normalizer->normalize($event));
     }
 
     public function testNormalizesPositionClosedWithCertifiedFakePnlEvidence(): void

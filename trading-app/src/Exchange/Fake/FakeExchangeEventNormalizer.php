@@ -7,6 +7,7 @@ namespace App\Exchange\Fake;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangeFillDto;
+use App\Exchange\Dto\ExchangeFundingDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangeOrderSide;
@@ -17,6 +18,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Event\ExchangeEventNormalizerInterface;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Exchange\Event\ExchangeOrderCancelled;
 use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Event\ExchangeOrderFilled;
@@ -25,6 +27,7 @@ use App\Exchange\Event\ExchangeOrderRejected;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
 use App\Exchange\Event\ExchangePositionUpdated;
+use Brick\Math\BigDecimal;
 use App\Exchange\Event\ExchangeProtectionOrderCreated;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
@@ -81,8 +84,80 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             'position.opened' => $this->positionEvent($event, $order, ExchangePositionOpened::class),
             'position.updated' => $this->positionEvent($event, $order, ExchangePositionUpdated::class),
             'position.closed' => $this->positionEvent($event, $order, ExchangePositionClosed::class),
+            'funding.accrued' => $this->fundingEvent($event),
             default => [],
         };
+    }
+
+    /** @return ExchangeEventInterface[] */
+    private function fundingEvent(FakeExchangeEvent $event): array
+    {
+        $payload = $event->payload;
+
+        try {
+            foreach (['position_id', 'notional', 'funding_rate', 'amount', 'currency', 'due_at', 'source', 'model_version'] as $field) {
+                if (!\is_string($payload[$field] ?? null) || trim($payload[$field]) === '') {
+                    return [];
+                }
+            }
+            $rateInterval = $payload['rate_interval_seconds'] ?? null;
+            $appliedInterval = $payload['applied_interval_seconds'] ?? null;
+            if (!\is_int($rateInterval) || $rateInterval <= 0 || !\is_int($appliedInterval) || $appliedInterval <= 0) {
+                return [];
+            }
+            BigDecimal::of($payload['notional']);
+            BigDecimal::of($payload['funding_rate']);
+            BigDecimal::of($payload['amount']);
+            $amountUsdt = $payload['amount_usdt'] ?? null;
+            if ($amountUsdt !== null) {
+                if (!\is_string($amountUsdt)) {
+                    return [];
+                }
+                BigDecimal::of($amountUsdt);
+            }
+            $internalTradeId = $this->nullableString($payload['internal_trade_id'] ?? null);
+            $internalPositionId = $this->nullableString($payload['internal_position_id'] ?? null);
+            $metadata = $payload['metadata'] ?? [];
+            if (!\is_array($metadata)) {
+                return [];
+            }
+
+            $funding = new ExchangeFundingDto(
+                exchange: Exchange::from((string) ($payload['exchange'] ?? '')),
+                marketType: MarketType::from((string) ($payload['market_type'] ?? '')),
+                symbol: $event->symbol,
+                positionSide: ExchangePositionSide::from((string) ($payload['position_side'] ?? '')),
+                positionId: (string) $payload['position_id'],
+                internalTradeId: $internalTradeId,
+                internalPositionId: $internalPositionId,
+                notional: (string) $payload['notional'],
+                fundingRate: (string) $payload['funding_rate'],
+                rateIntervalSeconds: $rateInterval,
+                appliedIntervalSeconds: $appliedInterval,
+                amount: (string) $payload['amount'],
+                currency: (string) $payload['currency'],
+                amountUsdt: $amountUsdt,
+                dueAt: new \DateTimeImmutable((string) $payload['due_at']),
+                source: (string) $payload['source'],
+                modelVersion: (string) $payload['model_version'],
+                metadata: $metadata,
+            );
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return [new ExchangeFundingReceived($funding, $payload)];
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (!\is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 
     private function orderFromEvent(FakeExchangeEvent $event): ?ExchangeOrderDto

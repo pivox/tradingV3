@@ -1,0 +1,45 @@
+{
+  "schema_version": "fake-funding-fixtures-v1",
+  "model_version": "fake-funding-notional-rate-interval-v1",
+  "symbol": "BTCUSDT",
+  "mark_price": "10000",
+  "rate_interval_seconds": 28800,
+  "cases": {
+    "positive": {
+      "funding_rate": "0.0001",
+      "currency": "USDT",
+      "due_at": "2026-01-01T08:00:00+00:00",
+      "applied_interval_seconds": 28800
+    },
+    "negative": {
+      "funding_rate": "-0.00005",
+      "currency": "USDT",
+      "due_at": "2026-01-01T08:00:00+00:00",
+      "applied_interval_seconds": 28800
+    },
+    "absent": {
+      "funding_rate": null,
+      "currency": "USDT",
+      "due_at": "2026-01-01T08:00:00+00:00",
+      "applied_interval_seconds": 28800
+    },
+    "partial": {
+      "funding_rate": "0.0001",
+      "currency": "USDT",
+      "due_at": "2026-01-01T08:00:00+00:00",
+      "applied_interval_seconds": 14400
+    },
+    "unknown_currency": {
+      "funding_rate": "0.0001",
+      "currency": "EUR",
+      "due_at": "2026-01-01T08:00:00+00:00",
+      "applied_interval_seconds": 28800
+    },
+    "newer_deadline": {
+      "funding_rate": "0.0002",
+      "currency": "USDT",
+      "due_at": "2026-01-01T16:00:00+00:00",
+      "applied_interval_seconds": 28800
+    }
+  }
+}

@@ -459,6 +459,38 @@ class FakeExchangeStateStore
         $this->persist();
     }
 
+    public function appendFundingEventOnce(FakeExchangeEvent $event): bool
+    {
+        if ($event->type !== 'funding.accrued') {
+            throw new \InvalidArgumentException('fake_funding_event_type_invalid');
+        }
+        $idempotencyKey = $event->payload['funding_idempotency_key'] ?? null;
+        $payloadHash = $event->payload['funding_payload_hash'] ?? null;
+        if (!\is_string($idempotencyKey) || $idempotencyKey === '' || !\is_string($payloadHash) || $payloadHash === '') {
+            throw new \InvalidArgumentException('fake_funding_event_identity_invalid');
+        }
+
+        return $this->transactional(function () use ($event, $idempotencyKey, $payloadHash): bool {
+            foreach ($this->events as $existing) {
+                if (
+                    $existing->type !== 'funding.accrued'
+                    || ($existing->payload['funding_idempotency_key'] ?? null) !== $idempotencyKey
+                ) {
+                    continue;
+                }
+                if (($existing->payload['funding_payload_hash'] ?? null) === $payloadHash) {
+                    return false;
+                }
+
+                throw new \LogicException('fake_funding_idempotency_conflict');
+            }
+
+            $this->appendEvent($event);
+
+            return true;
+        });
+    }
+
     /**
      * @return FakeExchangeEvent[]
      */

@@ -65,6 +65,40 @@ The deterministic fill ID is derived from venue, market type, symbol, order ID, 
 
 Replays with the same canonical fill/cost payload hash are ignored. Mutable projection source and late lineage enrichment do not change that canonical hash. If both the existing row and the replay provide non-null lineage identifiers and they differ, ingestion raises a conflict instead of silently moving the fill to another trade. A different payload for the same idempotency key raises a conflict and does not update the existing row.
 
+### Funding identity and monetary convention
+
+Normalized funding is a cost-only row with `fill_role=funding`. It is never an
+entry or exit fill: `exchange_fill_id`, `exchange_order_id`, `client_order_id`,
+`price`, and `quantity` are `NULL`. The schema-required internal `fill_id` is a
+deterministic technical identifier and must not be interpreted as an exchange
+fill.
+
+Its exact identity is:
+
+```text
+{exchange}:{market_type}:funding:sha256(position_id:due_at:model_version)
+```
+
+An identical position/deadline/model replay is ignored, including after a Fake
+state restart. A changed monetary payload under that identity is a conflict.
+Older deadlines arriving after newer ones remain distinct rows and are accepted
+once.
+
+The amount convention is exchange-neutral:
+
+```text
+notional = abs(position_size) * mark_price * contract_size
+unsigned_amount = notional * funding_rate * applied_interval_seconds / rate_interval_seconds
+long_amount = -unsigned_amount
+short_amount = +unsigned_amount
+```
+
+`funding_usdt > 0` is a credit and `funding_usdt < 0` is a debit. A known USDT
+amount is stored with that sign and is added once to net PnL. For an unsupported
+currency, the signed native `amount` and `currency` remain in `raw_reference`,
+`funding_usdt` remains `NULL`, and `funding_currency_not_normalized` is recorded.
+An absent rate produces no row; it is unknown, never an implicit zero.
+
 ## Lineage Resolution
 
 `FillCostLedgerIngestionService` resolves lineage in this order:

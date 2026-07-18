@@ -255,6 +255,32 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'position_size' => 1.0,
             'protection_order_count' => 1,
         ],
+        'funding' => [
+            'absent_rate_status' => 'unknown',
+            'event_deadlines' => [
+                '2026-01-01T16:00:00+00:00',
+                '2026-01-01T08:00:00+00:00',
+            ],
+            'fixture_version' => 'fake-funding-fixtures-v1',
+            'funding_event_count' => 2,
+            'internal_trade_id_preserved' => true,
+            'known_currency' => 'USDT',
+            'long_negative_amount' => '1.000000000000',
+            'long_positive_amount' => '-2.000000000000',
+            'model_version' => 'fake-funding-notional-rate-interval-v1',
+            'no_position_status' => 'no_position',
+            'normalized_fill_count' => 0,
+            'normalized_funding_count' => 2,
+            'out_of_order_amount' => '-2.000000000000',
+            'partial_amount' => '-0.500000000000',
+            'restart_replayed' => true,
+            'same_deadline_replayed' => true,
+            'short_negative_amount' => '-1.000000000000',
+            'short_positive_amount' => '2.000000000000',
+            'unknown_currency' => 'EUR',
+            'unknown_currency_amount_usdt' => null,
+            'unknown_currency_native_amount' => '-1.000000000000',
+        ],
     ];
 
     public function testGoldenRunnerContractExists(): void
@@ -320,7 +346,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(17, $catalogKeys);
+        self::assertCount(18, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

@@ -135,9 +135,10 @@ reste legacy.
 - `entry_price = entryZone.center` simplifie le pricing legacy (carnet, hint, quantization) ;
   acceptable hors live, à rapprocher du legacy avant tout branchement.
 - Aucune persistance ni audit reel : la gateway est en memoire.
-- COMMON-005 ne couvre pas tout #196 : pas de carnet d'ordres, pas de latence,
-  pas de funding, pas de ledger persistant, pas de matching multi-ordres, pas de
-  websocket et pas de reconciliation exchange reelle.
+- COMMON-005 ne couvre pas tout #196 : sa gateway TradingCore en memoire ne porte
+  ni funding ni ledger. Le Fake Exchange de niveau adapter couvre maintenant le
+  funding persistant decrit plus bas, mais pas la latence, le matching
+  multi-ordres ni une reconciliation exchange reelle.
 - Les scenarios Fake/Paper ne certifient ni OKX demo ni Hyperliquid testnet. Ils
   prouvent seulement que les branches locales de protection sont visibles avant
   toute tentative mutative.
@@ -255,6 +256,47 @@ fixtures versionnees, le modele de precision ou la reprise persistante ne sont
 pas disponibles. La marge d un SELL limit crossing est verifiee avec le meilleur
 bid executable, et un `LIMIT` legacy accompagne d un `stopPrice` reste un ordre
 declenche au lieu d etre rempli immediatement.
+
+## Funding deterministe Fake/Paper v1
+
+Le modele `fake-funding-notional-rate-interval-v1` consomme uniquement une
+echeance explicite, un taux nullable, les intervalles de taux/application et un
+snapshot de position perpetuelle a l horloge Fake controlee. Le calcul decimal
+est :
+
+```text
+notional = abs(size) * mark_price * contract_size
+amount = notional * rate * applied_interval / rate_interval
+LONG = -amount ; SHORT = +amount
+```
+
+Le signe monetaire normalise est donc credit positif et debit negatif. Les taux
+positifs font payer les longs et creditent les shorts; les taux negatifs font
+l inverse. Le snapshot exact a l echeance permet de facturer une position
+partielle. Sans position, aucun montant n est produit. Un taux absent donne le
+statut `unknown` et aucun evenement : il n est jamais transforme en zero.
+
+Chaque application persiste un evenement `funding.accrued` dans l etat
+`fake-paper-state-v1`. Son identite est `position_id + due_at + model_version`.
+Le replay identique, y compris apres restart, ne change ni le ledger ni la
+sequence; un payload different sous la meme identite echoue avec
+`fake_funding_idempotency_conflict`. Une echeance ancienne recue en retard garde
+son identite propre et est appliquee une fois.
+
+`FakeExchangeEventNormalizer` projette cet evenement en
+`ExchangeFundingReceived`; `DoctrineExchangeLocalProjectionStore` ecrit alors
+une row `fill_cost_ledger` avec `fill_role=funding`. Il ne cree ni fill entree,
+ni fill sortie, ni ordre legacy. `internal_trade_id` et
+`internal_position_id` sont conserves lorsqu ils sont disponibles. Les montants
+USDT alimentent `funding_usdt`; une devise non normalisee conserve le montant
+natif mais laisse `funding_usdt=NULL` avec
+`funding_currency_not_normalized`.
+
+La fixture versionnee est
+`trading-app/tests/fixtures/fake-paper/funding-model-v1.json`. Le scenario golden
+18 couvre long/short, taux positif/negatif/absent, partiel, devise inconnue,
+duplicate, restart et retard hors ordre. Ce chemin est strictement local : aucun
+client reseau, secret ou droit d ecriture demo/testnet/mainnet.
 
 ## Fallback taker deterministe de fin de zone
 
@@ -447,20 +489,20 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-sept scenarios executes dans cette version sont : maker limit rempli, limit
+Les dix-huit scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
 market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
 prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
-private WS avec snapshot resync, et restart avec position protegee ouverte.
+private WS avec snapshot resync, restart avec position protegee ouverte, et
+funding perpetuel deterministe/persistant.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
-| funding | `unsupported` | `funding_model_not_implemented` |
 | One-Way conflict | `unsupported` | `one_way_conflict_guard_not_implemented` |
 | dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
 
@@ -509,6 +551,13 @@ atomique, remettre le scenario golden 16 en `partial` avec
 `out_of_order_event_injection_not_implemented`, puis relancer les regressions
 #274. Le champ d etat `privateWs` est additif et sera ignore par l ancien chemin
 d hydratation. Aucun ordre exchange ni nettoyage demo/testnet/mainnet n est
+necessaire.
+
+Le rollback du funding doit retirer le modele, la fixture et la projection
+cost-only, puis remettre le scenario golden 18 en `unsupported` avec
+`funding_model_not_implemented`. Tout etat Fake contenant `funding.accrued` doit
+etre archive ou mis en quarantaine avant une revision qui ne connait pas cet
+evenement. Aucun nettoyage exchange ni activation demo/testnet/mainnet n est
 necessaire.
 
 ## Suite
