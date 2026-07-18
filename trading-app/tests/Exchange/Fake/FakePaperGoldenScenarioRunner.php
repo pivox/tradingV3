@@ -29,6 +29,9 @@ use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakeFallbackTakerPolicy;
+use App\Exchange\Fake\FakeFundingModel;
+use App\Exchange\Fake\FakeFundingModelConfig;
+use App\Exchange\Fake\FakeFundingSchedule;
 use App\Exchange\Fake\FakePrivateWsException;
 use App\Exchange\Fake\FakePrivateWsScenario;
 use App\Exchange\Fake\FakeInstrumentCatalog;
@@ -39,6 +42,7 @@ use App\Exchange\Event\ExchangeEventNormalizerRegistry;
 use App\Exchange\Event\AbstractExchangeOrderEvent;
 use App\Exchange\Event\AbstractExchangePositionEvent;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
@@ -66,6 +70,7 @@ final class FakePaperGoldenScenarioRunner
         'websocket_disconnect_resync',
         'duplicate_out_of_order_event',
         'restart_with_open_position',
+        'funding',
     ];
 
     /** @return list<string> */
@@ -101,6 +106,7 @@ final class FakePaperGoldenScenarioRunner
             'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
             'duplicate_out_of_order_event' => $this->duplicateOutOfOrderEvent(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
+            'funding' => $this->funding(),
         };
 
         return [
@@ -977,6 +983,199 @@ final class FakePaperGoldenScenarioRunner
                 @unlink($temporaryFile);
             }
         }
+    }
+
+    /** @return array<string,mixed> */
+    private function funding(): array
+    {
+        $fixtures = $this->fundingFixtures();
+        $model = new FakeFundingModel(FakeFundingModelConfig::v1(), $this->fundingClock());
+        $long = $this->fundingPosition(ExchangePositionSide::LONG, 2.0);
+        $short = $this->fundingPosition(ExchangePositionSide::SHORT, 2.0);
+        $longPositive = $model->calculate(
+            $this->fundingSchedule($fixtures, 'positive', ExchangePositionSide::LONG),
+            $long,
+        );
+        $shortPositive = $model->calculate(
+            $this->fundingSchedule($fixtures, 'positive', ExchangePositionSide::SHORT),
+            $short,
+        );
+        $longNegative = $model->calculate(
+            $this->fundingSchedule($fixtures, 'negative', ExchangePositionSide::LONG),
+            $long,
+        );
+        $shortNegative = $model->calculate(
+            $this->fundingSchedule($fixtures, 'negative', ExchangePositionSide::SHORT),
+            $short,
+        );
+        $partial = $model->calculate(
+            $this->fundingSchedule($fixtures, 'partial', ExchangePositionSide::LONG),
+            $this->fundingPosition(ExchangePositionSide::LONG, 1.0),
+        );
+        $absent = $model->calculate(
+            $this->fundingSchedule($fixtures, 'absent', ExchangePositionSide::LONG),
+            $long,
+        );
+        $noPosition = $model->calculate(
+            $this->fundingSchedule($fixtures, 'positive', ExchangePositionSide::LONG),
+            null,
+        );
+        $unknownCurrency = $model->calculate(
+            $this->fundingSchedule($fixtures, 'unknown_currency', ExchangePositionSide::LONG),
+            $this->fundingPosition(ExchangePositionSide::LONG, 1.0),
+        );
+
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_funding_');
+        if ($stateFile === false) {
+            throw new \RuntimeException('Unable to allocate the funding golden state file.');
+        }
+        @unlink($stateFile);
+
+        try {
+            $newer = $this->fundingSchedule($fixtures, 'newer_deadline', ExchangePositionSide::LONG);
+            $state = new FakeExchangeStateStore($stateFile);
+            $model->settle($newer, $long, $state);
+            $sameDeadline = $model->settle($newer, $long, $state);
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $restart = $model->settle($newer, $long, $restored);
+            $outOfOrder = $model->settle(
+                $this->fundingSchedule($fixtures, 'positive', ExchangePositionSide::LONG),
+                $long,
+                $restored,
+            );
+            $events = $restored->events('funding.accrued');
+            $normalized = [];
+            $normalizer = new FakeExchangeEventNormalizer();
+            foreach ($events as $event) {
+                array_push($normalized, ...$normalizer->normalize($event));
+            }
+            $fundingEvents = array_values(array_filter(
+                $normalized,
+                static fn (ExchangeEventInterface $event): bool => $event instanceof ExchangeFundingReceived,
+            ));
+            $fillEvents = array_values(array_filter(
+                $normalized,
+                static fn (ExchangeEventInterface $event): bool => $event instanceof ExchangeFillReceived,
+            ));
+            $firstNormalized = $fundingEvents[0] ?? null;
+
+            return [
+                'absent_rate_status' => $absent->status,
+                'event_deadlines' => array_map(
+                    static fn (FakeExchangeEvent $event): mixed => $event->payload['due_at'] ?? null,
+                    $events,
+                ),
+                'fixture_version' => $fixtures['schema_version'],
+                'funding_event_count' => \count($events),
+                'internal_trade_id_preserved' => $firstNormalized instanceof ExchangeFundingReceived
+                    && $firstNormalized->funding()->internalTradeId === 'golden-funding-long',
+                'known_currency' => $longPositive->funding?->currency,
+                'long_negative_amount' => $longNegative->funding?->amount,
+                'long_positive_amount' => $longPositive->funding?->amount,
+                'model_version' => $fixtures['model_version'],
+                'no_position_status' => $noPosition->status,
+                'normalized_fill_count' => \count($fillEvents),
+                'normalized_funding_count' => \count($fundingEvents),
+                'out_of_order_amount' => $outOfOrder->funding?->amount,
+                'partial_amount' => $partial->funding?->amount,
+                'restart_replayed' => $restart->replayed,
+                'same_deadline_replayed' => $sameDeadline->replayed,
+                'short_negative_amount' => $shortNegative->funding?->amount,
+                'short_positive_amount' => $shortPositive->funding?->amount,
+                'unknown_currency' => $unknownCurrency->funding?->currency,
+                'unknown_currency_amount_usdt' => $unknownCurrency->funding?->amountUsdt,
+                'unknown_currency_native_amount' => $unknownCurrency->funding?->amount,
+            ];
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    /** @return array{schema_version:string,model_version:string,symbol:string,mark_price:string,rate_interval_seconds:int,cases:array<string,array<string,mixed>>} */
+    private function fundingFixtures(): array
+    {
+        $path = dirname(__DIR__, 2) . '/fixtures/fake-paper/funding-model-v1.json';
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new \LogicException('The funding golden fixture is unavailable.');
+        }
+
+        /** @var array{schema_version:string,model_version:string,symbol:string,mark_price:string,rate_interval_seconds:int,cases:array<string,array<string,mixed>>} $fixtures */
+        $fixtures = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+        if (
+            $fixtures['schema_version'] !== 'fake-funding-fixtures-v1'
+            || $fixtures['model_version'] !== FakeFundingModelConfig::MODEL_VERSION
+        ) {
+            throw new \LogicException('The funding golden fixture version is unsupported.');
+        }
+
+        return $fixtures;
+    }
+
+    /** @param array{rate_interval_seconds:int,cases:array<string,array<string,mixed>>} $fixtures */
+    private function fundingSchedule(
+        array $fixtures,
+        string $case,
+        ExchangePositionSide $side,
+    ): FakeFundingSchedule {
+        $fixture = $fixtures['cases'][$case] ?? null;
+        if (!\is_array($fixture)) {
+            throw new \LogicException(sprintf('Missing funding golden case "%s".', $case));
+        }
+        $rate = $fixture['funding_rate'] ?? null;
+        if ($rate !== null && !\is_string($rate)) {
+            throw new \LogicException(sprintf('Invalid funding rate in golden case "%s".', $case));
+        }
+
+        return new FakeFundingSchedule(
+            symbol: 'BTCUSDT',
+            side: $side,
+            fundingRate: $rate,
+            rateIntervalSeconds: $fixtures['rate_interval_seconds'],
+            appliedIntervalSeconds: (int) ($fixture['applied_interval_seconds'] ?? 0),
+            currency: (string) ($fixture['currency'] ?? ''),
+            dueAt: new \DateTimeImmutable((string) ($fixture['due_at'] ?? '')),
+        );
+    }
+
+    private function fundingPosition(ExchangePositionSide $side, float $size): ExchangePositionDto
+    {
+        return new ExchangePositionDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: $side,
+            size: $size,
+            entryPrice: 9900.0,
+            markPrice: 10000.0,
+            unrealizedPnl: null,
+            realizedPnl: null,
+            margin: 2000.0,
+            leverage: 10.0,
+            openedAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            updatedAt: new \DateTimeImmutable('2026-01-01T15:59:00+00:00'),
+            metadata: [
+                'position_id' => 'golden-position-' . $side->value,
+                'internal_position_id' => 'golden-internal-position-' . $side->value,
+                'internal_trade_id' => 'golden-funding-' . $side->value,
+                'margin_contract_size' => '1',
+            ],
+        );
+    }
+
+    private function fundingClock(): ClockInterface
+    {
+        return new class implements ClockInterface {
+            public function now(): \DateTimeImmutable
+            {
+                return new \DateTimeImmutable('2026-01-01T16:00:00+00:00');
+            }
+        };
     }
 
     /**

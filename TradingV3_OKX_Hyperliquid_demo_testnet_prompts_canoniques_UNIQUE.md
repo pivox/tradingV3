@@ -11,8 +11,8 @@
 |---:|---|---|---|---:|---|---|---|---|---|
 | 1 | #196 — Fallback taker de fin de zone | done | issue/196-fake-fallback-taker-v1 | #282 | 4186abf243a035af16f7672bc493c225d31112d3 | worker_critical → review_fix | verte | favorable sur 4186abf243 | 2026-07-16T14:18:05Z |
 | 2 | #196 — TP1 puis trailing stop | done | issue/196-fake-tp1-trailing-v1 | #283 | 806f92dc1a162b50515a44e42a825f976f0610cb | worker_critical → review_fix → review_escalated | verte | favorable sur 806f92dc1a | 2026-07-16T19:32:05Z |
-| 3 | #196 — Injection out-of-order | in_progress | issue/196-fake-out-of-order-v1 | — | 19d67e0d3118de0e9bef9b45c370a83143818546 | worker_complex → review_fix → review_escalated | — | — | — |
-| 4 | #196 — Funding positif/négatif | pending | — | — | — | — | — | — | — |
+| 3 | #196 — Injection out-of-order | done | issue/196-fake-out-of-order-v1 | #284 | 71834044b4515ee4d5ce7682baabb06cc1769f36 | worker_complex → review_fix → review_escalated | verte | favorable sur 71834044b4 | 2026-07-18T10:23:57Z |
+| 4 | #196 — Funding positif/négatif | in_progress | issue/196-funding-v1 | — | — | worker_complex | — | — | — |
 | 5 | #196 — Garde One-Way | pending | — | — | — | — | — | — | — |
 | 6 | #196 — Recette Fake multi-profils | pending | — | — | — | — | — | — | — |
 | 7 | #196 — Daily loss cap | pending | — | — | — | — | — | — | — |

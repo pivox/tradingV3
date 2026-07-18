@@ -151,6 +151,12 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             return;
         }
 
+        if ($event instanceof ExchangeFundingReceived) {
+            $this->fillCostLedger->ingestFunding($event);
+
+            return;
+        }
+
         if ($event instanceof AbstractExchangePositionEvent) {
             $this->projectPosition($event);
         }

@@ -12,6 +12,7 @@ use App\Entity\FuturesOrderTrade;
 use App\Entity\Position;
 use App\Entity\TradeLineage;
 use App\Exchange\Dto\ExchangeFillDto;
+use App\Exchange\Dto\ExchangeFundingDto;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
@@ -20,6 +21,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Event\DoctrineExchangeLocalProjectionStore;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Okx\OkxExchangeEventNormalizer;
 use App\Exchange\Okx\OkxInstrumentResolver;
@@ -622,6 +624,48 @@ final class DoctrineExchangeLocalProjectionStoreTest extends TestCase
             feeCurrency: 'USDT',
             filledAt: new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
         )));
+    }
+
+    public function testFundingProjectionPersistsCostOnlyAndNeverCreatesLegacyFillOrOrder(): void
+    {
+        $orderSync = $this->createMock(FuturesOrderSyncService::class);
+        $orderSync->expects(self::never())->method('syncTradeFromApi');
+        $orderSync->expects(self::never())->method('syncOrderFromApi');
+        $saved = null;
+        $ledgerRepository = $this->createMock(FillCostLedgerEntryRepository::class);
+        $ledgerRepository->expects(self::once())->method('findOneByIdempotencyKey')->willReturn(null);
+        $ledgerRepository->expects(self::once())
+            ->method('save')
+            ->willReturnCallback(static function (FillCostLedgerEntry $entry) use (&$saved): void {
+                $saved = $entry;
+            });
+        $store = $this->storeWithPersistenceDoubles($orderSync, $ledgerRepository);
+
+        $store->project(new ExchangeFundingReceived(new ExchangeFundingDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            positionSide: ExchangePositionSide::LONG,
+            positionId: 'fake-position-long',
+            internalTradeId: 'itd-funding-projection',
+            internalPositionId: 'ipos-funding-projection',
+            notional: '20000.000000000000',
+            fundingRate: '0.0001',
+            rateIntervalSeconds: 28800,
+            appliedIntervalSeconds: 28800,
+            amount: '-2.000000000000',
+            currency: 'USDT',
+            amountUsdt: '-2.000000000000',
+            dueAt: new \DateTimeImmutable('2026-01-01T08:00:00+00:00'),
+            source: 'fake_funding_model',
+            modelVersion: 'fake-funding-notional-rate-interval-v1',
+        )));
+
+        self::assertInstanceOf(FillCostLedgerEntry::class, $saved);
+        self::assertSame('funding', $saved->getFillRole());
+        self::assertNull($saved->getExchangeFillId());
+        self::assertNull($saved->getPrice());
+        self::assertNull($saved->getQuantity());
     }
 
     private function store(

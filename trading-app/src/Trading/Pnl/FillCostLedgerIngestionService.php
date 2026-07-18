@@ -12,6 +12,7 @@ use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeFundingReceived;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
@@ -21,6 +22,13 @@ final readonly class FillCostLedgerIngestionService
 {
     private const SOURCE_VERSION = 'fill_cost_ledger_v1';
     private const SENSITIVE_KEY_MARKERS = ['apikey', 'secret', 'token', 'password', 'memo', 'credential'];
+    private const FUNDING_DETAIL_CONFLICT_KEYS = [
+        'funding_native_amount',
+        'funding_currency',
+        'funding_rate',
+        'funding_rate_interval_seconds',
+        'funding_applied_interval_seconds',
+    ];
 
     public function __construct(
         private FillCostLedgerEntryRepository $ledger,
@@ -105,6 +113,85 @@ final readonly class FillCostLedgerIngestionService
         return $this->persistSnapshot($idempotencyKey, $snapshot);
     }
 
+    public function ingestFunding(ExchangeFundingReceived $event): FillCostLedgerIngestionResult
+    {
+        $funding = $event->funding();
+        $identityHash = hash('sha256', json_encode([
+            'position_id' => $funding->positionId,
+            'due_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+            'model_version' => $funding->modelVersion,
+        ], JSON_THROW_ON_ERROR));
+        $idempotencyKey = sprintf(
+            '%s:%s:funding:%s',
+            $funding->exchange->value,
+            $funding->marketType->value,
+            $identityHash,
+        );
+        $lineage = $this->lineageManager->resolve(
+            new ExchangeContext($funding->exchange, $funding->marketType),
+            internalTradeId: $funding->internalTradeId,
+            positionId: $funding->positionId,
+        );
+        $qualityFlags = [];
+        if (!$lineage instanceof TradeLineage) {
+            $qualityFlags[] = 'missing_lineage';
+        }
+        if ($funding->amountUsdt === null) {
+            $qualityFlags[] = 'funding_currency_not_normalized';
+        }
+
+        $snapshot = [
+            'internal_trade_id' => $lineage?->getInternalTradeId() ?? $funding->internalTradeId,
+            'internal_position_id' => $lineage?->getInternalPositionId() ?? $funding->internalPositionId,
+            'position_id' => $lineage?->getPositionId() ?? $funding->positionId,
+            'exchange' => $funding->exchange->value,
+            'market_type' => $funding->marketType->value,
+            'symbol' => strtoupper($funding->symbol),
+            'side' => strtoupper($funding->positionSide->value),
+            'fill_id' => 'funding-' . substr($identityHash, 0, 48),
+            'exchange_fill_id' => null,
+            'exchange_order_id' => null,
+            'client_order_id' => null,
+            'order_intent_id' => $lineage?->getOrderIntent()?->getId(),
+            'fill_role' => 'funding',
+            'liquidity_role' => 'unknown',
+            'price' => null,
+            'quantity' => null,
+            'notional' => $funding->notional,
+            'fee_amount' => null,
+            'fee_currency' => null,
+            'fee_usdt' => null,
+            'funding_usdt' => $funding->amountUsdt,
+            'funding_native_amount' => $funding->amount,
+            'funding_currency' => strtoupper($funding->currency),
+            'funding_rate' => $funding->fundingRate,
+            'funding_rate_interval_seconds' => $funding->rateIntervalSeconds,
+            'funding_applied_interval_seconds' => $funding->appliedIntervalSeconds,
+            'spread_cost_usdt' => null,
+            'slippage_cost_usdt' => null,
+            'borrow_cost_usdt' => null,
+            'liquidation_fee_usdt' => null,
+            'occurred_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+            'source' => $funding->source,
+            'source_version' => $funding->modelVersion,
+            'quality_flags' => $qualityFlags,
+            'raw_reference' => $this->redactReference([
+                'event_type' => $event->eventType(),
+                'position_id' => $funding->positionId,
+                'due_at' => $funding->dueAt->format(\DateTimeInterface::ATOM),
+                'model_version' => $funding->modelVersion,
+                'native_amount' => $funding->amount,
+                'currency' => strtoupper($funding->currency),
+                'funding_rate' => $funding->fundingRate,
+                'rate_interval_seconds' => $funding->rateIntervalSeconds,
+                'applied_interval_seconds' => $funding->appliedIntervalSeconds,
+                'funding_idempotency_key' => $event->payload()['funding_idempotency_key'] ?? null,
+            ]),
+        ];
+
+        return $this->persistSnapshot($idempotencyKey, $snapshot);
+    }
+
     /**
      * @param array<string,mixed> $rawReference
      */
@@ -178,7 +265,7 @@ final readonly class FillCostLedgerIngestionService
         $payloadHash = $this->conflictHash($snapshot);
         $existing = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
         if ($existing instanceof FillCostLedgerEntry) {
-            if ($existing->getPayloadHash() === $payloadHash) {
+            if ($this->payloadHashMatches($existing->getPayloadHash(), $payloadHash, $snapshot)) {
                 if ($this->lineageConflicts($existing, $snapshot)) {
                     throw new FillCostLedgerIngestionConflict(sprintf(
                         'Conflicting fill-cost ledger lineage for idempotency key "%s".',
@@ -234,7 +321,9 @@ final readonly class FillCostLedgerIngestionService
             $this->ledger->save($entry);
         } catch (UniqueConstraintViolationException) {
             $concurrent = $this->ledger->resetManagerAndFindOneByIdempotencyKey($idempotencyKey);
-            if ($concurrent instanceof FillCostLedgerEntry && $concurrent->getPayloadHash() === $payloadHash) {
+            if ($concurrent instanceof FillCostLedgerEntry
+                && $this->payloadHashMatches($concurrent->getPayloadHash(), $payloadHash, $snapshot)
+            ) {
                 if ($this->lineageConflicts($concurrent, $snapshot)) {
                     throw new FillCostLedgerIngestionConflict(sprintf(
                         'Conflicting fill-cost ledger lineage for idempotency key "%s".',
@@ -462,7 +551,7 @@ final readonly class FillCostLedgerIngestionService
     /**
      * @param array<string,mixed> $snapshot
      */
-    private function conflictHash(array $snapshot): string
+    private function conflictHash(array $snapshot, bool $includeFundingDetails = true): string
     {
         $canonical = [];
         foreach ([
@@ -483,16 +572,33 @@ final readonly class FillCostLedgerIngestionService
             'fee_currency',
             'fee_usdt',
             'funding_usdt',
+            'funding_native_amount',
+            'funding_currency',
+            'funding_rate',
+            'funding_rate_interval_seconds',
+            'funding_applied_interval_seconds',
             'spread_cost_usdt',
             'slippage_cost_usdt',
             'borrow_cost_usdt',
             'liquidation_fee_usdt',
             'occurred_at',
         ] as $key) {
+            if (!$includeFundingDetails && \in_array($key, self::FUNDING_DETAIL_CONFLICT_KEYS, true)) {
+                continue;
+            }
             $canonical[$key] = $snapshot[$key] ?? null;
         }
 
         return hash('sha256', json_encode($canonical, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @param array<string,mixed> $snapshot
+     */
+    private function payloadHashMatches(string $storedHash, string $currentHash, array $snapshot): bool
+    {
+        return $storedHash === $currentHash
+            || $storedHash === $this->conflictHash($snapshot, includeFundingDetails: false);
     }
 
     private function deterministicFillId(ExchangeFillDto $fill): string
