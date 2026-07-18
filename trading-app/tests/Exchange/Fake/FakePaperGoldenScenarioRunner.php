@@ -8,7 +8,9 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\CancelOrderRequest;
+use App\Exchange\Dto\ExchangeFillDto;
 use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
@@ -28,9 +30,21 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakeFallbackTakerPolicy;
 use App\Exchange\Fake\FakePrivateWsException;
+use App\Exchange\Fake\FakePrivateWsScenario;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeTp1TrailingPolicy;
+use App\Exchange\Event\ExchangeEventBus;
+use App\Exchange\Event\ExchangeEventInterface;
+use App\Exchange\Event\ExchangeEventNormalizerRegistry;
+use App\Exchange\Event\AbstractExchangeOrderEvent;
+use App\Exchange\Event\AbstractExchangePositionEvent;
+use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
+use App\Exchange\Fake\FakeExchangeEventNormalizer;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use App\Exchange\Ws\ExchangeWsIngestionService;
 use Psr\Clock\ClockInterface;
+use Psr\Log\NullLogger;
 
 final class FakePaperGoldenScenarioRunner
 {
@@ -50,6 +64,7 @@ final class FakePaperGoldenScenarioRunner
         'tp1_then_trailing',
         'gap_at_stop_loss',
         'websocket_disconnect_resync',
+        'duplicate_out_of_order_event',
         'restart_with_open_position',
     ];
 
@@ -84,6 +99,7 @@ final class FakePaperGoldenScenarioRunner
             'tp1_then_trailing' => $this->tp1ThenTrailing(),
             'gap_at_stop_loss' => $this->gapAtStopLoss(),
             'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
+            'duplicate_out_of_order_event' => $this->duplicateOutOfOrderEvent(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
         };
 
@@ -613,6 +629,7 @@ final class FakePaperGoldenScenarioRunner
         } finally {
             @unlink($stateFile);
             @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
             foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
                 @unlink($temporaryFile);
             }
@@ -755,6 +772,160 @@ final class FakePaperGoldenScenarioRunner
                 && $afterCompleteDrain === [],
             'resync_required_before_reconnect' => $resyncRequired,
         ];
+    }
+
+    /** @return array<string,mixed> */
+    private function duplicateOutOfOrderEvent(): array
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_private_ws_');
+        $conflictStateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_private_ws_conflict_');
+        if ($stateFile === false || $conflictStateFile === false) {
+            throw new \RuntimeException('Unable to allocate the private WS golden state files.');
+        }
+        @unlink($stateFile);
+        @unlink($conflictStateFile);
+
+        try {
+            $fixture = $this->privateWsFixture();
+            $scenarioPayload = $fixture['scenario'] ?? null;
+            $conflictPayload = $fixture['conflict_scenario'] ?? null;
+            $resumePayload = $fixture['resume_event'] ?? null;
+            if (!\is_array($scenarioPayload) || !\is_array($conflictPayload) || !\is_array($resumePayload)) {
+                throw new \LogicException('The private WS golden fixture shape is invalid.');
+            }
+
+            [$state, $adapter] = $this->exchange($stateFile);
+            $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'golden-private-ws',
+            ));
+            $state->configurePrivateWsScenario(FakePrivateWsScenario::fromArray($scenarioPayload));
+
+            $projectionStore = new GoldenPrivateWsProjectionStore();
+            $bus = new ExchangeEventBus($projectionStore, new NullLogger());
+            $ingestion = new ExchangeWsIngestionService(
+                new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+                $bus,
+                new NullLogger(),
+            );
+            $client = new FakeExchangeWsClient($state);
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('The private WS golden fixture did not create a gap.');
+            } catch (FakePrivateWsException $exception) {
+                $gapCode = $exception->errorCode;
+            }
+
+            $projectedAtGap = $projectionStore->projectedCount;
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('The private WS golden fixture projected while resync was required.');
+            } catch (FakePrivateWsException $exception) {
+                if ($exception->errorCode !== 'fake_private_ws_snapshot_resync_required') {
+                    throw $exception;
+                }
+            }
+            $noProjectionAfterGap = $projectionStore->projectedCount === $projectedAtGap;
+            $gapAudit = $client->audit();
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredClient = new FakeExchangeWsClient($restoredState);
+            $restartPreservedResync = $restoredClient->requiresResync()
+                && $restoredClient->audit()['resync_reason'] === 'fake_private_ws_sequence_gap';
+
+            [, $restoredAdapter] = $this->exchangeForState($restoredState);
+            $reconciliationResult = (new ExchangeReconciliationService(
+                $bus,
+                $projectionStore,
+                $this->clock(),
+                new NullLogger(),
+            ))->reconcile($restoredAdapter);
+            $restoredClient->completeSnapshotResync($reconciliationResult);
+
+            $restoredState->appendEvent($this->fakeEventFromArray($resumePayload));
+            $resumed = $ingestion->drain($restoredClient);
+            $resyncAudit = $restoredClient->audit();
+            $resumedContiguously = $resumed->rawEventsRead === 1
+                && $resyncAudit['last_acknowledged_sequence'] === '4';
+            $normalizedSignatures = $projectionStore->normalizedSignatures();
+
+            $conflictState = new FakeExchangeStateStore($conflictStateFile);
+            $conflictState->configurePrivateWsScenario(FakePrivateWsScenario::fromArray($conflictPayload));
+            try {
+                $ingestion->drain(new FakeExchangeWsClient($conflictState));
+                throw new \LogicException('The private WS conflict fixture did not fail closed.');
+            } catch (FakePrivateWsException $exception) {
+                $conflictCode = $exception->errorCode;
+            }
+            $conflictAudit = $conflictState->privateWsAudit();
+
+            return [
+                'conflict_code' => $conflictCode,
+                'conflict_total' => $conflictAudit['conflict_total'],
+                'duplicate_total' => $gapAudit['duplicate_total'],
+                'gap_code' => $gapCode,
+                'gap_total' => $gapAudit['gap_total'],
+                'no_projection_after_gap' => $noProjectionAfterGap,
+                'normalized_projection_count' => \count($normalizedSignatures),
+                'normalized_projection_signatures' => $normalizedSignatures,
+                'normalized_projections_unique' => \count($normalizedSignatures) === \count(array_unique($normalizedSignatures)),
+                'resync_total' => $resyncAudit['resync_total'],
+                'restart_preserved_resync' => $restartPreservedResync,
+                'resumed_contiguously' => $resumedContiguously,
+            ];
+        } finally {
+            foreach ([$stateFile, $conflictStateFile] as $file) {
+                @unlink($file);
+                @unlink($file . '.lock');
+                @unlink($file . '.private-ws-consumer.lock');
+                foreach (glob($file . '.tmp.*') ?: [] as $temporaryFile) {
+                    @unlink($temporaryFile);
+                }
+            }
+        }
+    }
+
+    /** @return array<string,mixed> */
+    private function privateWsFixture(): array
+    {
+        $path = dirname(__DIR__, 2) . '/fixtures/fake-paper/private-ws-out-of-order-v1.json';
+        $raw = file_get_contents($path);
+        if ($raw === false) {
+            throw new \LogicException('The private WS golden fixture is unavailable.');
+        }
+
+        /** @var array<string,mixed> $fixture */
+        $fixture = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+        if (($fixture['schema_version'] ?? null) !== 'fake-private-ws-out-of-order-v1') {
+            throw new \LogicException('The private WS golden fixture version is unsupported.');
+        }
+
+        return $fixture;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function fakeEventFromArray(array $payload): FakeExchangeEvent
+    {
+        $type = $payload['type'] ?? null;
+        $symbol = $payload['symbol'] ?? null;
+        $occurredAt = $payload['occurred_at'] ?? null;
+        $eventPayload = $payload['payload'] ?? null;
+        if (
+            !\is_string($type)
+            || !\is_string($symbol)
+            || !\is_string($occurredAt)
+            || !\is_array($eventPayload)
+        ) {
+            throw new \LogicException('The private WS resume event is invalid.');
+        }
+
+        return new FakeExchangeEvent(
+            $type,
+            $symbol,
+            new \DateTimeImmutable($occurredAt),
+            $eventPayload,
+        );
     }
 
     /** @return array<string,mixed> */
@@ -921,5 +1092,196 @@ final class FakePaperGoldenScenarioRunner
                 return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
             }
         };
+    }
+}
+
+final class GoldenPrivateWsProjectionStore implements ExchangeLocalProjectionStoreInterface
+{
+    public int $projectedCount = 0;
+
+    /** @var list<string> */
+    private array $signatures = [];
+
+    public function hasOrder(ExchangeOrderDto $order): bool
+    {
+        return false;
+    }
+
+    public function openOrders(Exchange $exchange, MarketType $marketType): array
+    {
+        return [];
+    }
+
+    public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array
+    {
+        return [];
+    }
+
+    public function project(ExchangeEventInterface $event): void
+    {
+        ++$this->projectedCount;
+        $this->signatures[] = $this->normalizedSignature($event);
+    }
+
+    public function projectAtomically(array $events): void
+    {
+        $before = $this->projectedCount;
+        $signaturesBefore = $this->signatures;
+        try {
+            foreach ($events as $event) {
+                $this->project($event);
+            }
+        } catch (\Throwable $exception) {
+            $this->projectedCount = $before;
+            $this->signatures = $signaturesBefore;
+
+            throw $exception;
+        }
+    }
+
+    /** @return list<string> */
+    public function normalizedSignatures(): array
+    {
+        return $this->signatures;
+    }
+
+    private function normalizedSignature(ExchangeEventInterface $event): string
+    {
+        $semantics = [
+            'event_type' => $event->eventType(),
+            'exchange' => $event->exchange()->value,
+            'market_type' => $event->marketType()->value,
+            'symbol' => $event->symbol(),
+            'occurred_at' => $event->occurredAt(),
+            'payload' => $event->payload(),
+        ];
+        if ($event instanceof AbstractExchangeOrderEvent) {
+            $semantics['order'] = $this->orderSemantics($event->order());
+        }
+        if ($event instanceof ExchangeFillReceived) {
+            $semantics['fill'] = $this->fillSemantics($event->fill());
+        }
+        if ($event instanceof AbstractExchangePositionEvent) {
+            $semantics['position_event'] = [
+                'side' => $event->side()->value,
+                'size' => $event->size(),
+                'position' => $event->position() instanceof ExchangePositionDto
+                    ? $this->positionSemantics($event->position())
+                    : null,
+            ];
+        }
+
+        return hash('sha256', json_encode(
+            $this->canonicalValue($semantics),
+            JSON_THROW_ON_ERROR
+                | JSON_PRESERVE_ZERO_FRACTION
+                | JSON_UNESCAPED_SLASHES
+                | JSON_UNESCAPED_UNICODE,
+        ));
+    }
+
+    /** @return array<string,mixed> */
+    private function orderSemantics(ExchangeOrderDto $order): array
+    {
+        return [
+            'exchange' => $order->exchange->value,
+            'market_type' => $order->marketType->value,
+            'symbol' => $order->symbol,
+            'exchange_order_id' => $order->exchangeOrderId,
+            'client_order_id' => $order->clientOrderId,
+            'side' => $order->side->value,
+            'position_side' => $order->positionSide?->value,
+            'order_type' => $order->orderType->value,
+            'status' => $order->status->value,
+            'quantity' => $order->quantity,
+            'filled_quantity' => $order->filledQuantity,
+            'remaining_quantity' => $order->remainingQuantity,
+            'price' => $order->price,
+            'average_price' => $order->averagePrice,
+            'stop_price' => $order->stopPrice,
+            'reduce_only' => $order->reduceOnly,
+            'post_only' => $order->postOnly,
+            'time_in_force' => $order->timeInForce?->value,
+            'created_at' => $order->createdAt,
+            'updated_at' => $order->updatedAt,
+            'metadata' => $order->metadata,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function fillSemantics(ExchangeFillDto $fill): array
+    {
+        return [
+            'exchange' => $fill->exchange->value,
+            'market_type' => $fill->marketType->value,
+            'symbol' => $fill->symbol,
+            'exchange_order_id' => $fill->exchangeOrderId,
+            'client_order_id' => $fill->clientOrderId,
+            'fill_id' => $fill->fillId,
+            'side' => $fill->side->value,
+            'position_side' => $fill->positionSide?->value,
+            'quantity' => $fill->quantity,
+            'price' => $fill->price,
+            'fee' => $fill->fee,
+            'fee_currency' => $fill->feeCurrency,
+            'filled_at' => $fill->filledAt,
+            'metadata' => $fill->metadata,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function positionSemantics(ExchangePositionDto $position): array
+    {
+        return [
+            'exchange' => $position->exchange->value,
+            'market_type' => $position->marketType->value,
+            'symbol' => $position->symbol,
+            'side' => $position->side->value,
+            'size' => $position->size,
+            'entry_price' => $position->entryPrice,
+            'mark_price' => $position->markPrice,
+            'unrealized_pnl' => $position->unrealizedPnl,
+            'realized_pnl' => $position->realizedPnl,
+            'margin' => $position->margin,
+            'leverage' => $position->leverage,
+            'opened_at' => $position->openedAt,
+            'updated_at' => $position->updatedAt,
+            'metadata' => $position->metadata,
+        ];
+    }
+
+    private function canonicalValue(mixed $value): mixed
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return \DateTimeImmutable::createFromInterface($value)
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format('Y-m-d\\TH:i:s.u\\Z');
+        }
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+        if (\is_float($value) && !\is_finite($value)) {
+            throw new \LogicException('Golden normalized semantics contain a non-finite number.');
+        }
+        if (!\is_array($value)) {
+            if ($value === null || \is_scalar($value)) {
+                return $value;
+            }
+
+            throw new \LogicException(sprintf(
+                'Golden normalized semantics contain unsupported value type %s.',
+                get_debug_type($value),
+            ));
+        }
+
+        $canonical = [];
+        foreach ($value as $key => $item) {
+            $canonical[$key] = $this->canonicalValue($item);
+        }
+        if (!array_is_list($canonical)) {
+            ksort($canonical, SORT_STRING);
+        }
+
+        return $canonical;
     }
 }

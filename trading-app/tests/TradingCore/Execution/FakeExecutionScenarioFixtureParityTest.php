@@ -43,6 +43,30 @@ final class FakeExecutionScenarioFixtureParityTest extends TestCase
         }
     }
 
+    public function testPrivateWsFixtureKeepsDeclaredDeliveryOrderAndConflictCaseSeparate(): void
+    {
+        $path = dirname(__DIR__, 2) . '/fixtures/fake-paper/private-ws-out-of-order-v1.json';
+        $raw = file_get_contents($path);
+        self::assertIsString($raw, 'The private WS out-of-order fixture must be readable.');
+
+        /** @var array<string,mixed> $fixture */
+        $fixture = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+
+        self::assertSame('fake-private-ws-out-of-order-v1', $fixture['schema_version'] ?? null);
+        self::assertSame(
+            ['delivery-1', 'duplicate-1', 'delivery-3', 'delivery-2'],
+            array_column($fixture['scenario']['deliveries'] ?? [], 'fixture_entry_id'),
+        );
+        self::assertSame(
+            ['1', '1', '3', '2'],
+            array_map(
+                static fn (array $delivery): string => (string) ($delivery['sequence'] ?? ''),
+                $fixture['scenario']['deliveries'] ?? [],
+            ),
+        );
+        self::assertSame('1', (string) ($fixture['conflict_scenario']['deliveries'][1]['sequence'] ?? ''));
+    }
+
     /** @return array{schema_version:int,scope:string,scenarios:list<array<string,mixed>>} */
     private static function fixture(): array
     {

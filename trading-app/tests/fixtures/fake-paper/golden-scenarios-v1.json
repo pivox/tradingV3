@@ -145,13 +145,16 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testSequenceGapRequiresResync"],
-      "gap_codes": ["out_of_order_event_injection_not_implemented"],
+      "evidence": [
+        "tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testOutOfOrderOneThreeTwoRequiresSnapshotBeforeFurtherProjection",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php"
+      ],
+      "gap_codes": [],
       "id": 16,
       "name": "duplicate_out_of_order_event",
       "requirement": "Duplicate and out-of-order private events are injected, deduplicated and reconciled.",
-      "runner": null,
-      "status": "partial"
+      "runner": "duplicate_out_of_order_event",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testStateStoreRestoresProtectedPositionAndContinuesEventSequence"],

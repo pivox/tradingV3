@@ -4,6 +4,17 @@ declare(strict_types=1);
 
 namespace App\Tests\Exchange\Fake;
 
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
+use App\Exchange\Dto\ExchangeFillDto;
+use App\Exchange\Dto\ExchangeOrderDto;
+use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderType;
+use App\Exchange\Enum\ExchangePositionSide;
+use App\Exchange\Enum\ExchangeTimeInForce;
+use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeOrderCreated;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -218,6 +229,26 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'resumed_without_duplicate_or_loss' => true,
             'resync_required_before_reconnect' => true,
         ],
+        'duplicate_out_of_order_event' => [
+            'conflict_code' => 'fake_private_ws_sequence_conflict',
+            'conflict_total' => 1,
+            'duplicate_total' => 1,
+            'gap_code' => 'fake_private_ws_sequence_gap',
+            'gap_total' => 1,
+            'no_projection_after_gap' => true,
+            'normalized_projection_count' => 5,
+            'normalized_projection_signatures' => [
+                '564b0f3b7c5d79224fe9cc0401e23da782085129a8e14b31b9690abd2e5a9939',
+                '7c20956583750bbecb187a18bf023c58e1e4e31ad90e5764b2332c7bc5446e79',
+                '691686008840bbd0dbed5cef112e361999066167d676310474dda00a2af4b6d4',
+                'a537ee643c8990986b8167ca3c7cdde2565a9b379b632b6252566c08b076b338',
+                '7683f90540ac35361280ac64d4dd830afdee97be17851b60e05e7d74d999b36d',
+            ],
+            'normalized_projections_unique' => true,
+            'resync_total' => 1,
+            'restart_preserved_resync' => true,
+            'resumed_contiguously' => true,
+        ],
         'restart_with_open_position' => [
             'event_sequence_continued' => true,
             'historical_events_preserved' => true,
@@ -229,6 +260,52 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
     public function testGoldenRunnerContractExists(): void
     {
         self::assertTrue(class_exists(FakePaperGoldenScenarioRunner::class));
+    }
+
+    public function testNormalizedProjectionSignaturesCoverTypedSemanticsAndCanonicalPayload(): void
+    {
+        self::assertTrue(class_exists(FakePaperGoldenScenarioRunner::class));
+        $occurredAt = new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
+        $payload = [
+            'event_sequence' => 1,
+            'nested' => ['beta' => 2, 'alpha' => 1],
+        ];
+        $events = [
+            new ExchangeOrderCreated($this->normalizedOrder(), $occurredAt, $payload),
+            new ExchangeOrderCreated($this->normalizedOrder(exchangeOrderId: 'order-2'), $occurredAt, $payload),
+            new ExchangeOrderCreated($this->normalizedOrder(quantity: 2.0), $occurredAt, $payload),
+            new ExchangeOrderCreated($this->normalizedOrder(side: ExchangeOrderSide::SELL), $occurredAt, $payload),
+            new ExchangeOrderCreated($this->normalizedOrder(status: ExchangeOrderStatus::FILLED), $occurredAt, $payload),
+            new ExchangeOrderCreated($this->normalizedOrder(), $occurredAt, $payload + ['projection_marker' => 'changed']),
+            new ExchangeFillReceived($this->normalizedFill('fill-1'), $payload),
+            new ExchangeFillReceived($this->normalizedFill('fill-2'), $payload),
+        ];
+
+        $store = new GoldenPrivateWsProjectionStore();
+        foreach ($events as $event) {
+            $store->project($event);
+        }
+
+        self::assertCount(\count($events), array_unique($store->normalizedSignatures()));
+
+        $firstOrdering = new GoldenPrivateWsProjectionStore();
+        $firstOrdering->project(new ExchangeOrderCreated(
+            $this->normalizedOrder(),
+            $occurredAt,
+            ['nested' => ['beta' => 2, 'alpha' => 1], 'event_sequence' => 1],
+        ));
+        $secondOrdering = new GoldenPrivateWsProjectionStore();
+        $secondOrdering->project(new ExchangeOrderCreated(
+            $this->normalizedOrder(),
+            $occurredAt,
+            ['event_sequence' => 1, 'nested' => ['alpha' => 1, 'beta' => 2]],
+        ));
+
+        self::assertSame(
+            $firstOrdering->normalizedSignatures(),
+            $secondOrdering->normalizedSignatures(),
+            'Associative payload key order must not affect the canonical signature.',
+        );
     }
 
     public function testRunnerKeysExactlyMatchExecutableCatalogRows(): void
@@ -243,7 +320,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(16, $catalogKeys);
+        self::assertCount(17, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 
@@ -271,6 +348,58 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
                 yield $scenario['name'] => [$scenario];
             }
         }
+    }
+
+    private function normalizedOrder(
+        string $exchangeOrderId = 'order-1',
+        float $quantity = 1.0,
+        ExchangeOrderSide $side = ExchangeOrderSide::BUY,
+        ExchangeOrderStatus $status = ExchangeOrderStatus::OPEN,
+    ): ExchangeOrderDto {
+        $filledQuantity = $status === ExchangeOrderStatus::FILLED ? $quantity : 0.0;
+
+        return new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: $exchangeOrderId,
+            clientOrderId: 'client-1',
+            side: $side,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            status: $status,
+            quantity: $quantity,
+            filledQuantity: $filledQuantity,
+            remainingQuantity: $quantity - $filledQuantity,
+            price: 25000.0,
+            averagePrice: $status === ExchangeOrderStatus::FILLED ? 25000.0 : null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            timeInForce: ExchangeTimeInForce::GTC,
+            createdAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            metadata: ['source' => 'canonical-signature-test'],
+        );
+    }
+
+    private function normalizedFill(string $fillId): ExchangeFillDto
+    {
+        return new ExchangeFillDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'order-1',
+            clientOrderId: 'client-1',
+            fillId: $fillId,
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            quantity: 1.0,
+            price: 25000.0,
+            fee: 12.5,
+            feeCurrency: 'USDT',
+            filledAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            metadata: ['source' => 'canonical-signature-test'],
+        );
     }
 
     /** @return array{schema_version:string,scenarios:list<array<string,mixed>>} */

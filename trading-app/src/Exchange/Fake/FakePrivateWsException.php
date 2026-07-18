@@ -6,6 +6,7 @@ namespace App\Exchange\Fake;
 
 final class FakePrivateWsException extends \RuntimeException
 {
+    private const CONNECTED = 'connected';
     private const RESYNC_REQUIRED = 'resync_required';
 
     private function __construct(
@@ -41,11 +42,32 @@ final class FakePrivateWsException extends \RuntimeException
         );
     }
 
+    public static function sequenceConflict(
+        ?string $lastAcknowledgedSequence,
+        string $actualSequence,
+    ): self {
+        return new self(
+            errorCode: 'fake_private_ws_sequence_conflict',
+            state: self::RESYNC_REQUIRED,
+            lastAcknowledgedSequence: $lastAcknowledgedSequence,
+            actualSequence: $actualSequence,
+        );
+    }
+
     public static function snapshotResyncRequired(?string $lastAcknowledgedSequence): self
     {
         return new self(
             errorCode: 'fake_private_ws_snapshot_resync_required',
             state: self::RESYNC_REQUIRED,
+            lastAcknowledgedSequence: $lastAcknowledgedSequence,
+        );
+    }
+
+    public static function consumerBusy(?string $lastAcknowledgedSequence): self
+    {
+        return new self(
+            errorCode: 'fake_private_ws_consumer_busy',
+            state: self::CONNECTED,
             lastAcknowledgedSequence: $lastAcknowledgedSequence,
         );
     }

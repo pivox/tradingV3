@@ -1,0 +1,227 @@
+{
+  "schema_version": "fake-private-ws-out-of-order-v1",
+  "scenario": {
+    "scenario_id": "golden-private-ws-out-of-order-v1",
+    "deliveries": [
+      {
+        "fixture_entry_id": "delivery-1",
+        "sequence": "1",
+        "event": {
+          "type": "order.created",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:00+00:00",
+          "payload": {
+            "event_sequence": 1,
+            "order_snapshot": {
+              "exchange": "fake",
+              "market_type": "perpetual",
+              "symbol": "BTCUSDT",
+              "exchange_order_id": "fixture-order-1",
+              "client_order_id": "fixture-client-1",
+              "side": "buy",
+              "position_side": "long",
+              "order_type": "limit",
+              "status": "open",
+              "quantity": 1.0,
+              "filled_quantity": 0.0,
+              "remaining_quantity": 1.0,
+              "price": 25000.0,
+              "average_price": null,
+              "stop_price": null,
+              "reduce_only": false,
+              "post_only": true,
+              "time_in_force": "gtc",
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "updated_at": null,
+              "metadata": {
+                "source": "fake_private_ws_fixture"
+              }
+            }
+          }
+        },
+        "fingerprint": "04abce80aade94adfdd6b0358e00201f9240294556cb553d02e6f44141c272f1"
+      },
+      {
+        "fixture_entry_id": "duplicate-1",
+        "sequence": "1",
+        "event": {
+          "type": "order.created",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:00+00:00",
+          "payload": {
+            "event_sequence": 1,
+            "order_snapshot": {
+              "exchange": "fake",
+              "market_type": "perpetual",
+              "symbol": "BTCUSDT",
+              "exchange_order_id": "fixture-order-1",
+              "client_order_id": "fixture-client-1",
+              "side": "buy",
+              "position_side": "long",
+              "order_type": "limit",
+              "status": "open",
+              "quantity": 1.0,
+              "filled_quantity": 0.0,
+              "remaining_quantity": 1.0,
+              "price": 25000.0,
+              "average_price": null,
+              "stop_price": null,
+              "reduce_only": false,
+              "post_only": true,
+              "time_in_force": "gtc",
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "updated_at": null,
+              "metadata": {
+                "source": "fake_private_ws_fixture"
+              }
+            }
+          }
+        },
+        "fingerprint": "04abce80aade94adfdd6b0358e00201f9240294556cb553d02e6f44141c272f1"
+      },
+      {
+        "fixture_entry_id": "delivery-3",
+        "sequence": "3",
+        "event": {
+          "type": "position.updated",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:03+00:00",
+          "payload": {
+            "event_sequence": 3,
+            "marker": "future"
+          }
+        },
+        "fingerprint": "37305befac8711d652056774f369fcf7d10382b734354d283fabc058a7c765ad"
+      },
+      {
+        "fixture_entry_id": "delivery-2",
+        "sequence": "2",
+        "event": {
+          "type": "position.updated",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:02+00:00",
+          "payload": {
+            "event_sequence": 2,
+            "marker": "late"
+          }
+        },
+        "fingerprint": "0ef0df8e3286b69afac936fd0eefde8d09cac8a76bd7603c66228078401c5065"
+      }
+    ]
+  },
+  "conflict_scenario": {
+    "scenario_id": "golden-private-ws-conflict-v1",
+    "deliveries": [
+      {
+        "fixture_entry_id": "conflict-original",
+        "sequence": "1",
+        "event": {
+          "type": "order.created",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:00+00:00",
+          "payload": {
+            "event_sequence": 1,
+            "order_snapshot": {
+              "exchange": "fake",
+              "market_type": "perpetual",
+              "symbol": "BTCUSDT",
+              "exchange_order_id": "fixture-order-1",
+              "client_order_id": "fixture-client-1",
+              "side": "buy",
+              "position_side": "long",
+              "order_type": "limit",
+              "status": "open",
+              "quantity": 1.0,
+              "filled_quantity": 0.0,
+              "remaining_quantity": 1.0,
+              "price": 25000.0,
+              "average_price": null,
+              "stop_price": null,
+              "reduce_only": false,
+              "post_only": true,
+              "time_in_force": "gtc",
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "updated_at": null,
+              "metadata": {
+                "source": "fake_private_ws_fixture"
+              }
+            }
+          }
+        },
+        "fingerprint": "04abce80aade94adfdd6b0358e00201f9240294556cb553d02e6f44141c272f1"
+      },
+      {
+        "fixture_entry_id": "conflict-changed",
+        "sequence": "1",
+        "event": {
+          "type": "order.created",
+          "symbol": "BTCUSDT",
+          "occurred_at": "2026-01-01T00:00:00+00:00",
+          "payload": {
+            "event_sequence": 1,
+            "order_snapshot": {
+              "exchange": "fake",
+              "market_type": "perpetual",
+              "symbol": "BTCUSDT",
+              "exchange_order_id": "fixture-order-1",
+              "client_order_id": "fixture-client-1",
+              "side": "buy",
+              "position_side": "long",
+              "order_type": "limit",
+              "status": "open",
+              "quantity": 1.0,
+              "filled_quantity": 0.0,
+              "remaining_quantity": 1.0,
+              "price": 25000.0,
+              "average_price": null,
+              "stop_price": null,
+              "reduce_only": false,
+              "post_only": true,
+              "time_in_force": "gtc",
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "updated_at": null,
+              "metadata": {
+                "source": "fake_private_ws_fixture"
+              }
+            },
+            "conflict_marker": "changed"
+          }
+        },
+        "fingerprint": "47be6635f4513ef5cebbacef532c237e98fdfcfe38c6c620cd4302aa9236ce08"
+      }
+    ]
+  },
+  "resume_event": {
+    "type": "order.created",
+    "symbol": "BTCUSDT",
+    "occurred_at": "2026-01-01T00:00:04+00:00",
+    "payload": {
+      "event_sequence": 4,
+      "order_snapshot": {
+        "exchange": "fake",
+        "market_type": "perpetual",
+        "symbol": "BTCUSDT",
+        "exchange_order_id": "fixture-order-1",
+        "client_order_id": "fixture-client-1",
+        "side": "buy",
+        "position_side": "long",
+        "order_type": "limit",
+        "status": "open",
+        "quantity": 1.0,
+        "filled_quantity": 0.0,
+        "remaining_quantity": 1.0,
+        "price": 25000.0,
+        "average_price": null,
+        "stop_price": null,
+        "reduce_only": false,
+        "post_only": true,
+        "time_in_force": "gtc",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": null,
+        "metadata": {
+          "source": "fake_private_ws_fixture"
+        }
+      }
+    }
+  }
+}

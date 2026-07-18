@@ -41,6 +41,19 @@ final readonly class ExchangeReconciliationService
 
     public function reconcile(ExchangeAdapterInterface $adapter, ?string $symbol = null): ExchangeReconciliationResult
     {
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
+        if (
+            $normalizedSymbol === null
+            && $adapter instanceof ExchangeReconciliationSnapshotProofOrchestratorInterface
+        ) {
+            return $adapter->reconcileWithSnapshotProof($this, $normalizedSymbol);
+        }
+
+        return $this->reconcileBase($adapter, $normalizedSymbol);
+    }
+
+    public function reconcileBase(ExchangeAdapterInterface $adapter, ?string $symbol = null): ExchangeReconciliationResult
+    {
         $startedAt = $this->clock->now();
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $orders = $adapter instanceof ExchangeRestSnapshotProviderInterface
@@ -104,6 +117,13 @@ final readonly class ExchangeReconciliationService
 
         $unprotectedPositions = $this->detectUnprotectedPositions($adapter, $positions);
         $completedAt = $this->clock->now();
+        $metadata = [
+            'unknown_order_ids' => $unknownOrders,
+            'unprotected_positions' => $unprotectedPositions,
+            'events_projected' => $eventsProjected,
+            'position_snapshot_authoritative' => $positionSnapshotAuthoritative,
+        ];
+
         $result = new ExchangeReconciliationResult(
             exchange: $adapter->exchange(),
             marketType: $adapter->marketType(),
@@ -115,12 +135,7 @@ final readonly class ExchangeReconciliationService
             fillsImported: \count($fills),
             correctionsApplied: $eventsProjected,
             unknownOrdersDetected: \count($unknownOrders),
-            metadata: [
-                'unknown_order_ids' => $unknownOrders,
-                'unprotected_positions' => $unprotectedPositions,
-                'events_projected' => $eventsProjected,
-                'position_snapshot_authoritative' => $positionSnapshotAuthoritative,
-            ],
+            metadata: $metadata,
         );
 
         $this->logger->info('exchange_reconciliation.completed', [

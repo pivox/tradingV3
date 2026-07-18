@@ -29,11 +29,16 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use App\Exchange\Reconciliation\ExchangeReconciliationSnapshotProofOrchestratorInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
 #[AutoconfigureTag('app.exchange_adapter')]
-final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, ExchangeRestSnapshotProviderInterface
+final readonly class FakeExchangeAdapter implements
+    ExchangeAdapterInterface,
+    ExchangeRestSnapshotProviderInterface,
+    ExchangeReconciliationSnapshotProofOrchestratorInterface
 {
     private const FEE_RATE = 0.0005;
     private const MARGIN_MODEL_VERSION = 'fake-derived-initial-margin-v1';
@@ -48,6 +53,11 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
         ?FakeInstrumentProviderInterface $instruments = null,
     ) {
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
+    }
+
+    public function isBackedByStateStore(FakeExchangeStateStore $stateStore): bool
+    {
+        return $this->stateStore === $stateStore;
     }
 
     public function exchange(): Exchange
@@ -196,6 +206,14 @@ final readonly class FakeExchangeAdapter implements ExchangeAdapterInterface, Ex
     public function hasAuthoritativePositionSnapshot(?string $symbol = null): bool
     {
         return true;
+    }
+
+    public function reconcileWithSnapshotProof(
+        ExchangeReconciliationService $reconciliation,
+        ?string $symbol = null,
+    ): ExchangeReconciliationResult
+    {
+        return $this->stateStore->reconcileWithPrivateWsSnapshotProof($reconciliation, $this, $symbol);
     }
 
     public function placeOrder(PlaceOrderRequest $request): PlaceOrderResult
