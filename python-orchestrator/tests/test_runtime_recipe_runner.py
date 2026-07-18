@@ -424,6 +424,85 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
 
 
+def test_r12_removes_stale_standalone_reports_when_current_run_is_blocked(
+    tmp_path: Path,
+):
+    standalone_paths = (
+        tmp_path / "fake-multi-profile-recipe-report.json",
+        tmp_path / "fake-multi-profile-recipe-report.md",
+    )
+    successful_report = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert successful_report["results"][0]["status"] == "PASS"
+    assert json.loads(standalone_paths[0].read_text())["status"] == "PASS"
+    assert standalone_paths[1].read_text().startswith("# Fake multi-profile recipe")
+
+    blocked_report = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert blocked_report["results"][0]["status"] == "BLOCKED"
+    assert all(not path.exists() for path in standalone_paths)
+
+    blocked_again = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert blocked_again["results"][0]["status"] == "BLOCKED"
+    assert all(not path.exists() for path in standalone_paths)
+
+
+def test_run_without_r12_preserves_existing_standalone_reports(tmp_path: Path):
+    api = FakeRecipeApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    runner.run(scenarios=("R12",), keep_fixtures=True)
+    standalone_paths = (
+        tmp_path / "fake-multi-profile-recipe-report.json",
+        tmp_path / "fake-multi-profile-recipe-report.md",
+    )
+    original_contents = tuple(path.read_bytes() for path in standalone_paths)
+
+    report = runner.run(scenarios=("R1",), keep_fixtures=True)
+
+    assert report["results"][0]["scenario"] == "R1"
+    assert tuple(path.read_bytes() for path in standalone_paths) == original_contents
+
+
+def test_r12_surfaces_standalone_report_removal_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    standalone_json = tmp_path / "fake-multi-profile-recipe-report.json"
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    )
+    runner.run(scenarios=("R12",), keep_fixtures=True)
+    original_unlink = Path.unlink
+
+    def fail_to_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path == standalone_json:
+            raise PermissionError("standalone report removal denied")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_to_unlink)
+    blocked_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    )
+
+    with pytest.raises(PermissionError, match="standalone report removal denied"):
+        blocked_runner.run(scenarios=("R12",), keep_fixtures=True)
+
+
 def test_r12_does_not_present_the_unexercised_business_lock_as_observed(
     tmp_path: Path,
 ):

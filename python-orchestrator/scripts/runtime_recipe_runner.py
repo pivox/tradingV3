@@ -1205,23 +1205,35 @@ class RecipeRunner:
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        recipe_report = next(
+        r12_result = next(
             (
-                result.get("evidence", {}).get("recipe_report")
+                result
                 for result in report.get("results", [])
                 if result.get("scenario") == "R12"
             ),
             None,
         )
+        recipe_report = (
+            r12_result.get("evidence", {}).get("recipe_report")
+            if isinstance(r12_result, dict)
+            else None
+        )
+        standalone_paths = (
+            self.config.export_dir / "fake-multi-profile-recipe-report.json",
+            self.config.export_dir / "fake-multi-profile-recipe-report.md",
+        )
         if isinstance(recipe_report, dict):
-            (self.config.export_dir / "fake-multi-profile-recipe-report.json").write_text(
+            standalone_paths[0].write_text(
                 json.dumps(recipe_report, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            (self.config.export_dir / "fake-multi-profile-recipe-report.md").write_text(
+            standalone_paths[1].write_text(
                 self._multi_profile_markdown(recipe_report),
                 encoding="utf-8",
             )
+        elif r12_result is not None:
+            for path in standalone_paths:
+                path.unlink(missing_ok=True)
 
     @staticmethod
     def _multi_profile_markdown(report: dict[str, Any]) -> str:
