@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Runtime\Safety;
 
 use Symfony\Component\HttpClient\DecoratorTrait;
-use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
@@ -27,7 +26,7 @@ final class ExchangeCallGuardHttpClient implements HttpClientInterface
         if ($this->audit->isActive()) {
             $this->audit->recordAttempt($this->exchange);
 
-            throw new TransportException(sprintf('fake_only_exchange_call_blocked:%s', $this->exchange));
+            throw new FakeOnlyExchangeCallBlockedException(sprintf('fake_only_exchange_call_blocked:%s', $this->exchange));
         }
 
         return $this->client->request($method, $url, $options);
