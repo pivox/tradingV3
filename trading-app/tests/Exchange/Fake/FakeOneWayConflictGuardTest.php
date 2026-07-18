@@ -199,6 +199,98 @@ final class FakeOneWayConflictGuardTest extends TestCase
         }
     }
 
+    public function testRestoredMixedCasePositionRejectsOppositeEntry(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_one_way_mixed_position_');
+        self::assertNotFalse($stateFile);
+        unlink($stateFile);
+
+        try {
+            $seeded = new FakeExchangeStateStore($stateFile);
+            $seeded->savePosition(new ExchangePositionDto(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'bTcUsDt',
+                side: ExchangePositionSide::LONG,
+                size: 1.0,
+                entryPrice: 25000.0,
+                markPrice: 25000.0,
+                unrealizedPnl: 0.0,
+                realizedPnl: 0.0,
+                margin: 8333.33,
+                leverage: 3.0,
+                openedAt: $this->clock()->now(),
+                updatedAt: $this->clock()->now(),
+            ));
+
+            [$restored] = $this->exchangeForState(new FakeExchangeStateStore($stateFile));
+            $rejected = $restored->placeOrder($this->entryRequest(
+                ExchangePositionSide::SHORT,
+                'one-way-mixed-position-conflict',
+            ));
+
+            self::assertFalse($rejected->accepted);
+            self::assertSame('one_way_position_conflict', $rejected->metadata['reason'] ?? null);
+            self::assertSame('open_position', $rejected->metadata['conflict_source'] ?? null);
+            self::assertSame('long', $rejected->metadata['conflicting_position_side'] ?? null);
+            self::assertSame('fake::perpetual::BTCUSDT', $rejected->metadata['position_scope'] ?? null);
+        } finally {
+            $this->removeStateFiles($stateFile);
+        }
+    }
+
+    public function testRestoredMixedCaseActiveOrderRejectsOppositeEntry(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_one_way_mixed_order_');
+        self::assertNotFalse($stateFile);
+        unlink($stateFile);
+
+        try {
+            $seeded = new FakeExchangeStateStore($stateFile);
+            $seeded->saveOrder(new ExchangeOrderDto(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'bTcUsDt',
+                exchangeOrderId: 'fake-mixed-active-long',
+                clientOrderId: 'mixed-active-long',
+                side: ExchangeOrderSide::BUY,
+                positionSide: ExchangePositionSide::LONG,
+                orderType: ExchangeOrderType::LIMIT,
+                status: ExchangeOrderStatus::OPEN,
+                quantity: 1.0,
+                filledQuantity: 0.0,
+                remainingQuantity: 1.0,
+                price: 24950.0,
+                averagePrice: null,
+                stopPrice: null,
+                reduceOnly: false,
+                postOnly: true,
+                timeInForce: ExchangeTimeInForce::GTC,
+                createdAt: $this->clock()->now(),
+                metadata: [
+                    'margin_reference_price' => 24950.0,
+                    'margin_reference_source' => 'top_of_book',
+                    'margin_contract_size' => '1',
+                    'leverage' => 3,
+                ],
+            ));
+
+            [$restored] = $this->exchangeForState(new FakeExchangeStateStore($stateFile));
+            $rejected = $restored->placeOrder($this->entryRequest(
+                ExchangePositionSide::SHORT,
+                'one-way-mixed-order-conflict',
+            ));
+
+            self::assertFalse($rejected->accepted);
+            self::assertSame('one_way_position_conflict', $rejected->metadata['reason'] ?? null);
+            self::assertSame('active_order', $rejected->metadata['conflict_source'] ?? null);
+            self::assertSame('long', $rejected->metadata['conflicting_position_side'] ?? null);
+            self::assertSame('fake::perpetual::BTCUSDT', $rejected->metadata['position_scope'] ?? null);
+        } finally {
+            $this->removeStateFiles($stateFile);
+        }
+    }
+
     public function testDifferentSymbolsRemainIndependent(): void
     {
         [$adapter] = $this->exchangeForState(new FakeExchangeStateStore());
@@ -371,6 +463,19 @@ final class FakeOneWayConflictGuardTest extends TestCase
                 return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
             }
         };
+    }
+
+    private function removeStateFiles(string $stateFile): void
+    {
+        if (is_file($stateFile)) {
+            unlink($stateFile);
+        }
+        if (is_file($stateFile . '.lock')) {
+            unlink($stateFile . '.lock');
+        }
+        foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+            unlink($temporaryFile);
+        }
     }
 }
 

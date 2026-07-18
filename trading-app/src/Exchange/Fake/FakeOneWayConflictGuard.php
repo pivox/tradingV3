@@ -32,7 +32,7 @@ final readonly class FakeOneWayConflictGuard
             ExchangePositionSide::SHORT => ExchangePositionSide::LONG,
         };
 
-        foreach ($this->stateStore->getOpenPositions($request->symbol) as $position) {
+        foreach ($this->stateStore->getOpenPositions() as $position) {
             if (!$this->positionMatchesScope($position, $request) || $position->side !== $oppositeSide) {
                 continue;
             }
@@ -40,7 +40,7 @@ final readonly class FakeOneWayConflictGuard
             return $this->metadata($request, 'open_position', $position->side);
         }
 
-        foreach ($this->stateStore->getOpenOrders($request->symbol) as $order) {
+        foreach ($this->stateStore->getOpenOrders() as $order) {
             if (!$this->orderMatchesScope($order, $request) || $order->reduceOnly) {
                 continue;
             }
