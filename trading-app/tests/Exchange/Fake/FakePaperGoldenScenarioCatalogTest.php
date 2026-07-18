@@ -29,7 +29,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'duplicate_out_of_order_event' => ['executable', []],
         'restart_with_open_position' => ['executable', []],
         'funding' => ['executable', []],
-        'one_way_conflict' => ['unsupported', ['one_way_conflict_guard_not_implemented']],
+        'one_way_conflict' => ['executable', []],
         'dry_run_multi_profiles_same_symbol' => ['partial', ['multi_profile_fake_recipe_not_consolidated']],
     ];
 

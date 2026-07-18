@@ -62,6 +62,8 @@ final readonly class FakeExchangeMatchingEngine
 
     private FakeFillCostModel $fillCostModel;
 
+    private FakeOneWayConflictGuard $oneWayConflictGuard;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
@@ -69,10 +71,12 @@ final readonly class FakeExchangeMatchingEngine
         ?FakeOrderValidator $orderValidator = null,
         ?FakeInstrumentProviderInterface $instruments = null,
         ?FakeFillCostModel $fillCostModel = null,
+        ?FakeOneWayConflictGuard $oneWayConflictGuard = null,
     ) {
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
         $this->orderValidator = $orderValidator ?? new FakeOrderValidator($this->instruments);
         $this->fillCostModel = $fillCostModel ?? new FakeFillCostModel();
+        $this->oneWayConflictGuard = $oneWayConflictGuard ?? new FakeOneWayConflictGuard($this->stateStore);
     }
 
     public function submit(PlaceOrderRequest $request): PlaceOrderResult
@@ -107,6 +111,19 @@ final readonly class FakeExchangeMatchingEngine
                 submittedAt: $this->clock->now(),
                 order: $existing,
                 metadata: array_replace($existing->metadata, ['idempotent_replay' => true]),
+            );
+        }
+
+        $conflictMetadata = $this->oneWayConflictGuard->conflictMetadata(
+            $request,
+            $request->reduceOnly || $this->isStandaloneProtection($request),
+        );
+        if ($conflictMetadata !== null) {
+            return $this->rejectOrder(
+                $request,
+                FakeOneWayConflictGuard::REJECTION_REASON,
+                $trustedFallbackMetadata,
+                $conflictMetadata,
             );
         }
 
