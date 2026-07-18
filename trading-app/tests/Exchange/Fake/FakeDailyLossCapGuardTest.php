@@ -19,6 +19,7 @@ use App\Exchange\Fake\FakeDailyLossCapPolicy;
 use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
+use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeFillCostModel;
 use App\Exchange\Fake\FakeFundingModelConfig;
@@ -177,6 +178,93 @@ final class FakeDailyLossCapGuardTest extends TestCase
         self::assertCount(1, $state->events('order.rejected'));
     }
 
+    public function testRestingEntryIsRejectedWhenCapIsReachedBeforeDirectFillWithoutFillSideEffects(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T15:35:00+00:00');
+        [$adapter, $scenario] = $this->exchange($state, $clock);
+        $request = $this->request(
+            'daily-cap-resting-direct-fill',
+            type: ExchangeOrderType::LIMIT,
+            price: 24950.0,
+            metadata: [
+                'internal_trade_id' => 'trade-resting-direct',
+                'api_key' => 'TOP-SECRET-RESTING-DIRECT',
+            ],
+        );
+        $resting = $adapter->placeOrder($request);
+        self::assertSame(ExchangeOrderStatus::OPEN, $resting->status);
+        self::assertNotNull($resting->exchangeOrderId);
+
+        $this->appendFill($state, $clock->now(), '-10');
+        $fillEventCount = \count($state->events('order.filled'))
+            + \count($state->events('order.partially_filled'));
+
+        $blocked = $scenario->fillOrder($resting->exchangeOrderId);
+        $replayed = $scenario->fillOrder($resting->exchangeOrderId);
+
+        self::assertNotNull($blocked);
+        self::assertNotNull($replayed);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $blocked->status);
+        self::assertSame('daily_loss_cap_reached', $blocked->metadata['reason'] ?? null);
+        self::assertSame('limit_reached', $blocked->metadata['daily_loss_cap_status'] ?? null);
+        self::assertSame(0.0, $blocked->filledQuantity);
+        self::assertSame(1.0, $blocked->remainingQuantity);
+        self::assertSame($blocked, $replayed);
+        self::assertSame(
+            $fillEventCount,
+            \count($state->events('order.filled')) + \count($state->events('order.partially_filled')),
+        );
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $state->events('position.opened'));
+        self::assertCount(0, $state->events('position.updated'));
+        self::assertCount(1, $state->events('order.rejected'));
+
+        $serialized = json_encode([
+            $blocked->metadata,
+            array_map(static fn (FakeExchangeEvent $event): array => $event->toArray(), $state->events('order.rejected')),
+        ], JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('TOP-SECRET-RESTING-DIRECT', $serialized);
+        self::assertStringNotContainsString('api_key', $serialized);
+    }
+
+    public function testRestingEntryIsRejectedWhenCapBecomesNotComputableBeforeMovePriceMatch(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T15:40:00+00:00');
+        [$adapter, $scenario] = $this->exchange($state, $clock);
+        $resting = $adapter->placeOrder($this->request(
+            'daily-cap-resting-move-price',
+            type: ExchangeOrderType::LIMIT,
+            price: 24950.0,
+        ));
+        self::assertSame(ExchangeOrderStatus::OPEN, $resting->status);
+        self::assertNotNull($resting->exchangeOrderId);
+
+        $this->appendFill($state, $clock->now(), '-1', fee: null);
+        $fillEventCount = \count($state->events('order.filled'))
+            + \count($state->events('order.partially_filled'));
+
+        $scenario->movePrice('BTCUSDT', 24940.0, 0.0);
+        $blocked = $state->getOrder($resting->exchangeOrderId);
+
+        self::assertNotNull($blocked);
+        self::assertSame(ExchangeOrderStatus::REJECTED, $blocked->status);
+        self::assertSame('daily_loss_cap_not_computable', $blocked->metadata['reason'] ?? null);
+        self::assertSame('not_computable', $blocked->metadata['daily_loss_cap_status'] ?? null);
+        self::assertSame('fill_fee_unknown', $blocked->metadata['daily_loss_cap_detail_reason'] ?? null);
+        self::assertSame(0.0, $blocked->filledQuantity);
+        self::assertSame(1.0, $blocked->remainingQuantity);
+        self::assertSame(
+            $fillEventCount,
+            \count($state->events('order.filled')) + \count($state->events('order.partially_filled')),
+        );
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $state->events('position.opened'));
+        self::assertCount(0, $state->events('position.updated'));
+        self::assertCount(1, $state->events('order.rejected'));
+    }
+
     public function testUnknownFundingConversionFailsClosed(): void
     {
         $state = new FakeExchangeStateStore();
@@ -281,16 +369,21 @@ final class FakeDailyLossCapGuardTest extends TestCase
         $clock = new MutableDailyLossClock('2026-07-18T16:30:00+00:00');
         $this->appendFill($state, $clock->now(), '-1', fee: null);
         $this->savePosition($state, ExchangePositionSide::LONG, 1.0);
+        [$adapter, $scenario] = $this->exchange($state, $clock);
 
-        $result = $this->adapter($state, $clock)->placeOrder($this->request(
+        $result = $adapter->placeOrder($this->request(
             'daily-cap-protection-' . $type->value,
             type: $type,
             quantity: 1.0,
         ));
+        self::assertNotNull($result->exchangeOrderId);
+        $filled = $scenario->fillOrder($result->exchangeOrderId, price: 24900.0);
 
         self::assertTrue($result->accepted);
         self::assertSame(ExchangeOrderStatus::OPEN, $result->status);
         self::assertTrue($result->order?->reduceOnly);
+        self::assertSame(ExchangeOrderStatus::FILLED, $filled?->status);
+        self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
     }
 
     /** @return iterable<string,array{ExchangeOrderType}> */
@@ -497,6 +590,15 @@ final class FakeDailyLossCapGuardTest extends TestCase
         ClockInterface $clock,
         string $limit = '10',
     ): FakeExchangeAdapter {
+        return $this->exchange($state, $clock, $limit)[0];
+    }
+
+    /** @return array{FakeExchangeAdapter,FakeExchangeScenarioService} */
+    private function exchange(
+        FakeExchangeStateStore $state,
+        ClockInterface $clock,
+        string $limit = '10',
+    ): array {
         $book = new FakeExchangeOrderBook($state);
         $guard = $this->guard($state, $clock, $limit);
         $engine = new FakeExchangeMatchingEngine(
@@ -506,7 +608,10 @@ final class FakeDailyLossCapGuardTest extends TestCase
             dailyLossCapGuard: $guard,
         );
 
-        return new FakeExchangeAdapter($state, $book, $engine, $clock);
+        return [
+            new FakeExchangeAdapter($state, $book, $engine, $clock),
+            new FakeExchangeScenarioService($state, $book, $engine),
+        ];
     }
 
     /** @param array<string,mixed> $metadata */
@@ -517,6 +622,8 @@ final class FakeDailyLossCapGuardTest extends TestCase
         float $quantity = 1.0,
         ExchangePositionSide $positionSide = ExchangePositionSide::LONG,
         array $metadata = [],
+        ?float $price = null,
+        bool $postOnly = false,
     ): PlaceOrderRequest {
         $reduceIntent = $reduceOnly || \in_array($type, [
             ExchangeOrderType::STOP_LOSS,
@@ -536,14 +643,14 @@ final class FakeDailyLossCapGuardTest extends TestCase
             orderType: $type,
             timeInForce: ExchangeTimeInForce::GTC,
             quantity: $quantity,
-            price: null,
+            price: $price,
             stopPrice: \in_array($type, [
                 ExchangeOrderType::STOP_LOSS,
                 ExchangeOrderType::TAKE_PROFIT,
                 ExchangeOrderType::TRIGGER,
             ], true) ? 24900.0 : null,
             reduceOnly: $reduceOnly,
-            postOnly: false,
+            postOnly: $postOnly,
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,

@@ -350,6 +350,13 @@ un evenement `order.rejected` unique avec :
 - `daily_loss_cap_reached` si la consommation calculable atteint la limite ;
 - `daily_loss_cap_not_computable` si la policy ou les faits sont ambigus.
 
+Un ordre LIMIT d augmentation accepte mais reste au carnet est reevalue au point
+central de fill utilise par le fill explicite et par le matching apres mouvement
+de prix. Si le statut a change entre soumission et execution, l ordre passe une
+seule fois a `REJECTED` avant calcul/mutation de fill, position, evenement de fill
+ou creation de protection. Les tentatives suivantes retournent cet etat terminal
+sans second rejet. Les fills reduce-only et de protection gardent leur bypass.
+
 Les metadata d audit sont stables et expurgees : version de policy, date UTC,
 statut/detail, limite, net/consommation seulement s ils sont calculables, nombre
 de faits monetaires, duplicates identiques, faits invalides et rejets du jour.

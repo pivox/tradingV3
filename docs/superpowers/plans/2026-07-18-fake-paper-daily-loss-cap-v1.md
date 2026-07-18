@@ -85,8 +85,9 @@ Fake/Paper state/event/order pipeline, YAML configuration, MkDocs.
   price, execution price, reduced quantity, side, and contract size.
 - [ ] Persist the scale-12 value on the fill event; never infer it from a later
   full-close event.
-- [ ] Evaluate after exact client replay and before One-Way/book/margin/order
-  side effects for every exposure increase.
+- [ ] Evaluate after exact client replay and re-evaluate accepted resting orders
+  at the fill boundary before order/fill/position side effects for every
+  exposure increase.
 - [ ] Reuse the established reduction/protection classification to bypass only
   genuine risk-reducing paths.
 - [ ] Persist `daily_loss_cap_reached` or

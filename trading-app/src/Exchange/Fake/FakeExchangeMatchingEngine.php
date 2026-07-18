@@ -118,14 +118,9 @@ final readonly class FakeExchangeMatchingEngine
 
         $dailyLossCapMetadata = $this->dailyLossCapGuard?->rejectionMetadata($request);
         if ($dailyLossCapMetadata !== null) {
-            $reason = ($dailyLossCapMetadata['daily_loss_cap_status'] ?? null)
-                === FakeDailyLossCapStatus::LIMIT_REACHED
-                    ? 'daily_loss_cap_reached'
-                    : 'daily_loss_cap_not_computable';
-
             return $this->rejectOrder(
                 $request,
-                $reason,
+                $this->dailyLossCapRejectionReason($dailyLossCapMetadata),
                 $trustedFallbackMetadata,
                 $dailyLossCapMetadata,
             );
@@ -283,6 +278,12 @@ final readonly class FakeExchangeMatchingEngine
         if (!$order instanceof ExchangeOrderDto || !$this->isActiveStatus($order->status)) {
             return $order;
         }
+
+        $dailyLossCapMetadata = $this->dailyLossCapGuard?->rejectionMetadata($order);
+        if ($dailyLossCapMetadata !== null) {
+            return $this->rejectRestingOrderForDailyLossCap($order, $dailyLossCapMetadata);
+        }
+
         if ($this->isPersistedTrailingOrder($order)) {
             $this->assertPersistedActiveTrailingOrderValid($order);
         }
@@ -905,6 +906,36 @@ final readonly class FakeExchangeMatchingEngine
         $this->appendEvent('order.rejected', $order, array_replace(...$metadata));
 
         return $this->placeResult(false, $request, $order);
+    }
+
+    /** @param array<string,bool|int|string|null> $dailyLossCapMetadata */
+    private function rejectRestingOrderForDailyLossCap(
+        ExchangeOrderDto $order,
+        array $dailyLossCapMetadata,
+    ): ExchangeOrderDto {
+        $reason = $this->dailyLossCapRejectionReason($dailyLossCapMetadata);
+        $rejected = $this->withOrderStatus(
+            $order,
+            ExchangeOrderStatus::REJECTED,
+            array_replace($order->metadata, $dailyLossCapMetadata, ['reason' => $reason]),
+        );
+        $this->stateStore->saveOrder($rejected);
+        $this->appendEvent(
+            'order.rejected',
+            $rejected,
+            array_replace($dailyLossCapMetadata, ['reason' => $reason]),
+        );
+
+        return $rejected;
+    }
+
+    /** @param array<string,bool|int|string|null> $dailyLossCapMetadata */
+    private function dailyLossCapRejectionReason(array $dailyLossCapMetadata): string
+    {
+        return ($dailyLossCapMetadata['daily_loss_cap_status'] ?? null)
+            === FakeDailyLossCapStatus::LIMIT_REACHED
+                ? 'daily_loss_cap_reached'
+                : 'daily_loss_cap_not_computable';
     }
 
     private function intentMismatchReplayResult(PlaceOrderRequest $request, ExchangeOrderDto $existing): PlaceOrderResult

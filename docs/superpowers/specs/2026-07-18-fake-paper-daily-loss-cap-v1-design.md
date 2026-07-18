@@ -138,6 +138,15 @@ The matching engine performs these steps for an exposure-increasing request:
 5. continue through the existing path only when the cap is computable and
    strictly below the limit.
 
+An accepted resting exposure order is re-evaluated at the single fill boundary,
+immediately before fill arithmetic, order mutation, position mutation, fill
+events, or attached-protection creation. If the cap has become reached or not
+computable since submission, the order transitions once to `REJECTED` with the
+same redacted Daily loss metadata and no fill or position side effect. Repeated
+manual fills or price matches return that persisted terminal order and do not
+append another rejection. Reduce-only and protection fills retain the same
+bypass as their submission path.
+
 The existing replay lookup precedes the cap so a repeated client order returns
 the original accepted or rejected result rather than being re-evaluated under
 a later day or balance. Reduction intent follows the established contract:

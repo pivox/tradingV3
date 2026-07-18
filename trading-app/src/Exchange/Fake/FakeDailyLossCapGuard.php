@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Exchange\Fake;
 
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderType;
 use Brick\Math\BigDecimal;
@@ -170,9 +171,9 @@ final readonly class FakeDailyLossCapGuard
     }
 
     /** @return array<string,bool|int|string|null>|null */
-    public function rejectionMetadata(PlaceOrderRequest $request): ?array
+    public function rejectionMetadata(PlaceOrderRequest|ExchangeOrderDto $order): ?array
     {
-        if ($request->reduceOnly || \in_array($request->orderType, [
+        if ($order->reduceOnly || \in_array($order->orderType, [
             ExchangeOrderType::STOP_LOSS,
             ExchangeOrderType::TAKE_PROFIT,
             ExchangeOrderType::TRIGGER,

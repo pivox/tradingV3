@@ -374,6 +374,14 @@ version, UTC date, status/detail, limit, computable daily net/consumption, and
 derived monetary/duplicate/invalid/rejection counts; raw metadata and secrets
 never cross this boundary.
 
+An exposure-increasing LIMIT order that remains open is checked again at the
+central fill boundary used by both explicit scenario fills and price matching.
+If the cap changed after acceptance, the order becomes `REJECTED` once before
+fill arithmetic, quantity/status fill mutation, position mutation, fill events,
+or attached protections. Repeated fill attempts return the persisted terminal
+order without another rejection. Reduce-only and protection fills bypass this
+recheck exactly as they bypass submission-time enforcement.
+
 Risk reduction always bypasses this policy: explicit reduce-only market closes,
 standalone SL/TP, internally managed triggers/trailing stops, and protection
 fail-safe emergency closes continue through their existing validation and fill
