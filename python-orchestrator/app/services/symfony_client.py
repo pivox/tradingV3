@@ -112,6 +112,8 @@ async def fetch_open_state(
     url = f"{base_url.rstrip('/')}/api/exchange/open-state"
     params = {"exchange": exchange, "market_type": market_type}
     headers = {"X-Fake-Only-Safety-Evidence": "v1"} if exchange == "fake" else None
+    if headers is not None:
+        params["dry_run"] = "true"
     try:
         response = await client.get(url, params=params, headers=headers)
     except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire

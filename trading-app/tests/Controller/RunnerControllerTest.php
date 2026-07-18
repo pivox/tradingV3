@@ -131,6 +131,7 @@ final class RunnerControllerTest extends TestCase
         self::assertSame(
             [
                 'ambiguous_calls' => 0,
+                'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
                 'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
                 'schema_version' => 'fake-only-exchange-safety-v1',
@@ -138,6 +139,72 @@ final class RunnerControllerTest extends TestCase
             ],
             $responseBody['data']['fake_only_safety_evidence'] ?? null,
         );
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidProofPayloads')]
+    public function testRejectsFakeOnlyProofOutsideFakeDryRun(array $payload): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method('run');
+        $controller = $this->controller();
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
+            ],
+            content: json_encode($payload, JSON_THROW_ON_ERROR),
+        );
+
+        $response = $controller->index($request, new RunMtfCycleUseCase($this->runnerService($validator)));
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame('fake_only_safety_context_invalid', $body['error_code'] ?? null);
+        self::assertArrayNotHasKey('fake_only_safety_evidence', $body['data'] ?? []);
+    }
+
+    /** @return iterable<string, array{array<string,mixed>}> */
+    public static function invalidProofPayloads(): iterable
+    {
+        $base = [
+            'symbols' => ['BTCUSDT'],
+            'market_type' => 'perpetual',
+            'workers' => 1,
+            'sync_tables' => false,
+            'process_tp_sl' => false,
+            'skip_open_state_filter' => true,
+        ];
+
+        yield 'real exchange dry-run' => [$base + ['exchange' => 'bitmart', 'dry_run' => true]];
+        yield 'mutative fake' => [$base + ['exchange' => 'fake', 'dry_run' => false]];
+        yield 'parallel Fake worker escapes request-scoped audit' => [array_replace(
+            $base,
+            ['exchange' => 'fake', 'dry_run' => true, 'workers' => 2],
+        )];
+    }
+
+    private function controller(): RunnerController
+    {
+        $parameterBag = $this->createMock(ParameterBagInterface::class);
+        $parameterBag->method('get')->willReturnMap([
+            ['kernel.project_dir', '/tmp'],
+            ['mode', []],
+        ]);
+        $controller = new RunnerController(
+            new NullLogger(),
+            new TradeEntryModeContext(new TradeEntryConfigProvider($parameterBag)),
+            new OrchestrationContextValidator(),
+        );
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('has')->willReturn(false);
+        $controller->setContainer($container);
+
+        return $controller;
     }
 
     private function runnerService(MtfValidatorInterface $validator): MtfRunnerService

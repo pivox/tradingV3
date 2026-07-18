@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Application\Runner\OpenStateSnapshotSerializer;
+use App\Common\Enum\Exchange;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Context\ExchangeContextResolver;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
@@ -46,7 +47,19 @@ final class ExchangeStateController extends AbstractController
 
         $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v1';
         if ($safetyEvidenceRequested) {
-            $this->fakeOnlyExchangeCallAudit->begin();
+            $explicitDryRun = filter_var(
+                $request->query->get('dry_run'),
+                FILTER_VALIDATE_BOOLEAN,
+                FILTER_NULL_ON_FAILURE,
+            );
+            if ($context->exchange !== Exchange::FAKE || $explicitDryRun !== true) {
+                return $this->json([
+                    'status' => 'error',
+                    'error_code' => 'fake_only_safety_context_invalid',
+                    'message' => 'Fake-only safety evidence requires exchange=fake and dry_run=true.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+            $this->fakeOnlyExchangeCallAudit->begin(asyncExchangeCapableDispatchesSuppressed: true);
         }
 
         try {

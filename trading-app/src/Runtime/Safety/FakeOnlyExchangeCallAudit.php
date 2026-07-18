@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Runtime\Safety;
 
-final class FakeOnlyExchangeCallAudit
+use Symfony\Contracts\Service\ResetInterface;
+
+final class FakeOnlyExchangeCallAudit implements ResetInterface
 {
     private bool $active = false;
 
@@ -17,11 +19,14 @@ final class FakeOnlyExchangeCallAudit
 
     private int $ambiguousCalls = 0;
 
-    public function begin(): void
+    private bool $asyncExchangeCapableDispatchesSuppressed = false;
+
+    public function begin(bool $asyncExchangeCapableDispatchesSuppressed): void
     {
         $this->active = true;
         $this->exchangeCalls = ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0];
         $this->ambiguousCalls = 0;
+        $this->asyncExchangeCapableDispatchesSuppressed = $asyncExchangeCapableDispatchesSuppressed;
     }
 
     public function isActive(): bool
@@ -53,7 +58,8 @@ final class FakeOnlyExchangeCallAudit
     /**
      * @return array{
      *     ambiguous_calls: int,
-     *     complete: true,
+     *     async_exchange_capable_dispatches_suppressed: bool,
+     *     complete: bool,
      *     exchange_calls: array{bitmart: int, hyperliquid: int, okx: int},
      *     schema_version: string,
      *     source: string
@@ -63,13 +69,22 @@ final class FakeOnlyExchangeCallAudit
     {
         $evidence = [
             'ambiguous_calls' => $this->ambiguousCalls,
-            'complete' => true,
+            'async_exchange_capable_dispatches_suppressed' => $this->asyncExchangeCapableDispatchesSuppressed,
+            'complete' => $this->active && $this->asyncExchangeCapableDispatchesSuppressed,
             'exchange_calls' => $this->exchangeCalls,
             'schema_version' => 'fake-only-exchange-safety-v1',
             'source' => 'symfony_http_client_guard',
         ];
-        $this->active = false;
+        $this->reset();
 
         return $evidence;
+    }
+
+    public function reset(): void
+    {
+        $this->active = false;
+        $this->exchangeCalls = ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0];
+        $this->ambiguousCalls = 0;
+        $this->asyncExchangeCapableDispatchesSuppressed = false;
     }
 }

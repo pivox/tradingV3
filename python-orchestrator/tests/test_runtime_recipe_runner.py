@@ -47,6 +47,7 @@ class FakeRecipeApi:
         self.fake_only_safety_evidence = (
             {
                 "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
                 "schema_version": "fake-only-exchange-safety-v1",
@@ -58,6 +59,7 @@ class FakeRecipeApi:
         self.open_state_safety_evidence = (
             {
                 "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
                 "schema_version": "fake-only-exchange-safety-v1",
@@ -386,6 +388,9 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert recipe["locks"]["business"]["scope"] == "exchange+market_type+symbol"
     assert recipe["locks"]["business"]["conflict_status"] == "blocked"
     assert recipe["replay"]["same_run_id"] is True
+    assert recipe["replay"]["idempotency_key"].startswith(
+        "fake-golden20-fake-only-exchange-safety-v1-"
+    )
     assert recipe["restart"]["stable_recipe_key"] is True
     assert recipe["parallelism"] == {
         "bounded": True,
@@ -410,6 +415,45 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
 
 
+def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
+    tmp_path: Path,
+):
+    api = FakeRecipeApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    fixture_canonical = json.dumps(
+        runner.fixtures["multi_profile"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    fixture_hash = hashlib.sha256(fixture_canonical.encode("utf-8")).hexdigest()
+    legacy_key = f"fake-golden20-{fixture_hash[:16]}"
+    api.runs_by_key[legacy_key] = {
+        "ok": True,
+        "run_id": "run_pre_v1_persistent_result",
+        "status": "success",
+        "summary": {"total_calls": 3, "success": 3, "failed": 0},
+    }
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    run_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+
+    assert report["results"][0]["status"] == "PASS"
+    assert api.new_run_dispatch_count == 1
+    assert len(set(run_keys)) == 1
+    assert run_keys[0] != legacy_key
+    assert run_keys[0].startswith("fake-golden20-fake-only-exchange-safety-v1-")
+    assert recipe["replay"]["same_run_id"] is True
+
+
 @pytest.mark.parametrize(
     ("safety_evidence", "expected_status", "expected_exchange_calls"),
     [
@@ -417,6 +461,7 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
         (
             {
                 "ambiguous_calls": 1,
+                "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
                 "schema_version": "fake-only-exchange-safety-v1",
@@ -428,6 +473,7 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
         (
             {
                 "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
                 "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
                 "schema_version": "fake-only-exchange-safety-v1",
@@ -474,6 +520,7 @@ def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
     api = FakeRecipeApi(
         open_state_safety_evidence={
             "ambiguous_calls": 0,
+            "async_exchange_capable_dispatches_suppressed": True,
             "complete": True,
             "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
             "schema_version": "fake-only-exchange-safety-v1",
@@ -490,6 +537,8 @@ def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
 
     assert report["results"][0]["status"] == "FAIL"
     assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+    assert "Exchange calls: `bitmart=1`, `hyperliquid=0`, `okx=0`" in markdown
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

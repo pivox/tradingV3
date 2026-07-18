@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Config\TradeEntryModeContext;
+use App\Common\Enum\Exchange;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
@@ -46,9 +47,6 @@ class RunnerController extends AbstractController
                 $data = $request->query->all();
             }
             $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v1';
-            if ($safetyEvidenceRequested) {
-                $this->fakeOnlyExchangeCallAudit->begin();
-            }
 
             $symbolsInput = $data['symbols'] ?? [];
             $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);
@@ -145,7 +143,23 @@ class RunnerController extends AbstractController
                 'orchestration_set_id' => $headerSetId
                     ?? ($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
                 'config_hash' => $data['config_hash'] ?? null,
+                'suppress_exchange_capable_async_work' => $safetyEvidenceRequested,
             ]);
+            if ($safetyEvidenceRequested) {
+                if (
+                    $runnerRequest->exchange !== Exchange::FAKE
+                    || !$runnerRequest->dryRun
+                    || $runnerRequest->workers !== 1
+                ) {
+                    throw new OrchestrationContextException(
+                        'fake_only_safety_context_invalid',
+                        'Fake-only safety evidence requires exchange=fake, dry_run=true, and workers=1.',
+                    );
+                }
+                $this->fakeOnlyExchangeCallAudit->begin(
+                    asyncExchangeCapableDispatchesSuppressed: $runnerRequest->suppressExchangeCapableAsyncWork,
+                );
+            }
             $result = $runMtfCycle->run($runnerRequest);
 
             // Le résultat est déjà enrichi par MtfRunnerService

@@ -343,6 +343,20 @@ n'est pas strictement `exchange=fake` et `dry_run=true`. Les compteurs explicite
 `okx=0`, `hyperliquid=0` et `bitmart=0` completent la preuve instrumentee des
 tests : aucun client exchange reel n'est construit par le golden 20.
 
+Le contrat de preuve est versionne `fake-only-exchange-safety-v1`. Cette version
+fait partie de la cle d'idempotence R12 : un resultat persistant cree avant ce
+contrat ne peut donc pas etre rejoue comme preuve v1. A version et fixture
+identiques, la cle reste stable apres replay et redemarrage.
+
+`complete=true` n'est accepte que pour un appel `exchange=fake`,
+`dry_run=true`, `workers=1`. Le mode preuve reste mono-processus afin que l'audit
+HTTP request-scoped couvre tous les appels synchrones. Il ne depose ni
+`MtfTradingDecisionMessage` sur `mtf_decision`, ni
+`IndicatorSnapshotPersistRequestMessage` sur `mtf_projection` : aucun worker ne
+peut ainsi atteindre Bitmart, OKX ou Hyperliquid apres la reponse. Le snapshot
+`/api/exchange/open-state` exige lui aussi `exchange=fake` et un
+`dry_run=true` explicite pour produire cette preuve.
+
 Garanties du runner :
 
 - refuse de demarrer sans `--confirm DRY_RUN_ONLY` ;

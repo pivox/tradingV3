@@ -82,7 +82,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
     {
         $controller = $this->buildController();
         $request = new Request(
-            ['exchange' => 'fake', 'market_type' => 'perpetual'],
+            ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
             server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
         );
 
@@ -93,6 +93,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         self::assertSame(
             [
                 'ambiguous_calls' => 0,
+                'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
                 'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
                 'schema_version' => 'fake-only-exchange-safety-v1',
@@ -100,6 +101,39 @@ final class ExchangeStateControllerFakeTest extends TestCase
             ],
             $payload['fake_only_safety_evidence'] ?? null,
         );
+    }
+
+    /**
+     * @param array<string,string> $query
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidProofContexts')]
+    public function testFakeOnlyProofRejectsAnyContextThatIsNotFakeAndExplicitlyDryRun(array $query): void
+    {
+        $request = new Request(
+            $query,
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+        );
+
+        $response = $this->buildController()->openState($request);
+        $payload = json_decode((string) $response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame('fake_only_safety_context_invalid', $payload['error_code'] ?? null);
+        self::assertArrayNotHasKey('fake_only_safety_evidence', $payload);
+    }
+
+    /** @return iterable<string, array{array<string,string>}> */
+    public static function invalidProofContexts(): iterable
+    {
+        yield 'missing explicit dry-run' => [[
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+        ]];
+        yield 'real exchange' => [[
+            'exchange' => 'bitmart',
+            'market_type' => 'perpetual',
+            'dry_run' => 'true',
+        ]];
     }
 
     public function testFakeProviderFixtureExposesRealInitialBalance(): void

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURES_DIR = ROOT / "fixtures" / "runtime-recipe"
 DEFAULT_EXPORT_DIR = ROOT / "var" / "runtime-recipe"
 CONFIRMATION_TOKEN = "DRY_RUN_ONLY"
+FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION = "fake-only-exchange-safety-v1"
 
 SET_FIELDS = {
     "set_id",
@@ -686,7 +687,10 @@ class RecipeRunner:
             sort_keys=True,
         )
         fixture_hash = f"sha256:{hashlib.sha256(fixture_canonical.encode('utf-8')).hexdigest()}"
-        recipe_key = f"fake-golden20-{fixture_hash[7:23]}"
+        recipe_key = (
+            f"fake-golden20-{FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION}-"
+            f"{fixture_hash[7:23]}"
+        )
         first = self._run_dashboard(dashboard_id, recipe_key)
         replay = self._run_dashboard(dashboard_id, recipe_key)
         detail = self._fetch_run_detail(first)
@@ -863,9 +867,10 @@ class RecipeRunner:
 
         ambiguous_calls = evidence.get("ambiguous_calls")
         valid = (
-            evidence.get("schema_version") == "fake-only-exchange-safety-v1"
+            evidence.get("schema_version") == FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION
             and evidence.get("source") == "symfony_http_client_guard"
             and evidence.get("complete") is True
+            and evidence.get("async_exchange_capable_dispatches_suppressed") is True
             and type(ambiguous_calls) is int
             and ambiguous_calls == 0
         )
@@ -1202,6 +1207,7 @@ class RecipeRunner:
 
     @staticmethod
     def _multi_profile_markdown(report: dict[str, Any]) -> str:
+        exchange_calls = report["exchange_calls"]
         lines = [
             "# Fake multi-profile recipe",
             "",
@@ -1209,7 +1215,10 @@ class RecipeRunner:
             f"- Fixture: `{report['fixture_id']}`",
             f"- Fixture hash: `{report['fixture_hash']}`",
             f"- Scenario: `{report['scenario']}`",
-            "- Exchange calls: `bitmart=0`, `hyperliquid=0`, `okx=0`",
+            "- Exchange calls: "
+            f"`bitmart={exchange_calls['bitmart']}`, "
+            f"`hyperliquid={exchange_calls['hyperliquid']}`, "
+            f"`okx={exchange_calls['okx']}`",
             "",
             "| Set | Profile | Symbol | Config hash | Orders |",
             "| --- | --- | --- | --- | ---: |",

@@ -26,6 +26,14 @@ final class PostRunProjectionDispatcher
      */
     public function dispatch(array $results, MtfRunnerRequestDto $request, string $runId): void
     {
+        if ($request->suppressExchangeCapableAsyncWork) {
+            $this->logger->debug('[MTF Runner] Indicator persistence suppressed by Fake-only safety proof', [
+                'run_id' => $runId,
+            ]);
+
+            return;
+        }
+
         $timeframes = $this->resolveTimeframes($request);
         if ($timeframes === []) {
             return;

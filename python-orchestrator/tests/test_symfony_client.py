@@ -185,6 +185,7 @@ def test_fetch_open_state_returns_normalized_shape():
 def test_fetch_fake_open_state_requests_and_preserves_safety_evidence():
     evidence = {
         "ambiguous_calls": 0,
+        "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
         "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
         "schema_version": "fake-only-exchange-safety-v1",
@@ -193,6 +194,7 @@ def test_fetch_fake_open_state_requests_and_preserves_safety_evidence():
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["x-fake-only-safety-evidence"] == "v1"
+        assert request.url.params["dry_run"] == "true"
         return httpx.Response(
             200,
             json={
