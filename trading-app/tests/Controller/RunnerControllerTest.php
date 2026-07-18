@@ -141,6 +141,93 @@ final class RunnerControllerTest extends TestCase
         );
     }
 
+    public function testIgnoresClientAsyncSuppressionWithoutSafetyEvidenceHeader(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::once())
+            ->method('run')
+            ->willReturn($this->successfulMtfResponse());
+        $validator->expects(self::once())
+            ->method('getListTimeframe')
+            ->with('regular')
+            ->willReturn([]);
+        $tradeDecisionDispatcher = $this->createMock(TradeDecisionDispatcherInterface::class);
+        $tradeDecisionDispatcher->expects(self::once())->method('dispatchFromResponse');
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mtf_profile' => 'regular',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'suppress_exchange_capable_async_work' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator, $tradeDecisionDispatcher)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertIsArray($body);
+        self::assertIsArray($body['data'] ?? null);
+        self::assertArrayNotHasKey('fake_only_safety_evidence', $body['data']);
+    }
+
+    public function testSafetyEvidenceHeaderOverridesClientFalseAsyncSuppression(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::once())
+            ->method('run')
+            ->willReturn($this->successfulMtfResponse());
+        $validator->expects(self::never())->method('getListTimeframe');
+        $tradeDecisionDispatcher = $this->createMock(TradeDecisionDispatcherInterface::class);
+        $tradeDecisionDispatcher->expects(self::never())->method('dispatchFromResponse');
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mtf_profile' => 'regular',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'suppress_exchange_capable_async_work' => false,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator, $tradeDecisionDispatcher)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertIsArray($body);
+        self::assertTrue(
+            $body['data']['fake_only_safety_evidence']['async_exchange_capable_dispatches_suppressed'] ?? false,
+        );
+    }
+
     /**
      * @param array<string,mixed> $payload
      */
@@ -207,7 +294,28 @@ final class RunnerControllerTest extends TestCase
         return $controller;
     }
 
-    private function runnerService(MtfValidatorInterface $validator): MtfRunnerService
+    private function successfulMtfResponse(): MtfRunResponseDto
+    {
+        return new MtfRunResponseDto(
+            runId: 'validator-run',
+            status: 'success',
+            executionTimeSeconds: 0.0,
+            symbolsRequested: 1,
+            symbolsProcessed: 1,
+            symbolsSuccessful: 1,
+            symbolsFailed: 0,
+            symbolsSkipped: 0,
+            successRate: 100.0,
+            results: [],
+            errors: [],
+            timestamp: new \DateTimeImmutable('2026-07-18T00:00:00+00:00'),
+        );
+    }
+
+    private function runnerService(
+        MtfValidatorInterface $validator,
+        ?TradeDecisionDispatcherInterface $tradeDecisionDispatcher = null,
+    ): MtfRunnerService
     {
         $logger = new NullLogger();
         $switchRepository = $this->createMock(MtfSwitchRepository::class);
@@ -241,7 +349,7 @@ final class RunnerControllerTest extends TestCase
             $logger,
             $logger,
             $logger,
-            $this->createMock(TradeDecisionDispatcherInterface::class),
+            $tradeDecisionDispatcher ?? $this->createMock(TradeDecisionDispatcherInterface::class),
             '/tmp',
             $this->createMock(ClockInterface::class),
         );
