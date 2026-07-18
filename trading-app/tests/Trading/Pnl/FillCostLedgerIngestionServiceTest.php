@@ -152,6 +152,66 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertSame(1, $this->ledger->count([]));
     }
 
+    public function testReplayAcceptsPayloadHashWrittenBeforeFundingFieldsWereCanonicalized(): void
+    {
+        $legacyPayloadHash = hash('sha256', json_encode([
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'side' => 'BUY',
+            'fill_id' => 'fill-legacy-replay',
+            'exchange_fill_id' => 'fill-legacy-replay',
+            'exchange_order_id' => 'EX-FILL',
+            'client_order_id' => 'cid-fill',
+            'fill_role' => 'entry',
+            'liquidity_role' => 'unknown',
+            'price' => '100.000000000000',
+            'quantity' => '1.000000000000',
+            'notional' => '100.000000000000',
+            'fee_amount' => '0.050000000000',
+            'fee_currency' => 'USDT',
+            'fee_usdt' => '0.050000000000',
+            'funding_usdt' => null,
+            'spread_cost_usdt' => null,
+            'slippage_cost_usdt' => null,
+            'borrow_cost_usdt' => null,
+            'liquidation_fee_usdt' => null,
+            'occurred_at' => '2026-01-01T00:00:00+00:00',
+        ], JSON_THROW_ON_ERROR));
+        $existing = new FillCostLedgerEntry(
+            idempotencyKey: 'fake:perpetual:exchange_fill:fill-legacy-replay',
+            payloadHash: $legacyPayloadHash,
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            fillId: 'fill-legacy-replay',
+            fillRole: 'entry',
+            occurredAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            source: 'exchange_event',
+            sourceVersion: 'fill_cost_ledger_v1',
+        );
+        $repository = $this->createMock(FillCostLedgerEntryRepository::class);
+        $repository->expects(self::once())
+            ->method('findOneByIdempotencyKey')
+            ->with('fake:perpetual:exchange_fill:fill-legacy-replay')
+            ->willReturn($existing);
+        $repository->expects(self::never())->method('save');
+        /** @var TradeLineageRepository $lineages */
+        $lineages = $this->em->getRepository(TradeLineage::class);
+        $service = new FillCostLedgerIngestionService(
+            $repository,
+            new TradeLineageManager($lineages, $this->em, new NullLogger()),
+        );
+
+        $result = $service->ingestExchangeFill(new ExchangeFillReceived($this->fill(
+            fillId: 'fill-legacy-replay',
+        )));
+
+        self::assertTrue($result->replayed);
+        self::assertFalse($result->inserted);
+        self::assertSame($existing, $result->entry);
+    }
+
     public function testReplayIgnoresMutableProjectionSourceAndLateLineageEnrichment(): void
     {
         $event = new ExchangeFillReceived($this->fill(

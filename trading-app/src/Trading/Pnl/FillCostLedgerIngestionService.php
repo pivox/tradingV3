@@ -22,6 +22,13 @@ final readonly class FillCostLedgerIngestionService
 {
     private const SOURCE_VERSION = 'fill_cost_ledger_v1';
     private const SENSITIVE_KEY_MARKERS = ['apikey', 'secret', 'token', 'password', 'memo', 'credential'];
+    private const FUNDING_DETAIL_CONFLICT_KEYS = [
+        'funding_native_amount',
+        'funding_currency',
+        'funding_rate',
+        'funding_rate_interval_seconds',
+        'funding_applied_interval_seconds',
+    ];
 
     public function __construct(
         private FillCostLedgerEntryRepository $ledger,
@@ -258,7 +265,7 @@ final readonly class FillCostLedgerIngestionService
         $payloadHash = $this->conflictHash($snapshot);
         $existing = $this->ledger->findOneByIdempotencyKey($idempotencyKey);
         if ($existing instanceof FillCostLedgerEntry) {
-            if ($existing->getPayloadHash() === $payloadHash) {
+            if ($this->payloadHashMatches($existing->getPayloadHash(), $payloadHash, $snapshot)) {
                 if ($this->lineageConflicts($existing, $snapshot)) {
                     throw new FillCostLedgerIngestionConflict(sprintf(
                         'Conflicting fill-cost ledger lineage for idempotency key "%s".',
@@ -314,7 +321,9 @@ final readonly class FillCostLedgerIngestionService
             $this->ledger->save($entry);
         } catch (UniqueConstraintViolationException) {
             $concurrent = $this->ledger->resetManagerAndFindOneByIdempotencyKey($idempotencyKey);
-            if ($concurrent instanceof FillCostLedgerEntry && $concurrent->getPayloadHash() === $payloadHash) {
+            if ($concurrent instanceof FillCostLedgerEntry
+                && $this->payloadHashMatches($concurrent->getPayloadHash(), $payloadHash, $snapshot)
+            ) {
                 if ($this->lineageConflicts($concurrent, $snapshot)) {
                     throw new FillCostLedgerIngestionConflict(sprintf(
                         'Conflicting fill-cost ledger lineage for idempotency key "%s".',
@@ -542,7 +551,7 @@ final readonly class FillCostLedgerIngestionService
     /**
      * @param array<string,mixed> $snapshot
      */
-    private function conflictHash(array $snapshot): string
+    private function conflictHash(array $snapshot, bool $includeFundingDetails = true): string
     {
         $canonical = [];
         foreach ([
@@ -574,10 +583,22 @@ final readonly class FillCostLedgerIngestionService
             'liquidation_fee_usdt',
             'occurred_at',
         ] as $key) {
+            if (!$includeFundingDetails && \in_array($key, self::FUNDING_DETAIL_CONFLICT_KEYS, true)) {
+                continue;
+            }
             $canonical[$key] = $snapshot[$key] ?? null;
         }
 
         return hash('sha256', json_encode($canonical, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @param array<string,mixed> $snapshot
+     */
+    private function payloadHashMatches(string $storedHash, string $currentHash, array $snapshot): bool
+    {
+        return $storedHash === $currentHash
+            || $storedHash === $this->conflictHash($snapshot, includeFundingDetails: false);
     }
 
     private function deterministicFillId(ExchangeFillDto $fill): string
