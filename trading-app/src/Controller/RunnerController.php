@@ -138,6 +138,7 @@ class RunnerController extends AbstractController
                     ?? ($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
                 'orchestration_set_id' => $headerSetId
                     ?? ($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
+                'config_hash' => $data['config_hash'] ?? null,
             ]);
             $result = $runMtfCycle->run($runnerRequest);
 
