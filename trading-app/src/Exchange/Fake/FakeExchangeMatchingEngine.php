@@ -19,6 +19,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
+use Brick\Math\RoundingMode;
 use Psr\Clock\ClockInterface;
 
 final readonly class FakeExchangeMatchingEngine
@@ -72,6 +73,7 @@ final readonly class FakeExchangeMatchingEngine
         ?FakeInstrumentProviderInterface $instruments = null,
         ?FakeFillCostModel $fillCostModel = null,
         ?FakeOneWayConflictGuard $oneWayConflictGuard = null,
+        private ?FakeDailyLossCapGuard $dailyLossCapGuard = null,
     ) {
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
         $this->orderValidator = $orderValidator ?? new FakeOrderValidator($this->instruments);
@@ -111,6 +113,21 @@ final readonly class FakeExchangeMatchingEngine
                 submittedAt: $this->clock->now(),
                 order: $existing,
                 metadata: array_replace($existing->metadata, ['idempotent_replay' => true]),
+            );
+        }
+
+        $dailyLossCapMetadata = $this->dailyLossCapGuard?->rejectionMetadata($request);
+        if ($dailyLossCapMetadata !== null) {
+            $reason = ($dailyLossCapMetadata['daily_loss_cap_status'] ?? null)
+                === FakeDailyLossCapStatus::LIMIT_REACHED
+                    ? 'daily_loss_cap_reached'
+                    : 'daily_loss_cap_not_computable';
+
+            return $this->rejectOrder(
+                $request,
+                $reason,
+                $trustedFallbackMetadata,
+                $dailyLossCapMetadata,
             );
         }
 
@@ -248,6 +265,11 @@ final readonly class FakeExchangeMatchingEngine
         );
     }
 
+    public function dailyLossCapStatus(): ?FakeDailyLossCapStatus
+    {
+        return $this->dailyLossCapGuard?->current();
+    }
+
     public function fallbackTaker(string $exchangeOrderId): FakeFallbackTakerResult
     {
         return $this->stateStore->runAtomically(
@@ -336,6 +358,12 @@ final readonly class FakeExchangeMatchingEngine
             contractSize: $contractSize,
             postOnly: $order->postOnly,
         );
+        $realizedGrossPnlUsdt = $this->realizedGrossPnlUsdt(
+            $order,
+            $fillQuantity,
+            $executionPrice,
+            $contractSize,
+        );
 
         $updated = new ExchangeOrderDto(
             exchange: $order->exchange,
@@ -382,6 +410,7 @@ final readonly class FakeExchangeMatchingEngine
                 'spread_model_version' => $fillCost->spreadModelVersion,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => $realizedGrossPnlUsdt,
             ],
         );
         if ($status === ExchangeOrderStatus::FILLED && $this->isActiveTrailingOrder($updated)) {
@@ -2382,6 +2411,39 @@ final readonly class FakeExchangeMatchingEngine
     private function fillFee(float $quantity, float $price, float $contractSize): float
     {
         return round($quantity * $price * $contractSize * self::FEE_RATE, 12);
+    }
+
+    private function realizedGrossPnlUsdt(
+        ExchangeOrderDto $order,
+        float $fillQuantity,
+        float $executionPrice,
+        float $contractSize,
+    ): string {
+        if (!$order->reduceOnly) {
+            return '0.000000000000';
+        }
+        if ($order->positionSide === null) {
+            throw new \LogicException('fake_realized_pnl_position_side_unknown');
+        }
+        $position = $this->stateStore->getPosition($order->symbol, $order->positionSide);
+        if (!$position instanceof ExchangePositionDto) {
+            throw new \LogicException('fake_realized_pnl_position_unknown');
+        }
+
+        try {
+            $entry = BigDecimal::of(self::canonicalFloat($position->entryPrice));
+            $exit = BigDecimal::of(self::canonicalFloat($executionPrice));
+            $priceDelta = $position->side === ExchangePositionSide::SHORT
+                ? $entry->minus($exit)
+                : $exit->minus($entry);
+
+            return (string) $priceDelta
+                ->multipliedBy(self::canonicalFloat($fillQuantity))
+                ->multipliedBy(self::canonicalFloat($contractSize))
+                ->toScale(12, RoundingMode::HALF_EVEN);
+        } catch (\Throwable) {
+            throw new \LogicException('fake_realized_pnl_calculation_invalid');
+        }
     }
 
     private function withPersistedLeverageSetting(PlaceOrderRequest $request): PlaceOrderRequest

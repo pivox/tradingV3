@@ -89,12 +89,11 @@ final readonly class FakeExchangeAdapter implements
         );
     }
 
-    /**
-     * @return array{fee_model:string,fee_rate:float,fill_model:string,slippage_model:string,slippage_bps:float,spread_model:string,metadata_fixture_version:string,precision_model_version:string}
-     */
+    /** @return array<string,bool|float|int|string|null> */
     public function runtimeModelMetadata(): array
     {
         $catalog = new FakeInstrumentCatalog();
+        $dailyLossCap = $this->matchingEngine->dailyLossCapStatus();
 
         return [
             'fee_model' => 'fixed_notional_fee_v1',
@@ -105,7 +104,11 @@ final readonly class FakeExchangeAdapter implements
             'spread_model' => FakeFillCostModel::SPREAD_MODEL_VERSION,
             'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
             'precision_model_version' => $catalog->precisionModelVersion(),
-        ];
+        ] + ($dailyLossCap?->toAuditMetadata() ?? [
+            'daily_loss_cap_policy_version' => null,
+            'daily_loss_cap_status' => 'not_configured',
+            'daily_loss_cap_detail_reason' => 'daily_loss_cap_guard_not_configured',
+        ]);
     }
 
     /**

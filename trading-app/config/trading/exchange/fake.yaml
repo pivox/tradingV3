@@ -1,4 +1,4 @@
-version: '0.1.0-effective-config-bootstrap'
+version: '0.2.0-daily-loss-cap-v1'
 
 trading:
   exchange: fake
@@ -6,6 +6,13 @@ trading:
   execution:
     dry_run: true
     live_enabled: false
+  risk:
+    daily_loss_cap:
+      policy_version: 'fake-daily-loss-cap-v1'
+      currency: 'USDT'
+      utc_window: true
+      limit_env: 'FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT'
+      fail_closed_on_not_computable: true
 
 compatibility:
   env_template_keys:
@@ -13,3 +20,4 @@ compatibility:
     - FAKE_EXCHANGE_INITIAL_BALANCE_USDT
     - FAKE_EXCHANGE_FEES_ENABLED
     - FAKE_EXCHANGE_SLIPPAGE_BPS
+    - FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT

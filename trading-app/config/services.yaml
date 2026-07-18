@@ -68,6 +68,7 @@ parameters:
     env(REDIS_PORT): '6379'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
     env(POSITION_TRADE_ANALYSIS_REPORTING_SOURCE): 'v2'
+    env(FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT): '100.000000000000'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -91,6 +92,10 @@ services:
             - '../src/Provider/'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenario.php'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenarioFixtures.php'
+
+    App\Exchange\Fake\FakeDailyLossCapPolicy:
+        arguments:
+            $configuredLimitUsdt: '%env(string:FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT)%'
 
     # Loggers dedicated to the provider module
     App\Provider\:
