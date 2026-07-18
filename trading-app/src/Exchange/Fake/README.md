@@ -16,6 +16,7 @@ Supported scenarios:
   attached protection is rejected;
 - cancel by exchange order id or client order id;
 - replay the same active `clientOrderId` without creating a second active order;
+- enforce One-Way entry conflicts for the exact `fake/perpetual/symbol` scope;
 - inspect simulated events such as `order.created`, `order.filled`, `position.opened`, `protection_order.created`, and `protection_order.rejected`.
 
 Useful local endpoints:
@@ -166,6 +167,39 @@ position, only the failed increase is removed and the residual position must
 still have full active stop coverage. A wrong close quantity or unprotected
 residual raises an exception and restores the whole local operation. No
 credential, raw request payload, or external exchange mutation is involved.
+
+## Deterministic One-Way position mode
+
+Fake/Paper supports one position mode only: One-Way on `fake/perpetual`. Its
+canonical scope key is `exchange + market_type + uppercase(symbol)`. There is
+no hedge mode, implicit netting, or fallback to another exchange. Every
+`PlaceOrderRequest` must carry an explicit `positionSide`; the engine never
+infers it from BUY/SELL. A LONG entry is BUY, a SHORT entry is SELL, a
+reduce-only LONG exit is SELL, and a reduce-only SHORT exit is BUY.
+
+Before reading available margin or creating an active order, the matching
+engine checks the exact scope for an opposite open position and for an active
+opposite non-reduce-only entry. Either condition is persisted as a rejected
+order and one `order.rejected` event with stable reason
+`one_way_position_conflict`. An active entry whose persisted `positionSide` is
+missing fails closed as ambiguous. Same-side increases remain possible, other
+symbols remain independent, and reduce-only exits/protections stay allowed.
+Once the existing exposure is flat and no incompatible entry remains active,
+the opposite side can open normally.
+
+Rejection metadata is derived only: mode/version, canonical scope, requested
+side, conflict source, and conflicting side when known. Raw request metadata,
+credentials, headers, URLs, and payloads are not copied. Exact
+`clientOrderId` replay returns the same rejected order with
+`idempotent_replay=true` and no duplicate event. The ordinary checksummed
+`fake-paper-state-v1` envelope persists positions, active orders, rejection,
+and event sequence, so restart enforces the same policy without migration.
+
+This path is local and performs no exchange network request or
+demo/testnet/mainnet write. Rollback removes `FakeOneWayConflictGuard`, restores
+golden scenario 19 to `unsupported` with
+`one_way_conflict_guard_not_implemented`, and archives no new state format;
+existing rejected orders/events remain valid v1 audit records.
 
 ## Private WS disconnect/resync fixture
 

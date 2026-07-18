@@ -468,6 +468,49 @@ appel reseau exchange, aucune permission demo/testnet/mainnet et aucun
 changement de strategie, MTF, EntryZone, sizing, levier, SL/TP, frais ou
 slippage.
 
+## Mode One-Way Fake/Paper
+
+Le runtime supporte uniquement le mode One-Way pour l'adapter local
+`fake/perpetual`. La cle d'exposition est exacte et deterministe :
+
+```text
+exchange + market_type + uppercase(symbol)
+```
+
+`positionSide` est obligatoire et n'est jamais deduit de BUY/SELL. Une entree
+LONG utilise BUY, une entree SHORT utilise SELL, une sortie reduce-only LONG
+utilise SELL et une sortie reduce-only SHORT utilise BUY. Aucun mode hedge,
+netting arbitraire ou fallback Bitmart/autre exchange n'est disponible.
+
+Pour toute nouvelle entree non reduce-only, `FakeOneWayConflictGuard` inspecte
+les positions ouvertes et les ordres actifs non reduce-only du scope exact. Une
+position ou entree active opposee produit `one_way_position_conflict`. Un ordre
+actif legacy sans `positionSide` echoue ferme avec la meme raison et une source
+`ambiguous_active_order`. Les sorties/protections reduce-only, les augmentations
+du meme cote et les symboles differents restent independants. Apres cloture et
+absence d'ordre d'entree incompatible, le cote oppose est autorise.
+
+La garde s'execute apres le replay exact du `clientOrderId`, mais avant lecture
+du carnet, calcul/reservation de marge, validation de marge et creation d'un
+ordre actif. Le rejet seul est persiste comme ordre `rejected`, accompagne d'un
+unique evenement `order.rejected`; il ne change ni exposition ni marge. Son
+contexte contient uniquement version du mode, scope, cote demande, source et
+cote conflictuel connu. Aucun payload brut, credential, header ou URL n'est
+copie. Un replay identique renvoie le meme rejet avec
+`idempotent_replay=true`. Le fichier checksume `fake-paper-state-v1` conserve
+positions, ordres, rejet et sequence au restart sans migration.
+
+Le scenario golden 19 `one_way_conflict` execute position LONG contre SHORT,
+position SHORT contre LONG, sortie reduce-only, entree opposee apres cloture,
+ordre actif sans position, replay, restart et symboles independants. Tout reste
+local, sans credential, reseau exchange ou permission mutative
+demo/testnet/mainnet.
+
+Le rollback retire la garde, remet le scenario 19 a `unsupported` avec
+`one_way_conflict_guard_not_implemented` et restaure la presente section. Aucun
+schema ni format d'etat n'est a supprimer ; les rejets historiques restent des
+preuves v1 ordinaires.
+
 ## Golden suite Fake/Paper v1
 
 Le catalogue versionne des 20 scenarios obligatoires de #196 est disponible dans :
@@ -489,21 +532,21 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-huit scenarios executes dans cette version sont : maker limit rempli, limit
+Les dix-neuf scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
 market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
 prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
-private WS avec snapshot resync, restart avec position protegee ouverte, et
-funding perpetuel deterministe/persistant.
+private WS avec snapshot resync, restart avec position protegee ouverte,
+funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
+actif avec replay et restart.
 
 Les ecarts encore explicites sont :
 
 | Scenario | Statut | Gap stable |
 | --- | --- | --- |
-| One-Way conflict | `unsupported` | `one_way_conflict_guard_not_implemented` |
 | dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
 
 Commande consolidee :

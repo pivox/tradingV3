@@ -281,6 +281,26 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'unknown_currency_amount_usdt' => null,
             'unknown_currency_native_amount' => '-1.000000000000',
         ],
+        'one_way_conflict' => [
+            'active_order_conflict_source' => 'active_order',
+            'active_order_rejected' => true,
+            'available_margin_unchanged' => true,
+            'conflict_event_count' => 1,
+            'conflicting_position_side' => 'long',
+            'exposure_unchanged' => true,
+            'flat_allows_opposite' => true,
+            'independent_symbols' => true,
+            'long_blocks_short' => true,
+            'metadata_redacted' => true,
+            'position_mode_version' => 'fake-one-way-v1',
+            'reason' => 'one_way_position_conflict',
+            'reduce_only_exit_allowed' => true,
+            'rejected_order_persisted' => true,
+            'replay_idempotent' => true,
+            'restart_enforced' => true,
+            'same_rejected_order_id' => true,
+            'short_blocks_long' => true,
+        ],
     ];
 
     public function testGoldenRunnerContractExists(): void
@@ -346,7 +366,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(18, $catalogKeys);
+        self::assertCount(19, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

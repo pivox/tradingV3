@@ -14,6 +14,7 @@ use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Dto\PlaceOrderResult;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
@@ -71,6 +72,7 @@ final class FakePaperGoldenScenarioRunner
         'duplicate_out_of_order_event',
         'restart_with_open_position',
         'funding',
+        'one_way_conflict',
     ];
 
     /** @return list<string> */
@@ -107,6 +109,7 @@ final class FakePaperGoldenScenarioRunner
             'duplicate_out_of_order_event' => $this->duplicateOutOfOrderEvent(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
             'funding' => $this->funding(),
+            'one_way_conflict' => $this->oneWayConflict(),
         };
 
         return [
@@ -1094,6 +1097,193 @@ final class FakePaperGoldenScenarioRunner
                 @unlink($temporaryFile);
             }
         }
+    }
+
+    /** @return array<string,mixed> */
+    private function oneWayConflict(): array
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_one_way_');
+        if ($stateFile === false) {
+            throw new \RuntimeException('Unable to allocate the One-Way golden state file.');
+        }
+        @unlink($stateFile);
+
+        try {
+            [$state, $adapter, $scenario] = $this->exchange($stateFile);
+            $long = $adapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::LONG,
+                'golden-one-way-long',
+            ));
+            $availableMarginBefore = $state->availableMarginUsdt();
+            $shortRequest = $this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-short-conflict',
+                metadata: [
+                    'internal_trade_id' => 'golden-one-way-conflict',
+                    'api_key' => 'TOP-SECRET',
+                    'raw_payload' => ['authorization' => 'Bearer SECRET'],
+                ],
+            );
+            $rejected = $adapter->placeOrder($shortRequest);
+            $replayed = $adapter->placeOrder($shortRequest);
+            $positionsAfterConflict = $adapter->getOpenPositions('BTCUSDT');
+            $rejectionEvents = $scenario->events('order.rejected');
+            $serialized = json_encode([
+                $rejected->metadata,
+                array_map(static fn (FakeExchangeEvent $event): array => $event->toArray(), $rejectionEvents),
+            ], JSON_THROW_ON_ERROR);
+
+            [, $restarted] = $this->exchange($stateFile);
+            $restartConflict = $restarted->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-restart-conflict',
+            ));
+            $exit = $restarted->placeOrder($this->oneWayExitRequest(
+                ExchangePositionSide::LONG,
+                'golden-one-way-long-exit',
+            ));
+            $oppositeAfterFlat = $restarted->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-short-after-flat',
+            ));
+
+            [, $shortAdapter] = $this->exchange();
+            $shortAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-short-open',
+            ));
+            $longAgainstShort = $shortAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::LONG,
+                'golden-one-way-long-conflict',
+            ));
+
+            [, $activeAdapter] = $this->exchange();
+            $activeAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::LONG,
+                'golden-one-way-active-long',
+                orderType: ExchangeOrderType::LIMIT,
+                price: 24950.0,
+                postOnly: true,
+                withProtection: false,
+            ));
+            $activeConflict = $activeAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-active-short-conflict',
+            ));
+
+            [, $independentAdapter] = $this->exchange();
+            $btcLong = $independentAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::LONG,
+                'golden-one-way-independent-btc',
+            ));
+            $ethShort = $independentAdapter->placeOrder($this->oneWayEntryRequest(
+                ExchangePositionSide::SHORT,
+                'golden-one-way-independent-eth',
+                symbol: 'ETHUSDT',
+            ));
+
+            return [
+                'active_order_conflict_source' => $activeConflict->metadata['conflict_source'] ?? null,
+                'active_order_rejected' => !$activeConflict->accepted,
+                'available_margin_unchanged' => $availableMarginBefore === $state->availableMarginUsdt(),
+                'conflict_event_count' => \count($rejectionEvents),
+                'conflicting_position_side' => $rejected->metadata['conflicting_position_side'] ?? null,
+                'exposure_unchanged' => $long->accepted
+                    && \count($positionsAfterConflict) === 1
+                    && $positionsAfterConflict[0]->side === ExchangePositionSide::LONG
+                    && $positionsAfterConflict[0]->size === 1.0,
+                'flat_allows_opposite' => $exit->accepted
+                    && $exit->order?->reduceOnly === true
+                    && $oppositeAfterFlat->accepted,
+                'independent_symbols' => $btcLong->accepted
+                    && $ethShort->accepted
+                    && \count($independentAdapter->getOpenPositions('BTCUSDT')) === 1
+                    && \count($independentAdapter->getOpenPositions('ETHUSDT')) === 1,
+                'long_blocks_short' => !$rejected->accepted,
+                'metadata_redacted' => !str_contains($serialized, 'TOP-SECRET')
+                    && !str_contains($serialized, 'Bearer SECRET')
+                    && !str_contains($serialized, 'api_key')
+                    && !str_contains($serialized, 'raw_payload'),
+                'position_mode_version' => $rejected->metadata['position_mode_version'] ?? null,
+                'reason' => $rejected->metadata['reason'] ?? null,
+                'reduce_only_exit_allowed' => $exit->accepted && $exit->order?->reduceOnly === true,
+                'rejected_order_persisted' => $state->getOrder((string) $rejected->exchangeOrderId)?->status
+                    === ExchangeOrderStatus::REJECTED,
+                'replay_idempotent' => $replayed->metadata['idempotent_replay'] ?? false,
+                'restart_enforced' => !$restartConflict->accepted
+                    && ($restartConflict->metadata['reason'] ?? null) === 'one_way_position_conflict',
+                'same_rejected_order_id' => $rejected->exchangeOrderId === $replayed->exchangeOrderId,
+                'short_blocks_long' => !$longAgainstShort->accepted
+                    && ($longAgainstShort->metadata['reason'] ?? null) === 'one_way_position_conflict',
+            ];
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
+    }
+
+    /** @param array<string,mixed> $metadata */
+    private function oneWayEntryRequest(
+        ExchangePositionSide $positionSide,
+        string $clientOrderId,
+        string $symbol = 'BTCUSDT',
+        ExchangeOrderType $orderType = ExchangeOrderType::MARKET,
+        ?float $price = null,
+        bool $postOnly = false,
+        bool $withProtection = true,
+        array $metadata = [],
+    ): PlaceOrderRequest {
+        $short = $positionSide === ExchangePositionSide::SHORT;
+
+        return new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: $symbol,
+            side: $short ? ExchangeOrderSide::SELL : ExchangeOrderSide::BUY,
+            positionSide: $positionSide,
+            orderType: $orderType,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: $price,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: $postOnly,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: $clientOrderId,
+            attachedStopLossPrice: $withProtection
+                ? ($short ? ($symbol === 'ETHUSDT' ? 1820.0 : 25200.0) : ($symbol === 'ETHUSDT' ? 1780.0 : 24800.0))
+                : null,
+            metadata: $metadata,
+        );
+    }
+
+    private function oneWayExitRequest(
+        ExchangePositionSide $positionSide,
+        string $clientOrderId,
+    ): PlaceOrderRequest {
+        return new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: $positionSide === ExchangePositionSide::LONG
+                ? ExchangeOrderSide::SELL
+                : ExchangeOrderSide::BUY,
+            positionSide: $positionSide,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 3,
+            marginMode: 'isolated',
+            clientOrderId: $clientOrderId,
+        );
     }
 
     /** @return array{schema_version:string,model_version:string,symbol:string,mark_price:string,rate_interval_seconds:int,cases:array<string,array<string,mixed>>} */

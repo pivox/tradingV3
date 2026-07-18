@@ -179,13 +179,16 @@
       "status": "executable"
     },
     {
-      "evidence": ["docs/handbook/technical/fake-paper-gateway.md#limites-restantes"],
-      "gap_codes": ["one_way_conflict_guard_not_implemented"],
+      "evidence": [
+        "tests/Exchange/Fake/FakeOneWayConflictGuardTest.php",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts"
+      ],
+      "gap_codes": [],
       "id": 19,
       "name": "one_way_conflict",
       "requirement": "A conflicting One-Way position intent is rejected without changing exposure.",
-      "runner": null,
-      "status": "unsupported"
+      "runner": "one_way_conflict",
+      "status": "executable"
     },
     {
       "evidence": ["tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol"],
