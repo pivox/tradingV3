@@ -14,7 +14,7 @@
 | 3 | #196 — Injection out-of-order | done | issue/196-fake-out-of-order-v1 | #284 | 71834044b4515ee4d5ce7682baabb06cc1769f36 | worker_complex → review_fix → review_escalated | verte | favorable sur 71834044b4 | 2026-07-18T10:23:57Z |
 | 4 | #196 — Funding positif/négatif | done | issue/196-funding-v1 | #285 | 6b5aa4654a230eafdbfc356ee726fe5e76fe1293 | worker_complex → review_fix | verte | favorable sur 6b5aa4654a | 2026-07-18T11:29:44Z |
 | 5 | #196 — Garde One-Way | done | issue/196-one-way-conflict-v1 | #286 | a93b7b82047c17324a8e3a763cdb72db23e31d59 | worker_complex → review_fix | verte | favorable sur a93b7b8204 | 2026-07-18T12:25:56Z |
-| 6 | #196 — Recette Fake multi-profils | in_progress | issue/196-fake-multi-profile-recipe-v1 | — | — | worker_complex | — | — | — |
+| 6 | #196 — Recette Fake multi-profils | done | issue/196-fake-multi-profile-recipe-v1 | #287 | 2118216288d065c233d17d7a8245ec39c3364f69 | worker_complex → review_fix → review_escalated | verte | favorable sur 2118216288 | 2026-07-18T19:56:15Z |
 | 7 | #196 — Daily loss cap | pending | — | — | — | — | — | — | — |
 | 8 | #196 — Liquidation guard/model | pending | — | — | — | — | — | — | — |
 | 9 | #196 — Audit final Fake/Paper | pending | — | — | — | — | — | — | — |
