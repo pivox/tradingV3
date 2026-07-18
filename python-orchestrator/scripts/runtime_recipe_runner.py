@@ -704,7 +704,8 @@ class RecipeRunner:
         set_contracts_ok = True
         safety_evidence_ok = True
         exchange_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
-        snapshot_exchange_calls: dict[str, int] | None = None
+        snapshot_reference_calls: dict[str, int] | None = None
+        snapshot_exchange_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
         for fixture_set in enabled_sets:
             set_id = fixture_set["set_id"]
             result = observed.get(set_id, {})
@@ -727,10 +728,14 @@ class RecipeRunner:
                 snapshot_evidence
             )
             safety_evidence_ok = safety_evidence_ok and snapshot_ok
-            if snapshot_exchange_calls is None:
-                snapshot_exchange_calls = observed_snapshot_calls
-            elif snapshot_exchange_calls != observed_snapshot_calls:
+            if snapshot_reference_calls is None:
+                snapshot_reference_calls = observed_snapshot_calls
+            elif snapshot_reference_calls != observed_snapshot_calls:
                 safety_evidence_ok = False
+            for exchange in snapshot_exchange_calls:
+                snapshot_exchange_calls[exchange] = max(
+                    snapshot_exchange_calls[exchange], observed_snapshot_calls[exchange]
+                )
             config_hash = payload.get("config_hash")
             set_ok = (
                 result.get("ok") is True
@@ -764,9 +769,8 @@ class RecipeRunner:
                 }
             )
 
-        if snapshot_exchange_calls is not None:
-            for exchange in exchange_calls:
-                exchange_calls[exchange] += snapshot_exchange_calls[exchange]
+        for exchange in exchange_calls:
+            exchange_calls[exchange] += snapshot_exchange_calls[exchange]
 
         config_hashes = [item["config_hash"] for item in report_sets]
         lineage_ids = [item["lineage"]["orchestration_set_id"] for item in report_sets]
@@ -873,19 +877,20 @@ class RecipeRunner:
         if not isinstance(evidence, dict):
             return False, empty_calls
         calls = evidence.get("exchange_calls")
-        if not isinstance(calls, dict) or set(calls) != set(empty_calls):
-            return False, empty_calls
-
-        normalized_calls: dict[str, int] = {}
-        for exchange in empty_calls:
-            count = calls.get(exchange)
-            if type(count) is not int or count < 0:
-                return False, empty_calls
-            normalized_calls[exchange] = count
+        calls_valid = isinstance(calls, dict) and set(calls) == set(empty_calls)
+        normalized_calls = empty_calls.copy()
+        if isinstance(calls, dict):
+            for exchange in empty_calls:
+                count = calls.get(exchange)
+                if type(count) is int and count >= 0:
+                    normalized_calls[exchange] = count
+                else:
+                    calls_valid = False
 
         ambiguous_calls = evidence.get("ambiguous_calls")
         valid = (
-            evidence.get("schema_version") == FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION
+            calls_valid
+            and evidence.get("schema_version") == FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION
             and evidence.get("source") == "symfony_http_client_guard"
             and evidence.get("complete") is True
             and evidence.get("async_exchange_capable_dispatches_suppressed") is True

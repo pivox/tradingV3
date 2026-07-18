@@ -92,7 +92,9 @@ final class ExchangeStateController extends AbstractController
             ]);
 
             if ($this->fakeOnlyExchangeCallAudit->isActive()) {
-                $this->fakeOnlyExchangeCallAudit->recordAmbiguousAttempt();
+                if (!$this->fakeOnlyExchangeCallAudit->hasKnownExchangeAttempts()) {
+                    $this->fakeOnlyExchangeCallAudit->recordAmbiguousAttempt();
+                }
 
                 return $this->json([
                     'status' => 'error',

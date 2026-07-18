@@ -33,6 +33,7 @@ class FakeRecipeApi:
         live_probe_body: dict[str, Any] | None = None,
         fake_only_safety_evidence: dict[str, Any] | None = None,
         open_state_safety_evidence: dict[str, Any] | None = None,
+        open_state_safety_evidence_by_set: dict[str, Any] | None = None,
     ) -> None:
         self.health_ok = health_ok
         self.run_transport_error = run_transport_error
@@ -68,6 +69,7 @@ class FakeRecipeApi:
             if open_state_safety_evidence is None
             else open_state_safety_evidence
         )
+        self.open_state_safety_evidence_by_set = open_state_safety_evidence_by_set or {}
         self.r11_seen = 0
         self.lock = Lock()
         self.dashboards: list[dict[str, Any]] = []
@@ -319,7 +321,9 @@ class FakeRecipeApi:
             }
         payload_sent = dict(item["payload"])
         payload_sent["open_state_snapshot"] = {
-            "fake_only_safety_evidence": self.open_state_safety_evidence,
+            "fake_only_safety_evidence": self.open_state_safety_evidence_by_set.get(
+                item["set_id"], self.open_state_safety_evidence
+            ),
             "open_orders": [],
             "open_positions": [],
         }
@@ -660,6 +664,23 @@ def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
             "FAIL",
             {"bitmart": 3, "hyperliquid": 0, "okx": 0},
         ),
+        (
+            {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_calls": {
+                    "bitmart": 1,
+                    "hyperliquid": 0,
+                    "okx": 0,
+                    "unexpected": 0,
+                },
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            },
+            "FAIL",
+            {"bitmart": 3, "hyperliquid": 0, "okx": 0},
+        ),
     ],
 )
 def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
@@ -728,6 +749,31 @@ def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
     assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
     markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
     assert "Exchange calls: `bitmart=1`, `hyperliquid=0`, `okx=0`" in markdown
+
+
+def test_r12_fails_when_later_shared_snapshot_contains_known_exchange_attempt(tmp_path: Path):
+    api = FakeRecipeApi(
+        open_state_safety_evidence_by_set={
+            "recipe_fake_multi_scalper": {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_calls": {"bitmart": 1, "hyperliquid": "bad", "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            },
+        }
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

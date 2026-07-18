@@ -55,6 +55,11 @@ final class FakeOnlyExchangeCallAudit implements ResetInterface
         }
     }
 
+    public function hasKnownExchangeAttempts(): bool
+    {
+        return array_sum($this->exchangeCalls) > 0;
+    }
+
     /**
      * @return array{
      *     ambiguous_calls: int,

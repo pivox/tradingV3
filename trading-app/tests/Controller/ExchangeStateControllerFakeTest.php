@@ -16,12 +16,15 @@ use App\Provider\Fake\FakeSystemProvider;
 use App\Provider\MainProvider;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\Provider\Registry\ExchangeProviderRegistry;
+use App\Runtime\Safety\ExchangeCallGuardHttpClient;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use App\Tests\Provider\Fake\FakeProviderFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Psr\Log\NullLogger;
+use Symfony\Component\HttpClient\MockHttpClient;
+use Symfony\Component\HttpClient\Response\MockResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -253,6 +256,70 @@ final class ExchangeStateControllerFakeTest extends TestCase
         self::assertSame([], $successfulPayload['open_positions'] ?? null);
         self::assertSame([], $successfulPayload['open_orders'] ?? null);
         self::assertSame(0, $successfulPayload['fake_only_safety_evidence']['ambiguous_calls'] ?? null);
+        self::assertFalse($audit->isActive());
+    }
+
+    public function testFakeOnlyProofDoesNotDoubleCountGuardedExchangeCallAsAmbiguous(): void
+    {
+        $delegatedCalls = 0;
+        $innerClient = new MockHttpClient(static function () use (&$delegatedCalls): MockResponse {
+            ++$delegatedCalls;
+
+            return new MockResponse('{}');
+        });
+        $audit = new FakeOnlyExchangeCallAudit();
+        $guard = new ExchangeCallGuardHttpClient($innerClient, $audit, 'bitmart');
+        $guardedAccount = $this->createMock(AccountProviderInterface::class);
+        $guardedAccount->method('getOpenPositionsOrFail')
+            ->willReturnCallback(static function () use ($guard): array {
+                try {
+                    $guard->request('GET', 'https://api-cloud.bitmart.com/contract/private/position-v2');
+                } catch (\Throwable) {
+                    throw new \RuntimeException('fake provider wrapped guarded exchange call');
+                }
+
+                return [];
+            });
+        $fake = FakeProviderFixture::create();
+        $registry = new ExchangeProviderRegistry(
+            [
+                new ExchangeProviderBundle(
+                    new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
+                    new FakeKlineProvider(),
+                    $fake->contract,
+                    $fake->order,
+                    $guardedAccount,
+                    new FakeSystemProvider(),
+                ),
+            ],
+            Exchange::FAKE,
+            MarketType::PERPETUAL,
+        );
+        $controller = new ExchangeStateController(
+            new MainProvider($registry),
+            new ExchangeContextResolver(),
+            new OpenStateSnapshotSerializer(),
+            new NullLogger(),
+            $audit,
+        );
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('has')->willReturn(false);
+        $controller->setContainer($container);
+        $request = new Request(
+            ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+        );
+
+        $response = $controller->openState($request);
+        $payload = json_decode((string) $response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_SERVICE_UNAVAILABLE, $response->getStatusCode());
+        self::assertSame(0, $delegatedCalls);
+        self::assertSame(
+            ['bitmart' => 1, 'hyperliquid' => 0, 'okx' => 0],
+            $payload['fake_only_safety_evidence']['exchange_calls'] ?? null,
+        );
+        self::assertSame(0, $payload['fake_only_safety_evidence']['ambiguous_calls'] ?? null);
         self::assertFalse($audit->isActive());
     }
 }
