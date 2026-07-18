@@ -95,10 +95,10 @@ final class ExchangeStateController extends AbstractController
                 $this->fakeOnlyExchangeCallAudit->recordAmbiguousAttempt();
 
                 return $this->json([
-                    'open_positions' => [],
-                    'open_orders' => [],
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
                     'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
-                ]);
+                ], Response::HTTP_SERVICE_UNAVAILABLE);
             }
 
             // 503 : panne/erreur exchange transitoire. Le client orchestrateur traite

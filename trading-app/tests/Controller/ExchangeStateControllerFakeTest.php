@@ -16,6 +16,7 @@ use App\Provider\Fake\FakeSystemProvider;
 use App\Provider\MainProvider;
 use App\Provider\Registry\ExchangeProviderBundle;
 use App\Provider\Registry\ExchangeProviderRegistry;
+use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use App\Tests\Provider\Fake\FakeProviderFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -190,5 +191,68 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $response = $controller->openState($request);
 
         self::assertSame(Response::HTTP_SERVICE_UNAVAILABLE, $response->getStatusCode());
+    }
+
+    public function testFakeOnlyProofProviderFailureReturnsServiceUnavailableAndResetsAudit(): void
+    {
+        $calls = 0;
+        $throwingOnceAccount = $this->createMock(AccountProviderInterface::class);
+        $throwingOnceAccount->method('getOpenPositionsOrFail')
+            ->willReturnCallback(static function () use (&$calls): array {
+                if (++$calls === 1) {
+                    throw new \RuntimeException('fake provider unavailable');
+                }
+
+                return [];
+            });
+        $fake = FakeProviderFixture::create();
+        $audit = new FakeOnlyExchangeCallAudit();
+        $registry = new ExchangeProviderRegistry(
+            [
+                new ExchangeProviderBundle(
+                    new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
+                    new FakeKlineProvider(),
+                    $fake->contract,
+                    $fake->order,
+                    $throwingOnceAccount,
+                    new FakeSystemProvider(),
+                ),
+            ],
+            Exchange::FAKE,
+            MarketType::PERPETUAL,
+        );
+        $controller = new ExchangeStateController(
+            new MainProvider($registry),
+            new ExchangeContextResolver(),
+            new OpenStateSnapshotSerializer(),
+            new NullLogger(),
+            $audit,
+        );
+        $container = $this->createMock(ContainerInterface::class);
+        $container->method('has')->willReturn(false);
+        $controller->setContainer($container);
+        $request = new Request(
+            ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+        );
+
+        $failedResponse = $controller->openState($request);
+        $failedPayload = json_decode((string) $failedResponse->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_SERVICE_UNAVAILABLE, $failedResponse->getStatusCode());
+        self::assertSame('error', $failedPayload['status'] ?? null);
+        self::assertArrayNotHasKey('open_positions', $failedPayload);
+        self::assertArrayNotHasKey('open_orders', $failedPayload);
+        self::assertSame(1, $failedPayload['fake_only_safety_evidence']['ambiguous_calls'] ?? null);
+        self::assertFalse($audit->isActive());
+
+        $successfulResponse = $controller->openState($request);
+        $successfulPayload = json_decode((string) $successfulResponse->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $successfulResponse->getStatusCode());
+        self::assertSame([], $successfulPayload['open_positions'] ?? null);
+        self::assertSame([], $successfulPayload['open_orders'] ?? null);
+        self::assertSame(0, $successfulPayload['fake_only_safety_evidence']['ambiguous_calls'] ?? null);
+        self::assertFalse($audit->isActive());
     }
 }
