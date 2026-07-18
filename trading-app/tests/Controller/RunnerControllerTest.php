@@ -99,6 +99,7 @@ final class RunnerControllerTest extends TestCase
                 'HTTP_X_RUN_CORRELATION_ID' => 'run-config-hash',
                 'HTTP_X_ORCHESTRATION_SET_ID' => 'set-regular',
                 'HTTP_X_ORCHESTRATION_DASHBOARD_ID' => 'dashboard-fake',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
             ],
             content: json_encode([
                 'symbols' => ['BTCUSDT'],
@@ -125,6 +126,17 @@ final class RunnerControllerTest extends TestCase
         self::assertSame(
             'sha256:' . str_repeat('a', 64),
             $validator->request->lineageContext->configHash,
+        );
+        $responseBody = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(
+            [
+                'ambiguous_calls' => 0,
+                'complete' => true,
+                'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
+                'schema_version' => 'fake-only-exchange-safety-v1',
+                'source' => 'symfony_http_client_guard',
+            ],
+            $responseBody['data']['fake_only_safety_evidence'] ?? null,
         );
     }
 

@@ -299,10 +299,15 @@ services:
 
     App\Exchange\Hyperliquid\HttpHyperliquidSignedActionClient:
         arguments:
+            $httpClient: '@app.http_client.exchange_guard.hyperliquid'
             $baseUri: '%env(string:HYPERLIQUID_SIGNER_BASE_URI)%'
             $authToken: '%env(string:HYPERLIQUID_SIGNER_AUTH_TOKEN)%'
             $accountAddress: '%env(string:HYPERLIQUID_TESTNET_ACCOUNT_ADDRESS)%'
             $agentAddress: '%env(string:HYPERLIQUID_TESTNET_AGENT_ADDRESS)%'
+
+    App\Exchange\Hyperliquid\HyperliquidRestClient:
+        arguments:
+            $httpClient: '@app.http_client.exchange_guard.hyperliquid'
 
     App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource:
         arguments:
@@ -321,6 +326,51 @@ services:
             $simulatedTrading: '%env(bool:OKX_SIMULATED_TRADING)%'
             $demoTradingEnabled: '%env(bool:OKX_DEMO_TRADING_ENABLED)%'
             $liveEnabled: '%env(bool:OKX_LIVE_ENABLED)%'
+
+    App\Exchange\Okx\OkxRestClient:
+        arguments:
+            $httpClient: '@app.http_client.exchange_guard.okx'
+
+    App\Runtime\Safety\ExchangeCallGuardHttpClient:
+        abstract: true
+
+    app.http_client.exchange_guard.okx:
+        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
+        arguments:
+            $client: '@http_client'
+            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
+            $exchange: 'okx'
+
+    app.http_client.exchange_guard.hyperliquid:
+        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
+        arguments:
+            $client: '@http_client'
+            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
+            $exchange: 'hyperliquid'
+
+    app.http_client.exchange_guard.bitmart_futures_v2:
+        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
+        decorates: 'http_client.bitmart_futures_v2'
+        arguments:
+            $client: '@app.http_client.exchange_guard.bitmart_futures_v2.inner'
+            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
+            $exchange: 'bitmart'
+
+    app.http_client.exchange_guard.bitmart_futures_v2_private:
+        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
+        decorates: 'http_client.bitmart_futures_v2_private'
+        arguments:
+            $client: '@app.http_client.exchange_guard.bitmart_futures_v2_private.inner'
+            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
+            $exchange: 'bitmart'
+
+    app.http_client.exchange_guard.bitmart_system:
+        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
+        decorates: 'http_client.bitmart_system'
+        arguments:
+            $client: '@app.http_client.exchange_guard.bitmart_system.inner'
+            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
+            $exchange: 'bitmart'
 
     # Provider pour la configuration des contrats MTF (support par profil avec fallback)
     App\Config\MtfContractsConfigProvider:

@@ -78,6 +78,30 @@ final class ExchangeStateControllerFakeTest extends TestCase
         self::assertSame(['open_positions' => [], 'open_orders' => []], $payload);
     }
 
+    public function testFakeOnlyProofReturnsObservedExchangeCallEvidence(): void
+    {
+        $controller = $this->buildController();
+        $request = new Request(
+            ['exchange' => 'fake', 'market_type' => 'perpetual'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+        );
+
+        $response = $controller->openState($request);
+        $payload = json_decode((string) $response->getContent(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertSame(
+            [
+                'ambiguous_calls' => 0,
+                'complete' => true,
+                'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
+                'schema_version' => 'fake-only-exchange-safety-v1',
+                'source' => 'symfony_http_client_guard',
+            ],
+            $payload['fake_only_safety_evidence'] ?? null,
+        );
+    }
+
     public function testFakeProviderFixtureExposesRealInitialBalance(): void
     {
         self::assertSame(100000.0, FakeProviderFixture::create()->account->getAccountBalance());

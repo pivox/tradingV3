@@ -154,8 +154,13 @@ class _FakeAsyncClient:
     async def __aexit__(self, *_: Any) -> None:
         return None
 
-    async def get(self, url: str, params: Dict[str, Any] | None = None) -> _FakeResponse:
-        self.get_calls.append({"url": url, "params": params or {}})
+    async def get(
+        self,
+        url: str,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        self.get_calls.append({"url": url, "params": params or {}, "headers": headers or {}})
         return _FakeResponse(self._open_state_status, self._open_state)
 
     async def post(

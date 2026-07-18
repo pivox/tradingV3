@@ -111,8 +111,9 @@ async def fetch_open_state(
     """
     url = f"{base_url.rstrip('/')}/api/exchange/open-state"
     params = {"exchange": exchange, "market_type": market_type}
+    headers = {"X-Fake-Only-Safety-Evidence": "v1"} if exchange == "fake" else None
     try:
-        response = await client.get(url, params=params)
+        response = await client.get(url, params=params, headers=headers)
     except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire
         raise OpenStateUnavailableError(
             f"open-state fetch failed for {exchange}/{market_type}: {exc}"
@@ -145,10 +146,13 @@ async def fetch_open_state(
             f"open-state response has non-list open_positions/open_orders for {exchange}/{market_type}"
         )
 
-    return {
+    snapshot = {
         "open_positions": positions,
         "open_orders": orders,
     }
+    if "fake_only_safety_evidence" in body:
+        snapshot["fake_only_safety_evidence"] = body["fake_only_safety_evidence"]
+    return snapshot
 
 
 async def fetch_selected_contracts(
@@ -433,6 +437,8 @@ async def _dispatch_mtf_run(
     """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
     headers: Dict[str, str] = {}
+    if payload.get("exchange") == "fake" and payload.get("dry_run") is True:
+        headers["X-Fake-Only-Safety-Evidence"] = "v1"
     if run_id is not None:
         headers["X-Run-Id"] = run_id
         headers["X-Run-Correlation-Id"] = canonical_correlation_id(run_id)

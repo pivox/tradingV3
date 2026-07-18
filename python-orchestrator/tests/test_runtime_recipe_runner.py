@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+import pytest
+
 import scripts.runtime_recipe_runner as runner_module
 from scripts.runtime_recipe_runner import RecipeRunner, RunnerConfig
 
@@ -29,6 +31,8 @@ class FakeRecipeApi:
         r11_outage: bool = False,
         live_probe_status: int = 422,
         live_probe_body: dict[str, Any] | None = None,
+        fake_only_safety_evidence: dict[str, Any] | None = None,
+        open_state_safety_evidence: dict[str, Any] | None = None,
     ) -> None:
         self.health_ok = health_ok
         self.run_transport_error = run_transport_error
@@ -40,6 +44,28 @@ class FakeRecipeApi:
         self.r11_outage = r11_outage
         self.live_probe_status = live_probe_status
         self.live_probe_body = live_probe_body or {"detail": "live non autorise pour la recette"}
+        self.fake_only_safety_evidence = (
+            {
+                "ambiguous_calls": 0,
+                "complete": True,
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            }
+            if fake_only_safety_evidence is None
+            else fake_only_safety_evidence
+        )
+        self.open_state_safety_evidence = (
+            {
+                "ambiguous_calls": 0,
+                "complete": True,
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            }
+            if open_state_safety_evidence is None
+            else open_state_safety_evidence
+        )
         self.r11_seen = 0
         self.lock = Lock()
         self.dashboards: list[dict[str, Any]] = []
@@ -289,6 +315,12 @@ class FakeRecipeApi:
                 "error": "functional replay setup failure",
                 "response_json": {"status": "error"},
             }
+        payload_sent = dict(item["payload"])
+        payload_sent["open_state_snapshot"] = {
+            "fake_only_safety_evidence": self.open_state_safety_evidence,
+            "open_orders": [],
+            "open_positions": [],
+        }
         return {
             "set_id": item["set_id"],
             "ok": True,
@@ -298,13 +330,14 @@ class FakeRecipeApi:
             "response_json": {
                 "status": "success",
                 "data": {
+                    "fake_only_safety_evidence": self.fake_only_safety_evidence,
                     "orders_placed": {
                         "count": {"total": 0, "submitted": 0, "simulated": 0},
                         "orders": [],
                     }
                 },
             },
-            "payload_sent": item["payload"],
+            "payload_sent": payload_sent,
         }
 
 
@@ -375,6 +408,88 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     ]
     assert exchange_sets
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+@pytest.mark.parametrize(
+    ("safety_evidence", "expected_status", "expected_exchange_calls"),
+    [
+        ({}, "BLOCKED", {"bitmart": 0, "hyperliquid": 0, "okx": 0}),
+        (
+            {
+                "ambiguous_calls": 1,
+                "complete": True,
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            },
+            "BLOCKED",
+            {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        ),
+        (
+            {
+                "ambiguous_calls": 0,
+                "complete": True,
+                "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            },
+            "FAIL",
+            {"bitmart": 3, "hyperliquid": 0, "okx": 0},
+        ),
+    ],
+)
+def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
+    tmp_path: Path,
+    safety_evidence: dict[str, Any],
+    expected_status: str,
+    expected_exchange_calls: dict[str, int],
+):
+    api = FakeRecipeApi(fake_only_safety_evidence=safety_evidence)
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == expected_status
+    assert recipe["status"] == expected_status
+    assert recipe["exchange_calls"] == expected_exchange_calls
+
+
+def test_r12_blocks_when_shared_open_state_safety_evidence_is_missing(tmp_path: Path):
+    api = FakeRecipeApi(open_state_safety_evidence={})
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert report["results"][0]["status"] == "BLOCKED"
+
+
+def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
+    api = FakeRecipeApi(
+        open_state_safety_evidence={
+            "ambiguous_calls": 0,
+            "complete": True,
+            "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
+            "schema_version": "fake-only-exchange-safety-v1",
+            "source": "symfony_http_client_guard",
+        }
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

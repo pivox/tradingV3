@@ -106,7 +106,7 @@ class _StubClient:
     def __init__(self, response):
         self._response = response
 
-    async def post(self, url, json=None):
+    async def post(self, url, json=None, headers=None):
         return self._response
 
 
@@ -171,6 +171,7 @@ def test_fetch_open_state_returns_normalized_shape():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/exchange/open-state"
         assert request.url.params["exchange"] == "bitmart"
+        assert "x-fake-only-safety-evidence" not in request.headers
         return httpx.Response(200, json={"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []})
 
     async def _run():
@@ -179,6 +180,37 @@ def test_fetch_open_state_returns_normalized_shape():
 
     snapshot = asyncio.run(_run())
     assert snapshot == {"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []}
+
+
+def test_fetch_fake_open_state_requests_and_preserves_safety_evidence():
+    evidence = {
+        "ambiguous_calls": 0,
+        "complete": True,
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v1",
+        "source": "symfony_http_client_guard",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-fake-only-safety-evidence"] == "v1"
+        return httpx.Response(
+            200,
+            json={
+                "fake_only_safety_evidence": evidence,
+                "open_positions": [],
+                "open_orders": [],
+            },
+        )
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_open_state(client, "http://symfony", "fake", "perpetual")
+
+    assert asyncio.run(_run()) == {
+        "fake_only_safety_evidence": evidence,
+        "open_positions": [],
+        "open_orders": [],
+    }
 
 
 def test_fetch_open_state_raises_on_http_error_status():
@@ -779,7 +811,7 @@ def test_run_persisted_set_not_materialized_without_symbols():
 
 
 def test_run_persisted_set_propagates_orchestration_headers():
-    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"], exchange="fake")
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -799,6 +831,7 @@ def test_run_persisted_set_propagates_orchestration_headers():
     assert headers["x-run-correlation-id"] == canonical_correlation_id("run_dashA_20260617")
     assert headers["x-orchestration-set-id"] == "s1"
     assert headers["x-orchestration-dashboard-id"] == "42"
+    assert headers["x-fake-only-safety-evidence"] == "v1"
 
 
 def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
@@ -824,7 +857,7 @@ def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
 
 
 def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
-    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"], exchange="fake")
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -840,6 +873,7 @@ def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
     assert "x-run-id" not in headers
     assert "x-run-correlation-id" not in headers
     assert "x-orchestration-set-id" not in headers
+    assert headers["x-fake-only-safety-evidence"] == "v1"
 
 
 def test_fetch_run_trade_outcome_returns_body_and_forwards_params():

@@ -698,12 +698,33 @@ class RecipeRunner:
 
         report_sets: list[dict[str, Any]] = []
         set_contracts_ok = True
+        safety_evidence_ok = True
+        exchange_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+        snapshot_exchange_calls: dict[str, int] | None = None
         for fixture_set in enabled_sets:
             set_id = fixture_set["set_id"]
             result = observed.get(set_id, {})
             payload = result.get("payload_sent")
             payload = payload if isinstance(payload, dict) else {}
             orders_total = self._orders_total(result.get("response_json"))
+            evidence_ok, observed_exchange_calls = self._fake_only_safety_evidence(
+                result.get("response_json")
+            )
+            safety_evidence_ok = safety_evidence_ok and evidence_ok
+            for exchange in exchange_calls:
+                exchange_calls[exchange] += observed_exchange_calls[exchange]
+            snapshot = payload.get("open_state_snapshot")
+            snapshot_evidence = (
+                snapshot.get("fake_only_safety_evidence") if isinstance(snapshot, dict) else None
+            )
+            snapshot_ok, observed_snapshot_calls = self._normalize_fake_only_safety_evidence(
+                snapshot_evidence
+            )
+            safety_evidence_ok = safety_evidence_ok and snapshot_ok
+            if snapshot_exchange_calls is None:
+                snapshot_exchange_calls = observed_snapshot_calls
+            elif snapshot_exchange_calls != observed_snapshot_calls:
+                safety_evidence_ok = False
             config_hash = payload.get("config_hash")
             set_ok = (
                 result.get("ok") is True
@@ -735,10 +756,14 @@ class RecipeRunner:
                 }
             )
 
+        if snapshot_exchange_calls is not None:
+            for exchange in exchange_calls:
+                exchange_calls[exchange] += snapshot_exchange_calls[exchange]
+
         config_hashes = [item["config_hash"] for item in report_sets]
         lineage_ids = [item["lineage"]["orchestration_set_id"] for item in report_sets]
         summary = first.get("summary") if isinstance(first.get("summary"), dict) else {}
-        ok = (
+        core_ok = (
             self._is_successful_run(first)
             and self._is_successful_run(replay)
             and first.get("run_id") == replay.get("run_id")
@@ -750,9 +775,15 @@ class RecipeRunner:
             and len(set(lineage_ids)) == len(enabled_sets)
             and not any(set_id in observed for set_id in disabled_sets)
         )
+        if not core_ok or any(exchange_calls.values()):
+            status = "FAIL"
+        elif not safety_evidence_ok:
+            status = "BLOCKED"
+        else:
+            status = "PASS"
         recipe_report = {
             "disabled_sets": disabled_sets,
-            "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+            "exchange_calls": exchange_calls,
             "fixture_hash": fixture_hash,
             "fixture_id": fixture["fixture_id"],
             "locks": {
@@ -786,11 +817,11 @@ class RecipeRunner:
             "scenario": "dry_run_multi_profiles_same_symbol",
             "schema_version": "fake-multi-profile-recipe-report-v1",
             "sets": report_sets,
-            "status": "PASS" if ok else "FAIL",
+            "status": status,
         }
         return self._result(
             "R12",
-            "PASS" if ok else "FAIL",
+            status,
             "three Fake profiles coexist on one symbol with deterministic isolated lineage",
             {"recipe_report": recipe_report},
         )
@@ -804,6 +835,41 @@ class RecipeRunner:
         count = orders_placed.get("count") if isinstance(orders_placed, dict) else None
         total = count.get("total") if isinstance(count, dict) else None
         return total if isinstance(total, int) else None
+
+    @staticmethod
+    def _fake_only_safety_evidence(response_json: Any) -> tuple[bool, dict[str, int]]:
+        empty_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+        if not isinstance(response_json, dict):
+            return False, empty_calls
+        data = response_json.get("data")
+        evidence = data.get("fake_only_safety_evidence") if isinstance(data, dict) else None
+        return RecipeRunner._normalize_fake_only_safety_evidence(evidence)
+
+    @staticmethod
+    def _normalize_fake_only_safety_evidence(evidence: Any) -> tuple[bool, dict[str, int]]:
+        empty_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+        if not isinstance(evidence, dict):
+            return False, empty_calls
+        calls = evidence.get("exchange_calls")
+        if not isinstance(calls, dict) or set(calls) != set(empty_calls):
+            return False, empty_calls
+
+        normalized_calls: dict[str, int] = {}
+        for exchange in empty_calls:
+            count = calls.get(exchange)
+            if type(count) is not int or count < 0:
+                return False, empty_calls
+            normalized_calls[exchange] = count
+
+        ambiguous_calls = evidence.get("ambiguous_calls")
+        valid = (
+            evidence.get("schema_version") == "fake-only-exchange-safety-v1"
+            and evidence.get("source") == "symfony_http_client_guard"
+            and evidence.get("complete") is True
+            and type(ambiguous_calls) is int
+            and ambiguous_calls == 0
+        )
+        return valid, normalized_calls
 
     def _scenario_r14(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
         target = self._target_recipe()
