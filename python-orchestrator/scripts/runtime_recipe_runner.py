@@ -710,9 +710,11 @@ class RecipeRunner:
             result = observed.get(set_id, {})
             payload = result.get("payload_sent")
             payload = payload if isinstance(payload, dict) else {}
-            orders_total = self._orders_total(result.get("response_json"))
+            response_json = result.get("response_json")
+            processed_symbols = self._processed_symbols(response_json)
+            orders_total = self._orders_total(response_json)
             evidence_ok, observed_exchange_calls = self._fake_only_safety_evidence(
-                result.get("response_json")
+                response_json
             )
             safety_evidence_ok = safety_evidence_ok and evidence_ok
             for exchange in exchange_calls:
@@ -737,6 +739,8 @@ class RecipeRunner:
                 and payload.get("market_type") == "perpetual"
                 and payload.get("mtf_profile") == fixture_set["mtf_profile"]
                 and payload.get("symbols") == ["BTCUSDT"]
+                and processed_symbols is not None
+                and set(processed_symbols) == {"BTCUSDT"}
                 and payload.get("workers") == 1
                 and isinstance(config_hash, str)
                 and config_hash.startswith("sha256:")
@@ -756,7 +760,7 @@ class RecipeRunner:
                     "orders_total": orders_total,
                     "profile": fixture_set["mtf_profile"],
                     "set_id": set_id,
-                    "symbols": payload.get("symbols"),
+                    "symbols": processed_symbols,
                 }
             )
 
@@ -839,6 +843,18 @@ class RecipeRunner:
         count = orders_placed.get("count") if isinstance(orders_placed, dict) else None
         total = count.get("total") if isinstance(count, dict) else None
         return total if isinstance(total, int) else None
+
+    @staticmethod
+    def _processed_symbols(response_json: Any) -> list[str] | None:
+        if not isinstance(response_json, dict):
+            return None
+        data = response_json.get("data")
+        symbols = data.get("symbols") if isinstance(data, dict) else None
+        if not isinstance(symbols, dict):
+            return None
+        if any(type(symbol) is not str or not symbol for symbol in symbols):
+            return None
+        return sorted(symbols)
 
     @staticmethod
     def _fake_only_safety_evidence(response_json: Any) -> tuple[bool, dict[str, int]]:
@@ -1224,9 +1240,16 @@ class RecipeRunner:
             "| --- | --- | --- | --- | ---: |",
         ]
         for item in report["sets"]:
+            processed_symbols = item["symbols"]
+            if processed_symbols is None:
+                rendered_symbols = "UNAVAILABLE"
+            elif processed_symbols:
+                rendered_symbols = ",".join(processed_symbols)
+            else:
+                rendered_symbols = "NONE"
             lines.append(
                 f"| `{item['set_id']}` | `{item['profile']}` | "
-                f"`{','.join(item['symbols'] or [])}` | `{item['config_hash']}` | "
+                f"`{rendered_symbols}` | `{item['config_hash']}` | "
                 f"{item['orders_total']} |"
             )
         lines.extend(

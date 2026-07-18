@@ -336,7 +336,11 @@ class FakeRecipeApi:
                     "orders_placed": {
                         "count": {"total": 0, "submitted": 0, "simulated": 0},
                         "orders": [],
-                    }
+                    },
+                    "symbols": {
+                        symbol: {"status": "success"}
+                        for symbol in sorted(payload_sent["symbols"])
+                    },
                 },
             },
             "payload_sent": payload_sent,
@@ -413,6 +417,67 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     ]
     assert exchange_sets
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+def test_r12_rejects_additional_symbols_actually_processed_by_symfony(tmp_path: Path):
+    class ExtraProcessedSymbolApi(FakeRecipeApi):
+        def _set_result(self, item: dict[str, Any], key: str) -> dict[str, Any]:
+            result = super()._set_result(item, key)
+            if result.get("ok") is True:
+                result["response_json"]["data"]["symbols"] = {
+                    "BTCUSDT": {"status": "success"},
+                    "ETHUSDT": {"status": "success"},
+                }
+            return result
+
+    api = ExtraProcessedSymbolApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    persisted_sets = next(iter(api.run_details.values()))["sets"]
+
+    assert {tuple(item["payload_sent"]["symbols"]) for item in persisted_sets} == {
+        ("BTCUSDT",)
+    }
+    assert report["results"][0]["status"] == "FAIL"
+    assert {tuple(item["symbols"]) for item in recipe["sets"]} == {
+        ("BTCUSDT", "ETHUSDT")
+    }
+
+
+@pytest.mark.parametrize("symbols_shape", ["missing", "invalid"])
+def test_r12_fails_closed_when_processed_symbol_map_is_unusable(
+    tmp_path: Path,
+    symbols_shape: str,
+):
+    class UnusableProcessedSymbolsApi(FakeRecipeApi):
+        def _set_result(self, item: dict[str, Any], key: str) -> dict[str, Any]:
+            result = super()._set_result(item, key)
+            if result.get("ok") is True:
+                response_data = result["response_json"]["data"]
+                if symbols_shape == "missing":
+                    response_data.pop("symbols")
+                else:
+                    response_data["symbols"] = ["BTCUSDT"]
+            return result
+
+    api = UnusableProcessedSymbolsApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert [item["symbols"] for item in recipe["sets"]] == [None, None, None]
+    assert markdown.count("`UNAVAILABLE`") == 3
 
 
 def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
