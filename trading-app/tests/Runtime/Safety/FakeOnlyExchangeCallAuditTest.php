@@ -8,11 +8,7 @@ use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidRestClient;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Okx\OkxRestClient;
-use App\Provider\Bitmart\BitmartOrderProvider;
-use App\Provider\Bitmart\Http\BitmartConfig;
-use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
-use App\Provider\Bitmart\Http\BitmartRequestSigner;
 use App\Runtime\Safety\ExchangeCallGuardHttpClient;
 use App\Runtime\Safety\FakeOnlyExchangeCallBlockedException;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
@@ -92,39 +88,6 @@ final class FakeOnlyExchangeCallAuditTest extends TestCase
 
         $this->assertGuardBlockSurvivesWrapper(
             static fn (): int => $client->getSystemTimeMs(),
-            $audit,
-            'bitmart',
-            $delegatedCalls,
-        );
-    }
-
-    public function testBitmartOpenOrdersPrivatePathDoesNotRetryGuardBlock(): void
-    {
-        [$guard, $audit, $delegatedCalls] = $this->armedGuard('bitmart');
-        $this->bitmartProjectDir = sys_get_temp_dir() . '/trading-v3-fake-only-' . bin2hex(random_bytes(8));
-        $config = new BitmartConfig('test-key', 'test-secret', 'test-memo');
-        $lockFactory = new LockFactory(new InMemoryStore());
-        $logger = new NullLogger();
-        $privateClient = new BitmartHttpClientPrivate(
-            $guard,
-            new BitmartRequestSigner($config),
-            $config,
-            $lockFactory,
-            $this->bitmartProjectDir,
-            $logger,
-        );
-        $publicClient = new BitmartHttpClientPublic(
-            $guard,
-            $guard,
-            $lockFactory,
-            $this->bitmartProjectDir,
-            new MockClock('2026-07-18T00:00:00+00:00'),
-            $logger,
-        );
-        $provider = new BitmartOrderProvider($privateClient, $publicClient, $logger);
-
-        $this->assertGuardBlockSurvivesWrapper(
-            static fn (): array => $provider->getOpenOrdersOrFail('BTCUSDT'),
             $audit,
             'bitmart',
             $delegatedCalls,

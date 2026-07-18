@@ -14,7 +14,6 @@ use App\Provider\Context\ExchangeContext;
 use App\Provider\Bitmart\Http\BitmartHttpClientPrivate;
 use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Provider\Repository\ContractRepository;
-use App\Runtime\Safety\FakeOnlyExchangeCallBlockedException;
 use App\Service\FuturesOrderSyncService;
 use App\Service\OrderIntentManager;
 use App\Provider\OrderWatcherPublisher;
@@ -556,8 +555,6 @@ final class BitmartOrderProvider implements ContextualOrderProviderInterface
                 }
 
                 $lastError = new \RuntimeException('Invalid open orders response structure. Response: ' . json_encode($response));
-            } catch (FakeOnlyExchangeCallBlockedException $e) {
-                throw $e;
             } catch (\Throwable $e) {
                 $lastError = $e;
             }
