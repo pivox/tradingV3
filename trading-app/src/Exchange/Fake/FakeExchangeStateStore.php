@@ -845,7 +845,11 @@ class FakeExchangeStateStore
                     || !$this->privateWsSnapshotProofEquals($providedProof, $storedProof)
                     || $providedProof['scenario_id'] !== $scenario->scenarioId
                     || !hash_equals($cycleId, $providedProof['resync_cycle_id'])
-                    || $providedProof['event_sequence_watermark'] < $this->privateWs['last_observed_numeric_sequence']
+                    || $providedProof['event_sequence_watermark'] < (
+                        $this->privateWs['resync_reason'] === 'fake_private_ws_sequence_gap'
+                            ? $this->privateWsExpectedNumericSequence()
+                            : $this->privateWs['last_observed_numeric_sequence']
+                    )
                     || $providedProof['event_sequence_watermark'] > $this->maximumCanonicalNumericEventSequence()
                 ) {
                     throw new \LogicException('fake_private_ws_snapshot_proof_stale');

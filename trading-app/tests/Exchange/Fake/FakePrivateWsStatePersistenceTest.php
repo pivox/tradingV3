@@ -177,6 +177,41 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         self::assertSame('resync_completed', $audit['records'][1]['kind'] ?? null);
     }
 
+    public function testGapSnapshotProofMustCoverExpectedMissingSequence(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile);
+        $state->appendEvent($this->event(1));
+        $state->configurePrivateWsScenario($this->scenario([1, 3]));
+
+        $first = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+        $state->acknowledgePrivateWsDelivery($first);
+        $gap = $state->privateWsCurrentDelivery();
+        self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+        $state->markPrivateWsGap('2', '3', $gap);
+
+        $client = new FakeExchangeWsClient($state);
+        $reconciliation = $this->successfulGlobalReconciliation($state);
+        self::assertSame(
+            1,
+            $reconciliation->metadata['fake_private_ws_snapshot_proof']['event_sequence_watermark'] ?? null,
+        );
+        $auditBefore = $client->audit();
+        self::assertSame(1, $auditBefore['last_observed_numeric_sequence']);
+        self::assertSame('3', $state->privateWsCurrentDelivery()?->sequence);
+
+        try {
+            $client->completeSnapshotResync($reconciliation);
+            self::fail('A gap resync proof must cover the expected missing sequence.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_proof_stale', $exception->getMessage());
+        }
+
+        self::assertSame($auditBefore, $client->audit());
+        self::assertTrue($client->requiresResync());
+        self::assertEquals($gap, $state->privateWsCurrentDelivery());
+    }
+
     public function testExactDuplicateAndConflictAuditAreRedactedAndPersistent(): void
     {
         $first = $this->event(1, ['secret' => 'must-not-be-audited']);
