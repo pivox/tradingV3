@@ -292,7 +292,7 @@ un scenario non execute en `PASS`.
 | R9 - Replay explicite | nominal | Rejouer un run termine via la meme cle ou le meme tick. | Relation lisible avec le run initial, aucun effet de bord duplique. |
 | R10 - Crash et reprise | degraded ou nominal | Interrompre l'orchestrateur apres claim, attendre expiration puis relancer. | Claim repris, set non perdu, pas de double execution observee. |
 | R11 - Chevauchement schedules | degraded, `recipe_fake_overlap_scalper` | Declencher deux ticks proches avec meme dashboard. | Lock ou `running` in-flight visible, pas de double dispatch incompatible. |
-| R12 - Contention entre profils | `fake_multi_profile_same_symbol` | Cibler `BTCUSDT` depuis `regular`, `scalper` et `scalper_micro`, tous Fake dry-run. | Trois sets/lineages/hashes distincts, lock orchestration par profil, lock metier global au symbole, replay/restart idempotent et zero appel exchange. |
+| R12 - Contention entre profils | `fake_multi_profile_same_symbol` | Cibler `BTCUSDT` depuis `regular`, `scalper` et `scalper_micro`, tous Fake dry-run. | Trois sets/lineages/hashes distincts, lock orchestration par profil, scope et contrat du lock metier visibles mais non exerces, replay/restart idempotent et zero appel exchange. |
 | R13 - Snapshot obsolete | guided, pas validable par fixture dry-run seule | Avec les fixtures dry-run, fournir un snapshot absent doit rester non bloquant; la branche fail-closed ne concerne que les sets effectivement live. Marquer `BLOCKED` tant qu'un harness local dedie ne cree pas un set `fake/demo` effectivement live sans mainnet ni exchange reel. | Preuve minimale dans ce lot : dry-run sans snapshot ne trade pas en live et ne valide pas R13. Preuve finale attendue plus tard : refus fail-closed live avant dispatch, sans fallback exchange silencieux. |
 | R14 - Garde-fous live | mutation negative | Tenter OKX/Hyperliquid `dry_run=false` ou live non allowliste. | Refus avant dispatch, 422/skip audit, aucun appel metier. |
 | R15 - Temporal Schedule | nominal | Creer un schedule dry-run vers le dashboard nominal. | Schedule visible, pause/reprise, `ok=false` echoue vraiment dans Temporal. |
@@ -336,6 +336,15 @@ est `blocked` avec `cross_profile_symbol_locked`. Un conflit avec un autre run a
 niveau orchestration reste `skipped/locked`. Dans cette recette, les trois sets
 sont dry-run et ne creent aucun intent : le lock metier n'est donc pas acquis,
 les trois simulations coexistent sans effet de bord.
+
+Le rapport encode cette limite sans ambiguite : `locks.business` expose
+`evidence_status=not_exercised` et `observed=false`. La regle applicable a une
+vraie activite concurrente est separee dans
+`contract_conflict_status=blocked` et
+`contract_conflict_reason=cross_profile_symbol_locked`. R12 reste `PASS` dans ce
+cas nominal : il prouve la coexistence sans effet de bord, pas l'acquisition ni
+le refus du lock metier. Les tests dedies de `symbol_execution_lock` portent la
+preuve de cette regle contractuelle.
 
 Le rapport refuse le `PASS` si un set manque, si un hash/lineage est masque ou
 duplique, si le set desactive apparait, si un ordre est produit, ou si un payload

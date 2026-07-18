@@ -390,7 +390,12 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert recipe["locks"]["orchestration"]["conflict_status"] == "skipped"
     assert recipe["locks"]["orchestration"]["conflict_reason"] == "locked"
     assert recipe["locks"]["business"]["scope"] == "exchange+market_type+symbol"
-    assert recipe["locks"]["business"]["conflict_status"] == "blocked"
+    assert recipe["locks"]["business"]["evidence_status"] == "not_exercised"
+    assert recipe["locks"]["business"]["observed"] is False
+    assert recipe["locks"]["business"]["contract_conflict_status"] == "blocked"
+    assert recipe["locks"]["business"]["contract_conflict_reason"] == (
+        "cross_profile_symbol_locked"
+    )
     assert recipe["replay"]["same_run_id"] is True
     assert recipe["replay"]["idempotency_key"].startswith(
         "fake-golden20-fake-only-exchange-safety-v1-"
@@ -417,6 +422,35 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     ]
     assert exchange_sets
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+def test_r12_does_not_present_the_unexercised_business_lock_as_observed(
+    tmp_path: Path,
+):
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    business_lock = recipe["locks"]["business"]
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+
+    assert report["results"][0]["status"] == "PASS"
+    assert business_lock == {
+        "contract_conflict_reason": "cross_profile_symbol_locked",
+        "contract_conflict_status": "blocked",
+        "evidence_status": "not_exercised",
+        "observed": False,
+        "scope": "exchange+market_type+symbol",
+    }
+    assert "conflict_reason" not in business_lock
+    assert "conflict_status" not in business_lock
+    assert "Business lock evidence: `not_exercised` (`observed=false`)." in markdown
+    assert (
+        "Business lock contract: `blocked/cross_profile_symbol_locked`." in markdown
+    )
 
 
 def test_r12_rejects_additional_symbols_actually_processed_by_symfony(tmp_path: Path):

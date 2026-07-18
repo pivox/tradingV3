@@ -549,6 +549,11 @@ Les vingt lignes du catalogue sont maintenant `executable`; cela clot le
 catalogue golden v1, mais ne clot pas a lui seul l'issue #196 ni n'autorise une
 mutation demo/testnet/mainnet.
 
+Le scenario multi-profils prouve la coexistence Fake dry-run sans effet de bord.
+Il marque le lock metier `not_exercised` et `observed=false`; son statut contractuel
+`blocked/cross_profile_symbol_locked` est documente separement et reste exerce par
+les tests de repository dedies.
+
 Commande consolidee :
 
 ```bash

@@ -366,6 +366,13 @@ Elle applique `fake_multi_profile_same_symbol.json`, force trois sets Fake
 `fake-multi-profile-recipe-report.json` et `.md`. La cle de replay derive du hash
 de fixture : un restart du runner relit le meme run sans redispatch.
 
+La recette ne cree aucun `OrderIntent` et n'exerce donc pas le lock metier. Le
+rapport conserve son scope avec `evidence_status=not_exercised` et
+`observed=false`; la regle de concurrence reelle est separee dans
+`contract_conflict_status=blocked` et
+`contract_conflict_reason=cross_profile_symbol_locked`. Cette non-execution est
+nominale et ne transforme pas le `PASS` de coexistence en `BLOCKED`.
+
 R5 utilise le profil reserve `recipe_functional_error`. Ce profil n'est pas une
 strategie et ne doit avoir aucun fichier YAML : son absence provoque l'erreur
 fonctionnelle Symfony que la recette verifie. Le schema le refuse hors de

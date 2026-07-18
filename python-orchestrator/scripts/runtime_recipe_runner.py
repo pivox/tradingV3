@@ -796,8 +796,10 @@ class RecipeRunner:
             "fixture_id": fixture["fixture_id"],
             "locks": {
                 "business": {
-                    "conflict_reason": "cross_profile_symbol_locked",
-                    "conflict_status": "blocked",
+                    "contract_conflict_reason": "cross_profile_symbol_locked",
+                    "contract_conflict_status": "blocked",
+                    "evidence_status": "not_exercised",
+                    "observed": False,
                     "scope": "exchange+market_type+symbol",
                 },
                 "orchestration": {
@@ -1224,6 +1226,8 @@ class RecipeRunner:
     @staticmethod
     def _multi_profile_markdown(report: dict[str, Any]) -> str:
         exchange_calls = report["exchange_calls"]
+        business_lock = report["locks"]["business"]
+        business_observed = str(business_lock["observed"]).lower()
         lines = [
             "# Fake multi-profile recipe",
             "",
@@ -1256,7 +1260,12 @@ class RecipeRunner:
             [
                 "",
                 "Orchestration locks are profile-scoped and coexist. The business exposure lock ",
-                "is symbol-scoped and blocks cross-profile activity; dry-run acquires no business lock.",
+                "is symbol-scoped, but this dry-run acquires no business lock.",
+                f"Business lock evidence: `{business_lock['evidence_status']}` "
+                f"(`observed={business_observed}`).",
+                "Business lock contract: "
+                f"`{business_lock['contract_conflict_status']}/"
+                f"{business_lock['contract_conflict_reason']}`.",
                 "",
             ]
         )

@@ -31,8 +31,16 @@ The recipe reports two lock layers separately:
   it blocks incompatible opening activity with `cross_profile_symbol_locked`, but
   a dry-run that creates no intent has no business owner to acquire or release.
 
+The R12 business-lock section therefore records `evidence_status=not_exercised`
+and `observed=false`. Its separate contract fields remain
+`contract_conflict_status=blocked` and
+`contract_conflict_reason=cross_profile_symbol_locked`; they describe the rule
+for real concurrent opening activity and are not scenario evidence. The expected
+non-exercise does not make this coexistence recipe `BLOCKED`.
+
 An observed orchestration conflict is `skipped` with the stable `locked` code.
-Missing runtime evidence is `BLOCKED`; it is never promoted to `PASS`.
+Missing runtime evidence that R12 is designed to collect is `BLOCKED`; it is
+never promoted to `PASS`.
 
 ### Deterministic reports
 
@@ -59,7 +67,7 @@ The normalized report contains:
 - fixture/schema versions and deterministic recipe hash;
 - the three observed sets, profiles, symbols, lineage IDs, and config hashes;
 - disabled-set exclusion;
-- orchestration and business lock sections;
+- separate orchestration-lock observations and business-lock evidence/contract;
 - replay/restart semantics;
 - bounded-parallelism contract;
 - explicit zero-exchange-call proof;
@@ -67,11 +75,13 @@ The normalized report contains:
 
 ## Verification
 
-Tests cover same symbol, distinct symbols, a disabled set, lock conflict,
-idempotent replay, a second runner instance, bounded parallelism, strict absence
-of exchange calls, redaction, deterministic JSON/Markdown, and executable golden
-scenario 20. Broader Python/PHP suites, PHPStan, Symfony lint, MkDocs strict,
-secret/network scans, and `git diff --check` complete the gate.
+Tests cover same symbol, distinct symbols, a disabled set, orchestration lock
+conflict, explicit non-exercise of the business lock, idempotent replay, a second
+runner instance, bounded parallelism, strict absence of exchange calls,
+redaction, deterministic JSON/Markdown, and executable golden scenario 20.
+Dedicated repository tests remain the proof of the actual business lock. Broader
+Python/PHP suites, PHPStan, Symfony lint, MkDocs strict, secret/network scans, and
+`git diff --check` complete the gate.
 
 ## Rollback
 

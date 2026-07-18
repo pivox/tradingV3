@@ -207,8 +207,10 @@ final class FakePaperGoldenScenarioRunner
         $serialized = strtolower($contents);
 
         return [
-            'business_conflict_reason' => 'cross_profile_symbol_locked',
-            'business_conflict_status' => 'blocked',
+            'business_lock_contract_conflict_reason' => 'cross_profile_symbol_locked',
+            'business_lock_contract_conflict_status' => 'blocked',
+            'business_lock_evidence_status' => 'not_exercised',
+            'business_lock_observed' => false,
             'business_lock_scope' => 'exchange+market_type+symbol',
             'config_hashes' => $configHashes,
             'config_hashes_distinct' => \count(array_unique($configHashes)) === \count($configHashes),

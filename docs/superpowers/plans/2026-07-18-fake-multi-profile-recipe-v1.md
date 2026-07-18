@@ -19,7 +19,7 @@
 - Modify: `python-orchestrator/tests/test_symfony_client.py`
 
 - [x] Add fixture tests requiring three enabled Fake/demo/dry-run sets on `BTCUSDT`, distinct profile identities, and one disabled control.
-- [x] Add runner tests requiring R12, deterministic JSON/Markdown, replay across two runner instances, lock-layer separation, redaction, and zero target-exchange calls.
+- [x] Add runner tests requiring R12, deterministic JSON/Markdown, replay across two runner instances, lock-layer separation, explicit business-lock non-exercise, redaction, and zero target-exchange calls.
 - [x] Add wire/integration tests requiring distinct `config_hash` values and bounded concurrency for same-symbol profiles.
 - [x] Run the focused Pytest selection and record the expected missing-fixture/R12/hash failures.
 
@@ -32,7 +32,7 @@
 
 - [x] Add the versioned scenario-20 fixture with `regular`, `scalper`, and `scalper_micro` enabled on `BTCUSDT`, plus a disabled set.
 - [x] Canonicalize the effective set payload with sorted compact JSON and add `config_hash="sha256:<digest>"` before runtime overlays.
-- [x] Load the fixture and implement R12 validation of set preservation, unique lineage/config hashes, disabled exclusion, replay, contention status, and Fake-only network proof.
+- [x] Load the fixture and implement R12 validation of set preservation, unique lineage/config hashes, disabled exclusion, replay, observed orchestration contention, unexercised business-lock evidence, and Fake-only network proof.
 - [x] Export `fake-multi-profile-recipe-report.json` and `.md` from one normalized redacted object.
 - [x] Run the focused Python tests until green.
 
@@ -46,7 +46,7 @@
 
 - [x] First change catalogue expectations to 20 executable scenarios and run PHPUnit to observe the runner mismatch.
 - [x] Add `dry_run_multi_profiles_same_symbol` to the golden runner and derive deterministic facts from the shared Python fixture.
-- [x] Assert the exact normalized facts, redaction, unique hashes, lock scopes, replay/restart contract, and zero exchange clients.
+- [x] Assert the exact normalized facts, redaction, unique hashes, lock scopes, business-lock evidence versus contract, replay/restart contract, and zero exchange clients.
 - [x] Run the focused golden catalogue/execution tests until green.
 
 ### Task 4: Document contention and the single command

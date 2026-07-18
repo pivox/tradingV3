@@ -302,8 +302,10 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'short_blocks_long' => true,
         ],
         'dry_run_multi_profiles_same_symbol' => [
-            'business_conflict_reason' => 'cross_profile_symbol_locked',
-            'business_conflict_status' => 'blocked',
+            'business_lock_contract_conflict_reason' => 'cross_profile_symbol_locked',
+            'business_lock_contract_conflict_status' => 'blocked',
+            'business_lock_evidence_status' => 'not_exercised',
+            'business_lock_observed' => false,
             'business_lock_scope' => 'exchange+market_type+symbol',
             'config_hashes' => [
                 'sha256:b0d91d352646330134a7c91d58d3ca21a7eb41e9828050f68d1f33eba8589567',

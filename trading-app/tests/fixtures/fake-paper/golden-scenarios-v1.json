@@ -200,7 +200,7 @@
       "gap_codes": [],
       "id": 20,
       "name": "dry_run_multi_profiles_same_symbol",
-      "requirement": "Regular, scalper and scalper_micro dry-run sets targeting the same symbol preserve profile isolation and the global exposure lock.",
+      "requirement": "Regular, scalper and scalper_micro dry-run sets targeting the same symbol preserve profile isolation while reporting the global exposure-lock contract as not exercised.",
       "runner": "dry_run_multi_profiles_same_symbol",
       "status": "executable"
     }
