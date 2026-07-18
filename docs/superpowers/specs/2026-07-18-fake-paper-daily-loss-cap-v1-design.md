@@ -139,13 +139,26 @@ The matching engine performs these steps for an exposure-increasing request:
    strictly below the limit.
 
 An accepted resting exposure order is re-evaluated at the single fill boundary,
-immediately before fill arithmetic, order mutation, position mutation, fill
-events, or attached-protection creation. If the cap has become reached or not
-computable since submission, the order transitions once to `REJECTED` with the
-same redacted Daily loss metadata and no fill or position side effect. Repeated
-manual fills or price matches return that persisted terminal order and do not
-append another rejection. Reduce-only and protection fills retain the same
-bypass as their submission path.
+immediately before any new fill arithmetic, order mutation, position mutation,
+fill event, or attached-protection creation. If the cap has become reached or
+not computable since submission and the order has no prior fill, the order
+transitions once to `REJECTED` with the same redacted Daily loss metadata and no
+fill or position side effect.
+
+If the order is already `PARTIALLY_FILLED`, the acquired exposure remains an
+executed fact and only the unfilled remainder becomes terminal. The parent
+transitions to the established `CANCELLED`-with-fill convention while preserving
+its original quantity, filled quantity, remaining quantity, and average price.
+It emits one `order.cancelled` event carrying the redacted cap reason, then uses
+the existing attached-protection path for the exact filled quantity. A rejected
+protection uses the existing reduce-only market compensation. The legacy order
+watcher classifies a positive filled quantity before terminal status, so a
+cancelled/rejected/expired remainder cannot be recorded as a no-fill order.
+Repeated manual fills, price matches, or filesystem restarts return the
+persisted terminal/protected result without duplicating an order transition,
+fill, protection, or compensation event.
+Reduce-only and protection fills retain the same bypass as their submission
+path.
 
 The existing replay lookup precedes the cap so a repeated client order returns
 the original accepted or rejected result rather than being re-evaluated under

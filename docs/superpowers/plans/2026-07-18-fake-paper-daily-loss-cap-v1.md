@@ -138,3 +138,42 @@ Fake/Paper state/event/order pipeline, YAML configuration, MkDocs.
   comment that #196 is delivered.
 - [ ] Capture one final CI/thread snapshot and report local SHA, remote SHA, PR,
   exact files, verification, limits, and rollback.
+
+### Task 8: Address PR #288 P2 Partial-Fill Remainder Finding
+
+**Files:**
+
+- Modify: `trading-app/tests/Exchange/Fake/FakeDailyLossCapGuardTest.php`
+- Modify: `trading-app/tests/Trading/Lineage/LimitFillWatchMessageHandlerLineageTest.php`
+- Modify: `trading-app/src/Exchange/Fake/FakeExchangeMatchingEngine.php`
+- Modify: `trading-app/src/TradeEntry/MessageHandler/LimitFillWatchMessageHandler.php`
+- Modify: `docs/superpowers/specs/2026-07-18-fake-paper-daily-loss-cap-v1-design.md`
+
+- [ ] Add a direct-fill regression that partially fills a persistent resting
+  entry, reaches the cap, and expects one `CANCELLED` remainder with the fill
+  preserved, exact attached protection, redacted audit metadata, and stable
+  replay after filesystem restart.
+- [ ] Add a `movePrice()` matching regression that partially fills an entry,
+  makes the cap not computable, injects one attached-protection rejection, and
+  expects the existing reduce-only compensation to flatten only the acquired
+  exposure without duplicate matching or terminal events.
+- [ ] Add a watcher regression where a terminal `CANCELLED` order with a
+  positive filled quantity logs `position_opened` for the actual fill and never
+  logs `order_expired`.
+- [ ] Run only the three new tests and retain RED evidence: the matching tests
+  must observe `REJECTED` instead of `CANCELLED`, and the watcher test must
+  observe `order_expired` instead of `position_opened`.
+- [ ] Change the shared cap terminalization helper so zero-fill orders keep the
+  existing `REJECTED` transition, while partially filled orders use one
+  `CANCELLED` transition and immediately reuse attached protection/compensation.
+- [ ] Make the watcher test filled quantity before classifying
+  cancelled/rejected/expired as a no-fill terminal order; do not special-case an
+  exchange or transport.
+- [ ] Re-run the three tests GREEN, then the Daily cap, Fake adapter/runtime,
+  execution/lifecycle, and proportional repository suites.
+- [ ] Run PHPStan on every touched PHP file, PHP syntax, Symfony container lint
+  with `--no-debug`, all YAML lint, MkDocs strict, `git diff --check`, and
+  secret/payload/transport scans before the targeted commit and non-force push.
+- [ ] Reply to review comment `3609250661` with the pushed SHA and evidence,
+  resolve GraphQL thread `PRRT_kwDOPH0yO86SBjol`, verify local/remote/PR SHA and
+  CI, and do not request review, merge, close #196, or mark Prompt 7 done.

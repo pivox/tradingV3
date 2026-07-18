@@ -281,7 +281,7 @@ final readonly class FakeExchangeMatchingEngine
 
         $dailyLossCapMetadata = $this->dailyLossCapGuard?->rejectionMetadata($order);
         if ($dailyLossCapMetadata !== null) {
-            return $this->rejectRestingOrderForDailyLossCap($order, $dailyLossCapMetadata);
+            return $this->terminateRestingOrderForDailyLossCap($order, $dailyLossCapMetadata);
         }
 
         if ($this->isPersistedTrailingOrder($order)) {
@@ -909,15 +909,32 @@ final readonly class FakeExchangeMatchingEngine
     }
 
     /** @param array<string,bool|int|string|null> $dailyLossCapMetadata */
-    private function rejectRestingOrderForDailyLossCap(
+    private function terminateRestingOrderForDailyLossCap(
         ExchangeOrderDto $order,
         array $dailyLossCapMetadata,
     ): ExchangeOrderDto {
         $reason = $this->dailyLossCapRejectionReason($dailyLossCapMetadata);
+        $metadata = array_replace($order->metadata, $dailyLossCapMetadata, ['reason' => $reason]);
+        if ($order->filledQuantity > 0.00000001) {
+            $cancelled = $this->withOrderStatus(
+                $order,
+                ExchangeOrderStatus::CANCELLED,
+                $metadata,
+            );
+            $this->stateStore->saveOrder($cancelled);
+            $this->appendEvent(
+                'order.cancelled',
+                $cancelled,
+                array_replace($dailyLossCapMetadata, ['reason' => $reason]),
+            );
+
+            return $this->createAttachedProtectionOrders($cancelled);
+        }
+
         $rejected = $this->withOrderStatus(
             $order,
             ExchangeOrderStatus::REJECTED,
-            array_replace($order->metadata, $dailyLossCapMetadata, ['reason' => $reason]),
+            $metadata,
         );
         $this->stateStore->saveOrder($rejected);
         $this->appendEvent(

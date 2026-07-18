@@ -6,6 +6,7 @@ namespace App\Tests\Exchange\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Common\Enum\OrderStatus as LegacyOrderStatus;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Dto\PlaceOrderRequest;
@@ -26,6 +27,7 @@ use App\Exchange\Fake\FakeFundingModel;
 use App\Exchange\Fake\FakeFundingModelConfig;
 use App\Exchange\Fake\FakeFundingSchedule;
 use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Provider\Fake\FakeOrderProvider;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use PHPUnit\Framework\Attributes\CoversNothing;
@@ -265,6 +267,152 @@ final class FakeDailyLossCapGuardTest extends TestCase
         self::assertCount(0, $state->events('position.opened'));
         self::assertCount(0, $state->events('position.updated'));
         self::assertCount(1, $state->events('order.rejected'));
+    }
+
+    public function testCapCancelsOnlyDirectFillRemainderAndProtectsPartialExposureAcrossRestart(): void
+    {
+        $stateFile = $this->stateFile();
+        $clock = new MutableDailyLossClock('2026-07-18T15:42:00+00:00');
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            [$adapter, $scenario] = $this->exchange($state, $clock);
+            $resting = $adapter->placeOrder($this->request(
+                'daily-cap-partial-direct-fill',
+                type: ExchangeOrderType::LIMIT,
+                price: 24950.0,
+                attachedStopLossPrice: 24800.0,
+                metadata: [
+                    'internal_trade_id' => 'trade-partial-direct',
+                    'api_key' => 'TOP-SECRET-PARTIAL-DIRECT',
+                ],
+            ));
+            self::assertNotNull($resting->exchangeOrderId);
+
+            $partial = $scenario->fillOrder($resting->exchangeOrderId, 0.4, 24950.0);
+            self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial->status);
+            self::assertSame(0.4, $partial->filledQuantity);
+            self::assertSame(0.6, $partial->remainingQuantity);
+            self::assertCount(1, $adapter->getOpenOrders('BTCUSDT'));
+
+            $this->appendFill($state, $clock->now(), '-10');
+            $fillEventCount = \count($state->events('order.filled'))
+                + \count($state->events('order.partially_filled'));
+
+            $blocked = $scenario->fillOrder($resting->exchangeOrderId);
+            $replayed = $scenario->fillOrder($resting->exchangeOrderId);
+
+            self::assertNotNull($blocked);
+            self::assertSame(ExchangeOrderStatus::CANCELLED, $blocked->status);
+            self::assertSame('daily_loss_cap_reached', $blocked->metadata['reason'] ?? null);
+            self::assertSame('limit_reached', $blocked->metadata['daily_loss_cap_status'] ?? null);
+            self::assertSame(1.0, $blocked->quantity);
+            self::assertSame(0.4, $blocked->filledQuantity);
+            self::assertSame(0.6, $blocked->remainingQuantity);
+            self::assertSame(24950.0, $blocked->averagePrice);
+            self::assertSame('accepted', $blocked->metadata['protection_status'] ?? null);
+            self::assertSame($blocked->exchangeOrderId, $replayed->exchangeOrderId);
+            self::assertSame($blocked->status, $replayed->status);
+            self::assertSame($blocked->metadata, $replayed->metadata);
+            self::assertCount(1, $state->events('order.cancelled'));
+            self::assertCount(0, $state->events('order.rejected'));
+            self::assertSame(
+                $fillEventCount,
+                \count($state->events('order.filled')) + \count($state->events('order.partially_filled')),
+            );
+
+            $position = $adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+            self::assertNotNull($position);
+            self::assertSame(0.4, $position->size);
+            $protections = $adapter->getOpenOrders('BTCUSDT');
+            self::assertCount(1, $protections);
+            self::assertSame(ExchangeOrderType::STOP_LOSS, $protections[0]->orderType);
+            self::assertTrue($protections[0]->reduceOnly);
+            self::assertSame(0.4, $protections[0]->quantity);
+
+            $legacy = (new FakeOrderProvider($adapter))->getOrder('BTCUSDT', $resting->exchangeOrderId);
+            self::assertNotNull($legacy);
+            self::assertSame(LegacyOrderStatus::CANCELLED, $legacy->status);
+            self::assertSame('0.4', (string) $legacy->filledQuantity);
+            self::assertSame('0.6', (string) $legacy->remainingQuantity);
+
+            $serialized = json_encode([
+                $blocked->metadata,
+                array_map(
+                    static fn (FakeExchangeEvent $event): array => $event->toArray(),
+                    [...$state->events('order.cancelled'), ...$state->events('protection_order.created')],
+                ),
+            ], JSON_THROW_ON_ERROR);
+            self::assertStringNotContainsString('TOP-SECRET-PARTIAL-DIRECT', $serialized);
+            self::assertStringNotContainsString('api_key', $serialized);
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [$restoredAdapter, $restoredScenario] = $this->exchange($restored, $clock);
+            $restoredReplay = $restoredScenario->fillOrder($resting->exchangeOrderId);
+
+            self::assertSame(ExchangeOrderStatus::CANCELLED, $restoredReplay->status);
+            self::assertSame(0.4, $restoredReplay->filledQuantity);
+            self::assertSame(0.6, $restoredReplay->remainingQuantity);
+            self::assertCount(1, $restored->events('order.cancelled'));
+            self::assertCount(1, $restored->events('protection_order.created'));
+            self::assertCount(1, $restoredAdapter->getOpenOrders('BTCUSDT'));
+        } finally {
+            $this->removeStateFiles($stateFile);
+        }
+    }
+
+    public function testMovePriceCapBlockCompensatesPartialExposureWhenProtectionIsRejected(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T15:43:00+00:00');
+        [$adapter, $scenario] = $this->exchange($state, $clock);
+        $resting = $adapter->placeOrder($this->request(
+            'daily-cap-partial-move-price',
+            type: ExchangeOrderType::LIMIT,
+            price: 24950.0,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($resting->exchangeOrderId);
+        self::assertSame(
+            ExchangeOrderStatus::PARTIALLY_FILLED,
+            $scenario->fillOrder($resting->exchangeOrderId, 0.4, 24950.0)?->status,
+        );
+
+        $this->appendFill($state, $clock->now(), '-1', fee: null);
+        $scenario->rejectNextProtectionOrder();
+
+        $matched = $scenario->movePrice('BTCUSDT', 24940.0, 0.0)['matched_orders'];
+
+        self::assertCount(1, $matched);
+        $blocked = $matched[0];
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $blocked->status);
+        self::assertSame(0.4, $blocked->filledQuantity);
+        self::assertSame(0.6, $blocked->remainingQuantity);
+        self::assertSame('daily_loss_cap_not_computable', $blocked->metadata['reason'] ?? null);
+        self::assertSame('not_computable', $blocked->metadata['daily_loss_cap_status'] ?? null);
+        self::assertSame('fill_fee_unknown', $blocked->metadata['daily_loss_cap_detail_reason'] ?? null);
+        self::assertSame('rejected', $blocked->metadata['protection_status'] ?? null);
+        self::assertSame('reduce_only_market_close', $blocked->metadata['fail_safe_action'] ?? null);
+        self::assertSame('completed', $blocked->metadata['compensation_status'] ?? null);
+        self::assertSame('position_closed', $blocked->metadata['compensation_outcome'] ?? null);
+        self::assertTrue($blocked->metadata['position_flat_after_compensation'] ?? false);
+        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $state->events('order.cancelled'));
+        self::assertCount(1, $state->events('protection_order.rejected'));
+        self::assertCount(0, $state->events('order.rejected'));
+
+        $compensationId = $blocked->metadata['compensation_order_id'] ?? null;
+        self::assertIsString($compensationId);
+        $compensation = $state->getOrder($compensationId);
+        self::assertNotNull($compensation);
+        self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
+        self::assertTrue($compensation->reduceOnly);
+        self::assertSame(0.4, $compensation->filledQuantity);
+
+        $eventCount = \count($state->events());
+        self::assertSame([], $scenario->movePrice('BTCUSDT', 24930.0, 0.0)['matched_orders']);
+        self::assertCount($eventCount, $state->events());
     }
 
     public function testUnknownFundingConversionFailsClosed(): void
@@ -691,6 +839,8 @@ final class FakeDailyLossCapGuardTest extends TestCase
         array $metadata = [],
         ?float $price = null,
         bool $postOnly = false,
+        ?float $attachedStopLossPrice = null,
+        ?float $attachedTakeProfitPrice = null,
     ): PlaceOrderRequest {
         $reduceIntent = $reduceOnly || \in_array($type, [
             ExchangeOrderType::STOP_LOSS,
@@ -721,6 +871,8 @@ final class FakeDailyLossCapGuardTest extends TestCase
             leverage: 3,
             marginMode: 'isolated',
             clientOrderId: $clientOrderId,
+            attachedStopLossPrice: $attachedStopLossPrice,
+            attachedTakeProfitPrice: $attachedTakeProfitPrice,
             metadata: $metadata,
         );
     }
