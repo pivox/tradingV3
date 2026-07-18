@@ -22,7 +22,9 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeFillCostModel;
+use App\Exchange\Fake\FakeFundingModel;
 use App\Exchange\Fake\FakeFundingModelConfig;
+use App\Exchange\Fake\FakeFundingSchedule;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
@@ -288,6 +290,71 @@ final class FakeDailyLossCapGuardTest extends TestCase
 
         self::assertSame('not_computable', $status->status);
         self::assertSame('funding_amount_usdt_conflict', $status->detailReason);
+    }
+
+    public function testFundingSettledAtSubSecondDeadlineRemainsComputableAfterRestart(): void
+    {
+        $stateFile = $this->stateFile();
+        $clock = new MutableDailyLossClock('2026-07-18T17:00:01+00:00');
+        $dueAt = new \DateTimeImmutable('2026-07-18T17:00:00.123456+00:00');
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $this->savePosition($state, ExchangePositionSide::LONG, 1.0);
+            $position = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+            self::assertNotNull($position);
+            $result = (new FakeFundingModel(FakeFundingModelConfig::v1(), $clock))->settle(
+                new FakeFundingSchedule(
+                    symbol: 'BTCUSDT',
+                    side: ExchangePositionSide::LONG,
+                    fundingRate: '0.0001',
+                    rateIntervalSeconds: 28800,
+                    appliedIntervalSeconds: 28800,
+                    currency: 'USDT',
+                    dueAt: $dueAt,
+                ),
+                $position,
+                $state,
+            );
+            self::assertSame('applied', $result->status);
+
+            $persistedEvent = $state->events('funding.accrued')[0] ?? null;
+            self::assertInstanceOf(FakeExchangeEvent::class, $persistedEvent);
+            self::assertSame('2026-07-18T17:00:00+00:00', $persistedEvent->payload['due_at'] ?? null);
+            self::assertSame('2026-07-18T17:00:00.123456+00:00', $persistedEvent->occurredAt->format('Y-m-d\TH:i:s.uP'));
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $restoredEvent = $restored->events('funding.accrued')[0] ?? null;
+            self::assertInstanceOf(FakeExchangeEvent::class, $restoredEvent);
+            self::assertSame('2026-07-18T17:00:00+00:00', $restoredEvent->payload['due_at'] ?? null);
+            self::assertSame('2026-07-18T17:00:00.123456+00:00', $restoredEvent->occurredAt->format('Y-m-d\TH:i:s.uP'));
+
+            $status = $this->guard($restored, $clock)->current();
+
+            self::assertSame('ready', $status->status);
+            self::assertSame('-2.500000000000', $status->dailyNetUsdt);
+            self::assertSame('2.500000000000', $status->consumptionUsdt);
+            self::assertNull($status->detailReason);
+        } finally {
+            $this->removeStateFiles($stateFile);
+        }
+    }
+
+    public function testFundingDeadlineInDifferentPersistedSecondRemainsAConflict(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T17:00:02+00:00');
+        $this->appendFunding(
+            $state,
+            new \DateTimeImmutable('2026-07-18T17:00:00.999999+00:00'),
+            '-1',
+            dueAt: new \DateTimeImmutable('2026-07-18T17:00:01+00:00'),
+        );
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('funding_due_at_conflict', $status->detailReason);
     }
 
     public function testProfitableDayConsumptionFloorsAtExactZero(): void
@@ -695,12 +762,13 @@ final class FakeDailyLossCapGuardTest extends TestCase
         ?string $amountUsdt,
         ?int $sequence = null,
         ?string $nativeAmount = null,
+        ?\DateTimeImmutable $dueAt = null,
     ): void {
         $payload = [
             'amount' => $nativeAmount ?? $amountUsdt,
             'currency' => 'USDT',
             'amount_usdt' => $amountUsdt,
-            'due_at' => $occurredAt->format(\DateTimeInterface::ATOM),
+            'due_at' => ($dueAt ?? $occurredAt)->format(\DateTimeInterface::ATOM),
             'model_version' => FakeFundingModelConfig::MODEL_VERSION,
             'funding_idempotency_key' => 'funding-' . ($sequence ?? \count($state->events()) + 1),
             'funding_payload_hash' => hash('sha256', (string) $amountUsdt . ':' . ($sequence ?? \count($state->events()) + 1)),

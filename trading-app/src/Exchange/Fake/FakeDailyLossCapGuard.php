@@ -307,7 +307,7 @@ final readonly class FakeDailyLossCapGuard
         } catch (\Throwable) {
             return $this->invalidDelta('funding_due_at_invalid');
         }
-        if ($due != $event->occurredAt) {
+        if ($due->getTimestamp() !== $event->occurredAt->getTimestamp()) {
             return $this->invalidDelta('funding_due_at_conflict');
         }
 
