@@ -107,6 +107,7 @@ class MtfValidatorCoreService
             contextTimeframes: $contextTimeframes,
             mtfConfig: $mtfConfig,
             indicatorsByTimeframe: $indicatorsByTimeframe,
+            exchangeContext: $exchangeContext,
         );
 
         if (!$contextDecision->isValid) {
@@ -138,6 +139,7 @@ class MtfValidatorCoreService
             mtfConfig: $mtfConfig,
             indicatorsByTimeframe: $indicatorsByTimeframe,
             contextDecision: $contextDecision,
+            exchangeContext: $exchangeContext,
         );
 
         $result = $this->buildResultExecution(

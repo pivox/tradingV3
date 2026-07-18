@@ -59,8 +59,9 @@ The fixture contains no OKX, Hyperliquid, or Bitmart set. The command forces
 dry-run at both fixture application and run request. Tests instrument the OKX
 and Hyperliquid HTTP boundaries and fail on any target exchange or non-Fake
 payload. Bitmart is not decorated or modified: its zero counter is supported by
-the Fake provider boundary. Indicator reads inject `FakeKlineProvider` directly,
-so that route instantiates no global provider registry or bundle. The v2 evidence
+the Fake provider boundary. Indicator and ConditionRegistry timeframe kline
+reads inject `FakeKlineProvider` directly with the Fake context, so those routes
+instantiate no global provider registry or bundle. The v2 evidence
 names each proof method and fails closed when that exact shape is missing. Golden
 scenario 20 uses the versioned fixture only and never invokes a Bitmart provider;
 its Bitmart proof is structural, not an HTTP measurement.

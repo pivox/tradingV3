@@ -289,9 +289,10 @@ consolidated multi-profile dry-run recipe and proves orchestration/config
 isolation plus the existing global exposure-lock contract without creating an
 order or contacting an exchange. The v2 safety evidence measures OKX and
 Hyperliquid through HTTP guards and proves the Bitmart zero through the Fake
-provider boundary; this is not a Bitmart HTTP measurement. Fake indicator reads
-inject `FakeKlineProvider` directly without a global registry or bundle on that
-route, and the recipe does not decorate, modify, or call a Bitmart provider.
+provider boundary; this is not a Bitmart HTTP measurement. Fake indicator and
+ConditionRegistry timeframe kline reads inject `FakeKlineProvider` directly
+with the Fake context, without a global registry or bundle on those routes, and
+the recipe does not decorate, modify, or call a Bitmart provider.
 
 This closes the catalog gap only. Trade-history completeness and later
 operational acceptance remain outside this slice, so the evidence does not by

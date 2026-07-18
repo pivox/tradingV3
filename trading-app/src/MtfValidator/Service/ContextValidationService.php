@@ -6,6 +6,7 @@ namespace App\MtfValidator\Service;
 
 use App\Contract\MtfValidator\Dto\ContextDecisionDto;
 use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
+use App\Provider\Context\ExchangeContext;
 use Symfony\Component\DependencyInjection\Attribute\Lazy;
 
 #[Lazy]
@@ -29,6 +30,7 @@ class ContextValidationService
         array $contextTimeframes,
         array $mtfConfig,
         array $indicatorsByTimeframe,
+        ?ExchangeContext $exchangeContext = null,
     ): ContextDecisionDto {
         $decisions = [];
 
@@ -42,6 +44,7 @@ class ContextValidationService
                 mode: $mode,
                 mtfConfig: $mtfConfig,
                 indicators: $tfIndicators,
+                exchangeContext: $exchangeContext,
             );
         }
 
