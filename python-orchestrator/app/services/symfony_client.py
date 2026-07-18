@@ -34,6 +34,15 @@ SnapshotKey = Tuple[str, str]
 class OpenStateUnavailableError(RuntimeError):
     """Le snapshot d'état ouvert n'a pas pu être récupéré (fail-closed live)."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        fake_only_safety_evidence: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.fake_only_safety_evidence = fake_only_safety_evidence
+
 
 class ContractsUnavailableError(RuntimeError):
     """La liste des contrats sélectionnés n'a pas pu être récupérée (PY-003).
@@ -122,8 +131,17 @@ async def fetch_open_state(
         ) from exc
 
     if response.status_code != 200:
+        safety_evidence = None
+        if exchange == "fake":
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = None
+            if isinstance(error_body, dict) and "fake_only_safety_evidence" in error_body:
+                safety_evidence = error_body["fake_only_safety_evidence"]
         raise OpenStateUnavailableError(
-            f"open-state fetch returned HTTP {response.status_code} for {exchange}/{market_type}"
+            f"open-state fetch returned HTTP {response.status_code} for {exchange}/{market_type}",
+            fake_only_safety_evidence=safety_evidence,
         )
 
     try:

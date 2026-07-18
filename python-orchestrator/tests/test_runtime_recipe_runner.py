@@ -682,8 +682,19 @@ def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
     assert recipe["exchange_calls"] == expected_exchange_calls
 
 
-def test_r12_blocks_when_shared_open_state_safety_evidence_is_missing(tmp_path: Path):
-    api = FakeRecipeApi(open_state_safety_evidence={})
+@pytest.mark.parametrize(
+    "open_state_safety_evidence",
+    (
+        {},
+        "malformed",
+        {"exchange_calls": {"bitmart": 0}},
+    ),
+)
+def test_r12_blocks_when_shared_open_state_safety_evidence_is_missing_or_malformed(
+    tmp_path: Path,
+    open_state_safety_evidence: Any,
+):
+    api = FakeRecipeApi(open_state_safety_evidence=open_state_safety_evidence)
     runner = RecipeRunner(
         RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
         http_client=api,

@@ -223,8 +223,42 @@ def test_fetch_open_state_raises_on_http_error_status():
         async with _client_with(handler) as client:
             await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
 
-    with pytest.raises(OpenStateUnavailableError):
+    with pytest.raises(OpenStateUnavailableError) as caught:
         asyncio.run(_run())
+
+    assert caught.value.fake_only_safety_evidence is None
+
+
+def test_fetch_fake_open_state_http_error_preserves_only_safety_evidence():
+    evidence = {
+        "ambiguous_calls": 1,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v1",
+        "source": "symfony_http_client_guard",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={
+                "status": "error",
+                "message": "provider failed with api_key=must-not-escape",
+                "fake_only_safety_evidence": evidence,
+            },
+        )
+
+    async def _run():
+        async with _client_with(handler) as client:
+            await fetch_open_state(client, "http://symfony", "fake", "perpetual")
+
+    with pytest.raises(OpenStateUnavailableError) as caught:
+        asyncio.run(_run())
+
+    assert caught.value.fake_only_safety_evidence == evidence
+    assert "api_key" not in str(caught.value).lower()
+    assert "must-not-escape" not in str(caught.value)
 
 
 def test_fetch_open_state_raises_on_unexpected_shape():

@@ -466,6 +466,114 @@ def test_dry_run_proceeds_without_snapshot(orchestrator_env, monkeypatch):
     assert mtf_posts[0]["json"]["sync_tables"] is False
 
 
+def test_fake_dry_run_preserves_failed_open_state_exchange_call_evidence(
+    orchestrator_env, monkeypatch
+):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-proof",
+        dry_run=True,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    evidence = {
+        "ambiguous_calls": 1,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v1",
+        "source": "symfony_http_client_guard",
+    }
+    fake = _FakeAsyncClient(
+        open_state={
+            "status": "error",
+            "message": "guard blocked a forbidden exchange call",
+            "fake_only_safety_evidence": evidence,
+        },
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["open_state_snapshot"] == {
+        "fake_only_safety_evidence": evidence,
+    }
+    assert "open_positions" not in mtf_posts[0]["json"]["open_state_snapshot"]
+    assert "open_orders" not in mtf_posts[0]["json"]["open_state_snapshot"]
+
+
+def test_fake_dry_run_does_not_turn_generic_open_state_error_into_snapshot(
+    orchestrator_env, monkeypatch
+):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-generic-error",
+        dry_run=True,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    fake = _FakeAsyncClient(
+        open_state={"status": "error", "message": "provider unavailable"},
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert "open_state_snapshot" not in mtf_posts[0]["json"]
+
+
+def test_fake_live_set_stays_blocked_when_failed_open_state_carries_safety_evidence(
+    orchestrator_env, monkeypatch
+):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-live",
+        dry_run=False,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    fake = _FakeAsyncClient(
+        open_state={
+            "status": "error",
+            "fake_only_safety_evidence": {
+                "ambiguous_calls": 1,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v1",
+                "source": "symfony_http_client_guard",
+            },
+        },
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    assert not [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+
+
 def test_run_level_dry_run_override_forces_live_set_to_dry(orchestrator_env, monkeypatch):
     # Set live + fetch open-state en échec : sans override il serait skippé
     # (fail-closed). Avec {"dry_run": true}, il est forcé en dry-run, donc exécuté.
