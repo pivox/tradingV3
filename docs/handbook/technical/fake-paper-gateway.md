@@ -532,7 +532,7 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-neuf scenarios executes dans cette version sont : maker limit rempli, limit
+Les vingt scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
@@ -541,13 +541,13 @@ market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL a
 prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
 private WS avec snapshot resync, restart avec position protegee ouverte,
 funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
-actif avec replay et restart.
+actif avec replay et restart, puis la recette dry-run `regular` / `scalper` /
+`scalper_micro` sur le meme symbole Fake avec hashes/lineages distincts, rapports
+JSON/Markdown deterministes et zero appel OKX, Hyperliquid ou Bitmart.
 
-Les ecarts encore explicites sont :
-
-| Scenario | Statut | Gap stable |
-| --- | --- | --- |
-| dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
+Les vingt lignes du catalogue sont maintenant `executable`; cela clot le
+catalogue golden v1, mais ne clot pas a lui seul l'issue #196 ni n'autorise une
+mutation demo/testnet/mainnet.
 
 Commande consolidee :
 

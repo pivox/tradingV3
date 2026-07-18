@@ -191,13 +191,18 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol"],
-      "gap_codes": ["multi_profile_fake_recipe_not_consolidated"],
+      "evidence": [
+        "tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts",
+        "python-orchestrator/tests/test_runtime_recipe_runner.py::test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart",
+        "python-orchestrator/tests/test_integration_orchestrator_e2e.py::test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism"
+      ],
+      "gap_codes": [],
       "id": 20,
       "name": "dry_run_multi_profiles_same_symbol",
-      "requirement": "Two dry-run profiles targeting the same symbol preserve profile isolation and the global exposure lock.",
-      "runner": null,
-      "status": "partial"
+      "requirement": "Regular, scalper and scalper_micro dry-run sets targeting the same symbol preserve profile isolation and the global exposure lock.",
+      "runner": "dry_run_multi_profiles_same_symbol",
+      "status": "executable"
     }
   ]
 }

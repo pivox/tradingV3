@@ -61,6 +61,7 @@ Fixtures versionnees :
 
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_nominal_fake_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_degraded_fake_dashboard.json`
+- `python-orchestrator/fixtures/runtime-recipe/fake_multi_profile_same_symbol.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_okx_dry_run_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/r1_r16_hyperliquid_dry_run_dashboard.json`
 - `python-orchestrator/fixtures/runtime-recipe/demo_exchanges_dashboard.json`
@@ -291,7 +292,7 @@ un scenario non execute en `PASS`.
 | R9 - Replay explicite | nominal | Rejouer un run termine via la meme cle ou le meme tick. | Relation lisible avec le run initial, aucun effet de bord duplique. |
 | R10 - Crash et reprise | degraded ou nominal | Interrompre l'orchestrateur apres claim, attendre expiration puis relancer. | Claim repris, set non perdu, pas de double execution observee. |
 | R11 - Chevauchement schedules | degraded, `recipe_fake_overlap_scalper` | Declencher deux ticks proches avec meme dashboard. | Lock ou `running` in-flight visible, pas de double dispatch incompatible. |
-| R12 - Contention entre profils | nominal + degraded | Cibler `BTCUSDT` depuis deux profils Fake dry-run. | Distinction lock orchestration / lock metier, aucun live. |
+| R12 - Contention entre profils | `fake_multi_profile_same_symbol` | Cibler `BTCUSDT` depuis `regular`, `scalper` et `scalper_micro`, tous Fake dry-run. | Trois sets/lineages/hashes distincts, lock orchestration par profil, lock metier global au symbole, replay/restart idempotent et zero appel exchange. |
 | R13 - Snapshot obsolete | guided, pas validable par fixture dry-run seule | Avec les fixtures dry-run, fournir un snapshot absent doit rester non bloquant; la branche fail-closed ne concerne que les sets effectivement live. Marquer `BLOCKED` tant qu'un harness local dedie ne cree pas un set `fake/demo` effectivement live sans mainnet ni exchange reel. | Preuve minimale dans ce lot : dry-run sans snapshot ne trade pas en live et ne valide pas R13. Preuve finale attendue plus tard : refus fail-closed live avant dispatch, sans fallback exchange silencieux. |
 | R14 - Garde-fous live | mutation negative | Tenter OKX/Hyperliquid `dry_run=false` ou live non allowliste. | Refus avant dispatch, 422/skip audit, aucun appel metier. |
 | R15 - Temporal Schedule | nominal | Creer un schedule dry-run vers le dashboard nominal. | Schedule visible, pause/reprise, `ok=false` echoue vraiment dans Temporal. |
@@ -310,6 +311,38 @@ python scripts/runtime_recipe_runner.py \
   --keep-fixtures
 ```
 
+La recette autonome du golden scenario 20 est :
+
+```bash
+cd python-orchestrator
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --scenario R12 \
+  --export-dir var/runtime-recipe/fake-multi-profile \
+  --keep-fixtures
+```
+
+Elle exporte depuis le meme objet normalise et redacted :
+
+- `var/runtime-recipe/fake-multi-profile/fake-multi-profile-recipe-report.json` ;
+- `var/runtime-recipe/fake-multi-profile/fake-multi-profile-recipe-report.md`.
+
+Les trois locks d'orchestration ont la forme
+`<profil>|fake|perpetual|BTCUSDT`; ils coexistent parce que le profil appartient a
+leur scope. Le lock metier `symbol_execution_lock` a le scope
+`fake|perpetual|BTCUSDT` : une activite d'ouverture concurrente d'un autre profil
+est `blocked` avec `cross_profile_symbol_locked`. Un conflit avec un autre run au
+niveau orchestration reste `skipped/locked`. Dans cette recette, les trois sets
+sont dry-run et ne creent aucun intent : le lock metier n'est donc pas acquis,
+les trois simulations coexistent sans effet de bord.
+
+Le rapport refuse le `PASS` si un set manque, si un hash/lineage est masque ou
+duplique, si le set desactive apparait, si un ordre est produit, ou si un payload
+n'est pas strictement `exchange=fake` et `dry_run=true`. Les compteurs explicites
+`okx=0`, `hyperliquid=0` et `bitmart=0` completent la preuve instrumentee des
+tests : aucun client exchange reel n'est construit par le golden 20.
+
 Garanties du runner :
 
 - refuse de demarrer sans `--confirm DRY_RUN_ONLY` ;
@@ -317,6 +350,7 @@ Garanties du runner :
 - force `dry_run=true`, `workers=1` et `sync_tables=false` lors des mutations de sets ;
 - n'envoie jamais le champ `payload`, produit cote serveur ;
 - exporte `var/runtime-recipe/latest/runtime-recipe-report.json` ;
+- exporte aussi les rapports JSON/Markdown normalises lorsque `R12` est selectionne ;
 - produit uniquement des statuts `PASS`, `FAIL` ou `BLOCKED` ;
 - redige `BLOCKED` lorsque la panne/crash/Temporal reel n'a pas ete injecte ou confirme ;
 - peut desactiver les dashboards a la fin avec `--cleanup` si `--keep-fixtures` n'est pas utilise.

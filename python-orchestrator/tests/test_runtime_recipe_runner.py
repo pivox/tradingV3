@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -48,6 +49,7 @@ class FakeRecipeApi:
         self.run_details: dict[str, dict[str, Any]] = {}
         self.next_dashboard_id = 1
         self.next_set_id = 1
+        self.new_run_dispatch_count = 0
 
     def request(
         self,
@@ -148,7 +150,7 @@ class FakeRecipeApi:
         symbols = body.get("symbols") or []
         if not symbols:
             return None
-        return {
+        payload = {
             "dry_run": body.get("dry_run", True),
             "workers": 1,
             "exchange": body["exchange"],
@@ -158,6 +160,9 @@ class FakeRecipeApi:
             "process_tp_sl": False,
             "symbols": symbols,
         }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+        return payload
 
     def _run(self, body: dict[str, Any]) -> tuple[int, Any]:
         if self.run_transport_error:
@@ -167,6 +172,7 @@ class FakeRecipeApi:
         key = body["idempotency_key"]
         if key in self.runs_by_key:
             return 200, self.runs_by_key[key]
+        self.new_run_dispatch_count += 1
         active_sets = [item for item in self.sets[dashboard_id] if item["enabled"]]
         set_results = [self._set_result(item, key) for item in active_sets]
         if self.overlap_guard and key.startswith("recipe-r11-"):
@@ -289,8 +295,86 @@ class FakeRecipeApi:
             "status": 200,
             "business_status": "success",
             "error": None,
-            "response_json": {"status": "success"},
+            "response_json": {
+                "status": "success",
+                "data": {
+                    "orders_placed": {
+                        "count": {"total": 0, "submitted": 0, "simulated": 0},
+                        "orders": [],
+                    }
+                },
+            },
+            "payload_sent": item["payload"],
         }
+
+
+def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart(
+    tmp_path: Path,
+):
+    api = FakeRecipeApi(overlap_guard=True)
+    first_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    first = first_runner.run(scenarios=("R12",), keep_fixtures=True)
+    first_json = (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
+    first_markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
+
+    restarted_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    restarted = restarted_runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert first["results"][0]["status"] == "PASS"
+    assert restarted["results"][0]["status"] == "PASS"
+    assert api.new_run_dispatch_count == 1
+    assert first_json == (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
+    assert first_markdown == (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
+
+    recipe = json.loads(first_json)
+    assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v1"
+    assert recipe["scenario"] == "dry_run_multi_profiles_same_symbol"
+    assert recipe["status"] == "PASS"
+    assert [item["profile"] for item in recipe["sets"]] == [
+        "regular",
+        "scalper",
+        "scalper_micro",
+    ]
+    assert {tuple(item["symbols"]) for item in recipe["sets"]} == {("BTCUSDT",)}
+    assert len({item["config_hash"] for item in recipe["sets"]}) == 3
+    assert len({item["lineage"]["orchestration_set_id"] for item in recipe["sets"]}) == 3
+    assert recipe["disabled_sets"] == ["recipe_fake_multi_disabled"]
+    assert recipe["locks"]["orchestration"]["scope"] == (
+        "mtf_profile+exchange+market_type+symbol"
+    )
+    assert recipe["locks"]["orchestration"]["conflict_status"] == "skipped"
+    assert recipe["locks"]["orchestration"]["conflict_reason"] == "locked"
+    assert recipe["locks"]["business"]["scope"] == "exchange+market_type+symbol"
+    assert recipe["locks"]["business"]["conflict_status"] == "blocked"
+    assert recipe["replay"]["same_run_id"] is True
+    assert recipe["restart"]["stable_recipe_key"] is True
+    assert recipe["parallelism"] == {
+        "bounded": True,
+        "sets": 3,
+        "workers_per_set": 1,
+    }
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+    assert recipe["redacted"] is True
+    assert b"api_key" not in first_json.lower()
+    assert b"secret" not in first_json.lower()
+    assert b"# Fake multi-profile recipe" in first_markdown
+
+    exchange_sets = [
+        request["json"]
+        for request in api.requests
+        if request["method"] in {"POST", "PATCH"}
+        and "/sets" in request["path"]
+        and isinstance(request["json"], dict)
+        and "exchange" in request["json"]
+    ]
+    assert exchange_sets
+    assert {item["exchange"] for item in exchange_sets} == {"fake"}
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

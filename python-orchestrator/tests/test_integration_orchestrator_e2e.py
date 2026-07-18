@@ -74,7 +74,8 @@ def test_mtf_run_payload_contract_on_the_wire(orchestrator_env, symfony):
     # Allow-list stricte : aucune clé hors contrat ne part sur le fil.
     assert set(sent.keys()) <= {
         "dry_run", "workers", "exchange", "market_type", "mtf_profile",
-        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot",
+        "sync_tables", "process_tp_sl", "symbols", "config_hash",
+        "open_state_snapshot",
     }
 
 
@@ -268,6 +269,42 @@ def test_bounded_parallelism_respects_max_concurrency(
     # Jamais au-delà de la borne, et la borne est effectivement atteinte.
     assert fake.max_in_flight <= concurrency
     assert fake.max_in_flight == expected_max
+
+
+def test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism(
+    orchestrator_env, symfony, monkeypatch
+):
+    monkeypatch.setenv("MAX_CONCURRENCY", "2")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    for profile in ("regular", "scalper", "scalper_micro"):
+        _seed_set(
+            session,
+            dash.id,
+            f"multi-{profile}",
+            exchange="fake",
+            dry_run=True,
+            mtf_profile=profile,
+            symbols=("BTCUSDT",),
+        )
+    fake = symfony()
+
+    response = client.post(
+        "/orchestrator/run",
+        json={
+            "dashboard_id": str(dash.id),
+            "idempotency_key": "golden20-same-symbol",
+            "dry_run": True,
+        },
+    ).json()
+
+    assert response["summary"] == {"total_calls": 3, "success": 3, "failed": 0}
+    assert fake.max_in_flight == 2
+    assert {request["json"]["exchange"] for request in fake.run_requests} == {"fake"}
+    assert {tuple(request["json"]["symbols"]) for request in fake.run_requests} == {
+        ("BTCUSDT",)
+    }
+    assert len({request["json"]["config_hash"] for request in fake.run_requests}) == 3
 
 
 # ===========================================================================

@@ -131,6 +131,34 @@ def test_runtime_recipe_fixtures_are_fake_dry_run_only():
     assert {"regular", "scalper", "scalper_micro"}.issubset(profiles)
 
 
+def test_fake_multi_profile_fixture_targets_one_symbol_with_three_distinct_profiles():
+    fixture = _load(FIXTURE_DIR / "fake_multi_profile_same_symbol.json")
+
+    assert fixture["fixture_id"] == "fake-multi-profile-same-symbol-v1"
+    assert fixture["dry_run_only"] is True
+    enabled = [item for item in fixture["sets"] if item["enabled"]]
+    disabled = [item for item in fixture["sets"] if not item["enabled"]]
+
+    assert [item["mtf_profile"] for item in enabled] == [
+        "regular",
+        "scalper",
+        "scalper_micro",
+    ]
+    assert len({item["set_id"] for item in enabled}) == 3
+    assert {tuple(item["symbols"]) for item in enabled} == {("BTCUSDT",)}
+    assert len(disabled) == 1
+    assert disabled[0]["set_id"] == "recipe_fake_multi_disabled"
+    assert all(item["exchange"] == "fake" for item in fixture["sets"])
+    assert all(item["environment"] == "demo" for item in fixture["sets"])
+    assert all(item["dry_run"] is True for item in fixture["sets"])
+    assert all(item["workers"] == 1 for item in fixture["sets"])
+    assert fixture["expected_invariants"]["forbidden_exchange_calls"] == [
+        "okx",
+        "hyperliquid",
+        "bitmart",
+    ]
+
+
 def test_r5_uses_explicit_safe_fault_profile_instead_of_magic_symbol():
     fixture = _load(FIXTURE_DIR / "r1_r16_degraded_fake_dashboard.json")
     r5_set = next(

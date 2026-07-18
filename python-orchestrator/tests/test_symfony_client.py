@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -402,17 +403,22 @@ def test_generate_set_payload_matches_build_mtf_payload_shape():
         symbols=("BTCUSDT", "ETHUSDT"),
         dry_run=True,
     )
-    assert generate_set_payload(orm) == build_mtf_payload(pyd, None)
+    runtime_payload = build_mtf_payload(pyd, None)
+    runtime_payload.pop("config_hash")
+    assert generate_set_payload(orm) == runtime_payload
 
 
 # --- effective_set_payload (PY-007) -----------------------------------------
 
 
 def test_effective_set_payload_matches_generate_when_within_bounds():
-    # Cas nominal (workers déjà dans la borne) : le payload effectif est identique
-    # au payload persisté généré — pas de clamp à appliquer.
+    # Cas nominal : la configuration envoyée reste celle persistée et le payload
+    # effectif ajoute uniquement son empreinte canonique de lineage.
     orm = _orm_set()
-    assert effective_set_payload(orm) == generate_set_payload(orm)
+    effective = dict(effective_set_payload(orm))
+    config_hash = effective.pop("config_hash")
+    assert effective == generate_set_payload(orm)
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", config_hash)
 
 
 def test_effective_set_payload_clamps_oversized_workers():
@@ -420,6 +426,25 @@ def test_effective_set_payload_clamps_oversized_workers():
     # effectif clampe à la borne, comme l'envoi réel de run_persisted_set.
     payload = effective_set_payload(_orm_set(symbols=["BTCUSDT"], workers=8))
     assert payload["workers"] == 1
+
+
+def test_effective_set_payload_adds_stable_distinct_config_hashes():
+    regular = effective_set_payload(_orm_set(mtf_profile="regular", symbols=["BTCUSDT"]))
+    replay = effective_set_payload(_orm_set(mtf_profile="regular", symbols=["BTCUSDT"]))
+    scalper = effective_set_payload(_orm_set(mtf_profile="scalper", symbols=["BTCUSDT"]))
+    distinct_symbol = effective_set_payload(
+        _orm_set(mtf_profile="regular", symbols=["ETHUSDT"])
+    )
+
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", regular["config_hash"])
+    assert replay["config_hash"] == regular["config_hash"]
+    assert len(
+        {
+            regular["config_hash"],
+            scalper["config_hash"],
+            distinct_symbol["config_hash"],
+        }
+    ) == 3
 
 
 def test_effective_set_payload_none_when_not_materialized():
@@ -593,7 +618,7 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
     assert "skip_open_state_filter" not in sent
     assert set(sent.keys()) <= {
         "dry_run", "workers", "exchange", "market_type", "mtf_profile",
-        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot",
+        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot", "config_hash",
     }
 
 

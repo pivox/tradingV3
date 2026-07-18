@@ -350,6 +350,22 @@ Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
 schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
 marques `BLOCKED` si la condition n'est pas observable depuis le runner.
 
+Le golden scenario 20 / `R12` dispose d'une commande dediee et reproductible :
+
+```bash
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --scenario R12 \
+  --export-dir var/runtime-recipe/fake-multi-profile \
+  --keep-fixtures
+```
+
+Elle applique `fake_multi_profile_same_symbol.json`, force trois sets Fake
+`regular`, `scalper` et `scalper_micro` sur `BTCUSDT` en dry-run, puis produit
+`fake-multi-profile-recipe-report.json` et `.md`. La cle de replay derive du hash
+de fixture : un restart du runner relit le meme run sans redispatch.
+
 R5 utilise le profil reserve `recipe_functional_error`. Ce profil n'est pas une
 strategie et ne doit avoir aucun fichier YAML : son absence provoque l'erreur
 fonctionnelle Symfony que la recette verifie. Le schema le refuse hors de

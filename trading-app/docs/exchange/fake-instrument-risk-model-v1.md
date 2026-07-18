@@ -282,20 +282,13 @@ runtime:
 Do not use rollback as a path to live, demo, or testnet trading. No credential,
 exchange endpoint, or network operation is part of this model.
 
-## Remaining issue #196 gaps
+## Issue #196 scope boundary
 
-The following remain unsupported or only partial and must stay explicit in the
-golden catalog and readiness evidence:
+All twenty Fake/Paper golden v1 rows are executable. Scenario 20 covers the
+consolidated multi-profile dry-run recipe and proves orchestration/config
+isolation plus the existing global exposure-lock contract without creating an
+order or contacting an exchange.
 
-- daily loss cap;
-- liquidation guard and liquidation model;
-- funding accrual;
-- one-way position conflict handling;
-- TP1-to-trailing-stop behavior;
-- duplicate/out-of-order event injection coverage;
-- consolidated multi-profile Fake/Paper recipe and exposure behavior.
-
-Trade history completeness and any other cataloged partial behavior also remain
-outside this slice. Therefore this document and the executable golden scenarios
-are evidence for narrow deterministic increments, not evidence that issue #196
-is complete.
+This closes the catalog gap only. Trade-history completeness and later
+operational acceptance remain outside this slice, so the evidence does not by
+itself close issue #196 or authorize demo, testnet, or live mutation.

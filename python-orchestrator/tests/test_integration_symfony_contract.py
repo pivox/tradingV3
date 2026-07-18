@@ -229,7 +229,7 @@ def test_mtf_run_request_payload_contract_and_trace_id():
     # Allow-list stricte des clés (aucun flag de contrôle runner ne fuite).
     assert set(sent.keys()) <= {
         "dry_run", "workers", "exchange", "market_type", "mtf_profile",
-        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot",
+        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot", "config_hash",
     }
 
 

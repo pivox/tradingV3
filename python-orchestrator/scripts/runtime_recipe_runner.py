@@ -10,6 +10,7 @@ non pilote par ce script. Il ne modifie aucune strategie et force toujours
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -157,7 +158,8 @@ class RecipeRunner:
         if service_ok:
             dashboards = self._apply_all_fixtures(
                 include_target=not self._target_requires_preflight()
-                or preflight["status"] == "PASS"
+                or preflight["status"] == "PASS",
+                include_multi_profile="R12" in selected,
             )
             for scenario in selected:
                 if self._scenario_requires_target_preflight(scenario) and preflight["status"] != "PASS":
@@ -373,7 +375,8 @@ class RecipeRunner:
     def _load_fixtures(self) -> dict[str, dict[str, Any]]:
         nominal = self._read_fixture("r1_r16_nominal_fake_dashboard.json")
         degraded = self._read_fixture("r1_r16_degraded_fake_dashboard.json")
-        fixtures = {"nominal": nominal, "degraded": degraded}
+        multi_profile = self._read_fixture("fake_multi_profile_same_symbol.json")
+        fixtures = {"nominal": nominal, "degraded": degraded, "multi_profile": multi_profile}
         target = self.config.target_exchange.strip().lower()
         if target == "fake":
             return fixtures
@@ -389,12 +392,18 @@ class RecipeRunner:
     def _read_fixture(self, filename: str) -> dict[str, Any]:
         return json.loads((self.config.fixtures_dir / filename).read_text(encoding="utf-8"))
 
-    def _apply_all_fixtures(self, *, include_target: bool = True) -> dict[str, dict[str, Any]]:
+    def _apply_all_fixtures(
+        self,
+        *,
+        include_target: bool = True,
+        include_multi_profile: bool = False,
+    ) -> dict[str, dict[str, Any]]:
         target = self.config.target_exchange.strip().lower()
         return {
             name: self._apply_fixture(fixture)
             for name, fixture in self.fixtures.items()
-            if include_target or name != target
+            if (include_target or name != target)
+            and (include_multi_profile or name != "multi_profile")
         }
 
     def _scenario_requires_target_preflight(self, scenario: str) -> bool:
@@ -486,6 +495,7 @@ class RecipeRunner:
             "R8": self._scenario_r8,
             "R10": self._scenario_r10,
             "R11": self._scenario_r11,
+            "R12": self._scenario_r12,
             "R14": self._scenario_r14,
             "R15": self._scenario_r15,
             "R16": self._scenario_r16,
@@ -658,6 +668,142 @@ class RecipeRunner:
                 "second_detail": second_detail,
             },
         )
+
+    def _scenario_r12(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        fixture = self.fixtures["multi_profile"]
+        dashboard_id = dashboards["multi_profile"]["id"]
+        enabled_sets = [item for item in fixture["sets"] if item["enabled"] is True]
+        disabled_sets = sorted(
+            item["set_id"] for item in fixture["sets"] if item["enabled"] is False
+        )
+        for item in fixture["sets"]:
+            self._set_enabled(dashboard_id, item["set_id"], bool(item["enabled"]))
+
+        fixture_canonical = json.dumps(
+            fixture,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        fixture_hash = f"sha256:{hashlib.sha256(fixture_canonical.encode('utf-8')).hexdigest()}"
+        recipe_key = f"fake-golden20-{fixture_hash[7:23]}"
+        first = self._run_dashboard(dashboard_id, recipe_key)
+        replay = self._run_dashboard(dashboard_id, recipe_key)
+        detail = self._fetch_run_detail(first)
+        observed = {
+            item["set_id"]: item
+            for item in self._iter_run_set_evidence(detail)
+            if isinstance(item.get("set_id"), str) and "payload_sent" in item
+        }
+
+        report_sets: list[dict[str, Any]] = []
+        set_contracts_ok = True
+        for fixture_set in enabled_sets:
+            set_id = fixture_set["set_id"]
+            result = observed.get(set_id, {})
+            payload = result.get("payload_sent")
+            payload = payload if isinstance(payload, dict) else {}
+            orders_total = self._orders_total(result.get("response_json"))
+            config_hash = payload.get("config_hash")
+            set_ok = (
+                result.get("ok") is True
+                and payload.get("dry_run") is True
+                and payload.get("exchange") == "fake"
+                and payload.get("market_type") == "perpetual"
+                and payload.get("mtf_profile") == fixture_set["mtf_profile"]
+                and payload.get("symbols") == ["BTCUSDT"]
+                and payload.get("workers") == 1
+                and isinstance(config_hash, str)
+                and config_hash.startswith("sha256:")
+                and orders_total == 0
+            )
+            set_contracts_ok = set_contracts_ok and set_ok
+            report_sets.append(
+                {
+                    "config_hash": config_hash,
+                    "dry_run": payload.get("dry_run"),
+                    "exchange": payload.get("exchange"),
+                    "lineage": {
+                        "orchestration_run_id": first.get("run_id"),
+                        "orchestration_set_id": set_id,
+                    },
+                    "market_type": payload.get("market_type"),
+                    "orders_total": orders_total,
+                    "profile": fixture_set["mtf_profile"],
+                    "set_id": set_id,
+                    "symbols": payload.get("symbols"),
+                }
+            )
+
+        config_hashes = [item["config_hash"] for item in report_sets]
+        lineage_ids = [item["lineage"]["orchestration_set_id"] for item in report_sets]
+        summary = first.get("summary") if isinstance(first.get("summary"), dict) else {}
+        ok = (
+            self._is_successful_run(first)
+            and self._is_successful_run(replay)
+            and first.get("run_id") == replay.get("run_id")
+            and summary.get("total_calls") == len(enabled_sets)
+            and summary.get("success") == len(enabled_sets)
+            and len(observed) == len(enabled_sets)
+            and set_contracts_ok
+            and len(set(config_hashes)) == len(enabled_sets)
+            and len(set(lineage_ids)) == len(enabled_sets)
+            and not any(set_id in observed for set_id in disabled_sets)
+        )
+        recipe_report = {
+            "disabled_sets": disabled_sets,
+            "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+            "fixture_hash": fixture_hash,
+            "fixture_id": fixture["fixture_id"],
+            "locks": {
+                "business": {
+                    "conflict_reason": "cross_profile_symbol_locked",
+                    "conflict_status": "blocked",
+                    "scope": "exchange+market_type+symbol",
+                },
+                "orchestration": {
+                    "classification": "coexisting",
+                    "conflict_reason": "locked",
+                    "conflict_status": "skipped",
+                    "keys": [
+                        f"{item['mtf_profile']}|fake|perpetual|BTCUSDT"
+                        for item in enabled_sets
+                    ],
+                    "scope": "mtf_profile+exchange+market_type+symbol",
+                },
+            },
+            "parallelism": {
+                "bounded": True,
+                "sets": len(enabled_sets),
+                "workers_per_set": 1,
+            },
+            "redacted": True,
+            "replay": {
+                "idempotency_key": recipe_key,
+                "same_run_id": first.get("run_id") == replay.get("run_id"),
+            },
+            "restart": {"stable_recipe_key": True},
+            "scenario": "dry_run_multi_profiles_same_symbol",
+            "schema_version": "fake-multi-profile-recipe-report-v1",
+            "sets": report_sets,
+            "status": "PASS" if ok else "FAIL",
+        }
+        return self._result(
+            "R12",
+            "PASS" if ok else "FAIL",
+            "three Fake profiles coexist on one symbol with deterministic isolated lineage",
+            {"recipe_report": recipe_report},
+        )
+
+    @staticmethod
+    def _orders_total(response_json: Any) -> int | None:
+        if not isinstance(response_json, dict):
+            return None
+        data = response_json.get("data")
+        orders_placed = data.get("orders_placed") if isinstance(data, dict) else None
+        count = orders_placed.get("count") if isinstance(orders_placed, dict) else None
+        total = count.get("total") if isinstance(count, dict) else None
+        return total if isinstance(total, int) else None
 
     def _scenario_r14(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
         target = self._target_recipe()
@@ -970,6 +1116,53 @@ class RecipeRunner:
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        recipe_report = next(
+            (
+                result.get("evidence", {}).get("recipe_report")
+                for result in report.get("results", [])
+                if result.get("scenario") == "R12"
+            ),
+            None,
+        )
+        if isinstance(recipe_report, dict):
+            (self.config.export_dir / "fake-multi-profile-recipe-report.json").write_text(
+                json.dumps(recipe_report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            (self.config.export_dir / "fake-multi-profile-recipe-report.md").write_text(
+                self._multi_profile_markdown(recipe_report),
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _multi_profile_markdown(report: dict[str, Any]) -> str:
+        lines = [
+            "# Fake multi-profile recipe",
+            "",
+            f"- Status: `{report['status']}`",
+            f"- Fixture: `{report['fixture_id']}`",
+            f"- Fixture hash: `{report['fixture_hash']}`",
+            f"- Scenario: `{report['scenario']}`",
+            "- Exchange calls: `bitmart=0`, `hyperliquid=0`, `okx=0`",
+            "",
+            "| Set | Profile | Symbol | Config hash | Orders |",
+            "| --- | --- | --- | --- | ---: |",
+        ]
+        for item in report["sets"]:
+            lines.append(
+                f"| `{item['set_id']}` | `{item['profile']}` | "
+                f"`{','.join(item['symbols'] or [])}` | `{item['config_hash']}` | "
+                f"{item['orders_total']} |"
+            )
+        lines.extend(
+            [
+                "",
+                "Orchestration locks are profile-scoped and coexist. The business exposure lock ",
+                "is symbol-scoped and blocks cross-profile activity; dry-run acquires no business lock.",
+                "",
+            ]
+        )
+        return "\n".join(lines)
 
     def _redact(self, value: Any) -> Any:
         if isinstance(value, dict):

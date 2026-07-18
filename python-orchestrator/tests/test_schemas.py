@@ -189,6 +189,7 @@ def test_set_read_exposes_effective_payload_when_materialized():
         "sync_tables": False,
         "process_tp_sl": False,
         "symbols": ["BTCUSDT", "ETHUSDT"],
+        "config_hash": "sha256:feb32cc0bf6491ed5f7a551ae53ec5b8db234fdaa692f108583792d91c9aea3f",
     }
 
 
