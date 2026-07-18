@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
 from threading import Lock
 from typing import Any
+
+import pytest
 
 import scripts.runtime_recipe_runner as runner_module
 from scripts.runtime_recipe_runner import RecipeRunner, RunnerConfig
@@ -28,6 +31,9 @@ class FakeRecipeApi:
         r11_outage: bool = False,
         live_probe_status: int = 422,
         live_probe_body: dict[str, Any] | None = None,
+        fake_only_safety_evidence: dict[str, Any] | None = None,
+        open_state_safety_evidence: dict[str, Any] | None = None,
+        open_state_safety_evidence_by_set: dict[str, Any] | None = None,
     ) -> None:
         self.health_ok = health_ok
         self.run_transport_error = run_transport_error
@@ -39,6 +45,41 @@ class FakeRecipeApi:
         self.r11_outage = r11_outage
         self.live_probe_status = live_probe_status
         self.live_probe_body = live_probe_body or {"detail": "live non autorise pour la recette"}
+        self.fake_only_safety_evidence = (
+            {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            }
+            if fake_only_safety_evidence is None
+            else fake_only_safety_evidence
+        )
+        self.open_state_safety_evidence = (
+            {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            }
+            if open_state_safety_evidence is None
+            else open_state_safety_evidence
+        )
+        self.open_state_safety_evidence_by_set = open_state_safety_evidence_by_set or {}
         self.r11_seen = 0
         self.lock = Lock()
         self.dashboards: list[dict[str, Any]] = []
@@ -48,6 +89,7 @@ class FakeRecipeApi:
         self.run_details: dict[str, dict[str, Any]] = {}
         self.next_dashboard_id = 1
         self.next_set_id = 1
+        self.new_run_dispatch_count = 0
 
     def request(
         self,
@@ -148,7 +190,7 @@ class FakeRecipeApi:
         symbols = body.get("symbols") or []
         if not symbols:
             return None
-        return {
+        payload = {
             "dry_run": body.get("dry_run", True),
             "workers": 1,
             "exchange": body["exchange"],
@@ -158,6 +200,9 @@ class FakeRecipeApi:
             "process_tp_sl": False,
             "symbols": symbols,
         }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+        return payload
 
     def _run(self, body: dict[str, Any]) -> tuple[int, Any]:
         if self.run_transport_error:
@@ -167,6 +212,7 @@ class FakeRecipeApi:
         key = body["idempotency_key"]
         if key in self.runs_by_key:
             return 200, self.runs_by_key[key]
+        self.new_run_dispatch_count += 1
         active_sets = [item for item in self.sets[dashboard_id] if item["enabled"]]
         set_results = [self._set_result(item, key) for item in active_sets]
         if self.overlap_guard and key.startswith("recipe-r11-"):
@@ -283,14 +329,529 @@ class FakeRecipeApi:
                 "error": "functional replay setup failure",
                 "response_json": {"status": "error"},
             }
+        payload_sent = dict(item["payload"])
+        payload_sent["open_state_snapshot"] = {
+            "fake_only_safety_evidence": self.open_state_safety_evidence_by_set.get(
+                item["set_id"], self.open_state_safety_evidence
+            ),
+            "open_orders": [],
+            "open_positions": [],
+        }
         return {
             "set_id": item["set_id"],
             "ok": True,
             "status": 200,
             "business_status": "success",
             "error": None,
-            "response_json": {"status": "success"},
+            "response_json": {
+                "status": "success",
+                "data": {
+                    "fake_only_safety_evidence": self.fake_only_safety_evidence,
+                    "orders_placed": {
+                        "count": {"total": 0, "submitted": 0, "simulated": 0},
+                        "orders": [],
+                    },
+                    "symbols": {
+                        symbol: {"status": "success"}
+                        for symbol in sorted(payload_sent["symbols"])
+                    },
+                },
+            },
+            "payload_sent": payload_sent,
         }
+
+
+def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart(
+    tmp_path: Path,
+):
+    api = FakeRecipeApi(overlap_guard=True)
+    first_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    first = first_runner.run(scenarios=("R12",), keep_fixtures=True)
+    first_json = (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
+    first_markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
+
+    restarted_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    restarted = restarted_runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert first["results"][0]["status"] == "PASS"
+    assert restarted["results"][0]["status"] == "PASS"
+    assert api.new_run_dispatch_count == 1
+    assert first_json == (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
+    assert first_markdown == (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
+
+    recipe = json.loads(first_json)
+    assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v2"
+    assert recipe["scenario"] == "dry_run_multi_profiles_same_symbol"
+    assert recipe["status"] == "PASS"
+    assert [item["profile"] for item in recipe["sets"]] == [
+        "regular",
+        "scalper",
+        "scalper_micro",
+    ]
+    assert {tuple(item["symbols"]) for item in recipe["sets"]} == {("BTCUSDT",)}
+    assert len({item["config_hash"] for item in recipe["sets"]}) == 3
+    assert len({item["lineage"]["orchestration_set_id"] for item in recipe["sets"]}) == 3
+    assert recipe["disabled_sets"] == ["recipe_fake_multi_disabled"]
+    assert recipe["locks"]["orchestration"]["scope"] == (
+        "mtf_profile+exchange+market_type+symbol"
+    )
+    assert recipe["locks"]["orchestration"]["conflict_status"] == "skipped"
+    assert recipe["locks"]["orchestration"]["conflict_reason"] == "locked"
+    assert recipe["locks"]["business"]["scope"] == "exchange+market_type+symbol"
+    assert recipe["locks"]["business"]["evidence_status"] == "not_exercised"
+    assert recipe["locks"]["business"]["observed"] is False
+    assert recipe["locks"]["business"]["contract_conflict_status"] == "blocked"
+    assert recipe["locks"]["business"]["contract_conflict_reason"] == (
+        "cross_profile_symbol_locked"
+    )
+    assert recipe["replay"]["same_run_id"] is True
+    assert recipe["replay"]["idempotency_key"].startswith(
+        "fake-golden20-fake-only-exchange-safety-v2-"
+    )
+    assert recipe["restart"]["stable_recipe_key"] is True
+    assert recipe["parallelism"] == {
+        "bounded": True,
+        "sets": 3,
+        "workers_per_set": 1,
+    }
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+    assert recipe["exchange_call_proof"] == {
+        "bitmart": "fake_provider_boundary",
+        "hyperliquid": "http_client_guard",
+        "okx": "http_client_guard",
+    }
+    assert recipe["redacted"] is True
+    assert b"api_key" not in first_json.lower()
+    assert b"secret" not in first_json.lower()
+    assert b"# Fake multi-profile recipe" in first_markdown
+
+    exchange_sets = [
+        request["json"]
+        for request in api.requests
+        if request["method"] in {"POST", "PATCH"}
+        and "/sets" in request["path"]
+        and isinstance(request["json"], dict)
+        and "exchange" in request["json"]
+    ]
+    assert exchange_sets
+    assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+def test_r12_v2_distinguishes_bitmart_boundary_proof_from_http_guards(tmp_path: Path):
+    evidence_v2 = {
+        "ambiguous_calls": 0,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
+    }
+    api = FakeRecipeApi(
+        fake_only_safety_evidence=evidence_v2,
+        open_state_safety_evidence=evidence_v2,
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "PASS"
+    assert recipe["exchange_call_proof"] == evidence_v2["exchange_call_proof"]
+    assert recipe["exchange_calls"] == {
+        "bitmart": 0,
+        "hyperliquid": 0,
+        "okx": 0,
+    }
+    assert recipe["replay"]["idempotency_key"].startswith(
+        "fake-golden20-fake-only-exchange-safety-v2-"
+    )
+
+
+def test_r12_removes_stale_standalone_reports_when_current_run_is_blocked(
+    tmp_path: Path,
+):
+    standalone_paths = (
+        tmp_path / "fake-multi-profile-recipe-report.json",
+        tmp_path / "fake-multi-profile-recipe-report.md",
+    )
+    successful_report = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert successful_report["results"][0]["status"] == "PASS"
+    assert json.loads(standalone_paths[0].read_text())["status"] == "PASS"
+    assert standalone_paths[1].read_text().startswith("# Fake multi-profile recipe")
+
+    blocked_report = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert blocked_report["results"][0]["status"] == "BLOCKED"
+    assert all(not path.exists() for path in standalone_paths)
+
+    blocked_again = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    assert blocked_again["results"][0]["status"] == "BLOCKED"
+    assert all(not path.exists() for path in standalone_paths)
+
+
+def test_run_without_r12_preserves_existing_standalone_reports(tmp_path: Path):
+    api = FakeRecipeApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    runner.run(scenarios=("R12",), keep_fixtures=True)
+    standalone_paths = (
+        tmp_path / "fake-multi-profile-recipe-report.json",
+        tmp_path / "fake-multi-profile-recipe-report.md",
+    )
+    original_contents = tuple(path.read_bytes() for path in standalone_paths)
+
+    report = runner.run(scenarios=("R1",), keep_fixtures=True)
+
+    assert report["results"][0]["scenario"] == "R1"
+    assert tuple(path.read_bytes() for path in standalone_paths) == original_contents
+
+
+def test_r12_surfaces_standalone_report_removal_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    standalone_json = tmp_path / "fake-multi-profile-recipe-report.json"
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    )
+    runner.run(scenarios=("R12",), keep_fixtures=True)
+    original_unlink = Path.unlink
+
+    def fail_to_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path == standalone_json:
+            raise PermissionError("standalone report removal denied")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_to_unlink)
+    blocked_runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(health_ok=False),
+    )
+
+    with pytest.raises(PermissionError, match="standalone report removal denied"):
+        blocked_runner.run(scenarios=("R12",), keep_fixtures=True)
+
+
+def test_r12_does_not_present_the_unexercised_business_lock_as_observed(
+    tmp_path: Path,
+):
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    business_lock = recipe["locks"]["business"]
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+
+    assert report["results"][0]["status"] == "PASS"
+    assert business_lock == {
+        "contract_conflict_reason": "cross_profile_symbol_locked",
+        "contract_conflict_status": "blocked",
+        "evidence_status": "not_exercised",
+        "observed": False,
+        "scope": "exchange+market_type+symbol",
+    }
+    assert "conflict_reason" not in business_lock
+    assert "conflict_status" not in business_lock
+    assert "Business lock evidence: `not_exercised` (`observed=false`)." in markdown
+    assert (
+        "Business lock contract: `blocked/cross_profile_symbol_locked`." in markdown
+    )
+
+
+def test_r12_rejects_additional_symbols_actually_processed_by_symfony(tmp_path: Path):
+    class ExtraProcessedSymbolApi(FakeRecipeApi):
+        def _set_result(self, item: dict[str, Any], key: str) -> dict[str, Any]:
+            result = super()._set_result(item, key)
+            if result.get("ok") is True:
+                result["response_json"]["data"]["symbols"] = {
+                    "BTCUSDT": {"status": "success"},
+                    "ETHUSDT": {"status": "success"},
+                }
+            return result
+
+    api = ExtraProcessedSymbolApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    persisted_sets = next(iter(api.run_details.values()))["sets"]
+
+    assert {tuple(item["payload_sent"]["symbols"]) for item in persisted_sets} == {
+        ("BTCUSDT",)
+    }
+    assert report["results"][0]["status"] == "FAIL"
+    assert {tuple(item["symbols"]) for item in recipe["sets"]} == {
+        ("BTCUSDT", "ETHUSDT")
+    }
+
+
+@pytest.mark.parametrize("symbols_shape", ["missing", "invalid"])
+def test_r12_fails_closed_when_processed_symbol_map_is_unusable(
+    tmp_path: Path,
+    symbols_shape: str,
+):
+    class UnusableProcessedSymbolsApi(FakeRecipeApi):
+        def _set_result(self, item: dict[str, Any], key: str) -> dict[str, Any]:
+            result = super()._set_result(item, key)
+            if result.get("ok") is True:
+                response_data = result["response_json"]["data"]
+                if symbols_shape == "missing":
+                    response_data.pop("symbols")
+                else:
+                    response_data["symbols"] = ["BTCUSDT"]
+            return result
+
+    api = UnusableProcessedSymbolsApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert [item["symbols"] for item in recipe["sets"]] == [None, None, None]
+    assert markdown.count("`UNAVAILABLE`") == 3
+
+
+def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
+    tmp_path: Path,
+):
+    api = FakeRecipeApi()
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+    fixture_canonical = json.dumps(
+        runner.fixtures["multi_profile"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    fixture_hash = hashlib.sha256(fixture_canonical.encode("utf-8")).hexdigest()
+    legacy_key = f"fake-golden20-{fixture_hash[:16]}"
+    api.runs_by_key[legacy_key] = {
+        "ok": True,
+        "run_id": "run_pre_v1_persistent_result",
+        "status": "success",
+        "summary": {"total_calls": 3, "success": 3, "failed": 0},
+    }
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+    run_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+
+    assert report["results"][0]["status"] == "PASS"
+    assert api.new_run_dispatch_count == 1
+    assert len(set(run_keys)) == 1
+    assert run_keys[0] != legacy_key
+    assert run_keys[0].startswith("fake-golden20-fake-only-exchange-safety-v2-")
+    assert recipe["replay"]["same_run_id"] is True
+
+
+@pytest.mark.parametrize(
+    ("safety_evidence", "expected_status", "expected_exchange_calls"),
+    [
+        ({}, "BLOCKED", {"bitmart": 0, "hyperliquid": 0, "okx": 0}),
+        (
+            {
+                "ambiguous_calls": 1,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            },
+            "BLOCKED",
+            {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        ),
+        (
+            {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            },
+            "FAIL",
+            {"bitmart": 0, "hyperliquid": 0, "okx": 3},
+        ),
+        (
+            {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {
+                    "bitmart": 0,
+                    "hyperliquid": 0,
+                    "okx": 1,
+                    "unexpected": 0,
+                },
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            },
+            "FAIL",
+            {"bitmart": 0, "hyperliquid": 0, "okx": 3},
+        ),
+    ],
+)
+def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
+    tmp_path: Path,
+    safety_evidence: dict[str, Any],
+    expected_status: str,
+    expected_exchange_calls: dict[str, int],
+):
+    api = FakeRecipeApi(fake_only_safety_evidence=safety_evidence)
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == expected_status
+    assert recipe["status"] == expected_status
+    assert recipe["exchange_calls"] == expected_exchange_calls
+
+
+@pytest.mark.parametrize(
+    "open_state_safety_evidence",
+    (
+        {},
+        "malformed",
+        {"exchange_calls": {"bitmart": 0}},
+    ),
+)
+def test_r12_blocks_when_shared_open_state_safety_evidence_is_missing_or_malformed(
+    tmp_path: Path,
+    open_state_safety_evidence: Any,
+):
+    api = FakeRecipeApi(open_state_safety_evidence=open_state_safety_evidence)
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert report["results"][0]["status"] == "BLOCKED"
+
+
+def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
+    api = FakeRecipeApi(
+        open_state_safety_evidence={
+            "ambiguous_calls": 0,
+            "async_exchange_capable_dispatches_suppressed": True,
+            "complete": True,
+            "exchange_call_proof": {
+                "bitmart": "fake_provider_boundary",
+                "hyperliquid": "http_client_guard",
+                "okx": "http_client_guard",
+            },
+            "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+            "schema_version": "fake-only-exchange-safety-v2",
+            "source": "symfony_fake_provider_boundary_and_http_guards",
+        }
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 1}
+    markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
+    assert "Exchange calls: `bitmart=0`, `hyperliquid=0`, `okx=1`" in markdown
+
+
+def test_r12_fails_when_later_shared_snapshot_contains_known_exchange_attempt(tmp_path: Path):
+    api = FakeRecipeApi(
+        open_state_safety_evidence_by_set={
+            "recipe_fake_multi_scalper": {
+                "ambiguous_calls": 0,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": "bad", "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            },
+        }
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "FAIL"
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 1}
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

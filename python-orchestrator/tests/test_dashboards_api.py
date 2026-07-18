@@ -213,6 +213,7 @@ def test_set_read_exposes_effective_payload(api_client):
         "sync_tables": False,
         "process_tp_sl": False,
         "symbols": ["BTCUSDT", "ETHUSDT"],
+        "config_hash": "sha256:7a427521b12ca8c1a789200261533a331e89c62d9560565826dfc3eb3a49ad55",
     }
 
 

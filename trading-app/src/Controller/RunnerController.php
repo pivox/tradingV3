@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Config\TradeEntryModeContext;
+use App\Common\Enum\Exchange;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use App\Trading\Orchestration\OrchestrationContextException;
 use App\Trading\Orchestration\OrchestrationContextValidator;
 use Psr\Log\LoggerInterface;
@@ -22,6 +24,7 @@ class RunnerController extends AbstractController
         private readonly LoggerInterface $logger,
         private readonly TradeEntryModeContext $modeContext,
         private readonly OrchestrationContextValidator $orchestrationContextValidator,
+        private readonly FakeOnlyExchangeCallAudit $fakeOnlyExchangeCallAudit = new FakeOnlyExchangeCallAudit(),
     ) {
     }
 
@@ -43,6 +46,7 @@ class RunnerController extends AbstractController
                 // For GET requests, get parameters from query string
                 $data = $request->query->all();
             }
+            $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v2';
 
             $symbolsInput = $data['symbols'] ?? [];
             $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);
@@ -138,7 +142,24 @@ class RunnerController extends AbstractController
                     ?? ($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
                 'orchestration_set_id' => $headerSetId
                     ?? ($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
+                'config_hash' => $data['config_hash'] ?? null,
+                'suppress_exchange_capable_async_work' => $safetyEvidenceRequested,
             ]);
+            if ($safetyEvidenceRequested) {
+                if (
+                    $runnerRequest->exchange !== Exchange::FAKE
+                    || !$runnerRequest->dryRun
+                    || $runnerRequest->workers !== 1
+                ) {
+                    throw new OrchestrationContextException(
+                        'fake_only_safety_context_invalid',
+                        'Fake-only safety evidence requires exchange=fake, dry_run=true, and workers=1.',
+                    );
+                }
+                $this->fakeOnlyExchangeCallAudit->begin(
+                    asyncExchangeCapableDispatchesSuppressed: $runnerRequest->suppressExchangeCapableAsyncWork,
+                );
+            }
             $result = $runMtfCycle->run($runnerRequest);
 
             // Le résultat est déjà enrichi par MtfRunnerService
@@ -167,23 +188,28 @@ class RunnerController extends AbstractController
             ]);
 
             // Réponse alignée sur l'ancien endpoint runMtfCycle() pour compatibilité
+            $responseData = [
+                'run' => $runSummary,
+                'symbols' => $results,
+                'errors' => $errors,
+                'workers' => $workers,
+                'summary_by_tf' => $result['summary_by_tf'] ?? [],
+                'rejected_by' => $result['rejected_by'] ?? [],
+                'last_validated' => $result['last_validated'] ?? [],
+                'performance' => $performanceReport,
+                'orders_placed' => $result['orders_placed'] ?? [
+                    'count' => ['total' => 0, 'submitted' => 0, 'simulated' => 0],
+                    'orders' => [],
+                ],
+            ];
+            if ($safetyEvidenceRequested) {
+                $responseData['fake_only_safety_evidence'] = $this->fakeOnlyExchangeCallAudit->finish();
+            }
+
             return $this->json([
                 'status' => $status,
                 'message' => 'MTF run completed',
-                'data' => [
-                    'run' => $runSummary,
-                    'symbols' => $results,
-                    'errors' => $errors,
-                    'workers' => $workers,
-                    'summary_by_tf' => $result['summary_by_tf'] ?? [],
-                    'rejected_by' => $result['rejected_by'] ?? [],
-                    'last_validated' => $result['last_validated'] ?? [],
-                    'performance' => $performanceReport,
-                    'orders_placed' => $result['orders_placed'] ?? [
-                        'count' => ['total' => 0, 'submitted' => 0, 'simulated' => 0],
-                        'orders' => [],
-                    ],
-                ],
+                'data' => $responseData,
             ]);
 
         } catch (OrchestrationContextException $e) {
@@ -193,20 +219,34 @@ class RunnerController extends AbstractController
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->json([
+            $errorResponse = [
                 'status' => 'error',
                 'error_code' => $e->errorCode,
                 'message' => $e->getMessage(),
-            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            ];
+            if ($this->fakeOnlyExchangeCallAudit->isActive()) {
+                $errorResponse['data'] = [
+                    'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
+                ];
+            }
+
+            return $this->json($errorResponse, Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             $this->logger->error('[Runner Controller] Failed to run MTF cycle', [
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->json([
+            $errorResponse = [
                 'status' => 'error',
                 'message' => $e->getMessage(),
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            ];
+            if ($this->fakeOnlyExchangeCallAudit->isActive()) {
+                $errorResponse['data'] = [
+                    'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
+                ];
+            }
+
+            return $this->json($errorResponse, Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
 }

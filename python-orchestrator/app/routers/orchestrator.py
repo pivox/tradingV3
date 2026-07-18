@@ -657,18 +657,24 @@ async def _collect_snapshots(
     mtf_sets: List[Any],
     *,
     run_id: str,
-) -> Dict[SnapshotKey, Dict[str, Any]]:
+) -> tuple[
+    Dict[SnapshotKey, Dict[str, Any]],
+    Dict[SnapshotKey, Dict[str, Any]],
+]:
     """Récupère un snapshot d'état ouvert par couple ``(exchange, market_type)``.
 
     Un seul appel ``GET /api/exchange/open-state`` par couple distinct. Les
-    couples dont le fetch échoue restent absents du cache (fail-closed géré par
-    l'appelant pour les sets live).
+    couples dont le fetch échoue restent absents du cache de snapshots (fail-closed
+    géré par l'appelant pour les sets live). Une preuve Fake-only portée par une
+    réponse non-200 est conservée séparément afin qu'un set dry-run puisse l'auditer
+    sans transformer cette erreur en snapshot d'état valide.
 
     OBS-001 : chaque couple émet un ``snapshot_fetch`` corrélé (``ok`` /
     indisponible), pour rendre visible en flux le fetch 1×/(exchange, market_type).
     """
     keys = {snapshot_key(s) for s in mtf_sets}
     snapshots: Dict[SnapshotKey, Dict[str, Any]] = {}
+    failed_safety_evidence: Dict[SnapshotKey, Dict[str, Any]] = {}
     for exchange, market_type in keys:
         try:
             snapshots[(exchange, market_type)] = await fetch_open_state(
@@ -684,8 +690,12 @@ async def _collect_snapshots(
             run_metrics.observe_snapshot_fetch(
                 exchange=exchange, market_type=market_type, ok=True
             )
-        except OpenStateUnavailableError:
+        except OpenStateUnavailableError as exc:
             # Pas de snapshot fiable pour ce couple : on ne met rien en cache.
+            if exchange == "fake" and exc.fake_only_safety_evidence is not None:
+                failed_safety_evidence[(exchange, market_type)] = {
+                    "fake_only_safety_evidence": exc.fake_only_safety_evidence,
+                }
             run_audit.emit(
                 run_audit.SNAPSHOT_FETCH,
                 run_id=run_id,
@@ -699,7 +709,7 @@ async def _collect_snapshots(
                 exchange=exchange, market_type=market_type, ok=False
             )
             continue
-    return snapshots
+    return snapshots, failed_safety_evidence
 
 
 @router.post("/orchestrator/run", response_model=RunResponse)
@@ -938,7 +948,7 @@ async def run_orchestrator(
 
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
         # 1) Un seul fetch d'état ouvert par couple (exchange, market_type).
-        snapshots = await _collect_snapshots(
+        snapshots, failed_open_state_safety_evidence = await _collect_snapshots(
             client, settings.symfony_base_url, mtf_sets, run_id=run_id
         )
 
@@ -1006,10 +1016,14 @@ async def run_orchestrator(
                     session.commit()
 
         async def _dispatch_set(a_set: Any) -> Dict[str, Any]:
-            snapshot = snapshots.get(snapshot_key(a_set))
+            key = snapshot_key(a_set)
+            snapshot = snapshots.get(key)
             # État live EFFECTIF (override run-level `{"dry_run": true}` déjà reflété) :
             # le forçage ne peut que rendre un set plus sûr, jamais downgrader dry→live.
             effective_dry_run = a_set.dry_run or force_dry_run
+            dispatch_snapshot = snapshot
+            if dispatch_snapshot is None and effective_dry_run:
+                dispatch_snapshot = failed_open_state_safety_evidence.get(key)
             # Couche UNIQUE de garde-fous live (SAFE-003) : toute la politique
             # (bannissements permanents OKX/Hyperliquid, interrupteur d'activation,
             # allow-list) vit dans `live_guard.assess_live`. Le runner DB-backed
@@ -1112,7 +1126,7 @@ async def run_orchestrator(
                         client,
                         settings.symfony_base_url,
                         a_set,
-                        snapshot,
+                        dispatch_snapshot,
                         effective_dry_run,
                         run_id=run_id,
                     )

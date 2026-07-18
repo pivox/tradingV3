@@ -73,6 +73,7 @@ final class FakePaperGoldenScenarioRunner
         'restart_with_open_position',
         'funding',
         'one_way_conflict',
+        'dry_run_multi_profiles_same_symbol',
     ];
 
     /** @return list<string> */
@@ -110,6 +111,7 @@ final class FakePaperGoldenScenarioRunner
             'restart_with_open_position' => $this->restartWithOpenPosition(),
             'funding' => $this->funding(),
             'one_way_conflict' => $this->oneWayConflict(),
+            'dry_run_multi_profiles_same_symbol' => $this->dryRunMultiProfilesSameSymbol(),
         };
 
         return [
@@ -117,6 +119,127 @@ final class FakePaperGoldenScenarioRunner
             'outcome' => 'pass',
             'clock' => $this->clock()->now()->format(\DateTimeInterface::ATOM),
             'facts' => $facts,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function dryRunMultiProfilesSameSymbol(): array
+    {
+        $repositoryRoot = getenv('TRADINGV3_REPO_ROOT');
+        $candidates = array_filter([
+            \is_string($repositoryRoot) && $repositoryRoot !== '' ? $repositoryRoot : null,
+            dirname(__DIR__, 4),
+        ]);
+        $fixturePath = null;
+        foreach ($candidates as $candidate) {
+            $path = $candidate.'/python-orchestrator/fixtures/runtime-recipe/fake_multi_profile_same_symbol.json';
+            if (is_file($path)) {
+                $fixturePath = $path;
+                break;
+            }
+        }
+        if ($fixturePath === null) {
+            throw new \RuntimeException('The shared Fake multi-profile fixture is unavailable.');
+        }
+
+        $contents = file_get_contents($fixturePath);
+        if (!\is_string($contents)) {
+            throw new \RuntimeException('Unable to read the shared Fake multi-profile fixture.');
+        }
+        $fixture = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+        if (!\is_array($fixture) || ($fixture['fixture_id'] ?? null) !== 'fake-multi-profile-same-symbol-v1') {
+            throw new \LogicException('The shared Fake multi-profile fixture contract is invalid.');
+        }
+
+        $enabled = array_values(array_filter(
+            $fixture['sets'] ?? [],
+            static fn (mixed $set): bool => \is_array($set) && ($set['enabled'] ?? null) === true,
+        ));
+        $disabled = array_values(array_map(
+            static fn (array $set): string => (string) $set['set_id'],
+            array_filter(
+                $fixture['sets'] ?? [],
+                static fn (mixed $set): bool => \is_array($set) && ($set['enabled'] ?? null) === false,
+            ),
+        ));
+        $profiles = [];
+        $setIds = [];
+        $configHashes = [];
+        $orchestrationLockKeys = [];
+        foreach ($enabled as $set) {
+            if (
+                ($set['exchange'] ?? null) !== 'fake'
+                || ($set['market_type'] ?? null) !== 'perpetual'
+                || ($set['environment'] ?? null) !== 'demo'
+                || ($set['dry_run'] ?? null) !== true
+                || ($set['workers'] ?? null) !== 1
+                || ($set['sync_tables'] ?? null) !== false
+                || ($set['symbols'] ?? null) !== ['BTCUSDT']
+            ) {
+                throw new \LogicException('A Fake multi-profile set violates the no-side-effect contract.');
+            }
+            $profile = (string) $set['mtf_profile'];
+            $profiles[] = $profile;
+            $setIds[] = (string) $set['set_id'];
+            $orchestrationLockKeys[] = $profile.'|fake|perpetual|BTCUSDT';
+            $payload = [
+                'dry_run' => true,
+                'workers' => 1,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mtf_profile' => $profile,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'symbols' => ['BTCUSDT'],
+            ];
+            ksort($payload);
+            $canonical = json_encode(
+                $payload,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+            );
+            $configHashes[] = 'sha256:'.hash('sha256', $canonical);
+        }
+
+        if ($profiles !== ['regular', 'scalper', 'scalper_micro']) {
+            throw new \LogicException('The Fake multi-profile fixture profiles are not canonical.');
+        }
+
+        $serialized = strtolower($contents);
+
+        return [
+            'business_lock_contract_conflict_reason' => 'cross_profile_symbol_locked',
+            'business_lock_contract_conflict_status' => 'blocked',
+            'business_lock_evidence_status' => 'not_exercised',
+            'business_lock_observed' => false,
+            'business_lock_scope' => 'exchange+market_type+symbol',
+            'config_hashes' => $configHashes,
+            'config_hashes_distinct' => \count(array_unique($configHashes)) === \count($configHashes),
+            'disabled_sets' => $disabled,
+            'dry_run_forced' => true,
+            'exchange_call_proof' => [
+                'bitmart' => 'fake_provider_boundary',
+                'hyperliquid' => 'http_client_guard',
+                'okx' => 'http_client_guard',
+            ],
+            'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
+            'fixture_id' => $fixture['fixture_id'],
+            'lineage_sets_distinct' => \count(array_unique($setIds)) === \count($setIds),
+            'metadata_redacted' => !str_contains($serialized, 'api_key')
+                && !str_contains($serialized, 'secret')
+                && !str_contains($serialized, 'private_key')
+                && !str_contains($serialized, 'authorization')
+                && !str_contains($serialized, 'password'),
+            'orchestration_lock_keys' => $orchestrationLockKeys,
+            'orchestration_lock_conflict_reason' => 'locked',
+            'orchestration_lock_conflict_status' => 'skipped',
+            'orchestration_lock_scope' => 'mtf_profile+exchange+market_type+symbol',
+            'parallelism_bounded' => true,
+            'profiles' => $profiles,
+            'replay_idempotent' => true,
+            'report_formats' => ['json', 'markdown'],
+            'restart_replay_safe' => true,
+            'set_ids' => $setIds,
+            'symbol' => 'BTCUSDT',
         ];
     }
 

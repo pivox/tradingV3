@@ -55,6 +55,11 @@ final class MtfRunnerRequestDto
         public readonly ?string $correlationRunId = null,
         public readonly ?string $dashboardId = null,
         public readonly ?string $setId = null,
+        /**
+         * Contrat de preuve Fake-only : interdit tout dispatch durable dont le
+         * consommateur pourrait atteindre un exchange après la réponse HTTP.
+         */
+        public readonly bool $suppressExchangeCapableAsyncWork = false,
         ?LineageContext $lineageContext = null,
     ) {
         $this->lineageContext = $lineageContext ?? LineageContext::legacy(
@@ -98,6 +103,7 @@ final class MtfRunnerRequestDto
             correlationRunId: self::nonEmptyString($data['correlation_run_id'] ?? null),
             dashboardId: self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
             setId: self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
+            suppressExchangeCapableAsyncWork: (bool) ($data['suppress_exchange_capable_async_work'] ?? false),
             lineageContext: $lineageContext,
         );
     }
@@ -135,6 +141,7 @@ final class MtfRunnerRequestDto
             'correlation_run_id' => $this->correlationRunId,
             'dashboard_id' => $this->dashboardId,
             'set_id' => $this->setId,
+            'suppress_exchange_capable_async_work' => $this->suppressExchangeCapableAsyncWork,
             'lineage_context' => $this->lineageContext->toArray(),
         ];
     }

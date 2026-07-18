@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Indicator\Provider;
 
 use App\Common\Dto\IndicatorSnapshotDto;
+use App\Common\Enum\Exchange;
 use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
 use App\Contract\Indicator\Dto\ListIndicatorDto;
@@ -25,6 +26,7 @@ use App\Indicator\Core\Volatility\Bollinger as CoreBollinger;
 use App\Indicator\Core\Volume\Vwap as CoreVwap;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Provider\Context\ExchangeContext;
+use App\Provider\Fake\FakeKlineProvider;
 use App\Repository\IndicatorSnapshotRepository;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
@@ -57,6 +59,8 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         private readonly ClockInterface $clock,
         #[Autowire(service: 'monolog.logger.indicators')]
         private readonly LoggerInterface $logger,
+        #[Autowire(service: FakeKlineProvider::class)]
+        private readonly KlineProviderInterface $fakeKlineProvider,
         ) {}
 
         /**
@@ -782,7 +786,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         \DateTimeInterface $at,
         ?ExchangeContext $context,
     ): array {
-        $klines = $this->klineProvider->getKlines($symbol, $timeframe, $windowSize + 1, $context);
+        $provider = $context?->exchange === Exchange::FAKE
+            ? $this->fakeKlineProvider
+            : $this->klineProvider;
+        $klines = $provider->getKlines($symbol, $timeframe, $windowSize + 1, $context);
 
         return $this->closedKlineWindow($klines, $timeframe, $at, $windowSize);
     }

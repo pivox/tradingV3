@@ -1,0 +1,94 @@
+{
+  "$schema": "https://pivox.local/schemas/orchestrator-runtime-recipe-fixture-v1.json",
+  "fixture_id": "fake-multi-profile-same-symbol-v1",
+  "version": 1,
+  "dry_run_only": true,
+  "purpose": "Golden scenario 20: trois profils Fake/Paper dry-run sur le meme symbole, sans effet exchange.",
+  "dashboard": {
+    "name": "recipe-fake-multi-profile-same-symbol",
+    "enabled": true,
+    "description": "Recette Fake/Paper regular, scalper et scalper_micro sur BTCUSDT en dry-run force."
+  },
+  "sets": [
+    {
+      "set_id": "recipe_fake_multi_regular",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 30,
+      "recipe_role": "golden_20_regular"
+    },
+    {
+      "set_id": "recipe_fake_multi_scalper",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 20,
+      "recipe_role": "golden_20_scalper"
+    },
+    {
+      "set_id": "recipe_fake_multi_scalper_micro",
+      "enabled": true,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "scalper_micro",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 10,
+      "recipe_role": "golden_20_scalper_micro"
+    },
+    {
+      "set_id": "recipe_fake_multi_disabled",
+      "enabled": false,
+      "action": "mtf_run",
+      "exchange": "fake",
+      "market_type": "perpetual",
+      "mtf_profile": "regular",
+      "environment": "demo",
+      "dry_run": true,
+      "workers": 1,
+      "sync_tables": false,
+      "symbols": ["BTCUSDT"],
+      "contracts_limit": null,
+      "priority": 99,
+      "recipe_role": "golden_20_disabled_control"
+    }
+  ],
+  "scenario_mapping": {
+    "R12": [
+      "recipe_fake_multi_regular",
+      "recipe_fake_multi_scalper",
+      "recipe_fake_multi_scalper_micro"
+    ]
+  },
+  "expected_invariants": {
+    "dry_run": true,
+    "mainnet": false,
+    "workers_per_set": 1,
+    "same_symbol": "BTCUSDT",
+    "orchestration_lock_scope": "mtf_profile+exchange+market_type+symbol",
+    "business_lock_scope": "exchange+market_type+symbol",
+    "forbidden_exchange_calls": ["okx", "hyperliquid", "bitmart"]
+  }
+}

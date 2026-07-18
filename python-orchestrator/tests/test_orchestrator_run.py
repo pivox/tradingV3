@@ -154,8 +154,13 @@ class _FakeAsyncClient:
     async def __aexit__(self, *_: Any) -> None:
         return None
 
-    async def get(self, url: str, params: Dict[str, Any] | None = None) -> _FakeResponse:
-        self.get_calls.append({"url": url, "params": params or {}})
+    async def get(
+        self,
+        url: str,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+    ) -> _FakeResponse:
+        self.get_calls.append({"url": url, "params": params or {}, "headers": headers or {}})
         return _FakeResponse(self._open_state_status, self._open_state)
 
     async def post(
@@ -459,6 +464,124 @@ def test_dry_run_proceeds_without_snapshot(orchestrator_env, monkeypatch):
     assert len(mtf_posts) == 1
     assert "open_state_snapshot" not in mtf_posts[0]["json"]
     assert mtf_posts[0]["json"]["sync_tables"] is False
+
+
+def test_fake_dry_run_preserves_failed_open_state_exchange_call_evidence(
+    orchestrator_env, monkeypatch
+):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-proof",
+        dry_run=True,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    evidence = {
+        "ambiguous_calls": 1,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
+    }
+    fake = _FakeAsyncClient(
+        open_state={
+            "status": "error",
+            "message": "guard blocked a forbidden exchange call",
+            "fake_only_safety_evidence": evidence,
+        },
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert mtf_posts[0]["json"]["open_state_snapshot"] == {
+        "fake_only_safety_evidence": evidence,
+    }
+    assert "open_positions" not in mtf_posts[0]["json"]["open_state_snapshot"]
+    assert "open_orders" not in mtf_posts[0]["json"]["open_state_snapshot"]
+
+
+def test_fake_dry_run_does_not_turn_generic_open_state_error_into_snapshot(
+    orchestrator_env, monkeypatch
+):
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-generic-error",
+        dry_run=True,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    fake = _FakeAsyncClient(
+        open_state={"status": "error", "message": "provider unavailable"},
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is True
+    mtf_posts = [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
+    assert len(mtf_posts) == 1
+    assert "open_state_snapshot" not in mtf_posts[0]["json"]
+
+
+def test_fake_live_set_stays_blocked_when_failed_open_state_carries_safety_evidence(
+    orchestrator_env, monkeypatch
+):
+    monkeypatch.setenv("ORCHESTRATION_LIVE_ENABLED", "true")
+    monkeypatch.setenv("ORCHESTRATION_LIVE_EXCHANGES", "fake")
+    client, session = orchestrator_env
+    dash = _seed_dashboard(session)
+    _seed_set(
+        session,
+        dash.id,
+        "fake-live",
+        dry_run=False,
+        exchange="fake",
+        symbols=("BTCUSDT",),
+    )
+    fake = _FakeAsyncClient(
+        open_state={
+            "status": "error",
+            "fake_only_safety_evidence": {
+                "ambiguous_calls": 1,
+                "async_exchange_capable_dispatches_suppressed": True,
+                "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
+            },
+        },
+        open_state_status=503,
+    )
+    _install_fake_client(monkeypatch, fake)
+
+    body = client.post("/orchestrator/run", json={"dashboard_id": str(dash.id)}).json()
+
+    assert body["ok"] is False
+    assert body["summary"] == {"total_calls": 1, "success": 0, "failed": 1}
+    assert not [c for c in fake.post_calls if c["url"].endswith("/api/mtf/run")]
 
 
 def test_run_level_dry_run_override_forces_live_set_to_dry(orchestrator_env, monkeypatch):

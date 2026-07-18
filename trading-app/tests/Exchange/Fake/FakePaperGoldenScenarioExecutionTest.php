@@ -301,6 +301,49 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'same_rejected_order_id' => true,
             'short_blocks_long' => true,
         ],
+        'dry_run_multi_profiles_same_symbol' => [
+            'business_lock_contract_conflict_reason' => 'cross_profile_symbol_locked',
+            'business_lock_contract_conflict_status' => 'blocked',
+            'business_lock_evidence_status' => 'not_exercised',
+            'business_lock_observed' => false,
+            'business_lock_scope' => 'exchange+market_type+symbol',
+            'config_hashes' => [
+                'sha256:b0d91d352646330134a7c91d58d3ca21a7eb41e9828050f68d1f33eba8589567',
+                'sha256:d7cbdfa876ad668c56b9662d01906d0ed925c39c43b5814ece9ca44d71a0e344',
+                'sha256:01e5260242def9bd63f8e6b076bc88e99f74273c14e615e8cff828b5406d9a64',
+            ],
+            'config_hashes_distinct' => true,
+            'disabled_sets' => ['recipe_fake_multi_disabled'],
+            'dry_run_forced' => true,
+            'exchange_call_proof' => [
+                'bitmart' => 'fake_provider_boundary',
+                'hyperliquid' => 'http_client_guard',
+                'okx' => 'http_client_guard',
+            ],
+            'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
+            'fixture_id' => 'fake-multi-profile-same-symbol-v1',
+            'lineage_sets_distinct' => true,
+            'metadata_redacted' => true,
+            'orchestration_lock_keys' => [
+                'regular|fake|perpetual|BTCUSDT',
+                'scalper|fake|perpetual|BTCUSDT',
+                'scalper_micro|fake|perpetual|BTCUSDT',
+            ],
+            'orchestration_lock_conflict_reason' => 'locked',
+            'orchestration_lock_conflict_status' => 'skipped',
+            'orchestration_lock_scope' => 'mtf_profile+exchange+market_type+symbol',
+            'parallelism_bounded' => true,
+            'profiles' => ['regular', 'scalper', 'scalper_micro'],
+            'replay_idempotent' => true,
+            'report_formats' => ['json', 'markdown'],
+            'restart_replay_safe' => true,
+            'set_ids' => [
+                'recipe_fake_multi_regular',
+                'recipe_fake_multi_scalper',
+                'recipe_fake_multi_scalper_micro',
+            ],
+            'symbol' => 'BTCUSDT',
+        ],
     ];
 
     public function testGoldenRunnerContractExists(): void
@@ -366,7 +409,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(19, $catalogKeys);
+        self::assertCount(20, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

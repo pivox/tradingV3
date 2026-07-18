@@ -18,6 +18,8 @@ Les sets dry-run peuvent continuer sans snapshot.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
@@ -31,6 +33,15 @@ SnapshotKey = Tuple[str, str]
 
 class OpenStateUnavailableError(RuntimeError):
     """Le snapshot d'état ouvert n'a pas pu être récupéré (fail-closed live)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        fake_only_safety_evidence: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.fake_only_safety_evidence = fake_only_safety_evidence
 
 
 class ContractsUnavailableError(RuntimeError):
@@ -109,16 +120,28 @@ async def fetch_open_state(
     """
     url = f"{base_url.rstrip('/')}/api/exchange/open-state"
     params = {"exchange": exchange, "market_type": market_type}
+    headers = {"X-Fake-Only-Safety-Evidence": "v2"} if exchange == "fake" else None
+    if headers is not None:
+        params["dry_run"] = "true"
     try:
-        response = await client.get(url, params=params)
+        response = await client.get(url, params=params, headers=headers)
     except httpx.HTTPError as exc:  # noqa: BLE001 - on remonte une erreur métier claire
         raise OpenStateUnavailableError(
             f"open-state fetch failed for {exchange}/{market_type}: {exc}"
         ) from exc
 
     if response.status_code != 200:
+        safety_evidence = None
+        if exchange == "fake":
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = None
+            if isinstance(error_body, dict) and "fake_only_safety_evidence" in error_body:
+                safety_evidence = error_body["fake_only_safety_evidence"]
         raise OpenStateUnavailableError(
-            f"open-state fetch returned HTTP {response.status_code} for {exchange}/{market_type}"
+            f"open-state fetch returned HTTP {response.status_code} for {exchange}/{market_type}",
+            fake_only_safety_evidence=safety_evidence,
         )
 
     try:
@@ -143,10 +166,13 @@ async def fetch_open_state(
             f"open-state response has non-list open_positions/open_orders for {exchange}/{market_type}"
         )
 
-    return {
+    snapshot = {
         "open_positions": positions,
         "open_orders": orders,
     }
+    if "fake_only_safety_evidence" in body:
+        snapshot["fake_only_safety_evidence"] = body["fake_only_safety_evidence"]
+    return snapshot
 
 
 async def fetch_selected_contracts(
@@ -257,6 +283,23 @@ def _base_mtf_payload(
     return payload
 
 
+def _with_config_hash(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Ajoute l'empreinte de configuration, hors champs runtime et empreinte elle-meme."""
+    canonical_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"config_hash", "open_state_snapshot"}
+    }
+    canonical = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    payload["config_hash"] = f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+    return payload
+
+
 def build_mtf_payload(
     a_set: OrchestratorSet,
     snapshot: Optional[Dict[str, Any]],
@@ -270,16 +313,18 @@ def build_mtf_payload(
     ``dry_run`` du set. Le reste de la forme vient de ``_base_mtf_payload``.
     """
     payload = _base_mtf_payload(
-        dry_run=a_set.dry_run if dry_run is None else dry_run,
+        dry_run=a_set.dry_run,
         workers=a_set.workers,
         exchange=a_set.exchange.value,
         market_type=a_set.market_type.value,
         mtf_profile=a_set.mtf_profile.value,
         symbols=a_set.symbols,
     )
+    if dry_run is not None:
+        payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
-    return payload
+    return _with_config_hash(payload)
 
 
 def _enum_value(value: Any) -> Any:
@@ -358,7 +403,7 @@ def effective_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
     if payload is None:
         return None
     payload["workers"] = _clamp_workers(payload.get("workers"))
-    return payload
+    return _with_config_hash(payload)
 
 
 # Statuts métier renvoyés par /api/mtf/run considérés comme un succès complet.
@@ -412,6 +457,8 @@ async def _dispatch_mtf_run(
     """
     url = f"{base_url.rstrip('/')}/api/mtf/run"
     headers: Dict[str, str] = {}
+    if payload.get("exchange") == "fake" and payload.get("dry_run") is True:
+        headers["X-Fake-Only-Safety-Evidence"] = "v2"
     if run_id is not None:
         headers["X-Run-Id"] = run_id
         headers["X-Run-Correlation-Id"] = canonical_correlation_id(run_id)
@@ -501,6 +548,7 @@ async def run_persisted_set(
         payload["dry_run"] = dry_run
     if snapshot is not None:
         payload["open_state_snapshot"] = snapshot
+    _with_config_hash(payload)
     result = await _dispatch_mtf_run(
         client,
         base_url,

@@ -107,4 +107,32 @@ final class PostRunProjectionDispatcherTest extends TestCase
 
         $dispatcher->dispatch(['BTCUSDT' => ['status' => 'READY']], new MtfRunnerRequestDto(), 'run-123');
     }
+
+    public function testDoesNotDispatchExchangeCapableProjectionInFakeOnlyProofMode(): void
+    {
+        $mtfValidator = $this->createMock(MtfValidatorInterface::class);
+        $mtfValidator->expects(self::never())->method('getListTimeframe');
+
+        $messageBus = $this->createMock(MessageBusInterface::class);
+        $messageBus->expects(self::never())->method('dispatch');
+
+        $dispatcher = new PostRunProjectionDispatcher(
+            $mtfValidator,
+            $messageBus,
+            $this->createMock(ClockInterface::class),
+            $this->createMock(LoggerInterface::class),
+        );
+
+        $dispatcher->dispatch(
+            ['BTCUSDT' => ['status' => 'READY']],
+            new MtfRunnerRequestDto(
+                dryRun: true,
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                profile: 'regular',
+                suppressExchangeCapableAsyncWork: true,
+            ),
+            'run-proof',
+        );
+    }
 }

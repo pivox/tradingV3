@@ -350,6 +350,38 @@ Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
 schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
 marques `BLOCKED` si la condition n'est pas observable depuis le runner.
 
+Le golden scenario 20 / `R12` dispose d'une commande dediee et reproductible :
+
+```bash
+python scripts/runtime_recipe_runner.py \
+  --orchestrator-url http://localhost:8099 \
+  --confirm DRY_RUN_ONLY \
+  --scenario R12 \
+  --export-dir var/runtime-recipe/fake-multi-profile \
+  --keep-fixtures
+```
+
+Elle applique `fake_multi_profile_same_symbol.json`, force trois sets Fake
+`regular`, `scalper` et `scalper_micro` sur `BTCUSDT` en dry-run, puis produit
+`fake-multi-profile-recipe-report.json` et `.md`. La cle de replay derive du hash
+de fixture : un restart du runner relit le meme run sans redispatch.
+
+La recette ne cree aucun `OrderIntent` et n'exerce donc pas le lock metier. Le
+rapport conserve son scope avec `evidence_status=not_exercised` et
+`observed=false`; la regle de concurrence reelle est separee dans
+`contract_conflict_status=blocked` et
+`contract_conflict_reason=cross_profile_symbol_locked`. Cette non-execution est
+nominale et ne transforme pas le `PASS` de coexistence en `BLOCKED`.
+
+La preuve safety v2 distingue ses methodes dans `exchange_call_proof` : les
+compteurs OKX et Hyperliquid viennent de guards HTTP, alors que `bitmart=0`
+vient de la frontiere des providers Fake et ne constitue pas une mesure HTTP
+Bitmart. Les indicateurs injectent directement `FakeKlineProvider` pour le
+contexte Fake : cette route n'instancie aucun registre ou bundle global. Aucun
+client ou provider Bitmart n'est decore, modifie ou appele par R12. Une preuve
+v1, incomplete ou sans ces methodes est `BLOCKED` et ne peut pas reutiliser la
+cle de replay v2.
+
 R5 utilise le profil reserve `recipe_functional_error`. Ce profil n'est pas une
 strategie et ne doit avoir aucun fichier YAML : son absence provoque l'erreur
 fonctionnelle Symfony que la recette verifie. Le schema le refuse hors de

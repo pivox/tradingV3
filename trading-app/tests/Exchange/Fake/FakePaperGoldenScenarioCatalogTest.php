@@ -30,7 +30,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'restart_with_open_position' => ['executable', []],
         'funding' => ['executable', []],
         'one_way_conflict' => ['executable', []],
-        'dry_run_multi_profiles_same_symbol' => ['partial', ['multi_profile_fake_recipe_not_consolidated']],
+        'dry_run_multi_profiles_same_symbol' => ['executable', []],
     ];
 
     private const EXPECTED_NAMES = [
@@ -99,7 +99,10 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
 
     public function testEveryEvidenceReferenceResolvesToAnExistingFileAndMethod(): void
     {
-        $repositoryRoot = dirname(__DIR__, 4);
+        $configuredRoot = getenv('TRADINGV3_REPO_ROOT');
+        $repositoryRoot = \is_string($configuredRoot) && $configuredRoot !== ''
+            ? $configuredRoot
+            : dirname(__DIR__, 4);
 
         foreach (self::catalog()['scenarios'] as $scenario) {
             foreach ($scenario['evidence'] as $reference) {
@@ -109,6 +112,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
                 [$pathAndAnchor, $method] = array_pad(explode('::', $reference, 2), 2, null);
                 [$path] = explode('#', $pathAndAnchor, 2);
                 $absolutePath = str_starts_with($path, 'docs/')
+                    || str_starts_with($path, 'python-orchestrator/')
                     ? $repositoryRoot . '/' . $path
                     : $repositoryRoot . '/trading-app/' . $path;
 
@@ -116,7 +120,10 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
                 if ($method !== null) {
                     $contents = file_get_contents($absolutePath);
                     self::assertIsString($contents);
-                    self::assertStringContainsString('function ' . $method . '(', $contents);
+                    $declaration = str_ends_with($path, '.py')
+                        ? 'def ' . $method . '('
+                        : 'function ' . $method . '(';
+                    self::assertStringContainsString($declaration, $contents);
                 }
             }
         }

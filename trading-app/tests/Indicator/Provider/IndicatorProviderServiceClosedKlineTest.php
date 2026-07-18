@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Indicator\Provider;
 
 use App\Common\Dto\IndicatorSnapshotDto;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
 use App\Contract\Provider\Dto\KlineDto;
 use App\Contract\Provider\KlineProviderInterface;
@@ -19,6 +21,7 @@ use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
 use App\Indicator\Provider\IndicatorProviderService;
 use App\Indicator\Registry\ConditionRegistry;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\IndicatorSnapshotRepository;
 use Brick\Math\BigDecimal;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -85,6 +88,39 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
 
         self::assertSame(250.0, $result['1m']['close'] ?? null);
         self::assertSame('2026-05-31 12:04:00', $result['1m']['kline_time'] ?? null);
+    }
+
+    public function testFakeContextUsesFakeKlinesWithoutCallingLegacyFallback(): void
+    {
+        $now = new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC'));
+        $klines = $this->klinesEndingWithCurrentCandle($now);
+        $fakeContext = new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL);
+
+        $legacyFallback = $this->createMock(KlineProviderInterface::class);
+        $legacyFallback->expects(self::never())->method('getKlines');
+
+        $fakeKlines = $this->createMock(KlineProviderInterface::class);
+        $fakeKlines
+            ->expects(self::exactly(2))
+            ->method('getKlines')
+            ->with('BTCUSDT', Timeframe::TF_1M, 251, $fakeContext)
+            ->willReturn($klines);
+
+        $snapshotRepository = $this->createMock(IndicatorSnapshotRepository::class);
+        $snapshotRepository
+            ->expects(self::exactly(2))
+            ->method('findLastBySymbolAndTimeframe')
+            ->willReturn(null);
+        $snapshotRepository->expects(self::once())->method('upsert');
+
+        $result = $this->service(
+            $legacyFallback,
+            $snapshotRepository,
+            $now,
+            $fakeKlines,
+        )->getIndicatorsForSymbolAndTimeframes('BTCUSDT', ['1m'], $now, $fakeContext);
+
+        self::assertSame(250.0, $result['1m']['close'] ?? null);
     }
 
     public function testSnapshotFreshnessRequiresExpectedClosedCandle(): void
@@ -174,6 +210,7 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         KlineProviderInterface $klineProvider,
         IndicatorSnapshotRepository $snapshotRepository,
         \DateTimeImmutable $now,
+        ?KlineProviderInterface $fakeKlineProvider = null,
     ): IndicatorProviderService {
         $logger = new NullLogger();
 
@@ -192,6 +229,7 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
             new Sma(),
             $this->fixedClock($now),
             $logger,
+            $fakeKlineProvider ?? $klineProvider,
         );
     }
 

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Application\Runner\OpenStateSnapshotSerializer;
+use App\Common\Enum\Exchange;
 use App\Contract\Provider\MainProviderInterface;
 use App\Provider\Context\ExchangeContextResolver;
+use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use Psr\Log\LoggerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -27,6 +29,7 @@ final class ExchangeStateController extends AbstractController
         private readonly ExchangeContextResolver $contextResolver,
         private readonly OpenStateSnapshotSerializer $serializer,
         private readonly LoggerInterface $logger,
+        private readonly FakeOnlyExchangeCallAudit $fakeOnlyExchangeCallAudit = new FakeOnlyExchangeCallAudit(),
     ) {
     }
 
@@ -42,6 +45,23 @@ final class ExchangeStateController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v2';
+        if ($safetyEvidenceRequested) {
+            $explicitDryRun = filter_var(
+                $request->query->get('dry_run'),
+                FILTER_VALIDATE_BOOLEAN,
+                FILTER_NULL_ON_FAILURE,
+            );
+            if ($context->exchange !== Exchange::FAKE || $explicitDryRun !== true) {
+                return $this->json([
+                    'status' => 'error',
+                    'error_code' => 'fake_only_safety_context_invalid',
+                    'message' => 'Fake-only safety evidence requires exchange=fake and dry_run=true.',
+                ], Response::HTTP_UNPROCESSABLE_ENTITY);
+            }
+            $this->fakeOnlyExchangeCallAudit->begin(asyncExchangeCapableDispatchesSuppressed: true);
+        }
+
         try {
             $provider = $this->mainProvider->forContext($context);
             $accountProvider = $provider->getAccountProvider();
@@ -54,6 +74,9 @@ final class ExchangeStateController extends AbstractController
             $openOrders = $orderProvider !== null ? $orderProvider->getOpenOrdersOrFail() : [];
 
             $snapshot = $this->serializer->serialize($openPositions, $openOrders);
+            if ($safetyEvidenceRequested) {
+                $snapshot['fake_only_safety_evidence'] = $this->fakeOnlyExchangeCallAudit->finish();
+            }
 
             $this->logger->info('[Exchange State] Open-state snapshot produced', [
                 'exchange' => $context->exchange->value,
@@ -67,6 +90,18 @@ final class ExchangeStateController extends AbstractController
             $this->logger->error('[Exchange State] Failed to produce open-state snapshot', [
                 'error' => $e->getMessage(),
             ]);
+
+            if ($this->fakeOnlyExchangeCallAudit->isActive()) {
+                if (!$this->fakeOnlyExchangeCallAudit->hasKnownExchangeAttempts()) {
+                    $this->fakeOnlyExchangeCallAudit->recordAmbiguousAttempt();
+                }
+
+                return $this->json([
+                    'status' => 'error',
+                    'message' => $e->getMessage(),
+                    'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
+                ], Response::HTTP_SERVICE_UNAVAILABLE);
+            }
 
             // 503 : panne/erreur exchange transitoire. Le client orchestrateur traite
             // tout non-200 comme open-state indisponible (fail-closed des sets live).

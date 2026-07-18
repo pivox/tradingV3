@@ -8,6 +8,7 @@ use App\Contract\MtfValidator\Dto\ContextDecisionDto;
 use App\Contract\MtfValidator\Dto\ExecutionSelectionDto;
 use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
 use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
+use App\Provider\Context\ExchangeContext;
 use Symfony\Component\DependencyInjection\Attribute\Lazy;
 
 #[Lazy]
@@ -31,6 +32,7 @@ class ExecutionSelectionService
         array $mtfConfig,
         array $indicatorsByTimeframe,
         ContextDecisionDto $contextDecision,
+        ?ExchangeContext $exchangeContext = null,
     ): ExecutionSelectionDto {
         $decisions = [];
 
@@ -44,6 +46,7 @@ class ExecutionSelectionService
                 mode: $mode,
                 mtfConfig: $mtfConfig,
                 indicators: $tfIndicators,
+                exchangeContext: $exchangeContext,
             );
         }
 

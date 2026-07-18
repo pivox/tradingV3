@@ -90,6 +90,17 @@ final class MtfRunnerService
      */
     public function run(RunnerRequestDto $request): array
     {
+        if (
+            $request->suppressExchangeCapableAsyncWork
+            && (
+                $request->exchange !== Exchange::FAKE
+                || !$request->dryRun
+                || $request->workers !== 1
+            )
+        ) {
+            throw new \LogicException('fake_only_safety_requires_fake_dry_run_single_process');
+        }
+
         $profiler = new PerformanceProfiler();
         // OBS-003 : si l'orchestrateur a fourni un run_id (X-Run-Id), on l'utilise comme
         // identifiant de corrélation canonique (≤64, jamais tronqué) du run — il finit sur
@@ -426,7 +437,13 @@ final class MtfRunnerService
         );
 
         $response = $this->mtfValidator->run($mtfRequest);
-        $this->tradeDecisionDispatcher->dispatchFromResponse($mtfRequest, $response);
+        if (!$request->suppressExchangeCapableAsyncWork) {
+            $this->tradeDecisionDispatcher->dispatchFromResponse($mtfRequest, $response);
+        } else {
+            $this->mtfLogger->debug('[MTF Runner] Trading decision dispatch suppressed by Fake-only safety proof', [
+                'run_id' => $runId,
+            ]);
+        }
 
         // OBS-003 : le validateur génère son propre UUID, mais les décisions/lifecycle
         // events utilisent le run_id de corrélation propagé (`requestId`, prioritaire dans

@@ -532,7 +532,7 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-neuf scenarios executes dans cette version sont : maker limit rempli, limit
+Les vingt scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
@@ -541,13 +541,22 @@ market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL a
 prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
 private WS avec snapshot resync, restart avec position protegee ouverte,
 funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
-actif avec replay et restart.
+actif avec replay et restart, puis la recette dry-run `regular` / `scalper` /
+`scalper_micro` sur le meme symbole Fake avec hashes/lineages distincts, rapports
+JSON/Markdown deterministes et zero appel OKX, Hyperliquid ou Bitmart. La preuve
+v2 mesure OKX/Hyperliquid aux guards HTTP et etablit `bitmart=0` par la frontiere
+des providers Fake, sans pretendre mesurer Bitmart par HTTP. Le routage des
+indicateurs injecte directement `FakeKlineProvider`, sans registre ou bundle
+global sur cette route; aucun decorateur ni changement n'est ajoute a Bitmart.
 
-Les ecarts encore explicites sont :
+Les vingt lignes du catalogue sont maintenant `executable`; cela clot le
+catalogue golden v1, mais ne clot pas a lui seul l'issue #196 ni n'autorise une
+mutation demo/testnet/mainnet.
 
-| Scenario | Statut | Gap stable |
-| --- | --- | --- |
-| dry-run multi-profils meme symbole | `partial` | `multi_profile_fake_recipe_not_consolidated` |
+Le scenario multi-profils prouve la coexistence Fake dry-run sans effet de bord.
+Il marque le lock metier `not_exercised` et `observed=false`; son statut contractuel
+`blocked/cross_profile_symbol_locked` est documente separement et reste exerce par
+les tests de repository dedies.
 
 Commande consolidee :
 

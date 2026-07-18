@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace App\MtfValidator\Service;
 
-use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
+use App\Common\Enum\Exchange;
 use App\Common\Enum\Timeframe as TimeframeEnum;
 use App\Contract\Indicator\IndicatorEngineInterface;
+use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\MtfValidator\ConditionLoader\ConditionRegistry as MtfConditionRegistry;
 use App\MtfValidator\ConditionLoader\TimeframeEvaluator as MtfTimeframeEvaluator;
 use App\MtfValidator\Service\Rule\TimeframeRuleEvaluator;
 use App\MtfValidator\Service\Rule\YamlRuleEngine;
+use App\Provider\Context\ExchangeContext;
+use App\Provider\Fake\FakeKlineProvider;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -32,6 +35,8 @@ final class TimeframeValidationService
         private readonly ?MainProviderInterface $mainProvider = null,
         private readonly ?MtfValidationEngineMetrics $validationEngineMetrics = null,
         private readonly ?ClockInterface $clock = null,
+        #[Autowire(service: FakeKlineProvider::class)]
+        private readonly ?KlineProviderInterface $fakeKlineProvider = null,
     ) {
     }
 
@@ -46,6 +51,7 @@ final class TimeframeValidationService
         ?string $mode,
         array $mtfConfig,
         array $indicators,
+        ?ExchangeContext $exchangeContext = null,
     ): TimeframeDecisionDto {
         $validationConfig = $mtfConfig['validation'] ?? [];
         $rulesConfig      = $mtfConfig['rules'] ?? [];
@@ -84,6 +90,7 @@ final class TimeframeValidationService
                     mode: $mode,
                     mtfConfig: $mtfConfig,
                     indicators: $indicators,
+                    exchangeContext: $exchangeContext,
                 );
                 $engine = 'condition_registry';
             } catch (\Throwable $e) {
@@ -287,6 +294,7 @@ final class TimeframeValidationService
         ?string $mode,
         array $mtfConfig,
         array $indicators,
+        ?ExchangeContext $exchangeContext,
     ): TimeframeDecisionDto {
         if (!$this->canUseConditionRegistryEngine()) {
             throw new \LogicException('ConditionRegistry engine not available');
@@ -312,7 +320,7 @@ final class TimeframeValidationService
             );
         }
 
-        $klines = $this->fetchClosedKlinesForConditionRegistry($symbol, $tfEnum);
+        $klines = $this->fetchClosedKlinesForConditionRegistry($symbol, $tfEnum, $exchangeContext);
         if ($klines === []) {
             return new TimeframeDecisionDto(
                 timeframe: $timeframe,
@@ -776,16 +784,23 @@ final class TimeframeValidationService
     /**
      * @return array<int,mixed>
      */
-    private function fetchClosedKlinesForConditionRegistry(string $symbol, TimeframeEnum $timeframe): array
+    private function fetchClosedKlinesForConditionRegistry(
+        string $symbol,
+        TimeframeEnum $timeframe,
+        ?ExchangeContext $exchangeContext,
+    ): array
     {
-        if ($this->klineProvider === null) {
+        $isFake = $exchangeContext?->exchange === Exchange::FAKE;
+        $provider = $isFake ? $this->fakeKlineProvider : $this->klineProvider;
+        if ($provider === null) {
             return [];
         }
 
-        $klines = $this->klineProvider->getKlines(
+        $klines = $provider->getKlines(
             $symbol,
             $timeframe,
             self::CONDITION_REGISTRY_KLINE_WINDOW_SIZE + 1,
+            $isFake ? $exchangeContext : null,
         );
         $lastClosedOpenTs = $this->lastClosedKlineOpenTime($this->nowUtc(), $timeframe)->getTimestamp();
         $closed = [];

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -33,6 +35,21 @@ def _make_set(**kwargs: Any) -> OrchestratorSet:
     base = {"set_id": "s", "exchange": "fake"}
     base.update(kwargs)
     return OrchestratorSet(**base)
+
+
+def _expected_config_hash(payload: dict) -> str:
+    canonical_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"config_hash", "open_state_snapshot"}
+    }
+    canonical = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
@@ -89,7 +106,7 @@ class _StubClient:
     def __init__(self, response):
         self._response = response
 
-    async def post(self, url, json=None):
+    async def post(self, url, json=None, headers=None):
         return self._response
 
 
@@ -154,6 +171,7 @@ def test_fetch_open_state_returns_normalized_shape():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/exchange/open-state"
         assert request.url.params["exchange"] == "bitmart"
+        assert "x-fake-only-safety-evidence" not in request.headers
         return httpx.Response(200, json={"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []})
 
     async def _run():
@@ -164,6 +182,44 @@ def test_fetch_open_state_returns_normalized_shape():
     assert snapshot == {"open_positions": [{"symbol": "BTCUSDT"}], "open_orders": []}
 
 
+def test_fetch_fake_open_state_requests_and_preserves_safety_evidence():
+    evidence = {
+        "ambiguous_calls": 0,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-fake-only-safety-evidence"] == "v2"
+        assert request.url.params["dry_run"] == "true"
+        return httpx.Response(
+            200,
+            json={
+                "fake_only_safety_evidence": evidence,
+                "open_positions": [],
+                "open_orders": [],
+            },
+        )
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await fetch_open_state(client, "http://symfony", "fake", "perpetual")
+
+    assert asyncio.run(_run()) == {
+        "fake_only_safety_evidence": evidence,
+        "open_positions": [],
+        "open_orders": [],
+    }
+
+
 def test_fetch_open_state_raises_on_http_error_status():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"status": "error"})
@@ -172,8 +228,47 @@ def test_fetch_open_state_raises_on_http_error_status():
         async with _client_with(handler) as client:
             await fetch_open_state(client, "http://symfony", "bitmart", "perpetual")
 
-    with pytest.raises(OpenStateUnavailableError):
+    with pytest.raises(OpenStateUnavailableError) as caught:
         asyncio.run(_run())
+
+    assert caught.value.fake_only_safety_evidence is None
+
+
+def test_fetch_fake_open_state_http_error_preserves_only_safety_evidence():
+    evidence = {
+        "ambiguous_calls": 1,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={
+                "status": "error",
+                "message": "provider failed with api_key=must-not-escape",
+                "fake_only_safety_evidence": evidence,
+            },
+        )
+
+    async def _run():
+        async with _client_with(handler) as client:
+            await fetch_open_state(client, "http://symfony", "fake", "perpetual")
+
+    with pytest.raises(OpenStateUnavailableError) as caught:
+        asyncio.run(_run())
+
+    assert caught.value.fake_only_safety_evidence == evidence
+    assert "api_key" not in str(caught.value).lower()
+    assert "must-not-escape" not in str(caught.value)
 
 
 def test_fetch_open_state_raises_on_unexpected_shape():
@@ -215,7 +310,9 @@ def test_fetch_open_state_raises_on_non_list_arrays(open_positions, open_orders)
 def test_build_payload_applies_dry_run_override():
     live_set = _make_set(dry_run=False)
     # Override run-level dry_run=True => le payload force le dry-run.
-    assert build_mtf_payload(live_set, None, dry_run=True)["dry_run"] is True
+    overridden = build_mtf_payload(live_set, None, dry_run=True)
+    assert overridden["dry_run"] is True
+    assert overridden["config_hash"] == _expected_config_hash(overridden)
     # dry_run=None => on retombe sur la valeur du set (ici live).
     assert build_mtf_payload(live_set, None, dry_run=None)["dry_run"] is False
 
@@ -402,17 +499,22 @@ def test_generate_set_payload_matches_build_mtf_payload_shape():
         symbols=("BTCUSDT", "ETHUSDT"),
         dry_run=True,
     )
-    assert generate_set_payload(orm) == build_mtf_payload(pyd, None)
+    runtime_payload = build_mtf_payload(pyd, None)
+    runtime_payload.pop("config_hash")
+    assert generate_set_payload(orm) == runtime_payload
 
 
 # --- effective_set_payload (PY-007) -----------------------------------------
 
 
 def test_effective_set_payload_matches_generate_when_within_bounds():
-    # Cas nominal (workers déjà dans la borne) : le payload effectif est identique
-    # au payload persisté généré — pas de clamp à appliquer.
+    # Cas nominal : la configuration envoyée reste celle persistée et le payload
+    # effectif ajoute uniquement son empreinte canonique de lineage.
     orm = _orm_set()
-    assert effective_set_payload(orm) == generate_set_payload(orm)
+    effective = dict(effective_set_payload(orm))
+    config_hash = effective.pop("config_hash")
+    assert effective == generate_set_payload(orm)
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", config_hash)
 
 
 def test_effective_set_payload_clamps_oversized_workers():
@@ -420,6 +522,25 @@ def test_effective_set_payload_clamps_oversized_workers():
     # effectif clampe à la borne, comme l'envoi réel de run_persisted_set.
     payload = effective_set_payload(_orm_set(symbols=["BTCUSDT"], workers=8))
     assert payload["workers"] == 1
+
+
+def test_effective_set_payload_adds_stable_distinct_config_hashes():
+    regular = effective_set_payload(_orm_set(mtf_profile="regular", symbols=["BTCUSDT"]))
+    replay = effective_set_payload(_orm_set(mtf_profile="regular", symbols=["BTCUSDT"]))
+    scalper = effective_set_payload(_orm_set(mtf_profile="scalper", symbols=["BTCUSDT"]))
+    distinct_symbol = effective_set_payload(
+        _orm_set(mtf_profile="regular", symbols=["ETHUSDT"])
+    )
+
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", regular["config_hash"])
+    assert replay["config_hash"] == regular["config_hash"]
+    assert len(
+        {
+            regular["config_hash"],
+            scalper["config_hash"],
+            distinct_symbol["config_hash"],
+        }
+    ) == 3
 
 
 def test_effective_set_payload_none_when_not_materialized():
@@ -463,12 +584,16 @@ def test_effective_set_payload_equals_payload_sent_by_run_persisted_set():
 
     result = asyncio.run(_run())
     sent = dict(captured["json"])
-    # Retire la couche runtime exclue de effective_set_payload.
+    # Retire la couche runtime exclue de effective_set_payload et son empreinte,
+    # qui doit décrire le dry_run effectif après l'override.
     sent.pop("open_state_snapshot", None)
     sent.pop("dry_run", None)
+    sent_hash = sent.pop("config_hash")
     expected = dict(effective_set_payload(orm))
     expected.pop("dry_run", None)
+    configured_hash = expected.pop("config_hash")
     assert sent == expected
+    assert sent_hash != configured_hash
     # Et le payload effectif a bien clampé workers, comme l'envoi réel.
     assert expected["workers"] == 1 == result["payload_sent"]["workers"]
 
@@ -514,6 +639,33 @@ def test_run_persisted_set_dispatches_persisted_payload_with_snapshot_and_overri
     # Le payload persisté n'est pas muté (copie défensive).
     assert persisted["dry_run"] is False
     assert "open_state_snapshot" not in persisted
+
+
+def test_run_persisted_set_hashes_payload_after_dry_run_override():
+    orm = _orm_set(set_id="s", dry_run=False, symbols=["BTCUSDT"])
+    snapshot = {"open_positions": [], "open_orders": []}
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(
+                client,
+                "http://sym",
+                orm,
+                snapshot,
+                dry_run=True,
+            )
+
+    asyncio.run(_run())
+
+    sent = captured["json"]
+    assert sent["dry_run"] is True
+    assert sent["config_hash"] == _expected_config_hash(sent)
+    assert sent["config_hash"] != effective_set_payload(orm)["config_hash"]
 
 
 def test_run_persisted_set_forces_safety_flags_over_stored_payload():
@@ -593,7 +745,7 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
     assert "skip_open_state_filter" not in sent
     assert set(sent.keys()) <= {
         "dry_run", "workers", "exchange", "market_type", "mtf_profile",
-        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot",
+        "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot", "config_hash",
     }
 
 
@@ -705,7 +857,7 @@ def test_run_persisted_set_not_materialized_without_symbols():
 
 
 def test_run_persisted_set_propagates_orchestration_headers():
-    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"], exchange="fake")
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -725,6 +877,7 @@ def test_run_persisted_set_propagates_orchestration_headers():
     assert headers["x-run-correlation-id"] == canonical_correlation_id("run_dashA_20260617")
     assert headers["x-orchestration-set-id"] == "s1"
     assert headers["x-orchestration-dashboard-id"] == "42"
+    assert headers["x-fake-only-safety-evidence"] == "v2"
 
 
 def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
@@ -750,7 +903,7 @@ def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
 
 
 def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
-    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"])
+    orm = _orm_set(set_id="s1", dashboard_id=42, symbols=["BTCUSDT"], exchange="fake")
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -766,6 +919,7 @@ def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
     assert "x-run-id" not in headers
     assert "x-run-correlation-id" not in headers
     assert "x-orchestration-set-id" not in headers
+    assert headers["x-fake-only-safety-evidence"] == "v2"
 
 
 def test_fetch_run_trade_outcome_returns_body_and_forwards_params():

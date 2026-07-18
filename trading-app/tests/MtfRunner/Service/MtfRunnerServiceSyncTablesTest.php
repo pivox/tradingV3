@@ -190,6 +190,85 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         self::assertSame('run_dashA_20260617', $result['summary']['run_id'] ?? null);
     }
 
+    public function testFakeOnlyProofModeDoesNotDispatchTradingDecisionMessage(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+        $tradeDecisionDispatcher = $this->createMock(TradeDecisionDispatcherInterface::class);
+        $tradeDecisionDispatcher->expects(self::never())->method('dispatchFromResponse');
+
+        $service = $this->buildService(
+            $syncProvider,
+            tradeDecisionDispatcher: $tradeDecisionDispatcher,
+        );
+
+        $service->run(new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: true,
+            skipOpenStateFilter: true,
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: false,
+            processTpSl: false,
+            profile: 'regular',
+            suppressExchangeCapableAsyncWork: true,
+        ));
+    }
+
+    public function testFakeOnlyProofModeRejectsParallelWorkersOutsideTheControllerBoundary(): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+        $service = $this->buildService($syncProvider);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('fake_only_safety_requires_fake_dry_run_single_process');
+
+        $service->run(new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: true,
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            workers: 2,
+            syncTables: false,
+            processTpSl: false,
+            suppressExchangeCapableAsyncWork: true,
+        ));
+    }
+
+    /**
+     * @param array{exchange: Exchange, dry_run: bool} $context
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidInternalFakeOnlyProofContexts')]
+    public function testFakeOnlyProofModeRejectsInvalidContextOutsideTheControllerBoundary(array $context): void
+    {
+        $syncProvider = $this->createMock(MainProviderInterface::class);
+        $syncProvider->expects(self::never())->method('forContext');
+        $service = $this->buildService($syncProvider);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('fake_only_safety_requires_fake_dry_run_single_process');
+
+        $service->run(new MtfRunnerRequestDto(
+            symbols: ['BTCUSDT'],
+            dryRun: $context['dry_run'],
+            exchange: $context['exchange'],
+            marketType: MarketType::PERPETUAL,
+            workers: 1,
+            syncTables: false,
+            processTpSl: false,
+            suppressExchangeCapableAsyncWork: true,
+        ));
+    }
+
+    /** @return iterable<string, array{array{exchange: Exchange, dry_run: bool}}> */
+    public static function invalidInternalFakeOnlyProofContexts(): iterable
+    {
+        yield 'real exchange' => [['exchange' => Exchange::BITMART, 'dry_run' => true]];
+        yield 'mutative Fake' => [['exchange' => Exchange::FAKE, 'dry_run' => false]];
+    }
+
     private function request(bool $syncTables): MtfRunnerRequestDto
     {
         // Pas de profil : couvre aussi le chemin sans profil (cf. guard resolveTimeframes).
@@ -213,6 +292,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
         MainProviderInterface $syncProvider,
         ?LoggerInterface $mtfLogger = null,
         ?MainProviderInterface $filterProvider = null,
+        ?TradeDecisionDispatcherInterface $tradeDecisionDispatcher = null,
     ): MtfRunnerService {
         $logger = $this->createMock(LoggerInterface::class);
         $mtfLogger ??= $this->createMock(LoggerInterface::class);
@@ -273,7 +353,7 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             $logger,
             $mtfLogger,
             $logger,
-            $this->createMock(TradeDecisionDispatcherInterface::class),
+            $tradeDecisionDispatcher ?? $this->createMock(TradeDecisionDispatcherInterface::class),
             '/tmp',
             $this->createMock(ClockInterface::class),
             null,
