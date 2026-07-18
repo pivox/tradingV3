@@ -32,7 +32,7 @@
 
 - [x] Add the versioned scenario-20 fixture with `regular`, `scalper`, and `scalper_micro` enabled on `BTCUSDT`, plus a disabled set.
 - [x] Canonicalize the effective set payload with sorted compact JSON and add `config_hash="sha256:<digest>"` before runtime overlays.
-- [x] Load the fixture and implement R12 validation of set preservation, unique lineage/config hashes, disabled exclusion, replay, observed orchestration contention, unexercised business-lock evidence, and Fake-only network proof.
+- [x] Load the fixture and implement R12 validation of set preservation, unique lineage/config hashes, disabled exclusion, replay, observed orchestration contention, unexercised business-lock evidence, and Fake-only proof (OKX/Hyperliquid HTTP guards plus the Fake provider boundary for Bitmart).
 - [x] Export `fake-multi-profile-recipe-report.json` and `.md` from one normalized redacted object.
 - [x] Run the focused Python tests until green.
 
@@ -46,7 +46,7 @@
 
 - [x] First change catalogue expectations to 20 executable scenarios and run PHPUnit to observe the runner mismatch.
 - [x] Add `dry_run_multi_profiles_same_symbol` to the golden runner and derive deterministic facts from the shared Python fixture.
-- [x] Assert the exact normalized facts, redaction, unique hashes, lock scopes, business-lock evidence versus contract, replay/restart contract, and zero exchange clients.
+- [x] Assert the exact normalized facts, redaction, unique hashes, lock scopes, business-lock evidence versus contract, replay/restart contract, and the per-exchange proof methods without Bitmart instrumentation.
 - [x] Run the focused golden catalogue/execution tests until green.
 
 ### Task 4: Document contention and the single command

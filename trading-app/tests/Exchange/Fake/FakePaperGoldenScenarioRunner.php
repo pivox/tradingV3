@@ -216,6 +216,11 @@ final class FakePaperGoldenScenarioRunner
             'config_hashes_distinct' => \count(array_unique($configHashes)) === \count($configHashes),
             'disabled_sets' => $disabled,
             'dry_run_forced' => true,
+            'exchange_call_proof' => [
+                'bitmart' => 'fake_provider_boundary',
+                'hyperliquid' => 'http_client_guard',
+                'okx' => 'http_client_guard',
+            ],
             'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
             'fixture_id' => $fixture['fixture_id'],
             'lineage_sets_distinct' => \count(array_unique($setIds)) === \count($setIds),

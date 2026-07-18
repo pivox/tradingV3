@@ -12,6 +12,7 @@ use App\Common\Enum\OrderType;
 use App\Contract\Provider\ExchangeProviderRegistryInterface;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Fake\FakeAccountProvider;
+use App\Provider\Fake\FakeContractProvider;
 use App\Provider\Fake\FakeKlineProvider;
 use App\Provider\Fake\FakeOrderProvider;
 use App\Provider\Fake\FakeSystemProvider;
@@ -63,8 +64,11 @@ final class FakeExchangeBundleRegistryTest extends KernelTestCase
         self::assertTrue(
             $bundle->context()->equals(new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL))
         );
+        self::assertInstanceOf(FakeKlineProvider::class, $bundle->kline());
+        self::assertInstanceOf(FakeContractProvider::class, $bundle->contract());
         self::assertInstanceOf(FakeOrderProvider::class, $bundle->order());
         self::assertInstanceOf(FakeAccountProvider::class, $bundle->account());
+        self::assertInstanceOf(FakeSystemProvider::class, $bundle->system());
 
         // Default context is left unchanged (Bitmart/perpetual).
         self::assertTrue(

@@ -483,9 +483,14 @@ def test_fake_dry_run_preserves_failed_open_state_exchange_call_evidence(
         "ambiguous_calls": 1,
         "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
-        "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
-        "schema_version": "fake-only-exchange-safety-v1",
-        "source": "symfony_http_client_guard",
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
     }
     fake = _FakeAsyncClient(
         open_state={
@@ -558,9 +563,14 @@ def test_fake_live_set_stays_blocked_when_failed_open_state_carries_safety_evide
                 "ambiguous_calls": 1,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
-                "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             },
         },
         open_state_status=503,

@@ -349,12 +349,18 @@ preuve de cette regle contractuelle.
 Le rapport refuse le `PASS` si un set manque, si un hash/lineage est masque ou
 duplique, si le set desactive apparait, si un ordre est produit, ou si un payload
 n'est pas strictement `exchange=fake` et `dry_run=true`. Les compteurs explicites
-`okx=0`, `hyperliquid=0` et `bitmart=0` completent la preuve instrumentee des
-tests : aucun client exchange reel n'est construit par le golden 20.
+`okx=0`, `hyperliquid=0` et `bitmart=0` completent la preuve des tests. Le champ
+`exchange_call_proof` rend la methode explicite : OKX et Hyperliquid sont mesures
+par les guards HTTP, tandis que `bitmart=0` est etabli par la frontiere des
+providers Fake et ne pretend pas mesurer Bitmart par HTTP. Pour le contexte Fake,
+le calcul des indicateurs injecte directement `FakeKlineProvider`; cette route
+n'instancie aucun registre ni bundle global et ne retombe jamais sur le provider
+de klines legacy. Aucun decorateur ou guard Bitmart n'est installe pour cette
+preuve et aucun provider Bitmart n'est appele par le scenario.
 
-Le contrat de preuve est versionne `fake-only-exchange-safety-v1`. Cette version
+Le contrat de preuve est versionne `fake-only-exchange-safety-v2`. Cette version
 fait partie de la cle d'idempotence R12 : un resultat persistant cree avant ce
-contrat ne peut donc pas etre rejoue comme preuve v1. A version et fixture
+contrat ne peut donc pas etre rejoue comme preuve v2. A version et fixture
 identiques, la cle reste stable apres replay et redemarrage.
 
 `complete=true` n'est accepte que pour un appel `exchange=fake`,

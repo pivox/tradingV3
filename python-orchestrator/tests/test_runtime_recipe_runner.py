@@ -50,9 +50,14 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             }
             if fake_only_safety_evidence is None
             else fake_only_safety_evidence
@@ -62,9 +67,14 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             }
             if open_state_safety_evidence is None
             else open_state_safety_evidence
@@ -376,7 +386,7 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert first_markdown == (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
 
     recipe = json.loads(first_json)
-    assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v1"
+    assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v2"
     assert recipe["scenario"] == "dry_run_multi_profiles_same_symbol"
     assert recipe["status"] == "PASS"
     assert [item["profile"] for item in recipe["sets"]] == [
@@ -402,7 +412,7 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     )
     assert recipe["replay"]["same_run_id"] is True
     assert recipe["replay"]["idempotency_key"].startswith(
-        "fake-golden20-fake-only-exchange-safety-v1-"
+        "fake-golden20-fake-only-exchange-safety-v2-"
     )
     assert recipe["restart"]["stable_recipe_key"] is True
     assert recipe["parallelism"] == {
@@ -411,6 +421,11 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
         "workers_per_set": 1,
     }
     assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+    assert recipe["exchange_call_proof"] == {
+        "bitmart": "fake_provider_boundary",
+        "hyperliquid": "http_client_guard",
+        "okx": "http_client_guard",
+    }
     assert recipe["redacted"] is True
     assert b"api_key" not in first_json.lower()
     assert b"secret" not in first_json.lower()
@@ -426,6 +441,44 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     ]
     assert exchange_sets
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+def test_r12_v2_distinguishes_bitmart_boundary_proof_from_http_guards(tmp_path: Path):
+    evidence_v2 = {
+        "ambiguous_calls": 0,
+        "async_exchange_capable_dispatches_suppressed": True,
+        "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
+    }
+    api = FakeRecipeApi(
+        fake_only_safety_evidence=evidence_v2,
+        open_state_safety_evidence=evidence_v2,
+    )
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=api,
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "PASS"
+    assert recipe["exchange_call_proof"] == evidence_v2["exchange_call_proof"]
+    assert recipe["exchange_calls"] == {
+        "bitmart": 0,
+        "hyperliquid": 0,
+        "okx": 0,
+    }
+    assert recipe["replay"]["idempotency_key"].startswith(
+        "fake-golden20-fake-only-exchange-safety-v2-"
+    )
 
 
 def test_r12_removes_stale_standalone_reports_when_current_run_is_blocked(
@@ -632,7 +685,7 @@ def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
     assert api.new_run_dispatch_count == 1
     assert len(set(run_keys)) == 1
     assert run_keys[0] != legacy_key
-    assert run_keys[0].startswith("fake-golden20-fake-only-exchange-safety-v1-")
+    assert run_keys[0].startswith("fake-golden20-fake-only-exchange-safety-v2-")
     assert recipe["replay"]["same_run_id"] is True
 
 
@@ -645,9 +698,14 @@ def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
                 "ambiguous_calls": 1,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
                 "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             },
             "BLOCKED",
             {"bitmart": 0, "hyperliquid": 0, "okx": 0},
@@ -657,29 +715,39 @@ def test_r12_does_not_replay_a_persistent_result_from_before_safety_contract_v1(
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
-                "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             },
             "FAIL",
-            {"bitmart": 3, "hyperliquid": 0, "okx": 0},
+            {"bitmart": 0, "hyperliquid": 0, "okx": 3},
         ),
         (
             {
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
                 "exchange_calls": {
-                    "bitmart": 1,
+                    "bitmart": 0,
                     "hyperliquid": 0,
-                    "okx": 0,
+                    "okx": 1,
                     "unexpected": 0,
                 },
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             },
             "FAIL",
-            {"bitmart": 3, "hyperliquid": 0, "okx": 0},
+            {"bitmart": 0, "hyperliquid": 0, "okx": 3},
         ),
     ],
 )
@@ -732,9 +800,14 @@ def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
             "ambiguous_calls": 0,
             "async_exchange_capable_dispatches_suppressed": True,
             "complete": True,
-            "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
-            "schema_version": "fake-only-exchange-safety-v1",
-            "source": "symfony_http_client_guard",
+            "exchange_call_proof": {
+                "bitmart": "fake_provider_boundary",
+                "hyperliquid": "http_client_guard",
+                "okx": "http_client_guard",
+            },
+            "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+            "schema_version": "fake-only-exchange-safety-v2",
+            "source": "symfony_fake_provider_boundary_and_http_guards",
         }
     )
     runner = RecipeRunner(
@@ -746,9 +819,9 @@ def test_r12_counts_shared_open_state_exchange_attempt_once(tmp_path: Path):
     recipe = report["results"][0]["evidence"]["recipe_report"]
 
     assert report["results"][0]["status"] == "FAIL"
-    assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 1}
     markdown = (tmp_path / "fake-multi-profile-recipe-report.md").read_text()
-    assert "Exchange calls: `bitmart=1`, `hyperliquid=0`, `okx=0`" in markdown
+    assert "Exchange calls: `bitmart=0`, `hyperliquid=0`, `okx=1`" in markdown
 
 
 def test_r12_fails_when_later_shared_snapshot_contains_known_exchange_attempt(tmp_path: Path):
@@ -758,9 +831,14 @@ def test_r12_fails_when_later_shared_snapshot_contains_known_exchange_attempt(tm
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
-                "exchange_calls": {"bitmart": 1, "hyperliquid": "bad", "okx": 0},
-                "schema_version": "fake-only-exchange-safety-v1",
-                "source": "symfony_http_client_guard",
+                "exchange_call_proof": {
+                    "bitmart": "fake_provider_boundary",
+                    "hyperliquid": "http_client_guard",
+                    "okx": "http_client_guard",
+                },
+                "exchange_calls": {"bitmart": 0, "hyperliquid": "bad", "okx": 1},
+                "schema_version": "fake-only-exchange-safety-v2",
+                "source": "symfony_fake_provider_boundary_and_http_guards",
             },
         }
     )
@@ -773,7 +851,7 @@ def test_r12_fails_when_later_shared_snapshot_contains_known_exchange_attempt(tm
     recipe = report["results"][0]["evidence"]["recipe_report"]
 
     assert report["results"][0]["status"] == "FAIL"
-    assert recipe["exchange_calls"] == {"bitmart": 1, "hyperliquid": 0, "okx": 0}
+    assert recipe["exchange_calls"] == {"bitmart": 0, "hyperliquid": 0, "okx": 1}
 
 
 def test_runner_applies_fixtures_idempotently_without_sending_payload(tmp_path: Path):

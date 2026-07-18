@@ -120,7 +120,7 @@ async def fetch_open_state(
     """
     url = f"{base_url.rstrip('/')}/api/exchange/open-state"
     params = {"exchange": exchange, "market_type": market_type}
-    headers = {"X-Fake-Only-Safety-Evidence": "v1"} if exchange == "fake" else None
+    headers = {"X-Fake-Only-Safety-Evidence": "v2"} if exchange == "fake" else None
     if headers is not None:
         params["dry_run"] = "true"
     try:
@@ -458,7 +458,7 @@ async def _dispatch_mtf_run(
     url = f"{base_url.rstrip('/')}/api/mtf/run"
     headers: Dict[str, str] = {}
     if payload.get("exchange") == "fake" and payload.get("dry_run") is True:
-        headers["X-Fake-Only-Safety-Evidence"] = "v1"
+        headers["X-Fake-Only-Safety-Evidence"] = "v2"
     if run_id is not None:
         headers["X-Run-Id"] = run_id
         headers["X-Run-Correlation-Id"] = canonical_correlation_id(run_id)

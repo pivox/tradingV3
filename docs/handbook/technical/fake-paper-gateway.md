@@ -543,7 +543,11 @@ private WS avec snapshot resync, restart avec position protegee ouverte,
 funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
 actif avec replay et restart, puis la recette dry-run `regular` / `scalper` /
 `scalper_micro` sur le meme symbole Fake avec hashes/lineages distincts, rapports
-JSON/Markdown deterministes et zero appel OKX, Hyperliquid ou Bitmart.
+JSON/Markdown deterministes et zero appel OKX, Hyperliquid ou Bitmart. La preuve
+v2 mesure OKX/Hyperliquid aux guards HTTP et etablit `bitmart=0` par la frontiere
+des providers Fake, sans pretendre mesurer Bitmart par HTTP. Le routage des
+indicateurs injecte directement `FakeKlineProvider`, sans registre ou bundle
+global sur cette route; aucun decorateur ni changement n'est ajoute a Bitmart.
 
 Les vingt lignes du catalogue sont maintenant `executable`; cela clot le
 catalogue golden v1, mais ne clot pas a lui seul l'issue #196 ni n'autorise une

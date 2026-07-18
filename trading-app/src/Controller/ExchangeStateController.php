@@ -45,7 +45,7 @@ final class ExchangeStateController extends AbstractController
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v1';
+        $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v2';
         if ($safetyEvidenceRequested) {
             $explicitDryRun = filter_var(
                 $request->query->get('dry_run'),

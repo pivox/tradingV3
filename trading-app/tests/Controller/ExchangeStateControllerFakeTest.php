@@ -87,7 +87,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $controller = $this->buildController();
         $request = new Request(
             ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
-            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2'],
         );
 
         $response = $controller->openState($request);
@@ -99,9 +99,14 @@ final class ExchangeStateControllerFakeTest extends TestCase
                 'ambiguous_calls' => 0,
                 'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
+                'exchange_call_proof' => [
+                    'bitmart' => 'fake_provider_boundary',
+                    'hyperliquid' => 'http_client_guard',
+                    'okx' => 'http_client_guard',
+                ],
                 'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
-                'schema_version' => 'fake-only-exchange-safety-v1',
-                'source' => 'symfony_http_client_guard',
+                'schema_version' => 'fake-only-exchange-safety-v2',
+                'source' => 'symfony_fake_provider_boundary_and_http_guards',
             ],
             $payload['fake_only_safety_evidence'] ?? null,
         );
@@ -115,7 +120,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
     {
         $request = new Request(
             $query,
-            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2'],
         );
 
         $response = $this->buildController()->openState($request);
@@ -236,7 +241,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $controller->setContainer($container);
         $request = new Request(
             ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
-            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2'],
         );
 
         $failedResponse = $controller->openState($request);
@@ -268,12 +273,12 @@ final class ExchangeStateControllerFakeTest extends TestCase
             return new MockResponse('{}');
         });
         $audit = new FakeOnlyExchangeCallAudit();
-        $guard = new ExchangeCallGuardHttpClient($innerClient, $audit, 'bitmart');
+        $guard = new ExchangeCallGuardHttpClient($innerClient, $audit, 'okx');
         $guardedAccount = $this->createMock(AccountProviderInterface::class);
         $guardedAccount->method('getOpenPositionsOrFail')
             ->willReturnCallback(static function () use ($guard): array {
                 try {
-                    $guard->request('GET', 'https://api-cloud.bitmart.com/contract/private/position-v2');
+                    $guard->request('GET', 'https://www.okx.com/api/v5/account/positions');
                 } catch (\Throwable) {
                     throw new \RuntimeException('fake provider wrapped guarded exchange call');
                 }
@@ -307,7 +312,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         $controller->setContainer($container);
         $request = new Request(
             ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
-            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2'],
         );
 
         $response = $controller->openState($request);
@@ -316,7 +321,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
         self::assertSame(Response::HTTP_SERVICE_UNAVAILABLE, $response->getStatusCode());
         self::assertSame(0, $delegatedCalls);
         self::assertSame(
-            ['bitmart' => 1, 'hyperliquid' => 0, 'okx' => 0],
+            ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 1],
             $payload['fake_only_safety_evidence']['exchange_calls'] ?? null,
         );
         self::assertSame(0, $payload['fake_only_safety_evidence']['ambiguous_calls'] ?? null);

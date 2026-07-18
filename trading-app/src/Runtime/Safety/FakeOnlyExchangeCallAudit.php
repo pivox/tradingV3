@@ -65,6 +65,7 @@ final class FakeOnlyExchangeCallAudit implements ResetInterface
      *     ambiguous_calls: int,
      *     async_exchange_capable_dispatches_suppressed: bool,
      *     complete: bool,
+     *     exchange_call_proof: array{bitmart: string, hyperliquid: string, okx: string},
      *     exchange_calls: array{bitmart: int, hyperliquid: int, okx: int},
      *     schema_version: string,
      *     source: string
@@ -76,9 +77,14 @@ final class FakeOnlyExchangeCallAudit implements ResetInterface
             'ambiguous_calls' => $this->ambiguousCalls,
             'async_exchange_capable_dispatches_suppressed' => $this->asyncExchangeCapableDispatchesSuppressed,
             'complete' => $this->active && $this->asyncExchangeCapableDispatchesSuppressed,
+            'exchange_call_proof' => [
+                'bitmart' => 'fake_provider_boundary',
+                'hyperliquid' => 'http_client_guard',
+                'okx' => 'http_client_guard',
+            ],
             'exchange_calls' => $this->exchangeCalls,
-            'schema_version' => 'fake-only-exchange-safety-v1',
-            'source' => 'symfony_http_client_guard',
+            'schema_version' => 'fake-only-exchange-safety-v2',
+            'source' => 'symfony_fake_provider_boundary_and_http_guards',
         ];
         $this->reset();
 

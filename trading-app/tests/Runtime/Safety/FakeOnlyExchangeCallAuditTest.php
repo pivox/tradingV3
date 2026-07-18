@@ -8,19 +8,14 @@ use App\Exchange\Hyperliquid\HyperliquidConfig;
 use App\Exchange\Hyperliquid\HyperliquidRestClient;
 use App\Exchange\Okx\OkxConfig;
 use App\Exchange\Okx\OkxRestClient;
-use App\Provider\Bitmart\Http\BitmartHttpClientPublic;
 use App\Runtime\Safety\ExchangeCallGuardHttpClient;
 use App\Runtime\Safety\FakeOnlyExchangeCallBlockedException;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use Psr\Log\NullLogger;
 use Symfony\Component\Clock\MockClock;
-use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
-use Symfony\Component\Lock\LockFactory;
-use Symfony\Component\Lock\Store\InMemoryStore;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\Service\ResetInterface;
 
@@ -29,15 +24,6 @@ use Symfony\Contracts\Service\ResetInterface;
 #[CoversClass(FakeOnlyExchangeCallBlockedException::class)]
 final class FakeOnlyExchangeCallAuditTest extends TestCase
 {
-    private ?string $bitmartProjectDir = null;
-
-    protected function tearDown(): void
-    {
-        if ($this->bitmartProjectDir !== null) {
-            (new Filesystem())->remove($this->bitmartProjectDir);
-        }
-    }
-
     public function testArmedGuardCountsAndBlocksBeforeTheExchangeClientRuns(): void
     {
         $delegatedCalls = 0;
@@ -47,15 +33,15 @@ final class FakeOnlyExchangeCallAuditTest extends TestCase
             return new MockResponse('{}');
         });
         $audit = new FakeOnlyExchangeCallAudit();
-        $guard = new ExchangeCallGuardHttpClient($inner, $audit, 'bitmart');
+        $guard = new ExchangeCallGuardHttpClient($inner, $audit, 'okx');
         $audit->begin(asyncExchangeCapableDispatchesSuppressed: true);
 
         try {
-            $guard->request('POST', '/contract/private/submit-order');
+            $guard->request('POST', '/api/v5/trade/order');
             self::fail('The Fake-only guard must block exchange HTTP before delegation.');
         } catch (\Throwable $exception) {
             self::assertSame(FakeOnlyExchangeCallBlockedException::class, $exception::class);
-            self::assertSame('fake_only_exchange_call_blocked:bitmart', $exception->getMessage());
+            self::assertSame('fake_only_exchange_call_blocked:okx', $exception->getMessage());
             self::assertNotInstanceOf(TransportExceptionInterface::class, $exception);
         }
 
@@ -65,33 +51,27 @@ final class FakeOnlyExchangeCallAuditTest extends TestCase
                 'ambiguous_calls' => 0,
                 'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
-                'exchange_calls' => ['bitmart' => 1, 'hyperliquid' => 0, 'okx' => 0],
-                'schema_version' => 'fake-only-exchange-safety-v1',
-                'source' => 'symfony_http_client_guard',
+                'exchange_call_proof' => [
+                    'bitmart' => 'fake_provider_boundary',
+                    'hyperliquid' => 'http_client_guard',
+                    'okx' => 'http_client_guard',
+                ],
+                'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 1],
+                'schema_version' => 'fake-only-exchange-safety-v2',
+                'source' => 'symfony_fake_provider_boundary_and_http_guards',
             ],
             $audit->finish(),
         );
     }
 
-    public function testBitmartWrapperDoesNotRetryOrRerouteGuardBlockAsTransportFailure(): void
+    public function testServicesDoNotDecorateBitmartClientsForFakeAudit(): void
     {
-        [$guard, $audit, $delegatedCalls] = $this->armedGuard('bitmart');
-        $this->bitmartProjectDir = sys_get_temp_dir() . '/trading-v3-fake-only-' . bin2hex(random_bytes(8));
-        $client = new BitmartHttpClientPublic(
-            $guard,
-            $guard,
-            new LockFactory(new InMemoryStore()),
-            $this->bitmartProjectDir,
-            new MockClock('2026-07-18T00:00:00+00:00'),
-            new NullLogger(),
-        );
+        $services = file_get_contents(__DIR__ . '/../../../config/services.yaml');
 
-        $this->assertGuardBlockSurvivesWrapper(
-            static fn (): int => $client->getSystemTimeMs(),
-            $audit,
-            'bitmart',
-            $delegatedCalls,
-        );
+        self::assertIsString($services);
+        self::assertStringNotContainsString('app.http_client.exchange_guard.bitmart', $services);
+        self::assertStringContainsString('app.http_client.exchange_guard.okx', $services);
+        self::assertStringContainsString('app.http_client.exchange_guard.hyperliquid', $services);
     }
 
     public function testOkxWrapperDoesNotExposeGuardBlockAsTransportFailure(): void
@@ -147,9 +127,14 @@ final class FakeOnlyExchangeCallAuditTest extends TestCase
                 'ambiguous_calls' => 0,
                 'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
+                'exchange_call_proof' => [
+                    'bitmart' => 'fake_provider_boundary',
+                    'hyperliquid' => 'http_client_guard',
+                    'okx' => 'http_client_guard',
+                ],
                 'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
-                'schema_version' => 'fake-only-exchange-safety-v1',
-                'source' => 'symfony_http_client_guard',
+                'schema_version' => 'fake-only-exchange-safety-v2',
+                'source' => 'symfony_fake_provider_boundary_and_http_guards',
             ],
             $audit->finish(),
         );

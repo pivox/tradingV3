@@ -29,7 +29,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURES_DIR = ROOT / "fixtures" / "runtime-recipe"
 DEFAULT_EXPORT_DIR = ROOT / "var" / "runtime-recipe"
 CONFIRMATION_TOKEN = "DRY_RUN_ONLY"
-FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION = "fake-only-exchange-safety-v1"
+FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION = "fake-only-exchange-safety-v2"
+FAKE_ONLY_EXCHANGE_CALL_PROOF = {
+    "bitmart": "fake_provider_boundary",
+    "hyperliquid": "http_client_guard",
+    "okx": "http_client_guard",
+}
 
 SET_FIELDS = {
     "set_id",
@@ -795,6 +800,7 @@ class RecipeRunner:
             status = "PASS"
         recipe_report = {
             "disabled_sets": disabled_sets,
+            "exchange_call_proof": FAKE_ONLY_EXCHANGE_CALL_PROOF,
             "exchange_calls": exchange_calls,
             "fixture_hash": fixture_hash,
             "fixture_id": fixture["fixture_id"],
@@ -829,7 +835,7 @@ class RecipeRunner:
             },
             "restart": {"stable_recipe_key": True},
             "scenario": "dry_run_multi_profiles_same_symbol",
-            "schema_version": "fake-multi-profile-recipe-report-v1",
+            "schema_version": "fake-multi-profile-recipe-report-v2",
             "sets": report_sets,
             "status": status,
         }
@@ -891,7 +897,8 @@ class RecipeRunner:
         valid = (
             calls_valid
             and evidence.get("schema_version") == FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION
-            and evidence.get("source") == "symfony_http_client_guard"
+            and evidence.get("source") == "symfony_fake_provider_boundary_and_http_guards"
+            and evidence.get("exchange_call_proof") == FAKE_ONLY_EXCHANGE_CALL_PROOF
             and evidence.get("complete") is True
             and evidence.get("async_exchange_capable_dispatches_suppressed") is True
             and type(ambiguous_calls) is int
@@ -1243,6 +1250,7 @@ class RecipeRunner:
     @staticmethod
     def _multi_profile_markdown(report: dict[str, Any]) -> str:
         exchange_calls = report["exchange_calls"]
+        exchange_call_proof = report["exchange_call_proof"]
         business_lock = report["locks"]["business"]
         business_observed = str(business_lock["observed"]).lower()
         lines = [
@@ -1256,6 +1264,10 @@ class RecipeRunner:
             f"`bitmart={exchange_calls['bitmart']}`, "
             f"`hyperliquid={exchange_calls['hyperliquid']}`, "
             f"`okx={exchange_calls['okx']}`",
+            "- Proof methods: "
+            f"`bitmart={exchange_call_proof['bitmart']}`, "
+            f"`hyperliquid={exchange_call_proof['hyperliquid']}`, "
+            f"`okx={exchange_call_proof['okx']}`",
             "",
             "| Set | Profile | Symbol | Config hash | Orders |",
             "| --- | --- | --- | --- | ---: |",

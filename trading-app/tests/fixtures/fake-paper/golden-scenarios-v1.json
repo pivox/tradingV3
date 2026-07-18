@@ -193,6 +193,8 @@
     {
       "evidence": [
         "tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol",
+        "tests/Provider/Fake/FakeExchangeBundleRegistryTest.php::testRegistryResolvesFakePerpetualContext",
+        "tests/Indicator/Provider/IndicatorProviderServiceClosedKlineTest.php::testFakeContextUsesFakeKlinesWithoutCallingLegacyFallback",
         "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts",
         "python-orchestrator/tests/test_runtime_recipe_runner.py::test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart",
         "python-orchestrator/tests/test_integration_orchestrator_e2e.py::test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism"

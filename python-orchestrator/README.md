@@ -373,6 +373,15 @@ rapport conserve son scope avec `evidence_status=not_exercised` et
 `contract_conflict_reason=cross_profile_symbol_locked`. Cette non-execution est
 nominale et ne transforme pas le `PASS` de coexistence en `BLOCKED`.
 
+La preuve safety v2 distingue ses methodes dans `exchange_call_proof` : les
+compteurs OKX et Hyperliquid viennent de guards HTTP, alors que `bitmart=0`
+vient de la frontiere des providers Fake et ne constitue pas une mesure HTTP
+Bitmart. Les indicateurs injectent directement `FakeKlineProvider` pour le
+contexte Fake : cette route n'instancie aucun registre ou bundle global. Aucun
+client ou provider Bitmart n'est decore, modifie ou appele par R12. Une preuve
+v1, incomplete ou sans ces methodes est `BLOCKED` et ne peut pas reutiliser la
+cle de replay v2.
+
 R5 utilise le profil reserve `recipe_functional_error`. Ce profil n'est pas une
 strategie et ne doit avoir aucun fichier YAML : son absence provoque l'erreur
 fonctionnelle Symfony que la recette verifie. Le schema le refuse hors de

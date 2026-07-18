@@ -56,9 +56,14 @@ the sets again. A fixture change naturally creates a new key.
 ### Network safety
 
 The fixture contains no OKX, Hyperliquid, or Bitmart set. The command forces
-dry-run at both fixture application and run request. Tests instrument the HTTP
-boundary and fail on any target exchange or non-Fake payload. Golden scenario 20
-uses the versioned fixture only and never constructs a real exchange client.
+dry-run at both fixture application and run request. Tests instrument the OKX
+and Hyperliquid HTTP boundaries and fail on any target exchange or non-Fake
+payload. Bitmart is not decorated or modified: its zero counter is supported by
+the Fake provider boundary. Indicator reads inject `FakeKlineProvider` directly,
+so that route instantiates no global provider registry or bundle. The v2 evidence
+names each proof method and fails closed when that exact shape is missing. Golden
+scenario 20 uses the versioned fixture only and never invokes a Bitmart provider;
+its Bitmart proof is structural, not an HTTP measurement.
 
 ## Output contract
 
@@ -70,7 +75,7 @@ The normalized report contains:
 - separate orchestration-lock observations and business-lock evidence/contract;
 - replay/restart semantics;
 - bounded-parallelism contract;
-- explicit zero-exchange-call proof;
+- explicit zero-exchange-call proof with per-exchange proof methods;
 - overall `PASS`, `FAIL`, or `BLOCKED` result.
 
 ## Verification

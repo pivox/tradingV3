@@ -46,7 +46,7 @@ class RunnerController extends AbstractController
                 // For GET requests, get parameters from query string
                 $data = $request->query->all();
             }
-            $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v1';
+            $safetyEvidenceRequested = $request->headers->get('X-Fake-Only-Safety-Evidence') === 'v2';
 
             $symbolsInput = $data['symbols'] ?? [];
             $dryRun = filter_var($data['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN);

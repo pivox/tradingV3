@@ -315,6 +315,11 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'config_hashes_distinct' => true,
             'disabled_sets' => ['recipe_fake_multi_disabled'],
             'dry_run_forced' => true,
+            'exchange_call_proof' => [
+                'bitmart' => 'fake_provider_boundary',
+                'hyperliquid' => 'http_client_guard',
+                'okx' => 'http_client_guard',
+            ],
             'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
             'fixture_id' => 'fake-multi-profile-same-symbol-v1',
             'lineage_sets_distinct' => true,

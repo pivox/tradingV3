@@ -348,30 +348,6 @@ services:
             $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
             $exchange: 'hyperliquid'
 
-    app.http_client.exchange_guard.bitmart_futures_v2:
-        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
-        decorates: 'http_client.bitmart_futures_v2'
-        arguments:
-            $client: '@app.http_client.exchange_guard.bitmart_futures_v2.inner'
-            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
-            $exchange: 'bitmart'
-
-    app.http_client.exchange_guard.bitmart_futures_v2_private:
-        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
-        decorates: 'http_client.bitmart_futures_v2_private'
-        arguments:
-            $client: '@app.http_client.exchange_guard.bitmart_futures_v2_private.inner'
-            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
-            $exchange: 'bitmart'
-
-    app.http_client.exchange_guard.bitmart_system:
-        class: App\Runtime\Safety\ExchangeCallGuardHttpClient
-        decorates: 'http_client.bitmart_system'
-        arguments:
-            $client: '@app.http_client.exchange_guard.bitmart_system.inner'
-            $audit: '@App\Runtime\Safety\FakeOnlyExchangeCallAudit'
-            $exchange: 'bitmart'
-
     # Provider pour la configuration des contrats MTF (support par profil avec fallback)
     App\Config\MtfContractsConfigProvider:
         public: true

@@ -187,13 +187,18 @@ def test_fetch_fake_open_state_requests_and_preserves_safety_evidence():
         "ambiguous_calls": 0,
         "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
         "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
-        "schema_version": "fake-only-exchange-safety-v1",
-        "source": "symfony_http_client_guard",
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["x-fake-only-safety-evidence"] == "v1"
+        assert request.headers["x-fake-only-safety-evidence"] == "v2"
         assert request.url.params["dry_run"] == "true"
         return httpx.Response(
             200,
@@ -234,9 +239,14 @@ def test_fetch_fake_open_state_http_error_preserves_only_safety_evidence():
         "ambiguous_calls": 1,
         "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
-        "exchange_calls": {"bitmart": 1, "hyperliquid": 0, "okx": 0},
-        "schema_version": "fake-only-exchange-safety-v1",
-        "source": "symfony_http_client_guard",
+        "exchange_call_proof": {
+            "bitmart": "fake_provider_boundary",
+            "hyperliquid": "http_client_guard",
+            "okx": "http_client_guard",
+        },
+        "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 1},
+        "schema_version": "fake-only-exchange-safety-v2",
+        "source": "symfony_fake_provider_boundary_and_http_guards",
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -867,7 +877,7 @@ def test_run_persisted_set_propagates_orchestration_headers():
     assert headers["x-run-correlation-id"] == canonical_correlation_id("run_dashA_20260617")
     assert headers["x-orchestration-set-id"] == "s1"
     assert headers["x-orchestration-dashboard-id"] == "42"
-    assert headers["x-fake-only-safety-evidence"] == "v1"
+    assert headers["x-fake-only-safety-evidence"] == "v2"
 
 
 def test_run_persisted_set_hashes_long_run_id_in_correlation_header():
@@ -909,7 +919,7 @@ def test_run_persisted_set_without_run_id_sends_no_orchestration_headers():
     assert "x-run-id" not in headers
     assert "x-run-correlation-id" not in headers
     assert "x-orchestration-set-id" not in headers
-    assert headers["x-fake-only-safety-evidence"] == "v1"
+    assert headers["x-fake-only-safety-evidence"] == "v2"
 
 
 def test_fetch_run_trade_outcome_returns_body_and_forwards_params():

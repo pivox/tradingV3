@@ -99,7 +99,7 @@ final class RunnerControllerTest extends TestCase
                 'HTTP_X_RUN_CORRELATION_ID' => 'run-config-hash',
                 'HTTP_X_ORCHESTRATION_SET_ID' => 'set-regular',
                 'HTTP_X_ORCHESTRATION_DASHBOARD_ID' => 'dashboard-fake',
-                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2',
             ],
             content: json_encode([
                 'symbols' => ['BTCUSDT'],
@@ -133,9 +133,14 @@ final class RunnerControllerTest extends TestCase
                 'ambiguous_calls' => 0,
                 'async_exchange_capable_dispatches_suppressed' => true,
                 'complete' => true,
+                'exchange_call_proof' => [
+                    'bitmart' => 'fake_provider_boundary',
+                    'hyperliquid' => 'http_client_guard',
+                    'okx' => 'http_client_guard',
+                ],
                 'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
-                'schema_version' => 'fake-only-exchange-safety-v1',
-                'source' => 'symfony_http_client_guard',
+                'schema_version' => 'fake-only-exchange-safety-v2',
+                'source' => 'symfony_fake_provider_boundary_and_http_guards',
             ],
             $responseBody['data']['fake_only_safety_evidence'] ?? null,
         );
@@ -199,7 +204,7 @@ final class RunnerControllerTest extends TestCase
             'POST',
             server: [
                 'CONTENT_TYPE' => 'application/json',
-                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2',
             ],
             content: json_encode([
                 'symbols' => ['BTCUSDT'],
@@ -242,7 +247,7 @@ final class RunnerControllerTest extends TestCase
             'POST',
             server: [
                 'CONTENT_TYPE' => 'application/json',
-                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v1',
+                'HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2',
             ],
             content: json_encode($payload, JSON_THROW_ON_ERROR),
         );
