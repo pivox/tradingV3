@@ -141,6 +141,79 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
     }
 
+    #[DataProvider('sensitiveStructuralStringProvider')]
+    public function testRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveStructuralStringProvider(): iterable
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $slash = '\\';
+
+        yield 'escaped structural quotes and escaped quote inside key' => [
+            'prefix {'
+            . $slash . '"api' . str_repeat($slash, 3) . '"key' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"} suffix',
+        ];
+        yield 'single-quoted Unicode-escaped sensitive member' => [
+            "prefix {'api" . $slash . "u005fkey':'" . $sentinel . "'} suffix",
+        ];
+    }
+
+    #[DataProvider('nonCanonicalBase64SensitiveMapKeyProvider')]
+    public function testRejectsLenientlyDecodableBase64SensitiveMapKeys(string $key): void
+    {
+        self::assertSame('api_key', base64_decode($key, false));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([$key => 'synthetic-redaction-sentinel']),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonCanonicalBase64SensitiveMapKeyProvider(): iterable
+    {
+        $base64 = base64_encode('api_key');
+        foreach ([
+            'space' => ' ',
+            'horizontal tab' => "\t",
+            'line feed' => "\n",
+            'vertical tab' => "\v",
+            'form feed' => "\f",
+            'carriage return' => "\r",
+        ] as $label => $whitespace) {
+            yield 'folded with ' . $label => [substr($base64, 0, 4) . $whitespace . substr($base64, 4)];
+        }
+
+        yield 'internal padding' => [substr($base64, 0, 4) . '=' . substr($base64, 4)];
+        yield 'excess internal padding' => [substr($base64, 0, 4) . '===' . substr($base64, 4)];
+    }
+
+    #[DataProvider('jsonWrappedBase64SensitiveMapKeyProvider')]
+    public function testRejectsJsonWrappedBase64SensitiveMapKeys(string $key): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([$key => 'synthetic-redaction-sentinel']),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function jsonWrappedBase64SensitiveMapKeyProvider(): iterable
+    {
+        $wrapped = json_encode(base64_encode('api_key'), JSON_THROW_ON_ERROR);
+
+        yield 'JSON string wrapper' => [$wrapped];
+        yield 'percent-encoded JSON string wrapper' => [rawurlencode($wrapped)];
+    }
+
     /** @param array<array-key, mixed> $payload */
     #[DataProvider('ambiguousUnicodeStructuredKeyProvider')]
     public function testRejectsAmbiguousUnicodeKeysAcrossStructuredRepresentations(array $payload): void
@@ -976,6 +1049,20 @@ final class PaperMarketEventRedactorTest extends TestCase
 
             PaperMarketEventRedactor::assertSafe(['raw' => implode('&', $form)]);
         }
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testAllowsSignatureCountZeroInFormMetadata(): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => 'signature_count=0']);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testAllowsOrdinaryPublicRatioNotationNearSerializedArrayPrefix(): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => 'public ratio a:1 currently']);
 
         self::addToAssertionCount(1);
     }

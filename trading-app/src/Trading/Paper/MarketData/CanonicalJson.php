@@ -28,7 +28,7 @@ final class CanonicalJson
      * Encodes normalized PHP values: sequential integer-key arrays follow array_is_list() semantics,
      * non-list arrays are maps, and object instances are unsupported.
      */
-    public static function encode(mixed $value): string
+    public static function encode(#[\SensitiveParameter] mixed $value): string
     {
         $activeArrayReferences = [];
         $nodeCount = 0;
@@ -104,6 +104,7 @@ final class CanonicalJson
      * @param array<string, true> $activeArrayReferences
      */
     private static function normalize(
+        #[\SensitiveParameter]
         mixed &$value,
         int $depth,
         array &$activeArrayReferences,
@@ -208,7 +209,9 @@ final class CanonicalJson
     /**
      * @param array<array-key, mixed> $value
      */
-    private static function hasContiguousZeroBasedIntegerKeySet(array $value): bool
+    private static function hasContiguousZeroBasedIntegerKeySet(
+        #[\SensitiveParameter] array $value,
+    ): bool
     {
         $keyCount = \count($value);
         foreach (array_keys($value) as $key) {
@@ -248,7 +251,7 @@ final class CanonicalJson
     /**
      * @param array<array-key, mixed> $value
      */
-    private static function arrayReferenceId(array &$value): string
+    private static function arrayReferenceId(#[\SensitiveParameter] array &$value): string
     {
         $holder = [&$value];
         $reference = \ReflectionReference::fromArrayElement($holder, 0);

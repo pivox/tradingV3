@@ -57,6 +57,7 @@ final readonly class PaperMarketEvent
         \DateTimeImmutable $exchangeTimestamp,
         \DateTimeImmutable $receivedTimestamp,
         ?string $sequence,
+        #[\SensitiveParameter]
         array $payload,
     ): self {
         $normalizedSymbol = strtoupper($symbol);
@@ -68,8 +69,8 @@ final readonly class PaperMarketEvent
         PaperMarketEventRedactor::assertSafe($payload);
         $payload = self::detachPayload($payload);
 
-        $exchangeTimestampUtc = $exchangeTimestamp->setTimezone(self::utc());
-        $receivedTimestampUtc = $receivedTimestamp->setTimezone(self::utc());
+        $exchangeTimestampUtc = self::normalizeTimestamp($exchangeTimestamp);
+        $receivedTimestampUtc = self::normalizeTimestamp($receivedTimestamp);
         self::assertSerializableTimestamp($exchangeTimestampUtc);
         self::assertSerializableTimestamp($receivedTimestampUtc);
         $payloadHash = hash('sha256', CanonicalJson::encode($payload));
@@ -99,7 +100,7 @@ final readonly class PaperMarketEvent
     /**
      * @param array<string, mixed> $data
      */
-    public static function fromArray(array $data): self
+    public static function fromArray(#[\SensitiveParameter] array $data): self
     {
         self::assertContractShape($data);
 
@@ -226,7 +227,7 @@ final readonly class PaperMarketEvent
      *
      * @return array<array-key, mixed>
      */
-    private static function detachPayload(array $payload): array
+    private static function detachPayload(#[\SensitiveParameter] array $payload): array
     {
         $nodeCount = 0;
         $byteCount = 0;
@@ -240,6 +241,7 @@ final readonly class PaperMarketEvent
      * @return array<array-key, mixed>
      */
     private static function detachPayloadWithinBudget(
+        #[\SensitiveParameter]
         array $payload,
         int &$nodeCount,
         int &$byteCount,
@@ -299,7 +301,7 @@ final readonly class PaperMarketEvent
     /**
      * @param array<string, mixed> $data
      */
-    private static function assertContractShape(array $data): void
+    private static function assertContractShape(#[\SensitiveParameter] array $data): void
     {
         $actualKeys = array_keys($data);
         $expectedKeys = self::CONTRACT_KEYS;
@@ -335,6 +337,11 @@ final readonly class PaperMarketEvent
         }
 
         return $timestamp;
+    }
+
+    private static function normalizeTimestamp(\DateTimeImmutable $timestamp): \DateTimeImmutable
+    {
+        return \DateTimeImmutable::createFromInterface($timestamp)->setTimezone(self::utc());
     }
 
     private static function assertSerializableTimestamp(\DateTimeImmutable $timestamp): void

@@ -237,6 +237,309 @@ PHP,
         self::assertSame('2026-07-19T10:00:00.654321Z', $event->toArray()['received_timestamp']);
     }
 
+    public function testCreateOwnsBaseDateTimeImmutableTimestamps(): void
+    {
+        $formatState = (object) ['poisoned' => false];
+        $exchangeTimestamp = new class('2026-07-19T10:00:00.123456Z', $formatState) extends \DateTimeImmutable {
+            public function __construct(string $datetime, private readonly object $formatState)
+            {
+                parent::__construct($datetime);
+            }
+
+            public function format(string $format): string
+            {
+                return $this->formatState->poisoned
+                    ? '2000-01-01T00:00:00.000000Z'
+                    : parent::format($format);
+            }
+        };
+        $receivedTimestamp = new class('2026-07-19T10:00:00.223456Z', $formatState) extends \DateTimeImmutable {
+            public function __construct(string $datetime, private readonly object $formatState)
+            {
+                parent::__construct($datetime);
+            }
+
+            public function format(string $format): string
+            {
+                return $this->formatState->poisoned
+                    ? '2000-01-01T00:00:00.000000Z'
+                    : parent::format($format);
+            }
+        };
+
+        $event = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: $exchangeTimestamp,
+            receivedTimestamp: $receivedTimestamp,
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+        $serialized = $event->toArray();
+
+        self::assertSame(\DateTimeImmutable::class, $event->exchangeTimestamp::class);
+        self::assertSame(\DateTimeImmutable::class, $event->receivedTimestamp::class);
+
+        $formatState->poisoned = true;
+
+        self::assertSame($serialized, $event->toArray());
+    }
+
+    public function testRejectedBoundaryInputsAreHiddenFromFullExceptionTraceChains(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
+
+$sentinel = implode('', ['synthetic', '-trace-', 'sentinel']);
+$payload = ['raw' => '{"api\\q":"' . $sentinel . '"}'];
+$wireData = PaperMarketEvent::create(
+    PaperMarketDataVenue::OKX,
+    'BTCUSDT',
+    PaperMarketDataChannel::TOP_OF_BOOK,
+    new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+    new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+    '42',
+    ['price' => '29999.0'],
+)->toArray();
+$wireData['payload'] = $payload;
+$wireData['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+$operations = [
+    static fn () => PaperMarketEventRedactor::assertSafe($payload),
+    static fn () => PaperMarketEvent::create(
+        PaperMarketDataVenue::OKX,
+        'BTCUSDT',
+        PaperMarketDataChannel::TOP_OF_BOOK,
+        new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+        new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+        '42',
+        $payload,
+    ),
+    static fn () => PaperMarketEvent::fromArray($wireData),
+];
+
+foreach ($operations as $index => $operation) {
+    try {
+        $operation();
+        exit(10 + $index);
+    } catch (\InvalidArgumentException $exception) {
+        $sawPrevious = false;
+        $current = $exception;
+        do {
+            $rendered = print_r([
+                'message' => $current->getMessage(),
+                'trace' => $current->getTrace(),
+            ], true);
+            if (str_contains($rendered, $sentinel)) {
+                exit(20 + $index);
+            }
+
+            $current = $current->getPrevious();
+            $sawPrevious = $sawPrevious || $current !== null;
+        } while ($current !== null);
+
+        if (!$sawPrevious) {
+            exit(30 + $index);
+        }
+    }
+}
+
+$sensitiveKey = 'api_key_' . $sentinel;
+$payload = [$sensitiveKey => $sentinel];
+$wireData['payload'] = $payload;
+$wireData['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+$operations = [
+    static fn () => PaperMarketEventRedactor::assertSafe($payload),
+    static fn () => PaperMarketEvent::create(
+        PaperMarketDataVenue::OKX,
+        'BTCUSDT',
+        PaperMarketDataChannel::TOP_OF_BOOK,
+        new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+        new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+        '42',
+        $payload,
+    ),
+    static fn () => PaperMarketEvent::fromArray($wireData),
+];
+
+foreach ($operations as $index => $operation) {
+    try {
+        $operation();
+        exit(40 + $index);
+    } catch (\InvalidArgumentException $exception) {
+        $current = $exception;
+        do {
+            $rendered = print_r([
+                'message' => $current->getMessage(),
+                'trace' => $current->getTrace(),
+            ], true);
+            if (str_contains($rendered, $sentinel)) {
+                exit(50 + $index);
+            }
+
+            $current = $current->getPrevious();
+        } while ($current !== null);
+    }
+}
+
+$additionalPayloads = [
+    [
+        ['header' => 'Basic ' . base64_encode('public-user:' . $sentinel)],
+        ['Basic ' . base64_encode('public-user:' . $sentinel)],
+    ],
+    [
+        ['raw' => '-----BEGIN PRIVATE KEY-----' . $sentinel],
+        [$sentinel],
+    ],
+    [
+        ['raw' => 'api_key=' . $sentinel],
+        [$sentinel],
+    ],
+    [
+        ['raw' => 'prefix {api\\u005fkey:"' . $sentinel . '"} suffix'],
+        [$sentinel],
+    ],
+    [
+        ['raw' => serialize(['api_key' => $sentinel])],
+        [$sentinel],
+    ],
+    [
+        ['raw' => base64_encode(json_encode(['api_key' => $sentinel], JSON_THROW_ON_ERROR))],
+        [base64_encode(json_encode(['api_key' => $sentinel], JSON_THROW_ON_ERROR))],
+    ],
+];
+
+foreach ($additionalPayloads as $fixtureIndex => [$payload, $prohibitedFragments]) {
+    $wireData['payload'] = $payload;
+    $wireData['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+    $operations = [
+        static fn () => PaperMarketEventRedactor::assertSafe($payload),
+        static fn () => PaperMarketEvent::create(
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+            new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+            '42',
+            $payload,
+        ),
+        static fn () => PaperMarketEvent::fromArray($wireData),
+    ];
+
+    foreach ($operations as $operationIndex => $operation) {
+        try {
+            $operation();
+            exit(70 + $fixtureIndex * 3 + $operationIndex);
+        } catch (\InvalidArgumentException $exception) {
+            $current = $exception;
+            do {
+                $rendered = print_r([
+                    'message' => $current->getMessage(),
+                    'trace' => $current->getTrace(),
+                ], true);
+                foreach ($prohibitedFragments as $prohibitedFragment) {
+                    if (str_contains($rendered, $prohibitedFragment)) {
+                        exit(100 + $fixtureIndex * 3 + $operationIndex);
+                    }
+                }
+
+                $current = $current->getPrevious();
+            } while ($current !== null);
+        }
+    }
+}
+
+$resource = fopen('php://memory', 'rb');
+if ($resource === false) {
+    exit(130);
+}
+
+$payload = ['note' => $sentinel, 'unsupported' => $resource];
+$wireData['payload'] = $payload;
+$operations = [
+    static fn () => PaperMarketEvent::create(
+        PaperMarketDataVenue::OKX,
+        'BTCUSDT',
+        PaperMarketDataChannel::TOP_OF_BOOK,
+        new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+        new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+        '42',
+        $payload,
+    ),
+    static fn () => PaperMarketEvent::fromArray($wireData),
+];
+
+foreach ($operations as $index => $operation) {
+    try {
+        $operation();
+        exit(131 + $index);
+    } catch (\InvalidArgumentException $exception) {
+        $current = $exception;
+        do {
+            $rendered = print_r([
+                'message' => $current->getMessage(),
+                'trace' => $current->getTrace(),
+            ], true);
+            if (str_contains($rendered, $sentinel)) {
+                exit(133 + $index);
+            }
+
+            $current = $current->getPrevious();
+        } while ($current !== null);
+    }
+}
+fclose($resource);
+
+try {
+    PaperMarketEvent::fromArray(['unexpected' => $sentinel]);
+    exit(60);
+} catch (\InvalidArgumentException $exception) {
+    $current = $exception;
+    do {
+        $rendered = print_r([
+            'message' => $current->getMessage(),
+            'trace' => $current->getTrace(),
+        ], true);
+        if (str_contains($rendered, $sentinel)) {
+            exit(61);
+        }
+
+        $current = $current->getPrevious();
+    } while ($current !== null);
+}
+
+fwrite(STDOUT, 'trace_arguments_redacted');
+PHP,
+            var_export($autoload, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'zend.exception_ignore_args=0',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(20.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), 'Trace secrecy subprocess failed.');
+        self::assertSame('', $process->getErrorOutput(), 'Trace secrecy subprocess wrote to stderr.');
+        self::assertSame('trace_arguments_redacted', $process->getOutput());
+    }
+
     #[DataProvider('unserializableTimestampYearProvider')]
     public function testCreateRejectsTimestampYearsOutsideTheStrictWireFormat(string $field, int $year): void
     {
@@ -1030,6 +1333,136 @@ PHP,
     {
         yield 'percent-encoded Base64 key' => [rawurlencode(base64_encode('api_key'))];
         yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
+    }
+
+    #[DataProvider('sensitiveStructuralStringProvider')]
+    public function testCreateRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    #[DataProvider('sensitiveStructuralStringProvider')]
+    public function testFromArrayRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
+    {
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveStructuralStringProvider(): iterable
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $slash = '\\';
+
+        yield 'escaped structural quotes and escaped quote inside key' => [
+            'prefix {'
+            . $slash . '"api' . str_repeat($slash, 3) . '"key' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"} suffix',
+        ];
+        yield 'single-quoted Unicode-escaped sensitive member' => [
+            "prefix {'api" . $slash . "u005fkey':'" . $sentinel . "'} suffix",
+        ];
+    }
+
+    #[DataProvider('nonCanonicalBase64SensitiveMapKeyProvider')]
+    public function testCreateRejectsLenientlyDecodableBase64SensitiveMapKeys(string $key): void
+    {
+        self::assertSame('api_key', base64_decode($key, false));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: [$key => 'synthetic-redaction-sentinel']),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    #[DataProvider('nonCanonicalBase64SensitiveMapKeyProvider')]
+    public function testFromArrayRejectsLenientlyDecodableBase64SensitiveMapKeys(string $key): void
+    {
+        self::assertSame('api_key', base64_decode($key, false));
+        $payload = [$key => 'synthetic-redaction-sentinel'];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonCanonicalBase64SensitiveMapKeyProvider(): iterable
+    {
+        $base64 = base64_encode('api_key');
+        foreach ([
+            'space' => ' ',
+            'horizontal tab' => "\t",
+            'line feed' => "\n",
+            'vertical tab' => "\v",
+            'form feed' => "\f",
+            'carriage return' => "\r",
+        ] as $label => $whitespace) {
+            yield 'folded with ' . $label => [substr($base64, 0, 4) . $whitespace . substr($base64, 4)];
+        }
+
+        yield 'internal padding' => [substr($base64, 0, 4) . '=' . substr($base64, 4)];
+        yield 'excess internal padding' => [substr($base64, 0, 4) . '===' . substr($base64, 4)];
+    }
+
+    #[DataProvider('jsonWrappedBase64SensitiveMapKeyProvider')]
+    public function testCreateRejectsJsonWrappedBase64SensitiveMapKeys(string $key): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: [$key => 'synthetic-redaction-sentinel']),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    #[DataProvider('jsonWrappedBase64SensitiveMapKeyProvider')]
+    public function testFromArrayRejectsJsonWrappedBase64SensitiveMapKeys(string $key): void
+    {
+        $payload = [$key => 'synthetic-redaction-sentinel'];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function jsonWrappedBase64SensitiveMapKeyProvider(): iterable
+    {
+        $wrapped = json_encode(base64_encode('api_key'), JSON_THROW_ON_ERROR);
+
+        yield 'JSON string wrapper' => [$wrapped];
+        yield 'percent-encoded JSON string wrapper' => [rawurlencode($wrapped)];
+    }
+
+    public function testCreateAndFromArrayAllowSignatureCountZeroInFormMetadata(): void
+    {
+        $event = self::event(payload: ['raw' => 'signature_count=0']);
+
+        self::assertSame($event->toArray(), PaperMarketEvent::fromArray($event->toArray())->toArray());
+    }
+
+    public function testCreateAndFromArrayAllowOrdinaryPublicRatioNotation(): void
+    {
+        $event = self::event(payload: ['raw' => 'public ratio a:1 currently']);
+
+        self::assertSame($event->toArray(), PaperMarketEvent::fromArray($event->toArray())->toArray());
     }
 
     public function testCreateRejectsRawJsonPayloadStringsWithEscapedSensitiveKeys(): void

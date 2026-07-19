@@ -119,7 +119,7 @@ REGEX;
     /**
      * @param array<array-key, mixed> $value
      */
-    public static function assertSafe(array $value): void
+    public static function assertSafe(#[\SensitiveParameter] array $value): void
     {
         $activeArrayReferences = [];
         $nodeCount = 0;
@@ -145,6 +145,7 @@ REGEX;
      * @param array<string, true>     $decodedStrings
      */
     private static function assertSafeArray(
+        #[\SensitiveParameter]
         array &$value,
         int $depth,
         array &$activeArrayReferences,
@@ -229,7 +230,7 @@ REGEX;
     /**
      * @param array<array-key, mixed> $value
      */
-    private static function arrayReferenceId(array &$value): string
+    private static function arrayReferenceId(#[\SensitiveParameter] array &$value): string
     {
         $holder = [&$value];
         $reference = \ReflectionReference::fromArrayElement($holder, 0);
@@ -244,6 +245,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function assertSafeString(
+        #[\SensitiveParameter]
         string $value,
         int &$byteCount,
         int &$decodedNodeCount,
@@ -271,6 +273,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanEncodedString(
+        #[\SensitiveParameter]
         string $value,
         int $decodeDepth,
         int &$decodedNodeCount,
@@ -422,7 +425,9 @@ REGEX;
         );
     }
 
-    private static function assertNoPrivateKeyEnvelopeMarkers(string $value): void
+    private static function assertNoPrivateKeyEnvelopeMarkers(
+        #[\SensitiveParameter] string $value,
+    ): void
     {
         $match = preg_match(self::PRIVATE_KEY_ENVELOPE_MARKER_PATTERN, $value);
         if ($match === false) {
@@ -434,7 +439,7 @@ REGEX;
         }
     }
 
-    private static function assertNoBasicCredentials(string $value): void
+    private static function assertNoBasicCredentials(#[\SensitiveParameter] string $value): void
     {
         $matches = [];
         $matchCount = preg_match_all(self::BASIC_VALUE_PATTERN, $value, $matches, PREG_SET_ORDER);
@@ -450,7 +455,7 @@ REGEX;
         }
     }
 
-    private static function assertNoSensitiveAssignments(string $value): void
+    private static function assertNoSensitiveAssignments(#[\SensitiveParameter] string $value): void
     {
         $normalized = \Normalizer::normalize($value, \Normalizer::FORM_KC);
         if ($normalized === false) {
@@ -467,20 +472,42 @@ REGEX;
         }
     }
 
-    private static function assertNoSensitiveJsonObjectKeys(string $value): void
+    private static function assertNoSensitiveJsonObjectKeys(#[\SensitiveParameter] string $value): void
     {
         self::assertNoSensitiveJsonMemberKeys($value);
         self::assertNoSensitiveUnquotedStructuredKeys($value);
     }
 
-    private static function assertNoSensitiveJsonMemberKeys(string $value): void
+    private static function assertNoSensitiveJsonMemberKeys(#[\SensitiveParameter] string $value): void
     {
         $length = \strlen($value);
-        $encodedKeyStart = null;
-        $rejectMalformedKey = true;
+        if ($length >= 2 && $value[0] === '"' && $value[$length - 1] === '"') {
+            try {
+                $decodedString = json_decode(
+                    $value,
+                    depth: 2,
+                    flags: JSON_THROW_ON_ERROR,
+                );
+            } catch (\JsonException) {
+                $decodedString = null;
+            }
+
+            if (\is_string($decodedString)) {
+                return;
+            }
+        }
+
+        /**
+         * @var array<string, array{
+         *     encoded_key_start: int,
+         *     slash_count: int,
+         *     reject_malformed_key: bool
+         * }|null> $openers
+         */
+        $openers = ['"' => null, "'" => null];
 
         for ($offset = 0; $offset < $length;) {
-            if ($value[$offset] === '"') {
+            if ($value[$offset] === '"' || $value[$offset] === "'") {
                 $quoteTokenStart = $offset;
                 $quoteOffset = $offset;
                 ++$offset;
@@ -490,7 +517,10 @@ REGEX;
                     ++$offset;
                 }
 
-                if ($offset >= $length || $value[$offset] !== '"') {
+                if (
+                    $offset >= $length
+                    || ($value[$offset] !== '"' && $value[$offset] !== "'")
+                ) {
                     continue;
                 }
 
@@ -502,26 +532,45 @@ REGEX;
                 continue;
             }
 
-            if ($encodedKeyStart !== null) {
-                $afterQuote = $offset;
-                while ($afterQuote < $length && self::isAsciiWhitespace($value[$afterQuote])) {
-                    ++$afterQuote;
-                }
-
-                if ($afterQuote < $length && $value[$afterQuote] === ':') {
-                    self::assertJsonObjectKeyCandidateSafe(
-                        substr($value, $encodedKeyStart, $quoteTokenStart - $encodedKeyStart),
-                        $rejectMalformedKey,
-                    );
-                    $encodedKeyStart = null;
-                    $offset = $afterQuote + 1;
-
-                    continue;
-                }
+            $quote = $value[$quoteOffset];
+            $slashCount = $quoteOffset - $quoteTokenStart;
+            $afterQuote = $offset;
+            while ($afterQuote < $length && self::isAsciiWhitespace($value[$afterQuote])) {
+                ++$afterQuote;
             }
 
-            $rejectMalformedKey = self::isJsonMemberLeftBoundary($value, $quoteTokenStart);
-            $encodedKeyStart = $quoteOffset + 1;
+            $opener = $openers[$quote];
+            if ($opener !== null && $afterQuote < $length && $value[$afterQuote] === ':') {
+                self::assertJsonObjectKeyCandidateSafe(
+                    substr(
+                        $value,
+                        $opener['encoded_key_start'],
+                        $quoteTokenStart - $opener['encoded_key_start'],
+                    ),
+                    $opener['reject_malformed_key'],
+                );
+                $openers[$quote] = null;
+                $offset = $afterQuote + 1;
+
+                continue;
+            }
+
+            if ($opener !== null && $opener['slash_count'] === $slashCount) {
+                $openers[$quote] = null;
+
+                continue;
+            }
+
+            if ($opener === null) {
+                $openers[$quote] = [
+                    'encoded_key_start' => $quoteOffset + 1,
+                    'slash_count' => $slashCount,
+                    'reject_malformed_key' => self::isJsonMemberLeftBoundary(
+                        $value,
+                        $quoteTokenStart,
+                    ),
+                ];
+            }
         }
     }
 
@@ -537,7 +586,9 @@ REGEX;
             && !\in_array($previousByte, ['_', '\\', '"'], true);
     }
 
-    private static function assertNoSensitiveUnquotedStructuredKeys(string $value): void
+    private static function assertNoSensitiveUnquotedStructuredKeys(
+        #[\SensitiveParameter] string $value,
+    ): void
     {
         $length = \strlen($value);
         for ($offset = 0; $offset < $length; ++$offset) {
@@ -578,6 +629,7 @@ REGEX;
     }
 
     private static function assertJsonObjectKeyCandidateSafe(
+        #[\SensitiveParameter]
         string $encodedKey,
         bool $rejectMalformedKey = true,
     ): void
@@ -619,7 +671,9 @@ REGEX;
         }
     }
 
-    private static function isWindowsPathLikePublicKeyCandidate(string $key): bool
+    private static function isWindowsPathLikePublicKeyCandidate(
+        #[\SensitiveParameter] string $key,
+    ): bool
     {
         if (\strlen($key) < 4 || $key[1] !== ':' || $key[2] !== '\\') {
             return false;
@@ -639,6 +693,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanPhpSerializedValue(
+        #[\SensitiveParameter]
         string $value,
         int $decodeDepth,
         int &$decodedNodeCount,
@@ -687,6 +742,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanEmbeddedPhpSerializedValues(
+        #[\SensitiveParameter]
         string $value,
         int $decodeDepth,
         int &$decodedNodeCount,
@@ -738,14 +794,33 @@ REGEX;
                 || $firstValueByte === '-',
             'd' => self::isAsciiDigit($firstValueByte)
                 || \in_array($firstValueByte, ['+', '-', '.', 'N', 'I'], true),
-            's', 'S', 'a', 'O', 'C', 'E', 'r', 'R' => self::isAsciiDigit($firstValueByte)
+            'a' => self::hasPhpSerializedArrayDelimiter($value, $offset + 2),
+            's', 'S', 'O', 'C', 'E', 'r', 'R' => self::isAsciiDigit($firstValueByte)
                 || $firstValueByte === '+'
                 || $firstValueByte === '-',
             default => false,
         };
     }
 
+    private static function hasPhpSerializedArrayDelimiter(string $value, int $offset): bool
+    {
+        if (isset($value[$offset]) && ($value[$offset] === '+' || $value[$offset] === '-')) {
+            ++$offset;
+        }
+
+        if (!isset($value[$offset]) || !self::isAsciiDigit($value[$offset])) {
+            return false;
+        }
+
+        do {
+            ++$offset;
+        } while (isset($value[$offset]) && self::isAsciiDigit($value[$offset]));
+
+        return substr($value, $offset, 2) === ':{';
+    }
+
     private static function parsePhpSerializedCandidate(
+        #[\SensitiveParameter]
         string $value,
         int &$offset,
         int $nestingDepth,
@@ -816,7 +891,11 @@ REGEX;
         throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
     }
 
-    private static function parsePhpSerializedScalar(string $value, int &$offset, string $type): void
+    private static function parsePhpSerializedScalar(
+        #[\SensitiveParameter] string $value,
+        int &$offset,
+        string $type,
+    ): void
     {
         $terminator = strpos($value, ';', $offset);
         if ($terminator === false || $terminator - $offset > self::MAX_PHP_SERIALIZED_SCALAR_BYTES) {
@@ -839,6 +918,7 @@ REGEX;
     }
 
     private static function parsePhpSerializedString(
+        #[\SensitiveParameter]
         string $value,
         int &$offset,
         bool $escaped,
@@ -884,6 +964,7 @@ REGEX;
     }
 
     private static function parsePhpSerializedUnsignedInteger(
+        #[\SensitiveParameter]
         string $value,
         int &$offset,
         int $maximum,
@@ -907,6 +988,7 @@ REGEX;
     }
 
     private static function requirePhpSerializedBytes(
+        #[\SensitiveParameter]
         string $value,
         int &$offset,
         string $expected,
@@ -925,6 +1007,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanEmbeddedBase64Values(
+        #[\SensitiveParameter]
         string $value,
         int $decodeDepth,
         int &$decodedNodeCount,
@@ -1025,6 +1108,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanDecodedValue(
+        #[\SensitiveParameter]
         mixed &$value,
         int $decodeDepth,
         int $nestingDepth,
@@ -1094,6 +1178,7 @@ REGEX;
      * @param array<string, true> $decodedStrings
      */
     private static function scanFormValue(
+        #[\SensitiveParameter]
         string $value,
         int $decodeDepth,
         int &$decodedNodeCount,
@@ -1148,6 +1233,7 @@ REGEX;
     }
 
     private static function decodeRecoverableBase64(
+        #[\SensitiveParameter]
         string $value,
         int $minimumLength = 8,
         bool $allowUrlSafe = true,
@@ -1221,7 +1307,7 @@ REGEX;
         return $trimmed;
     }
 
-    private static function normalizeKey(string $key): string
+    private static function normalizeKey(#[\SensitiveParameter] string $key): string
     {
         for ($depth = 0; $depth < self::MAX_SENSITIVE_DECODE_DEPTH; ++$depth) {
             $decoded = rawurldecode($key);
@@ -1269,7 +1355,10 @@ REGEX;
         return trim($normalized ?? '', '_');
     }
 
-    private static function assertMapKeySafe(string $key, mixed $value): void
+    private static function assertMapKeySafe(
+        #[\SensitiveParameter] string $key,
+        #[\SensitiveParameter] mixed $value,
+    ): void
     {
         for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
             $normalizedKey = self::normalizeKey($key);
@@ -1281,9 +1370,18 @@ REGEX;
             }
 
             $decoded = rawurldecode($key);
-            if ($decoded === $key && str_contains($key, '\\')) {
+            if ($decoded === $key) {
+                $jsonDecoded = null;
                 try {
-                    $jsonDecoded = json_decode('"' . $key . '"', flags: JSON_THROW_ON_ERROR);
+                    if (
+                        \strlen($key) >= 2
+                        && $key[0] === '"'
+                        && $key[\strlen($key) - 1] === '"'
+                    ) {
+                        $jsonDecoded = json_decode($key, flags: JSON_THROW_ON_ERROR);
+                    } elseif (str_contains($key, '\\')) {
+                        $jsonDecoded = json_decode('"' . $key . '"', flags: JSON_THROW_ON_ERROR);
+                    }
                 } catch (\JsonException) {
                     $jsonDecoded = null;
                 }
@@ -1295,6 +1393,10 @@ REGEX;
 
             if ($decoded === $key) {
                 $base64Decoded = self::decodeRecoverableBase64($key);
+                if ($base64Decoded === null) {
+                    $base64Decoded = self::decodeNonCanonicalBase64MapKey($key);
+                }
+
                 if ($base64Decoded === null) {
                     return;
                 }
@@ -1310,7 +1412,23 @@ REGEX;
         }
     }
 
-    private static function isSensitiveKey(string $normalizedKey): bool
+    private static function decodeNonCanonicalBase64MapKey(
+        #[\SensitiveParameter] string $value,
+    ): ?string
+    {
+        $unpadded = preg_replace('/[\x09-\x0D =]/', '', $value);
+        if ($unpadded === null) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($unpadded === $value) {
+            return null;
+        }
+
+        return self::decodeRecoverableBase64($unpadded);
+    }
+
+    private static function isSensitiveKey(#[\SensitiveParameter] string $normalizedKey): bool
     {
         foreach ([self::SENSITIVE_KEYS, self::SENSITIVE_KEY_ALIASES] as $sensitiveKeys) {
             foreach ($sensitiveKeys as $sensitiveKey) {
@@ -1339,7 +1457,10 @@ REGEX;
         return false;
     }
 
-    private static function isExplicitlySafeMetadata(string $normalizedKey, mixed $value): bool
+    private static function isExplicitlySafeMetadata(
+        string $normalizedKey,
+        #[\SensitiveParameter] mixed $value,
+    ): bool
     {
         return match ($normalizedKey) {
             'authorization_status' => \is_bool($value)
@@ -1347,7 +1468,8 @@ REGEX;
                 || \in_array($value, ['not_applicable', 'not_present', 'absent', 'redacted', 'unknown'], true),
             'api_key_hint' => $value === null
                 || \in_array($value, ['not_present', 'redacted', 'masked'], true),
-            'signature_count' => \is_int($value) && $value >= 0,
+            'signature_count' => (\is_int($value) && $value >= 0)
+                || (\is_string($value) && preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) === 1),
             'wallet_balance_model' => \in_array($value, ['unknown', 'not_applicable', 'public_aggregate'], true),
             'seed_phrase_model' => \in_array($value, ['unknown', 'not_applicable'], true),
             default => false,
