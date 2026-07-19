@@ -215,8 +215,9 @@ brut, credential, URL ou header sensible n est conserve.
 
 Ce contrat couvre les erreurs adapter REST simulees. Il ne modelise pas encore un
 quota glissant, la latence/jitter avec seed, les erreurs de precision/marge, ni les
-divergences Bitmart. La deconnexion et le resync private WS sont couverts par la
-fixture separee `FakeExchangeWsClient`.
+divergences Bitmart. `FakeExchangeWsClient` couvre la deconnexion/reconnexion et
+une fixture distincte couvre le gap avec snapshot resync. Le scenario golden 15
+ne chaine toutefois pas encore ces deux comportements ; il reste donc `partial`.
 
 ## Runtime-check Fake/Paper
 
@@ -694,31 +695,30 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les vingt scenarios executes dans cette version sont : maker limit rempli, limit
+Les dix-huit scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
 market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
-prochain prix disponible, deconnexion/reprise private WS, duplicate/out-of-order
-private WS avec snapshot resync, restart avec position protegee ouverte,
+prochain prix disponible, duplicate/out-of-order private WS avec snapshot resync,
+restart avec position protegee ouverte,
 funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
-actif avec replay et restart, puis la recette dry-run `regular` / `scalper` /
-`scalper_micro` sur le meme symbole Fake avec hashes/lineages distincts, rapports
-JSON/Markdown deterministes et zero appel OKX, Hyperliquid ou Bitmart. La preuve
-v2 mesure OKX/Hyperliquid aux guards HTTP et etablit `bitmart=0` par la frontiere
-des providers Fake, sans pretendre mesurer Bitmart par HTTP. Le routage des
-indicateurs injecte directement `FakeKlineProvider`, sans registre ou bundle
-global sur cette route; aucun decorateur ni changement n'est ajoute a Bitmart.
+actif avec replay et restart.
 
-Les vingt lignes du catalogue sont maintenant `executable`; cela clot le
-catalogue golden v1, mais ne clot pas a lui seul l'issue #196 ni n'autorise une
-mutation demo/testnet/mainnet.
+Deux lignes restent `partial` :
 
-Le scenario multi-profils prouve la coexistence Fake dry-run sans effet de bord.
-Il marque le lock metier `not_exercised` et `observed=false`; son statut contractuel
-`blocked/cross_profile_symbol_locked` est documente separement et reste exerce par
-les tests de repository dedies.
+- le scenario 15 exerce une deconnexion/reconnexion sans perte ni doublon, mais
+  pas le resync par snapshot annonce par son nom ;
+- le scenario 20 dispose de tests Python avec doubles HTTP en memoire, mais le
+  runner golden PHP ne lance pas la recette complete deux fois depuis des piles
+  fraiches. Les preuves structurelles OKX/Hyperliquid/Bitmart et les tests de lock
+  restent utiles, sans constituer la preuve golden finale.
+
+Le bilan est donc 18 `executable` et 2 `partial`. L'audit critere par critere et
+les conditions de cloture sont publies dans
+`reports/fake-paper-final-audit-196.md`. Ce bilan ne clot pas l'issue #196 et
+n'autorise aucune mutation demo/testnet/mainnet.
 
 Commande consolidee :
 

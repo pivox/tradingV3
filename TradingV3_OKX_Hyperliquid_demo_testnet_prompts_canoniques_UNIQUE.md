@@ -17,7 +17,7 @@
 | 6 | #196 — Recette Fake multi-profils | done | issue/196-fake-multi-profile-recipe-v1 | #287 | 2118216288d065c233d17d7a8245ec39c3364f69 | worker_complex → review_fix → review_escalated | verte | favorable sur 2118216288 | 2026-07-18T19:56:15Z |
 | 7 | #196 — Daily loss cap | done | issue/196-daily-loss-cap-v1 | #288 | 00c730884a684dc0a772625ddaf7b097483b4884 | worker_critical → review_escalated | verte | favorable sur 00c730884a | 2026-07-19T06:29:41Z |
 | 8 | #196 — Liquidation guard/model | done | issue/196-fake-liquidation-v1 | #289 | 122e8ddf1835843d29acd43ca1aa11341ad69a97 | worker_critical → review_escalated | verte | favorable sur 122e8ddf18 | 2026-07-19T10:54:41Z |
-| 9 | #196 — Audit final Fake/Paper | pending | — | — | — | — | — | — | — |
+| 9 | #196 — Audit final Fake/Paper | in_progress | issue/196-fake-paper-final-audit | — | — | — | — | — | — |
 | 10 | #195 — Inventaire statique Bitmart | pending | — | — | — | — | — | — | — |
 | 11 | #195 — Vérification runtime Bitmart | pending | — | — | — | — | — | — | — |
 | 12 | #195 — Matrice de remplacement | pending | — | — | — | — | — | — | — |
