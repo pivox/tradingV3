@@ -22,14 +22,29 @@ final class PaperMarketEventRedactor
         'seed_phrase',
     ];
 
+    /** @var list<string> Exact normalized aliases used by supported venue clients and common API headers. */
+    private const SENSITIVE_KEY_ALIASES = [
+        'x_api_key',
+        'ok_access_key',
+        'ok_access_sign',
+        'ok_access_passphrase',
+        'api_secret_key',
+    ];
+
     /**
      * @param array<array-key, mixed> $value
      */
     public static function assertSafe(array $value): void
     {
         foreach ($value as $key => $item) {
-            if (\is_string($key) && \in_array(self::normalizeKey($key), self::SENSITIVE_KEYS, true)) {
-                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            if (\is_string($key)) {
+                $normalizedKey = self::normalizeKey($key);
+                if (
+                    \in_array($normalizedKey, self::SENSITIVE_KEYS, true)
+                    || \in_array($normalizedKey, self::SENSITIVE_KEY_ALIASES, true)
+                ) {
+                    throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+                }
             }
 
             if (\is_array($item)) {

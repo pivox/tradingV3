@@ -164,6 +164,50 @@ final class PaperMarketEventTest extends TestCase
         );
     }
 
+    public function testCanonicalJsonUsesShortestRoundTripFloatsIndependentlyOfIniPrecision(): void
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        if (!\is_string($previousPrecision)) {
+            self::fail('serialize_precision must be readable for this test.');
+        }
+
+        self::assertNotFalse(ini_set('serialize_precision', '3'));
+
+        try {
+            $expectedJson = '{"price":1.2345678901234567}';
+            $encoded = CanonicalJson::encode(['price' => 1.2345678901234567]);
+
+            self::assertSame($expectedJson, $encoded);
+            self::assertSame(hash('sha256', $expectedJson), hash('sha256', $encoded));
+            self::assertSame('3', ini_get('serialize_precision'));
+        } finally {
+            ini_set('serialize_precision', $previousPrecision);
+        }
+    }
+
+    public function testCanonicalJsonRestoresIniPrecisionWhenEncodingFails(): void
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        if (!\is_string($previousPrecision)) {
+            self::fail('serialize_precision must be readable for this test.');
+        }
+
+        self::assertNotFalse(ini_set('serialize_precision', '3'));
+
+        try {
+            try {
+                CanonicalJson::encode(['invalid_utf8' => "\xB1\x31"]);
+                self::fail('Invalid UTF-8 must fail canonical JSON encoding.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('paper_canonical_json_encoding_failed', $exception->getMessage());
+            }
+
+            self::assertSame('3', ini_get('serialize_precision'));
+        } finally {
+            ini_set('serialize_precision', $previousPrecision);
+        }
+    }
+
     public function testCanonicalJsonPreservesIntegerKeyedMapSemanticsAfterSorting(): void
     {
         $map = [1 => 'one', 0 => 'zero'];
@@ -171,6 +215,16 @@ final class PaperMarketEventTest extends TestCase
 
         self::assertSame('{"0":"zero","1":"one"}', CanonicalJson::encode($map));
         self::assertNotSame(CanonicalJson::encode($list), CanonicalJson::encode($map));
+    }
+
+    public function testCanonicalJsonTreatsSequentialIntegerKeysAsAListInThePhpPayloadModel(): void
+    {
+        $sequentialIntegerKeys = [0 => 'zero', 1 => 'one'];
+        $list = ['zero', 'one'];
+
+        self::assertTrue(array_is_list($sequentialIntegerKeys));
+        self::assertSame('["zero","one"]', CanonicalJson::encode($sequentialIntegerKeys));
+        self::assertSame(CanonicalJson::encode($list), CanonicalJson::encode($sequentialIntegerKeys));
     }
 
     #[DataProvider('unsupportedCanonicalValueProvider')]

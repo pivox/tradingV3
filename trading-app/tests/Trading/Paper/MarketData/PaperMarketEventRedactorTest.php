@@ -18,7 +18,7 @@ final class PaperMarketEventRedactorTest extends TestCase
         $payload = [
             'book' => [
                 ['bid' => '29999.0'],
-                ['nested' => ['public' => [$key => 'must-not-be-stored']]],
+                ['nested' => ['public' => [$key => 'synthetic-placeholder']]],
             ],
         ];
 
@@ -54,6 +54,11 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'camel case secret key' => ['secretKey'];
         yield 'camel case private key' => ['privateKey'];
         yield 'camel case seed phrase' => ['seedPhrase'];
+        yield 'common X API key header' => ['X-API-KEY'];
+        yield 'OKX access key header' => ['OK-ACCESS-KEY'];
+        yield 'OKX access signature header' => ['OK-ACCESS-SIGN'];
+        yield 'OKX access passphrase header' => ['OK-ACCESS-PASSPHRASE'];
+        yield 'Hyperliquid API secret key alias' => ['API-SECRET-KEY'];
     }
 
     public function testAllowsPublicFieldsThroughNestedMapsAndLists(): void
