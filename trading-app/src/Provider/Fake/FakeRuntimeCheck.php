@@ -76,6 +76,11 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         if (!self::slippageModelReady($model)) {
             $blockingErrors[] = 'fake_paper_slippage_model_not_ready';
         }
+        if (($model['daily_loss_cap_status'] ?? null) === 'limit_reached') {
+            $blockingErrors[] = 'fake_paper_daily_loss_cap_reached';
+        } elseif (($model['daily_loss_cap_status'] ?? null) !== 'ready') {
+            $blockingErrors[] = 'fake_paper_daily_loss_cap_not_computable';
+        }
         if (!$persistence['configured']) {
             $warnings[] = 'fake_paper_persistence_not_configured';
         } else {

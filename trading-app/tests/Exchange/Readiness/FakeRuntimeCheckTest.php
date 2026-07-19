@@ -7,6 +7,9 @@ namespace App\Tests\Exchange\Readiness;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Fake\FakeDailyLossCapGuard;
+use App\Exchange\Fake\FakeDailyLossCapPolicy;
+use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeFault;
 use App\Exchange\Fake\FakeExchangeFaultKind;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
@@ -53,7 +56,12 @@ final class FakeRuntimeCheckTest extends TestCase
         $state = new FakeExchangeStateStore();
         $book = new FakeExchangeOrderBook($state);
         $clock = $this->clock();
-        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $clock,
+            dailyLossCapGuard: new FakeDailyLossCapGuard($state, $clock, new FakeDailyLossCapPolicy('100')),
+        );
         $metadata = (new FakeExchangeAdapter($state, $book, $engine, $clock))->runtimeModelMetadata();
 
         self::assertSame('fake-instrument-catalog-v1', $metadata['metadata_fixture_version']);
@@ -61,6 +69,48 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertSame('fixed_adverse_slippage_bps_v1', $metadata['slippage_model']);
         self::assertSame(5.0, $metadata['slippage_bps']);
         self::assertSame('top_of_book_embedded_spread_v1', $metadata['spread_model']);
+        self::assertSame('fake-daily-loss-cap-v1', $metadata['daily_loss_cap_policy_version']);
+        self::assertSame('ready', $metadata['daily_loss_cap_status']);
+        self::assertSame('100.000000000000', $metadata['daily_loss_cap_limit_usdt']);
+    }
+
+    public function testDailyLossCapInvalidPolicyFailsRuntimeClosedWithStableReason(): void
+    {
+        $report = $this->runtimeCheck(
+            new FakeExchangeStateStore(),
+            dailyLossCapUsdt: '0',
+        )->current();
+
+        self::assertContains('fake_paper_daily_loss_cap_not_computable', $report->blockingErrors);
+    }
+
+    public function testDailyLossCapReachedFailsRuntimeClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->appendEvent(new FakeExchangeEvent(
+            'order.filled',
+            'BTCUSDT',
+            new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            [
+                'fill_quantity' => '1',
+                'fill_price' => '100',
+                'fill_fee' => '0',
+                'fee_currency' => 'USDT',
+                'spread_cost_usdt' => '0',
+                'slippage_cost_usdt' => '0',
+                'cost_model_version' => 'fixed_adverse_slippage_bps_v1',
+                'spread_model_version' => 'top_of_book_embedded_spread_v1',
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '-100',
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $report = $this->runtimeCheck($state, dailyLossCapUsdt: '100')->current();
+
+        self::assertContains('fake_paper_daily_loss_cap_reached', $report->blockingErrors);
+        self::assertNotContains('fake_paper_daily_loss_cap_not_computable', $report->blockingErrors);
     }
 
     public function testSlippageRuntimeModelValidationFailsClosed(): void
@@ -227,11 +277,13 @@ final class FakeRuntimeCheckTest extends TestCase
         bool $controlledClock = true,
         bool $marketDataSourceReady = false,
         ?string $stateFile = null,
+        string $dailyLossCapUsdt = '100',
     ): FakeRuntimeCheck
     {
         $book = new FakeExchangeOrderBook($state);
         $clock ??= $this->clock();
-        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $guard = new FakeDailyLossCapGuard($state, $clock, new FakeDailyLossCapPolicy($dailyLossCapUsdt));
+        $engine = new FakeExchangeMatchingEngine($state, $book, $clock, dailyLossCapGuard: $guard);
 
         return new FakeRuntimeCheck(
             new FakeExchangeAdapter($state, $book, $engine, $clock),

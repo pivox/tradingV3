@@ -327,6 +327,80 @@ On restart, orders, the `client_order_id` index, positions, balances, order book
 
 `FakeExchangeStateStore::recoveryMetadata()` exposes the effective format, engine/config identity, whether the instance restored persisted state, whether that state used the legacy format, and the next event sequence. This is local Paper evidence only and does not certify exchange reconciliation or enable any demo/live write path.
 
+## UTC Daily loss cap
+
+The ordinary Fake/Paper matching path enforces policy
+`fake-daily-loss-cap-v1` before every new entry or exposure increase. Its limit
+comes from `FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT`, defaults conservatively to
+`100.000000000000`, must be a positive plain USDT decimal with at most 18
+integer and 12 fractional digits, and has no silent disable value. Invalid,
+zero, negative, exponential, over-precision, or absent effective values make
+the policy `not_computable` and block exposure increases.
+
+The current day is the half-open UTC interval selected exclusively from the
+injected controlled clock. The guard reconstructs its value from the persisted
+Fake events on every evaluation; it owns no mutable counter and deletes no fact
+at midnight or restart:
+
+```text
+daily_net_usdt
+  = realized_gross_pnl_usdt on reduction fills
+  - fill fees - spread costs - slippage costs
+  + signed funding amount_usdt
+
+consumption_usdt = max(0, -daily_net_usdt)
+```
+
+Entry fill costs count when incurred. Gross PnL counts only when quantity is
+actually reduced, including partial reductions. Positive funding is a credit
+and negative funding a debit. Unrealized PnL is never read. Arithmetic uses
+Brick Math at scale 12 with HALF_EVEN, and equality with the limit is blocking.
+
+Every in-window fill needs complete USDT fee/spread/slippage facts, known model
+lineage, a positive fill quantity/price, and a reduction fill needs signed
+`realized_gross_pnl_usdt`. Funding needs a known USDT amount, model, deadline,
+and idempotency identity. An unknown conversion, missing legacy field,
+malformed/negative cost, future monetary event, invalid sequence, or conflicting
+duplicate returns `not_computable`; unknown is never replaced with zero.
+Identical event-sequence duplicates are counted once. Old UTC days remain in
+the state journal and simply fall outside the new window.
+
+Exact client-order replay is resolved before the policy is evaluated. A new
+exposure request then passes the policy before One-Way, book, margin, order
+creation, or fill effects. A block persists one rejected order and one
+`order.rejected` event with `daily_loss_cap_reached` or
+`daily_loss_cap_not_computable`. Audit metadata is restricted to policy
+version, UTC date, status/detail, limit, computable daily net/consumption, and
+derived monetary/duplicate/invalid/rejection counts; raw metadata and secrets
+never cross this boundary.
+
+An exposure-increasing LIMIT order that remains open is checked again at the
+central fill boundary used by both explicit scenario fills and price matching.
+If the cap changed after acceptance, the order becomes `REJECTED` once before
+fill arithmetic, quantity/status fill mutation, position mutation, fill events,
+or attached protections. Repeated fill attempts return the persisted terminal
+order without another rejection. Reduce-only and protection fills bypass this
+recheck exactly as they bypass submission-time enforcement.
+
+Risk reduction always bypasses this policy: explicit reduce-only market closes,
+standalone SL/TP, internally managed triggers/trailing stops, and protection
+fail-safe emergency closes continue through their existing validation and fill
+paths. This bypass does not allow a same-side increase or change One-Way,
+precision, margin, or protection rules.
+
+`runtimeModelMetadata()` exposes the redacted status. The runtime check adds
+`fake_paper_daily_loss_cap_reached` at or above the cap and
+`fake_paper_daily_loss_cap_not_computable` for invalid policy, missing guard, or
+ambiguous monetary state. Both are blocking for new exposure. The derived
+event, duplicate, invalid, and rejection counts are the operational metrics;
+there is no in-memory metric balance to reconcile.
+
+No schema or migration is involved. Rollback removes the policy service wiring,
+matching preflight, readiness extension, and additive realized-fill field.
+Retain the checksummed Fake state file as audit history; do not rewrite events
+or reset it to make a cap disappear. Reverting this policy cannot enable an
+exchange transport or any demo/testnet/mainnet mutation.
+
 ## Deterministic adapter faults
 
 `FakeExchangeScenarioService::failNext()` queues a typed one-shot fault for one

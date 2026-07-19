@@ -298,6 +298,100 @@ La fixture versionnee est
 duplicate, restart et retard hors ordre. Ce chemin est strictement local : aucun
 client reseau, secret ou droit d ecriture demo/testnet/mainnet.
 
+## Daily loss cap UTC Fake/Paper v1
+
+La politique `fake-daily-loss-cap-v1` est appliquee au chemin ordinaire du
+matching Fake avant toute nouvelle entree ou augmentation d exposition. La
+limite USDT est fournie par `FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT`, avec le defaut
+conservateur `100.000000000000`. Elle doit etre une chaine decimale positive,
+sans exposant, avec au plus 18 chiffres entiers et 12 decimales. Zero, une valeur
+negative, absente apres resolution, malformee ou trop precise place la politique
+en `not_computable` et bloque les augmentations. Il n existe pas de valeur de
+desactivation silencieuse.
+
+La journee est exclusivement derivee de l horloge controlee puis convertie en
+UTC. Sa fenetre est `[00:00:00, 00:00:00 suivant)`. Le calcul reconstruit les
+faits monetaires depuis les evenements persistants `fake-paper-state-v1` :
+
+```text
+daily_net_usdt
+  = somme(realized_gross_pnl_usdt des fills de reduction)
+  - somme(fill_fee_usdt)
+  - somme(spread_cost_usdt)
+  - somme(slippage_cost_usdt)
+  + somme(funding amount_usdt signe)
+
+consumption_usdt = max(0, -daily_net_usdt)
+```
+
+Les frais d entree sont donc consommes le jour du fill, meme si la position
+reste ouverte. Le PnL brut ne devient realise que sur la quantite reduite, y
+compris une sortie partielle. Le funding conserve le contrat certifie : credit
+positif, debit negatif. Le PnL latent et le mark-to-market ne sont jamais
+utilises. Les additions utilisent Brick Math, echelle 12, HALF_EVEN. La limite
+exacte est bloquante (`consumption >= limit`).
+
+Pour chaque fill de la fenetre, fee, devise USDT, spread, slippage, quantite,
+prix, completude et versions de modeles doivent etre connus. Un fill de reduction
+doit aussi porter son `realized_gross_pnl_usdt` signe. Un funding doit avoir un
+`amount_usdt` USDT connu, son modele, son echeance et son identite idempotente.
+Une conversion inconnue, un champ legacy absent, un cout negatif ou malforme,
+un evenement monetaire futur, une sequence invalide ou un duplicate conflictuel
+donne `not_computable`. Une inconnue n est jamais remplacee par zero. Deux faits
+strictement identiques sous la meme sequence sont comptes une fois; un contenu
+different sous cette sequence bloque le calcul.
+
+L ordre des gardes est volontaire : validation du contexte/intention, replay
+exact du `client_order_id`, Daily loss cap, puis One-Way, carnet, marge, creation
+d ordre et fill. Ainsi un replay conserve son resultat historique et un nouveau
+risque est rejete avant effet de bord. Le rejet persiste un ordre `REJECTED` et
+un evenement `order.rejected` unique avec :
+
+- `daily_loss_cap_reached` si la consommation calculable atteint la limite ;
+- `daily_loss_cap_not_computable` si la policy ou les faits sont ambigus.
+
+Un ordre LIMIT d augmentation accepte mais reste au carnet est reevalue au point
+central de fill utilise par le fill explicite et par le matching apres mouvement
+de prix. Si le statut a change entre soumission et execution, l ordre passe une
+seule fois a `REJECTED` avant calcul/mutation de fill, position, evenement de fill
+ou creation de protection. Les tentatives suivantes retournent cet etat terminal
+sans second rejet. Les fills reduce-only et de protection gardent leur bypass.
+
+Les metadata d audit sont stables et expurgees : version de policy, date UTC,
+statut/detail, limite, net/consommation seulement s ils sont calculables, nombre
+de faits monetaires, duplicates identiques, faits invalides et rejets du jour.
+Elles ne contiennent ni payload brut, secret, header, URL, chemin de fichier, ni
+valeur d environnement.
+
+Les actions qui reduisent le risque restent autorisees quel que soit le statut :
+ordre `reduce_only`, fermeture market d urgence, SL, TP, trigger/trailing interne
+et compensation de protection. Elles continuent a subir leurs validations
+existantes; cette exception n autorise aucune augmentation, aucun changement de
+sizing et aucun transport exchange.
+
+Le passage a minuit ne supprime rien : seule la fenetre UTC change. Apres restart,
+le meme journal reconstruit le meme statut. Il n existe ni compteur mutable a
+reset, ni migration, ni requete PostgreSQL dans ce chemin.
+
+Controle operateur :
+
+```bash
+cd trading-app
+php bin/console app:exchange:runtime-check fake perpetual
+```
+
+La metadata runtime publie la version, la date, la limite, le statut et les
+compteurs derives. `fake_paper_daily_loss_cap_reached` et
+`fake_paper_daily_loss_cap_not_computable` sont bloquants. Un statut `ready`
+signifie seulement que le cap est calculable et sous la limite; les autres
+prerequis Fake/Paper restent independants.
+
+Rollback : revertir le wiring de `FakeDailyLossCapPolicy`, le preflight du
+matching engine, l extension runtime et le champ additif de PnL realise sur les
+fills. Conserver le fichier d etat et ses evenements comme historique; ne jamais
+reecrire le ledger ni supprimer une journee pour contourner le cap. Ce rollback
+n active aucun client Bitmart, OKX, Hyperliquid, demo, testnet ou mainnet.
+
 ## Fallback taker deterministe de fin de zone
 
 Le moteur Fake/Paper supporte une politique opt-in versionnee

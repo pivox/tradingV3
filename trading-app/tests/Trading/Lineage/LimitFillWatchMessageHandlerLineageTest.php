@@ -123,6 +123,67 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
         self::assertSame('run-limit', $opened->getRunId());
     }
 
+    public function testTerminalCancelledOrderWithFillLogsPositionOpenedInsteadOfExpired(): void
+    {
+        $order = new OrderDto(
+            orderId: 'exchange-limit-partial-1',
+            symbol: 'BTCUSDT',
+            side: OrderSide::BUY,
+            type: OrderType::LIMIT,
+            status: OrderStatus::CANCELLED,
+            quantity: BigDecimal::of('1'),
+            price: BigDecimal::of('100'),
+            stopPrice: null,
+            filledQuantity: BigDecimal::of('0.4'),
+            remainingQuantity: BigDecimal::of('0.6'),
+            averagePrice: BigDecimal::of('101'),
+            createdAt: new \DateTimeImmutable('2026-06-23 12:00:00 UTC'),
+            updatedAt: new \DateTimeImmutable('2026-06-23 12:00:30 UTC'),
+            metadata: ['position_id' => 'pos-limit-partial-1'],
+        );
+        $orderProvider = $this->createMock(OrderProviderInterface::class);
+        $orderProvider->expects(self::once())
+            ->method('getOrder')
+            ->with('BTCUSDT', 'exchange-limit-partial-1')
+            ->willReturn($order);
+        $handler = new LimitFillWatchMessageHandler(
+            $this->mainProvider($orderProvider),
+            new NullLogger(),
+            $this->messageBus(),
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLineageManager(),
+        );
+
+        $handler(new LimitFillWatchMessage(
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'exchange-limit-partial-1',
+            clientOrderId: 'client-limit-partial-1',
+            side: 'BUY',
+            cancelAfterSec: 30,
+            decisionKey: 'fake:perpetual:BTCUSDT:1m:1764161200:long:scalper:v1',
+            lifecycleContext: [
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'run_id' => 'run-limit-partial',
+            ],
+        ));
+
+        /** @var TradeLifecycleEvent|null $opened */
+        $opened = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_opened',
+            'positionId' => 'pos-limit-partial-1',
+        ]);
+        /** @var TradeLifecycleEvent|null $expired */
+        $expired = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'order_expired',
+        ]);
+
+        self::assertNotNull($opened);
+        self::assertSame(0.4, (float) $opened->getQty());
+        self::assertSame('run-limit-partial', $opened->getRunId());
+        self::assertNull($expired);
+    }
+
     private function tradeLineageManager(): TradeLineageManager
     {
         /** @var TradeLineageRepository $repository */
@@ -131,12 +192,13 @@ final class LimitFillWatchMessageHandlerLineageTest extends KernelTestCase
         return new TradeLineageManager($repository, $this->em, new NullLogger());
     }
 
-    private function mainProvider(): MainProviderInterface
+    private function mainProvider(?OrderProviderInterface $orderProvider = null): MainProviderInterface
     {
-        return new class implements MainProviderInterface {
+        return new class($orderProvider) implements MainProviderInterface {
+            public function __construct(private readonly ?OrderProviderInterface $orderProvider) {}
             public function getKlineProvider(): KlineProviderInterface { throw new \LogicException('unused'); }
             public function getContractProvider(): ContractProviderInterface { throw new \LogicException('unused'); }
-            public function getOrderProvider(): ?OrderProviderInterface { throw new \LogicException('unused'); }
+            public function getOrderProvider(): ?OrderProviderInterface { return $this->orderProvider; }
             public function getAccountProvider(): ?AccountProviderInterface { throw new \LogicException('unused'); }
             public function getSystemProvider(): SystemProviderInterface { throw new \LogicException('unused'); }
             public function forContext(?ExchangeContext $context = null): self { return $this; }

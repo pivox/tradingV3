@@ -60,7 +60,11 @@ final class LimitFillWatchMessageHandler
         if ($order !== null) {
             $status = $order->status;
 
-            if ($status === OrderStatus::FILLED || $status === OrderStatus::PARTIALLY_FILLED) {
+            if (
+                $status === OrderStatus::FILLED
+                || $status === OrderStatus::PARTIALLY_FILLED
+                || $order->filledQuantity->isPositive()
+            ) {
                 // Position ouverte: désarmer le dead-man switch pour ce symbole
                 $deadmanProvider = $this->unwrapOrderProvider($orderProvider);
                 if (method_exists($deadmanProvider, 'cancelAllAfter')) {
