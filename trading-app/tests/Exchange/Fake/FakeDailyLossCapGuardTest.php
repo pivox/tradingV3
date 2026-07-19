@@ -666,6 +666,114 @@ final class FakeDailyLossCapGuardTest extends TestCase
         self::assertSame(1, $status->duplicateEventCount);
     }
 
+    public function testExactFundingIdentityReplayWithDifferentSequenceIsCountedOnceAfterRestart(): void
+    {
+        $stateFile = $this->stateFile();
+        $clock = new MutableDailyLossClock('2026-07-18T18:15:00+00:00');
+        $idempotencyKey = 'funding-restart-replay';
+        $payloadHash = str_repeat('a', 64);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $this->appendFunding(
+                $state,
+                $clock->now(),
+                '-6',
+                sequence: 31,
+                idempotencyKey: $idempotencyKey,
+                payloadHash: $payloadHash,
+            );
+            $this->appendFunding(
+                $state,
+                $clock->now(),
+                '-6',
+                sequence: 32,
+                idempotencyKey: $idempotencyKey,
+                payloadHash: $payloadHash,
+            );
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            $status = $this->guard($restored, $clock)->current();
+
+            self::assertCount(2, $restored->events('funding.accrued'));
+            self::assertSame('ready', $status->status);
+            self::assertSame('-6.000000000000', $status->dailyNetUsdt);
+            self::assertSame('6.000000000000', $status->consumptionUsdt);
+            self::assertSame(1, $status->monetaryEventCount);
+            self::assertSame(1, $status->duplicateEventCount);
+            self::assertSame(0, $status->invalidEventCount);
+        } finally {
+            $this->removeStateFiles($stateFile);
+        }
+    }
+
+    public function testSameFundingIdentityWithDifferentPayloadHashFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T18:20:00+00:00');
+        $idempotencyKey = 'funding-hash-conflict';
+        $this->appendFunding(
+            $state,
+            $clock->now(),
+            '-6',
+            sequence: 33,
+            idempotencyKey: $idempotencyKey,
+            payloadHash: str_repeat('a', 64),
+        );
+        $this->appendFunding(
+            $state,
+            $clock->now(),
+            '-6',
+            sequence: 34,
+            idempotencyKey: $idempotencyKey,
+            payloadHash: str_repeat('b', 64),
+        );
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('funding_idempotency_conflict', $status->detailReason);
+        self::assertNull($status->dailyNetUsdt);
+        self::assertNull($status->consumptionUsdt);
+        self::assertSame(1, $status->monetaryEventCount);
+        self::assertSame(0, $status->duplicateEventCount);
+        self::assertSame(1, $status->invalidEventCount);
+    }
+
+    public function testSameFundingIdentityWithConflictingCreditCannotOffsetLosses(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T18:25:00+00:00');
+        $idempotencyKey = 'funding-credit-conflict';
+        $payloadHash = str_repeat('c', 64);
+        $this->appendFunding(
+            $state,
+            $clock->now(),
+            '-12',
+            sequence: 35,
+            idempotencyKey: $idempotencyKey,
+            payloadHash: $payloadHash,
+        );
+        $this->appendFunding(
+            $state,
+            $clock->now(),
+            '5',
+            sequence: 36,
+            idempotencyKey: $idempotencyKey,
+            payloadHash: $payloadHash,
+        );
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('funding_idempotency_conflict', $status->detailReason);
+        self::assertNull($status->dailyNetUsdt);
+        self::assertNull($status->consumptionUsdt);
+        self::assertSame(1, $status->monetaryEventCount);
+        self::assertSame(0, $status->duplicateEventCount);
+        self::assertSame(1, $status->invalidEventCount);
+    }
+
     public function testConflictingDuplicateSequenceIsNotComputable(): void
     {
         $state = new FakeExchangeStateStore();
@@ -915,15 +1023,18 @@ final class FakeDailyLossCapGuardTest extends TestCase
         ?int $sequence = null,
         ?string $nativeAmount = null,
         ?\DateTimeImmutable $dueAt = null,
+        ?string $idempotencyKey = null,
+        ?string $payloadHash = null,
     ): void {
+        $identityDiscriminator = $sequence ?? \count($state->events()) + 1;
         $payload = [
             'amount' => $nativeAmount ?? $amountUsdt,
             'currency' => 'USDT',
             'amount_usdt' => $amountUsdt,
             'due_at' => ($dueAt ?? $occurredAt)->format(\DateTimeInterface::ATOM),
             'model_version' => FakeFundingModelConfig::MODEL_VERSION,
-            'funding_idempotency_key' => 'funding-' . ($sequence ?? \count($state->events()) + 1),
-            'funding_payload_hash' => hash('sha256', (string) $amountUsdt . ':' . ($sequence ?? \count($state->events()) + 1)),
+            'funding_idempotency_key' => $idempotencyKey ?? 'funding-' . $identityDiscriminator,
+            'funding_payload_hash' => $payloadHash ?? hash('sha256', (string) $amountUsdt . ':' . $identityDiscriminator),
         ];
         if ($sequence !== null) {
             $payload = ['event_sequence' => $sequence] + $payload;

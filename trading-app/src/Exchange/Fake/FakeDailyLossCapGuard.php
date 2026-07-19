@@ -49,6 +49,8 @@ final readonly class FakeDailyLossCapGuard
         $rejectionCount = 0;
         /** @var array<int,string> $fingerprintsBySequence */
         $fingerprintsBySequence = [];
+        /** @var array<string,string> canonical fingerprints excluding event_sequence */
+        $fingerprintsByFundingIdentity = [];
         try {
             $events = $this->stateStore->events();
         } catch (\Throwable) {
@@ -129,6 +131,30 @@ final readonly class FakeDailyLossCapGuard
                 );
             }
             $fingerprintsBySequence[$sequence] = $fingerprint;
+
+            if ($event->type === 'funding.accrued') {
+                $fundingIdentity = $event->payload['funding_idempotency_key'] ?? null;
+                if (\is_string($fundingIdentity) && trim($fundingIdentity) !== '') {
+                    if (isset($fingerprintsByFundingIdentity[$fundingIdentity])) {
+                        if (hash_equals($fingerprintsByFundingIdentity[$fundingIdentity], $fingerprint)) {
+                            ++$duplicateEventCount;
+
+                            continue;
+                        }
+
+                        return $this->notComputable(
+                            $utcDate,
+                            $limitUsdt,
+                            'funding_idempotency_conflict',
+                            $monetaryEventCount,
+                            $duplicateEventCount,
+                            1,
+                            $rejectionCount,
+                        );
+                    }
+                    $fingerprintsByFundingIdentity[$fundingIdentity] = $fingerprint;
+                }
+            }
 
             $delta = $event->type === 'funding.accrued'
                 ? $this->fundingDelta($event)
