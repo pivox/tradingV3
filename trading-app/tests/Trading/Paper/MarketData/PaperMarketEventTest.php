@@ -954,6 +954,89 @@ PHP,
         }
     }
 
+    #[DataProvider('embeddedSensitiveRepresentationProvider')]
+    public function testCreateRejectsDelimiterBoundedEmbeddedCredentialRepresentations(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    #[DataProvider('embeddedSensitiveRepresentationProvider')]
+    public function testFromArrayRejectsDelimiterBoundedEmbeddedCredentialsOnStrictWireInput(
+        string $raw,
+    ): void {
+        $data = self::event(payload: ['raw' => 'public-market-data'])->toArray();
+        $data['payload'] = ['raw' => $raw];
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($data['payload']));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function embeddedSensitiveRepresentationProvider(): iterable
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $slash = '\\';
+
+        yield 'escaped JSON member after opening bracket' => [
+            'prefix [\\\"api\\u005fkey\\\":\\\"' . $sentinel . '\\\"] suffix',
+        ];
+        yield 'escaped JSON member at string start' => [
+            '\\\"api\\u005fkey\\\":\\\"' . $sentinel . '\\"',
+        ];
+        yield 'escaped JSON member after ASCII whitespace' => [
+            "prefix\f\\\"api\\u005fkey\\\":\\\"" . $sentinel . '\\"',
+        ];
+        yield 'escaped JSON member between punctuation delimiters' => [
+            'prefix|'
+            . $slash . '"api' . $slash . 'u005fkey' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"|suffix',
+        ];
+        yield 'escaped opening and plain closing credential key quote' => [
+            'prefix ['
+            . $slash . '"api' . $slash . 'u005fkey":'
+            . $slash . '"' . $sentinel . $slash . '"] suffix',
+        ];
+        yield 'plain opening and escaped closing credential key quote' => [
+            'prefix ["api' . $slash . 'u005fkey' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"] suffix',
+        ];
+        yield 'PHP serialized credential map' => [
+            'prefix [' . serialize(['api_key' => $sentinel]) . '] suffix',
+        ];
+        yield 'PHP serialized credential map between punctuation delimiters' => [
+            'prefix|' . serialize(['api_key' => $sentinel]) . '|suffix',
+        ];
+        yield 'canonical Base64 credential JSON' => [
+            'prefix [' . base64_encode('{"api_key":"' . $sentinel . '"}') . '] suffix',
+        ];
+        yield 'canonical Base64 credential JSON between token delimiters' => [
+            'prefix|' . base64_encode('{"api_key":"' . $sentinel . '"}') . '|suffix',
+        ];
+
+        $urlFixture = json_encode(
+            ['api_key' => $sentinel, 'note' => "\u{1003E}"],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $classicPadded = base64_encode($urlFixture);
+        $urlPadded = strtr($classicPadded, '+/', '-_');
+
+        yield 'unpadded canonical Base64 credential JSON' => [
+            'prefix [' . rtrim($classicPadded, '=') . '] suffix',
+        ];
+        yield 'padded canonical Base64url credential JSON' => [
+            'prefix [' . $urlPadded . '] suffix',
+        ];
+        yield 'unpadded canonical Base64url credential JSON' => [
+            'prefix [' . rtrim($urlPadded, '=') . '] suffix',
+        ];
+    }
+
     public function testCreateAndWireRoundTripAllowWindowsPathProseAndEscapedPublicJson(): void
     {
         $event = self::event(payload: [
@@ -1054,6 +1137,31 @@ PHP,
             sequence: $sequence,
             payload: $payload,
         );
+    }
+
+    /**
+     * @param callable(): mixed $operation
+     * @param list<string>       $prohibitedFragments
+     */
+    private static function assertSensitiveRejectionWithoutDisclosure(
+        callable $operation,
+        array $prohibitedFragments,
+    ): void {
+        try {
+            $operation();
+            self::fail('Embedded credential material must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+
+            $current = $exception;
+            do {
+                foreach ($prohibitedFragments as $fragment) {
+                    self::assertStringNotContainsString($fragment, $current->getMessage());
+                }
+
+                $current = $current->getPrevious();
+            } while ($current !== null);
+        }
     }
 
     /**

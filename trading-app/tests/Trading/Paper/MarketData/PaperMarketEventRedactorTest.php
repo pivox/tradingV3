@@ -199,6 +199,166 @@ final class PaperMarketEventRedactorTest extends TestCase
         }
     }
 
+    #[DataProvider('embeddedSensitiveRepresentationProvider')]
+    public function testRejectsDelimiterBoundedEmbeddedCredentialRepresentations(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function embeddedSensitiveRepresentationProvider(): iterable
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $slash = '\\';
+
+        yield 'escaped JSON member after opening bracket' => [
+            'prefix [\\\"api\\u005fkey\\\":\\\"' . $sentinel . '\\\"] suffix',
+        ];
+        yield 'escaped JSON member at string start' => [
+            '\\\"api\\u005fkey\\\":\\\"' . $sentinel . '\\"',
+        ];
+        yield 'escaped JSON member after ASCII whitespace' => [
+            "prefix\f\\\"api\\u005fkey\\\":\\\"" . $sentinel . '\\"',
+        ];
+        yield 'escaped JSON member between punctuation delimiters' => [
+            'prefix|'
+            . $slash . '"api' . $slash . 'u005fkey' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"|suffix',
+        ];
+        yield 'escaped opening and plain closing credential key quote' => [
+            'prefix ['
+            . $slash . '"api' . $slash . 'u005fkey":'
+            . $slash . '"' . $sentinel . $slash . '"] suffix',
+        ];
+        yield 'plain opening and escaped closing credential key quote' => [
+            'prefix ["api' . $slash . 'u005fkey' . $slash . '":'
+            . $slash . '"' . $sentinel . $slash . '"] suffix',
+        ];
+        yield 'PHP serialized credential map' => [
+            'prefix [' . serialize(['api_key' => $sentinel]) . '] suffix',
+        ];
+        yield 'PHP serialized credential map between punctuation delimiters' => [
+            'prefix|' . serialize(['api_key' => $sentinel]) . '|suffix',
+        ];
+        yield 'canonical Base64 credential JSON' => [
+            'prefix [' . base64_encode('{"api_key":"' . $sentinel . '"}') . '] suffix',
+        ];
+        yield 'canonical Base64 credential JSON between token delimiters' => [
+            'prefix|' . base64_encode('{"api_key":"' . $sentinel . '"}') . '|suffix',
+        ];
+
+        $urlFixture = json_encode(
+            ['api_key' => $sentinel, 'note' => "\u{1003E}"],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $classicPadded = base64_encode($urlFixture);
+        $urlPadded = strtr($classicPadded, '+/', '-_');
+
+        yield 'unpadded canonical Base64 credential JSON' => [
+            'prefix [' . rtrim($classicPadded, '=') . '] suffix',
+        ];
+        yield 'padded canonical Base64url credential JSON' => [
+            'prefix [' . $urlPadded . '] suffix',
+        ];
+        yield 'unpadded canonical Base64url credential JSON' => [
+            'prefix [' . rtrim($urlPadded, '=') . '] suffix',
+        ];
+    }
+
+    #[DataProvider('malformedEmbeddedPhpSerializationProvider')]
+    public function testRejectsMalformedOrResourceIntensiveEmbeddedPhpSerialization(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, 'synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function malformedEmbeddedPhpSerializationProvider(): iterable
+    {
+        yield 'declared string length exceeds candidate' => [
+            'prefix [a:1:{s:7:"api_key";s:999999:"synthetic-redaction-sentinel";}] suffix',
+        ];
+        yield 'declared array size exceeds decode node budget' => [
+            'prefix [a:999999:{}] suffix',
+        ];
+        yield 'negative declared array size' => [
+            'prefix [a:-1:{s:7:"api_key";s:28:"synthetic-redaction-sentinel";}] suffix',
+        ];
+
+        $serialized = 'N;';
+        for ($depth = 0; $depth <= 128; ++$depth) {
+            $serialized = 'a:1:{i:0;' . $serialized . '}';
+        }
+
+        yield 'nesting exceeds decode depth budget' => [
+            'prefix [' . $serialized . '] suffix',
+        ];
+        yield 'standalone aggregate node count exceeds decode budget' => [
+            serialize(array_fill(0, 4_096, 'public-market-data')),
+        ];
+    }
+
+    #[DataProvider('embeddedPublicRepresentationProvider')]
+    public function testAllowsDelimiterBoundedEmbeddedPublicRepresentations(string $raw): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function embeddedPublicRepresentationProvider(): iterable
+    {
+        $publicJson = '{"symbol":"BTCUSDT","price":"29999.0"}';
+
+        yield 'public bracketed prose' => [
+            'prefix [public BTCUSDT market snapshot at 29999.0] suffix',
+        ];
+        yield 'benign PHP serialization' => [
+            'prefix [' . serialize(['symbol' => 'BTCUSDT', 'price' => '29999.0']) . '] suffix',
+        ];
+        yield 'benign canonical Base64 JSON' => [
+            'prefix [' . base64_encode($publicJson) . '] suffix',
+        ];
+        yield 'ordinary long alphanumeric token' => [
+            'prefix [' . str_repeat('PUBLICMARKETDATA42', 512) . '] suffix',
+        ];
+        yield 'noncanonical Base64-looking prose' => [
+            'prefix [' . base64_encode($publicJson) . '=] suffix',
+        ];
+        yield 'ordinary Windows path' => [
+            'Ordinary note: the public folder "C:\\prices": contains BTCUSDT snapshots.',
+        ];
+    }
+
+    #[DataProvider('escapedPublicMemberProvider')]
+    public function testAllowsPublicEscapedSymbolAndPriceFragments(string $raw): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function escapedPublicMemberProvider(): iterable
+    {
+        for ($count = 1; $count <= 4; ++$count) {
+            $slashes = str_repeat('\\', $count);
+
+            yield sprintf('%d backslash(es)', $count) => [
+                'prefix ['
+                . $slashes . '"symbol' . $slashes . '":' . $slashes . '"BTCUSDT' . $slashes . '",'
+                . $slashes . '"price' . $slashes . '":' . $slashes . '"29999.0' . $slashes . '"'
+                . '] suffix',
+            ];
+        }
+    }
+
     public function testAllowsPublicJsonObjectKeysAfterNonJsonPrefix(): void
     {
         PaperMarketEventRedactor::assertSafe([
@@ -767,6 +927,31 @@ final class PaperMarketEventRedactorTest extends TestCase
         }
 
         throw new \LogicException('paper_market_test_base64_padding_fixture_unavailable');
+    }
+
+    /**
+     * @param callable(): void $operation
+     * @param list<string>      $prohibitedFragments
+     */
+    private static function assertSensitiveRejectionWithoutDisclosure(
+        callable $operation,
+        array $prohibitedFragments,
+    ): void {
+        try {
+            $operation();
+            self::fail('Embedded credential material must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+
+            $current = $exception;
+            do {
+                foreach ($prohibitedFragments as $fragment) {
+                    self::assertStringNotContainsString($fragment, $current->getMessage());
+                }
+
+                $current = $current->getPrevious();
+            } while ($current !== null);
+        }
     }
 
     /**

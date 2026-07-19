@@ -100,13 +100,9 @@ REGEX;
 ~-----(?:BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----~D
 REGEX;
 
-    private const JSON_OBJECT_KEY_PATTERN = '~(?<!\\\\)"((?:[^"\\\\]|\\\\.)*)"[\t\r\n ]*:~uD';
-
-    private const ESCAPED_JSON_OBJECT_KEY_PATTERN = <<<'REGEX'
-~(?:\{|,)[\t\r\n ]*\\+"(?<key>.*?)\\+"[\t\r\n ]*:~usD
-REGEX;
-
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
+
+    private const MAX_PHP_SERIALIZED_SCALAR_BYTES = 128;
 
     /** @var array<string, string> Cyrillic and Greek cross-script credential-key confusables. */
     private const KEY_CONFUSABLES = [
@@ -351,6 +347,18 @@ REGEX;
         }
 
         if ($serializedMatch === 1) {
+            $candidateOffset = 0;
+            $candidateNodeCount = 0;
+            self::parsePhpSerializedCandidate(
+                $canonical,
+                $candidateOffset,
+                0,
+                $candidateNodeCount,
+            );
+            if ($candidateOffset !== \strlen($canonical)) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
+
             self::scanPhpSerializedValue(
                 $canonical,
                 $decodeDepth,
@@ -398,6 +406,20 @@ REGEX;
         }
 
         self::scanFormValue(
+            $canonical,
+            $decodeDepth,
+            $decodedNodeCount,
+            $decodedByteCount,
+            $decodedStrings,
+        );
+        self::scanEmbeddedPhpSerializedValues(
+            $canonical,
+            $decodeDepth,
+            $decodedNodeCount,
+            $decodedByteCount,
+            $decodedStrings,
+        );
+        self::scanEmbeddedBase64Values(
             $canonical,
             $decodeDepth,
             $decodedNodeCount,
@@ -453,30 +475,70 @@ REGEX;
 
     private static function assertNoSensitiveJsonObjectKeys(string $value): void
     {
-        $matches = [];
-        $matchCount = preg_match_all(self::JSON_OBJECT_KEY_PATTERN, $value, $matches, PREG_SET_ORDER);
-        if ($matchCount === false) {
-            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        self::assertNoSensitiveJsonMemberKeys($value);
+    }
+
+    private static function assertNoSensitiveJsonMemberKeys(string $value): void
+    {
+        $length = \strlen($value);
+        $encodedKeyStart = null;
+
+        for ($offset = 0; $offset < $length;) {
+            if ($value[$offset] === '"') {
+                $quoteTokenStart = $offset;
+                $quoteOffset = $offset;
+                ++$offset;
+            } elseif ($value[$offset] === '\\') {
+                $quoteTokenStart = $offset;
+                while ($offset < $length && $value[$offset] === '\\') {
+                    ++$offset;
+                }
+
+                if ($offset >= $length || $value[$offset] !== '"') {
+                    continue;
+                }
+
+                $quoteOffset = $offset;
+                ++$offset;
+            } else {
+                ++$offset;
+
+                continue;
+            }
+
+            if ($encodedKeyStart !== null) {
+                $afterQuote = $offset;
+                while ($afterQuote < $length && self::isAsciiWhitespace($value[$afterQuote])) {
+                    ++$afterQuote;
+                }
+
+                if ($afterQuote < $length && $value[$afterQuote] === ':') {
+                    self::assertJsonObjectKeyCandidateSafe(
+                        substr($value, $encodedKeyStart, $quoteTokenStart - $encodedKeyStart),
+                    );
+                    $encodedKeyStart = null;
+                    $offset = $afterQuote + 1;
+
+                    continue;
+                }
+            }
+
+            if (self::isJsonMemberLeftBoundary($value, $quoteTokenStart)) {
+                $encodedKeyStart = $quoteOffset + 1;
+            }
+        }
+    }
+
+    private static function isJsonMemberLeftBoundary(string $value, int $offset): bool
+    {
+        if ($offset === 0 || self::isAsciiWhitespace($value[$offset - 1])) {
+            return true;
         }
 
-        foreach ($matches as $match) {
-            self::assertJsonObjectKeyCandidateSafe($match[1]);
-        }
+        $previousByte = $value[$offset - 1];
 
-        $matches = [];
-        $matchCount = preg_match_all(
-            self::ESCAPED_JSON_OBJECT_KEY_PATTERN,
-            $value,
-            $matches,
-            PREG_SET_ORDER,
-        );
-        if ($matchCount === false) {
-            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
-        }
-
-        foreach ($matches as $match) {
-            self::assertJsonObjectKeyCandidateSafe($match['key']);
-        }
+        return !self::isAsciiAlphaNumeric($previousByte)
+            && !\in_array($previousByte, ['_', '\\', '"'], true);
     }
 
     private static function assertJsonObjectKeyCandidateSafe(string $encodedKey): void
@@ -550,7 +612,10 @@ REGEX;
         });
 
         try {
-            $decoded = unserialize($value, ['allowed_classes' => false]);
+            $decoded = unserialize($value, [
+                'allowed_classes' => false,
+                'max_depth' => self::MAX_NESTING_DEPTH + 1,
+            ]);
         } catch (\Throwable $exception) {
             throw new \InvalidArgumentException(
                 'paper_market_sensitive_field_rejected',
@@ -570,6 +635,385 @@ REGEX;
             $decodedByteCount,
             $decodedStrings,
         );
+    }
+
+    /**
+     * Scans only self-delimiting PHP serialization values whose type marker begins at a safe
+     * token boundary. A small parser finds the exact candidate without trusting attacker-provided
+     * string lengths, array sizes, or nesting before native decoding is attempted.
+     *
+     * @param array<string, true> $decodedStrings
+     */
+    private static function scanEmbeddedPhpSerializedValues(
+        string $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+        array &$decodedStrings,
+    ): void {
+        $length = \strlen($value);
+        for ($offset = 0; $offset < $length;) {
+            if (
+                !self::isPhpSerializedCandidateLeftBoundary($value, $offset)
+                || !self::isPhpSerializedCandidateStart($value, $offset)
+            ) {
+                ++$offset;
+
+                continue;
+            }
+
+            $candidateStart = $offset;
+            $candidateNodeCount = 0;
+            self::parsePhpSerializedCandidate($value, $offset, 0, $candidateNodeCount);
+            $candidate = substr($value, $candidateStart, $offset - $candidateStart);
+            self::scanPhpSerializedValue(
+                $candidate,
+                $decodeDepth,
+                $decodedNodeCount,
+                $decodedByteCount,
+                $decodedStrings,
+            );
+        }
+    }
+
+    private static function isPhpSerializedCandidateStart(string $value, int $offset): bool
+    {
+        if (substr($value, $offset, 2) === 'N;') {
+            return true;
+        }
+
+        if (!isset($value[$offset + 2]) || $value[$offset + 1] !== ':') {
+            return false;
+        }
+
+        $type = $value[$offset];
+        $firstValueByte = $value[$offset + 2];
+
+        return match ($type) {
+            'b' => $firstValueByte === '0' || $firstValueByte === '1',
+            'i' => self::isAsciiDigit($firstValueByte)
+                || $firstValueByte === '+'
+                || $firstValueByte === '-',
+            'd' => self::isAsciiDigit($firstValueByte)
+                || \in_array($firstValueByte, ['+', '-', '.', 'N', 'I'], true),
+            's', 'S', 'a', 'O', 'C', 'E', 'r', 'R' => self::isAsciiDigit($firstValueByte)
+                || $firstValueByte === '+'
+                || $firstValueByte === '-',
+            default => false,
+        };
+    }
+
+    private static function parsePhpSerializedCandidate(
+        string $value,
+        int &$offset,
+        int $nestingDepth,
+        int &$candidateNodeCount,
+    ): void {
+        ++$candidateNodeCount;
+        if (
+            $candidateNodeCount > self::MAX_SENSITIVE_DECODE_NODES
+            || $nestingDepth > self::MAX_NESTING_DEPTH
+            || !isset($value[$offset])
+        ) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $type = $value[$offset];
+        if ($type === 'N') {
+            self::requirePhpSerializedBytes($value, $offset, 'N;');
+
+            return;
+        }
+
+        if (!isset($value[$offset + 1]) || $value[$offset + 1] !== ':') {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $offset += 2;
+        if (\in_array($type, ['b', 'i', 'd'], true)) {
+            self::parsePhpSerializedScalar($value, $offset, $type);
+
+            return;
+        }
+
+        if ($type === 's' || $type === 'S') {
+            self::parsePhpSerializedString($value, $offset, $type === 'S');
+
+            return;
+        }
+
+        if ($type === 'a') {
+            $itemCount = self::parsePhpSerializedUnsignedInteger(
+                $value,
+                $offset,
+                intdiv(self::MAX_SENSITIVE_DECODE_NODES, 2),
+            );
+            self::requirePhpSerializedBytes($value, $offset, ':{');
+
+            for ($index = 0; $index < $itemCount; ++$index) {
+                self::parsePhpSerializedCandidate(
+                    $value,
+                    $offset,
+                    $nestingDepth + 1,
+                    $candidateNodeCount,
+                );
+                self::parsePhpSerializedCandidate(
+                    $value,
+                    $offset,
+                    $nestingDepth + 1,
+                    $candidateNodeCount,
+                );
+            }
+
+            self::requirePhpSerializedBytes($value, $offset, '}');
+
+            return;
+        }
+
+        // Objects, custom payloads, enums, and references are never public market data.
+        throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+    }
+
+    private static function parsePhpSerializedScalar(string $value, int &$offset, string $type): void
+    {
+        $terminator = strpos($value, ';', $offset);
+        if ($terminator === false || $terminator - $offset > self::MAX_PHP_SERIALIZED_SCALAR_BYTES) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $scalar = substr($value, $offset, $terminator - $offset);
+        $pattern = match ($type) {
+            'b' => '/\A[01]\z/D',
+            'i' => '/\A[+-]?[0-9]+\z/D',
+            'd' => '/\A(?:[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:E[+-]?[0-9]+)?|NAN|[+-]?INF)\z/D',
+            default => throw new \LogicException('paper_market_serialized_scalar_type_invalid'),
+        };
+        $match = preg_match($pattern, $scalar);
+        if ($match !== 1) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $offset = $terminator + 1;
+    }
+
+    private static function parsePhpSerializedString(
+        string $value,
+        int &$offset,
+        bool $escaped,
+    ): void {
+        $declaredLength = self::parsePhpSerializedUnsignedInteger(
+            $value,
+            $offset,
+            self::MAX_SENSITIVE_DECODE_BYTES,
+        );
+        self::requirePhpSerializedBytes($value, $offset, ':"');
+
+        if (!$escaped) {
+            if ($declaredLength > \strlen($value) - $offset - 2) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
+
+            $offset += $declaredLength;
+        } else {
+            for ($decodedLength = 0; $decodedLength < $declaredLength; ++$decodedLength) {
+                if (!isset($value[$offset])) {
+                    throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+                }
+
+                if ($value[$offset] === '\\') {
+                    if (
+                        !isset($value[$offset + 2])
+                        || !ctype_xdigit($value[$offset + 1])
+                        || !ctype_xdigit($value[$offset + 2])
+                    ) {
+                        throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+                    }
+
+                    $offset += 3;
+
+                    continue;
+                }
+
+                ++$offset;
+            }
+        }
+
+        self::requirePhpSerializedBytes($value, $offset, '";');
+    }
+
+    private static function parsePhpSerializedUnsignedInteger(
+        string $value,
+        int &$offset,
+        int $maximum,
+    ): int {
+        if (!isset($value[$offset]) || !self::isAsciiDigit($value[$offset])) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $number = 0;
+        do {
+            $digit = ord($value[$offset]) - ord('0');
+            if ($number > intdiv($maximum - $digit, 10)) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
+
+            $number = $number * 10 + $digit;
+            ++$offset;
+        } while (isset($value[$offset]) && self::isAsciiDigit($value[$offset]));
+
+        return $number;
+    }
+
+    private static function requirePhpSerializedBytes(
+        string $value,
+        int &$offset,
+        string $expected,
+    ): void {
+        if (substr($value, $offset, \strlen($expected)) !== $expected) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $offset += \strlen($expected);
+    }
+
+    /**
+     * Decodes complete Base64 tokens only. Candidate discovery is a linear byte scan bounded by
+     * non-token boundaries; it never tries sliding substrings from prose or noncanonical tokens.
+     *
+     * @param array<string, true> $decodedStrings
+     */
+    private static function scanEmbeddedBase64Values(
+        string $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+        array &$decodedStrings,
+    ): void {
+        $length = \strlen($value);
+        for ($offset = 0; $offset < $length;) {
+            if (
+                !self::isBase64CandidateLeftBoundary($value, $offset)
+                || !self::isBase64TokenByte($value[$offset], false)
+            ) {
+                ++$offset;
+
+                continue;
+            }
+
+            $candidateStart = $offset;
+            while ($offset < $length && self::isBase64TokenByte($value[$offset], true)) {
+                ++$offset;
+            }
+
+            if (!self::isBase64CandidateRightBoundary($value, $offset)) {
+                continue;
+            }
+
+            $candidateLength = $offset - $candidateStart;
+            if ($candidateLength < 8) {
+                continue;
+            }
+
+            $decoded = self::decodeCanonicalBase64Token(
+                substr($value, $candidateStart, $candidateLength),
+            );
+            if ($decoded === null) {
+                continue;
+            }
+
+            self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
+            self::scanEncodedString(
+                $decoded,
+                $decodeDepth + 1,
+                $decodedNodeCount,
+                $decodedByteCount,
+                $decodedStrings,
+            );
+        }
+    }
+
+    private static function decodeCanonicalBase64Token(string $value): ?string
+    {
+        $unpadded = rtrim($value, '=');
+        $paddingCount = \strlen($value) - \strlen($unpadded);
+        if ($paddingCount > 2 || \strlen($unpadded) % 4 === 1) {
+            return null;
+        }
+
+        $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+\z/D', $unpadded);
+        $urlMatch = preg_match('/\A[A-Za-z0-9_-]+\z/D', $unpadded);
+        if ($classicMatch === false || $urlMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($classicMatch !== 1 && $urlMatch !== 1) {
+            return null;
+        }
+
+        $requiredPadding = (4 - \strlen($unpadded) % 4) % 4;
+        if ($paddingCount !== 0 && $paddingCount !== $requiredPadding) {
+            return null;
+        }
+
+        $urlSafe = $urlMatch === 1 && $classicMatch !== 1;
+        $standardUnpadded = $urlSafe ? strtr($unpadded, '-_', '+/') : $unpadded;
+        $decoded = base64_decode($standardUnpadded . str_repeat('=', $requiredPadding), true);
+        if ($decoded === false || preg_match('//u', $decoded) !== 1) {
+            return null;
+        }
+
+        $canonicalUnpadded = rtrim(base64_encode($decoded), '=');
+        if ($urlSafe) {
+            $canonicalUnpadded = strtr($canonicalUnpadded, '+/', '-_');
+        }
+
+        return $canonicalUnpadded === $unpadded ? $decoded : null;
+    }
+
+    private static function isPhpSerializedCandidateLeftBoundary(string $value, int $offset): bool
+    {
+        return $offset === 0
+            || (
+                !self::isAsciiAlphaNumeric($value[$offset - 1])
+                && $value[$offset - 1] !== '_'
+            );
+    }
+
+    private static function isBase64CandidateLeftBoundary(string $value, int $offset): bool
+    {
+        return $offset === 0 || !self::isBase64TokenByte($value[$offset - 1], true);
+    }
+
+    private static function isBase64CandidateRightBoundary(string $value, int $offset): bool
+    {
+        return !isset($value[$offset]) || !self::isBase64TokenByte($value[$offset], true);
+    }
+
+    private static function isBase64TokenByte(string $byte, bool $allowPadding): bool
+    {
+        return self::isAsciiDigit($byte)
+            || ($byte >= 'A' && $byte <= 'Z')
+            || ($byte >= 'a' && $byte <= 'z')
+            || \in_array($byte, ['+', '/', '-', '_'], true)
+            || ($allowPadding && $byte === '=');
+    }
+
+    private static function isAsciiDigit(string $byte): bool
+    {
+        return $byte >= '0' && $byte <= '9';
+    }
+
+    private static function isAsciiAlphaNumeric(string $byte): bool
+    {
+        return self::isAsciiDigit($byte)
+            || ($byte >= 'A' && $byte <= 'Z')
+            || ($byte >= 'a' && $byte <= 'z');
+    }
+
+    private static function isAsciiWhitespace(string $byte): bool
+    {
+        return $byte === ' '
+            || ($byte >= "\x09" && $byte <= "\x0D");
     }
 
     /**
