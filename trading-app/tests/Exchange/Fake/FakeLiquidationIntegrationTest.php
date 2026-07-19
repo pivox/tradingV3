@@ -231,6 +231,91 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame(96807.0, $state->totalBalanceUsdt());
     }
 
+    public function testBankruptcyGapPersistsTerminalLiquidationAndAuditedBalanceClampAcrossRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-bankruptcy-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            [$adapter, $scenario] = $this->runtimeForState($state);
+            $entry = $adapter->placeOrder($this->entryRequest(
+                clientOrderId: 'liquidation-bankruptcy-gap',
+                side: ExchangePositionSide::SHORT,
+                leverage: 50,
+                quantity: 80.0,
+            ));
+            self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+
+            $failure = null;
+            try {
+                $scenario->movePrice('BTCUSDT', 100000.0);
+            } catch (\LogicException $exception) {
+                $failure = $exception->getMessage();
+            }
+
+            self::assertNull($failure, 'A bankruptcy gap must not roll back terminal liquidation.');
+            self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::SHORT));
+            self::assertCount(1, $state->events('liquidation.triggered'));
+            self::assertCount(1, $state->events('liquidation.filled'));
+            self::assertCount(1, $state->events('position.closed'));
+
+            $closed = $state->events('position.closed')[0];
+            $certifiedDelta = $closed->payload['recorded_pnl_usdt_decimal'] ?? null;
+            self::assertIsString($certifiedDelta);
+            self::assertTrue(BigDecimal::of($certifiedDelta)->isLessThan('-100000'));
+            $expectedShortfall = (string) BigDecimal::of($certifiedDelta)
+                ->plus('100000')
+                ->abs()
+                ->toScale(12, RoundingMode::HALF_EVEN);
+
+            $balance = $adapter->getBalances()[0];
+            self::assertSame(0.0, $balance->available);
+            self::assertSame(0.0, $balance->total);
+            self::assertSame(0.0, $balance->equity);
+            self::assertSame($certifiedDelta, $balance->metadata['last_certified_balance_delta_usdt'] ?? null);
+            self::assertSame(
+                '-100000.000000000000',
+                $balance->metadata['last_certified_balance_applied_delta_usdt'] ?? null,
+            );
+            self::assertSame(
+                $expectedShortfall,
+                $balance->metadata['last_certified_balance_shortfall_usdt'] ?? null,
+            );
+            self::assertTrue($balance->metadata['last_certified_balance_clamped'] ?? false);
+            self::assertSame(
+                'fake-liquidation-balance-floor-v1',
+                $balance->metadata['last_certified_balance_clamp_model_version'] ?? null,
+            );
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [$restoredAdapter, $restoredScenario] = $this->runtimeForState($restored);
+            $restoredScenario->movePrice('BTCUSDT', 100000.0);
+            $restoredScenario->movePrice('BTCUSDT', 100000.0);
+
+            self::assertNull($restored->getPosition('BTCUSDT', ExchangePositionSide::SHORT));
+            self::assertCount(1, $restored->events('liquidation.triggered'));
+            self::assertCount(1, $restored->events('liquidation.filled'));
+            self::assertCount(1, $restored->events('position.closed'));
+            self::assertCount(2, $restoredAdapter->getFillsSnapshot('BTCUSDT'));
+            self::assertSame(0.0, $restoredAdapter->getBalances()[0]->total);
+
+            $rejected = $restoredAdapter->placeOrder($this->entryRequest(
+                clientOrderId: 'liquidation-bankruptcy-no-reentry',
+                leverage: 100,
+                quantity: 0.001,
+            ));
+            self::assertFalse($rejected->accepted);
+            self::assertSame('insufficient_balance', $rejected->metadata['reason'] ?? null);
+            self::assertSame([], $restored->getOpenPositions('BTCUSDT'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testRestartAndRepeatedMarkAreExactOnce(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-restart-');
@@ -475,6 +560,50 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame([], $state->getOpenPositions('BTCUSDT'));
         self::assertSame([], $state->events('order.filled'));
         self::assertCount(1, $state->events('order.rejected'));
+    }
+
+    public function testCrossingLimitPreflightUsesExecutableBookPriceForLongAndShort(): void
+    {
+        foreach ([
+            'long' => [ExchangeOrderSide::BUY, ExchangePositionSide::LONG, 30000.0, 25000.0],
+            'short' => [ExchangeOrderSide::SELL, ExchangePositionSide::SHORT, 20000.0, 24999.0],
+        ] as $case => [$orderSide, $positionSide, $limitPrice, $executablePrice]) {
+            [$adapter, , $state] = $this->runtime();
+
+            $result = $adapter->placeOrder(new PlaceOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                side: $orderSide,
+                positionSide: $positionSide,
+                orderType: ExchangeOrderType::LIMIT,
+                timeInForce: ExchangeTimeInForce::GTC,
+                quantity: 1.0,
+                price: $limitPrice,
+                stopPrice: null,
+                reduceOnly: false,
+                postOnly: false,
+                leverage: 50,
+                marginMode: 'isolated',
+                clientOrderId: 'liquidation-crossing-limit-' . $case,
+                quantityDecimal: '1',
+                priceDecimal: (string) $limitPrice,
+            ));
+
+            self::assertTrue($result->accepted, $case);
+            self::assertSame(ExchangeOrderStatus::FILLED, $result->status, $case);
+            self::assertSame($executablePrice, $result->order?->averagePrice, $case);
+            self::assertSame(
+                number_format($executablePrice, 12, '.', ''),
+                $result->order?->metadata['liquidation_entry_price_decimal'] ?? null,
+                $case,
+            );
+            self::assertSame(
+                $executablePrice,
+                $state->events('order.filled')[0]->payload['fill_price'] ?? null,
+                $case,
+            );
+        }
     }
 
     public function testPartialReductionRecalculatesLiquidationQuantityMarginAndFee(): void

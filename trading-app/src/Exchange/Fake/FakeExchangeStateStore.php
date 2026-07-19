@@ -33,6 +33,7 @@ class FakeExchangeStateStore
     private const PRIVATE_WS_CONNECTED = 'connected';
     private const PRIVATE_WS_RESYNC_REQUIRED = 'resync_required';
     private const PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA = 'fake-private-ws-snapshot-proof-v1';
+    private const LIQUIDATION_BALANCE_CLAMP_MODEL_VERSION = 'fake-liquidation-balance-floor-v1';
 
     private ?string $stateFile;
 
@@ -392,20 +393,30 @@ class FakeExchangeStateStore
         } catch (\Throwable) {
             throw new \LogicException('fake_liquidation_balance_delta_invalid');
         }
-        if ($newTotal->isNegative() || $newEquity->isNegative()) {
-            throw new \LogicException('fake_liquidation_balance_negative');
-        }
+        $zero = BigDecimal::zero()->toScale(12, RoundingMode::HALF_EVEN);
+        $clamped = $newTotal->isNegative() || $newEquity->isNegative();
+        $bookedTotal = $newTotal->isNegative() ? $zero : $newTotal;
+        $bookedEquity = $newEquity->isNegative() ? $zero : $newEquity;
+        $appliedDelta = $bookedTotal->minus($totalDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+        $shortfall = $deltaDecimal
+            ->minus($appliedDelta)
+            ->abs()
+            ->toScale(12, RoundingMode::HALF_EVEN);
 
         $this->balances['USDT'] = new ExchangeBalanceDto(
             exchange: $balance->exchange,
             marketType: $balance->marketType,
             currency: $balance->currency,
-            available: (float) (string) $newTotal,
-            total: (float) (string) $newTotal,
-            equity: (float) (string) $newEquity,
+            available: (float) (string) $bookedTotal,
+            total: (float) (string) $bookedTotal,
+            equity: (float) (string) $bookedEquity,
             unrealizedPnl: $balance->unrealizedPnl,
             metadata: array_replace($balance->metadata, [
                 'last_certified_balance_delta_usdt' => (string) $deltaDecimal->toScale(12, RoundingMode::HALF_EVEN),
+                'last_certified_balance_applied_delta_usdt' => (string) $appliedDelta,
+                'last_certified_balance_shortfall_usdt' => (string) $shortfall,
+                'last_certified_balance_clamped' => $clamped,
+                'last_certified_balance_clamp_model_version' => self::LIQUIDATION_BALANCE_CLAMP_MODEL_VERSION,
                 'last_certified_balance_model_version' => $modelVersion,
             ]),
         );

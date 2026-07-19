@@ -1306,8 +1306,18 @@ final readonly class FakeExchangeMatchingEngine
             return null;
         }
 
+        $crossingLimitPrice = $request->orderType === ExchangeOrderType::LIMIT
+            ? $this->crossingLimitExecutionPrice(
+                $request->symbol,
+                $request->side,
+                $request->price,
+                $request->postOnly,
+            )
+            : null;
         $entryPrice = $request->orderType === ExchangeOrderType::LIMIT
-            ? $request->exactPrice()
+            ? ($crossingLimitPrice !== null
+                ? self::canonicalFloat($crossingLimitPrice)
+                : $request->exactPrice())
             : self::canonicalFloat($referencePrice);
         $quantity = $request->exactQuantity();
         $leverage = $request->leverage ?? 1;
@@ -3473,14 +3483,16 @@ final readonly class FakeExchangeMatchingEngine
 
     private function executionPrice(ExchangeOrderDto $order): float
     {
-        if (
-            $order->orderType === ExchangeOrderType::LIMIT
-            && !$order->postOnly
-            && $this->limitOrderCrossesBook($order)
-        ) {
-            $top = $this->orderBook->top($order->symbol);
-
-            return $order->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
+        if ($order->orderType === ExchangeOrderType::LIMIT) {
+            $crossingLimitPrice = $this->crossingLimitExecutionPrice(
+                $order->symbol,
+                $order->side,
+                $order->price,
+                $order->postOnly,
+            );
+            if ($crossingLimitPrice !== null) {
+                return $crossingLimitPrice;
+            }
         }
 
         if ($order->price !== null) {
@@ -3490,6 +3502,26 @@ final readonly class FakeExchangeMatchingEngine
         $top = $this->orderBook->top($order->symbol);
 
         return $order->side === ExchangeOrderSide::BUY ? $top->ask : $top->bid;
+    }
+
+    private function crossingLimitExecutionPrice(
+        string $symbol,
+        ExchangeOrderSide $side,
+        ?float $limitPrice,
+        bool $postOnly,
+    ): ?float {
+        if ($limitPrice === null || $postOnly) {
+            return null;
+        }
+
+        $top = $this->orderBook->top($symbol);
+        $crosses = $side === ExchangeOrderSide::BUY
+            ? $limitPrice >= $top->ask
+            : $limitPrice <= $top->bid;
+
+        return $crosses
+            ? ($side === ExchangeOrderSide::BUY ? $top->ask : $top->bid)
+            : null;
     }
 
     private function averagePrice(ExchangeOrderDto $order, float $fillQuantity, float $executionPrice, float $newFilled): float
