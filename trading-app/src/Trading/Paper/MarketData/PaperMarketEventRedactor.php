@@ -79,7 +79,7 @@ final class PaperMarketEventRedactor
 )~ix
 REGEX;
 
-    private const BASIC_VALUE_PATTERN = '~\bbasic[\t ]+([A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])~i';
+    private const BASIC_VALUE_PATTERN = '~\bbasic[\t ]+([A-Za-z0-9+/]+=*)(?![A-Za-z0-9+/=])~i';
 
     private const PHP_SERIALIZED_VALUE_PATTERN = <<<'REGEX'
 ~\A(?:
@@ -97,8 +97,10 @@ REGEX;
 REGEX;
 
     private const PRIVATE_KEY_ENVELOPE_MARKER_PATTERN = <<<'REGEX'
-~-----(?:BEGIN|END) (?:PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY|OPENSSH PRIVATE KEY)-----~D
+~-----(?:BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----~D
 REGEX;
+
+    private const JSON_OBJECT_KEY_PATTERN = '~"((?:[^"\\\\]|\\\\.)*)"[\t\r\n ]*:~uD';
 
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
 
@@ -319,6 +321,7 @@ REGEX;
                     );
                 }
 
+                self::assertNoSensitiveJsonObjectKeys($canonical);
                 $decoded = null;
             }
 
@@ -376,7 +379,7 @@ REGEX;
             }
         }
 
-        $base64Decoded = self::decodeCanonicalBase64($canonical);
+        $base64Decoded = self::decodeRecoverableBase64($canonical);
         if ($base64Decoded !== null) {
             self::consumeDecodedBytes($decodedByteCount, \strlen($base64Decoded));
             self::scanEncodedString(
@@ -420,8 +423,8 @@ REGEX;
         }
 
         foreach ($matches as $match) {
-            $decoded = base64_decode($match[1], true);
-            if ($decoded !== false && str_contains($decoded, ':')) {
+            $decoded = self::decodeRecoverableBase64($match[1], 1, false);
+            if ($decoded !== null && str_contains($decoded, ':')) {
                 throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
             }
         }
@@ -429,13 +432,42 @@ REGEX;
 
     private static function assertNoSensitiveAssignments(string $value): void
     {
-        $match = preg_match(self::SENSITIVE_VALUE_PATTERN, $value);
+        $normalized = \Normalizer::normalize($value, \Normalizer::FORM_KC);
+        if ($normalized === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        $match = preg_match(self::SENSITIVE_VALUE_PATTERN, strtr($normalized, self::KEY_CONFUSABLES));
         if ($match === false) {
             throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
         }
 
         if ($match === 1) {
             throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+    }
+
+    private static function assertNoSensitiveJsonObjectKeys(string $value): void
+    {
+        $matches = [];
+        $matchCount = preg_match_all(self::JSON_OBJECT_KEY_PATTERN, $value, $matches, PREG_SET_ORDER);
+        if ($matchCount === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        foreach ($matches as $match) {
+            try {
+                $key = json_decode('"' . $match[1] . '"', flags: JSON_THROW_ON_ERROR);
+            } catch (\JsonException $exception) {
+                throw new \InvalidArgumentException(
+                    'paper_market_sensitive_field_rejected',
+                    previous: $exception,
+                );
+            }
+
+            if (!\is_string($key) || self::isSensitiveKey(self::normalizeKey($key))) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
         }
     }
 
@@ -613,9 +645,12 @@ REGEX;
         }
     }
 
-    private static function decodeCanonicalBase64(string $value): ?string
-    {
-        if (\strlen($value) < 8) {
+    private static function decodeRecoverableBase64(
+        string $value,
+        int $minimumLength = 8,
+        bool $allowUrlSafe = true,
+    ): ?string {
+        if (\strlen($value) < $minimumLength) {
             return null;
         }
 
@@ -625,13 +660,8 @@ REGEX;
         }
 
         $requiredPadding = (4 - \strlen($unpadded) % 4) % 4;
-        $actualPadding = \strlen($value) - \strlen($unpadded);
-        if ($actualPadding !== 0 && $actualPadding !== $requiredPadding) {
-            return null;
-        }
-
-        $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+={0,2}\z/D', $value);
-        $urlMatch = preg_match('/\A[A-Za-z0-9_-]+={0,2}\z/D', $value);
+        $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+=*\z/D', $value);
+        $urlMatch = $allowUrlSafe ? preg_match('/\A[A-Za-z0-9_-]+=*\z/D', $value) : 0;
         if ($classicMatch === false || $urlMatch === false) {
             throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
         }

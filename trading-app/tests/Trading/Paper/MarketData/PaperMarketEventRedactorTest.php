@@ -125,6 +125,38 @@ final class PaperMarketEventRedactorTest extends TestCase
         ]];
     }
 
+    #[DataProvider('malformedStructuredCredentialProvider')]
+    public function testRejectsMalformedStructuredCredentialStrings(string $malformed): void
+    {
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $malformed]);
+            self::fail('Malformed structured credential material must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function malformedStructuredCredentialProvider(): iterable
+    {
+        yield 'JSON-escaped credential key with trailing data' => [
+            '{"api\\u005fkey":"synthetic-secret-sentinel"} trailing',
+        ];
+        yield 'malformed query prefix before confusable credential key' => [
+            "ignored&аpi_key=synthetic-secret-sentinel",
+        ];
+        yield 'malformed query suffix after confusable credential key' => [
+            "аpi_key=synthetic-secret-sentinel&ignored",
+        ];
+        yield 'confusable credential assignment' => [
+            "аpi_key: synthetic-secret-sentinel",
+        ];
+        yield 'confusable JSON credential key with trailing data' => [
+            "{\"аpi_key\":\"synthetic-secret-sentinel\"} trailing",
+        ];
+    }
+
     public function testRejectsMapKeyStillPercentEncodedBeyondTheBoundedDecodeDepth(): void
     {
         $encodedKey = self::percentEncodeEveryByte('api_key');
@@ -217,7 +249,9 @@ final class PaperMarketEventRedactorTest extends TestCase
     public static function privateKeyEnvelopeProvider(): iterable
     {
         yield 'PKCS8 private key' => ['PRIVATE KEY'];
+        yield 'PKCS8 encrypted private key' => ['ENCRYPTED PRIVATE KEY'];
         yield 'PKCS1 RSA private key' => ['RSA PRIVATE KEY'];
+        yield 'legacy DSA private key' => ['DSA PRIVATE KEY'];
         yield 'SEC1 EC private key' => ['EC PRIVATE KEY'];
         yield 'OpenSSH private key' => ['OPENSSH PRIVATE KEY'];
     }
@@ -361,16 +395,20 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'URL-safe unpadded' => [rtrim($urlPadded, '=')];
     }
 
-    #[DataProvider('malformedBase64PaddingProvider')]
-    public function testDoesNotInterpretMalformedBase64PaddingAsCanonical(string $malformed): void
+    #[DataProvider('malformedBase64CredentialPaddingProvider')]
+    public function testRejectsCredentialsWithMalformedBase64Padding(string $malformed): void
     {
-        PaperMarketEventRedactor::assertSafe(['raw' => $malformed]);
-
-        self::addToAssertionCount(1);
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $malformed]);
+            self::fail('Credential material with malformed Base64 padding must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
     }
 
     /** @return iterable<string, array{string}> */
-    public static function malformedBase64PaddingProvider(): iterable
+    public static function malformedBase64CredentialPaddingProvider(): iterable
     {
         $requiresTwoPadding = self::base64CredentialWithPaddingCount(2);
         $requiresOnePadding = self::base64CredentialWithPaddingCount(1);
@@ -528,11 +566,33 @@ final class PaperMarketEventRedactorTest extends TestCase
         ]);
     }
 
+    public function testRejectsBasicCredentialsWithNoncanonicalPadding(): void
+    {
+        try {
+            PaperMarketEventRedactor::assertSafe(['header' => 'Basic dTpw==']);
+            self::fail('Basic credentials with noncanonical padding must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('dTpw', $exception->getMessage());
+        }
+    }
+
     public function testAllowsPublicBasicProtocolStatusText(): void
     {
         PaperMarketEventRedactor::assertSafe([
             'connection' => 'basic websocket disconnected',
             'update' => 'basic incremental update',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testAllowsPublicTextNearStructuredCredentialDetectionBoundaries(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'prose' => 'ignored & websocket disconnected',
+            'assignment' => 'connection_state: disconnected',
+            'query_status' => 'ignored&connection_state=disconnected',
         ]);
 
         self::addToAssertionCount(1);
