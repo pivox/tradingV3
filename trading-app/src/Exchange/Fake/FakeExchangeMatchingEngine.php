@@ -65,6 +65,8 @@ final readonly class FakeExchangeMatchingEngine
 
     private FakeOneWayConflictGuard $oneWayConflictGuard;
 
+    private FakeLiquidationCalculator $liquidationCalculator;
+
     public function __construct(
         private FakeExchangeStateStore $stateStore,
         private FakeExchangeOrderBook $orderBook,
@@ -74,11 +76,13 @@ final readonly class FakeExchangeMatchingEngine
         ?FakeFillCostModel $fillCostModel = null,
         ?FakeOneWayConflictGuard $oneWayConflictGuard = null,
         private ?FakeDailyLossCapGuard $dailyLossCapGuard = null,
+        ?FakeLiquidationCalculator $liquidationCalculator = null,
     ) {
         $this->instruments = $instruments ?? new FakeInstrumentCatalog();
         $this->orderValidator = $orderValidator ?? new FakeOrderValidator($this->instruments);
         $this->fillCostModel = $fillCostModel ?? new FakeFillCostModel();
         $this->oneWayConflictGuard = $oneWayConflictGuard ?? new FakeOneWayConflictGuard($this->stateStore);
+        $this->liquidationCalculator = $liquidationCalculator ?? new FakeLiquidationCalculator();
     }
 
     public function submit(PlaceOrderRequest $request): PlaceOrderResult
@@ -163,13 +167,39 @@ final readonly class FakeExchangeMatchingEngine
             );
         }
 
-        if ($request->postOnly && $this->wouldCross($request)) {
-            return $this->rejectOrder($request, 'post_only_would_cross', $trustedFallbackMetadata);
-        }
-
         $instrument = $this->instruments->find($request->symbol);
         if (!$instrument instanceof FakeInstrument) {
             throw new \LogicException('fake_instrument_metadata_unavailable');
+        }
+        $liquidationPreflight = $this->liquidationPreflight($request, $referencePrice, $instrument);
+        $liquidationMetadata = $liquidationPreflight !== null
+            ? array_filter(
+                $liquidationPreflight->toAuditMetadata(),
+                static fn (?string $value): bool => $value !== null,
+            )
+            : [];
+        if (
+            $liquidationPreflight instanceof FakeLiquidationResult
+            && (
+                $liquidationPreflight->status !== FakeLiquidationResult::READY
+                || $liquidationPreflight->markState !== FakeLiquidationResult::SAFE
+            )
+        ) {
+            $reason = $liquidationPreflight->reason;
+            if ($liquidationPreflight->status === FakeLiquidationResult::READY) {
+                $reason = 'liquidation_entry_inside_guard';
+            }
+
+            return $this->rejectOrder(
+                $request,
+                $reason ?? 'liquidation_metadata_invalid',
+                $trustedFallbackMetadata,
+                $liquidationMetadata,
+            );
+        }
+
+        if ($request->postOnly && $this->wouldCross($request)) {
+            return $this->rejectOrder($request, 'post_only_would_cross', $trustedFallbackMetadata);
         }
 
         if ($this->isStandaloneProtection($request) && $this->stateStore->consumeProtectionRejectionFlag()) {
@@ -194,6 +224,7 @@ final readonly class FakeExchangeMatchingEngine
             array_replace(
                 $this->requestMetadata($request, $referencePrice, $instrument->contractSize),
                 $trustedFallbackMetadata,
+                $liquidationMetadata,
             ),
         );
         $this->stateStore->saveOrder($order);
@@ -883,6 +914,57 @@ final readonly class FakeExchangeMatchingEngine
             + $this->lineageMetadata($request->metadata)
             + $this->fallbackPolicyMetadata($request->metadata)
             + $this->tp1TrailingPolicyMetadata($request->metadata);
+    }
+
+    private function liquidationPreflight(
+        PlaceOrderRequest $request,
+        float $referencePrice,
+        FakeInstrument $instrument,
+    ): ?FakeLiquidationResult {
+        if ($request->reduceOnly || $this->isStandaloneProtection($request)) {
+            return null;
+        }
+
+        $entryPrice = $request->orderType === ExchangeOrderType::LIMIT
+            ? $request->exactPrice()
+            : self::canonicalFloat($referencePrice);
+        $quantity = $request->exactQuantity();
+        $leverage = $request->leverage ?? 1;
+        if ($entryPrice === null || $quantity === null || $leverage <= 0) {
+            return $this->liquidationCalculator->calculate(new FakeLiquidationInput(
+                side: $request->positionSide ?? ExchangePositionSide::LONG,
+                marginMode: $request->marginMode,
+                quantity: $quantity,
+                entryPrice: $entryPrice,
+                isolatedMargin: null,
+                contractSize: $instrument->contractSize,
+                maintenanceMarginRate: $instrument->maintenanceMarginRate,
+                markPrice: $this->stateStore->getMarkPrice($request->symbol),
+            ));
+        }
+
+        try {
+            $quantityDecimal = BigDecimal::of($quantity);
+            $entryPriceDecimal = BigDecimal::of($entryPrice);
+            $contractSize = BigDecimal::of($instrument->contractSize);
+            $isolatedMargin = $quantityDecimal
+                ->multipliedBy($entryPriceDecimal)
+                ->multipliedBy($contractSize)
+                ->dividedBy($leverage, 12, RoundingMode::HALF_EVEN);
+        } catch (\Throwable) {
+            $isolatedMargin = null;
+        }
+
+        return $this->liquidationCalculator->calculate(new FakeLiquidationInput(
+            side: $request->positionSide ?? ExchangePositionSide::LONG,
+            marginMode: $request->marginMode,
+            quantity: $quantity,
+            entryPrice: $entryPrice,
+            isolatedMargin: $isolatedMargin !== null ? (string) $isolatedMargin : null,
+            contractSize: $instrument->contractSize,
+            maintenanceMarginRate: $instrument->maintenanceMarginRate,
+            markPrice: $this->stateStore->getMarkPrice($request->symbol),
+        ));
     }
 
     /**
@@ -1861,6 +1943,7 @@ final readonly class FakeExchangeMatchingEngine
             metadata: $this->appendEntryLedger(
                 array_replace(
                     $this->lineageMetadata($order->metadata),
+                    $this->liquidationMetadata($order->metadata),
                     $existingMetadata,
                 ),
                 $order->exchangeOrderId,
@@ -2119,6 +2202,19 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $policy;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    private function liquidationMetadata(array $metadata): array
+    {
+        return array_filter(
+            $metadata,
+            static fn (string $key): bool => str_starts_with($key, 'liquidation_'),
+            ARRAY_FILTER_USE_KEY,
+        );
     }
 
     private function protectionQuantity(ExchangeOrderDto $entryOrder): float

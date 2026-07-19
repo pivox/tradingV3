@@ -275,7 +275,7 @@ final readonly class FakeExchangeAdapter implements
             || trim($symbol) !== $symbol
             || strtoupper($symbol) !== $symbol
             || $leverage <= 0
-            || !\in_array($marginMode, ['isolated', 'cross'], true)
+            || $marginMode !== 'isolated'
         ) {
             return false;
         }

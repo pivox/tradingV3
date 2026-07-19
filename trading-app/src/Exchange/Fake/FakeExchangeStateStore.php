@@ -17,6 +17,8 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\MathException;
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -55,6 +57,9 @@ class FakeExchangeStateStore
 
     /** @var array<string, array{bid: float, ask: float}> */
     private array $orderBooks = [];
+
+    /** @var array<string, string> */
+    private array $markPrices = [];
 
     /** @var array<string, array{leverage:int,margin_mode:string}> */
     private array $leverageSettings = [];
@@ -100,6 +105,10 @@ class FakeExchangeStateStore
         $this->clientOrderIndex = [];
         $this->positions = [];
         $this->orderBooks = [];
+        $this->markPrices = [
+            'BTCUSDT' => '25000',
+            'ETHUSDT' => '1800',
+        ];
         $this->leverageSettings = [];
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
@@ -388,6 +397,48 @@ class FakeExchangeStateStore
         }
 
         $this->orderBooks[strtoupper($symbol)] = ['bid' => $bid, 'ask' => $ask];
+        $this->persist();
+    }
+
+    public function getMarkPrice(string $symbol): ?string
+    {
+        return $this->markPrices[strtoupper($symbol)] ?? null;
+    }
+
+    public function hasMarkPrice(string $symbol): bool
+    {
+        return \array_key_exists(strtoupper($symbol), $this->markPrices);
+    }
+
+    public function markPriceSource(): string
+    {
+        return FakeLiquidationPolicy::MARK_PRICE_SOURCE;
+    }
+
+    public function setMarkPrice(string $symbol, string $markPrice): void
+    {
+        $symbol = strtoupper($symbol);
+        if ($symbol === '' || trim($symbol) !== $symbol) {
+            throw new \InvalidArgumentException('fake_mark_price_symbol_invalid');
+        }
+
+        try {
+            $decimal = BigDecimal::of($markPrice)->stripTrailingZeros();
+        } catch (MathException $exception) {
+            throw new \InvalidArgumentException('fake_mark_price_invalid', 0, $exception);
+        }
+        if (!$decimal->isGreaterThan(0)) {
+            throw new \InvalidArgumentException('fake_mark_price_invalid');
+        }
+
+        $this->markPrices[$symbol] = (string) $decimal;
+        ksort($this->markPrices);
+        $this->persist();
+    }
+
+    public function clearMarkPrice(string $symbol): void
+    {
+        unset($this->markPrices[strtoupper($symbol)]);
         $this->persist();
     }
 
@@ -1277,6 +1328,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'markPrices' => $this->markPrices,
             'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
@@ -1349,6 +1401,7 @@ class FakeExchangeStateStore
         $positions = $state['positions'] ?? null;
         $balances = $state['balances'] ?? null;
         $orderBooks = $state['orderBooks'] ?? null;
+        $markPrices = $state['markPrices'] ?? [];
         $leverageSettings = $state['leverageSettings'] ?? [];
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
@@ -1367,6 +1420,7 @@ class FakeExchangeStateStore
             || !$this->isTypedMap($positions, ExchangePositionDto::class)
             || !$this->isTypedMap($balances, ExchangeBalanceDto::class)
             || !$this->isOrderBookMap($orderBooks)
+            || !$this->isMarkPriceMap($markPrices)
             || !$this->isLeverageSettingsMap($leverageSettings)
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
@@ -1382,6 +1436,7 @@ class FakeExchangeStateStore
         $this->positions = $positions;
         $this->balances = $balances;
         $this->orderBooks = $orderBooks;
+        $this->markPrices = $markPrices;
         $this->leverageSettings = $leverageSettings;
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
@@ -1494,6 +1549,34 @@ class FakeExchangeStateStore
                 || !\is_float($book['bid'] ?? null)
                 || !\is_float($book['ask'] ?? null)
             ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isMarkPriceMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $symbol => $markPrice) {
+            if (
+                !\is_string($symbol)
+                || $symbol === ''
+                || trim($symbol) !== $symbol
+                || strtoupper($symbol) !== $symbol
+                || !\is_string($markPrice)
+            ) {
+                return false;
+            }
+            try {
+                if (!BigDecimal::of($markPrice)->isGreaterThan(0)) {
+                    return false;
+                }
+            } catch (MathException) {
                 return false;
             }
         }
@@ -2020,6 +2103,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'markPrices' => $this->markPrices,
             'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
@@ -2042,6 +2126,7 @@ class FakeExchangeStateStore
         $this->positions = $snapshot['positions'];
         $this->balances = $snapshot['balances'];
         $this->orderBooks = $snapshot['orderBooks'];
+        $this->markPrices = $snapshot['markPrices'];
         $this->leverageSettings = $snapshot['leverageSettings'];
         $this->events = $snapshot['events'];
         $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];

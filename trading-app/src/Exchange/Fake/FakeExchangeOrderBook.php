@@ -35,6 +35,10 @@ final readonly class FakeExchangeOrderBook
         }
 
         $halfSpread = max($midPrice * ($spreadBps / 10000.0) / 2.0, 0.00000001);
+        $this->stateStore->setMarkPrice(
+            strtoupper($symbol),
+            json_encode($midPrice, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR),
+        );
         $this->stateStore->setOrderBookTop(strtoupper($symbol), $midPrice - $halfSpread, $midPrice + $halfSpread);
 
         return $this->top($symbol);
