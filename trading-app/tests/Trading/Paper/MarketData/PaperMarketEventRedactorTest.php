@@ -13,6 +13,14 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperMarketEventRedactor::class)]
 final class PaperMarketEventRedactorTest extends TestCase
 {
+    public function testDocumentsThePayloadResourceBudgets(): void
+    {
+        self::assertSame(20_000, PaperMarketEventRedactor::MAX_PAYLOAD_NODES);
+        self::assertSame(1_048_576, PaperMarketEventRedactor::MAX_PAYLOAD_BYTES);
+        self::assertSame(1_048_576, PaperMarketEventRedactor::MAX_PAYLOAD_KEY_BYTES);
+        self::assertSame(1_048_576, PaperMarketEventRedactor::MAX_PAYLOAD_STRING_BYTES);
+    }
+
     #[DataProvider('sensitiveKeyProvider')]
     public function testRejectsNormalizedSensitiveKeysRecursively(string $key): void
     {
@@ -177,6 +185,26 @@ final class PaperMarketEventRedactorTest extends TestCase
             'description' => 'public wallet statistics without a private identifier',
             'status' => 'signature verification unavailable',
             'mode' => 'basic market snapshot',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testRejectsActualBasicCredentials(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        PaperMarketEventRedactor::assertSafe([
+            'header' => 'Basic ' . base64_encode('synthetic-user:synthetic-secret-sentinel'),
+        ]);
+    }
+
+    public function testAllowsPublicBasicProtocolStatusText(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'connection' => 'basic websocket disconnected',
+            'update' => 'basic incremental update',
         ]);
 
         self::addToAssertionCount(1);

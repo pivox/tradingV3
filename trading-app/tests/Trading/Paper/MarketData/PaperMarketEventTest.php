@@ -164,6 +164,61 @@ final class PaperMarketEventTest extends TestCase
         );
     }
 
+    public function testRejectsExponentiallyExpandingSharedDagWithinSixtyFourMegabytes(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+$layers = [['price' => '29999.0']];
+for ($level = 1; $level <= 20; ++$level) {
+    $previous = &$layers[$level - 1];
+    $layers[$level] = ['left' => &$previous, 'right' => &$previous];
+    unset($previous);
+}
+
+try {
+    \App\Trading\Paper\MarketData\PaperMarketEvent::create(
+        \App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+        'BTCUSDT',
+        \App\Trading\Paper\MarketData\PaperMarketDataChannel::TOP_OF_BOOK,
+        new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+        new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+        '42',
+        $layers[20],
+    );
+} catch (\InvalidArgumentException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit(0);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(2);
+PHP,
+            var_export($autoload, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=64M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(20.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_market_payload_nodes_exceeded', $process->getOutput());
+    }
+
     public function testTimestampsNormalizeToUtcWithMicroseconds(): void
     {
         $event = PaperMarketEvent::create(
@@ -623,6 +678,92 @@ PHP,
         $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
 
         self::event(payload: ['book' => [['authorization' => 'must-not-be-stored']]]);
+    }
+
+    public function testCreateRejectsCompoundSensitivePayloadKeys(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        self::event(payload: ['HYPERLIQUID_PRIVATE_KEY' => 'synthetic-secret-sentinel']);
+    }
+
+    public function testCreateRejectsRawJsonPayloadStringsWithEscapedSensitiveKeys(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        self::event(payload: ['raw' => '{"api\u005fkey":"synthetic-secret-sentinel"}']);
+    }
+
+    public function testCreateRejectsRawFormPayloadStringsWithEncodedSensitiveKeys(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        self::event(payload: ['raw' => 'api%5Fkey=synthetic-secret-sentinel']);
+    }
+
+    public function testCreateRejectsWhitespacePrefixedPhpSerializedPayloadStrings(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        self::event(payload: [
+            'raw' => " \n\t" . serialize(['api_key' => 'synthetic-secret-sentinel']),
+        ]);
+    }
+
+    public function testCreateRejectsOversizedPayloadKeysBeforeNormalization(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_key_too_large');
+
+        self::event(payload: [str_repeat('k', 1_048_577) => 'public-value']);
+    }
+
+    public function testCreateRejectsPayloadsBeyondTheAggregateByteBudget(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_bytes_exceeded');
+
+        self::event(payload: [
+            'levels' => array_fill(0, 1_025, str_repeat('x', 1_024)),
+        ]);
+    }
+
+    /** @param array<array-key, mixed> $payload */
+    #[DataProvider('unsafePayloadProvider')]
+    public function testFromArrayRejectsUnsafePayloadsWithoutDisclosingInput(array $payload): void
+    {
+        $data = self::event()->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        try {
+            PaperMarketEvent::fromArray($data);
+            self::fail('An unsafe payload must be rejected by fromArray().');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{array<array-key, mixed>}> */
+    public static function unsafePayloadProvider(): iterable
+    {
+        yield 'compound sensitive key' => [[
+            'HYPERLIQUID_PRIVATE_KEY' => 'synthetic-secret-sentinel',
+        ]];
+        yield 'escaped raw JSON' => [[
+            'raw' => '{"api\u005fkey":"synthetic-secret-sentinel"}',
+        ]];
+        yield 'encoded raw form data' => [[
+            'raw' => 'api%5Fkey=synthetic-secret-sentinel',
+        ]];
+        yield 'whitespace-prefixed PHP serialization' => [[
+            'raw' => " \n\t" . serialize(['api_key' => 'synthetic-secret-sentinel']),
+        ]];
     }
 
     /**

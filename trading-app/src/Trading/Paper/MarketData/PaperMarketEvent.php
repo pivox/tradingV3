@@ -217,12 +217,72 @@ final readonly class PaperMarketEvent
      */
     private static function detachPayload(array $payload): array
     {
+        $nodeCount = 0;
+        $byteCount = 0;
+
+        return self::detachPayloadWithinBudget($payload, $nodeCount, $byteCount);
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function detachPayloadWithinBudget(
+        array $payload,
+        int &$nodeCount,
+        int &$byteCount,
+    ): array {
+        self::consumeDetachNode($nodeCount);
         $detached = [];
         foreach ($payload as $key => $value) {
-            $detached[$key] = \is_array($value) ? self::detachPayload($value) : $value;
+            if (\is_string($key)) {
+                if (\strlen($key) > PaperMarketEventRedactor::MAX_PAYLOAD_KEY_BYTES) {
+                    throw new \InvalidArgumentException('paper_market_payload_key_too_large');
+                }
+
+                self::consumeDetachBytes($byteCount, \strlen($key));
+            }
+
+            if (\is_array($value)) {
+                $detached[$key] = self::detachPayloadWithinBudget($value, $nodeCount, $byteCount);
+
+                continue;
+            }
+
+            self::consumeDetachNode($nodeCount);
+            if (\is_string($value)) {
+                if (\strlen($value) > PaperMarketEventRedactor::MAX_PAYLOAD_STRING_BYTES) {
+                    throw new \InvalidArgumentException('paper_market_payload_string_too_large');
+                }
+
+                self::consumeDetachBytes($byteCount, \strlen($value));
+            }
+
+            $detached[$key] = $value;
         }
 
         return $detached;
+    }
+
+    private static function consumeDetachNode(int &$nodeCount): void
+    {
+        ++$nodeCount;
+        if ($nodeCount > PaperMarketEventRedactor::MAX_PAYLOAD_NODES) {
+            throw new \InvalidArgumentException('paper_market_payload_nodes_exceeded');
+        }
+    }
+
+    private static function consumeDetachBytes(int &$byteCount, int $bytes): void
+    {
+        if (
+            $bytes > PaperMarketEventRedactor::MAX_PAYLOAD_BYTES
+            || $byteCount > PaperMarketEventRedactor::MAX_PAYLOAD_BYTES - $bytes
+        ) {
+            throw new \InvalidArgumentException('paper_market_payload_bytes_exceeded');
+        }
+
+        $byteCount += $bytes;
     }
 
     /**
