@@ -15,7 +15,7 @@
 | 4 | #196 — Funding positif/négatif | done | issue/196-funding-v1 | #285 | 6b5aa4654a230eafdbfc356ee726fe5e76fe1293 | worker_complex → review_fix | verte | favorable sur 6b5aa4654a | 2026-07-18T11:29:44Z |
 | 5 | #196 — Garde One-Way | done | issue/196-one-way-conflict-v1 | #286 | a93b7b82047c17324a8e3a763cdb72db23e31d59 | worker_complex → review_fix | verte | favorable sur a93b7b8204 | 2026-07-18T12:25:56Z |
 | 6 | #196 — Recette Fake multi-profils | done | issue/196-fake-multi-profile-recipe-v1 | #287 | 2118216288d065c233d17d7a8245ec39c3364f69 | worker_complex → review_fix → review_escalated | verte | favorable sur 2118216288 | 2026-07-18T19:56:15Z |
-| 7 | #196 — Daily loss cap | done | issue/196-daily-loss-cap-v1 | #288 | 3890e6d08229187eb9a7e9e773f67b2b50d34e04 | worker_critical → review_escalated | verte | favorable sur 3890e6d082 | 2026-07-18T22:47:12Z |
+| 7 | #196 — Daily loss cap | done | issue/196-daily-loss-cap-v1 | #288 | 00c730884a684dc0a772625ddaf7b097483b4884 | worker_critical → review_escalated | verte | favorable sur 00c730884a | 2026-07-19T06:29:41Z |
 | 8 | #196 — Liquidation guard/model | pending | — | — | — | — | — | — | — |
 | 9 | #196 — Audit final Fake/Paper | pending | — | — | — | — | — | — | — |
 | 10 | #195 — Inventaire statique Bitmart | pending | — | — | — | — | — | — | — |
