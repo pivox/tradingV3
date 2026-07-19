@@ -157,6 +157,29 @@ final class PaperMarketEventRedactorTest extends TestCase
         ];
     }
 
+    public function testRejectsEscapedSensitiveJsonObjectKeyAfterNonJsonPrefix(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {"api\\u005fkey":"' . $sentinel . '"}';
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A prefixed escaped sensitive JSON object key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($sentinel, $exception->getMessage());
+        }
+    }
+
+    public function testAllowsPublicJsonObjectKeysAfterNonJsonPrefix(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'raw' => 'prefix {"symbol":"BTCUSDT","price":"29999.0"}',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
     public function testRejectsMapKeyStillPercentEncodedBeyondTheBoundedDecodeDepth(): void
     {
         $encodedKey = self::percentEncodeEveryByte('api_key');

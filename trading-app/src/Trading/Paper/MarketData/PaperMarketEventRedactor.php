@@ -303,6 +303,7 @@ REGEX;
         self::assertNoPrivateKeyEnvelopeMarkers($canonical);
         self::assertNoBasicCredentials($canonical);
         self::assertNoSensitiveAssignments($canonical);
+        self::assertNoSensitiveJsonObjectKeys($canonical);
 
         $firstByte = $canonical[0];
         if ($firstByte === '{' || $firstByte === '[' || $firstByte === '"') {
@@ -321,7 +322,6 @@ REGEX;
                     );
                 }
 
-                self::assertNoSensitiveJsonObjectKeys($canonical);
                 $decoded = null;
             }
 
