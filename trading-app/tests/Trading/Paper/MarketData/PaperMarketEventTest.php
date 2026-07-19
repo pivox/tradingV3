@@ -1,0 +1,409 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Trading\Paper\MarketData;
+
+use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
+use App\Trading\Paper\MarketData\PaperMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+
+#[CoversClass(PaperMarketEvent::class)]
+#[CoversClass(CanonicalJson::class)]
+final class PaperMarketEventTest extends TestCase
+{
+    public function testContractEnumsExposeOnlyTheApprovedValues(): void
+    {
+        self::assertSame(['okx', 'hyperliquid'], array_column(PaperMarketDataVenue::cases(), 'value'));
+        self::assertSame([
+            'candle_1m',
+            'candle_5m',
+            'candle_15m',
+            'candle_1h',
+            'top_of_book',
+            'public_trade',
+            'connection_state',
+            'snapshot_boundary',
+        ], array_column(PaperMarketDataChannel::cases(), 'value'));
+        self::assertSame([
+            'recorded_public_book_and_trades',
+            'public_historical_candles_and_trades',
+            'incomplete',
+        ], array_column(PaperMarketDataQuality::cases(), 'value'));
+    }
+
+    public function testSourceInterfaceExposesVenueAndIterableEvents(): void
+    {
+        $event = self::event();
+        $source = new class($event) implements PaperMarketDataSourceInterface {
+            public function __construct(private readonly PaperMarketEvent $event)
+            {
+            }
+
+            public function venue(): PaperMarketDataVenue
+            {
+                return PaperMarketDataVenue::OKX;
+            }
+
+            public function events(): iterable
+            {
+                yield $this->event;
+            }
+        };
+
+        self::assertSame(PaperMarketDataVenue::OKX, $source->venue());
+        self::assertSame([$event], iterator_to_array($source->events()));
+    }
+
+    public function testCreatesDeterministicImmutableEventAndStrictlyRoundTrips(): void
+    {
+        $event = self::event();
+        $expectedEventId = hash(
+            'sha256',
+            '1|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|42',
+        );
+        $expectedPayloadHash = hash(
+            'sha256',
+            '{"ask":"30001.0","bid":"29999.0"}',
+        );
+
+        self::assertSame(1, $event->schemaVersion);
+        self::assertSame($expectedEventId, $event->eventId);
+        self::assertSame(PaperMarketDataVenue::OKX, $event->sourceVenue);
+        self::assertSame('BTCUSDT', $event->symbol);
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $event->channel);
+        self::assertSame('2026-07-19T10:00:00.123456Z', $event->exchangeTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame('2026-07-19T10:00:00.223456Z', $event->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame('42', $event->sequence);
+        self::assertSame(['ask' => '30001.0', 'bid' => '29999.0'], $event->payload);
+        self::assertSame($expectedPayloadHash, $event->payloadHash);
+        self::assertSame([
+            'schema_version' => 1,
+            'event_id' => $expectedEventId,
+            'source_venue' => 'okx',
+            'symbol' => 'BTCUSDT',
+            'channel' => 'top_of_book',
+            'exchange_timestamp' => '2026-07-19T10:00:00.123456Z',
+            'received_timestamp' => '2026-07-19T10:00:00.223456Z',
+            'sequence' => '42',
+            'payload' => ['ask' => '30001.0', 'bid' => '29999.0'],
+            'payload_hash' => $expectedPayloadHash,
+        ], $event->toArray());
+
+        $restored = PaperMarketEvent::fromArray($event->toArray());
+
+        self::assertNotSame($event, $restored);
+        self::assertEquals($event, $restored);
+        self::assertSame($event->toArray(), $restored->toArray());
+        self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->isReadOnly());
+        self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->getConstructor()?->isPrivate());
+    }
+
+    public function testTimestampsNormalizeToUtcWithMicroseconds(): void
+    {
+        $event = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::HYPERLIQUID,
+            symbol: 'ethusdt',
+            channel: PaperMarketDataChannel::PUBLIC_TRADE,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.123456+02:00'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T05:00:00.654321-05:00'),
+            sequence: null,
+            payload: ['price' => '3500.0', 'size' => '0.5'],
+        );
+
+        self::assertSame('UTC', $event->exchangeTimestamp->getTimezone()->getName());
+        self::assertSame('UTC', $event->receivedTimestamp->getTimezone()->getName());
+        self::assertSame('2026-07-19T10:00:00.123456Z', $event->toArray()['exchange_timestamp']);
+        self::assertSame('2026-07-19T10:00:00.654321Z', $event->toArray()['received_timestamp']);
+    }
+
+    public function testCanonicalPayloadHashIgnoresAssociativeKeyOrderRecursively(): void
+    {
+        $first = self::event(
+            sequence: null,
+            payload: [
+                'book' => ['ask' => '30001.0', 'bid' => '29999.0'],
+                'meta' => ['source' => 'public', 'depth' => 1],
+            ],
+        );
+        $second = self::event(
+            sequence: null,
+            payload: [
+                'meta' => ['depth' => 1, 'source' => 'public'],
+                'book' => ['bid' => '29999.0', 'ask' => '30001.0'],
+            ],
+        );
+
+        self::assertSame($first->payloadHash, $second->payloadHash);
+        self::assertSame($first->eventId, $second->eventId);
+    }
+
+    public function testCanonicalPayloadHashPreservesListOrder(): void
+    {
+        $first = self::event(sequence: null, payload: ['levels' => [['29999.0', '1'], ['29998.0', '2']]]);
+        $second = self::event(sequence: null, payload: ['levels' => [['29998.0', '2'], ['29999.0', '1']]]);
+
+        self::assertNotSame($first->payloadHash, $second->payloadHash);
+        self::assertNotSame($first->eventId, $second->eventId);
+    }
+
+    public function testCanonicalJsonUsesTheRequiredStableFlags(): void
+    {
+        self::assertSame(
+            '{"a":["é","https://example.test/public",1.0],"z":{"a":1,"b":2}}',
+            CanonicalJson::encode([
+                'z' => ['b' => 2, 'a' => 1],
+                'a' => ['é', 'https://example.test/public', 1.0],
+            ]),
+        );
+    }
+
+    public function testCanonicalJsonPreservesIntegerKeyedMapSemanticsAfterSorting(): void
+    {
+        $map = [1 => 'one', 0 => 'zero'];
+        $list = ['zero', 'one'];
+
+        self::assertSame('{"0":"zero","1":"one"}', CanonicalJson::encode($map));
+        self::assertNotSame(CanonicalJson::encode($list), CanonicalJson::encode($map));
+    }
+
+    #[DataProvider('unsupportedCanonicalValueProvider')]
+    public function testCanonicalJsonRejectsObjectsAndNonFiniteNumbers(mixed $value): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        CanonicalJson::encode(['nested' => ['value' => $value]]);
+    }
+
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function unsupportedCanonicalValueProvider(): iterable
+    {
+        yield 'object' => [new \stdClass()];
+        yield 'positive infinity' => [INF];
+        yield 'negative infinity' => [-INF];
+        yield 'not a number' => [NAN];
+    }
+
+    public function testCanonicalJsonRejectsResources(): void
+    {
+        $resource = fopen('php://memory', 'r');
+        self::assertIsResource($resource);
+
+        try {
+            $this->expectException(\InvalidArgumentException::class);
+            CanonicalJson::encode(['resource' => $resource]);
+        } finally {
+            fclose($resource);
+        }
+    }
+
+    #[DataProvider('allowedSymbolProvider')]
+    public function testOnlyBtcAndEthUsdtSymbolsAreAccepted(string $input, string $expected): void
+    {
+        self::assertSame($expected, self::event(symbol: $input)->symbol);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function allowedSymbolProvider(): iterable
+    {
+        yield 'BTC lowercase' => ['btcusdt', 'BTCUSDT'];
+        yield 'ETH mixed case' => ['EthUsdt', 'ETHUSDT'];
+    }
+
+    #[DataProvider('rejectedSymbolProvider')]
+    public function testRejectsEverySymbolOutsideTheExactAllowlist(string $symbol): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_symbol_not_allowed');
+
+        self::event(symbol: $symbol);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function rejectedSymbolProvider(): iterable
+    {
+        yield 'other asset' => ['SOLUSDT'];
+        yield 'other quote' => ['BTCUSD'];
+        yield 'separator' => ['BTC-USDT'];
+        yield 'surrounding whitespace' => [' BTCUSDT '];
+        yield 'empty' => [''];
+    }
+
+    #[DataProvider('invalidSequenceProvider')]
+    public function testNonNullSequenceMustContainDecimalDigitsOnly(string $sequence): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sequence_invalid');
+
+        self::event(sequence: $sequence);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function invalidSequenceProvider(): iterable
+    {
+        yield 'empty' => [''];
+        yield 'negative' => ['-1'];
+        yield 'decimal' => ['1.5'];
+        yield 'whitespace' => [' 42'];
+        yield 'letters' => ['seq-42'];
+    }
+
+    public function testNullSequenceUsesTheCanonicalPayloadHashAsIdentityTail(): void
+    {
+        $event = self::event(sequence: null);
+
+        self::assertSame(
+            hash(
+                'sha256',
+                '1|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|' . $event->payloadHash,
+            ),
+            $event->eventId,
+        );
+    }
+
+    public function testFromArrayRejectsForgedPayloadHash(): void
+    {
+        $data = self::event()->toArray();
+        $data['payload_hash'] = str_repeat('0', 64);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_hash_mismatch');
+
+        PaperMarketEvent::fromArray($data);
+    }
+
+    public function testFromArrayRejectsPayloadChangedBehindItsHash(): void
+    {
+        $data = self::event()->toArray();
+        $data['payload']['ask'] = '99999.0';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_hash_mismatch');
+
+        PaperMarketEvent::fromArray($data);
+    }
+
+    public function testFromArrayRejectsForgedEventId(): void
+    {
+        $data = self::event()->toArray();
+        $data['event_id'] = str_repeat('0', 64);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_event_id_mismatch');
+
+        PaperMarketEvent::fromArray($data);
+    }
+
+    #[DataProvider('unsupportedEnumValueProvider')]
+    public function testFromArrayRejectsUnsupportedVenueOrChannel(string $key, string $value, string $reason): void
+    {
+        $data = self::event()->toArray();
+        $data[$key] = $value;
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($reason);
+
+        PaperMarketEvent::fromArray($data);
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function unsupportedEnumValueProvider(): iterable
+    {
+        yield 'unsupported venue' => ['source_venue', 'other_venue', 'paper_market_venue_unsupported'];
+        yield 'unsupported channel' => ['channel', 'private_order', 'paper_market_channel_unsupported'];
+    }
+
+    public function testFromArrayRejectsMissingAndUnknownContractKeys(): void
+    {
+        $missing = self::event()->toArray();
+        unset($missing['received_timestamp']);
+
+        try {
+            PaperMarketEvent::fromArray($missing);
+            self::fail('A missing contract key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_event_shape_invalid', $exception->getMessage());
+        }
+
+        $unknown = self::event()->toArray();
+        $unknown['exchange'] = 'fake';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_event_shape_invalid');
+
+        PaperMarketEvent::fromArray($unknown);
+    }
+
+    #[DataProvider('invalidStrictFieldProvider')]
+    public function testFromArrayRejectsInvalidStrictFieldTypes(string $key, mixed $value, string $reason): void
+    {
+        $data = self::event()->toArray();
+        $data[$key] = $value;
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($reason);
+
+        PaperMarketEvent::fromArray($data);
+    }
+
+    /**
+     * @return iterable<string, array{string, mixed, string}>
+     */
+    public static function invalidStrictFieldProvider(): iterable
+    {
+        yield 'schema version string' => ['schema_version', '1', 'paper_market_schema_version_unsupported'];
+        yield 'future schema version' => ['schema_version', 2, 'paper_market_schema_version_unsupported'];
+        yield 'event id not a string' => ['event_id', 123, 'paper_market_event_shape_invalid'];
+        yield 'venue not a string' => ['source_venue', ['okx'], 'paper_market_event_shape_invalid'];
+        yield 'symbol not a string' => ['symbol', 123, 'paper_market_event_shape_invalid'];
+        yield 'channel not a string' => ['channel', true, 'paper_market_event_shape_invalid'];
+        yield 'exchange timestamp lacks microseconds' => ['exchange_timestamp', '2026-07-19T10:00:00Z', 'paper_market_timestamp_invalid'];
+        yield 'received timestamp has offset' => ['received_timestamp', '2026-07-19T12:00:00.223456+02:00', 'paper_market_timestamp_invalid'];
+        yield 'sequence integer' => ['sequence', 42, 'paper_market_sequence_invalid'];
+        yield 'payload scalar' => ['payload', 'public-data', 'paper_market_event_shape_invalid'];
+        yield 'payload hash not a string' => ['payload_hash', false, 'paper_market_event_shape_invalid'];
+    }
+
+    public function testCreateRejectsSensitivePayloadKeysAtAnyDepth(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        self::event(payload: ['book' => [['authorization' => 'must-not-be-stored']]]);
+    }
+
+    /**
+     * @param array<mixed> $payload
+     */
+    private static function event(
+        string $symbol = 'btcusdt',
+        ?string $sequence = '42',
+        array $payload = ['ask' => '30001.0', 'bid' => '29999.0'],
+    ): PaperMarketEvent {
+        return PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: $symbol,
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+            sequence: $sequence,
+            payload: $payload,
+        );
+    }
+}
