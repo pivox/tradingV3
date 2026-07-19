@@ -990,6 +990,7 @@ final readonly class FakeExchangeMatchingEngine
             $fillFee,
             $fillCost,
         );
+        $this->assertLiquidationCloseLedgerComplete($exitLedger);
         $closePayload = $this->certifiedClosePayload(
             $position,
             $exitLedger,
@@ -1071,9 +1072,41 @@ final readonly class FakeExchangeMatchingEngine
             ['order_id' => $order->exchangeOrderId, 'close_reason' => 'liquidation'] + $closePayload,
         ));
         $this->stateStore->applyCertifiedBalanceDeltaUsdt(
-            self::canonicalFloat((float) $closePayload['recorded_pnl_usdt']),
+            (string) $closePayload['recorded_pnl_usdt_decimal'],
             $result->policy->modelVersion,
         );
+    }
+
+    /** @param array<string,mixed> $ledger */
+    private function assertLiquidationCloseLedgerComplete(array $ledger): void
+    {
+        foreach ([
+            'entry_qty',
+            'exit_qty',
+            'entry_notional_usdt',
+            'exit_notional_usdt',
+            'entry_fee_usdt',
+            'exit_fee_usdt',
+            'entry_spread_cost_usdt',
+            'exit_spread_cost_usdt',
+            'entry_slippage_cost_usdt',
+            'exit_slippage_cost_usdt',
+        ] as $key) {
+            $value = $ledger[$key] ?? null;
+            if (!\is_int($value) && !\is_float($value) && !\is_string($value)) {
+                throw new \LogicException('fake_liquidation_close_ledger_incomplete');
+            }
+            if (!is_numeric($value) || !\is_finite((float) $value) || (float) $value < 0.0) {
+                throw new \LogicException('fake_liquidation_close_ledger_invalid');
+            }
+        }
+        if (
+            ($ledger['cost_model_version'] ?? null) !== FakeFillCostModel::MODEL_VERSION
+            || ($ledger['spread_model_version'] ?? null) !== FakeFillCostModel::SPREAD_MODEL_VERSION
+            || ($ledger['pnl_source'] ?? null) !== 'fake_paper_fill_ledger_v1'
+        ) {
+            throw new \LogicException('fake_liquidation_close_ledger_model_invalid');
+        }
     }
 
     private function liquidationGrossPnl(FakeLiquidationResult $result): string
@@ -2608,16 +2641,31 @@ final readonly class FakeExchangeMatchingEngine
             + $this->metadataFloat($closeLedger, 'exit_slippage_cost_usdt');
         $entryOrderCount = max(1, (int) round($this->metadataFloat($closeLedger, 'entry_order_count')));
         $lineageSufficient = $entryOrderCount <= 1;
-        $gross = $position->side === ExchangePositionSide::SHORT
-            ? $entryNotional - $exitNotional
-            : $exitNotional - $entryNotional;
+        try {
+            $entryNotionalDecimal = BigDecimal::of(self::canonicalFloat($entryNotional));
+            $exitNotionalDecimal = BigDecimal::of(self::canonicalFloat($exitNotional));
+            $grossDecimal = $position->side === ExchangePositionSide::SHORT
+                ? $entryNotionalDecimal->minus($exitNotionalDecimal)
+                : $exitNotionalDecimal->minus($entryNotionalDecimal);
+            $recordedPnlDecimal = $grossDecimal
+                ->minus(self::canonicalFloat($entryFee))
+                ->minus(self::canonicalFloat($exitFee))
+                ->minus(self::canonicalFloat($spreadCost))
+                ->minus(self::canonicalFloat($slippageCost))
+                ->minus(self::canonicalFloat($liquidationFeeUsdt))
+                ->toScale(12, RoundingMode::HALF_EVEN);
+            $grossDecimal = $grossDecimal->toScale(12, RoundingMode::HALF_EVEN);
+        } catch (\Throwable) {
+            throw new \LogicException('fake_certified_close_decimal_invalid');
+        }
+        $gross = (float) (string) $grossDecimal;
+        $recordedPnl = (float) (string) $recordedPnlDecimal;
 
         return $this->lineageMetadata($closeLedger) + [
             'gross_realized_pnl_usdt' => round($gross, 12),
-            'recorded_pnl_usdt' => round(
-                $gross - $entryFee - $exitFee - $spreadCost - $slippageCost - $liquidationFeeUsdt,
-                12,
-            ),
+            'gross_realized_pnl_usdt_decimal' => (string) $grossDecimal,
+            'recorded_pnl_usdt' => round($recordedPnl, 12),
+            'recorded_pnl_usdt_decimal' => (string) $recordedPnlDecimal,
             'entry_fee_usdt' => round($entryFee, 12),
             'exit_fee_usdt' => round($exitFee, 12),
             'other_trading_fees_usdt' => 0.0,

@@ -186,7 +186,12 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame('liquidation', $closed->payload['close_reason'] ?? null);
         self::assertSame(110.0, $closed->payload['liquidation_fee_usdt'] ?? null);
         self::assertSame(-3157.0, $closed->payload['recorded_pnl_usdt'] ?? null);
+        self::assertSame('-3157.000000000000', $closed->payload['recorded_pnl_usdt_decimal'] ?? null);
         self::assertSame(96843.0, $state->totalBalanceUsdt());
+        self::assertSame(
+            '-3157.000000000000',
+            $state->getBalances()[0]->metadata['last_certified_balance_delta_usdt'] ?? null,
+        );
 
         $cancelledProtections = array_values(array_filter(
             $state->getOrders('BTCUSDT'),
@@ -389,6 +394,35 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame('23320.326633165829', $position->metadata['liquidation_guard_price_decimal'] ?? null);
     }
 
+    public function testLiquidationRollsBackEveryMutationWhenBalanceBookingFails(): void
+    {
+        $state = new FailingLiquidationBalanceStateStore();
+        $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+        [$adapter, $scenario] = $this->runtimeForState($state);
+        $adapter->placeOrder($this->entryRequest(
+            clientOrderId: 'liquidation-atomic-rollback',
+            attachedStopLossPrice: 22500.0,
+            attachedTakeProfitPrice: 27000.0,
+        ));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $eventsBefore = $state->events();
+        $state->failBalanceBooking = true;
+
+        try {
+            $scenario->movePrice('BTCUSDT', 22000.0);
+            self::fail('The injected balance booking failure must abort liquidation.');
+        } catch (\LogicException $exception) {
+            self::assertSame('forced_liquidation_balance_booking_failure', $exception->getMessage());
+        }
+
+        self::assertSame('25000', $state->getMarkPrice('BTCUSDT'));
+        self::assertNotNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertCount(2, $state->getOpenOrders('BTCUSDT'));
+        self::assertSame(100000.0, $state->totalBalanceUsdt());
+    }
+
     /**
      * @return array{FakeExchangeAdapter,FakeExchangeScenarioService,FakeExchangeStateStore}
      */
@@ -452,5 +486,19 @@ final class FakeLiquidationIntegrationTest extends TestCase
                 return new \DateTimeImmutable('2026-07-19T10:00:00+00:00');
             }
         };
+    }
+}
+
+final class FailingLiquidationBalanceStateStore extends FakeExchangeStateStore
+{
+    public bool $failBalanceBooking = false;
+
+    public function applyCertifiedBalanceDeltaUsdt(string $delta, string $modelVersion): void
+    {
+        if ($this->failBalanceBooking) {
+            throw new \LogicException('forced_liquidation_balance_booking_failure');
+        }
+
+        parent::applyCertifiedBalanceDeltaUsdt($delta, $modelVersion);
     }
 }
