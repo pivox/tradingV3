@@ -17,6 +17,9 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\MathException;
+use Brick\Math\RoundingMode;
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -30,6 +33,7 @@ class FakeExchangeStateStore
     private const PRIVATE_WS_CONNECTED = 'connected';
     private const PRIVATE_WS_RESYNC_REQUIRED = 'resync_required';
     private const PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA = 'fake-private-ws-snapshot-proof-v1';
+    private const LIQUIDATION_BALANCE_CLAMP_MODEL_VERSION = 'fake-liquidation-balance-floor-v1';
 
     private ?string $stateFile;
 
@@ -55,6 +59,9 @@ class FakeExchangeStateStore
 
     /** @var array<string, array{bid: float, ask: float}> */
     private array $orderBooks = [];
+
+    /** @var array<string, string> */
+    private array $markPrices = [];
 
     /** @var array<string, array{leverage:int,margin_mode:string}> */
     private array $leverageSettings = [];
@@ -100,6 +107,10 @@ class FakeExchangeStateStore
         $this->clientOrderIndex = [];
         $this->positions = [];
         $this->orderBooks = [];
+        $this->markPrices = [
+            'BTCUSDT' => '25000',
+            'ETHUSDT' => '1800',
+        ];
         $this->leverageSettings = [];
         $this->events = [];
         $this->rejectNextProtectionOrder = false;
@@ -363,6 +374,55 @@ class FakeExchangeStateStore
         return max($this->marginCollateralUsdt() - $this->usedMarginUsdt(), 0.0);
     }
 
+    public function applyCertifiedBalanceDeltaUsdt(string $delta, string $modelVersion): void
+    {
+        $balance = $this->balances['USDT'] ?? null;
+        if (!$balance instanceof ExchangeBalanceDto) {
+            throw new \LogicException('fake_usdt_balance_unavailable');
+        }
+        if ($modelVersion !== FakeLiquidationPolicy::MODEL_VERSION) {
+            throw new \LogicException('fake_liquidation_balance_model_invalid');
+        }
+
+        try {
+            $deltaDecimal = BigDecimal::of($delta);
+            $totalDecimal = BigDecimal::of(self::canonicalFloat($balance->total ?? $balance->available));
+            $equityDecimal = BigDecimal::of(self::canonicalFloat($balance->equity ?? (float) (string) $totalDecimal));
+            $newTotal = $totalDecimal->plus($deltaDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+            $newEquity = $equityDecimal->plus($deltaDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+        } catch (\Throwable) {
+            throw new \LogicException('fake_liquidation_balance_delta_invalid');
+        }
+        $zero = BigDecimal::zero()->toScale(12, RoundingMode::HALF_EVEN);
+        $clamped = $newTotal->isNegative() || $newEquity->isNegative();
+        $bookedTotal = $newTotal->isNegative() ? $zero : $newTotal;
+        $bookedEquity = $newEquity->isNegative() ? $zero : $newEquity;
+        $appliedDelta = $bookedTotal->minus($totalDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+        $shortfall = $deltaDecimal
+            ->minus($appliedDelta)
+            ->abs()
+            ->toScale(12, RoundingMode::HALF_EVEN);
+
+        $this->balances['USDT'] = new ExchangeBalanceDto(
+            exchange: $balance->exchange,
+            marketType: $balance->marketType,
+            currency: $balance->currency,
+            available: (float) (string) $bookedTotal,
+            total: (float) (string) $bookedTotal,
+            equity: (float) (string) $bookedEquity,
+            unrealizedPnl: $balance->unrealizedPnl,
+            metadata: array_replace($balance->metadata, [
+                'last_certified_balance_delta_usdt' => (string) $deltaDecimal->toScale(12, RoundingMode::HALF_EVEN),
+                'last_certified_balance_applied_delta_usdt' => (string) $appliedDelta,
+                'last_certified_balance_shortfall_usdt' => (string) $shortfall,
+                'last_certified_balance_clamped' => $clamped,
+                'last_certified_balance_clamp_model_version' => self::LIQUIDATION_BALANCE_CLAMP_MODEL_VERSION,
+                'last_certified_balance_model_version' => $modelVersion,
+            ]),
+        );
+        $this->persist();
+    }
+
     /**
      * @return array{bid: float, ask: float}
      */
@@ -388,6 +448,48 @@ class FakeExchangeStateStore
         }
 
         $this->orderBooks[strtoupper($symbol)] = ['bid' => $bid, 'ask' => $ask];
+        $this->persist();
+    }
+
+    public function getMarkPrice(string $symbol): ?string
+    {
+        return $this->markPrices[strtoupper($symbol)] ?? null;
+    }
+
+    public function hasMarkPrice(string $symbol): bool
+    {
+        return \array_key_exists(strtoupper($symbol), $this->markPrices);
+    }
+
+    public function markPriceSource(): string
+    {
+        return FakeLiquidationPolicy::MARK_PRICE_SOURCE;
+    }
+
+    public function setMarkPrice(string $symbol, string $markPrice): void
+    {
+        $symbol = strtoupper($symbol);
+        if ($symbol === '' || trim($symbol) !== $symbol) {
+            throw new \InvalidArgumentException('fake_mark_price_symbol_invalid');
+        }
+
+        try {
+            $decimal = BigDecimal::of($markPrice)->stripTrailingZeros();
+        } catch (MathException $exception) {
+            throw new \InvalidArgumentException('fake_mark_price_invalid', 0, $exception);
+        }
+        if (!$decimal->isGreaterThan(0)) {
+            throw new \InvalidArgumentException('fake_mark_price_invalid');
+        }
+
+        $this->markPrices[$symbol] = (string) $decimal;
+        ksort($this->markPrices);
+        $this->persist();
+    }
+
+    public function clearMarkPrice(string $symbol): void
+    {
+        unset($this->markPrices[strtoupper($symbol)]);
         $this->persist();
     }
 
@@ -1157,6 +1259,15 @@ class FakeExchangeStateStore
         return $price;
     }
 
+    private static function canonicalFloat(float $value): string
+    {
+        if (!\is_finite($value)) {
+            throw new \LogicException('fake_decimal_float_invalid');
+        }
+
+        return json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+    }
+
     private function isActiveStatus(ExchangeOrderStatus $status): bool
     {
         return \in_array($status, [
@@ -1277,6 +1388,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'markPrices' => $this->markPrices,
             'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
@@ -1349,6 +1461,7 @@ class FakeExchangeStateStore
         $positions = $state['positions'] ?? null;
         $balances = $state['balances'] ?? null;
         $orderBooks = $state['orderBooks'] ?? null;
+        $markPrices = $state['markPrices'] ?? [];
         $leverageSettings = $state['leverageSettings'] ?? [];
         $events = $state['events'] ?? null;
         $rejectNextProtectionOrder = $state['rejectNextProtectionOrder'] ?? null;
@@ -1367,6 +1480,7 @@ class FakeExchangeStateStore
             || !$this->isTypedMap($positions, ExchangePositionDto::class)
             || !$this->isTypedMap($balances, ExchangeBalanceDto::class)
             || !$this->isOrderBookMap($orderBooks)
+            || !$this->isMarkPriceMap($markPrices)
             || !$this->isLeverageSettingsMap($leverageSettings)
             || !$this->isTypedArray($events, FakeExchangeEvent::class)
             || !\is_bool($rejectNextProtectionOrder)
@@ -1382,6 +1496,7 @@ class FakeExchangeStateStore
         $this->positions = $positions;
         $this->balances = $balances;
         $this->orderBooks = $orderBooks;
+        $this->markPrices = $markPrices;
         $this->leverageSettings = $leverageSettings;
         $this->events = array_values($events);
         $this->rejectNextProtectionOrder = $rejectNextProtectionOrder;
@@ -1494,6 +1609,34 @@ class FakeExchangeStateStore
                 || !\is_float($book['bid'] ?? null)
                 || !\is_float($book['ask'] ?? null)
             ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isMarkPriceMap(mixed $value): bool
+    {
+        if (!\is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $symbol => $markPrice) {
+            if (
+                !\is_string($symbol)
+                || $symbol === ''
+                || trim($symbol) !== $symbol
+                || strtoupper($symbol) !== $symbol
+                || !\is_string($markPrice)
+            ) {
+                return false;
+            }
+            try {
+                if (!BigDecimal::of($markPrice)->isGreaterThan(0)) {
+                    return false;
+                }
+            } catch (MathException) {
                 return false;
             }
         }
@@ -2020,6 +2163,7 @@ class FakeExchangeStateStore
             'positions' => $this->positions,
             'balances' => $this->balances,
             'orderBooks' => $this->orderBooks,
+            'markPrices' => $this->markPrices,
             'leverageSettings' => $this->leverageSettings,
             'events' => $this->events,
             'rejectNextProtectionOrder' => $this->rejectNextProtectionOrder,
@@ -2042,6 +2186,7 @@ class FakeExchangeStateStore
         $this->positions = $snapshot['positions'];
         $this->balances = $snapshot['balances'];
         $this->orderBooks = $snapshot['orderBooks'];
+        $this->markPrices = $snapshot['markPrices'];
         $this->leverageSettings = $snapshot['leverageSettings'];
         $this->events = $snapshot['events'];
         $this->rejectNextProtectionOrder = $snapshot['rejectNextProtectionOrder'];

@@ -13,9 +13,12 @@ use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeFundingReceived;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
 final readonly class FillCostLedgerIngestionService
@@ -72,6 +75,7 @@ final readonly class FillCostLedgerIngestionService
             $payload,
             $qualityFlags,
         );
+        $liquidationFeeUsdt = $this->liquidationFeeUsdt($metadata, $payload, $qualityFlags);
         $source = $this->source($metadata, $payload);
         $sourceVersion = $this->string($metadata['source_version'] ?? $payload['source_version'] ?? null)
             ?? $this->string($metadata['pnl_source'] ?? $payload['pnl_source'] ?? null)
@@ -102,7 +106,7 @@ final readonly class FillCostLedgerIngestionService
             'spread_cost_usdt' => $spreadCostUsdt,
             'slippage_cost_usdt' => $slippageCostUsdt,
             'borrow_cost_usdt' => null,
-            'liquidation_fee_usdt' => null,
+            'liquidation_fee_usdt' => $liquidationFeeUsdt,
             'occurred_at' => $fill->filledAt->format(\DateTimeInterface::ATOM),
             'source' => $source,
             'source_version' => $sourceVersion,
@@ -459,6 +463,106 @@ final readonly class FillCostLedgerIngestionService
         }
 
         return $this->decimal($cost);
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $payload
+     * @param list<string> $qualityFlags
+     */
+    private function liquidationFeeUsdt(
+        array $metadata,
+        array $payload,
+        array &$qualityFlags,
+    ): ?string {
+        $feeKeys = [
+            'liquidation_fee_decimal',
+            'liquidation_fee_usdt_decimal',
+            'liquidation_fee_usdt',
+        ];
+        $feePresent = false;
+        $exactFeeSelected = false;
+        $value = null;
+        foreach ($feeKeys as $key) {
+            if (array_key_exists($key, $metadata)) {
+                $feePresent = true;
+                $exactFeeSelected = $key !== 'liquidation_fee_usdt';
+                $value = $metadata[$key];
+
+                break;
+            }
+            if (array_key_exists($key, $payload)) {
+                $feePresent = true;
+                $exactFeeSelected = $key !== 'liquidation_fee_usdt';
+                $value = $payload[$key];
+
+                break;
+            }
+        }
+        if (!$feePresent) {
+            return null;
+        }
+
+        $currency = strtoupper((string) (
+            $metadata['liquidation_fee_currency']
+            ?? $payload['liquidation_fee_currency']
+            ?? ''
+        ));
+        if ($currency !== 'USDT') {
+            $qualityFlags[] = 'liquidation_fee_currency_unknown';
+
+            return null;
+        }
+        $modelVersion = $this->string(
+            $metadata['liquidation_fee_model_version']
+            ?? $payload['liquidation_fee_model_version']
+            ?? null,
+        );
+        if ($modelVersion !== FakeLiquidationPolicy::FEE_MODEL_VERSION) {
+            $qualityFlags[] = 'liquidation_fee_model_unknown';
+
+            return null;
+        }
+
+        if ($value === null || $value === '') {
+            $qualityFlags[] = 'liquidation_fee_unknown';
+
+            return null;
+        }
+        if (!is_numeric($value)) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+        if (\is_float($value)) {
+            if ($exactFeeSelected) {
+                $qualityFlags[] = 'liquidation_fee_invalid';
+
+                return null;
+            }
+            if (!\is_finite($value) || $value < 0.0) {
+                $qualityFlags[] = 'liquidation_fee_invalid';
+
+                return null;
+            }
+
+            return $this->decimal($value);
+        }
+
+        try {
+            $fee = BigDecimal::of((string) $value);
+        } catch (\Throwable) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+        if ($fee->isNegative()) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+
+        return (string) $fee->toScale(12, RoundingMode::HALF_EVEN);
     }
 
     /**

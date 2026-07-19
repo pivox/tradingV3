@@ -469,7 +469,7 @@ final class FakeExchangeAdapterTest extends TestCase
 
     public function testSetLeverageReplacesExistingSymbolSettingDeterministically(): void
     {
-        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 10, 'cross'));
+        self::assertTrue($this->adapter->setLeverage('BTCUSDT', 10, 'isolated'));
         self::assertTrue($this->adapter->setLeverage('BTCUSDT', 25, 'isolated'));
 
         self::assertSame([

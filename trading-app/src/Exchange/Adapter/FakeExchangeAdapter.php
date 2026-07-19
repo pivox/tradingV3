@@ -104,7 +104,7 @@ final readonly class FakeExchangeAdapter implements
             'spread_model' => FakeFillCostModel::SPREAD_MODEL_VERSION,
             'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
             'precision_model_version' => $catalog->precisionModelVersion(),
-        ] + ($dailyLossCap?->toAuditMetadata() ?? [
+        ] + $this->matchingEngine->liquidationModelMetadata() + ($dailyLossCap?->toAuditMetadata() ?? [
             'daily_loss_cap_policy_version' => null,
             'daily_loss_cap_status' => 'not_configured',
             'daily_loss_cap_detail_reason' => 'daily_loss_cap_guard_not_configured',
@@ -190,7 +190,7 @@ final readonly class FakeExchangeAdapter implements
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $fills = [];
         foreach ($this->stateStore->events() as $index => $event) {
-            if (!\in_array($event->type, ['order.filled', 'order.partially_filled'], true)) {
+            if (!\in_array($event->type, ['order.filled', 'order.partially_filled', 'liquidation.filled'], true)) {
                 continue;
             }
             if ($normalizedSymbol !== null && $event->symbol !== $normalizedSymbol) {
@@ -275,7 +275,7 @@ final readonly class FakeExchangeAdapter implements
             || trim($symbol) !== $symbol
             || strtoupper($symbol) !== $symbol
             || $leverage <= 0
-            || !\in_array($marginMode, ['isolated', 'cross'], true)
+            || $marginMode !== 'isolated'
         ) {
             return false;
         }
@@ -382,6 +382,7 @@ final readonly class FakeExchangeAdapter implements
                 'source' => 'fake_exchange_rest_reconciliation',
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                ...($event->type === 'liquidation.filled' ? $this->fillLineageMetadata($order) : []),
                 ...$this->fillCostMetadata($event),
             ],
         );
@@ -399,6 +400,12 @@ final readonly class FakeExchangeAdapter implements
             'slippage_cost_usdt',
             'cost_model_version',
             'spread_model_version',
+            'liquidation_fee_usdt',
+            'liquidation_fee_decimal',
+            'liquidation_fee_rate',
+            'liquidation_fee_currency',
+            'liquidation_fee_model_version',
+            'liquidation_identity',
         ] as $key) {
             if (array_key_exists($key, $event->payload)) {
                 $metadata[$key] = $event->payload[$key];
@@ -406,6 +413,21 @@ final readonly class FakeExchangeAdapter implements
         }
 
         return $metadata;
+    }
+
+    /** @return array<string,mixed> */
+    private function fillLineageMetadata(ExchangeOrderDto $order): array
+    {
+        return array_intersect_key($order->metadata, array_flip([
+            'internal_trade_id',
+            'trade_id',
+            'internal_position_id',
+            'position_id',
+            'exchange_position_id',
+            'order_intent_id',
+            'run_id',
+            'decision_key',
+        ]));
     }
 
     private function fillFee(float $quantity, float $price): float

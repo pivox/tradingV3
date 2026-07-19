@@ -27,6 +27,7 @@ use App\Exchange\Fake\FakeFundingModel;
 use App\Exchange\Fake\FakeFundingModelConfig;
 use App\Exchange\Fake\FakeFundingSchedule;
 use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Provider\Fake\FakeOrderProvider;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
@@ -144,6 +145,185 @@ final class FakeDailyLossCapGuardTest extends TestCase
         self::assertSame('-10.000000000000', $status->dailyNetUsdt);
         self::assertSame('10.000000000000', $status->consumptionUsdt);
         self::assertSame('limit_reached', $status->status);
+    }
+
+    public function testLiquidationFillSubtractsSeparateFeeExactlyOnce(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T14:45:00+00:00');
+        $state->appendEvent(new FakeExchangeEvent(
+            'liquidation.filled',
+            'BTCUSDT',
+            $clock->now(),
+            [
+                'fill_quantity' => '1.000000000000',
+                'fill_price' => '100.000000000000',
+                'fill_fee' => '1.000000000000',
+                'fee_currency' => 'USDT',
+                'liquidity_role' => 'taker',
+                'spread_cost_usdt' => '2.000000000000',
+                'slippage_cost_usdt' => '3.000000000000',
+                'cost_model_version' => FakeFillCostModel::MODEL_VERSION,
+                'spread_model_version' => FakeFillCostModel::SPREAD_MODEL_VERSION,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '-5.000000000000',
+                'liquidation_fee_usdt' => '4.000000000000',
+                'liquidation_fee_currency' => 'USDT',
+                'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $status = $this->guard($state, $clock, '15')->current();
+
+        self::assertSame('-15.000000000000', $status->dailyNetUsdt);
+        self::assertSame('15.000000000000', $status->consumptionUsdt);
+        self::assertSame('limit_reached', $status->status);
+        self::assertSame(1, $status->monetaryEventCount);
+    }
+
+    public function testLiquidationFillUsesExactDecimalFeeAtTheCapBoundary(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T14:47:00+00:00');
+        $state->appendEvent(new FakeExchangeEvent(
+            'liquidation.filled',
+            'BTCUSDT',
+            $clock->now(),
+            [
+                'fill_quantity' => '1.000000000000',
+                'fill_price' => '100.000000000000',
+                'fill_fee' => '0.000000000000',
+                'fee_currency' => 'USDT',
+                'liquidity_role' => 'taker',
+                'spread_cost_usdt' => '0.000000000000',
+                'slippage_cost_usdt' => '0.000000000000',
+                'cost_model_version' => FakeFillCostModel::MODEL_VERSION,
+                'spread_model_version' => FakeFillCostModel::SPREAD_MODEL_VERSION,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '0.000000000000',
+                'liquidation_fee_usdt' => 10159.6,
+                'liquidation_fee_decimal' => '10159.600000000001',
+                'liquidation_fee_currency' => 'USDT',
+                'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $status = $this->guard($state, $clock, '10159.600000000001')->current();
+
+        self::assertSame('-10159.600000000001', $status->dailyNetUsdt);
+        self::assertSame('10159.600000000001', $status->consumptionUsdt);
+        self::assertSame('limit_reached', $status->status);
+        self::assertSame(1, $status->monetaryEventCount);
+    }
+
+    public function testFloatOnlyLiquidationFeeFailsClosedAsInexactLegacyState(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T14:48:00+00:00');
+        $state->appendEvent(new FakeExchangeEvent(
+            'liquidation.filled',
+            'BTCUSDT',
+            $clock->now(),
+            [
+                'fill_quantity' => '1.000000000000',
+                'fill_price' => '100.000000000000',
+                'fill_fee' => '0.000000000000',
+                'fee_currency' => 'USDT',
+                'liquidity_role' => 'taker',
+                'spread_cost_usdt' => '0.000000000000',
+                'slippage_cost_usdt' => '0.000000000000',
+                'cost_model_version' => FakeFillCostModel::MODEL_VERSION,
+                'spread_model_version' => FakeFillCostModel::SPREAD_MODEL_VERSION,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '0.000000000000',
+                'liquidation_fee_usdt' => 4.0,
+                'liquidation_fee_currency' => 'USDT',
+                'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('liquidation_fee_exact_unknown', $status->detailReason);
+        self::assertNull($status->dailyNetUsdt);
+    }
+
+    public function testFloatValuedExactLiquidationFeeFieldFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T14:49:00+00:00');
+        $state->appendEvent(new FakeExchangeEvent(
+            'liquidation.filled',
+            'BTCUSDT',
+            $clock->now(),
+            [
+                'fill_quantity' => '1.000000000000',
+                'fill_price' => '100.000000000000',
+                'fill_fee' => '0.000000000000',
+                'fee_currency' => 'USDT',
+                'liquidity_role' => 'taker',
+                'spread_cost_usdt' => '0.000000000000',
+                'slippage_cost_usdt' => '0.000000000000',
+                'cost_model_version' => FakeFillCostModel::MODEL_VERSION,
+                'spread_model_version' => FakeFillCostModel::SPREAD_MODEL_VERSION,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '0.000000000000',
+                'liquidation_fee_usdt' => 4.0,
+                'liquidation_fee_decimal' => 4.0,
+                'liquidation_fee_currency' => 'USDT',
+                'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('liquidation_fee_exact_unknown', $status->detailReason);
+        self::assertNull($status->dailyNetUsdt);
+    }
+
+    public function testLiquidationFillWithoutKnownFeeFailsClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $clock = new MutableDailyLossClock('2026-07-18T14:50:00+00:00');
+        $state->appendEvent(new FakeExchangeEvent(
+            'liquidation.filled',
+            'BTCUSDT',
+            $clock->now(),
+            [
+                'fill_quantity' => '1.000000000000',
+                'fill_price' => '100.000000000000',
+                'fill_fee' => '1.000000000000',
+                'fee_currency' => 'USDT',
+                'liquidity_role' => 'taker',
+                'spread_cost_usdt' => '0.000000000000',
+                'slippage_cost_usdt' => '0.000000000000',
+                'cost_model_version' => FakeFillCostModel::MODEL_VERSION,
+                'spread_model_version' => FakeFillCostModel::SPREAD_MODEL_VERSION,
+                'pnl_source' => 'fake_paper_fill_ledger_v1',
+                'cost_completeness' => 'complete',
+                'realized_gross_pnl_usdt' => '-5.000000000000',
+                'liquidation_fee_usdt' => null,
+                'liquidation_fee_currency' => 'USDT',
+                'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+                'order_snapshot' => ['reduce_only' => true],
+            ],
+        ));
+
+        $status = $this->guard($state, $clock)->current();
+
+        self::assertSame('not_computable', $status->status);
+        self::assertSame('liquidation_fee_unknown', $status->detailReason);
+        self::assertNull($status->dailyNetUsdt);
     }
 
     public function testUnknownNecessaryCostIsNeverConvertedToZeroAndBlocksFailClosed(): void

@@ -9,6 +9,8 @@ use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeFillCostModel;
+use App\Exchange\Fake\FakeInstrumentCatalog;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Exchange\Readiness\ExchangeReadinessEvaluator;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Exchange\Readiness\ExchangeReadinessReport;
@@ -75,6 +77,18 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         }
         if (!self::slippageModelReady($model)) {
             $blockingErrors[] = 'fake_paper_slippage_model_not_ready';
+        }
+        if (!self::liquidationModelReady($model)) {
+            $blockingErrors[] = 'fake_paper_liquidation_model_not_ready';
+        }
+        if (!$this->liquidationMarksReady()) {
+            $blockingErrors[] = 'fake_paper_liquidation_mark_not_ready';
+        }
+        if ($this->hasPersistedCrossMarginState()) {
+            $blockingErrors[] = 'fake_paper_cross_margin_state_unsupported';
+        }
+        if (!$this->openPositionLiquidationStateReady()) {
+            $blockingErrors[] = 'fake_paper_liquidation_position_state_not_ready';
         }
         if (($model['daily_loss_cap_status'] ?? null) === 'limit_reached') {
             $blockingErrors[] = 'fake_paper_daily_loss_cap_reached';
@@ -179,5 +193,93 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
             && \is_finite((float) $slippageBps)
             && (float) $slippageBps === FakeFillCostModel::TAKER_SLIPPAGE_BPS
             && ($model['spread_model'] ?? null) === FakeFillCostModel::SPREAD_MODEL_VERSION;
+    }
+
+    /**
+     * @param array<string,mixed> $model
+     * @internal
+     */
+    public static function liquidationModelReady(array $model): bool
+    {
+        return ($model['liquidation_model_version'] ?? null) === FakeLiquidationPolicy::MODEL_VERSION
+            && ($model['liquidation_supported_margin_mode'] ?? null) === 'isolated'
+            && ($model['liquidation_cross_margin_status'] ?? null) === 'unsupported'
+            && ($model['liquidation_guard_buffer_rate'] ?? null) === '0.010000000000'
+            && ($model['liquidation_fee_rate'] ?? null) === '0.005000000000'
+            && ($model['liquidation_fee_currency'] ?? null) === 'USDT'
+            && ($model['liquidation_fee_model_version'] ?? null) === FakeLiquidationPolicy::FEE_MODEL_VERSION
+            && ($model['liquidation_mark_price_source'] ?? null) === FakeLiquidationPolicy::MARK_PRICE_SOURCE;
+    }
+
+    private function liquidationMarksReady(): bool
+    {
+        foreach ((new FakeInstrumentCatalog())->all() as $instrument) {
+            $markPrice = $this->stateStore->getMarkPrice($instrument->symbol);
+            if (!\is_string($markPrice) || !is_numeric($markPrice) || (float) $markPrice <= 0.0) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function hasPersistedCrossMarginState(): bool
+    {
+        foreach ($this->stateStore->leverageSettings() as $setting) {
+            if ($setting['margin_mode'] === 'cross') {
+                return true;
+            }
+        }
+        foreach ($this->stateStore->getOpenPositions() as $position) {
+            if (($position->metadata['liquidation_margin_mode'] ?? null) === 'cross') {
+                return true;
+            }
+        }
+        foreach ($this->stateStore->getOpenOrders() as $order) {
+            if (($order->metadata['margin_mode'] ?? null) === 'cross') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function openPositionLiquidationStateReady(): bool
+    {
+        foreach ($this->stateStore->getOpenPositions() as $position) {
+            if (
+                ($position->metadata['liquidation_model_version'] ?? null) !== FakeLiquidationPolicy::MODEL_VERSION
+                || ($position->metadata['liquidation_margin_mode'] ?? null) !== 'isolated'
+            ) {
+                return false;
+            }
+            foreach ([
+                'liquidation_position_identity',
+                'liquidation_quantity_decimal',
+                'liquidation_entry_price_decimal',
+                'liquidation_isolated_margin_decimal',
+                'liquidation_contract_size_decimal',
+                'liquidation_maintenance_margin_rate',
+                'liquidation_price_decimal',
+                'liquidation_guard_price_decimal',
+            ] as $key) {
+                $value = $position->metadata[$key] ?? null;
+                if (!\is_string($value)) {
+                    return false;
+                }
+                if ($key === 'liquidation_position_identity') {
+                    if (preg_match('/^fake-position-[a-f0-9]{40}$/D', $value) !== 1) {
+                        return false;
+                    }
+
+                    continue;
+                }
+                if (!is_numeric($value)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 }
