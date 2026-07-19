@@ -883,6 +883,7 @@ final readonly class FakeExchangeMatchingEngine
         ));
     }
 
+    /** @param array<string,mixed> $metadata */
     private function positionWithMark(
         ExchangePositionDto $position,
         FakeLiquidationResult $result,
@@ -2481,7 +2482,7 @@ final readonly class FakeExchangeMatchingEngine
         if (($metadata['liquidation_model_version'] ?? null) === null) {
             return $metadata;
         }
-        if (($metadata['liquidation_model_version'] ?? null) !== FakeLiquidationPolicy::MODEL_VERSION) {
+        if ($metadata['liquidation_model_version'] !== FakeLiquidationPolicy::MODEL_VERSION) {
             throw new \LogicException('fake_liquidation_position_metadata_invalid');
         }
 

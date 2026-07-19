@@ -240,7 +240,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 'order_status' => $order->status->value,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
-                ...$this->fillLineageMetadata($order),
+                ...($event->type === 'liquidation.filled' ? $this->fillLineageMetadata($order) : []),
                 ...$this->fillCostMetadata($event),
             ],
         );

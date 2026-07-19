@@ -382,7 +382,7 @@ final readonly class FakeExchangeAdapter implements
                 'source' => 'fake_exchange_rest_reconciliation',
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
-                ...$this->fillLineageMetadata($order),
+                ...($event->type === 'liquidation.filled' ? $this->fillLineageMetadata($order) : []),
                 ...$this->fillCostMetadata($event),
             ],
         );
