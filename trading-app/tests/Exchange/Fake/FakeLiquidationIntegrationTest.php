@@ -792,34 +792,56 @@ final class FakeLiquidationIntegrationTest extends TestCase
         }
     }
 
-    public function testPartialReductionRecalculatesLiquidationQuantityMarginAndFee(): void
+    public function testPartialReductionWithoutControlledMarkRecalculatesLiquidationQuantityMarginAndFee(): void
     {
         [$adapter, $scenario, $state] = $this->runtime();
         $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-partial-entry'));
-        $reduction = $adapter->placeOrder(new PlaceOrderRequest(
-            exchange: Exchange::FAKE,
-            marketType: MarketType::PERPETUAL,
-            symbol: 'BTCUSDT',
-            side: ExchangeOrderSide::SELL,
-            positionSide: ExchangePositionSide::LONG,
-            orderType: ExchangeOrderType::MARKET,
-            timeInForce: ExchangeTimeInForce::GTC,
-            quantity: 0.4,
-            price: null,
-            stopPrice: null,
-            reduceOnly: true,
-            postOnly: false,
-            leverage: 10,
-            marginMode: 'isolated',
-            clientOrderId: 'liquidation-partial-reduce',
-            quantityDecimal: '0.4',
-        ));
+        $state->clearMarkPrice('BTCUSDT');
+        self::assertNull($state->getMarkPrice('BTCUSDT'));
+
+        $reduction = null;
+        $failure = null;
+        try {
+            $reduction = $adapter->placeOrder(new PlaceOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                side: ExchangeOrderSide::SELL,
+                positionSide: ExchangePositionSide::LONG,
+                orderType: ExchangeOrderType::MARKET,
+                timeInForce: ExchangeTimeInForce::GTC,
+                quantity: 0.4,
+                price: null,
+                stopPrice: null,
+                reduceOnly: true,
+                postOnly: false,
+                leverage: 10,
+                marginMode: 'isolated',
+                clientOrderId: 'liquidation-partial-reduce',
+                quantityDecimal: '0.4',
+            ));
+        } catch (\LogicException $exception) {
+            $failure = $exception->getMessage();
+        }
+
+        self::assertNull($failure, 'A missing controlled mark must not roll back a reduce-only fill.');
+        self::assertNotNull($reduction);
         self::assertSame(ExchangeOrderStatus::FILLED, $reduction->status);
 
         $remaining = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
         self::assertNotNull($remaining);
+        self::assertSame(0.6, $remaining->size);
+        self::assertSame(1500.0, $remaining->margin);
         self::assertSame('0.600000000000', $remaining->metadata['liquidation_quantity_decimal'] ?? null);
         self::assertSame('1500.000000000000', $remaining->metadata['liquidation_isolated_margin_decimal'] ?? null);
+        self::assertSame('25000.000000000000', $remaining->metadata['liquidation_mark_price_decimal'] ?? null);
+        self::assertSame('22613.065326633166', $remaining->metadata['liquidation_price_decimal'] ?? null);
+        self::assertSame('22863.065326633166', $remaining->metadata['liquidation_guard_price_decimal'] ?? null);
+        self::assertNull($state->getMarkPrice('BTCUSDT'));
+        self::assertCount(2, $state->events('order.filled'));
+        self::assertCount(1, $state->events('position.updated'));
+        $liquidationFillsBeforeMove = $state->events('liquidation.filled');
+        self::assertCount(0, $liquidationFillsBeforeMove);
 
         $scenario->movePrice('BTCUSDT', 22000.0);
 

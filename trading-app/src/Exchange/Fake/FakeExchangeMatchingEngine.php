@@ -2626,6 +2626,9 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_liquidation_position_metadata_invalid');
         }
 
+        // A partial reduction may reuse the last certified mark solely to recalculate exact isolated metadata.
+        $calculationMarkPrice = $this->stateStore->getMarkPrice($position->symbol)
+            ?? $this->stringMetadata($metadata, 'liquidation_mark_price_decimal');
         $result = $this->liquidationCalculator->calculate(new FakeLiquidationInput(
             side: $position->side,
             marginMode: $this->stringMetadata($metadata, 'liquidation_margin_mode') ?? 'unknown',
@@ -2634,7 +2637,7 @@ final readonly class FakeExchangeMatchingEngine
             isolatedMargin: (string) $remainingMargin,
             contractSize: $this->stringMetadata($metadata, 'liquidation_contract_size_decimal'),
             maintenanceMarginRate: $this->stringMetadata($metadata, 'liquidation_maintenance_margin_rate'),
-            markPrice: $this->stateStore->getMarkPrice($position->symbol),
+            markPrice: $calculationMarkPrice,
         ));
         if ($result->status !== FakeLiquidationResult::READY) {
             throw new \LogicException($result->reason ?? 'fake_liquidation_position_metadata_invalid');
