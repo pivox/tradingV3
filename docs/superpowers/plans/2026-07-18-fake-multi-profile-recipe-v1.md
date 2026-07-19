@@ -1,5 +1,13 @@
 # Fake Multi-Profile Recipe v1 Implementation Plan
 
+> **Superseded certification status (2026-07-19).** This checked plan preserves
+> Prompt 6's historical implementation target and completion record; it is not
+> the current golden-suite certification. The source of truth is
+> [`docs/handbook/reports/fake-paper-final-audit-196.md`](../../handbook/reports/fake-paper-final-audit-196.md).
+> Scenario 20 is `partial`: its Python tests use in-memory HTTP test doubles,
+> and the PHP golden runner does not launch the full recipe twice from two fresh
+> application stacks.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Fake/Paper golden scenario 20 executable through one deterministic dry-run recipe for regular, scalper, and scalper_micro on the same symbol.
