@@ -190,7 +190,7 @@ final readonly class FakeExchangeAdapter implements
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $fills = [];
         foreach ($this->stateStore->events() as $index => $event) {
-            if (!\in_array($event->type, ['order.filled', 'order.partially_filled'], true)) {
+            if (!\in_array($event->type, ['order.filled', 'order.partially_filled', 'liquidation.filled'], true)) {
                 continue;
             }
             if ($normalizedSymbol !== null && $event->symbol !== $normalizedSymbol) {
@@ -399,6 +399,12 @@ final readonly class FakeExchangeAdapter implements
             'slippage_cost_usdt',
             'cost_model_version',
             'spread_model_version',
+            'liquidation_fee_usdt',
+            'liquidation_fee_decimal',
+            'liquidation_fee_rate',
+            'liquidation_fee_currency',
+            'liquidation_fee_model_version',
+            'liquidation_identity',
         ] as $key) {
             if (array_key_exists($key, $event->payload)) {
                 $metadata[$key] = $event->payload[$key];

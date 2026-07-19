@@ -19,6 +19,7 @@ use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
+use Brick\Math\RoundingMode;
 use Symfony\Component\DependencyInjection\Attribute\Autoconfigure;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -370,6 +371,45 @@ class FakeExchangeStateStore
     public function availableMarginUsdt(): float
     {
         return max($this->marginCollateralUsdt() - $this->usedMarginUsdt(), 0.0);
+    }
+
+    public function applyCertifiedBalanceDeltaUsdt(string $delta, string $modelVersion): void
+    {
+        $balance = $this->balances['USDT'] ?? null;
+        if (!$balance instanceof ExchangeBalanceDto) {
+            throw new \LogicException('fake_usdt_balance_unavailable');
+        }
+        if ($modelVersion !== FakeLiquidationPolicy::MODEL_VERSION) {
+            throw new \LogicException('fake_liquidation_balance_model_invalid');
+        }
+
+        try {
+            $deltaDecimal = BigDecimal::of($delta);
+            $totalDecimal = BigDecimal::of(self::canonicalFloat($balance->total ?? $balance->available));
+            $equityDecimal = BigDecimal::of(self::canonicalFloat($balance->equity ?? (float) (string) $totalDecimal));
+            $newTotal = $totalDecimal->plus($deltaDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+            $newEquity = $equityDecimal->plus($deltaDecimal)->toScale(12, RoundingMode::HALF_EVEN);
+        } catch (\Throwable) {
+            throw new \LogicException('fake_liquidation_balance_delta_invalid');
+        }
+        if ($newTotal->isNegative() || $newEquity->isNegative()) {
+            throw new \LogicException('fake_liquidation_balance_negative');
+        }
+
+        $this->balances['USDT'] = new ExchangeBalanceDto(
+            exchange: $balance->exchange,
+            marketType: $balance->marketType,
+            currency: $balance->currency,
+            available: (float) (string) $newTotal,
+            total: (float) (string) $newTotal,
+            equity: (float) (string) $newEquity,
+            unrealizedPnl: $balance->unrealizedPnl,
+            metadata: array_replace($balance->metadata, [
+                'last_certified_balance_delta_usdt' => (string) $deltaDecimal->toScale(12, RoundingMode::HALF_EVEN),
+                'last_certified_balance_model_version' => $modelVersion,
+            ]),
+        );
+        $this->persist();
     }
 
     /**
@@ -1206,6 +1246,15 @@ class FakeExchangeStateStore
         }
 
         return $price;
+    }
+
+    private static function canonicalFloat(float $value): string
+    {
+        if (!\is_finite($value)) {
+            throw new \LogicException('fake_decimal_float_invalid');
+        }
+
+        return json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
     }
 
     private function isActiveStatus(ExchangeOrderStatus $status): bool

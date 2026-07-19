@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Dto\PlaceOrderRequest;
+use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
@@ -134,6 +135,243 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame([], $state->getOpenPositions('BTCUSDT'));
     }
 
+    public function testGuardEntryIsAuditedOnceWithoutLiquidation(): void
+    {
+        [, $scenario, $state] = $this->runtime();
+        [$adapter] = $this->runtimeForState($state);
+        $adapter->placeOrder($this->entryRequest());
+
+        $first = $scenario->movePrice('BTCUSDT', 22800.0);
+        $second = $scenario->movePrice('BTCUSDT', 22800.0);
+
+        self::assertSame([], $first['matched_orders']);
+        self::assertSame([], $second['matched_orders']);
+        self::assertNotNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        self::assertCount(1, $state->events('liquidation.guard_entered'));
+        self::assertSame('22800.000000000000', $state->events('liquidation.guard_entered')[0]->payload['liquidation_mark_price_decimal'] ?? null);
+        self::assertSame([], $state->events('liquidation.filled'));
+        self::assertSame([], $state->events('position.closed'));
+    }
+
+    public function testLongGapLiquidatesAtObservedMarkWithSeparateFeeAndProtectionCleanup(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $entry = $adapter->placeOrder($this->entryRequest(
+            clientOrderId: 'liquidation-long-gap',
+            attachedStopLossPrice: 22500.0,
+            attachedTakeProfitPrice: 27000.0,
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+        self::assertCount(2, $state->getOpenOrders('BTCUSDT'));
+
+        $move = $scenario->movePrice('BTCUSDT', 22000.0);
+
+        self::assertSame([], $move['matched_orders']);
+        self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        self::assertCount(1, $state->events('liquidation.triggered'));
+        self::assertCount(1, $state->events('liquidation.filled'));
+        self::assertCount(1, $state->events('position.closed'));
+        self::assertCount(1, $state->events('order.filled'));
+
+        $fill = $state->events('liquidation.filled')[0];
+        self::assertSame(1.0, $fill->payload['fill_quantity'] ?? null);
+        self::assertSame(22000.0, $fill->payload['fill_price'] ?? null);
+        self::assertSame(11.0, $fill->payload['fill_fee'] ?? null);
+        self::assertSame(110.0, $fill->payload['liquidation_fee_usdt'] ?? null);
+        self::assertSame(FakeLiquidationPolicy::FEE_MODEL_VERSION, $fill->payload['liquidation_fee_model_version'] ?? null);
+        self::assertSame('USDT', $fill->payload['liquidation_fee_currency'] ?? null);
+        self::assertSame('-3000.000000000000', $fill->payload['realized_gross_pnl_usdt'] ?? null);
+
+        $closed = $state->events('position.closed')[0];
+        self::assertSame('liquidation', $closed->payload['close_reason'] ?? null);
+        self::assertSame(110.0, $closed->payload['liquidation_fee_usdt'] ?? null);
+        self::assertSame(-3157.0, $closed->payload['recorded_pnl_usdt'] ?? null);
+        self::assertSame(96843.0, $state->totalBalanceUsdt());
+
+        $cancelledProtections = array_values(array_filter(
+            $state->getOrders('BTCUSDT'),
+            static fn ($order): bool => $order->reduceOnly && $order->status === ExchangeOrderStatus::CANCELLED,
+        ));
+        self::assertCount(2, $cancelledProtections);
+        foreach ($cancelledProtections as $protection) {
+            self::assertSame('position_liquidated', $protection->metadata['reason'] ?? null);
+        }
+
+        $fills = $adapter->getFillsSnapshot('BTCUSDT');
+        self::assertCount(2, $fills);
+        self::assertSame(110.0, $fills[1]->metadata['liquidation_fee_usdt'] ?? null);
+    }
+
+    public function testShortGapLiquidatesAtObservedMark(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $state->setOrderBookTop('BTCUSDT', 25000.0, 25001.0);
+        $entry = $adapter->placeOrder($this->entryRequest(
+            clientOrderId: 'liquidation-short-gap',
+            side: ExchangePositionSide::SHORT,
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+
+        $scenario->movePrice('BTCUSDT', 28000.0);
+
+        self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::SHORT));
+        $fill = $state->events('liquidation.filled')[0] ?? null;
+        self::assertNotNull($fill);
+        self::assertSame(ExchangePositionSide::SHORT->value, $fill->payload['liquidation_position_side'] ?? null);
+        self::assertSame(28000.0, $fill->payload['fill_price'] ?? null);
+        self::assertSame(140.0, $fill->payload['liquidation_fee_usdt'] ?? null);
+        self::assertSame('-3000.000000000000', $fill->payload['realized_gross_pnl_usdt'] ?? null);
+        self::assertSame(96807.0, $state->totalBalanceUsdt());
+    }
+
+    public function testRestartAndRepeatedMarkAreExactOnce(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-restart-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            [$adapter, $scenario] = $this->runtimeForState($state);
+            $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-restart'));
+            $scenario->movePrice('BTCUSDT', 22000.0);
+
+            $balanceAfterFirst = $state->totalBalanceUsdt();
+            self::assertCount(1, $state->events('liquidation.filled'));
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [, $restoredScenario] = $this->runtimeForState($restored);
+            $restoredScenario->movePrice('BTCUSDT', 21000.0);
+            $restoredScenario->movePrice('BTCUSDT', 21000.0);
+
+            self::assertCount(1, $restored->events('liquidation.triggered'));
+            self::assertCount(1, $restored->events('liquidation.filled'));
+            self::assertCount(1, $restored->events('position.closed'));
+            self::assertSame($balanceAfterFirst, $restored->totalBalanceUsdt());
+            self::assertCount(2, (new FakeExchangeAdapter(
+                $restored,
+                new FakeExchangeOrderBook($restored),
+                new FakeExchangeMatchingEngine($restored, new FakeExchangeOrderBook($restored), $this->clock()),
+                $this->clock(),
+            ))->getFillsSnapshot('BTCUSDT'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
+    public function testUnknownPersistedLiquidationMetadataFailsClosedAndRollsBackMarkMove(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-invalid-position'));
+        $position = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+        self::assertNotNull($position);
+        $metadata = $position->metadata;
+        unset($metadata['liquidation_contract_size_decimal']);
+        $state->savePosition(new ExchangePositionDto(
+            exchange: $position->exchange,
+            marketType: $position->marketType,
+            symbol: $position->symbol,
+            side: $position->side,
+            size: $position->size,
+            entryPrice: $position->entryPrice,
+            markPrice: $position->markPrice,
+            unrealizedPnl: $position->unrealizedPnl,
+            realizedPnl: $position->realizedPnl,
+            margin: $position->margin,
+            leverage: $position->leverage,
+            openedAt: $position->openedAt,
+            updatedAt: $position->updatedAt,
+            metadata: $metadata,
+        ));
+
+        try {
+            $scenario->movePrice('BTCUSDT', 22000.0);
+            self::fail('Malformed persisted liquidation metadata must fail closed.');
+        } catch (\LogicException $exception) {
+            self::assertSame('liquidation_contract_size_unknown', $exception->getMessage());
+        }
+
+        self::assertSame('25000', $state->getMarkPrice('BTCUSDT'));
+        self::assertNotNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        self::assertSame([], $state->events('liquidation.triggered'));
+        self::assertSame([], $state->events('liquidation.filled'));
+        self::assertSame(100000.0, $state->totalBalanceUsdt());
+    }
+
+    public function testRestingEntryIsRevalidatedAtFillBoundary(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $resting = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 1.0,
+            price: 24900.0,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            leverage: 10,
+            marginMode: 'isolated',
+            clientOrderId: 'liquidation-resting-boundary',
+            quantityDecimal: '1',
+            priceDecimal: '24900',
+        ));
+        self::assertSame(ExchangeOrderStatus::OPEN, $resting->status);
+        $state->setMarkPrice('BTCUSDT', '22500');
+
+        $rejected = $scenario->fillOrder((string) $resting->exchangeOrderId, 1.0, 24900.0);
+
+        self::assertSame(ExchangeOrderStatus::REJECTED, $rejected?->status);
+        self::assertSame('liquidation_entry_inside_guard', $rejected?->metadata['reason'] ?? null);
+        self::assertSame([], $state->getOpenPositions('BTCUSDT'));
+        self::assertSame([], $state->events('order.filled'));
+        self::assertCount(1, $state->events('order.rejected'));
+    }
+
+    public function testPartialReductionRecalculatesLiquidationQuantityMarginAndFee(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-partial-entry'));
+        $reduction = $adapter->placeOrder(new PlaceOrderRequest(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangeOrderSide::SELL,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::MARKET,
+            timeInForce: ExchangeTimeInForce::GTC,
+            quantity: 0.4,
+            price: null,
+            stopPrice: null,
+            reduceOnly: true,
+            postOnly: false,
+            leverage: 10,
+            marginMode: 'isolated',
+            clientOrderId: 'liquidation-partial-reduce',
+            quantityDecimal: '0.4',
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $reduction->status);
+
+        $remaining = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+        self::assertNotNull($remaining);
+        self::assertSame('0.600000000000', $remaining->metadata['liquidation_quantity_decimal'] ?? null);
+        self::assertSame('1500.000000000000', $remaining->metadata['liquidation_isolated_margin_decimal'] ?? null);
+
+        $scenario->movePrice('BTCUSDT', 22000.0);
+
+        $fill = $state->events('liquidation.filled')[0] ?? null;
+        self::assertNotNull($fill);
+        self::assertSame(0.6, $fill->payload['fill_quantity'] ?? null);
+        self::assertSame(66.0, $fill->payload['liquidation_fee_usdt'] ?? null);
+        self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+    }
+
     /**
      * @return array{FakeExchangeAdapter,FakeExchangeScenarioService,FakeExchangeStateStore}
      */
@@ -141,6 +379,14 @@ final class FakeLiquidationIntegrationTest extends TestCase
     {
         $state = new FakeExchangeStateStore();
         $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+        [$adapter, $scenario] = $this->runtimeForState($state);
+
+        return [$adapter, $scenario, $state];
+    }
+
+    /** @return array{FakeExchangeAdapter,FakeExchangeScenarioService} */
+    private function runtimeForState(FakeExchangeStateStore $state): array
+    {
         $book = new FakeExchangeOrderBook($state);
         $clock = $this->clock();
         $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
@@ -148,18 +394,23 @@ final class FakeLiquidationIntegrationTest extends TestCase
         return [
             new FakeExchangeAdapter($state, $book, $engine, $clock),
             new FakeExchangeScenarioService($state, $book, $engine),
-            $state,
         ];
     }
 
-    private function entryRequest(string $marginMode = 'isolated'): PlaceOrderRequest
+    private function entryRequest(
+        string $marginMode = 'isolated',
+        string $clientOrderId = 'liquidation-entry-isolated',
+        ExchangePositionSide $side = ExchangePositionSide::LONG,
+        ?float $attachedStopLossPrice = null,
+        ?float $attachedTakeProfitPrice = null,
+    ): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
             symbol: 'BTCUSDT',
-            side: ExchangeOrderSide::BUY,
-            positionSide: ExchangePositionSide::LONG,
+            side: $side === ExchangePositionSide::LONG ? ExchangeOrderSide::BUY : ExchangeOrderSide::SELL,
+            positionSide: $side,
             orderType: ExchangeOrderType::MARKET,
             timeInForce: ExchangeTimeInForce::GTC,
             quantity: 1.0,
@@ -169,7 +420,9 @@ final class FakeLiquidationIntegrationTest extends TestCase
             postOnly: false,
             leverage: 10,
             marginMode: $marginMode,
-            clientOrderId: 'liquidation-entry-' . $marginMode,
+            clientOrderId: $clientOrderId,
+            attachedStopLossPrice: $attachedStopLossPrice,
+            attachedTakeProfitPrice: $attachedTakeProfitPrice,
             quantityDecimal: '1',
         );
     }
