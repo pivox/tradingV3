@@ -12,7 +12,9 @@ use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
 
 #[CoversClass(PaperMarketEvent::class)]
 #[CoversClass(CanonicalJson::class)]
@@ -123,6 +125,66 @@ final class PaperMarketEventTest extends TestCase
         self::assertSame('2026-07-19T10:00:00.654321Z', $event->toArray()['received_timestamp']);
     }
 
+    #[DataProvider('unserializableTimestampYearProvider')]
+    public function testCreateRejectsTimestampYearsOutsideTheStrictWireFormat(string $field, int $year): void
+    {
+        $exchangeTimestamp = new \DateTimeImmutable('2026-07-19T10:00:00.123456Z');
+        $receivedTimestamp = new \DateTimeImmutable('2026-07-19T10:00:00.223456Z');
+        if ($field === 'exchange_timestamp') {
+            $exchangeTimestamp = $exchangeTimestamp->setDate($year, 7, 19);
+        } else {
+            $receivedTimestamp = $receivedTimestamp->setDate($year, 7, 19);
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_timestamp_invalid');
+
+        PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: $exchangeTimestamp,
+            receivedTimestamp: $receivedTimestamp,
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function unserializableTimestampYearProvider(): iterable
+    {
+        yield 'extended exchange year' => ['exchange_timestamp', 10_000];
+        yield 'negative received year' => ['received_timestamp', -1];
+    }
+
+    #[DataProvider('serializableBoundaryYearProvider')]
+    public function testCreateRoundTripsStrictFourDigitBoundaryYears(int $year): void
+    {
+        $timestamp = (new \DateTimeImmutable('2026-01-01T00:00:00.123456Z'))->setDate($year, 1, 1);
+        $event = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: $timestamp,
+            receivedTimestamp: $timestamp,
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+
+        self::assertEquals($event, PaperMarketEvent::fromArray($event->toArray()));
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function serializableBoundaryYearProvider(): iterable
+    {
+        yield 'year zero' => [0];
+        yield 'year 9999' => [9999];
+    }
+
     public function testCanonicalPayloadHashIgnoresAssociativeKeyOrderRecursively(): void
     {
         $first = self::event(
@@ -208,6 +270,45 @@ final class PaperMarketEventTest extends TestCase
         }
     }
 
+    public function testCanonicalJsonFailsClosedWhenIniSetIsDisabled(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+try {
+    \App\Trading\Paper\MarketData\CanonicalJson::encode(['price' => 1.2345678901234567]);
+} catch (\InvalidArgumentException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit(0);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(2);
+PHP,
+            var_export($autoload, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'serialize_precision=3',
+            '-d',
+            'disable_functions=ini_set',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(10.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame(
+            'paper_canonical_json_serialize_precision_unavailable',
+            $process->getOutput(),
+        );
+    }
+
     public function testCanonicalJsonPreservesIntegerKeyedMapSemanticsAfterSorting(): void
     {
         $map = [1 => 'one', 0 => 'zero'];
@@ -225,6 +326,31 @@ final class PaperMarketEventTest extends TestCase
         self::assertTrue(array_is_list($sequentialIntegerKeys));
         self::assertSame('["zero","one"]', CanonicalJson::encode($sequentialIntegerKeys));
         self::assertSame(CanonicalJson::encode($list), CanonicalJson::encode($sequentialIntegerKeys));
+    }
+
+    #[RunInSeparateProcess]
+    public function testCanonicalJsonRejectsCyclicArraysWithAStableCode(): void
+    {
+        $payload = [];
+        $payload['self'] = &$payload;
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_cycle_detected');
+
+        CanonicalJson::encode($payload);
+    }
+
+    public function testCanonicalJsonRejectsArraysBeyondTheBoundedNestingDepth(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_depth_exceeded');
+
+        CanonicalJson::encode(self::nestedPayload(129));
+    }
+
+    public function testCanonicalJsonAllowsArraysAtTheBoundedNestingDepth(): void
+    {
+        self::assertNotSame('', CanonicalJson::encode(self::nestedPayload(128)));
     }
 
     #[DataProvider('unsupportedCanonicalValueProvider')]
@@ -459,5 +585,18 @@ final class PaperMarketEventTest extends TestCase
             sequence: $sequence,
             payload: $payload,
         );
+    }
+
+    /**
+     * @return array<array-key, mixed>
+     */
+    private static function nestedPayload(int $levels): array
+    {
+        $payload = ['price' => '29999.0'];
+        for ($level = 0; $level < $levels; ++$level) {
+            $payload = ['nested' => $payload];
+        }
+
+        return $payload;
     }
 }

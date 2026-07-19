@@ -6,6 +6,7 @@ namespace App\Trading\Paper\MarketData;
 
 final class CanonicalJson
 {
+    private const MAX_NESTING_DEPTH = 128;
     private const SERIALIZE_PRECISION_SETTING = 'serialize_precision';
     private const CANONICAL_SERIALIZE_PRECISION = '-1';
 
@@ -20,7 +21,8 @@ final class CanonicalJson
      */
     public static function encode(mixed $value): string
     {
-        $normalized = self::normalize($value);
+        $activeArrayReferences = [];
+        $normalized = self::normalize($value, 0, $activeArrayReferences);
         $previousPrecision = self::configureCanonicalSerializePrecision();
 
         try {
@@ -45,8 +47,12 @@ final class CanonicalJson
             return $previousPrecision;
         }
 
+        if (!\is_callable('ini_set')) {
+            throw new \InvalidArgumentException('paper_canonical_json_serialize_precision_unavailable');
+        }
+
         if (
-            ini_set(self::SERIALIZE_PRECISION_SETTING, self::CANONICAL_SERIALIZE_PRECISION) === false
+            \ini_set(self::SERIALIZE_PRECISION_SETTING, self::CANONICAL_SERIALIZE_PRECISION) === false
             || ini_get(self::SERIALIZE_PRECISION_SETTING) !== self::CANONICAL_SERIALIZE_PRECISION
         ) {
             self::restoreSerializePrecision($previousPrecision);
@@ -63,28 +69,53 @@ final class CanonicalJson
             return;
         }
 
+        if (!\is_callable('ini_set')) {
+            throw new \InvalidArgumentException('paper_canonical_json_serialize_precision_restore_failed');
+        }
+
         if (
-            ini_set(self::SERIALIZE_PRECISION_SETTING, $precision) === false
+            \ini_set(self::SERIALIZE_PRECISION_SETTING, $precision) === false
             || ini_get(self::SERIALIZE_PRECISION_SETTING) !== $precision
         ) {
             throw new \InvalidArgumentException('paper_canonical_json_serialize_precision_restore_failed');
         }
     }
 
-    private static function normalize(mixed $value): mixed
+    /**
+     * @param array<string, true> $activeArrayReferences
+     */
+    private static function normalize(mixed &$value, int $depth, array &$activeArrayReferences): mixed
     {
         if (\is_array($value)) {
-            if (array_is_list($value)) {
-                return array_map(self::normalize(...), $value);
+            if ($depth > self::MAX_NESTING_DEPTH) {
+                throw new \InvalidArgumentException('paper_canonical_json_depth_exceeded');
             }
 
-            $normalized = [];
-            foreach ($value as $key => $item) {
-                $normalized[$key] = self::normalize($item);
+            $referenceId = self::arrayReferenceId($value);
+            if (isset($activeArrayReferences[$referenceId])) {
+                throw new \InvalidArgumentException('paper_canonical_json_cycle_detected');
             }
-            ksort($normalized, SORT_STRING);
 
-            return (object) $normalized;
+            $activeArrayReferences[$referenceId] = true;
+
+            try {
+                $normalized = [];
+                foreach (array_keys($value) as $key) {
+                    $item = &$value[$key];
+                    $normalized[$key] = self::normalize($item, $depth + 1, $activeArrayReferences);
+                    unset($item);
+                }
+
+                if (array_is_list($value)) {
+                    return $normalized;
+                }
+
+                ksort($normalized, SORT_STRING);
+
+                return (object) $normalized;
+            } finally {
+                unset($activeArrayReferences[$referenceId]);
+            }
         }
 
         if (\is_float($value) && !is_finite($value)) {
@@ -100,5 +131,19 @@ final class CanonicalJson
         }
 
         throw new \InvalidArgumentException('paper_canonical_json_unsupported_type');
+    }
+
+    /**
+     * @param array<array-key, mixed> $value
+     */
+    private static function arrayReferenceId(array &$value): string
+    {
+        $holder = [&$value];
+        $reference = \ReflectionReference::fromArrayElement($holder, 0);
+        if ($reference === null) {
+            throw new \LogicException('paper_canonical_json_reference_unavailable');
+        }
+
+        return bin2hex($reference->getId());
     }
 }

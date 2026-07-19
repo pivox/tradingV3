@@ -66,6 +66,8 @@ final readonly class PaperMarketEvent
 
         $exchangeTimestampUtc = $exchangeTimestamp->setTimezone(self::utc());
         $receivedTimestampUtc = $receivedTimestamp->setTimezone(self::utc());
+        self::assertSerializableTimestamp($exchangeTimestampUtc);
+        self::assertSerializableTimestamp($receivedTimestampUtc);
         $payloadHash = hash('sha256', CanonicalJson::encode($payload));
         $eventId = self::eventId(
             venue: $venue,
@@ -239,6 +241,11 @@ final readonly class PaperMarketEvent
         }
 
         return $timestamp;
+    }
+
+    private static function assertSerializableTimestamp(\DateTimeImmutable $timestamp): void
+    {
+        self::parseTimestamp($timestamp->format(self::TIMESTAMP_FORMAT));
     }
 
     private static function utc(): \DateTimeZone

@@ -7,6 +7,7 @@ namespace App\Tests\Trading\Paper\MarketData;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperMarketEventRedactor::class)]
@@ -59,6 +60,77 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'OKX access signature header' => ['OK-ACCESS-SIGN'];
         yield 'OKX access passphrase header' => ['OK-ACCESS-PASSPHRASE'];
         yield 'Hyperliquid API secret key alias' => ['API-SECRET-KEY'];
+        yield 'camel case access token' => ['accessToken'];
+        yield 'camel case client secret' => ['clientSecret'];
+    }
+
+    /** @param array<array-key, mixed> $payload */
+    #[DataProvider('serializedSensitiveValueProvider')]
+    public function testRejectsSerializedCredentialsInsideStringValues(array $payload): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        PaperMarketEventRedactor::assertSafe($payload);
+    }
+
+    /**
+     * @return iterable<string, array{array<array-key, mixed>}>
+     */
+    public static function serializedSensitiveValueProvider(): iterable
+    {
+        yield 'authorization bearer header' => [[
+            'headers' => ['Authorization: Bearer synthetic-placeholder'],
+        ]];
+        yield 'raw JSON API key' => [[
+            'raw' => '{"api_key":"synthetic-placeholder"}',
+        ]];
+        yield 'form encoded client secret' => [[
+            'request' => 'clientSecret=synthetic-placeholder',
+        ]];
+        yield 'raw JSON signature' => [[
+            'raw' => '{"signature":"synthetic-placeholder"}',
+        ]];
+        yield 'standalone bearer credential' => [[
+            'header_value' => 'Bearer synthetic-placeholder',
+        ]];
+    }
+
+    public function testRejectsAnUnboundedStringBeforeScanningIt(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_string_too_large');
+
+        PaperMarketEventRedactor::assertSafe([
+            'public_snapshot' => str_repeat('x', 1_048_577),
+        ]);
+    }
+
+    #[RunInSeparateProcess]
+    public function testRejectsCyclicPayloadsWithAStableCode(): void
+    {
+        $payload = [];
+        $payload['self'] = &$payload;
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_cycle_detected');
+
+        PaperMarketEventRedactor::assertSafe($payload);
+    }
+
+    public function testRejectsPayloadsBeyondTheBoundedNestingDepth(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_payload_depth_exceeded');
+
+        PaperMarketEventRedactor::assertSafe(self::nestedPayload(129));
+    }
+
+    public function testAllowsPayloadsAtTheBoundedNestingDepth(): void
+    {
+        PaperMarketEventRedactor::assertSafe(self::nestedPayload(128));
+
+        self::addToAssertionCount(1);
     }
 
     public function testAllowsPublicFieldsThroughNestedMapsAndLists(): void
@@ -83,6 +155,7 @@ final class PaperMarketEventRedactorTest extends TestCase
         PaperMarketEventRedactor::assertSafe([
             'description' => 'public wallet statistics without a private identifier',
             'status' => 'signature verification unavailable',
+            'mode' => 'basic market snapshot',
         ]);
 
         self::addToAssertionCount(1);
@@ -101,5 +174,18 @@ final class PaperMarketEventRedactorTest extends TestCase
         ]);
 
         self::addToAssertionCount(1);
+    }
+
+    /**
+     * @return array<array-key, mixed>
+     */
+    private static function nestedPayload(int $levels): array
+    {
+        $payload = ['price' => '29999.0'];
+        for ($level = 0; $level < $levels; ++$level) {
+            $payload = ['nested' => $payload];
+        }
+
+        return $payload;
     }
 }
