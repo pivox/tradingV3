@@ -18,6 +18,8 @@ use App\Exchange\Adapter\FakeExchangeAdapter;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
 use App\Exchange\Dto\ExchangeCapabilities;
+use App\Exchange\Fake\FakeDailyLossCapGuard;
+use App\Exchange\Fake\FakeDailyLossCapPolicy;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
@@ -81,7 +83,12 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $state = new FakeExchangeStateStore();
         $clock = new MockClock('2026-01-01T00:00:00+00:00');
         $book = new FakeExchangeOrderBook($state);
-        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $clock,
+            dailyLossCapGuard: new FakeDailyLossCapGuard($state, $clock, new FakeDailyLossCapPolicy('100')),
+        );
         $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
         $runtimeCheck = new FakeRuntimeCheck($adapter, $state, $clock, controlledClock: true);
         $command = new ExchangeRuntimeCheckCommand(
@@ -126,7 +133,12 @@ final class ExchangeRuntimeCheckCommandTest extends TestCase
         $state = new FakeExchangeStateStore();
         $clock = new MockClock('2026-01-01T00:00:00+00:00');
         $book = new FakeExchangeOrderBook($state);
-        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $clock,
+            dailyLossCapGuard: new FakeDailyLossCapGuard($state, $clock, new FakeDailyLossCapPolicy('100')),
+        );
         $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
         $runtimeCheck = new FakeRuntimeCheck($adapter, $state, $clock, controlledClock: true);
         $report = $runtimeCheck->check(new ExchangeReadinessInput(
