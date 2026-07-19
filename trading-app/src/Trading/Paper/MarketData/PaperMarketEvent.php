@@ -63,6 +63,7 @@ final readonly class PaperMarketEvent
 
         self::assertValidSequence($sequence);
         PaperMarketEventRedactor::assertSafe($payload);
+        $payload = self::detachPayload($payload);
 
         $exchangeTimestampUtc = $exchangeTimestamp->setTimezone(self::utc());
         $receivedTimestampUtc = $receivedTimestamp->setTimezone(self::utc());
@@ -207,6 +208,21 @@ final readonly class PaperMarketEvent
         if ($sequence !== null && !ctype_digit($sequence)) {
             throw new \InvalidArgumentException('paper_market_sequence_invalid');
         }
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function detachPayload(array $payload): array
+    {
+        $detached = [];
+        foreach ($payload as $key => $value) {
+            $detached[$key] = \is_array($value) ? self::detachPayload($value) : $value;
+        }
+
+        return $detached;
     }
 
     /**

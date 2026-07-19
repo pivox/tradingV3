@@ -107,6 +107,63 @@ final class PaperMarketEventTest extends TestCase
         self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->getConstructor()?->isPrivate());
     }
 
+    public function testCreateDetachesSharedAcyclicExternalReferencesFromThePayload(): void
+    {
+        $externalPrice = '29999.0';
+        $externalBook = ['price' => &$externalPrice, 'size' => '1.2'];
+        $event = self::event(
+            sequence: null,
+            payload: [
+                'primary' => &$externalBook,
+                'mirror' => &$externalBook,
+            ],
+        );
+        $expectedPayload = $event->payload;
+
+        $externalPrice = '1.0';
+        $externalBook['size'] = '999.0';
+
+        self::assertSame([
+            'primary' => ['price' => '29999.0', 'size' => '1.2'],
+            'mirror' => ['price' => '29999.0', 'size' => '1.2'],
+        ], $expectedPayload);
+        self::assertSame($expectedPayload, $event->payload);
+        self::assertSame(
+            $event->payloadHash,
+            hash('sha256', CanonicalJson::encode($event->payload)),
+        );
+    }
+
+    public function testFromArrayDetachesSharedAcyclicExternalReferencesFromThePayload(): void
+    {
+        $data = self::event(
+            sequence: null,
+            payload: [
+                'primary' => ['price' => '29999.0', 'size' => '1.2'],
+                'mirror' => ['price' => '29999.0', 'size' => '1.2'],
+            ],
+        )->toArray();
+        $externalPrice = '29999.0';
+        $externalBook = ['price' => &$externalPrice, 'size' => '1.2'];
+        $data['payload']['primary'] = &$externalBook;
+        $data['payload']['mirror'] = &$externalBook;
+
+        $event = PaperMarketEvent::fromArray($data);
+        $expectedPayload = $event->payload;
+        $externalPrice = '1.0';
+        $externalBook['size'] = '999.0';
+
+        self::assertSame([
+            'primary' => ['price' => '29999.0', 'size' => '1.2'],
+            'mirror' => ['price' => '29999.0', 'size' => '1.2'],
+        ], $expectedPayload);
+        self::assertSame($expectedPayload, $event->payload);
+        self::assertSame(
+            $event->payloadHash,
+            hash('sha256', CanonicalJson::encode($event->payload)),
+        );
+    }
+
     public function testTimestampsNormalizeToUtcWithMicroseconds(): void
     {
         $event = PaperMarketEvent::create(

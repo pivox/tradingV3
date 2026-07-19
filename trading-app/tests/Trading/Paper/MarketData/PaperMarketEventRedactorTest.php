@@ -79,6 +79,8 @@ final class PaperMarketEventRedactorTest extends TestCase
      */
     public static function serializedSensitiveValueProvider(): iterable
     {
+        $serializedAccessToken = serialize(['accessToken' => 'synthetic-placeholder']);
+
         yield 'authorization bearer header' => [[
             'headers' => ['Authorization: Bearer synthetic-placeholder'],
         ]];
@@ -93,6 +95,25 @@ final class PaperMarketEventRedactorTest extends TestCase
         ]];
         yield 'standalone bearer credential' => [[
             'header_value' => 'Bearer synthetic-placeholder',
+        ]];
+        yield 'PHP serialized access token' => [[
+            'raw' => $serializedAccessToken,
+        ]];
+        yield 'PHP escaped serialized access token string' => [[
+            'raw' => sprintf(
+                'S:%d:"%s";',
+                strlen($serializedAccessToken),
+                str_replace('"', '\\22', $serializedAccessToken),
+            ),
+        ]];
+        yield 'PHP serialized client secret' => [[
+            'raw' => serialize(['clientSecret' => 'synthetic-placeholder']),
+        ]];
+        yield 'PHP serialized credential pair' => [[
+            'credentials' => serialize([
+                'username' => 'synthetic-user',
+                'password' => 'synthetic-placeholder',
+            ]),
         ]];
     }
 

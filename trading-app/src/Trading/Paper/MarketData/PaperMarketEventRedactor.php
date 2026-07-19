@@ -60,6 +60,21 @@ final class PaperMarketEventRedactor
 )~ix
 REGEX;
 
+    private const PHP_SERIALIZED_VALUE_PATTERN = <<<'REGEX'
+~\A(?:
+    N; |
+    b:[01]; |
+    i:[+-]?\d+; |
+    d:(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:E[+-]?\d+)?|NAN|[+-]?INF); |
+    [sS]:\d+:" |
+    a:\d+:\{ |
+    O:\d+:" |
+    C:\d+:" |
+    E:\d+:" |
+    [rR]:\d+;
+)~xD
+REGEX;
+
     /**
      * @param array<array-key, mixed> $value
      */
@@ -133,6 +148,15 @@ REGEX;
     {
         if (\strlen($value) > self::MAX_SCANNED_STRING_BYTES) {
             throw new \InvalidArgumentException('paper_market_payload_string_too_large');
+        }
+
+        $serializedMatch = preg_match(self::PHP_SERIALIZED_VALUE_PATTERN, $value);
+        if ($serializedMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($serializedMatch === 1) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
         }
 
         $match = preg_match(self::SENSITIVE_VALUE_PATTERN, $value);
