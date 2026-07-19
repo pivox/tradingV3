@@ -8,6 +8,9 @@ final readonly class PaperMarketEvent
 {
     public const SCHEMA_VERSION = 1;
 
+    /** Far above current exchange counters while bounding identity input deterministically. */
+    public const MAX_SEQUENCE_DIGITS = 128;
+
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
     /** @var list<string> */
@@ -205,7 +208,15 @@ final readonly class PaperMarketEvent
 
     private static function assertValidSequence(?string $sequence): void
     {
-        if ($sequence !== null && !ctype_digit($sequence)) {
+        if ($sequence === null) {
+            return;
+        }
+
+        if (\strlen($sequence) > self::MAX_SEQUENCE_DIGITS) {
+            throw new \InvalidArgumentException('paper_market_sequence_too_large');
+        }
+
+        if (preg_match('/\A[0-9]+\z/D', $sequence) !== 1) {
             throw new \InvalidArgumentException('paper_market_sequence_invalid');
         }
     }
@@ -302,11 +313,18 @@ final readonly class PaperMarketEvent
 
     private static function parseTimestamp(string $value): \DateTimeImmutable
     {
-        $timestamp = \DateTimeImmutable::createFromFormat(
-            '!' . self::TIMESTAMP_FORMAT,
-            $value,
-            self::utc(),
-        );
+        try {
+            $timestamp = \DateTimeImmutable::createFromFormat(
+                '!' . self::TIMESTAMP_FORMAT,
+                $value,
+                self::utc(),
+            );
+        } catch (\ValueError $exception) {
+            throw new \InvalidArgumentException(
+                'paper_market_timestamp_invalid',
+                previous: $exception,
+            );
+        }
         $errors = \DateTimeImmutable::getLastErrors();
 
         if ($timestamp === false

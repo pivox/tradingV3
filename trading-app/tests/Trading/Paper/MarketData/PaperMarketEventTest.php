@@ -421,13 +421,14 @@ PHP,
         );
     }
 
-    public function testCanonicalJsonPreservesIntegerKeyedMapSemanticsAfterSorting(): void
+    public function testCanonicalJsonRejectsAmbiguousNonListIntegerKeyMaps(): void
     {
         $map = [1 => 'one', 0 => 'zero'];
-        $list = ['zero', 'one'];
 
-        self::assertSame('{"0":"zero","1":"one"}', CanonicalJson::encode($map));
-        self::assertNotSame(CanonicalJson::encode($list), CanonicalJson::encode($map));
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_integer_key_map_unsupported');
+
+        CanonicalJson::encode($map);
     }
 
     public function testCanonicalJsonTreatsSequentialIntegerKeysAsAListInThePhpPayloadModel(): void
@@ -463,6 +464,94 @@ PHP,
     public function testCanonicalJsonAllowsArraysAtTheBoundedNestingDepth(): void
     {
         self::assertNotSame('', CanonicalJson::encode(self::nestedPayload(128)));
+    }
+
+    public function testCanonicalJsonRejectsAggregateNodeExpansionWithAStableCode(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_nodes_exceeded');
+
+        CanonicalJson::encode(array_fill(0, 20_000, null));
+    }
+
+    public function testCanonicalJsonRejectsAggregateStringBytesWithAStableCode(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_bytes_exceeded');
+
+        CanonicalJson::encode(str_repeat('x', 1_048_577));
+    }
+
+    public function testCanonicalJsonRejectsAggregateMapKeysWithAStableCode(): void
+    {
+        $map = [];
+        for ($index = 0; $index < 10_001; ++$index) {
+            $map[sprintf('key_%05d', $index)] = null;
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_keys_exceeded');
+
+        CanonicalJson::encode($map);
+    }
+
+    public function testCanonicalJsonAcceptsValuesAtEveryAggregateBudgetBoundary(): void
+    {
+        $map = [];
+        for ($index = 0; $index < 10_000; ++$index) {
+            $map[sprintf('key_%05d', $index)] = null;
+        }
+
+        self::assertNotSame('', CanonicalJson::encode(array_fill(0, 19_999, null)));
+        self::assertNotSame('', CanonicalJson::encode(str_repeat('x', 1_048_576)));
+        self::assertNotSame('', CanonicalJson::encode($map));
+    }
+
+    public function testCanonicalJsonBoundsSharedDagExpansionBeforeMemoryExhaustion(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+$layers = [['price' => '29999.0']];
+for ($level = 1; $level <= 20; ++$level) {
+    $previous = &$layers[$level - 1];
+    $layers[$level] = ['left' => &$previous, 'right' => &$previous];
+    unset($previous);
+}
+
+try {
+    \App\Trading\Paper\MarketData\CanonicalJson::encode($layers[20]);
+} catch (\InvalidArgumentException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit(0);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(2);
+PHP,
+            var_export($autoload, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=64M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(20.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_canonical_json_keys_exceeded', $process->getOutput());
     }
 
     #[DataProvider('unsupportedCanonicalValueProvider')]
@@ -554,6 +643,25 @@ PHP,
         yield 'letters' => ['seq-42'];
     }
 
+    public function testSequenceAcceptsTheDocumentedConservativeBoundary(): void
+    {
+        $boundary = str_repeat('9', 128);
+
+        self::assertSame($boundary, self::event(sequence: $boundary)->sequence);
+        self::assertSame(
+            '18446744073709551615',
+            self::event(sequence: '18446744073709551615')->sequence,
+        );
+    }
+
+    public function testSequenceRejectsOneDigitBeyondTheConservativeBoundary(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sequence_too_large');
+
+        self::event(sequence: str_repeat('9', 129));
+    }
+
     public function testNullSequenceUsesTheCanonicalPayloadHashAsIdentityTail(): void
     {
         $event = self::event(sequence: null);
@@ -642,6 +750,51 @@ PHP,
         PaperMarketEvent::fromArray($unknown);
     }
 
+    public function testCanonicalNdjsonWireRoundTripsEveryAcceptedPayloadShape(): void
+    {
+        $event = self::event(
+            sequence: '18446744073709551615',
+            payload: [
+                'levels' => [
+                    ['price' => '29999.0', 'size' => '1.2'],
+                    ['price' => '30001.0', 'size' => '0.8'],
+                ],
+                'metadata' => [
+                    '01' => 'string-key-preserved',
+                    'active' => true,
+                    'count' => 2,
+                    'ratio' => 1.0,
+                    'status' => null,
+                ],
+            ],
+        );
+        $ndjsonLine = CanonicalJson::encode($event->toArray()) . "\n";
+        $decoded = json_decode(
+            rtrim($ndjsonLine, "\n"),
+            associative: true,
+            depth: 129,
+            flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
+
+        self::assertIsArray($decoded);
+        $restored = PaperMarketEvent::fromArray($decoded);
+
+        self::assertSame($event->toArray(), $restored->toArray());
+        self::assertSame($ndjsonLine, CanonicalJson::encode($restored->toArray()) . "\n");
+    }
+
+    public function testFromArrayRejectsAmbiguousPayloadShapeBeforeHashComparison(): void
+    {
+        $data = self::event()->toArray();
+        $data['payload'] = ['levels' => [1 => 'one', 0 => 'zero']];
+        $data['payload_hash'] = str_repeat('0', 64);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_integer_key_map_unsupported');
+
+        PaperMarketEvent::fromArray($data);
+    }
+
     #[DataProvider('invalidStrictFieldProvider')]
     public function testFromArrayRejectsInvalidStrictFieldTypes(string $key, mixed $value, string $reason): void
     {
@@ -670,6 +823,31 @@ PHP,
         yield 'sequence integer' => ['sequence', 42, 'paper_market_sequence_invalid'];
         yield 'payload scalar' => ['payload', 'public-data', 'paper_market_event_shape_invalid'];
         yield 'payload hash not a string' => ['payload_hash', false, 'paper_market_event_shape_invalid'];
+    }
+
+    #[DataProvider('timestampFieldProvider')]
+    public function testFromArrayNormalizesNulTimestampFailures(string $field): void
+    {
+        $data = self::event()->toArray();
+        $data[$field] .= "\0synthetic";
+
+        try {
+            PaperMarketEvent::fromArray($data);
+            self::fail('A NUL-containing timestamp must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_timestamp_invalid', $exception->getMessage());
+        } catch (\ValueError $exception) {
+            self::fail(sprintf('ValueError escaped the event boundary: %s', $exception->getMessage()));
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function timestampFieldProvider(): iterable
+    {
+        yield 'exchange timestamp' => ['exchange_timestamp'];
+        yield 'received timestamp' => ['received_timestamp'];
     }
 
     public function testCreateRejectsSensitivePayloadKeysAtAnyDepth(): void

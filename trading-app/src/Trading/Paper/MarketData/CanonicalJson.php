@@ -6,6 +6,15 @@ namespace App\Trading\Paper\MarketData;
 
 final class CanonicalJson
 {
+    /** Maximum value occurrences expanded by one direct canonical encode. */
+    public const MAX_NODES = 20_000;
+
+    /** Maximum aggregate bytes across expanded string keys and scalar values. */
+    public const MAX_BYTES = 1_048_576;
+
+    /** Maximum associative key occurrences expanded by one direct canonical encode. */
+    public const MAX_KEYS = 10_000;
+
     private const MAX_NESTING_DEPTH = 128;
     private const SERIALIZE_PRECISION_SETTING = 'serialize_precision';
     private const CANONICAL_SERIALIZE_PRECISION = '-1';
@@ -22,7 +31,17 @@ final class CanonicalJson
     public static function encode(mixed $value): string
     {
         $activeArrayReferences = [];
-        $normalized = self::normalize($value, 0, $activeArrayReferences);
+        $nodeCount = 0;
+        $byteCount = 0;
+        $keyCount = 0;
+        $normalized = self::normalize(
+            $value,
+            0,
+            $activeArrayReferences,
+            $nodeCount,
+            $byteCount,
+            $keyCount,
+        );
         $previousPrecision = self::configureCanonicalSerializePrecision();
 
         try {
@@ -84,11 +103,27 @@ final class CanonicalJson
     /**
      * @param array<string, true> $activeArrayReferences
      */
-    private static function normalize(mixed &$value, int $depth, array &$activeArrayReferences): mixed
-    {
+    private static function normalize(
+        mixed &$value,
+        int $depth,
+        array &$activeArrayReferences,
+        int &$nodeCount,
+        int &$byteCount,
+        int &$keyCount,
+    ): mixed {
         if (\is_array($value)) {
             if ($depth > self::MAX_NESTING_DEPTH) {
                 throw new \InvalidArgumentException('paper_canonical_json_depth_exceeded');
+            }
+
+            self::consumeNode($nodeCount);
+            $isList = array_is_list($value);
+            if (!$isList) {
+                foreach (array_keys($value) as $key) {
+                    if (\is_int($key)) {
+                        throw new \InvalidArgumentException('paper_canonical_json_integer_key_map_unsupported');
+                    }
+                }
             }
 
             $referenceId = self::arrayReferenceId($value);
@@ -101,12 +136,24 @@ final class CanonicalJson
             try {
                 $normalized = [];
                 foreach (array_keys($value) as $key) {
+                    if (!$isList) {
+                        self::consumeKey($keyCount);
+                        self::consumeBytes($byteCount, \strlen((string) $key));
+                    }
+
                     $item = &$value[$key];
-                    $normalized[$key] = self::normalize($item, $depth + 1, $activeArrayReferences);
+                    $normalized[$key] = self::normalize(
+                        $item,
+                        $depth + 1,
+                        $activeArrayReferences,
+                        $nodeCount,
+                        $byteCount,
+                        $keyCount,
+                    );
                     unset($item);
                 }
 
-                if (array_is_list($value)) {
+                if ($isList) {
                     return $normalized;
                 }
 
@@ -118,6 +165,8 @@ final class CanonicalJson
             }
         }
 
+        self::consumeNode($nodeCount);
+
         if (\is_float($value) && !is_finite($value)) {
             throw new \InvalidArgumentException('paper_canonical_json_non_finite_number');
         }
@@ -126,11 +175,62 @@ final class CanonicalJson
             throw new \InvalidArgumentException('paper_canonical_json_unsupported_type');
         }
 
-        if ($value === null || \is_bool($value) || \is_int($value) || \is_float($value) || \is_string($value)) {
+        if (\is_string($value)) {
+            self::consumeBytes($byteCount, \strlen($value));
+
+            return $value;
+        }
+
+        if ($value === null) {
+            self::consumeBytes($byteCount, 4);
+
+            return null;
+        }
+
+        if (\is_bool($value)) {
+            self::consumeBytes($byteCount, $value ? 4 : 5);
+
+            return $value;
+        }
+
+        if (\is_int($value)) {
+            self::consumeBytes($byteCount, \strlen((string) $value));
+
+            return $value;
+        }
+
+        if (\is_float($value)) {
+            self::consumeBytes($byteCount, 32);
+
             return $value;
         }
 
         throw new \InvalidArgumentException('paper_canonical_json_unsupported_type');
+    }
+
+    private static function consumeNode(int &$nodeCount): void
+    {
+        ++$nodeCount;
+        if ($nodeCount > self::MAX_NODES) {
+            throw new \InvalidArgumentException('paper_canonical_json_nodes_exceeded');
+        }
+    }
+
+    private static function consumeBytes(int &$byteCount, int $bytes): void
+    {
+        if ($bytes > self::MAX_BYTES || $byteCount > self::MAX_BYTES - $bytes) {
+            throw new \InvalidArgumentException('paper_canonical_json_bytes_exceeded');
+        }
+
+        $byteCount += $bytes;
+    }
+
+    private static function consumeKey(int &$keyCount): void
+    {
+        ++$keyCount;
+        if ($keyCount > self::MAX_KEYS) {
+            throw new \InvalidArgumentException('paper_canonical_json_keys_exceeded');
+        }
     }
 
     /**
