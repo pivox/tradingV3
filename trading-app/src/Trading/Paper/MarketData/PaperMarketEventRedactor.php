@@ -98,18 +98,8 @@ REGEX;
 
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]-]+\z~D';
 
-    /** @var array<string, string> Common fullwidth, Cyrillic and Greek credential-key confusables. */
+    /** @var array<string, string> Cyrillic and Greek cross-script credential-key confusables. */
     private const KEY_CONFUSABLES = [
-        'Ａ' => 'A', 'Ｂ' => 'B', 'Ｃ' => 'C', 'Ｄ' => 'D', 'Ｅ' => 'E', 'Ｆ' => 'F', 'Ｇ' => 'G',
-        'Ｈ' => 'H', 'Ｉ' => 'I', 'Ｊ' => 'J', 'Ｋ' => 'K', 'Ｌ' => 'L', 'Ｍ' => 'M', 'Ｎ' => 'N',
-        'Ｏ' => 'O', 'Ｐ' => 'P', 'Ｑ' => 'Q', 'Ｒ' => 'R', 'Ｓ' => 'S', 'Ｔ' => 'T', 'Ｕ' => 'U',
-        'Ｖ' => 'V', 'Ｗ' => 'W', 'Ｘ' => 'X', 'Ｙ' => 'Y', 'Ｚ' => 'Z',
-        'ａ' => 'a', 'ｂ' => 'b', 'ｃ' => 'c', 'ｄ' => 'd', 'ｅ' => 'e', 'ｆ' => 'f', 'ｇ' => 'g',
-        'ｈ' => 'h', 'ｉ' => 'i', 'ｊ' => 'j', 'ｋ' => 'k', 'ｌ' => 'l', 'ｍ' => 'm', 'ｎ' => 'n',
-        'ｏ' => 'o', 'ｐ' => 'p', 'ｑ' => 'q', 'ｒ' => 'r', 'ｓ' => 's', 'ｔ' => 't', 'ｕ' => 'u',
-        'ｖ' => 'v', 'ｗ' => 'w', 'ｘ' => 'x', 'ｙ' => 'y', 'ｚ' => 'z',
-        '０' => '0', '１' => '1', '２' => '2', '３' => '3', '４' => '4',
-        '５' => '5', '６' => '6', '７' => '7', '８' => '8', '９' => '9', '＿' => '_',
         'А' => 'A', 'В' => 'B', 'Е' => 'E', 'К' => 'K', 'М' => 'M', 'Н' => 'H', 'О' => 'O',
         'Р' => 'P', 'С' => 'C', 'Т' => 'T', 'Х' => 'X', 'а' => 'a', 'в' => 'b', 'е' => 'e',
         'і' => 'i', 'к' => 'k', 'м' => 'm', 'н' => 'h', 'о' => 'o', 'р' => 'p', 'с' => 'c',
@@ -608,7 +598,7 @@ REGEX;
 
     private static function decodeCanonicalBase64(string $value): ?string
     {
-        if (\strlen($value) < 8 || preg_match('/\A[A-Za-z0-9+\/]+={0,2}\z/D', $value) !== 1) {
+        if (\strlen($value) < 8) {
             return null;
         }
 
@@ -617,11 +607,27 @@ REGEX;
             return null;
         }
 
-        $padded = $unpadded . str_repeat('=', (4 - \strlen($unpadded) % 4) % 4);
+        $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+={0,2}\z/D', $value);
+        $urlMatch = preg_match('/\A[A-Za-z0-9_-]+={0,2}\z/D', $value);
+        if ($classicMatch === false || $urlMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($classicMatch !== 1 && $urlMatch !== 1) {
+            return null;
+        }
+
+        $standardUnpadded = $urlMatch === 1 ? strtr($unpadded, '-_', '+/') : $unpadded;
+        $padded = $standardUnpadded . str_repeat('=', (4 - \strlen($standardUnpadded) % 4) % 4);
         $decoded = base64_decode($padded, true);
+        $canonicalUnpadded = $decoded === false ? null : rtrim(base64_encode($decoded), '=');
+        if ($canonicalUnpadded !== null && $urlMatch === 1) {
+            $canonicalUnpadded = strtr($canonicalUnpadded, '+/', '-_');
+        }
+
         if (
             $decoded === false
-            || rtrim(base64_encode($decoded), '=') !== $unpadded
+            || $canonicalUnpadded !== $unpadded
             || preg_match('//u', $decoded) !== 1
         ) {
             return null;
@@ -671,6 +677,20 @@ REGEX;
             $key = $decoded;
         }
 
+        if (rawurldecode($key) !== $key) {
+            throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
+        }
+
+        $compatibilityNormalized = \Normalizer::normalize($key, \Normalizer::FORM_KC);
+        if ($compatibilityNormalized === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if (\strlen($compatibilityNormalized) > self::MAX_PAYLOAD_KEY_BYTES) {
+            throw new \InvalidArgumentException('paper_market_payload_key_too_large');
+        }
+
+        $key = $compatibilityNormalized;
         $key = strtr($key, self::KEY_CONFUSABLES);
         $withWordBoundaries = preg_replace(
             [

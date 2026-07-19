@@ -421,14 +421,23 @@ PHP,
         );
     }
 
-    public function testCanonicalJsonRejectsAmbiguousNonListIntegerKeyMaps(): void
+    public function testCanonicalJsonPreservesDistinctIntegerAndStringKeysInSortStringOrder(): void
     {
-        $map = [1 => 'one', 0 => 'zero'];
+        $map = [2 => 'two', 10 => 'ten', 1 => 'integer-one', '01' => 'string-zero-one'];
+        try {
+            $encoded = CanonicalJson::encode($map);
+        } catch (\InvalidArgumentException $exception) {
+            self::fail(sprintf('A non-list integer-key map was rejected with %s.', $exception->getMessage()));
+        }
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('paper_canonical_json_integer_key_map_unsupported');
-
-        CanonicalJson::encode($map);
+        self::assertSame(
+            '{"01":"string-zero-one","1":"integer-one","10":"ten","2":"two"}',
+            $encoded,
+        );
+        self::assertNotSame(
+            CanonicalJson::encode(array_values($map)),
+            $encoded,
+        );
     }
 
     public function testCanonicalJsonTreatsSequentialIntegerKeysAsAListInThePhpPayloadModel(): void
@@ -783,16 +792,27 @@ PHP,
         self::assertSame($ndjsonLine, CanonicalJson::encode($restored->toArray()) . "\n");
     }
 
-    public function testFromArrayRejectsAmbiguousPayloadShapeBeforeHashComparison(): void
+    public function testEventValueRoundTripsNonListIntegerKeyMapsWithoutChangingLists(): void
     {
-        $data = self::event()->toArray();
-        $data['payload'] = ['levels' => [1 => 'one', 0 => 'zero']];
-        $data['payload_hash'] = str_repeat('0', 64);
+        try {
+            $event = self::event(payload: [
+                'integer_map' => [1 => 'one', 0 => 'zero', '01' => 'string-zero-one'],
+                'levels' => [['29999.0', '1'], ['30001.0', '2']],
+            ]);
+        } catch (\InvalidArgumentException $exception) {
+            self::fail(sprintf('An event containing a non-list integer-key map was rejected with %s.', $exception->getMessage()));
+        }
+        $restored = PaperMarketEvent::fromArray($event->toArray());
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('paper_canonical_json_integer_key_map_unsupported');
-
-        PaperMarketEvent::fromArray($data);
+        self::assertNotSame($event, $restored);
+        self::assertEquals($event, $restored);
+        self::assertSame($event->toArray(), $restored->toArray());
+        self::assertTrue(array_is_list($restored->payload['levels']));
+        self::assertFalse(array_is_list($restored->payload['integer_map']));
+        self::assertSame(
+            CanonicalJson::encode($event->payload),
+            CanonicalJson::encode($restored->payload),
+        );
     }
 
     #[DataProvider('invalidStrictFieldProvider')]

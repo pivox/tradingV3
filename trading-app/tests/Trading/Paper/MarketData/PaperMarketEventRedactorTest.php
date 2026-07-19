@@ -85,7 +85,26 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'fully percent-encoded map key' => ['%61%70%69%5F%6B%65%79'];
         yield 'fullwidth Unicode confusables' => ['ａｐｉ＿ｋｅｙ'];
         yield 'fullwidth authorization confusables' => ['ａｕｔｈｏｒｉｚａｔｉｏｎ'];
+        yield 'mathematical bold compatibility characters' => ['𝐚𝐩𝐢_𝐤𝐞𝐲'];
         yield 'Cyrillic Unicode confusable' => ["аpi_key"];
+    }
+
+    public function testRejectsMapKeyStillPercentEncodedBeyondTheBoundedDecodeDepth(): void
+    {
+        $encodedKey = self::percentEncodeEveryByte('api_key');
+        for ($depth = 0; $depth < PaperMarketEventRedactor::MAX_SENSITIVE_DECODE_DEPTH; ++$depth) {
+            $encodedKey = rawurlencode($encodedKey);
+        }
+
+        try {
+            PaperMarketEventRedactor::assertSafe([
+                $encodedKey => 'synthetic-secret-sentinel',
+            ]);
+            self::fail('A key requiring another percent-decoding pass must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_decode_depth_exceeded', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
     }
 
     /** @param array<array-key, mixed> $payload */
@@ -177,6 +196,60 @@ final class PaperMarketEventRedactorTest extends TestCase
             JSON_THROW_ON_ERROR,
         ), JSON_THROW_ON_ERROR)];
         yield 'BOM-prefixed escaped JSON' => ["\xEF\xBB\xBF{\"api\\u005fkey\":\"synthetic-secret-sentinel\"}"];
+    }
+
+    #[DataProvider('base64UrlAlphabetProvider')]
+    public function testRejectsCredentialsInsideUnpaddedBase64UrlJson(
+        string $note,
+        string $alphabetCharacter,
+    ): void {
+        $json = json_encode(
+            ['api_key' => 'synthetic-secret-sentinel', 'note' => $note],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $encoded = self::base64UrlEncode($json);
+
+        self::assertStringContainsString($alphabetCharacter, $encoded);
+        self::assertStringNotContainsString('=', $encoded);
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $encoded]);
+            self::fail('Base64url-encoded credential JSON must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    #[DataProvider('publicBase64UrlAlphabetProvider')]
+    public function testAllowsUnpaddedBase64UrlPublicJson(
+        string $note,
+        string $alphabetCharacter,
+    ): void {
+        $json = json_encode(
+            ['symbol' => 'BTCUSDT', 'note' => $note],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $encoded = self::base64UrlEncode($json);
+
+        self::assertStringContainsString($alphabetCharacter, $encoded);
+        self::assertStringNotContainsString('=', $encoded);
+        PaperMarketEventRedactor::assertSafe(['raw' => $encoded]);
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function base64UrlAlphabetProvider(): iterable
+    {
+        yield 'dash alphabet' => ["\u{1003E}", '-'];
+        yield 'underscore alphabet' => ["\u{1003F}", '_'];
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function publicBase64UrlAlphabetProvider(): iterable
+    {
+        yield 'dash alphabet' => ['¾', '-'];
+        yield 'underscore alphabet' => ['¿', '_'];
     }
 
     #[DataProvider('benignEncodedPublicValueProvider')]
@@ -359,6 +432,11 @@ final class PaperMarketEventRedactorTest extends TestCase
         }
 
         return $encoded;
+    }
+
+    private static function base64UrlEncode(string $value): string
+    {
+        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
     }
 
     /**

@@ -118,13 +118,6 @@ final class CanonicalJson
 
             self::consumeNode($nodeCount);
             $isList = array_is_list($value);
-            if (!$isList) {
-                foreach (array_keys($value) as $key) {
-                    if (\is_int($key)) {
-                        throw new \InvalidArgumentException('paper_canonical_json_integer_key_map_unsupported');
-                    }
-                }
-            }
 
             $referenceId = self::arrayReferenceId($value);
             if (isset($activeArrayReferences[$referenceId])) {
