@@ -389,4 +389,3 @@ MkDocs.
   `headRefOid` are identical. Re-read the PR diff and open-PR list. Do not ask
   `@codex review`, merge, resolve future threads, comment/close #196, or modify
   the Prompt 8 registry.
-

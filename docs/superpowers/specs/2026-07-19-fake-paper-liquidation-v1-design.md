@@ -274,4 +274,3 @@ Fake state file containing liquidation v1 facts before running code that cannot
 interpret them. Re-enable cross only together with an explicit replacement
 portfolio model; never as a fallback. No exchange cleanup is required because
 the feature is strictly local and sends no order.
-
