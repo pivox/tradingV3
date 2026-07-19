@@ -57,7 +57,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             'order.created' => $order instanceof ExchangeOrderDto
                 ? [new ExchangeOrderCreated($order, $event->occurredAt, $event->payload)]
                 : [],
-            'order.filled' => $order instanceof ExchangeOrderDto
+            'order.filled', 'liquidation.filled' => $order instanceof ExchangeOrderDto
                 ? [
                     new ExchangeOrderFilled($order, $event->occurredAt, $event->payload),
                     new ExchangeFillReceived($this->fillFromEvent($event, $order), $event->payload),
@@ -240,6 +240,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 'order_status' => $order->status->value,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                ...$this->fillLineageMetadata($order),
                 ...$this->fillCostMetadata($event),
             ],
         );
@@ -257,6 +258,12 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             'slippage_cost_usdt',
             'cost_model_version',
             'spread_model_version',
+            'liquidation_fee_usdt',
+            'liquidation_fee_decimal',
+            'liquidation_fee_rate',
+            'liquidation_fee_currency',
+            'liquidation_fee_model_version',
+            'liquidation_identity',
         ] as $key) {
             if (array_key_exists($key, $event->payload)) {
                 $metadata[$key] = $event->payload[$key];
@@ -264,6 +271,21 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
         }
 
         return $metadata;
+    }
+
+    /** @return array<string,mixed> */
+    private function fillLineageMetadata(ExchangeOrderDto $order): array
+    {
+        return array_intersect_key($order->metadata, array_flip([
+            'internal_trade_id',
+            'trade_id',
+            'internal_position_id',
+            'position_id',
+            'exchange_position_id',
+            'order_intent_id',
+            'run_id',
+            'decision_key',
+        ]));
     }
 
     /**

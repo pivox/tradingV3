@@ -217,6 +217,7 @@ final readonly class FakeDailyLossCapGuard
         return \in_array($event->type, [
             'order.filled',
             'order.partially_filled',
+            'liquidation.filled',
             'funding.accrued',
         ], true);
     }
@@ -264,6 +265,22 @@ final readonly class FakeDailyLossCapGuard
         if ($slippage === null || $slippage->isNegative()) {
             return $this->invalidDelta('fill_slippage_cost_invalid');
         }
+        $liquidationFee = BigDecimal::zero()->toScale(self::SCALE);
+        if ($event->type === 'liquidation.filled') {
+            if (!\array_key_exists('liquidation_fee_usdt', $payload) || $payload['liquidation_fee_usdt'] === null) {
+                return $this->invalidDelta('liquidation_fee_unknown');
+            }
+            if (($payload['liquidation_fee_currency'] ?? null) !== 'USDT') {
+                return $this->invalidDelta('liquidation_fee_currency_unknown');
+            }
+            if (($payload['liquidation_fee_model_version'] ?? null) !== FakeLiquidationPolicy::FEE_MODEL_VERSION) {
+                return $this->invalidDelta('liquidation_fee_model_unknown');
+            }
+            $liquidationFee = $this->decimal($payload['liquidation_fee_usdt']);
+            if ($liquidationFee === null || !$liquidationFee->isPositive()) {
+                return $this->invalidDelta('liquidation_fee_invalid');
+            }
+        }
         $snapshot = $payload['order_snapshot'] ?? null;
         if (!\is_array($snapshot) || !\is_bool($snapshot['reduce_only'] ?? null)) {
             return $this->invalidDelta('fill_reduce_intent_unknown');
@@ -286,7 +303,7 @@ final readonly class FakeDailyLossCapGuard
         }
 
         return [
-            'amount' => $gross->minus($fee)->minus($spread)->minus($slippage)
+            'amount' => $gross->minus($fee)->minus($spread)->minus($slippage)->minus($liquidationFee)
                 ->toScale(self::SCALE, RoundingMode::HALF_EVEN),
             'reason' => '',
         ];

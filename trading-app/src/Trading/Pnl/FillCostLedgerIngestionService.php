@@ -72,6 +72,7 @@ final readonly class FillCostLedgerIngestionService
             $payload,
             $qualityFlags,
         );
+        $liquidationFeeUsdt = $this->liquidationFeeUsdt($metadata, $payload, $qualityFlags);
         $source = $this->source($metadata, $payload);
         $sourceVersion = $this->string($metadata['source_version'] ?? $payload['source_version'] ?? null)
             ?? $this->string($metadata['pnl_source'] ?? $payload['pnl_source'] ?? null)
@@ -102,7 +103,7 @@ final readonly class FillCostLedgerIngestionService
             'spread_cost_usdt' => $spreadCostUsdt,
             'slippage_cost_usdt' => $slippageCostUsdt,
             'borrow_cost_usdt' => null,
-            'liquidation_fee_usdt' => null,
+            'liquidation_fee_usdt' => $liquidationFeeUsdt,
             'occurred_at' => $fill->filledAt->format(\DateTimeInterface::ATOM),
             'source' => $source,
             'source_version' => $sourceVersion,
@@ -459,6 +460,68 @@ final readonly class FillCostLedgerIngestionService
         }
 
         return $this->decimal($cost);
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $payload
+     * @param list<string> $qualityFlags
+     */
+    private function liquidationFeeUsdt(
+        array $metadata,
+        array $payload,
+        array &$qualityFlags,
+    ): ?string {
+        $feePresent = array_key_exists('liquidation_fee_usdt', $metadata)
+            || array_key_exists('liquidation_fee_usdt', $payload);
+        if (!$feePresent) {
+            return null;
+        }
+
+        $currency = strtoupper((string) (
+            $metadata['liquidation_fee_currency']
+            ?? $payload['liquidation_fee_currency']
+            ?? ''
+        ));
+        if ($currency !== 'USDT') {
+            $qualityFlags[] = 'liquidation_fee_currency_unknown';
+
+            return null;
+        }
+        $modelVersion = $this->string(
+            $metadata['liquidation_fee_model_version']
+            ?? $payload['liquidation_fee_model_version']
+            ?? null,
+        );
+        if ($modelVersion === null) {
+            $qualityFlags[] = 'liquidation_fee_model_unknown';
+
+            return null;
+        }
+
+        if (array_key_exists('liquidation_fee_usdt', $metadata)) {
+            $value = $metadata['liquidation_fee_usdt'];
+        } else {
+            $value = $payload['liquidation_fee_usdt'] ?? null;
+        }
+        if ($value === null || $value === '') {
+            $qualityFlags[] = 'liquidation_fee_unknown';
+
+            return null;
+        }
+        if (!is_numeric($value)) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+        $fee = (float) $value;
+        if (!\is_finite($fee) || $fee < 0.0) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+
+        return $this->decimal($fee);
     }
 
     /**

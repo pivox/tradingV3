@@ -26,6 +26,7 @@ use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -118,6 +119,35 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             'top_of_book_embedded_spread_v1',
             $fill->metadata['spread_model_version'] ?? null,
         );
+    }
+
+    public function testNormalizesDedicatedLiquidationFillWithSeparateKnownFee(): void
+    {
+        $this->scenarioAdapter()->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            quantity: 1.0,
+            postOnly: false,
+            metadata: ['internal_trade_id' => 'itd-liquidation-normalized'],
+        ));
+        $this->scenario->movePrice('BTCUSDT', 15000.0);
+
+        $events = $this->scenario->events('liquidation.filled');
+        self::assertCount(1, $events);
+        $normalized = $this->normalizer->normalize($events[0]);
+
+        self::assertCount(2, $normalized);
+        self::assertInstanceOf(ExchangeOrderFilled::class, $normalized[0]);
+        self::assertInstanceOf(ExchangeFillReceived::class, $normalized[1]);
+        self::assertTrue($normalized[0]->order()->reduceOnly);
+        self::assertSame(ExchangeOrderStatus::FILLED, $normalized[0]->order()->status);
+        self::assertSame(75.0, $normalized[1]->fill()->metadata['liquidation_fee_usdt'] ?? null);
+        self::assertSame(
+            FakeLiquidationPolicy::FEE_MODEL_VERSION,
+            $normalized[1]->fill()->metadata['liquidation_fee_model_version'] ?? null,
+        );
+        self::assertSame('USDT', $normalized[1]->fill()->metadata['liquidation_fee_currency'] ?? null);
+        self::assertSame('itd-liquidation-normalized', $normalized[1]->fill()->metadata['internal_trade_id'] ?? null);
     }
 
     public function testNormalizesPositionOpenedEvent(): void

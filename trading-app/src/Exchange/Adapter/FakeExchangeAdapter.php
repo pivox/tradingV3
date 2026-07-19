@@ -382,6 +382,7 @@ final readonly class FakeExchangeAdapter implements
                 'source' => 'fake_exchange_rest_reconciliation',
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
+                ...$this->fillLineageMetadata($order),
                 ...$this->fillCostMetadata($event),
             ],
         );
@@ -412,6 +413,21 @@ final readonly class FakeExchangeAdapter implements
         }
 
         return $metadata;
+    }
+
+    /** @return array<string,mixed> */
+    private function fillLineageMetadata(ExchangeOrderDto $order): array
+    {
+        return array_intersect_key($order->metadata, array_flip([
+            'internal_trade_id',
+            'trade_id',
+            'internal_position_id',
+            'position_id',
+            'exchange_position_id',
+            'order_intent_id',
+            'run_id',
+            'decision_key',
+        ]));
     }
 
     private function fillFee(float $quantity, float $price): float
