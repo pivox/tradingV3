@@ -89,6 +89,42 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'Cyrillic Unicode confusable' => ["аpi_key"];
     }
 
+    /** @param array<array-key, mixed> $payload */
+    #[DataProvider('ambiguousUnicodeStructuredKeyProvider')]
+    public function testRejectsAmbiguousUnicodeKeysAcrossStructuredRepresentations(array $payload): void
+    {
+        try {
+            PaperMarketEventRedactor::assertSafe($payload);
+            self::fail('An ambiguous Unicode structured key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{array<array-key, mixed>}> */
+    public static function ambiguousUnicodeStructuredKeyProvider(): iterable
+    {
+        $cyrillicApiKey = "аpi_key";
+        $ambiguousPrivateKey = "priѵate_key";
+
+        yield 'raw Unicode form key' => [[
+            'raw' => $cyrillicApiKey . '=synthetic-secret-sentinel',
+        ]];
+        yield 'percent-encoded Unicode form key' => [[
+            'raw' => rawurlencode($cyrillicApiKey) . '=synthetic-secret-sentinel',
+        ]];
+        yield 'ambiguous map key' => [[
+            $ambiguousPrivateKey => 'synthetic-secret-sentinel',
+        ]];
+        yield 'ambiguous JSON key' => [[
+            'raw' => json_encode(
+                [$ambiguousPrivateKey => 'synthetic-secret-sentinel'],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+            ),
+        ]];
+    }
+
     public function testRejectsMapKeyStillPercentEncodedBeyondTheBoundedDecodeDepth(): void
     {
         $encodedKey = self::percentEncodeEveryByte('api_key');
@@ -158,6 +194,51 @@ final class PaperMarketEventRedactorTest extends TestCase
                 'password' => 'synthetic-placeholder',
             ]),
         ]];
+    }
+
+    #[DataProvider('privateKeyEnvelopeProvider')]
+    public function testRejectsPrivateKeyEnvelopesUnderPublicKeys(string $privateKeyType): void
+    {
+        $envelope = sprintf(
+            "-----BEGIN %1\$s-----\nc3ludGhldGljLXNlY3JldC1zZW50aW5lbA==\n-----END %1\$s-----",
+            $privateKeyType,
+        );
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['note' => $envelope]);
+            self::fail('A private-key envelope under a public key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function privateKeyEnvelopeProvider(): iterable
+    {
+        yield 'PKCS8 private key' => ['PRIVATE KEY'];
+        yield 'PKCS1 RSA private key' => ['RSA PRIVATE KEY'];
+        yield 'SEC1 EC private key' => ['EC PRIVATE KEY'];
+        yield 'OpenSSH private key' => ['OPENSSH PRIVATE KEY'];
+    }
+
+    #[DataProvider('shortBearerTokenProvider')]
+    public function testRejectsBearerWithAnyNonEmptyToken(string $token): void
+    {
+        try {
+            PaperMarketEventRedactor::assertSafe(['header' => 'Bearer ' . $token]);
+            self::fail('A non-empty Bearer token must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($token, $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function shortBearerTokenProvider(): iterable
+    {
+        yield 'one-character token' => ['x'];
+        yield 'seven-character token' => ['short_7'];
     }
 
     public function testRejectsAnUnboundedStringBeforeScanningIt(): void
@@ -250,6 +331,54 @@ final class PaperMarketEventRedactorTest extends TestCase
     {
         yield 'dash alphabet' => ['¾', '-'];
         yield 'underscore alphabet' => ['¿', '_'];
+    }
+
+    #[DataProvider('canonicalBase64CredentialProvider')]
+    public function testRejectsCredentialsInEveryCanonicalBase64Form(string $encodedCredential): void
+    {
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $encodedCredential]);
+            self::fail('A credential in canonical Base64 must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString('synthetic-secret-sentinel', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function canonicalBase64CredentialProvider(): iterable
+    {
+        $json = json_encode(
+            ['api_key' => 'synthetic-secret-sentinel', 'note' => "\u{1003E}"],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $classicPadded = base64_encode($json);
+        $urlPadded = strtr($classicPadded, '+/', '-_');
+
+        yield 'classic padded' => [$classicPadded];
+        yield 'classic unpadded' => [rtrim($classicPadded, '=')];
+        yield 'URL-safe padded' => [$urlPadded];
+        yield 'URL-safe unpadded' => [rtrim($urlPadded, '=')];
+    }
+
+    #[DataProvider('malformedBase64PaddingProvider')]
+    public function testDoesNotInterpretMalformedBase64PaddingAsCanonical(string $malformed): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => $malformed]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function malformedBase64PaddingProvider(): iterable
+    {
+        $requiresTwoPadding = self::base64CredentialWithPaddingCount(2);
+        $requiresOnePadding = self::base64CredentialWithPaddingCount(1);
+
+        yield 'classic partial padding' => [substr($requiresTwoPadding, 0, -1)];
+        yield 'classic excessive padding' => [$requiresOnePadding . '='];
+        yield 'URL-safe partial padding' => [strtr(substr($requiresTwoPadding, 0, -1), '+/', '-_')];
+        yield 'URL-safe excessive padding' => [strtr($requiresOnePadding . '=', '+/', '-_')];
     }
 
     #[DataProvider('benignEncodedPublicValueProvider')]
@@ -372,6 +501,18 @@ final class PaperMarketEventRedactorTest extends TestCase
             'description' => 'public wallet statistics without a private identifier',
             'status' => 'signature verification unavailable',
             'mode' => 'basic market snapshot',
+            'unicode_note' => 'Marché public à Paris — 東京 🚀',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testAllowsOrdinaryPublicKeyMaterialAndAnEmptyBearerScheme(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'public_key' => "-----BEGIN PUBLIC KEY-----\ncHVibGljLW1hdGVyaWFs\n-----END PUBLIC KEY-----",
+            'certificate' => "-----BEGIN CERTIFICATE-----\ncHVibGljLWNlcnRpZmljYXRl\n-----END CERTIFICATE-----",
+            'header_status' => 'Bearer ',
         ]);
 
         self::addToAssertionCount(1);
@@ -414,6 +555,33 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::addToAssertionCount(1);
     }
 
+    public function testAllowsDesignAssignmentInFormString(): void
+    {
+        PaperMarketEventRedactor::assertSafe(['raw' => 'design=public_layout']);
+
+        self::addToAssertionCount(1);
+    }
+
+    #[DataProvider('sensitiveSignAssignmentProvider')]
+    public function testStillRejectsExplicitSensitiveSignAssignments(string $key): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        PaperMarketEventRedactor::assertSafe([
+            'raw' => $key . '=synthetic-secret-sentinel',
+        ]);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveSignAssignmentProvider(): iterable
+    {
+        yield 'sign' => ['sign'];
+        yield 'signature' => ['signature'];
+        yield 'prefixed sign' => ['order_sign'];
+        yield 'numeric signature suffix' => ['order_signature64'];
+    }
+
     public function testSemanticMetadataKeyCannotAllowCredentialMaterial(): void
     {
         $this->expectException(\InvalidArgumentException::class);
@@ -437,6 +605,26 @@ final class PaperMarketEventRedactorTest extends TestCase
     private static function base64UrlEncode(string $value): string
     {
         return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+    }
+
+    private static function base64CredentialWithPaddingCount(int $paddingCount): string
+    {
+        for ($suffixLength = 0; $suffixLength < 3; ++$suffixLength) {
+            $json = json_encode(
+                [
+                    'api_key' => 'synthetic-secret-sentinel',
+                    'note' => "\u{1003E}",
+                    'suffix' => str_repeat('x', $suffixLength),
+                ],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+            );
+            $encoded = base64_encode($json);
+            if (\strlen($encoded) - \strlen(rtrim($encoded, '=')) === $paddingCount) {
+                return $encoded;
+            }
+        }
+
+        throw new \LogicException('paper_market_test_base64_padding_fixture_unavailable');
     }
 
     /**

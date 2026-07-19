@@ -59,7 +59,7 @@ final class PaperMarketEventRedactor
 
     private const SENSITIVE_VALUE_PATTERN = <<<'REGEX'
 ~(?:
-    \bbearer[\t ]+[a-z0-9._\~+/=-]{8,} |
+    \bbearer[\t ]+[a-z0-9._\~+/=-]+ |
     ["']?(?:
         authorization |
         api[._\x20-]*key |
@@ -69,7 +69,7 @@ final class PaperMarketEventRedactor
         access[._\x20-]*token |
         client[._\x20-]*secret |
         passphrase |
-        sign(?:ature)? |
+        (?<![a-z0-9])sign(?:ature)? |
         wallet |
         mnemonic |
         seed[._\x20-]*phrase |
@@ -96,7 +96,11 @@ REGEX;
 )~xD
 REGEX;
 
-    private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]-]+\z~D';
+    private const PRIVATE_KEY_ENVELOPE_MARKER_PATTERN = <<<'REGEX'
+~-----(?:BEGIN|END) (?:PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY|OPENSSH PRIVATE KEY)-----~D
+REGEX;
+
+    private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
 
     /** @var array<string, string> Cyrillic and Greek cross-script credential-key confusables. */
     private const KEY_CONFUSABLES = [
@@ -294,6 +298,7 @@ REGEX;
             return;
         }
 
+        self::assertNoPrivateKeyEnvelopeMarkers($canonical);
         self::assertNoBasicCredentials($canonical);
         self::assertNoSensitiveAssignments($canonical);
 
@@ -392,6 +397,18 @@ REGEX;
             $decodedByteCount,
             $decodedStrings,
         );
+    }
+
+    private static function assertNoPrivateKeyEnvelopeMarkers(string $value): void
+    {
+        $match = preg_match(self::PRIVATE_KEY_ENVELOPE_MARKER_PATTERN, $value);
+        if ($match === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($match === 1) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
     }
 
     private static function assertNoBasicCredentials(string $value): void
@@ -607,6 +624,12 @@ REGEX;
             return null;
         }
 
+        $requiredPadding = (4 - \strlen($unpadded) % 4) % 4;
+        $actualPadding = \strlen($value) - \strlen($unpadded);
+        if ($actualPadding !== 0 && $actualPadding !== $requiredPadding) {
+            return null;
+        }
+
         $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+={0,2}\z/D', $value);
         $urlMatch = preg_match('/\A[A-Za-z0-9_-]+={0,2}\z/D', $value);
         if ($classicMatch === false || $urlMatch === false) {
@@ -618,7 +641,7 @@ REGEX;
         }
 
         $standardUnpadded = $urlMatch === 1 ? strtr($unpadded, '-_', '+/') : $unpadded;
-        $padded = $standardUnpadded . str_repeat('=', (4 - \strlen($standardUnpadded) % 4) % 4);
+        $padded = $standardUnpadded . str_repeat('=', $requiredPadding);
         $decoded = base64_decode($padded, true);
         $canonicalUnpadded = $decoded === false ? null : rtrim(base64_encode($decoded), '=');
         if ($canonicalUnpadded !== null && $urlMatch === 1) {
@@ -692,6 +715,15 @@ REGEX;
 
         $key = $compatibilityNormalized;
         $key = strtr($key, self::KEY_CONFUSABLES);
+        $nonAsciiMatch = preg_match('/[^\x00-\x7F]/', $key);
+        if ($nonAsciiMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($nonAsciiMatch === 1) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
         $withWordBoundaries = preg_replace(
             [
                 '/(?<=[a-z0-9])(?=[A-Z])/',
