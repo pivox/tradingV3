@@ -171,13 +171,72 @@ final class PaperMarketEventRedactorTest extends TestCase
         }
     }
 
+    public function testRejectsSensitiveJsonObjectKeyWithEscapedStructuralQuotes(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {\\"api\\u005fkey\\":\\"' . $sentinel . '\\"} suffix';
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('An escaped sensitive JSON object fragment must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($sentinel, $exception->getMessage());
+        }
+    }
+
+    public function testRejectsSensitiveJsonObjectKeyWithMismatchedStructuralEscapes(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {\\"api\\u005fkey' . str_repeat('\\', 2) . '":"' . $sentinel . '"} suffix';
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A malformed escaped sensitive JSON object fragment must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($sentinel, $exception->getMessage());
+        }
+    }
+
     public function testAllowsPublicJsonObjectKeysAfterNonJsonPrefix(): void
     {
         PaperMarketEventRedactor::assertSafe([
             'raw' => 'prefix {"symbol":"BTCUSDT","price":"29999.0"}',
         ]);
+        PaperMarketEventRedactor::assertSafe([
+            'raw' => 'prefix {\\"symbol\\":\\"BTCUSDT\\",\\"price\\":\\"29999.0\\"} suffix',
+        ]);
+        PaperMarketEventRedactor::assertSafe([
+            'raw' => 'prefix {'
+                . str_repeat('\\', 2) . '"symbol' . str_repeat('\\', 2)
+                . '":"BTCUSDT"} suffix',
+        ]);
 
         self::addToAssertionCount(1);
+    }
+
+    public function testAllowsOrdinaryWindowsPathLikePublicProse(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'note' => 'Ordinary note: the public folder "C:\\prices": contains BTCUSDT snapshots.',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testRejectsJsonUnicodeCredentialEscapeInsideWindowsPathLikeToken(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'Ordinary note: "C:\\api\\u005fkey": ' . $sentinel;
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A Windows-path-like token must not hide a JSON Unicode credential key.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($sentinel, $exception->getMessage());
+        }
     }
 
     public function testRejectsMapKeyStillPercentEncodedBeyondTheBoundedDecodeDepth(): void

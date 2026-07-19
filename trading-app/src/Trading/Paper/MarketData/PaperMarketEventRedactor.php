@@ -100,7 +100,11 @@ REGEX;
 ~-----(?:BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----~D
 REGEX;
 
-    private const JSON_OBJECT_KEY_PATTERN = '~"((?:[^"\\\\]|\\\\.)*)"[\t\r\n ]*:~uD';
+    private const JSON_OBJECT_KEY_PATTERN = '~(?<!\\\\)"((?:[^"\\\\]|\\\\.)*)"[\t\r\n ]*:~uD';
+
+    private const ESCAPED_JSON_OBJECT_KEY_PATTERN = <<<'REGEX'
+~(?:\{|,)[\t\r\n ]*\\+"(?<key>.*?)\\+"[\t\r\n ]*:~usD
+REGEX;
 
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
 
@@ -456,19 +460,75 @@ REGEX;
         }
 
         foreach ($matches as $match) {
+            self::assertJsonObjectKeyCandidateSafe($match[1]);
+        }
+
+        $matches = [];
+        $matchCount = preg_match_all(
+            self::ESCAPED_JSON_OBJECT_KEY_PATTERN,
+            $value,
+            $matches,
+            PREG_SET_ORDER,
+        );
+        if ($matchCount === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        foreach ($matches as $match) {
+            self::assertJsonObjectKeyCandidateSafe($match['key']);
+        }
+    }
+
+    private static function assertJsonObjectKeyCandidateSafe(string $encodedKey): void
+    {
+        for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
+            if (self::isSensitiveKey(self::normalizeKey($encodedKey))) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
+
             try {
-                $key = json_decode('"' . $match[1] . '"', flags: JSON_THROW_ON_ERROR);
+                $key = json_decode('"' . $encodedKey . '"', flags: JSON_THROW_ON_ERROR);
             } catch (\JsonException $exception) {
+                if (self::isWindowsPathLikePublicKeyCandidate($encodedKey)) {
+                    return;
+                }
+
                 throw new \InvalidArgumentException(
                     'paper_market_sensitive_field_rejected',
                     previous: $exception,
                 );
             }
 
-            if (!\is_string($key) || self::isSensitiveKey(self::normalizeKey($key))) {
+            if (!\is_string($key)) {
                 throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
             }
+
+            if ($key === $encodedKey) {
+                return;
+            }
+
+            if ($decodeDepth === self::MAX_SENSITIVE_DECODE_DEPTH) {
+                throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
+            }
+
+            $encodedKey = $key;
         }
+    }
+
+    private static function isWindowsPathLikePublicKeyCandidate(string $key): bool
+    {
+        if (\strlen($key) < 4 || $key[1] !== ':' || $key[2] !== '\\') {
+            return false;
+        }
+
+        $drive = ord($key[0]);
+        $pathMatch = preg_match('/\A[-A-Za-z0-9._ ]+\z/D', substr($key, 3));
+        if ($pathMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        return (($drive >= ord('A') && $drive <= ord('Z')) || ($drive >= ord('a') && $drive <= ord('z')))
+            && $pathMatch === 1;
     }
 
     /**

@@ -939,6 +939,31 @@ PHP,
         self::event(payload: ['raw' => '{"api\u005fkey":"synthetic-secret-sentinel"}']);
     }
 
+    public function testCreateRejectsSensitiveJsonObjectFragmentsWithEscapedStructuralQuotes(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+
+        try {
+            self::event(payload: [
+                'raw' => 'prefix {\\"api\\u005fkey\\":\\"' . $sentinel . '\\"} suffix',
+            ]);
+            self::fail('An escaped sensitive JSON object fragment must be rejected by create().');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString($sentinel, $exception->getMessage());
+        }
+    }
+
+    public function testCreateAndWireRoundTripAllowWindowsPathProseAndEscapedPublicJson(): void
+    {
+        $event = self::event(payload: [
+            'note' => 'Ordinary note: the public folder "C:\\prices": contains BTCUSDT snapshots.',
+            'raw' => 'prefix {\\"symbol\\":\\"BTCUSDT\\",\\"price\\":\\"29999.0\\"} suffix',
+        ]);
+
+        self::assertSame($event->toArray(), PaperMarketEvent::fromArray($event->toArray())->toArray());
+    }
+
     public function testCreateRejectsRawFormPayloadStringsWithEncodedSensitiveKeys(): void
     {
         $this->expectException(\InvalidArgumentException::class);
@@ -1000,6 +1025,9 @@ PHP,
         ]];
         yield 'escaped raw JSON' => [[
             'raw' => '{"api\u005fkey":"synthetic-secret-sentinel"}',
+        ]];
+        yield 'escaped structural quotes around raw JSON' => [[
+            'raw' => 'prefix {\\"api\\u005fkey\\":\\"synthetic-secret-sentinel\\"} suffix',
         ]];
         yield 'encoded raw form data' => [[
             'raw' => 'api%5Fkey=synthetic-secret-sentinel',
