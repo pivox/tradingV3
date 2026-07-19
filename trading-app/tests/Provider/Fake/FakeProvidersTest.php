@@ -193,7 +193,7 @@ final class FakeProvidersTest extends TestCase
 
     public function testOrderProviderAppliesPersistedSymbolLeverageWhenOrderOmitsIt(): void
     {
-        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
+        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'isolated'));
 
         $order = $this->fixture->order->placeOrder(
             'BTCUSDT',
@@ -206,7 +206,7 @@ final class FakeProvidersTest extends TestCase
         self::assertNotNull($order);
         self::assertSame(OrderStatus::FILLED, $order->status);
         self::assertSame(10, $order->metadata['leverage'] ?? null);
-        self::assertSame('cross', $order->metadata['margin_mode'] ?? null);
+        self::assertSame('isolated', $order->metadata['margin_mode'] ?? null);
 
         $position = $this->fixture->account->getPosition('BTCUSDT');
         self::assertNotNull($position);
@@ -226,9 +226,9 @@ final class FakeProvidersTest extends TestCase
         self::assertTrue($replay->metadata['idempotent_replay'] ?? false);
     }
 
-    public function testOrderProviderExplicitLeverageOverridesPersistedSymbolSetting(): void
+    public function testOrderProviderExplicitLeverageOverridesPersistedSymbolLeverage(): void
     {
-        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
+        self::assertTrue($this->fixture->order->submitLeverage('BTCUSDT', 10, 'isolated'));
 
         $order = $this->fixture->order->placeOrder(
             'BTCUSDT',
@@ -292,14 +292,20 @@ final class FakeProvidersTest extends TestCase
         self::assertSame(24999.0, $top->bid);
         self::assertSame(25001.0, $top->ask);
 
-        self::assertTrue($this->fixture->order->submitLeverage('ETHUSDT', 25, 'cross'));
+        self::assertTrue($this->fixture->order->submitLeverage('ETHUSDT', 25, 'isolated'));
         self::assertSame(
-            ['leverage' => 25, 'margin_mode' => 'cross'],
+            ['leverage' => 25, 'margin_mode' => 'isolated'],
             $this->fixture->state->getLeverageSetting('ETHUSDT'),
         );
         self::assertTrue($this->fixture->order->cancelOrder('BTCUSDT', $placed->orderId));
         self::assertSame([], $this->fixture->order->getOpenOrders('BTCUSDT'));
         self::assertSame(OrderStatus::CANCELLED, $this->fixture->order->getOrder('BTCUSDT', $placed->orderId)?->status);
+    }
+
+    public function testOrderProviderRejectsUnsupportedCrossLeverageSetting(): void
+    {
+        self::assertFalse($this->fixture->order->submitLeverage('BTCUSDT', 10, 'cross'));
+        self::assertNull($this->fixture->state->getLeverageSetting('BTCUSDT'));
     }
 
     public function testOrderProviderReturnsRejectedResultForConflictingClientOrderIdReplay(): void

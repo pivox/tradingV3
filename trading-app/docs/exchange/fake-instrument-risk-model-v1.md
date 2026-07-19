@@ -284,16 +284,19 @@ exchange endpoint, or network operation is part of this model.
 
 ## Issue #196 scope boundary
 
-All twenty Fake/Paper golden v1 rows are executable. Scenario 20 covers the
-consolidated multi-profile dry-run recipe and proves orchestration/config
-isolation plus the existing global exposure-lock contract without creating an
-order or contacting an exchange. The v2 safety evidence measures OKX and
-Hyperliquid through HTTP guards and proves the Bitmart zero through the Fake
-provider boundary; this is not a Bitmart HTTP measurement. Fake indicator and
-ConditionRegistry timeframe kline reads inject `FakeKlineProvider` directly
-with the Fake context, without a global registry or bundle on those routes, and
-the recipe does not decorate, modify, or call a Bitmart provider.
+Eighteen Fake/Paper golden v1 rows are executable. Scenario 15 remains partial
+because its disconnect/reconnect proof does not execute the named snapshot
+resync. Scenario 20 remains partial because its Python tests use in-memory HTTP
+harnesses and the former PHP runner validated fixture constants instead of
+running the full recipe twice from fresh application state.
 
-This closes the catalog gap only. Trade-history completeness and later
-operational acceptance remain outside this slice, so the evidence does not by
-itself close issue #196 or authorize demo, testnet, or live mutation.
+The v2 safety evidence still checks OKX and Hyperliquid through structural HTTP
+guards and establishes the Bitmart zero through the Fake provider boundary; it
+is not a Bitmart HTTP measurement. Fake indicator and ConditionRegistry
+timeframe kline reads inject `FakeKlineProvider` directly with the Fake context,
+without a global registry or bundle on those routes, and the recipe does not
+decorate, modify, or call a Bitmart provider.
+
+The exact completion gaps are tracked in
+`docs/handbook/reports/fake-paper-final-audit-196.md`. The current evidence does
+not close issue #196 or authorize demo, testnet, or live mutation.

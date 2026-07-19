@@ -62,6 +62,7 @@ nav:
       - Hyperliquid testnet controlled trading: runbooks/hyperliquid-testnet-controlled-trading.md
       - Recette orchestrateur R1-R16: runbooks/orchestrator-runtime-recipe-r1-r16.md
   - Rapports:
+      - "Audit final Fake / Paper #196": reports/fake-paper-final-audit-196.md
       - "Recette runtime orchestrateur #188": reports/orchestrator-runtime-final-report.md
       - "Decision pre-mutative demo/testnet": reports/pre-mutative-demo-readiness-decision.md
       - "Baseline bad trades #132": reports/bad-trades-baseline.md

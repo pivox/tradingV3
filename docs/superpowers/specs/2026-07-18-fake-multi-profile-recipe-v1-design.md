@@ -1,5 +1,13 @@
 # Fake multi-profile recipe v1 design
 
+> **Superseded certification status (2026-07-19).** This document preserves
+> Prompt 6's historical design intent and acceptance criteria; it is not the
+> current golden-suite certification. The source of truth is
+> [`docs/handbook/reports/fake-paper-final-audit-196.md`](../../handbook/reports/fake-paper-final-audit-196.md).
+> Scenario 20 is `partial`: its Python tests use in-memory HTTP test doubles,
+> and the PHP golden runner does not launch the full recipe twice from two fresh
+> application stacks.
+
 ## Scope
 
 Prompt 6 closes Fake/Paper golden scenario 20 without changing strategy, MTF,

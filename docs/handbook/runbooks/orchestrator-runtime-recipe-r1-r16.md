@@ -311,6 +311,15 @@ python scripts/runtime_recipe_runner.py \
   --keep-fixtures
 ```
 
+> **Statut de certification supersede (audit final #196).** Cette documentation
+> Prompt 6 conserve la recette R12 et son resultat propre, mais ne constitue plus
+> une certification golden du scenario 20. Le statut de reference est publie
+> dans
+> [`reports/fake-paper-final-audit-196.md`](../reports/fake-paper-final-audit-196.md).
+> Le scenario 20 est `partial` : les tests Python utilisent des doubles HTTP en
+> memoire et le runner golden PHP ne lance pas la recette complete deux fois
+> depuis deux piles applicatives fraiches.
+
 La recette autonome du golden scenario 20 est :
 
 ```bash

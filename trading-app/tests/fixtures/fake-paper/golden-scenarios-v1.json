@@ -137,12 +137,12 @@
     },
     {
       "evidence": ["tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate"],
-      "gap_codes": [],
+      "gap_codes": ["websocket_disconnect_snapshot_resync_not_exercised"],
       "id": 15,
       "name": "websocket_disconnect_resync",
       "requirement": "A deterministic private WebSocket disconnect resumes without event loss or duplication.",
-      "runner": "websocket_disconnect_resync",
-      "status": "executable"
+      "runner": null,
+      "status": "partial"
     },
     {
       "evidence": [
@@ -195,16 +195,18 @@
         "tests/Repository/ExchangeScopedStorageTest.php::testOrderIntentReservationBlocksDifferentProfileOnSameExchangeMarketSymbol",
         "tests/Provider/Fake/FakeExchangeBundleRegistryTest.php::testRegistryResolvesFakePerpetualContext",
         "tests/Indicator/Provider/IndicatorProviderServiceClosedKlineTest.php::testFakeContextUsesFakeKlinesWithoutCallingLegacyFallback",
-        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts",
         "python-orchestrator/tests/test_runtime_recipe_runner.py::test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart",
         "python-orchestrator/tests/test_integration_orchestrator_e2e.py::test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism"
       ],
-      "gap_codes": [],
+      "gap_codes": [
+        "multi_profile_recipe_uses_in_memory_http_harness",
+        "golden_runner_does_not_execute_recipe_twice_from_fresh_state"
+      ],
       "id": 20,
       "name": "dry_run_multi_profiles_same_symbol",
       "requirement": "Regular, scalper and scalper_micro dry-run sets targeting the same symbol preserve profile isolation while reporting the global exposure-lock contract as not exercised.",
-      "runner": "dry_run_multi_profiles_same_symbol",
-      "status": "executable"
+      "runner": null,
+      "status": "partial"
     }
   ]
 }
