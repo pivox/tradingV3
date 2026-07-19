@@ -7,7 +7,11 @@ namespace App\Tests\Exchange\Readiness;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\ExchangePositionDto;
+use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Fake\FakeDailyLossCapGuard;
 use App\Exchange\Fake\FakeDailyLossCapPolicy;
@@ -23,6 +27,7 @@ use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Provider\Fake\FakeRuntimeCheck;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\Clock\NativeClock;
@@ -191,6 +196,45 @@ final class FakeRuntimeCheckTest extends TestCase
         $report = $this->runtimeCheck($state)->current();
 
         self::assertContains('fake_paper_cross_margin_state_unsupported', $report->blockingErrors);
+    }
+
+    #[DataProvider('activeOrderStatuses')]
+    public function testPersistedActiveCrossMarginOrderFailsRuntimeClosed(ExchangeOrderStatus $status): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->saveOrder($this->crossMarginOrder($status));
+
+        $report = $this->runtimeCheck($state)->current();
+
+        self::assertContains('fake_paper_cross_margin_state_unsupported', $report->blockingErrors);
+    }
+
+    /** @return iterable<string,array{ExchangeOrderStatus}> */
+    public static function activeOrderStatuses(): iterable
+    {
+        yield 'pending' => [ExchangeOrderStatus::PENDING];
+        yield 'open' => [ExchangeOrderStatus::OPEN];
+        yield 'partially filled' => [ExchangeOrderStatus::PARTIALLY_FILLED];
+    }
+
+    #[DataProvider('terminalOrderStatuses')]
+    public function testPersistedTerminalCrossMarginOrderDoesNotFailRuntimeClosed(ExchangeOrderStatus $status): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->saveOrder($this->crossMarginOrder($status));
+
+        $report = $this->runtimeCheck($state)->current();
+
+        self::assertNotContains('fake_paper_cross_margin_state_unsupported', $report->blockingErrors);
+    }
+
+    /** @return iterable<string,array{ExchangeOrderStatus}> */
+    public static function terminalOrderStatuses(): iterable
+    {
+        yield 'filled' => [ExchangeOrderStatus::FILLED];
+        yield 'cancelled' => [ExchangeOrderStatus::CANCELLED];
+        yield 'rejected' => [ExchangeOrderStatus::REJECTED];
+        yield 'expired' => [ExchangeOrderStatus::EXPIRED];
     }
 
     public function testOpenPositionWithoutPersistedLiquidationIdentityFailsRuntimeClosed(): void
@@ -399,5 +443,37 @@ final class FakeRuntimeCheckTest extends TestCase
                 return new \DateTimeImmutable('2026-01-01T00:00:00+00:00');
             }
         };
+    }
+
+    private function crossMarginOrder(ExchangeOrderStatus $status): ExchangeOrderDto
+    {
+        $filledQuantity = match ($status) {
+            ExchangeOrderStatus::FILLED => 1.0,
+            ExchangeOrderStatus::PARTIALLY_FILLED => 0.5,
+            default => 0.0,
+        };
+
+        return new ExchangeOrderDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            exchangeOrderId: 'fake-cross-' . $status->value,
+            clientOrderId: null,
+            side: ExchangeOrderSide::BUY,
+            positionSide: ExchangePositionSide::LONG,
+            orderType: ExchangeOrderType::LIMIT,
+            status: $status,
+            quantity: 1.0,
+            filledQuantity: $filledQuantity,
+            remainingQuantity: 1.0 - $filledQuantity,
+            price: 24950.0,
+            averagePrice: null,
+            stopPrice: null,
+            reduceOnly: false,
+            postOnly: true,
+            timeInForce: null,
+            createdAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            metadata: ['margin_mode' => 'cross'],
+        );
     }
 }

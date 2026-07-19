@@ -62,6 +62,22 @@ final class FillCostLedgerLiquidationTest extends TestCase
         self::assertContains('liquidation_fee_invalid', $entry->getQualityFlags());
     }
 
+    public function testUnknownLiquidationFeeModelRemainsNullWithQualityFlag(): void
+    {
+        [$service, $stored] = $this->service();
+
+        $service->ingestExchangeFill($this->event([
+            'liquidation_fee_usdt' => 110.0,
+            'liquidation_fee_currency' => 'USDT',
+            'liquidation_fee_model_version' => 'fake-liquidation-notional-fee-v0',
+        ], fillId: 'fake-fill-liquidation-unknown-fee-model'));
+        $entry = $stored();
+
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertNull($entry->getLiquidationFeeUsdt());
+        self::assertContains('liquidation_fee_model_unknown', $entry->getQualityFlags());
+    }
+
     public function testExactLiquidationFeeWinsOverRoundedFloatProjection(): void
     {
         [$service, $stored] = $this->service();

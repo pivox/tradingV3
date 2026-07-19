@@ -13,6 +13,7 @@ use App\Exchange\Enum\ExchangeOrderSide;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeFundingReceived;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
@@ -517,7 +518,7 @@ final readonly class FillCostLedgerIngestionService
             ?? $payload['liquidation_fee_model_version']
             ?? null,
         );
-        if ($modelVersion === null) {
+        if ($modelVersion !== FakeLiquidationPolicy::FEE_MODEL_VERSION) {
             $qualityFlags[] = 'liquidation_fee_model_unknown';
 
             return null;

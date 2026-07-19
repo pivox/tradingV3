@@ -235,6 +235,11 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
                 return true;
             }
         }
+        foreach ($this->stateStore->getOpenOrders() as $order) {
+            if (($order->metadata['margin_mode'] ?? null) === 'cross') {
+                return true;
+            }
+        }
 
         return false;
     }
