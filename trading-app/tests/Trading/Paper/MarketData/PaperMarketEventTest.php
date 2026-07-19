@@ -931,6 +931,107 @@ PHP,
         self::event(payload: ['HYPERLIQUID_PRIVATE_KEY' => 'synthetic-secret-sentinel']);
     }
 
+    #[DataProvider('jsonUnicodeEscapedDirectMapKeyProvider')]
+    public function testCreateRejectsJsonUnicodeEscapedDirectMapKey(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: [
+                $key => $sentinel,
+            ]),
+            [$key, $sentinel],
+        );
+    }
+
+    #[DataProvider('jsonUnicodeEscapedDirectMapKeyProvider')]
+    public function testFromArrayRejectsJsonUnicodeEscapedDirectMapKeyOnStrictWireInput(
+        string $key,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $payload = [$key => $sentinel];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function jsonUnicodeEscapedDirectMapKeyProvider(): iterable
+    {
+        yield 'JSON Unicode escape' => ['api' . str_repeat('\\', 1) . 'u005fkey'];
+        yield 'double-escaped JSON Unicode escape' => ['api' . str_repeat('\\', 2) . 'u005fkey'];
+        yield 'quadruply escaped JSON Unicode escape' => ['api' . str_repeat('\\', 4) . 'u005fkey'];
+    }
+
+    public function testCreateRejectsBase64EncodedDirectMapKey(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $key = base64_encode('api_key');
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: [
+                $key => $sentinel,
+            ]),
+            [$key, $sentinel],
+        );
+    }
+
+    public function testFromArrayRejectsBase64EncodedDirectMapKeyOnStrictWireInput(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $key = base64_encode('api_key');
+        $payload = [$key => $sentinel];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, $sentinel],
+        );
+    }
+
+    #[DataProvider('composedEncodedDirectMapKeyProvider')]
+    public function testCreateRejectsComposedEncodedDirectMapKey(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: [$key => $sentinel]),
+            [$key, $sentinel],
+        );
+    }
+
+    #[DataProvider('composedEncodedDirectMapKeyProvider')]
+    public function testFromArrayRejectsComposedEncodedDirectMapKeyOnStrictWireInput(
+        string $key,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $payload = [$key => $sentinel];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function composedEncodedDirectMapKeyProvider(): iterable
+    {
+        yield 'percent-encoded Base64 key' => [rawurlencode(base64_encode('api_key'))];
+        yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
+    }
+
     public function testCreateRejectsRawJsonPayloadStringsWithEscapedSensitiveKeys(): void
     {
         $this->expectException(\InvalidArgumentException::class);
@@ -954,6 +1055,71 @@ PHP,
         }
     }
 
+    #[DataProvider('escapedSensitiveMemberPrefixProvider')]
+    public function testCreateRejectsEscapedSensitiveMemberAfterAlphanumericOrUnderscorePrefix(
+        string $prefix,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix' . $prefix . '\\"api\\u005fkey\\":\\"' . $sentinel . '\\" suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    #[DataProvider('escapedSensitiveMemberPrefixProvider')]
+    public function testFromArrayRejectsEscapedSensitiveMemberAfterAlphanumericOrUnderscorePrefix(
+        string $prefix,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix' . $prefix . '\\"api\\u005fkey\\":\\"' . $sentinel . '\\" suffix';
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function escapedSensitiveMemberPrefixProvider(): iterable
+    {
+        yield 'alphanumeric prefix' => ['a'];
+        yield 'underscore prefix' => ['_'];
+    }
+
+    public function testCreateRejectsUnquotedJsonUnicodeEscapedSensitiveMember(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {api\\u005fkey:"' . $sentinel . '"} suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    public function testFromArrayRejectsUnquotedJsonUnicodeEscapedSensitiveMember(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {api\\u005fkey:"' . $sentinel . '"} suffix';
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, $sentinel],
+        );
+    }
+
     #[DataProvider('embeddedSensitiveRepresentationProvider')]
     public function testCreateRejectsDelimiterBoundedEmbeddedCredentialRepresentations(string $raw): void
     {
@@ -975,6 +1141,50 @@ PHP,
             static fn () => PaperMarketEvent::fromArray($data),
             [$raw, 'synthetic-redaction-sentinel'],
         );
+    }
+
+    #[DataProvider('malformedEmbeddedBase64CredentialPaddingProvider')]
+    public function testCreateRejectsEmbeddedCredentialsWithMalformedBase64Padding(
+        string $malformed,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix|' . $malformed . '|suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    #[DataProvider('malformedEmbeddedBase64CredentialPaddingProvider')]
+    public function testFromArrayRejectsEmbeddedCredentialsWithMalformedBase64Padding(
+        string $malformed,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix|' . $malformed . '|suffix';
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function malformedEmbeddedBase64CredentialPaddingProvider(): iterable
+    {
+        $requiresTwoPadding = self::base64CredentialWithPaddingCount(2);
+        $requiresOnePadding = self::base64CredentialWithPaddingCount(1);
+
+        yield 'classic partial padding' => [substr($requiresTwoPadding, 0, -1)];
+        yield 'classic excessive padding' => [$requiresOnePadding . '='];
+        yield 'URL-safe partial padding' => [strtr(substr($requiresTwoPadding, 0, -1), '+/', '-_')];
+        yield 'URL-safe excessive padding' => [strtr($requiresOnePadding . '=', '+/', '-_')];
     }
 
     /** @return iterable<string, array{string}> */
@@ -1053,6 +1263,45 @@ PHP,
         $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
 
         self::event(payload: ['raw' => 'api%5Fkey=synthetic-secret-sentinel']);
+    }
+
+    #[DataProvider('sensitiveAssignmentAsciiWhitespaceProvider')]
+    public function testCreateRejectsSensitiveAssignmentWithAsciiWhitespaceAroundEquals(
+        string $whitespace,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'api_key' . $whitespace . '=' . $whitespace . $sentinel;
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    #[DataProvider('sensitiveAssignmentAsciiWhitespaceProvider')]
+    public function testFromArrayRejectsSensitiveAssignmentWithAsciiWhitespaceAroundEquals(
+        string $whitespace,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'api_key' . $whitespace . '=' . $whitespace . $sentinel;
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$raw, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveAssignmentAsciiWhitespaceProvider(): iterable
+    {
+        yield 'newline' => ["\n"];
+        yield 'form-feed' => ["\f"];
     }
 
     public function testCreateRejectsWhitespacePrefixedPhpSerializedPayloadStrings(): void
@@ -1137,6 +1386,25 @@ PHP,
             sequence: $sequence,
             payload: $payload,
         );
+    }
+
+    private static function base64CredentialWithPaddingCount(int $paddingCount): string
+    {
+        for ($suffixLength = 0; $suffixLength < 3; ++$suffixLength) {
+            $json = json_encode(
+                [
+                    'api_key' => 'synthetic-redaction-sentinel',
+                    'suffix' => str_repeat('x', $suffixLength),
+                ],
+                JSON_THROW_ON_ERROR,
+            );
+            $encoded = base64_encode($json);
+            if (\strlen($encoded) - \strlen(rtrim($encoded, '=')) === $paddingCount) {
+                return $encoded;
+            }
+        }
+
+        throw new \LogicException('paper_market_test_base64_padding_fixture_unavailable');
     }
 
     /**

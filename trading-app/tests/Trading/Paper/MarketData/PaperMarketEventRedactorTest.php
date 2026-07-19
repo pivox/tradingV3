@@ -89,6 +89,58 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'Cyrillic Unicode confusable' => ["аpi_key"];
     }
 
+    #[DataProvider('jsonUnicodeEscapedDirectMapKeyProvider')]
+    public function testRejectsJsonUnicodeEscapedDirectMapKey(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([
+                $key => $sentinel,
+            ]),
+            [$key, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function jsonUnicodeEscapedDirectMapKeyProvider(): iterable
+    {
+        yield 'JSON Unicode escape' => ['api' . str_repeat('\\', 1) . 'u005fkey'];
+        yield 'double-escaped JSON Unicode escape' => ['api' . str_repeat('\\', 2) . 'u005fkey'];
+        yield 'quadruply escaped JSON Unicode escape' => ['api' . str_repeat('\\', 4) . 'u005fkey'];
+    }
+
+    public function testRejectsBase64EncodedDirectMapKey(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $key = base64_encode('api_key');
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([
+                $key => $sentinel,
+            ]),
+            [$key, $sentinel],
+        );
+    }
+
+    #[DataProvider('composedEncodedDirectMapKeyProvider')]
+    public function testRejectsComposedEncodedDirectMapKey(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([$key => $sentinel]),
+            [$key, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function composedEncodedDirectMapKeyProvider(): iterable
+    {
+        yield 'percent-encoded Base64 key' => [rawurlencode(base64_encode('api_key'))];
+        yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
+    }
+
     /** @param array<array-key, mixed> $payload */
     #[DataProvider('ambiguousUnicodeStructuredKeyProvider')]
     public function testRejectsAmbiguousUnicodeKeysAcrossStructuredRepresentations(array $payload): void
@@ -197,6 +249,38 @@ final class PaperMarketEventRedactorTest extends TestCase
             self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
             self::assertStringNotContainsString($sentinel, $exception->getMessage());
         }
+    }
+
+    #[DataProvider('escapedSensitiveMemberPrefixProvider')]
+    public function testRejectsEscapedSensitiveMemberAfterAlphanumericOrUnderscorePrefix(
+        string $prefix,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix' . $prefix . '\\"api\\u005fkey\\":\\"' . $sentinel . '\\" suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function escapedSensitiveMemberPrefixProvider(): iterable
+    {
+        yield 'alphanumeric prefix' => ['a'];
+        yield 'underscore prefix' => ['_'];
+    }
+
+    public function testRejectsUnquotedJsonUnicodeEscapedSensitiveMember(): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix {api\\u005fkey:"' . $sentinel . '"} suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, $sentinel],
+        );
     }
 
     #[DataProvider('embeddedSensitiveRepresentationProvider')]
@@ -661,6 +745,18 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'URL-safe excessive padding' => [strtr($requiresOnePadding . '=', '+/', '-_')];
     }
 
+    #[DataProvider('malformedBase64CredentialPaddingProvider')]
+    public function testRejectsEmbeddedCredentialsWithMalformedBase64Padding(string $malformed): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'prefix|' . $malformed . '|suffix';
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
     #[DataProvider('benignEncodedPublicValueProvider')]
     public function testAllowsBenignStructuredAndEncodedPublicValues(string $publicValue): void
     {
@@ -864,6 +960,26 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::addToAssertionCount(1);
     }
 
+    public function testAllowsExplicitlySafeMetadataInFormString(): void
+    {
+        foreach ([false, true] as $encodeKeys) {
+            $pairs = [
+                'authorization_status' => 'not_applicable',
+                'api_key_hint' => 'not_present',
+                'wallet_balance_model' => 'unknown',
+                'seed_phrase_model' => 'not_applicable',
+            ];
+            $form = [];
+            foreach ($pairs as $key => $value) {
+                $form[] = ($encodeKeys ? self::percentEncodeEveryByte($key) : $key) . '=' . $value;
+            }
+
+            PaperMarketEventRedactor::assertSafe(['raw' => implode('&', $form)]);
+        }
+
+        self::addToAssertionCount(1);
+    }
+
     #[DataProvider('sensitiveSignAssignmentProvider')]
     public function testStillRejectsExplicitSensitiveSignAssignments(string $key): void
     {
@@ -882,6 +998,27 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'signature' => ['signature'];
         yield 'prefixed sign' => ['order_sign'];
         yield 'numeric signature suffix' => ['order_signature64'];
+    }
+
+    #[DataProvider('sensitiveAssignmentAsciiWhitespaceProvider')]
+    public function testRejectsSensitiveAssignmentWithAsciiWhitespaceAroundEquals(
+        string $whitespace,
+    ): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'api_key' . $whitespace . '=' . $whitespace . $sentinel;
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function sensitiveAssignmentAsciiWhitespaceProvider(): iterable
+    {
+        yield 'newline' => ["\n"];
+        yield 'form-feed' => ["\f"];
     }
 
     public function testSemanticMetadataKeyCannotAllowCredentialMaterial(): void

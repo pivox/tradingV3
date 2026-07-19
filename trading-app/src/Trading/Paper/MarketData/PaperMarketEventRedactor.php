@@ -75,7 +75,7 @@ final class PaperMarketEventRedactor
         seed[._\x20-]*phrase |
         password |
         ok[._\x20-]*access[._\x20-]*(?:key|sign|passphrase)
-    )["']?[\t ]*[:=]
+    )["']?[\x09-\x0D ]*[:=]
 )~ix
 REGEX;
 
@@ -175,13 +175,7 @@ REGEX;
                     }
 
                     self::consumeBytes($byteCount, \strlen($key));
-                    $normalizedKey = self::normalizeKey($key);
-                    if (
-                        self::isSensitiveKey($normalizedKey)
-                        && !self::isExplicitlySafeMetadata($normalizedKey, $item)
-                    ) {
-                        throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
-                    }
+                    self::assertMapKeySafe($key, $item);
                 }
 
                 if (\is_array($item)) {
@@ -476,12 +470,14 @@ REGEX;
     private static function assertNoSensitiveJsonObjectKeys(string $value): void
     {
         self::assertNoSensitiveJsonMemberKeys($value);
+        self::assertNoSensitiveUnquotedStructuredKeys($value);
     }
 
     private static function assertNoSensitiveJsonMemberKeys(string $value): void
     {
         $length = \strlen($value);
         $encodedKeyStart = null;
+        $rejectMalformedKey = true;
 
         for ($offset = 0; $offset < $length;) {
             if ($value[$offset] === '"') {
@@ -515,6 +511,7 @@ REGEX;
                 if ($afterQuote < $length && $value[$afterQuote] === ':') {
                     self::assertJsonObjectKeyCandidateSafe(
                         substr($value, $encodedKeyStart, $quoteTokenStart - $encodedKeyStart),
+                        $rejectMalformedKey,
                     );
                     $encodedKeyStart = null;
                     $offset = $afterQuote + 1;
@@ -523,9 +520,8 @@ REGEX;
                 }
             }
 
-            if (self::isJsonMemberLeftBoundary($value, $quoteTokenStart)) {
-                $encodedKeyStart = $quoteOffset + 1;
-            }
+            $rejectMalformedKey = self::isJsonMemberLeftBoundary($value, $quoteTokenStart);
+            $encodedKeyStart = $quoteOffset + 1;
         }
     }
 
@@ -541,7 +537,50 @@ REGEX;
             && !\in_array($previousByte, ['_', '\\', '"'], true);
     }
 
-    private static function assertJsonObjectKeyCandidateSafe(string $encodedKey): void
+    private static function assertNoSensitiveUnquotedStructuredKeys(string $value): void
+    {
+        $length = \strlen($value);
+        for ($offset = 0; $offset < $length; ++$offset) {
+            if ($value[$offset] !== ':') {
+                continue;
+            }
+
+            $candidateEnd = $offset;
+            while ($candidateEnd > 0 && self::isAsciiWhitespace($value[$candidateEnd - 1])) {
+                --$candidateEnd;
+            }
+
+            $candidateStart = $candidateEnd;
+            while (
+                $candidateStart > 0
+                && self::isPotentialEncodedKeyByte($value[$candidateStart - 1])
+            ) {
+                --$candidateStart;
+            }
+
+            if ($candidateStart === $candidateEnd) {
+                continue;
+            }
+
+            $candidate = substr($value, $candidateStart, $candidateEnd - $candidateStart);
+            if (!str_contains($candidate, '\\') && !str_contains($candidate, '%')) {
+                continue;
+            }
+
+            self::assertMapKeySafe($candidate, 'synthetic-untrusted-structured-value');
+        }
+    }
+
+    private static function isPotentialEncodedKeyByte(string $byte): bool
+    {
+        return self::isAsciiAlphaNumeric($byte)
+            || \in_array($byte, ['_', '-', '.', '%', '+', '/', '\\'], true);
+    }
+
+    private static function assertJsonObjectKeyCandidateSafe(
+        string $encodedKey,
+        bool $rejectMalformedKey = true,
+    ): void
     {
         for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
             if (self::isSensitiveKey(self::normalizeKey($encodedKey))) {
@@ -551,7 +590,10 @@ REGEX;
             try {
                 $key = json_decode('"' . $encodedKey . '"', flags: JSON_THROW_ON_ERROR);
             } catch (\JsonException $exception) {
-                if (self::isWindowsPathLikePublicKeyCandidate($encodedKey)) {
+                if (
+                    !$rejectMalformedKey
+                    || self::isWindowsPathLikePublicKeyCandidate($encodedKey)
+                ) {
                     return;
                 }
 
@@ -914,7 +956,7 @@ REGEX;
                 continue;
             }
 
-            $decoded = self::decodeCanonicalBase64Token(
+            $decoded = self::decodeRecoverableBase64(
                 substr($value, $candidateStart, $candidateLength),
             );
             if ($decoded === null) {
@@ -930,44 +972,6 @@ REGEX;
                 $decodedStrings,
             );
         }
-    }
-
-    private static function decodeCanonicalBase64Token(string $value): ?string
-    {
-        $unpadded = rtrim($value, '=');
-        $paddingCount = \strlen($value) - \strlen($unpadded);
-        if ($paddingCount > 2 || \strlen($unpadded) % 4 === 1) {
-            return null;
-        }
-
-        $classicMatch = preg_match('/\A[A-Za-z0-9+\/]+\z/D', $unpadded);
-        $urlMatch = preg_match('/\A[A-Za-z0-9_-]+\z/D', $unpadded);
-        if ($classicMatch === false || $urlMatch === false) {
-            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
-        }
-
-        if ($classicMatch !== 1 && $urlMatch !== 1) {
-            return null;
-        }
-
-        $requiredPadding = (4 - \strlen($unpadded) % 4) % 4;
-        if ($paddingCount !== 0 && $paddingCount !== $requiredPadding) {
-            return null;
-        }
-
-        $urlSafe = $urlMatch === 1 && $classicMatch !== 1;
-        $standardUnpadded = $urlSafe ? strtr($unpadded, '-_', '+/') : $unpadded;
-        $decoded = base64_decode($standardUnpadded . str_repeat('=', $requiredPadding), true);
-        if ($decoded === false || preg_match('//u', $decoded) !== 1) {
-            return null;
-        }
-
-        $canonicalUnpadded = rtrim(base64_encode($decoded), '=');
-        if ($urlSafe) {
-            $canonicalUnpadded = strtr($canonicalUnpadded, '+/', '-_');
-        }
-
-        return $canonicalUnpadded === $unpadded ? $decoded : null;
     }
 
     private static function isPhpSerializedCandidateLeftBoundary(string $value, int $offset): bool
@@ -1047,13 +1051,7 @@ REGEX;
                 foreach ($value as $key => &$item) {
                     if (\is_string($key)) {
                         self::consumeDecodedBytes($decodedByteCount, \strlen($key));
-                        $normalizedKey = self::normalizeKey($key);
-                        if (
-                            self::isSensitiveKey($normalizedKey)
-                            && !self::isExplicitlySafeMetadata($normalizedKey, $item)
-                        ) {
-                            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
-                        }
+                        self::assertMapKeySafe($key, $item);
                     }
 
                     self::scanDecodedValue(
@@ -1269,6 +1267,47 @@ REGEX;
         $normalized = preg_replace('/[^a-z0-9]+/', '_', strtolower($withWordBoundaries ?? ''));
 
         return trim($normalized ?? '', '_');
+    }
+
+    private static function assertMapKeySafe(string $key, mixed $value): void
+    {
+        for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
+            $normalizedKey = self::normalizeKey($key);
+            if (
+                self::isSensitiveKey($normalizedKey)
+                && !self::isExplicitlySafeMetadata($normalizedKey, $value)
+            ) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
+
+            $decoded = rawurldecode($key);
+            if ($decoded === $key && str_contains($key, '\\')) {
+                try {
+                    $jsonDecoded = json_decode('"' . $key . '"', flags: JSON_THROW_ON_ERROR);
+                } catch (\JsonException) {
+                    $jsonDecoded = null;
+                }
+
+                if (\is_string($jsonDecoded)) {
+                    $decoded = $jsonDecoded;
+                }
+            }
+
+            if ($decoded === $key) {
+                $base64Decoded = self::decodeRecoverableBase64($key);
+                if ($base64Decoded === null) {
+                    return;
+                }
+
+                $decoded = $base64Decoded;
+            }
+
+            if ($decodeDepth === self::MAX_SENSITIVE_DECODE_DEPTH) {
+                throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
+            }
+
+            $key = $decoded;
+        }
     }
 
     private static function isSensitiveKey(string $normalizedKey): bool
