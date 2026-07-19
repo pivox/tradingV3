@@ -421,23 +421,55 @@ PHP,
         );
     }
 
-    public function testCanonicalJsonPreservesDistinctIntegerAndStringKeysInSortStringOrder(): void
+    public function testCanonicalJsonPreservesNonContiguousIntegerKeyMapsAcrossTheAssociativeWire(): void
     {
-        $map = [2 => 'two', 10 => 'ten', 1 => 'integer-one', '01' => 'string-zero-one'];
-        try {
-            $encoded = CanonicalJson::encode($map);
-        } catch (\InvalidArgumentException $exception) {
-            self::fail(sprintf('A non-list integer-key map was rejected with %s.', $exception->getMessage()));
-        }
+        $map = [2 => 'two', 0 => 'zero'];
+        $encoded = CanonicalJson::encode($map);
+        $decoded = json_decode(
+            $encoded,
+            associative: true,
+            depth: 512,
+            flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
 
-        self::assertSame(
-            '{"01":"string-zero-one","1":"integer-one","10":"ten","2":"two"}',
+        self::assertSame('{"0":"zero","2":"two"}', $encoded);
+        self::assertIsArray($decoded);
+        self::assertFalse(array_is_list($decoded));
+        self::assertSame($encoded, CanonicalJson::encode($decoded));
+    }
+
+    public function testCanonicalJsonPreservesLeadingZeroStringKeysInSortStringOrder(): void
+    {
+        $map = [1 => 'one', 0 => 'zero', '01' => 'leading-zero'];
+        $encoded = CanonicalJson::encode($map);
+        $decoded = json_decode(
             $encoded,
+            associative: true,
+            depth: 512,
+            flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
         );
-        self::assertNotSame(
-            CanonicalJson::encode(array_values($map)),
-            $encoded,
-        );
+
+        self::assertSame('{"0":"zero","01":"leading-zero","1":"one"}', $encoded);
+        self::assertIsArray($decoded);
+        self::assertFalse(array_is_list($decoded));
+        self::assertSame($encoded, CanonicalJson::encode($decoded));
+    }
+
+    /** @param array<int, string> $map */
+    #[DataProvider('ambiguousIntegerKeyMapProvider')]
+    public function testCanonicalJsonRejectsAmbiguousContiguousIntegerKeyMaps(array $map): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_ambiguous_integer_key_map');
+
+        CanonicalJson::encode($map);
+    }
+
+    /** @return iterable<string, array{array<int, string>}> */
+    public static function ambiguousIntegerKeyMapProvider(): iterable
+    {
+        yield 'two keys in reverse order' => [[1 => 'one', 0 => 'zero']];
+        yield 'three contiguous keys in non-list order' => [[2 => 'two', 0 => 'zero', 1 => 'one']];
     }
 
     public function testCanonicalJsonTreatsSequentialIntegerKeysAsAListInThePhpPayloadModel(): void
@@ -792,27 +824,40 @@ PHP,
         self::assertSame($ndjsonLine, CanonicalJson::encode($restored->toArray()) . "\n");
     }
 
-    public function testEventValueRoundTripsNonListIntegerKeyMapsWithoutChangingLists(): void
+    public function testCreateRejectsAmbiguousIntegerKeyMapsBeforeReturningAnEvent(): void
     {
-        try {
-            $event = self::event(payload: [
-                'integer_map' => [1 => 'one', 0 => 'zero', '01' => 'string-zero-one'],
-                'levels' => [['29999.0', '1'], ['30001.0', '2']],
-            ]);
-        } catch (\InvalidArgumentException $exception) {
-            self::fail(sprintf('An event containing a non-list integer-key map was rejected with %s.', $exception->getMessage()));
-        }
-        $restored = PaperMarketEvent::fromArray($event->toArray());
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_ambiguous_integer_key_map');
+
+        self::event(payload: [
+            'levels' => [1 => 'one', 0 => 'zero'],
+        ]);
+    }
+
+    public function testEventWireRoundTripsNonContiguousIntegerKeyMapsWithoutChangingLists(): void
+    {
+        $event = self::event(payload: [
+            'integer_map' => [2 => 'two', 0 => 'zero'],
+            'leading_zero_map' => [1 => 'one', 0 => 'zero', '01' => 'leading-zero'],
+            'levels' => [['29999.0', '1'], ['30001.0', '2']],
+        ]);
+        $wire = CanonicalJson::encode($event->toArray());
+        $decoded = json_decode(
+            $wire,
+            associative: true,
+            depth: 512,
+            flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
+
+        self::assertIsArray($decoded);
+        $restored = PaperMarketEvent::fromArray($decoded);
 
         self::assertNotSame($event, $restored);
         self::assertEquals($event, $restored);
-        self::assertSame($event->toArray(), $restored->toArray());
         self::assertTrue(array_is_list($restored->payload['levels']));
         self::assertFalse(array_is_list($restored->payload['integer_map']));
-        self::assertSame(
-            CanonicalJson::encode($event->payload),
-            CanonicalJson::encode($restored->payload),
-        );
+        self::assertFalse(array_is_list($restored->payload['leading_zero_map']));
+        self::assertSame($wire, CanonicalJson::encode($restored->toArray()));
     }
 
     #[DataProvider('invalidStrictFieldProvider')]

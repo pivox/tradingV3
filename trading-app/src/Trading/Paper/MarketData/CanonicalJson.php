@@ -150,6 +150,10 @@ final class CanonicalJson
                     return $normalized;
                 }
 
+                if (self::hasContiguousZeroBasedIntegerKeySet($value)) {
+                    throw new \InvalidArgumentException('paper_canonical_json_ambiguous_integer_key_map');
+                }
+
                 ksort($normalized, SORT_STRING);
 
                 return (object) $normalized;
@@ -199,6 +203,21 @@ final class CanonicalJson
         }
 
         throw new \InvalidArgumentException('paper_canonical_json_unsupported_type');
+    }
+
+    /**
+     * @param array<array-key, mixed> $value
+     */
+    private static function hasContiguousZeroBasedIntegerKeySet(array $value): bool
+    {
+        $keyCount = \count($value);
+        foreach (array_keys($value) as $key) {
+            if (!\is_int($key) || $key < 0 || $key >= $keyCount) {
+                return false;
+            }
+        }
+
+        return $keyCount > 0;
     }
 
     private static function consumeNode(int &$nodeCount): void
