@@ -16,6 +16,7 @@ use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Exchange\Readiness\ExchangeReadinessLevel;
 use App\Exchange\Readiness\ExchangeReadinessInput;
 use App\Provider\Fake\FakeRuntimeCheck;
@@ -72,6 +73,14 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertSame('fake-daily-loss-cap-v1', $metadata['daily_loss_cap_policy_version']);
         self::assertSame('ready', $metadata['daily_loss_cap_status']);
         self::assertSame('100.000000000000', $metadata['daily_loss_cap_limit_usdt']);
+        self::assertSame(FakeLiquidationPolicy::MODEL_VERSION, $metadata['liquidation_model_version']);
+        self::assertSame('isolated', $metadata['liquidation_supported_margin_mode']);
+        self::assertSame('unsupported', $metadata['liquidation_cross_margin_status']);
+        self::assertSame('0.010000000000', $metadata['liquidation_guard_buffer_rate']);
+        self::assertSame('0.005000000000', $metadata['liquidation_fee_rate']);
+        self::assertSame('USDT', $metadata['liquidation_fee_currency']);
+        self::assertSame(FakeLiquidationPolicy::FEE_MODEL_VERSION, $metadata['liquidation_fee_model_version']);
+        self::assertSame(FakeLiquidationPolicy::MARK_PRICE_SOURCE, $metadata['liquidation_mark_price_source']);
     }
 
     public function testDailyLossCapInvalidPolicyFailsRuntimeClosedWithStableReason(): void
@@ -130,6 +139,56 @@ final class FakeRuntimeCheckTest extends TestCase
         self::assertFalse(FakeRuntimeCheck::slippageModelReady([
             'slippage_model' => 'fixed_adverse_slippage_bps_v1',
         ]));
+    }
+
+    public function testLiquidationRuntimeModelValidationFailsClosed(): void
+    {
+        $valid = [
+            'liquidation_model_version' => FakeLiquidationPolicy::MODEL_VERSION,
+            'liquidation_supported_margin_mode' => 'isolated',
+            'liquidation_cross_margin_status' => 'unsupported',
+            'liquidation_guard_buffer_rate' => '0.010000000000',
+            'liquidation_fee_rate' => '0.005000000000',
+            'liquidation_fee_currency' => 'USDT',
+            'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+            'liquidation_mark_price_source' => FakeLiquidationPolicy::MARK_PRICE_SOURCE,
+        ];
+
+        self::assertTrue(FakeRuntimeCheck::liquidationModelReady($valid));
+        self::assertFalse(FakeRuntimeCheck::liquidationModelReady(array_replace($valid, [
+            'liquidation_model_version' => 'unknown',
+        ])));
+        self::assertFalse(FakeRuntimeCheck::liquidationModelReady(array_replace($valid, [
+            'liquidation_supported_margin_mode' => 'cross',
+        ])));
+        self::assertFalse(FakeRuntimeCheck::liquidationModelReady(array_replace($valid, [
+            'liquidation_fee_rate' => null,
+        ])));
+        self::assertFalse(FakeRuntimeCheck::liquidationModelReady(array_replace($valid, [
+            'liquidation_mark_price_source' => 'last-trade',
+        ])));
+    }
+
+    public function testMissingExplicitMarkFailsRuntimeClosedWithoutBookFallback(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->clearMarkPrice('BTCUSDT');
+        $state->setOrderBookTop('BTCUSDT', 24999.0, 25001.0);
+
+        $report = $this->runtimeCheck($state, marketDataSourceReady: true)->current();
+
+        self::assertContains('fake_paper_liquidation_mark_not_ready', $report->blockingErrors);
+        self::assertTrue($report->publicConnectivity);
+    }
+
+    public function testPersistedCrossSettingFailsRuntimeClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->setLeverageSetting('BTCUSDT', 10, 'cross');
+
+        $report = $this->runtimeCheck($state)->current();
+
+        self::assertContains('fake_paper_cross_margin_state_unsupported', $report->blockingErrors);
     }
 
     public function testPersistentPaperProbesWritableRecoveryWithoutTouchingActiveState(): void

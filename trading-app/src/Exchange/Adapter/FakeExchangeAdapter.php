@@ -104,7 +104,7 @@ final readonly class FakeExchangeAdapter implements
             'spread_model' => FakeFillCostModel::SPREAD_MODEL_VERSION,
             'metadata_fixture_version' => $catalog->metadataFixtureVersion(),
             'precision_model_version' => $catalog->precisionModelVersion(),
-        ] + ($dailyLossCap?->toAuditMetadata() ?? [
+        ] + $this->matchingEngine->liquidationModelMetadata() + ($dailyLossCap?->toAuditMetadata() ?? [
             'daily_loss_cap_policy_version' => null,
             'daily_loss_cap_status' => 'not_configured',
             'daily_loss_cap_detail_reason' => 'daily_loss_cap_guard_not_configured',

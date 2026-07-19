@@ -296,6 +296,23 @@ final readonly class FakeExchangeMatchingEngine
         return $this->dailyLossCapGuard?->current();
     }
 
+    /** @return array<string,string> */
+    public function liquidationModelMetadata(): array
+    {
+        $policy = $this->liquidationCalculator->policy();
+
+        return [
+            'liquidation_model_version' => $policy->modelVersion,
+            'liquidation_supported_margin_mode' => $policy->supportedMarginMode,
+            'liquidation_cross_margin_status' => $policy->crossMarginStatus,
+            'liquidation_guard_buffer_rate' => $policy->guardBufferRate,
+            'liquidation_fee_rate' => $policy->liquidationFeeRate,
+            'liquidation_fee_currency' => $policy->feeCurrency,
+            'liquidation_fee_model_version' => $policy->feeModelVersion,
+            'liquidation_mark_price_source' => $policy->markPriceSource,
+        ];
+    }
+
     public function fallbackTaker(string $exchangeOrderId): FakeFallbackTakerResult
     {
         return $this->stateStore->runAtomically(
@@ -2378,9 +2395,9 @@ final readonly class FakeExchangeMatchingEngine
             updatedAt: $this->clock->now(),
             metadata: $this->appendEntryLedger(
                 array_replace(
+                    $existingMetadata,
                     $this->lineageMetadata($order->metadata),
                     $this->liquidationMetadata($order->metadata),
-                    $existingMetadata,
                 ),
                 $order->exchangeOrderId,
                 $fillQuantity,

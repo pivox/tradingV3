@@ -327,6 +327,80 @@ On restart, orders, the `client_order_id` index, positions, balances, order book
 
 `FakeExchangeStateStore::recoveryMetadata()` exposes the effective format, engine/config identity, whether the instance restored persisted state, whether that state used the legacy format, and the next event sequence. This is local Paper evidence only and does not certify exchange reconciliation or enable any demo/live write path.
 
+## Deterministic isolated liquidation v1
+
+The Fake/Paper adapter implements `fake-isolated-linear-liquidation-v1` for
+isolated linear perpetual positions only. Cross margin is deliberately
+unsupported: `setLeverage(..., 'cross')` returns false, an entry request is
+rejected with `liquidation_cross_margin_unsupported`, and a legacy persisted
+cross setting blocks runtime readiness. No portfolio-level collateral is
+invented while a cross model is absent.
+
+The model uses the exact instrument contract size and maintenance-margin rate,
+the accumulated isolated margin, and an explicit controlled mark. It never
+uses the last trade or derives a missing mark from bid/ask. Fresh BTCUSDT and
+ETHUSDT fixtures have explicit marks; a legacy state without `markPrices`
+hydrates with unknown marks and fails closed. The Brick Math formulas are:
+
+```text
+Q = quantity * contract_size
+long_liquidation  = (Q * entry_price - isolated_margin) / (Q * (1 - mmr))
+short_liquidation = (Q * entry_price + isolated_margin) / (Q * (1 + mmr))
+
+guard_amount = entry_price * 0.010000000000
+long_guard   = long_liquidation + guard_amount
+short_guard  = short_liquidation - guard_amount
+```
+
+The guard is not the liquidation threshold. Entering it emits one
+`liquidation.guard_entered` event for the unchanged position calculation and
+updates mark/unrealized PnL without closing. Crossing or gapping through the
+threshold closes at the observed mark. Submission and the central fill
+boundary both reject exposure increases when mode, mark, instrument metadata,
+the aggregated position calculation, threshold, or guard is unknown/invalid,
+or when the entry is already unsafe. Reduce-only risk reduction remains
+available. Same-side increases and partial reductions recalculate exact
+quantity, weighted entry, and proportional isolated margin.
+
+A threshold crossing creates a deterministic filled reduce-only MARKET order,
+then records `liquidation.triggered`, the dedicated monetary fact
+`liquidation.filled`, and `position.closed(close_reason=liquidation)`. Active
+SL, TP, trigger, and trailing protections for the liquidated symbol/side are
+cancelled with `position_liquidated`; unrelated orders are untouched. The
+whole sequence, including position removal and the certified USDT balance
+delta, runs inside the existing checksummed state transaction. After restart,
+the absent position prevents a second liquidation, fee, PnL, or balance debit.
+
+The liquidation fill retains the ordinary known taker fee and 5 bps slippage,
+and adds a separate known fee:
+
+```text
+liquidation_fee_usdt
+  = quantity * mark_price * contract_size * 0.005000000000
+fee model = fake-liquidation-notional-fee-v1
+currency  = USDT
+```
+
+`position.closed.recorded_pnl_usdt` and the stored balance subtract entry and
+exit fees/spread/slippage plus that liquidation fee once. The Daily loss cap
+uses `liquidation.filled` as the single monetary fact and subtracts the same
+component once; `position.closed` is lifecycle evidence only. The fill-cost
+ledger persists a valid explicit liquidation fee. A missing, malformed,
+negative, unversioned, or non-USDT component remains null/`not_computable`
+with a quality reason and is never coerced to zero.
+
+`runtimeModelMetadata()` publishes the liquidation, guard, fee, and mark-source
+versions. The runtime check blocks on an unsupported model, a missing catalog
+mark, a legacy cross setting, or uncertified open-position state. It continues
+to force local dry-run, kill switch on, and trade permission off.
+
+Rollback removes the liquidation evaluator, matching hooks, projection and
+readiness claims, but must not rewrite prior liquidation events or ledger rows.
+Archive or quarantine a state file containing liquidation facts before running
+older code. Restoring cross acceptance is forbidden until a versioned portfolio
+margin model exists. This local model makes no exchange call and enables no
+demo, testnet, or mainnet mutation.
+
 ## UTC Daily loss cap
 
 The ordinary Fake/Paper matching path enforces policy
@@ -346,12 +420,14 @@ at midnight or restart:
 daily_net_usdt
   = realized_gross_pnl_usdt on reduction fills
   - fill fees - spread costs - slippage costs
+  - explicit liquidation fee on liquidation.filled
   + signed funding amount_usdt
 
 consumption_usdt = max(0, -daily_net_usdt)
 ```
 
-Entry fill costs count when incurred. Gross PnL counts only when quantity is
+Entry fill costs count when incurred. The dedicated `liquidation.filled` fact
+also subtracts its known versioned liquidation fee exactly once. Gross PnL counts only when quantity is
 actually reduced, including partial reductions. Positive funding is a credit
 and negative funding a debit. Unrealized PnL is never read. Arithmetic uses
 Brick Math at scale 12 with HALF_EVEN, and equality with the limit is blocking.

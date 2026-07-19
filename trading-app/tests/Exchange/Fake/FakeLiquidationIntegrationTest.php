@@ -372,6 +372,23 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
     }
 
+    public function testSameSideIncreasePersistsAggregatedExactLiquidationInputs(): void
+    {
+        [$adapter, , $state] = $this->runtime();
+        $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-scale-first'));
+        $state->setOrderBookTop('BTCUSDT', 25999.0, 26000.0);
+        $second = $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-scale-second'));
+
+        self::assertSame(ExchangeOrderStatus::FILLED, $second->status);
+        $position = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+        self::assertNotNull($position);
+        self::assertSame('2.000000000000', $position->metadata['liquidation_quantity_decimal'] ?? null);
+        self::assertSame('25500.000000000000', $position->metadata['liquidation_entry_price_decimal'] ?? null);
+        self::assertSame('5100.000000000000', $position->metadata['liquidation_isolated_margin_decimal'] ?? null);
+        self::assertSame('23065.326633165829', $position->metadata['liquidation_price_decimal'] ?? null);
+        self::assertSame('23320.326633165829', $position->metadata['liquidation_guard_price_decimal'] ?? null);
+    }
+
     /**
      * @return array{FakeExchangeAdapter,FakeExchangeScenarioService,FakeExchangeStateStore}
      */

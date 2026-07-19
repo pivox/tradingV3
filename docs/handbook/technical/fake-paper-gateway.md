@@ -257,6 +257,73 @@ pas disponibles. La marge d un SELL limit crossing est verifiee avec le meilleur
 bid executable, et un `LIMIT` legacy accompagne d un `stopPrice` reste un ordre
 declenche au lieu d etre rempli immediatement.
 
+## Liquidation déterministe Fake/Paper v1
+
+Le Fake Exchange de niveau adapter porte désormais le modèle versionné
+`fake-isolated-linear-liquidation-v1`, exclusivement pour la marge isolée.
+La marge cross reste explicitement non supportée tant qu’aucun modèle de
+collatéral portefeuille n’existe : `setLeverage(..., "cross")` renvoie `false`,
+une entrée cross est rejetée avec `liquidation_cross_margin_unsupported`, et un
+ancien réglage cross persistant bloque la readiness. Aucun solde portefeuille
+implicite n’est reconstruit.
+
+Le calcul consomme les décimaux exacts Brick Math : quantité, contract size,
+prix d’entrée moyen, marge isolée accumulée, maintenance-margin rate et mark
+contrôlé. Le mark est une donnée persistée distincte du carnet. Un mark absent
+n’est jamais remplacé par le mid, le bid/ask ou le dernier trade. Les formules
+linéaires sont :
+
+```text
+Q = quantity * contract_size
+liq_long  = (Q * entry - isolated_margin) / (Q * (1 - mmr))
+liq_short = (Q * entry + isolated_margin) / (Q * (1 + mmr))
+
+guard_long  = liq_long  + entry * 0.010000000000
+guard_short = liq_short - entry * 0.010000000000
+```
+
+Le guard et le seuil de liquidation sont deux frontières différentes. Une
+entrée dans le guard produit une seule alerte `liquidation.guard_entered` pour
+le calcul inchangé et ne ferme pas la position. Un franchissement ou gap ferme
+au mark observé, jamais au seuil théorique. Le préflight est rejoué à la
+soumission et au point central de fill; une métadonnée, marge, mark, seuil ou
+guard inconnu/invalide refuse l’augmentation sans exposition. Les réductions
+reduce-only restent autorisées. Une augmentation de même côté agrège exactement
+quantité, prix moyen et marge; une réduction partielle recalcule la quantité et
+la marge proportionnelle restantes.
+
+La liquidation atomique crée un ordre MARKET reduce-only rempli, annule les
+protections SL/TP/trigger/trailing obsolètes avec `position_liquidated`, puis
+émet `liquidation.triggered`, `liquidation.filled` et
+`position.closed(close_reason=liquidation)`. Le fill dédié est l’unique fait
+monétaire. Il contient la fee/slippage taker ordinaires et une fee séparée :
+
+```text
+liquidation_fee_usdt = quantity * mark * contract_size * 0.005000000000
+model = fake-liquidation-notional-fee-v1
+currency = USDT
+```
+
+Le lifecycle certifié, le ledger, le solde et la suppression de position sont
+commités dans la même transaction d’état. Le PnL net et le solde soustraient les
+coûts d’entrée/sortie et la liquidation fee une fois. Le daily-loss cap lit
+`liquidation.filled` une fois et ne replie pas `position.closed`. Au restart ou
+au replay du même mark, l’absence de position empêche tout second fill, coût,
+PnL ou débit. Une fee absente, malformée, négative, sans modèle connu ou hors
+USDT reste `NULL`/`not_computable`; elle n’est jamais transformée en zéro.
+
+Le runtime-check publie et valide les versions modèle/guard/fee/source du mark.
+Il bloque si un mark catalogué manque, si un état cross persiste ou si une
+position ouverte ne porte pas les entrées certifiées. Il conserve
+`dry_run=true`, `permissions_trade=false` et le kill switch actif.
+
+Rollback : retirer l’évaluateur, ses hooks de matching, la projection et les
+claims de readiness, sans réécrire les événements ou lignes ledger déjà
+produits. Un fichier d’état contenant des liquidations doit être archivé ou
+mis en quarantaine avant un retour à un binaire plus ancien. Ne pas réactiver
+cross avant un modèle portefeuille versionné. Ce chemin est strictement local,
+sans appel exchange et sans activation demo/testnet/mainnet.
+
 ## Funding deterministe Fake/Paper v1
 
 Le modele `fake-funding-notional-rate-interval-v1` consomme uniquement une
@@ -319,6 +386,7 @@ daily_net_usdt
   - somme(fill_fee_usdt)
   - somme(spread_cost_usdt)
   - somme(slippage_cost_usdt)
+  - somme(liquidation_fee_usdt des liquidation.filled)
   + somme(funding amount_usdt signe)
 
 consumption_usdt = max(0, -daily_net_usdt)
