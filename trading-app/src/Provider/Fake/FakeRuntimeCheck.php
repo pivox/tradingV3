@@ -249,6 +249,7 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
                 return false;
             }
             foreach ([
+                'liquidation_position_identity',
                 'liquidation_quantity_decimal',
                 'liquidation_entry_price_decimal',
                 'liquidation_isolated_margin_decimal',
@@ -258,7 +259,17 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
                 'liquidation_guard_price_decimal',
             ] as $key) {
                 $value = $position->metadata[$key] ?? null;
-                if (!\is_string($value) || !is_numeric($value)) {
+                if (!\is_string($value)) {
+                    return false;
+                }
+                if ($key === 'liquidation_position_identity') {
+                    if (preg_match('/^fake-position-[a-f0-9]{40}$/D', $value) !== 1) {
+                        return false;
+                    }
+
+                    continue;
+                }
+                if (!is_numeric($value)) {
                     return false;
                 }
             }

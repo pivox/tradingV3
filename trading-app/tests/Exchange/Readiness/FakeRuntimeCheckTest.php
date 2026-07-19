@@ -7,6 +7,8 @@ namespace App\Tests\Exchange\Readiness;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Dto\ExchangePositionDto;
+use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Fake\FakeDailyLossCapGuard;
 use App\Exchange\Fake\FakeDailyLossCapPolicy;
 use App\Exchange\Fake\FakeExchangeEvent;
@@ -189,6 +191,41 @@ final class FakeRuntimeCheckTest extends TestCase
         $report = $this->runtimeCheck($state)->current();
 
         self::assertContains('fake_paper_cross_margin_state_unsupported', $report->blockingErrors);
+    }
+
+    public function testOpenPositionWithoutPersistedLiquidationIdentityFailsRuntimeClosed(): void
+    {
+        $state = new FakeExchangeStateStore();
+        $state->savePosition(new ExchangePositionDto(
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            symbol: 'BTCUSDT',
+            side: ExchangePositionSide::LONG,
+            size: 1.0,
+            entryPrice: 25000.0,
+            markPrice: 25000.0,
+            unrealizedPnl: 0.0,
+            realizedPnl: 0.0,
+            margin: 2500.0,
+            leverage: 10.0,
+            openedAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            updatedAt: new \DateTimeImmutable('2026-01-01T00:00:00+00:00'),
+            metadata: [
+                'liquidation_model_version' => FakeLiquidationPolicy::MODEL_VERSION,
+                'liquidation_margin_mode' => 'isolated',
+                'liquidation_quantity_decimal' => '1.000000000000',
+                'liquidation_entry_price_decimal' => '25000.000000000000',
+                'liquidation_isolated_margin_decimal' => '2500.000000000000',
+                'liquidation_contract_size_decimal' => '1.000000000000',
+                'liquidation_maintenance_margin_rate' => '0.005000000000',
+                'liquidation_price_decimal' => '22613.065326633166',
+                'liquidation_guard_price_decimal' => '22863.065326633166',
+            ],
+        ));
+
+        $report = $this->runtimeCheck($state)->current();
+
+        self::assertContains('fake_paper_liquidation_position_state_not_ready', $report->blockingErrors);
     }
 
     public function testPersistentPaperProbesWritableRecoveryWithoutTouchingActiveState(): void

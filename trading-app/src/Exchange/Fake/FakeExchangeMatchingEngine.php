@@ -25,6 +25,7 @@ use Psr\Clock\ClockInterface;
 final readonly class FakeExchangeMatchingEngine
 {
     private const FEE_RATE = 0.0005;
+    private const LIQUIDATION_POSITION_IDENTITY_KEY = 'liquidation_position_identity';
     /**
      * @var string[]
      */
@@ -825,6 +826,7 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         foreach ($this->stateStore->getOpenPositions($symbol) as $position) {
+            $this->liquidationPositionIdentity($position);
             $result = $this->liquidationResultForPosition($position, $markPrice);
             if ($result->status !== FakeLiquidationResult::READY) {
                 throw new \LogicException($result->reason ?? 'fake_liquidation_position_metadata_invalid');
@@ -955,13 +957,14 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_liquidation_position_metadata_invalid');
         }
 
-        $identity = $this->liquidationCalculationIdentity($result);
-        $clientOrderId = 'fake-liq-' . substr(hash('sha256', implode(':', [
-            $position->symbol,
-            $position->side->value,
-            $position->openedAt?->format(\DateTimeInterface::ATOM) ?? 'unknown',
-            $identity,
-        ])), 0, 32);
+        $positionIdentity = $this->liquidationPositionIdentity($position);
+        $calculationIdentity = $this->liquidationCalculationIdentity($result);
+        $identity = hash('sha256', implode(':', [
+            $result->policy->modelVersion,
+            $positionIdentity,
+            $calculationIdentity,
+        ]));
+        $clientOrderId = 'fake-liq-' . substr($identity, 0, 32);
         if ($this->stateStore->getOrderByClientOrderId($position->symbol, $clientOrderId) !== null) {
             throw new \LogicException('fake_liquidation_identity_conflict');
         }
@@ -1007,6 +1010,7 @@ final readonly class FakeExchangeMatchingEngine
                 'source' => 'fake_exchange',
                 'close_reason' => 'liquidation',
                 'liquidation_identity' => $identity,
+                self::LIQUIDATION_POSITION_IDENTITY_KEY => $positionIdentity,
                 'quantity_decimal' => $result->quantity,
                 'filled_quantity_decimal' => $result->quantity,
                 'remaining_quantity_decimal' => '0',
@@ -1062,6 +1066,7 @@ final readonly class FakeExchangeMatchingEngine
             'liquidation_fee_currency' => $result->policy->feeCurrency,
             'liquidation_fee_model_version' => $result->policy->feeModelVersion,
             'liquidation_position_side' => $position->side->value,
+            self::LIQUIDATION_POSITION_IDENTITY_KEY => $positionIdentity,
             'liquidation_identity' => $identity,
         ]);
         $this->stateStore->removePosition($position->symbol, $position->side);
@@ -1355,6 +1360,7 @@ final readonly class FakeExchangeMatchingEngine
 
             $existing = $this->stateStore->getPosition($symbol, $side);
             if ($existing instanceof ExchangePositionDto) {
+                $this->liquidationPositionIdentity($existing);
                 $existingQuantity = BigDecimal::of((string) $this->requiredLiquidationMetadata(
                     $existing->metadata,
                     'liquidation_quantity_decimal',
@@ -2413,6 +2419,9 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_liquidation_mark_price_unknown');
         }
         $markPrice = (float) $markPriceDecimal;
+        $positionIdentity = $existing instanceof ExchangePositionDto
+            ? $this->liquidationPositionIdentity($existing)
+            : $this->newLiquidationPositionIdentity($order);
         $position = new ExchangePositionDto(
             exchange: Exchange::FAKE,
             marketType: MarketType::PERPETUAL,
@@ -2432,6 +2441,7 @@ final readonly class FakeExchangeMatchingEngine
                     $existingMetadata,
                     $this->lineageMetadata($order->metadata),
                     $this->liquidationMetadata($order->metadata),
+                    [self::LIQUIDATION_POSITION_IDENTITY_KEY => $positionIdentity],
                 ),
                 $order->exchangeOrderId,
                 $fillQuantity,
@@ -2799,6 +2809,28 @@ final readonly class FakeExchangeMatchingEngine
             static fn (string $key): bool => str_starts_with($key, 'liquidation_'),
             ARRAY_FILTER_USE_KEY,
         );
+    }
+
+    private function newLiquidationPositionIdentity(ExchangeOrderDto $openingOrder): string
+    {
+        if (trim($openingOrder->exchangeOrderId) === '') {
+            throw new \LogicException('fake_liquidation_opening_order_identity_unknown');
+        }
+
+        return 'fake-position-' . substr(hash('sha256', implode(':', [
+            FakeLiquidationPolicy::MODEL_VERSION,
+            $openingOrder->exchangeOrderId,
+        ])), 0, 40);
+    }
+
+    private function liquidationPositionIdentity(ExchangePositionDto $position): string
+    {
+        $identity = $this->stringMetadata($position->metadata, self::LIQUIDATION_POSITION_IDENTITY_KEY);
+        if ($identity === null || preg_match('/^fake-position-[a-f0-9]{40}$/D', $identity) !== 1) {
+            throw new \LogicException('fake_liquidation_position_identity_unknown');
+        }
+
+        return $identity;
     }
 
     private function protectionQuantity(ExchangeOrderDto $entryOrder): float

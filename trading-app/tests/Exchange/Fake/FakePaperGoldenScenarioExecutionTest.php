@@ -240,7 +240,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'normalized_projection_signatures' => [
                 '564b0f3b7c5d79224fe9cc0401e23da782085129a8e14b31b9690abd2e5a9939',
                 '2be15b8f66ebfe037608198007836f50acff77c672ea021450926dbb6bb5b103',
-                'f5362df653ae27b6de849d64e33a834e7036197ef5518e79e0b18820b7a2622f',
+                '51c2ea450770798782291e7fc7392d41a7a34a1fa6f2e69e2af38d502c10207e',
                 'a537ee643c8990986b8167ca3c7cdde2565a9b379b632b6252566c08b076b338',
                 '7683f90540ac35361280ac64d4dd830afdee97be17851b60e05e7d74d999b36d',
             ],

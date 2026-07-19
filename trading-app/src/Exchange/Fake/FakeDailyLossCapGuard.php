@@ -267,16 +267,36 @@ final readonly class FakeDailyLossCapGuard
         }
         $liquidationFee = BigDecimal::zero()->toScale(self::SCALE);
         if ($event->type === 'liquidation.filled') {
-            if (!\array_key_exists('liquidation_fee_usdt', $payload) || $payload['liquidation_fee_usdt'] === null) {
-                return $this->invalidDelta('liquidation_fee_unknown');
-            }
             if (($payload['liquidation_fee_currency'] ?? null) !== 'USDT') {
                 return $this->invalidDelta('liquidation_fee_currency_unknown');
             }
             if (($payload['liquidation_fee_model_version'] ?? null) !== FakeLiquidationPolicy::FEE_MODEL_VERSION) {
                 return $this->invalidDelta('liquidation_fee_model_unknown');
             }
-            $liquidationFee = $this->decimal($payload['liquidation_fee_usdt']);
+            $liquidationFeeValue = null;
+            $liquidationFeePresent = false;
+            foreach (['liquidation_fee_decimal', 'liquidation_fee_usdt_decimal'] as $key) {
+                if (\array_key_exists($key, $payload)) {
+                    $liquidationFeePresent = true;
+                    $liquidationFeeValue = $payload[$key];
+                    if (\is_float($liquidationFeeValue)) {
+                        return $this->invalidDelta('liquidation_fee_exact_unknown');
+                    }
+
+                    break;
+                }
+            }
+            if (!$liquidationFeePresent && \array_key_exists('liquidation_fee_usdt', $payload)) {
+                $liquidationFeePresent = true;
+                $liquidationFeeValue = $payload['liquidation_fee_usdt'];
+                if (\is_float($liquidationFeeValue)) {
+                    return $this->invalidDelta('liquidation_fee_exact_unknown');
+                }
+            }
+            if (!$liquidationFeePresent || $liquidationFeeValue === null) {
+                return $this->invalidDelta('liquidation_fee_unknown');
+            }
+            $liquidationFee = $this->decimal($liquidationFeeValue);
             if ($liquidationFee === null || !$liquidationFee->isPositive()) {
                 return $this->invalidDelta('liquidation_fee_invalid');
             }

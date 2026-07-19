@@ -268,6 +268,99 @@ final class FakeLiquidationIntegrationTest extends TestCase
         }
     }
 
+    public function testRestartReplayKeepsIdentityAndDistinctReopenCanLiquidateAtSameClockAndInputs(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-position-identity-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            [$adapter, $scenario] = $this->runtimeForState($state);
+            $firstEntry = $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-identity-first'));
+            self::assertSame(ExchangeOrderStatus::FILLED, $firstEntry->status);
+            $firstPosition = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+            self::assertNotNull($firstPosition);
+            $firstPositionIdentity = $firstPosition->metadata['liquidation_position_identity'] ?? null;
+            $firstOpenedAt = $firstPosition->openedAt;
+
+            $scenario->movePrice('BTCUSDT', 22000.0);
+            $firstLiquidation = $state->events('liquidation.filled')[0] ?? null;
+            self::assertNotNull($firstLiquidation);
+            $firstLiquidationIdentity = $firstLiquidation->payload['liquidation_identity'] ?? null;
+            $firstLiquidationOrders = array_values(array_filter(
+                $state->getOrders('BTCUSDT'),
+                static fn ($order): bool => str_starts_with($order->clientOrderId, 'fake-liq-'),
+            ));
+            self::assertCount(1, $firstLiquidationOrders);
+            $firstLiquidationClientOrderId = $firstLiquidationOrders[0]->clientOrderId;
+            $balanceAfterFirst = $state->totalBalanceUsdt();
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [$restoredAdapter, $restoredScenario] = $this->runtimeForState($restored);
+            $restoredScenario->movePrice('BTCUSDT', 22000.0);
+
+            self::assertCount(1, $restored->events('liquidation.filled'));
+            self::assertSame($balanceAfterFirst, $restored->totalBalanceUsdt());
+            $replayedLiquidationOrders = array_values(array_filter(
+                $restored->getOrders('BTCUSDT'),
+                static fn ($order): bool => str_starts_with($order->clientOrderId, 'fake-liq-'),
+            ));
+            self::assertCount(1, $replayedLiquidationOrders);
+            self::assertSame($firstLiquidationClientOrderId, $replayedLiquidationOrders[0]->clientOrderId);
+            self::assertSame(
+                $firstLiquidationIdentity,
+                $restored->events('liquidation.filled')[0]->payload['liquidation_identity'] ?? null,
+            );
+
+            $restored->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            $restored->setMarkPrice('BTCUSDT', '25000');
+            $secondEntry = $restoredAdapter->placeOrder($this->entryRequest(
+                clientOrderId: 'liquidation-identity-second',
+            ));
+            self::assertSame(ExchangeOrderStatus::FILLED, $secondEntry->status);
+            $secondPosition = $restored->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+            self::assertNotNull($secondPosition);
+            $secondPositionIdentity = $secondPosition->metadata['liquidation_position_identity'] ?? null;
+
+            $collision = null;
+            try {
+                $restoredScenario->movePrice('BTCUSDT', 22000.0);
+            } catch (\LogicException $exception) {
+                $collision = $exception->getMessage();
+            }
+            self::assertNull($collision, 'A distinct reopened position must not reuse a liquidation identity.');
+
+            self::assertIsString($firstPositionIdentity);
+            self::assertIsString($secondPositionIdentity);
+            self::assertNotSame($firstPositionIdentity, $secondPositionIdentity);
+            self::assertEquals($firstOpenedAt, $secondPosition->openedAt);
+            self::assertSame(
+                $firstPosition->metadata['liquidation_price_decimal'] ?? null,
+                $secondPosition->metadata['liquidation_price_decimal'] ?? null,
+            );
+            self::assertCount(2, $restored->events('liquidation.filled'));
+            $liquidationIdentities = array_map(
+                static fn ($event): mixed => $event->payload['liquidation_identity'] ?? null,
+                $restored->events('liquidation.filled'),
+            );
+            self::assertCount(2, array_unique($liquidationIdentities));
+            $liquidationClientOrderIds = array_map(
+                static fn ($order): string => $order->clientOrderId,
+                array_values(array_filter(
+                    $restored->getOrders('BTCUSDT'),
+                    static fn ($order): bool => str_starts_with($order->clientOrderId, 'fake-liq-'),
+                )),
+            );
+            self::assertCount(2, array_unique($liquidationClientOrderIds));
+            self::assertNull($restored->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testUnknownPersistedLiquidationMetadataFailsClosedAndRollsBackMarkMove(): void
     {
         [$adapter, $scenario, $state] = $this->runtime();
@@ -305,6 +398,49 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame([], $state->events('liquidation.triggered'));
         self::assertSame([], $state->events('liquidation.filled'));
         self::assertSame(100000.0, $state->totalBalanceUsdt());
+    }
+
+    public function testMissingPersistedPositionIdentityFailsClosedAndRollsBackMarkMove(): void
+    {
+        [$adapter, $scenario, $state] = $this->runtime();
+        $adapter->placeOrder($this->entryRequest(clientOrderId: 'liquidation-missing-position-identity'));
+        $position = $state->getPosition('BTCUSDT', ExchangePositionSide::LONG);
+        self::assertNotNull($position);
+        $metadata = $position->metadata;
+        unset($metadata['liquidation_position_identity']);
+        $state->savePosition(new ExchangePositionDto(
+            exchange: $position->exchange,
+            marketType: $position->marketType,
+            symbol: $position->symbol,
+            side: $position->side,
+            size: $position->size,
+            entryPrice: $position->entryPrice,
+            markPrice: $position->markPrice,
+            unrealizedPnl: $position->unrealizedPnl,
+            realizedPnl: $position->realizedPnl,
+            margin: $position->margin,
+            leverage: $position->leverage,
+            openedAt: $position->openedAt,
+            updatedAt: $position->updatedAt,
+            metadata: $metadata,
+        ));
+        $ordersBefore = $state->getOrders('BTCUSDT');
+        $eventsBefore = $state->events();
+        $balanceBefore = $state->totalBalanceUsdt();
+
+        $reason = null;
+        try {
+            $scenario->movePrice('BTCUSDT', 22000.0);
+        } catch (\LogicException $exception) {
+            $reason = $exception->getMessage();
+        }
+
+        self::assertSame('fake_liquidation_position_identity_unknown', $reason);
+        self::assertSame('25000', $state->getMarkPrice('BTCUSDT'));
+        self::assertNotNull($state->getPosition('BTCUSDT', ExchangePositionSide::LONG));
+        self::assertEquals($ordersBefore, $state->getOrders('BTCUSDT'));
+        self::assertEquals($eventsBefore, $state->events());
+        self::assertSame($balanceBefore, $state->totalBalanceUsdt());
     }
 
     public function testRestingEntryIsRevalidatedAtFillBoundary(): void

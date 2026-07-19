@@ -16,6 +16,8 @@ use App\Exchange\Event\ExchangeFundingReceived;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
 final readonly class FillCostLedgerIngestionService
@@ -472,8 +474,30 @@ final readonly class FillCostLedgerIngestionService
         array $payload,
         array &$qualityFlags,
     ): ?string {
-        $feePresent = array_key_exists('liquidation_fee_usdt', $metadata)
-            || array_key_exists('liquidation_fee_usdt', $payload);
+        $feeKeys = [
+            'liquidation_fee_decimal',
+            'liquidation_fee_usdt_decimal',
+            'liquidation_fee_usdt',
+        ];
+        $feePresent = false;
+        $exactFeeSelected = false;
+        $value = null;
+        foreach ($feeKeys as $key) {
+            if (array_key_exists($key, $metadata)) {
+                $feePresent = true;
+                $exactFeeSelected = $key !== 'liquidation_fee_usdt';
+                $value = $metadata[$key];
+
+                break;
+            }
+            if (array_key_exists($key, $payload)) {
+                $feePresent = true;
+                $exactFeeSelected = $key !== 'liquidation_fee_usdt';
+                $value = $payload[$key];
+
+                break;
+            }
+        }
         if (!$feePresent) {
             return null;
         }
@@ -499,11 +523,6 @@ final readonly class FillCostLedgerIngestionService
             return null;
         }
 
-        if (array_key_exists('liquidation_fee_usdt', $metadata)) {
-            $value = $metadata['liquidation_fee_usdt'];
-        } else {
-            $value = $payload['liquidation_fee_usdt'] ?? null;
-        }
         if ($value === null || $value === '') {
             $qualityFlags[] = 'liquidation_fee_unknown';
 
@@ -514,14 +533,35 @@ final readonly class FillCostLedgerIngestionService
 
             return null;
         }
-        $fee = (float) $value;
-        if (!\is_finite($fee) || $fee < 0.0) {
+        if (\is_float($value)) {
+            if ($exactFeeSelected) {
+                $qualityFlags[] = 'liquidation_fee_invalid';
+
+                return null;
+            }
+            if (!\is_finite($value) || $value < 0.0) {
+                $qualityFlags[] = 'liquidation_fee_invalid';
+
+                return null;
+            }
+
+            return $this->decimal($value);
+        }
+
+        try {
+            $fee = BigDecimal::of((string) $value);
+        } catch (\Throwable) {
+            $qualityFlags[] = 'liquidation_fee_invalid';
+
+            return null;
+        }
+        if ($fee->isNegative()) {
             $qualityFlags[] = 'liquidation_fee_invalid';
 
             return null;
         }
 
-        return $this->decimal($fee);
+        return (string) $fee->toScale(12, RoundingMode::HALF_EVEN);
     }
 
     /**

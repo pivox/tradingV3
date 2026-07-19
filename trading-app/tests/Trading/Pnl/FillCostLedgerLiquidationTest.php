@@ -62,6 +62,43 @@ final class FillCostLedgerLiquidationTest extends TestCase
         self::assertContains('liquidation_fee_invalid', $entry->getQualityFlags());
     }
 
+    public function testExactLiquidationFeeWinsOverRoundedFloatProjection(): void
+    {
+        [$service, $stored] = $this->service();
+        $event = $this->event([
+            'liquidation_fee_decimal' => '10159.600000000001',
+            'liquidation_fee_usdt' => 10159.6,
+            'liquidation_fee_currency' => 'USDT',
+            'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+        ], fillId: 'fake-fill-liquidation-exact-decimal');
+
+        $first = $service->ingestExchangeFill($event);
+        $second = $service->ingestExchangeFill($event);
+        $entry = $stored();
+
+        self::assertTrue($first->inserted);
+        self::assertTrue($second->replayed);
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertSame('10159.600000000001', $entry->getLiquidationFeeUsdt());
+    }
+
+    public function testFloatValuedExactLiquidationFeeFailsClosedWithoutProjectionFallback(): void
+    {
+        [$service, $stored] = $this->service();
+
+        $service->ingestExchangeFill($this->event([
+            'liquidation_fee_decimal' => 10159.6,
+            'liquidation_fee_usdt' => 10159.6,
+            'liquidation_fee_currency' => 'USDT',
+            'liquidation_fee_model_version' => FakeLiquidationPolicy::FEE_MODEL_VERSION,
+        ], fillId: 'fake-fill-liquidation-inexact-decimal'));
+        $entry = $stored();
+
+        self::assertInstanceOf(FillCostLedgerEntry::class, $entry);
+        self::assertNull($entry->getLiquidationFeeUsdt());
+        self::assertContains('liquidation_fee_invalid', $entry->getQualityFlags());
+    }
+
     /**
      * @return array{FillCostLedgerIngestionService,\Closure():?FillCostLedgerEntry}
      */
