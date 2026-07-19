@@ -366,6 +366,10 @@ final readonly class FakeExchangeMatchingEngine
         $executionPrice = $price ?? $this->executionPrice($order);
         $fillLiquidationMetadata = [];
         if (!$order->reduceOnly && !$this->isTriggerOrder($order)) {
+            if (!$this->entryFillHasSufficientCollateral($order, $fillQuantity, $executionPrice)) {
+                return $this->terminateEntryForInsufficientBalance($order);
+            }
+
             $instrument = $this->instruments->find($order->symbol);
             $marginMode = $this->stringMetadata($order->metadata, 'margin_mode');
             $leverage = $this->positiveIntMetadata($order->metadata, 'leverage') ?? 1;
@@ -1525,6 +1529,70 @@ final readonly class FakeExchangeMatchingEngine
         );
 
         return $rejected;
+    }
+
+    private function entryFillHasSufficientCollateral(
+        ExchangeOrderDto $order,
+        float $fillQuantity,
+        float $executionPrice,
+    ): bool {
+        $marginReferencePrice = $order->price ?? $order->averagePrice;
+        if (
+            $marginReferencePrice === null
+            && ($order->metadata['margin_reference_source'] ?? null) === 'top_of_book'
+            && is_numeric($order->metadata['margin_reference_price'] ?? null)
+        ) {
+            $marginReferencePrice = (float) $order->metadata['margin_reference_price'];
+        }
+        if ($marginReferencePrice === null || !\is_finite($marginReferencePrice) || $marginReferencePrice <= 0.0) {
+            throw new \LogicException('fake_order_margin_reference_price_unavailable');
+        }
+
+        $leverage = $this->positiveIntMetadata($order->metadata, 'leverage') ?? 1;
+        $contractSize = $this->marginContractSize($order->metadata);
+        try {
+            $reservedFillMargin = BigDecimal::of(self::canonicalFloat($fillQuantity))
+                ->multipliedBy(self::canonicalFloat($marginReferencePrice))
+                ->multipliedBy(self::canonicalFloat($contractSize))
+                ->dividedBy($leverage, 12, RoundingMode::HALF_EVEN);
+            $executedFillMargin = BigDecimal::of(self::canonicalFloat($fillQuantity))
+                ->multipliedBy(self::canonicalFloat($executionPrice))
+                ->multipliedBy(self::canonicalFloat($contractSize))
+                ->dividedBy($leverage, 12, RoundingMode::HALF_EVEN);
+            $projectedUsedMargin = BigDecimal::of(self::canonicalFloat($this->stateStore->usedMarginUsdt()))
+                ->minus($reservedFillMargin)
+                ->plus($executedFillMargin)
+                ->toScale(12, RoundingMode::HALF_EVEN);
+            $collateral = BigDecimal::of(self::canonicalFloat($this->stateStore->marginCollateralUsdt()))
+                ->toScale(12, RoundingMode::HALF_EVEN);
+        } catch (MathException) {
+            throw new \LogicException('fake_entry_fill_margin_invalid');
+        }
+
+        return $projectedUsedMargin->isLessThanOrEqualTo($collateral);
+    }
+
+    private function terminateEntryForInsufficientBalance(ExchangeOrderDto $order): ExchangeOrderDto
+    {
+        $reason = 'insufficient_balance';
+        $status = $order->filledQuantity <= 0.00000001
+            ? ExchangeOrderStatus::REJECTED
+            : ExchangeOrderStatus::CANCELLED;
+        $terminated = $this->withOrderStatus(
+            $order,
+            $status,
+            array_replace($order->metadata, ['reason' => $reason]),
+        );
+        $this->stateStore->saveOrder($terminated);
+        $this->appendEvent(
+            $status === ExchangeOrderStatus::REJECTED ? 'order.rejected' : 'order.cancelled',
+            $terminated,
+            ['reason' => $reason],
+        );
+
+        return $status === ExchangeOrderStatus::CANCELLED
+            ? $this->createAttachedProtectionOrders($terminated)
+            : $terminated;
     }
 
     /** @param array<string,bool|int|string|null> $dailyLossCapMetadata */

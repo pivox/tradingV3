@@ -316,6 +316,77 @@ final class FakeLiquidationIntegrationTest extends TestCase
         }
     }
 
+    public function testBankruptcyGapRejectsCrossingRestingEntryBeforeReopeningExposure(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-resting-entry-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            [$adapter, $scenario] = $this->runtimeForState($state);
+            $entry = $adapter->placeOrder($this->entryRequest(
+                clientOrderId: 'liquidation-resting-position',
+                side: ExchangePositionSide::SHORT,
+                leverage: 50,
+                quantity: 80.0,
+            ));
+            self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+
+            $resting = $adapter->placeOrder(new PlaceOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                side: ExchangeOrderSide::SELL,
+                positionSide: ExchangePositionSide::SHORT,
+                orderType: ExchangeOrderType::LIMIT,
+                timeInForce: ExchangeTimeInForce::GTC,
+                quantity: 1.0,
+                price: 90000.0,
+                stopPrice: null,
+                reduceOnly: false,
+                postOnly: false,
+                leverage: 50,
+                marginMode: 'isolated',
+                clientOrderId: 'liquidation-resting-entry',
+                quantityDecimal: '1',
+                priceDecimal: '90000',
+            ));
+            self::assertSame(ExchangeOrderStatus::OPEN, $resting->status);
+            self::assertNotNull($resting->exchangeOrderId);
+
+            $matched = $scenario->movePrice('BTCUSDT', 100000.0, 0.0)['matched_orders'];
+
+            self::assertCount(1, $matched);
+            self::assertSame(ExchangeOrderStatus::REJECTED, $matched[0]->status);
+            self::assertSame('insufficient_balance', $matched[0]->metadata['reason'] ?? null);
+            self::assertSame(0.0, $matched[0]->filledQuantity);
+            self::assertSame(1.0, $matched[0]->remainingQuantity);
+            self::assertNull($state->getPosition('BTCUSDT', ExchangePositionSide::SHORT));
+            self::assertSame(0.0, $adapter->getBalances()[0]->total);
+            self::assertCount(1, $state->events('order.filled'));
+            self::assertCount(1, $state->events('order.rejected'));
+            self::assertSame(
+                'insufficient_balance',
+                $state->events('order.rejected')[0]->payload['reason'] ?? null,
+            );
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [, $restoredScenario] = $this->runtimeForState($restored);
+            $replayed = $restoredScenario->movePrice('BTCUSDT', 100000.0, 0.0)['matched_orders'];
+
+            self::assertSame([], $replayed);
+            self::assertSame(ExchangeOrderStatus::REJECTED, $restored->getOrder($resting->exchangeOrderId)?->status);
+            self::assertNull($restored->getPosition('BTCUSDT', ExchangePositionSide::SHORT));
+            self::assertCount(1, $restored->events('liquidation.filled'));
+            self::assertCount(1, $restored->events('order.rejected'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testRestartAndRepeatedMarkAreExactOnce(): void
     {
         $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-restart-');
