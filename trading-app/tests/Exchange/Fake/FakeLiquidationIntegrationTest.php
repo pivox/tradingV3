@@ -633,6 +633,121 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertCount(1, $state->events('order.rejected'));
     }
 
+    public function testLiquidationPreflightCancellationProtectsPartialExposureAcrossRestart(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-liquidation-partial-protection-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->setOrderBookTop('BTCUSDT', 24999.0, 25000.0);
+            [$adapter, $scenario] = $this->runtimeForState($state);
+            $resting = $adapter->placeOrder(new PlaceOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                side: ExchangeOrderSide::BUY,
+                positionSide: ExchangePositionSide::LONG,
+                orderType: ExchangeOrderType::LIMIT,
+                timeInForce: ExchangeTimeInForce::GTC,
+                quantity: 1.0,
+                price: 24900.0,
+                stopPrice: null,
+                reduceOnly: false,
+                postOnly: true,
+                leverage: 10,
+                marginMode: 'isolated',
+                clientOrderId: 'liquidation-partial-protection',
+                attachedStopLossPrice: 20000.0,
+                attachedTakeProfitPrice: 27000.0,
+                quantityDecimal: '1',
+                priceDecimal: '24900',
+                attachedStopLossPriceDecimal: '20000',
+                attachedTakeProfitPriceDecimal: '27000',
+            ));
+            self::assertSame(ExchangeOrderStatus::OPEN, $resting->status);
+            self::assertNotNull($resting->exchangeOrderId);
+
+            $partial = $scenario->fillOrder($resting->exchangeOrderId, 0.4, 23000.0);
+            self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial?->status);
+            self::assertSame(0.4, $partial->filledQuantity);
+            self::assertSame(0.6, $partial->remainingQuantity);
+            self::assertCount(1, $adapter->getOpenOrders('BTCUSDT'));
+
+            $state->setMarkPrice('BTCUSDT', '22000');
+            $blocked = $scenario->fillOrder($resting->exchangeOrderId, 0.6, 24900.0);
+
+            self::assertNotNull($blocked);
+            self::assertSame(ExchangeOrderStatus::CANCELLED, $blocked->status);
+            self::assertSame('liquidation_entry_inside_guard', $blocked->metadata['reason'] ?? null);
+            self::assertSame('guard', $blocked->metadata['liquidation_mark_state'] ?? null);
+            self::assertSame(1.0, $blocked->quantity);
+            self::assertSame(0.4, $blocked->filledQuantity);
+            self::assertSame(0.6, $blocked->remainingQuantity);
+            self::assertSame(23000.0, $blocked->averagePrice);
+            self::assertSame('accepted', $blocked->metadata['protection_status'] ?? null);
+
+            $position = $adapter->getOpenPositions('BTCUSDT')[0] ?? null;
+            self::assertNotNull($position);
+            self::assertSame(0.4, $position->size);
+
+            $protections = $adapter->getOpenOrders('BTCUSDT');
+            self::assertCount(2, $protections);
+            $protectionFacts = [];
+            foreach ($protections as $protection) {
+                $protectionFacts[$protection->orderType->value] = [
+                    $protection->status,
+                    $protection->reduceOnly,
+                    $protection->quantity,
+                    $protection->remainingQuantity,
+                    $protection->stopPrice,
+                ];
+            }
+            self::assertSame([
+                ExchangeOrderType::STOP_LOSS->value => [
+                    ExchangeOrderStatus::OPEN,
+                    true,
+                    0.4,
+                    0.4,
+                    20000.0,
+                ],
+                ExchangeOrderType::TAKE_PROFIT->value => [
+                    ExchangeOrderStatus::OPEN,
+                    true,
+                    0.4,
+                    0.4,
+                    27000.0,
+                ],
+            ], $protectionFacts);
+            self::assertCount(1, $state->events('order.partially_filled'));
+            self::assertCount(0, $state->events('order.filled'));
+            self::assertCount(1, $state->events('order.cancelled'));
+            self::assertCount(0, $state->events('order.rejected'));
+            self::assertCount(2, $state->events('protection_order.created'));
+
+            $eventCount = \count($state->events());
+            $replayed = $scenario->fillOrder($resting->exchangeOrderId);
+            self::assertSame($blocked->metadata, $replayed?->metadata);
+            self::assertCount($eventCount, $state->events());
+
+            $restored = new FakeExchangeStateStore($stateFile);
+            [$restoredAdapter, $restoredScenario] = $this->runtimeForState($restored);
+            $restoredReplay = $restoredScenario->fillOrder($resting->exchangeOrderId);
+
+            self::assertSame(ExchangeOrderStatus::CANCELLED, $restoredReplay?->status);
+            self::assertSame('liquidation_entry_inside_guard', $restoredReplay?->metadata['reason'] ?? null);
+            self::assertSame($blocked->metadata, $restoredReplay->metadata);
+            self::assertCount($eventCount, $restored->events());
+            self::assertCount(1, $restored->events('order.cancelled'));
+            self::assertCount(2, $restored->events('protection_order.created'));
+            self::assertCount(2, $restoredAdapter->getOpenOrders('BTCUSDT'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
+    }
+
     public function testCrossingLimitPreflightUsesExecutableBookPriceForLongAndShort(): void
     {
         foreach ([

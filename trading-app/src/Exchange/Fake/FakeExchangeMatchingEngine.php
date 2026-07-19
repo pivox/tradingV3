@@ -1467,7 +1467,9 @@ final readonly class FakeExchangeMatchingEngine
             ['reason' => $reason],
         );
 
-        return $terminated;
+        return $status === ExchangeOrderStatus::CANCELLED
+            ? $this->createAttachedProtectionOrders($terminated)
+            : $terminated;
     }
 
     /**
