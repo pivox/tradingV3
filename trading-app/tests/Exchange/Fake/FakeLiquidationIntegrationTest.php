@@ -19,6 +19,8 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeLiquidationPolicy;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -423,6 +425,57 @@ final class FakeLiquidationIntegrationTest extends TestCase
         self::assertSame(100000.0, $state->totalBalanceUsdt());
     }
 
+    public function testLiquidationFeeKeepsScaleTwelvePrecisionInCertifiedNetPnl(): void
+    {
+        [$adapter, , $state] = $this->runtime();
+        $entry = $adapter->placeOrder($this->entryRequest(
+            clientOrderId: 'liquidation-decimal-fee',
+            side: ExchangePositionSide::SHORT,
+            leverage: 50,
+            quantity: 80.0,
+        ));
+        self::assertSame(ExchangeOrderStatus::FILLED, $entry->status);
+        $positionBeforeLiquidation = $state->getPosition('BTCUSDT', ExchangePositionSide::SHORT);
+        self::assertNotNull($positionBeforeLiquidation);
+
+        $book = new FakeExchangeOrderBook($state);
+        $engine = new FakeExchangeMatchingEngine($state, $book, $this->clock());
+        $state->runAtomically(function () use ($engine, $state): void {
+            $state->setMarkPrice('BTCUSDT', '25399.000000000002');
+            $engine->matchOpenOrders('BTCUSDT');
+        });
+
+        $fill = $state->events('liquidation.filled')[0] ?? null;
+        $closed = $state->events('position.closed')[0] ?? null;
+        self::assertNotNull($fill);
+        self::assertNotNull($closed);
+        self::assertSame('10159.600000000001', $fill->payload['liquidation_fee_decimal'] ?? null);
+        self::assertSame('10159.600000000001', $closed->payload['liquidation_fee_usdt_decimal'] ?? null);
+
+        $canonicalFloat = static function (float $value): string {
+            $encoded = json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+            self::assertIsString($encoded);
+
+            return $encoded;
+        };
+        $entryMetadata = $positionBeforeLiquidation->metadata;
+        $spreadCost = (float) ($entryMetadata['entry_spread_cost_usdt'] ?? 0.0)
+            + (float) ($fill->payload['spread_cost_usdt'] ?? 0.0);
+        $slippageCost = (float) ($entryMetadata['entry_slippage_cost_usdt'] ?? 0.0)
+            + (float) ($fill->payload['slippage_cost_usdt'] ?? 0.0);
+
+        $expectedNet = BigDecimal::of((string) $closed->payload['gross_realized_pnl_usdt_decimal'])
+            ->minus($canonicalFloat((float) ($entryMetadata['entry_fee_usdt'] ?? 0.0)))
+            ->minus($canonicalFloat((float) ($fill->payload['fill_fee'] ?? 0.0)))
+            ->minus($canonicalFloat($spreadCost))
+            ->minus($canonicalFloat($slippageCost))
+            ->minus((string) $fill->payload['liquidation_fee_decimal'])
+            ->toScale(12, RoundingMode::HALF_EVEN);
+
+        self::assertSame((string) $expectedNet, $closed->payload['recorded_pnl_usdt_decimal'] ?? null);
+        self::assertSame((string) $expectedNet, $state->getBalances()[0]->metadata['last_certified_balance_delta_usdt'] ?? null);
+    }
+
     /**
      * @return array{FakeExchangeAdapter,FakeExchangeScenarioService,FakeExchangeStateStore}
      */
@@ -454,6 +507,8 @@ final class FakeLiquidationIntegrationTest extends TestCase
         ExchangePositionSide $side = ExchangePositionSide::LONG,
         ?float $attachedStopLossPrice = null,
         ?float $attachedTakeProfitPrice = null,
+        int $leverage = 10,
+        float $quantity = 1.0,
     ): PlaceOrderRequest
     {
         return new PlaceOrderRequest(
@@ -464,17 +519,17 @@ final class FakeLiquidationIntegrationTest extends TestCase
             positionSide: $side,
             orderType: ExchangeOrderType::MARKET,
             timeInForce: ExchangeTimeInForce::GTC,
-            quantity: 1.0,
+            quantity: $quantity,
             price: null,
             stopPrice: null,
             reduceOnly: false,
             postOnly: false,
-            leverage: 10,
+            leverage: $leverage,
             marginMode: $marginMode,
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
             attachedTakeProfitPrice: $attachedTakeProfitPrice,
-            quantityDecimal: '1',
+            quantityDecimal: (string) BigDecimal::of($quantity)->stripTrailingZeros(),
         );
     }
 

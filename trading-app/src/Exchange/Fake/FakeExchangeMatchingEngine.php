@@ -994,7 +994,7 @@ final readonly class FakeExchangeMatchingEngine
         $closePayload = $this->certifiedClosePayload(
             $position,
             $exitLedger,
-            (float) $liquidationFee,
+            $liquidationFee,
             $result->policy->feeModelVersion,
         );
         $metadata = array_replace(
@@ -2625,7 +2625,7 @@ final readonly class FakeExchangeMatchingEngine
     private function certifiedClosePayload(
         ExchangePositionDto $position,
         array $closeLedger,
-        float $liquidationFeeUsdt = 0.0,
+        string $liquidationFeeUsdt = '0',
         ?string $liquidationFeeModelVersion = null,
     ): array
     {
@@ -2642,6 +2642,14 @@ final readonly class FakeExchangeMatchingEngine
         $entryOrderCount = max(1, (int) round($this->metadataFloat($closeLedger, 'entry_order_count')));
         $lineageSufficient = $entryOrderCount <= 1;
         try {
+            $liquidationFeeDecimal = BigDecimal::of($liquidationFeeUsdt);
+            if (
+                $liquidationFeeDecimal->isNegative()
+                || ($liquidationFeeModelVersion === null && !$liquidationFeeDecimal->isZero())
+                || ($liquidationFeeModelVersion !== null && !$liquidationFeeDecimal->isPositive())
+            ) {
+                throw new \LogicException('fake_certified_liquidation_fee_invalid');
+            }
             $entryNotionalDecimal = BigDecimal::of(self::canonicalFloat($entryNotional));
             $exitNotionalDecimal = BigDecimal::of(self::canonicalFloat($exitNotional));
             $grossDecimal = $position->side === ExchangePositionSide::SHORT
@@ -2652,7 +2660,7 @@ final readonly class FakeExchangeMatchingEngine
                 ->minus(self::canonicalFloat($exitFee))
                 ->minus(self::canonicalFloat($spreadCost))
                 ->minus(self::canonicalFloat($slippageCost))
-                ->minus(self::canonicalFloat($liquidationFeeUsdt))
+                ->minus($liquidationFeeDecimal)
                 ->toScale(12, RoundingMode::HALF_EVEN);
             $grossDecimal = $grossDecimal->toScale(12, RoundingMode::HALF_EVEN);
         } catch (\Throwable) {
@@ -2673,7 +2681,8 @@ final readonly class FakeExchangeMatchingEngine
             'spread_cost_usdt' => round($spreadCost, 12),
             'slippage_cost_usdt' => round($slippageCost, 12),
             'borrow_cost_usdt' => 0.0,
-            'liquidation_fee_usdt' => round($liquidationFeeUsdt, 12),
+            'liquidation_fee_usdt' => round((float) (string) $liquidationFeeDecimal, 12),
+            'liquidation_fee_usdt_decimal' => (string) $liquidationFeeDecimal->toScale(12, RoundingMode::HALF_EVEN),
             'liquidation_fee_model_version' => $liquidationFeeModelVersion,
             'cost_model_version' => $this->stringMetadata($closeLedger, 'cost_model_version'),
             'spread_model_version' => $this->stringMetadata($closeLedger, 'spread_model_version'),
