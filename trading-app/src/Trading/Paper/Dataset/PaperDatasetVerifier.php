@@ -20,7 +20,7 @@ final class PaperDatasetVerifier
     ) {
     }
 
-    public function verify(string $datasetDirectory): PaperDatasetManifest
+    public function verify(#[\SensitiveParameter] string $datasetDirectory): PaperDatasetManifest
     {
         $this->assertNoSymlinkComponents($datasetDirectory);
         if (!is_dir($datasetDirectory) || !is_readable($datasetDirectory)) {

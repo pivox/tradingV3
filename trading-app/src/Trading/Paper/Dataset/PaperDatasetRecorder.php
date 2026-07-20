@@ -239,7 +239,6 @@ final class PaperDatasetRecorder
         $this->reloadDurableState();
         $this->assertPinnedDirectories();
         $this->assertRecording();
-        $this->flushEventsFile();
         $checksum = $this->checksumEventsFile();
         $this->assertPinnedDirectories();
 
@@ -266,7 +265,6 @@ final class PaperDatasetRecorder
         $this->reloadDurableState();
         $this->assertPinnedDirectories();
         $this->assertRecording();
-        $this->flushEventsFile();
         $checksum = $this->checksumEventsFile();
         $this->assertPinnedDirectories();
 
@@ -520,6 +518,13 @@ final class PaperDatasetRecorder
                 }
 
                 $originalLength = $statistics['size'];
+                $this->assertParsedSnapshotContinuity($handle, $this->scannedBytes);
+                $expectedAppendedSha256 = $this->checksumPrefix(
+                    $handle,
+                    $this->scannedBytes,
+                    'paper_dataset_events_snapshot_validation',
+                    $line,
+                );
                 try {
                     $this->assertPinnedDirectories();
                     $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
@@ -529,11 +534,20 @@ final class PaperDatasetRecorder
                     if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
                         throw new \RuntimeException('paper_dataset_events_read_failed');
                     }
+                    if ($statistics['size'] !== $originalLength + strlen($line)) {
+                        throw new \RuntimeException('paper_dataset_events_write_failed');
+                    }
+                    $this->assertParsedSnapshotContinuity($handle, $statistics['size']);
                     $this->assertHandleMatchesPath($handle, $this->eventsPath);
+                    $appendedSha256 = $this->checksumPrefix($handle, $statistics['size']);
+                    $this->assertExpectedAppendedChecksum($expectedAppendedSha256, $appendedSha256);
+                    $this->assertParsedSnapshotContinuity($handle, $statistics['size']);
+                    $finalAppendedSha256 = $this->checksumPrefix($handle, $statistics['size']);
+                    $this->assertExpectedAppendedChecksum($expectedAppendedSha256, $finalAppendedSha256);
 
                     return [
                         'size' => $statistics['size'],
-                        'sha256' => $this->checksumPrefix($handle, $statistics['size']),
+                        'sha256' => $finalAppendedSha256,
                         'identity' => [
                             'dev' => $statistics['dev'],
                             'ino' => $statistics['ino'],
@@ -554,6 +568,17 @@ final class PaperDatasetRecorder
         } finally {
             fclose($handle);
         }
+    }
+
+    private function assertExpectedAppendedChecksum(string $expected, string $actual): void
+    {
+        if (hash_equals($expected, $actual)) {
+            return;
+        }
+
+        $this->usable = false;
+
+        throw new \RuntimeException('paper_dataset_events_snapshot_changed');
     }
 
     /** @param resource $handle */
@@ -579,10 +604,10 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function flushEventsFile(): void
+    private function checksumEventsFile(): string
     {
         $this->assertPinnedDirectories();
-        $handle = $this->openRegularFile($this->eventsPath, 'ab', 'paper_dataset_events_open_failed');
+        $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
         try {
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_events_lock_failed');
@@ -590,8 +615,31 @@ final class PaperDatasetRecorder
             try {
                 $this->assertHandleMatchesPath($handle, $this->eventsPath);
                 $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                $this->assertParsedSnapshotContinuity($handle, $this->scannedBytes);
+                if (!$this->filesystem->seek(
+                    $handle,
+                    0,
+                    SEEK_SET,
+                    'paper_dataset_events_checksum_failed',
+                )) {
+                    throw new \RuntimeException('paper_dataset_checksum_failed');
+                }
+                $result = $this->filesystem->checksum($handle, 'paper_dataset_events_checksum_failed');
+                if ($result['bytes'] !== $this->scannedBytes) {
+                    throw new \RuntimeException('paper_dataset_checksum_failed');
+                }
+                if ($this->scannedPrefixSha256 === null
+                    || !hash_equals($this->scannedPrefixSha256, $result['checksum'])
+                ) {
+                    $this->usable = false;
+
+                    throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+                }
+                $this->assertParsedSnapshotContinuity($handle, $this->scannedBytes);
                 $this->assertPinnedDirectories();
                 $this->assertHandleMatchesPath($handle, $this->eventsPath);
+
+                return $result['checksum'];
             } finally {
                 flock($handle, LOCK_UN);
             }
@@ -600,25 +648,63 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function checksumEventsFile(): string
+    /** @param resource $handle */
+    private function assertParsedSnapshotContinuity($handle, int $expectedFileSize): void
     {
-        $this->assertPinnedDirectories();
-        $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
         try {
-            $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_checksum_failed');
-            if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
-                throw new \RuntimeException('paper_dataset_checksum_failed');
+            $statistics = $this->filesystem->stat(
+                $handle,
+                'paper_dataset_events_snapshot_validation',
+            );
+            if ($statistics === false
+                || !$this->isRegularFile($statistics)
+                || !isset($statistics['size'])
+                || !\is_int($statistics['size'])
+                || $statistics['size'] !== $expectedFileSize
+                || $this->scannedFileIdentity === null
+                || !$this->sameFile($this->scannedFileIdentity, $statistics)
+                || $this->scannedPrefixSha256 === null
+            ) {
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
             }
-            $result = $this->filesystem->checksum($handle, 'paper_dataset_events_checksum_failed');
-            if ($result['bytes'] !== $statistics['size']) {
-                throw new \RuntimeException('paper_dataset_checksum_failed');
+
+            $prefixSha256 = $this->checksumPrefix(
+                $handle,
+                $this->scannedBytes,
+                'paper_dataset_events_snapshot_validation',
+            );
+            if (!hash_equals($this->scannedPrefixSha256, $prefixSha256)) {
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+            }
+
+            $finalStatistics = $this->filesystem->stat(
+                $handle,
+                'paper_dataset_events_snapshot_validation',
+            );
+            if ($finalStatistics === false
+                || !$this->isRegularFile($finalStatistics)
+                || !isset($finalStatistics['size'])
+                || !\is_int($finalStatistics['size'])
+                || $finalStatistics['size'] !== $expectedFileSize
+                || !$this->sameFile($statistics, $finalStatistics)
+            ) {
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
             }
             $this->assertPinnedDirectories();
-            $this->assertHandleMatchesPath($handle, $this->eventsPath);
+            $this->assertHandleMatchesPath(
+                $handle,
+                $this->eventsPath,
+                'paper_dataset_events_snapshot_validation',
+            );
+        } catch (\Throwable $failure) {
+            $this->usable = false;
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_events_snapshot_changed'
+            ) {
+                throw $failure;
+            }
 
-            return $result['checksum'];
-        } finally {
-            fclose($handle);
+            throw new \RuntimeException('paper_dataset_events_snapshot_changed', 0, $failure);
         }
     }
 
@@ -737,10 +823,16 @@ final class PaperDatasetRecorder
     }
 
     /** @param resource $handle */
-    private function checksumPrefix($handle, int $length): string
+    private function checksumPrefix(
+        $handle,
+        int $length,
+        string $operation = 'paper_dataset_events_read_failed',
+        #[\SensitiveParameter]
+        string $suffix = '',
+    ): string
     {
-        if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_read_failed')) {
-            throw new \RuntimeException('paper_dataset_events_read_failed');
+        if (!$this->filesystem->seek($handle, 0, SEEK_SET, $operation)) {
+            throw new \RuntimeException($operation);
         }
 
         $remaining = $length;
@@ -749,13 +841,16 @@ final class PaperDatasetRecorder
             $chunk = $this->filesystem->read(
                 $handle,
                 min(8192, $remaining),
-                'paper_dataset_events_read_failed',
+                $operation,
             );
             if ($chunk === false || $chunk === '') {
-                throw new \RuntimeException('paper_dataset_events_read_failed');
+                throw new \RuntimeException($operation);
             }
             hash_update($context, $chunk);
             $remaining -= strlen($chunk);
+        }
+        if ($suffix !== '') {
+            hash_update($context, $suffix);
         }
 
         return hash_final($context);

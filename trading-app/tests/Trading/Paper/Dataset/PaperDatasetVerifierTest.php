@@ -122,6 +122,29 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    public function testVerifyRedactsDatasetDirectoryWhenExceptionArgumentsAreEnabled(): void
+    {
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+        $sentinel = 'PAPER_DATASET_DIRECTORY_TRACE_' . 'SENTINEL_6b42d1';
+        $datasetDirectory = $this->testRoot . '/' . $sentinel;
+
+        try {
+            (new PaperDatasetVerifier())->verify($datasetDirectory);
+            self::fail('A missing dataset directory must fail verification.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_invalid', $exception->getMessage());
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+            self::assertStringNotContainsString($datasetDirectory, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+
+        $parameter = new \ReflectionParameter([PaperDatasetVerifier::class, 'verify'], 'datasetDirectory');
+        self::assertNotEmpty($parameter->getAttributes(\SensitiveParameter::class));
+    }
+
     #[DataProvider('forgedManifestFactsProvider')]
     public function testRejectsForgedLastIdentityAndTimestamps(string $field, mixed $value, string $error): void
     {

@@ -413,6 +413,195 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->assertRecorderUnusable($stale);
     }
 
+    public function testAppendRejectsValidSameLengthMutationAfterReloadBeforeDurableAppend(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorded = $this->event(sequence: '1');
+        $recorder->append($recorded);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $eventsBefore = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($eventsBefore);
+        self::assertIsString($manifestBefore);
+        $replacement = $this->sameLengthValidReplacement($recorded);
+        self::assertSame(strlen($eventsBefore), strlen($replacement));
+        $filesystem->overwriteEventsBeforePublication($eventsPath, $replacement, 'append');
+
+        try {
+            $recorder->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('Append must reject a valid same-length event mutation after durable reload.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getMessage());
+        }
+
+        self::assertSame($replacement, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(
+            PaperDatasetState::RECORDING,
+            (new PaperDatasetManifestCodec())->decode($manifestBefore)->state,
+        );
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    public function testAppendRejectsValidSameLengthMutationOfOnlyNewLineBeforeDigestPublication(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $durablePrefix = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($durablePrefix);
+        self::assertIsString($manifestBefore);
+
+        $requested = $this->event(sequence: '2', microseconds: 2);
+        $canonicalLine = CanonicalJson::encode($requested->toArray()) . "\n";
+        $replacementLine = $this->sameLengthValidReplacement($requested);
+        self::assertSame(strlen($canonicalLine), strlen($replacementLine));
+        $replacementData = json_decode($replacementLine, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($replacementData);
+        $replacement = PaperMarketEvent::fromArray($replacementData);
+        self::assertSame($requested->eventId, $replacement->eventId);
+        self::assertSame($requested->sequence, $replacement->sequence);
+        self::assertEquals($requested->exchangeTimestamp, $replacement->exchangeTimestamp);
+        self::assertEquals($requested->receivedTimestamp, $replacement->receivedTimestamp);
+        self::assertNotSame($requested->payload, $replacement->payload);
+        self::assertNotSame($requested->payloadHash, $replacement->payloadHash);
+
+        $filesystem->overwriteAppendedLineBeforePublication(
+            $eventsPath,
+            strlen($durablePrefix),
+            $replacementLine,
+        );
+
+        try {
+            $recorder->append($requested);
+            self::fail('Append must reject replacement of only the newly appended canonical line.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getMessage());
+        }
+
+        self::assertSame($durablePrefix, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    public function testAppendHasNoMutablePublicationBoundaryAfterFinalRehash(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $durablePrefix = file_get_contents($eventsPath);
+        self::assertIsString($durablePrefix);
+
+        $requested = $this->event(sequence: '2', microseconds: 2);
+        $canonicalLine = CanonicalJson::encode($requested->toArray()) . "\n";
+        $replacementLine = $this->sameLengthValidReplacement($requested);
+        self::assertSame(strlen($canonicalLine), strlen($replacementLine));
+        $filesystem->overwriteAppendedLineOnSnapshotValidation(
+            $eventsPath,
+            strlen($durablePrefix),
+            $replacementLine,
+            validationSeek: 3,
+        );
+
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $recorder->append($requested));
+        self::assertSame($durablePrefix . $canonicalLine, file_get_contents($eventsPath));
+    }
+
+    public function testAppendFinalRehashRejectsNewLineMutationAfterFirstFullHash(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $durablePrefix = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($durablePrefix);
+        self::assertIsString($manifestBefore);
+
+        $requested = $this->event(sequence: '2', microseconds: 2);
+        $replacementLine = $this->sameLengthValidReplacement($requested);
+        $filesystem->overwriteAppendedLineOnSnapshotValidation(
+            $eventsPath,
+            strlen($durablePrefix),
+            $replacementLine,
+            validationSeek: 2,
+        );
+
+        try {
+            $recorder->append($requested);
+            self::fail('The final full rehash must reject a new-line mutation after the first full hash.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getMessage());
+        }
+
+        self::assertSame($durablePrefix, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    #[DataProvider('finalizationMethodProvider')]
+    public function testFinalizationRejectsValidSameLengthMutationAfterReloadBeforeChecksum(
+        string $finalizationMethod,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorded = $this->event(sequence: '1');
+        $recorder->append($recorded);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $eventsBefore = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($eventsBefore);
+        self::assertIsString($manifestBefore);
+        $replacement = $this->sameLengthValidReplacement($recorded);
+        self::assertSame(strlen($eventsBefore), strlen($replacement));
+        $filesystem->overwriteEventsBeforePublication($eventsPath, $replacement, 'finalize');
+
+        try {
+            $recorder->{$finalizationMethod}();
+            self::fail('Finalization must reject a valid same-length event mutation before checksum.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getMessage());
+        }
+
+        self::assertSame($replacement, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
+        self::assertSame(
+            PaperDatasetState::RECORDING,
+            (new PaperDatasetManifestCodec())->decode($manifestBefore)->state,
+        );
+        $this->assertRecorderUnusable($recorder);
+    }
+
     public function testRestartRejectsAValidLastEventLineWithoutItsDurableNewline(): void
     {
         $manifest = $this->manifest();
@@ -1285,6 +1474,17 @@ final class PaperDatasetRecorderTest extends TestCase
         );
     }
 
+    private function sameLengthValidReplacement(PaperMarketEvent $recorded): string
+    {
+        $replacement = $recorded->toArray();
+        $replacement['payload'] = ['ask' => '30001.0', 'bid' => '28888.0'];
+        $replacement['payload_hash'] = hash('sha256', CanonicalJson::encode($replacement['payload']));
+        $replacementEvent = PaperMarketEvent::fromArray($replacement);
+        self::assertNotSame($recorded->payloadHash, $replacementEvent->payloadHash);
+
+        return CanonicalJson::encode($replacementEvent->toArray()) . "\n";
+    }
+
     private function datasetRoot(): string
     {
         return $this->testRoot . '/paper-market-data';
@@ -1380,6 +1580,13 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private int $tailMutationSeeks = 0;
     private ?string $datasetDirectoryToSwap = null;
     private ?string $datasetDirectoryReplacement = null;
+    private ?string $publicationMutationPath = null;
+    private ?string $publicationMutationContents = null;
+    private ?string $publicationMutationTrigger = null;
+    private int $publicationMutationOffset = 0;
+    private bool $publicationAppendWriteObserved = false;
+    private int $publicationSnapshotValidationSeeks = 0;
+    private ?int $publicationSnapshotValidationTarget = null;
 
     public function failNextAppend(string $failure): void
     {
@@ -1438,9 +1645,54 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->datasetDirectoryReplacement = $replacement;
     }
 
+    public function overwriteEventsBeforePublication(string $path, string $contents, string $trigger): void
+    {
+        $this->publicationMutationPath = $path;
+        $this->publicationMutationContents = $contents;
+        $this->publicationMutationTrigger = $trigger;
+        $this->publicationMutationOffset = 0;
+    }
+
+    public function overwriteAppendedLineBeforePublication(string $path, int $offset, string $contents): void
+    {
+        $this->publicationMutationPath = $path;
+        $this->publicationMutationContents = $contents;
+        $this->publicationMutationTrigger = 'append';
+        $this->publicationMutationOffset = $offset;
+    }
+
+    public function overwriteAppendedLineOnSnapshotValidation(
+        string $path,
+        int $offset,
+        string $contents,
+        int $validationSeek,
+    ): void {
+        $this->publicationMutationPath = $path;
+        $this->publicationMutationContents = $contents;
+        $this->publicationMutationTrigger = 'append_snapshot_validation';
+        $this->publicationMutationOffset = $offset;
+        $this->publicationSnapshotValidationSeeks = 0;
+        $this->publicationSnapshotValidationTarget = $validationSeek;
+    }
+
     /** @param resource $handle */
     public function seek($handle, int $offset, int $whence, string $operation): bool
     {
+        if ($this->publicationMutationTrigger === 'append'
+            && $this->publicationAppendWriteObserved
+            && $operation === 'paper_dataset_events_read_failed'
+        ) {
+            $this->injectPublicationMutation();
+        }
+        if ($this->publicationMutationTrigger === 'append_snapshot_validation'
+            && $this->publicationAppendWriteObserved
+            && $operation === 'paper_dataset_events_snapshot_validation'
+        ) {
+            ++$this->publicationSnapshotValidationSeeks;
+            if ($this->publicationSnapshotValidationSeeks === $this->publicationSnapshotValidationTarget) {
+                $this->injectPublicationMutation();
+            }
+        }
         if ($this->tailMutationPath !== null
             && $this->tailMutationContents !== null
             && $offset === 0
@@ -1485,6 +1737,11 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
      */
     public function checksum($handle, string $operation): array
     {
+        if ($operation === 'paper_dataset_events_checksum_failed'
+            && $this->publicationMutationTrigger === 'finalize'
+        ) {
+            $this->injectPublicationMutation();
+        }
         if ($operation === 'paper_dataset_events_checksum_failed' && $this->shortChecksumRead) {
             $this->shortChecksumRead = false;
 
@@ -1498,6 +1755,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     {
         if ($operation !== 'paper_dataset_events_write_failed') {
             return parent::write($handle, $contents, $operation);
+        }
+        if (\in_array($this->publicationMutationTrigger, ['append', 'append_snapshot_validation'], true)) {
+            $this->publicationAppendWriteObserved = true;
         }
         if ($this->appendFailure === 'full_write') {
             $this->appendFailure = null;
@@ -1568,6 +1828,41 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
 
         return parent::sync($handle, $operation);
+    }
+
+    private function injectPublicationMutation(): void
+    {
+        $path = $this->publicationMutationPath;
+        $contents = $this->publicationMutationContents;
+        $offset = $this->publicationMutationOffset;
+        $this->publicationMutationPath = null;
+        $this->publicationMutationContents = null;
+        $this->publicationMutationTrigger = null;
+        $this->publicationMutationOffset = 0;
+        $this->publicationAppendWriteObserved = false;
+        $this->publicationSnapshotValidationSeeks = 0;
+        $this->publicationSnapshotValidationTarget = null;
+        if ($path === null || $contents === null) {
+            throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+        }
+        $handle = fopen($path, 'r+b');
+        if ($handle === false) {
+            throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+        }
+        try {
+            if (fseek($handle, $offset, SEEK_SET) !== 0) {
+                throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+            }
+            $written = fwrite($handle, $contents);
+            if ($written !== strlen($contents) || !fflush($handle)) {
+                throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+            }
+        } finally {
+            fclose($handle);
+        }
+        if (filesize($path) < $offset + strlen($contents)) {
+            throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+        }
     }
 
     public function stat($handle, string $operation): array|false
