@@ -11,6 +11,9 @@ use Brick\Math\BigInteger;
 
 final class PaperDatasetRecorder
 {
+    private const REGULAR_FILE_TYPE = 0100000;
+    private const FILE_TYPE_MASK = 0170000;
+
     private PaperDatasetManifestCodec $codec;
     private PaperDatasetVerifier $verifier;
     private PaperDatasetRecorderFilesystem $filesystem;
@@ -203,10 +206,7 @@ final class PaperDatasetRecorder
         $this->reloadDurableState();
         $this->assertRecording();
         $this->flushEventsFile();
-        $checksum = hash_file('sha256', $this->eventsPath);
-        if (!\is_string($checksum)) {
-            throw new \RuntimeException('paper_dataset_checksum_failed');
-        }
+        $checksum = $this->checksumEventsFile();
 
         $completed = $this->currentManifest->finalized(
             state: PaperDatasetState::COMPLETE,
@@ -232,10 +232,7 @@ final class PaperDatasetRecorder
         $this->reloadDurableState();
         $this->assertRecording();
         $this->flushEventsFile();
-        $checksum = hash_file('sha256', $this->eventsPath);
-        if (!\is_string($checksum)) {
-            throw new \RuntimeException('paper_dataset_checksum_failed');
-        }
+        $checksum = $this->checksumEventsFile();
 
         $incomplete = $this->currentManifest->finalized(
             state: PaperDatasetState::INCOMPLETE,
@@ -275,10 +272,7 @@ final class PaperDatasetRecorder
 
     private function scanDurableTail(): void
     {
-        $handle = @fopen($this->eventsPath, 'rb');
-        if ($handle === false) {
-            throw new \RuntimeException('paper_dataset_events_unreadable');
-        }
+        $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
 
         try {
             $statistics = fstat($handle);
@@ -357,6 +351,7 @@ final class PaperDatasetRecorder
             if ($position === false || $position !== $durableSize) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
+            $this->assertHandleMatchesPath($handle, $this->eventsPath);
         } finally {
             fclose($handle);
         }
@@ -399,15 +394,13 @@ final class PaperDatasetRecorder
 
     private function appendDurably(string $line): int
     {
-        $handle = @fopen($this->eventsPath, 'ab');
-        if ($handle === false) {
-            throw new \RuntimeException('paper_dataset_events_open_failed');
-        }
+        $handle = $this->openRegularFile($this->eventsPath, 'ab', 'paper_dataset_events_open_failed');
         try {
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_events_lock_failed');
             }
             try {
+                $this->assertHandleMatchesPath($handle, $this->eventsPath);
                 $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
                 if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
                     throw new \RuntimeException('paper_dataset_events_read_failed');
@@ -421,6 +414,7 @@ final class PaperDatasetRecorder
                     if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
                         throw new \RuntimeException('paper_dataset_events_read_failed');
                     }
+                    $this->assertHandleMatchesPath($handle, $this->eventsPath);
 
                     return $statistics['size'];
                 } catch (\Throwable $failure) {
@@ -465,16 +459,15 @@ final class PaperDatasetRecorder
 
     private function flushEventsFile(): void
     {
-        $handle = @fopen($this->eventsPath, 'ab');
-        if ($handle === false) {
-            throw new \RuntimeException('paper_dataset_events_open_failed');
-        }
+        $handle = $this->openRegularFile($this->eventsPath, 'ab', 'paper_dataset_events_open_failed');
         try {
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_events_lock_failed');
             }
             try {
+                $this->assertHandleMatchesPath($handle, $this->eventsPath);
                 $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                $this->assertHandleMatchesPath($handle, $this->eventsPath);
             } finally {
                 flock($handle, LOCK_UN);
             }
@@ -483,8 +476,29 @@ final class PaperDatasetRecorder
         }
     }
 
+    private function checksumEventsFile(): string
+    {
+        $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
+        try {
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_checksum_failed');
+            if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
+                throw new \RuntimeException('paper_dataset_checksum_failed');
+            }
+            $result = $this->filesystem->checksum($handle, 'paper_dataset_events_checksum_failed');
+            if ($result['bytes'] !== $statistics['size']) {
+                throw new \RuntimeException('paper_dataset_checksum_failed');
+            }
+            $this->assertHandleMatchesPath($handle, $this->eventsPath);
+
+            return $result['checksum'];
+        } finally {
+            fclose($handle);
+        }
+    }
+
     private function writeManifestAtomically(PaperDatasetManifest $manifest): void
     {
+        $destinationStat = $this->pathStatIfPresent($this->manifestPath);
         $temporary = @tempnam($this->datasetDirectory, '.manifest-');
         if ($temporary === false) {
             throw new \RuntimeException('paper_dataset_manifest_temp_failed');
@@ -498,17 +512,18 @@ final class PaperDatasetRecorder
             if (!@chmod($temporary, 0600)) {
                 throw new \RuntimeException('paper_dataset_manifest_mode_failed');
             }
-            $handle = @fopen($temporary, 'wb');
-            if ($handle === false) {
-                throw new \RuntimeException('paper_dataset_manifest_open_failed');
-            }
+            $handle = $this->openRegularFile($temporary, 'r+b', 'paper_dataset_manifest_open_failed');
             $this->writeAll($handle, $this->codec->encode($manifest), 'paper_dataset_manifest_write_failed');
             $this->flushHandle($handle, 'paper_dataset_manifest_flush_failed');
+            $this->assertHandleMatchesPath($handle, $temporary);
+            $temporaryStat = $this->pathStat($temporary, 'paper_dataset_manifest_temp_failed');
             fclose($handle);
             $handle = null;
+            $this->assertPathUnchanged($this->manifestPath, $destinationStat);
             if (!@rename($temporary, $this->manifestPath)) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
+            $this->assertPathUnchanged($this->manifestPath, $temporaryStat);
             $this->syncDatasetDirectory();
         } finally {
             if (\is_resource($handle)) {
@@ -605,11 +620,7 @@ final class PaperDatasetRecorder
      */
     private function withDatasetLock(callable $operation): mixed
     {
-        $this->assertNoSymlinkComponents($this->lockPath);
-        $handle = @fopen($this->lockPath, 'r+b');
-        if ($handle === false) {
-            throw new \RuntimeException('paper_dataset_lock_open_failed');
-        }
+        $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
 
         try {
             if (!flock($handle, LOCK_EX)) {
@@ -617,6 +628,8 @@ final class PaperDatasetRecorder
             }
 
             try {
+                $this->assertHandleMatchesPath($handle, $this->lockPath);
+
                 return $operation();
             } finally {
                 flock($handle, LOCK_UN);
@@ -628,12 +641,142 @@ final class PaperDatasetRecorder
 
     private function readStoredManifest(): PaperDatasetManifest
     {
-        $json = @file_get_contents($this->manifestPath);
-        if ($json === false) {
-            throw new \RuntimeException('paper_dataset_manifest_unreadable');
+        $handle = $this->openRegularFile($this->manifestPath, 'rb', 'paper_dataset_manifest_unreadable');
+        try {
+            $json = stream_get_contents($handle);
+            if ($json === false) {
+                throw new \RuntimeException('paper_dataset_manifest_unreadable');
+            }
+            $this->assertHandleMatchesPath($handle, $this->manifestPath);
+        } finally {
+            fclose($handle);
         }
 
         return $this->codec->decode($json);
+    }
+
+    /** @return resource */
+    private function openRegularFile(string $path, string $mode, string $openError)
+    {
+        $before = $this->pathStat($path, $openError);
+        $handle = @fopen($path, $mode);
+        if ($handle === false) {
+            throw new \RuntimeException($openError);
+        }
+
+        try {
+            $opened = $this->assertHandleMatchesPath($handle, $path);
+            if (!$this->sameFile($before, $opened)) {
+                throw new \RuntimeException('paper_dataset_file_changed');
+            }
+
+            return $handle;
+        } catch (\Throwable $failure) {
+            fclose($handle);
+
+            throw $failure;
+        }
+    }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array<string, mixed>
+     */
+    private function assertHandleMatchesPath($handle, string $path): array
+    {
+        $opened = $this->filesystem->stat($handle, 'paper_dataset_file_validation_failed');
+        if ($opened === false || !$this->isRegularFile($opened)) {
+            throw new \RuntimeException('paper_dataset_file_validation_failed');
+        }
+
+        $current = $this->pathStat($path, 'paper_dataset_file_changed');
+        if (!$this->sameFile($opened, $current)) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+
+        return $opened;
+    }
+
+    /** @return array<string, mixed> */
+    private function pathStat(string $path, string $missingError): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        clearstatcache(true, $path);
+        $statistics = @lstat($path);
+        if ($statistics === false) {
+            throw new \RuntimeException($missingError);
+        }
+        if (($statistics['mode'] & self::FILE_TYPE_MASK) === 0120000) {
+            throw new \RuntimeException('paper_dataset_symlink_rejected');
+        }
+        if (!$this->isRegularFile($statistics)) {
+            throw new \RuntimeException('paper_dataset_file_validation_failed');
+        }
+
+        return $statistics;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function pathStatIfPresent(string $path): ?array
+    {
+        $this->assertNoSymlinkComponents($path);
+        clearstatcache(true, $path);
+        $statistics = @lstat($path);
+        if ($statistics === false) {
+            return null;
+        }
+        if (($statistics['mode'] & self::FILE_TYPE_MASK) === 0120000) {
+            throw new \RuntimeException('paper_dataset_symlink_rejected');
+        }
+        if (!$this->isRegularFile($statistics)) {
+            throw new \RuntimeException('paper_dataset_file_validation_failed');
+        }
+
+        return $statistics;
+    }
+
+    /** @param array<string, mixed>|null $expected */
+    private function assertPathUnchanged(string $path, ?array $expected): void
+    {
+        $current = $this->pathStatIfPresent($path);
+        if ($expected === null || $current === null) {
+            if ($expected !== $current) {
+                throw new \RuntimeException('paper_dataset_file_changed');
+            }
+
+            return;
+        }
+        if (!$this->sameFile($expected, $current)) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isRegularFile(array $statistics): bool
+    {
+        return isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE;
+    }
+
+    /**
+     * @param array<string, mixed> $left
+     * @param array<string, mixed> $right
+     */
+    private function sameFile(array $left, array $right): bool
+    {
+        foreach (['dev', 'ino'] as $field) {
+            if (!isset($left[$field], $right[$field])
+                || !\is_int($left[$field])
+                || !\is_int($right[$field])
+                || $left[$field] !== $right[$field]
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function assertSameDataset(PaperDatasetManifest $requested, PaperDatasetManifest $stored): void

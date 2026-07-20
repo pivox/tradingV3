@@ -578,6 +578,172 @@ final class PaperDatasetRecorderTest extends TestCase
         new PaperDatasetRecorder($safe . '/link/existing', $this->manifest());
     }
 
+    public function testAppendRejectsEventsSymlinkSwappedAfterConstructionWithoutTouchingTarget(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $originalEventsPath = $this->datasetDirectory() . '/events.original.ndjson';
+        $targetPath = $this->testRoot . '/events-target.ndjson';
+        self::assertSame(0, file_put_contents($targetPath, ''));
+        self::assertTrue(rename($eventsPath, $originalEventsPath));
+        self::assertTrue(symlink($targetPath, $eventsPath));
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('An events file swapped for a symlink must be rejected before append.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+        }
+
+        self::assertSame('', file_get_contents($targetPath));
+        self::assertSame('', file_get_contents($originalEventsPath));
+    }
+
+    public function testAppendRejectsManifestSymlinkSwappedAfterConstructionWithoutReadingOrReplacingIt(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $originalManifestPath = $this->datasetDirectory() . '/manifest.original.json';
+        $targetPath = $this->testRoot . '/manifest-target.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        self::assertTrue(copy($manifestPath, $targetPath));
+        self::assertTrue(rename($manifestPath, $originalManifestPath));
+        self::assertTrue(symlink($targetPath, $manifestPath));
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('A manifest swapped for a symlink must be rejected before it is read or replaced.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+        }
+
+        self::assertTrue(is_link($manifestPath));
+        self::assertSame($manifestBefore, file_get_contents($targetPath));
+        self::assertSame($manifestBefore, file_get_contents($originalManifestPath));
+    }
+
+    #[DataProvider('finalizationMethodProvider')]
+    public function testFinalizationRejectsEventsSymlinkSwappedAfterConstructionBeforeFinalizingManifest(
+        string $finalizationMethod,
+    ): void {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $originalEventsPath = $this->datasetDirectory() . '/events.original.ndjson';
+        $targetPath = $this->testRoot . '/events-target.ndjson';
+        $eventsBefore = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($eventsBefore);
+        self::assertIsString($manifestBefore);
+        self::assertSame(strlen($eventsBefore), file_put_contents($targetPath, $eventsBefore));
+        self::assertTrue(rename($eventsPath, $originalEventsPath));
+        self::assertTrue(symlink($targetPath, $eventsPath));
+
+        try {
+            if ($finalizationMethod === 'complete') {
+                $recorder->complete();
+            } else {
+                $recorder->markIncomplete();
+            }
+            self::fail('Finalization must reject an events file swapped for a symlink.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+        }
+
+        self::assertSame($eventsBefore, file_get_contents($targetPath));
+        self::assertSame($eventsBefore, file_get_contents($originalEventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function finalizationMethodProvider(): iterable
+    {
+        yield 'complete' => ['complete'];
+        yield 'mark incomplete' => ['markIncomplete'];
+    }
+
+    public function testCompleteFsyncsEventsAndLeavesRecordingStateWhenThatSyncFails(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $syncsBeforeCompletion = $filesystem->eventSyncs;
+        $filesystem->failNextEventSync();
+
+        try {
+            $recorder->complete();
+            self::fail('The injected completion event-file fsync failure must be reported.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_flush_failed', $exception->getMessage());
+        }
+
+        self::assertSame($syncsBeforeCompletion + 1, $filesystem->eventSyncs);
+        $storedJson = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($storedJson);
+        self::assertSame(PaperDatasetState::RECORDING, (new PaperDatasetManifestCodec())->decode($storedJson)->state);
+
+        self::assertSame(PaperDatasetState::COMPLETE, $recorder->complete()->state);
+        self::assertSame($syncsBeforeCompletion + 2, $filesystem->eventSyncs);
+    }
+
+    public function testCompleteRejectsShortEventChecksumReadBeforeFinalizingManifest(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->shortReadNextChecksum();
+
+        $failure = null;
+        try {
+            $recorder->complete();
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        }
+
+        self::assertInstanceOf(\RuntimeException::class, $failure);
+        self::assertSame('paper_dataset_checksum_failed', $failure->getMessage());
+        self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
+    }
+
+    public function testCompleteFinalVerificationRejectsEventsPathSwappedAfterVerifierOpen(): void
+    {
+        $verifierFilesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            verifier: new PaperDatasetVerifier(filesystem: $verifierFilesystem),
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $targetPath = $this->testRoot . '/verifier-events-target.ndjson';
+        $eventsBefore = file_get_contents($eventsPath);
+        self::assertIsString($eventsBefore);
+        self::assertSame(strlen($eventsBefore), file_put_contents($targetPath, $eventsBefore));
+        $verifierFilesystem->swapPathOnVerifierEventsValidation($eventsPath, $targetPath);
+
+        $failure = null;
+        try {
+            $recorder->complete();
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        }
+
+        self::assertInstanceOf(\RuntimeException::class, $failure);
+        self::assertSame('paper_dataset_symlink_rejected', $failure->getMessage());
+        self::assertSame($eventsBefore, file_get_contents($targetPath));
+    }
+
     public function testManifestRewriteFailurePoisonsInstanceAndRestartRescansDurableAppend(): void
     {
         $manifest = $this->manifest();
@@ -835,12 +1001,17 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 {
     public int $rollbackTruncations = 0;
     public int $manifestDirectorySyncs = 0;
+    public int $eventSyncs = 0;
 
     private ?string $appendFailure = null;
     private bool $partialWriteCompleted = false;
     private int $appendStatCalls = 0;
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
+    private bool $failEventSync = false;
+    private bool $shortChecksumRead = false;
+    private ?string $verifierEventsPath = null;
+    private ?string $verifierEventsTarget = null;
 
     public function failNextAppend(string $failure): void
     {
@@ -857,6 +1028,38 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failNextManifestDirectorySync(): void
     {
         $this->failManifestDirectorySync = true;
+    }
+
+    public function failNextEventSync(): void
+    {
+        $this->failEventSync = true;
+    }
+
+    public function shortReadNextChecksum(): void
+    {
+        $this->shortChecksumRead = true;
+    }
+
+    public function swapPathOnVerifierEventsValidation(string $path, string $target): void
+    {
+        $this->verifierEventsPath = $path;
+        $this->verifierEventsTarget = $target;
+    }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array{checksum: string, bytes: int}
+     */
+    public function checksum($handle, string $operation): array
+    {
+        if ($operation === 'paper_dataset_events_checksum_failed' && $this->shortChecksumRead) {
+            $this->shortChecksumRead = false;
+
+            return ['checksum' => hash('sha256', ''), 'bytes' => 0];
+        }
+
+        return parent::checksum($handle, $operation);
     }
 
     public function write($handle, string $contents, string $operation): int|false
@@ -909,6 +1112,14 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
                 return false;
             }
         }
+        if ($operation === 'paper_dataset_events_flush_failed') {
+            ++$this->eventSyncs;
+            if ($this->failEventSync) {
+                $this->failEventSync = false;
+
+                return false;
+            }
+        }
         if ($operation === 'paper_dataset_events_flush_failed' && $this->appendFailure === 'sync') {
             $this->appendFailure = null;
 
@@ -925,6 +1136,21 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function stat($handle, string $operation): array|false
     {
+        if ($operation === 'paper_dataset_verifier_events_validation'
+            && $this->verifierEventsPath !== null
+            && $this->verifierEventsTarget !== null
+        ) {
+            $statistics = parent::stat($handle, $operation);
+            $path = $this->verifierEventsPath;
+            $target = $this->verifierEventsTarget;
+            $this->verifierEventsPath = null;
+            $this->verifierEventsTarget = null;
+            if (!rename($path, $path . '.verification-original') || !symlink($target, $path)) {
+                throw new \RuntimeException('Unable to inject verifier path substitution.');
+            }
+
+            return $statistics;
+        }
         if ($operation === 'paper_dataset_events_read_failed' && $this->appendFailure === 'post_stat') {
             ++$this->appendStatCalls;
             if ($this->appendStatCalls === 2) {

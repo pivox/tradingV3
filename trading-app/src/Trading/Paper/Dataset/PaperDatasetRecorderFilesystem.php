@@ -39,4 +39,17 @@ class PaperDatasetRecorderFilesystem
     {
         return ftruncate($handle, $size);
     }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array{checksum: string, bytes: int}
+     */
+    public function checksum($handle, string $operation): array
+    {
+        $context = hash_init('sha256');
+        $bytes = hash_update_stream($context, $handle);
+
+        return ['checksum' => hash_final($context), 'bytes' => $bytes];
+    }
 }

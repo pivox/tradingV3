@@ -10,8 +10,13 @@ use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
 {
-    public function __construct(private readonly PaperDatasetManifestCodec $codec = new PaperDatasetManifestCodec())
-    {
+    private const REGULAR_FILE_TYPE = 0100000;
+    private const FILE_TYPE_MASK = 0170000;
+
+    public function __construct(
+        private readonly PaperDatasetManifestCodec $codec = new PaperDatasetManifestCodec(),
+        private readonly PaperDatasetRecorderFilesystem $filesystem = new PaperDatasetRecorderFilesystem(),
+    ) {
     }
 
     public function verify(string $datasetDirectory): PaperDatasetManifest
@@ -31,11 +36,11 @@ final class PaperDatasetVerifier
                 throw new \RuntimeException('paper_dataset_file_unreadable');
             }
         }
-
-        $json = @file_get_contents($manifestPath);
-        if ($json === false) {
-            throw new \RuntimeException('paper_dataset_manifest_unreadable');
-        }
+        $json = $this->readRegularFile(
+            $manifestPath,
+            'paper_dataset_manifest_unreadable',
+            'paper_dataset_verifier_manifest_validation',
+        );
 
         $manifest = $this->codec->decode($json);
         if ($manifest->state !== PaperDatasetState::COMPLETE) {
@@ -43,9 +48,8 @@ final class PaperDatasetVerifier
         }
 
         $facts = $this->scan($eventsPath, $manifest);
-        $checksum = hash_file('sha256', $eventsPath);
-        if (!\is_string($checksum) || $manifest->eventsFileSha256 === null
-            || !hash_equals($manifest->eventsFileSha256, $checksum)
+        if ($manifest->eventsFileSha256 === null
+            || !hash_equals($manifest->eventsFileSha256, $facts['events_checksum'])
         ) {
             throw new \RuntimeException('paper_dataset_checksum_mismatch');
         }
@@ -99,6 +103,119 @@ final class PaperDatasetVerifier
         }
     }
 
+    private function readRegularFile(string $path, string $readError, string $validationOperation): string
+    {
+        $handle = $this->openRegularFile($path, 'rb', $readError, $validationOperation);
+        try {
+            $statistics = $this->filesystem->stat($handle, $validationOperation);
+            $contents = stream_get_contents($handle);
+            $position = ftell($handle);
+            if ($statistics === false
+                || !isset($statistics['size'])
+                || !\is_int($statistics['size'])
+                || $contents === false
+                || $position === false
+                || $position !== $statistics['size']
+            ) {
+                throw new \RuntimeException($readError);
+            }
+            $this->assertHandleMatchesPath($handle, $path, $validationOperation);
+
+            return $contents;
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /** @return resource */
+    private function openRegularFile(string $path, string $mode, string $openError, string $validationOperation)
+    {
+        $before = $this->pathStat($path, $openError);
+        $handle = @fopen($path, $mode);
+        if ($handle === false) {
+            throw new \RuntimeException($openError);
+        }
+
+        try {
+            $opened = $this->assertHandleMatchesPath($handle, $path, $validationOperation);
+            if (!$this->sameFile($before, $opened)) {
+                throw new \RuntimeException('paper_dataset_file_changed');
+            }
+
+            return $handle;
+        } catch (\Throwable $failure) {
+            fclose($handle);
+
+            throw $failure;
+        }
+    }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array<string, mixed>
+     */
+    private function assertHandleMatchesPath($handle, string $path, string $validationOperation): array
+    {
+        $opened = $this->filesystem->stat($handle, $validationOperation);
+        if ($opened === false || !$this->isRegularFile($opened)) {
+            throw new \RuntimeException('paper_dataset_file_validation_failed');
+        }
+
+        $current = $this->pathStat($path, 'paper_dataset_file_changed');
+        if (!$this->sameFile($opened, $current)) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+
+        return $opened;
+    }
+
+    /** @return array<string, mixed> */
+    private function pathStat(string $path, string $missingError): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        clearstatcache(true, $path);
+        $statistics = @lstat($path);
+        if ($statistics === false) {
+            throw new \RuntimeException($missingError);
+        }
+        if (($statistics['mode'] & self::FILE_TYPE_MASK) === 0120000) {
+            throw new \RuntimeException('paper_dataset_symlink_rejected');
+        }
+        if (!$this->isRegularFile($statistics)) {
+            throw new \RuntimeException('paper_dataset_file_unreadable');
+        }
+
+        return $statistics;
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isRegularFile(array $statistics): bool
+    {
+        return isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE;
+    }
+
+    /**
+     * @param array<string, mixed> $left
+     * @param array<string, mixed> $right
+     */
+    private function sameFile(array $left, array $right): bool
+    {
+        foreach (['dev', 'ino'] as $field) {
+            if (!isset($left[$field], $right[$field])
+                || !\is_int($left[$field])
+                || !\is_int($right[$field])
+                || $left[$field] !== $right[$field]
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * @return array{
      *   event_count: int,
@@ -106,16 +223,12 @@ final class PaperDatasetVerifier
      *   start_exchange_timestamp: \DateTimeImmutable|null,
      *   end_exchange_timestamp: \DateTimeImmutable|null,
      *   channels: list<string>,
-     *   sequence_gaps: array<string, int>
+     *   sequence_gaps: array<string, int>,
+     *   events_checksum: string
      * }
      */
     private function scan(string $eventsPath, PaperDatasetManifest $manifest): array
     {
-        $handle = @fopen($eventsPath, 'rb');
-        if ($handle === false) {
-            throw new \RuntimeException('paper_dataset_events_unreadable');
-        }
-
         /** @var array<string, true> $identities */
         $identities = [];
         /** @var array<string, BigInteger> $lastSequences */
@@ -128,9 +241,21 @@ final class PaperDatasetVerifier
         $lastEventId = null;
         $start = null;
         $end = null;
+        $checksumContext = hash_init('sha256');
 
+        $handle = $this->openRegularFile(
+            $eventsPath,
+            'rb',
+            'paper_dataset_file_unreadable',
+            'paper_dataset_verifier_events_validation',
+        );
         try {
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_verifier_events_validation');
+            if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
             while (($line = fgets($handle)) !== false) {
+                hash_update($checksumContext, $line);
                 if (trim($line) === '') {
                     continue;
                 }
@@ -178,6 +303,11 @@ final class PaperDatasetVerifier
             if (!feof($handle)) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
+            $position = ftell($handle);
+            if ($position === false || $position !== $statistics['size']) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+            $this->assertHandleMatchesPath($handle, $eventsPath, 'paper_dataset_verifier_events_validation');
         } finally {
             fclose($handle);
         }
@@ -193,6 +323,7 @@ final class PaperDatasetVerifier
             'end_exchange_timestamp' => $end,
             'channels' => $channels,
             'sequence_gaps' => $sequenceGaps,
+            'events_checksum' => hash_final($checksumContext),
         ];
     }
 
