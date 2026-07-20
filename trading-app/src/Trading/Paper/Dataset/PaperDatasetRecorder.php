@@ -13,6 +13,7 @@ final class PaperDatasetRecorder
 {
     private PaperDatasetManifestCodec $codec;
     private PaperDatasetVerifier $verifier;
+    private PaperDatasetRecorderFilesystem $filesystem;
     private string $datasetDirectory;
     private string $eventsPath;
     private string $manifestPath;
@@ -44,11 +45,17 @@ final class PaperDatasetRecorder
         PaperDatasetManifest $manifest,
         ?PaperDatasetManifestCodec $codec = null,
         ?PaperDatasetVerifier $verifier = null,
+        ?PaperDatasetRecorderFilesystem $filesystem = null,
     ) {
         PaperDatasetManifest::assertDatasetId($manifest->datasetId);
         $this->codec = $codec ?? new PaperDatasetManifestCodec();
         $this->verifier = $verifier ?? new PaperDatasetVerifier($this->codec);
+        $this->filesystem = $filesystem ?? new PaperDatasetRecorderFilesystem();
         $this->identityManifest = $manifest;
+
+        if ($manifest->state !== PaperDatasetState::RECORDING && !$this->storedManifestExists($root, $manifest)) {
+            throw new \RuntimeException('paper_dataset_initial_state_invalid');
+        }
 
         $root = $this->prepareDirectory($root);
         $this->datasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
@@ -73,6 +80,9 @@ final class PaperDatasetRecorder
                 $this->assertSameDataset($manifest, $stored);
                 $this->currentManifest = $stored;
             } else {
+                if ($manifest->state !== PaperDatasetState::RECORDING) {
+                    throw new \RuntimeException('paper_dataset_initial_state_invalid');
+                }
                 $this->ensureDirectory($checkpoints);
                 $this->ensureEventsFile(create: true);
                 $this->currentManifest = $manifest;
@@ -398,19 +408,58 @@ final class PaperDatasetRecorder
                 throw new \RuntimeException('paper_dataset_events_lock_failed');
             }
             try {
-                $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
-                $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
-                $statistics = fstat($handle);
-                if ($statistics === false) {
+                $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
+                if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
                     throw new \RuntimeException('paper_dataset_events_read_failed');
                 }
 
-                return $statistics['size'];
+                $originalLength = $statistics['size'];
+                try {
+                    $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
+                    $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                    $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
+                    if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
+                        throw new \RuntimeException('paper_dataset_events_read_failed');
+                    }
+
+                    return $statistics['size'];
+                } catch (\Throwable $failure) {
+                    if (!$this->rollbackAppend($handle, $originalLength)) {
+                        $this->usable = false;
+
+                        throw new \RuntimeException('paper_dataset_events_rollback_failed', 0, $failure);
+                    }
+
+                    throw $failure;
+                }
             } finally {
                 flock($handle, LOCK_UN);
             }
         } finally {
             fclose($handle);
+        }
+    }
+
+    /** @param resource $handle */
+    private function rollbackAppend($handle, int $originalLength): bool
+    {
+        try {
+            if (!$this->filesystem->truncate(
+                $handle,
+                $originalLength,
+                'paper_dataset_events_rollback_failed',
+            )) {
+                return false;
+            }
+            $this->flushHandle($handle, 'paper_dataset_events_rollback_failed');
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_rollback_failed');
+
+            return $statistics !== false
+                && isset($statistics['size'])
+                && \is_int($statistics['size'])
+                && $statistics['size'] === $originalLength;
+        } catch (\Throwable) {
+            return false;
         }
     }
 
@@ -460,6 +509,7 @@ final class PaperDatasetRecorder
             if (!@rename($temporary, $this->manifestPath)) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
+            $this->syncDatasetDirectory();
         } finally {
             if (\is_resource($handle)) {
                 fclose($handle);
@@ -470,13 +520,29 @@ final class PaperDatasetRecorder
         }
     }
 
+    private function syncDatasetDirectory(): void
+    {
+        $handle = @fopen($this->datasetDirectory, 'rb');
+        if ($handle === false) {
+            throw new \RuntimeException('paper_dataset_manifest_directory_open_failed');
+        }
+
+        try {
+            if (!$this->filesystem->sync($handle, 'paper_dataset_manifest_directory_sync_failed')) {
+                throw new \RuntimeException('paper_dataset_manifest_directory_sync_failed');
+            }
+        } finally {
+            fclose($handle);
+        }
+    }
+
     /** @param resource $handle */
     private function writeAll($handle, string $contents, string $error): void
     {
         $offset = 0;
         $length = strlen($contents);
         while ($offset < $length) {
-            $written = fwrite($handle, substr($contents, $offset));
+            $written = $this->filesystem->write($handle, substr($contents, $offset), $error);
             if ($written === false || $written === 0) {
                 throw new \RuntimeException($error);
             }
@@ -487,10 +553,10 @@ final class PaperDatasetRecorder
     /** @param resource $handle */
     private function flushHandle($handle, string $error): void
     {
-        if (!fflush($handle)) {
+        if (!$this->filesystem->flush($handle, $error)) {
             throw new \RuntimeException($error);
         }
-        if (\function_exists('fsync') && !fsync($handle)) {
+        if (!$this->filesystem->sync($handle, $error)) {
             throw new \RuntimeException($error);
         }
     }
@@ -600,6 +666,22 @@ final class PaperDatasetRecorder
         }
 
         return $resolved;
+    }
+
+    private function storedManifestExists(string $root, PaperDatasetManifest $manifest): bool
+    {
+        if ($root === '' || str_contains($root, "\0")) {
+            throw new \RuntimeException('paper_dataset_root_invalid');
+        }
+        $this->assertNoSymlinkComponents($root);
+
+        return is_file(
+            rtrim($root, DIRECTORY_SEPARATOR)
+            . DIRECTORY_SEPARATOR
+            . $manifest->datasetId
+            . DIRECTORY_SEPARATOR
+            . 'manifest.json',
+        );
     }
 
     private function ensureDirectory(string $directory): void

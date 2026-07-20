@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Trading\Paper\Dataset;
+
+class PaperDatasetRecorderFilesystem
+{
+    /** @param resource $handle */
+    public function write($handle, string $contents, string $operation): int|false
+    {
+        return fwrite($handle, $contents);
+    }
+
+    /** @param resource $handle */
+    public function flush($handle, string $operation): bool
+    {
+        return fflush($handle);
+    }
+
+    /** @param resource $handle */
+    public function sync($handle, string $operation): bool
+    {
+        return fsync($handle);
+    }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array<string, mixed>|false
+     */
+    public function stat($handle, string $operation): array|false
+    {
+        return fstat($handle);
+    }
+
+    /** @param resource $handle */
+    public function truncate($handle, int $size, string $operation): bool
+    {
+        return ftruncate($handle, $size);
+    }
+}

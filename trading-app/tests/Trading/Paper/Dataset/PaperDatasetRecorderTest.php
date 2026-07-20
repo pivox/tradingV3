@@ -8,6 +8,7 @@ use App\Trading\Paper\Dataset\PaperDatasetAppendResult;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
+use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -20,6 +21,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperDatasetRecorder::class)]
+#[CoversClass(PaperDatasetRecorderFilesystem::class)]
 #[CoversClass(PaperDatasetManifest::class)]
 #[CoversClass(PaperDatasetManifestCodec::class)]
 #[CoversClass(PaperDatasetVerifier::class)]
@@ -497,6 +499,58 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertDirectoryDoesNotExist($this->datasetRoot());
     }
 
+    #[DataProvider('initialFinalStateProvider')]
+    public function testFinalStateCannotCreateDatasetArtifacts(PaperDatasetState $state): void
+    {
+        $manifest = $this->manifest()->finalized(
+            state: $state,
+            endExchangeTimestamp: $state === PaperDatasetState::COMPLETE
+                ? new \DateTimeImmutable('2026-07-19T10:00:00.000001Z')
+                : null,
+            quality: $state === PaperDatasetState::COMPLETE
+                ? PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES
+                : PaperMarketDataQuality::INCOMPLETE,
+            eventsFileSha256: hash('sha256', ''),
+        );
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A finalized manifest must not create a dataset.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_initial_state_invalid', $exception->getMessage());
+        }
+
+        self::assertDirectoryDoesNotExist($this->datasetRoot());
+    }
+
+    /** @return iterable<string, array{PaperDatasetState}> */
+    public static function initialFinalStateProvider(): iterable
+    {
+        yield 'complete' => [PaperDatasetState::COMPLETE];
+        yield 'incomplete' => [PaperDatasetState::INCOMPLETE];
+    }
+
+    #[DataProvider('initialFinalStateProvider')]
+    public function testExistingFinalizedDatasetCanBeReopenedButRemainsFrozen(PaperDatasetState $state): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $event = $this->event(sequence: '1');
+        $recorder->append($event);
+        $finalized = $state === PaperDatasetState::COMPLETE
+            ? $recorder->complete()
+            : $recorder->markIncomplete();
+
+        $reopened = new PaperDatasetRecorder($this->datasetRoot(), $finalized);
+        self::assertSame($state, $reopened->manifest()->state);
+
+        try {
+            $reopened->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A reopened finalized dataset must remain frozen.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+    }
+
     public function testRecorderRejectsAnIntermediateSymlinkBeforeCreatingRoot(): void
     {
         $real = $this->testRoot . '/real';
@@ -551,6 +605,148 @@ final class PaperDatasetRecorderTest extends TestCase
         $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
         self::assertSame(2, $restarted->manifest()->eventCount);
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($second));
+    }
+
+    public function testEveryManifestRenameSynchronizesTheDatasetDirectory(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        self::assertSame(1, $filesystem->manifestDirectorySyncs);
+
+        $recorder->append($this->event(sequence: '1'));
+
+        self::assertSame(2, $filesystem->manifestDirectorySyncs);
+    }
+
+    public function testManifestDirectorySyncFailureIsNotReportedAsAppendSuccess(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $event = $this->event(sequence: '1');
+        $filesystem->failNextManifestDirectorySync();
+
+        try {
+            $recorder->append($event);
+            self::fail('A manifest directory sync failure must not report append success.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        try {
+            $recorder->append($event);
+            self::fail('A recorder with uncertain manifest durability must be unusable.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_recorder_unusable', $exception->getMessage());
+        }
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($event));
+    }
+
+    public function testInitialManifestDirectorySyncFailureHasStableError(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failNextManifestDirectorySync();
+
+        try {
+            new PaperDatasetRecorder(
+                $this->datasetRoot(),
+                $this->manifest(),
+                filesystem: $filesystem,
+            );
+            self::fail('An initial manifest directory sync failure must fail construction.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_directory_sync_failed', $exception->getMessage());
+        }
+
+        self::assertFileExists($this->datasetDirectory() . '/manifest.json');
+    }
+
+    #[DataProvider('recoverableAppendFailureProvider')]
+    public function testAppendFailureRollsBackToOriginalLengthAndRecorderRemainsUsable(
+        string $failure,
+        string $expectedError,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $recorder->append($this->event(sequence: '1')));
+        $before = file_get_contents($eventsPath);
+        self::assertIsString($before);
+        self::assertNotSame('', $before);
+        $filesystem->failNextAppend($failure);
+
+        try {
+            $recorder->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('The injected append failure must be reported.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($expectedError, $exception->getMessage());
+        }
+
+        self::assertSame(1, $filesystem->rollbackTruncations);
+        self::assertSame($before, file_get_contents($eventsPath));
+        self::assertSame(
+            PaperDatasetAppendResult::APPENDED,
+            $recorder->append($this->event(sequence: '2', microseconds: 2)),
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function recoverableAppendFailureProvider(): iterable
+    {
+        yield 'full write failure' => ['full_write', 'paper_dataset_events_write_failed'];
+        yield 'partial write failure' => ['partial_write', 'paper_dataset_events_write_failed'];
+        yield 'fflush failure' => ['flush', 'paper_dataset_events_flush_failed'];
+        yield 'fsync failure' => ['sync', 'paper_dataset_events_flush_failed'];
+        yield 'post-append fstat failure' => ['post_stat', 'paper_dataset_events_read_failed'];
+    }
+
+    #[DataProvider('rollbackFailureProvider')]
+    public function testFailedAppendPoisonsRecorderWhenRollbackCannotBeMadeDurable(string $failure): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $filesystem->failNextAppend('partial_write');
+        $filesystem->failRollback($failure);
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('An append with an uncertain rollback must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_rollback_failed', $exception->getMessage());
+        }
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('A recorder with uncertain event bytes must be unusable.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_recorder_unusable', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function rollbackFailureProvider(): iterable
+    {
+        yield 'truncate failure' => ['truncate'];
+        yield 'rollback fflush failure' => ['flush'];
+        yield 'rollback fsync failure' => ['sync'];
     }
 
     private function manifest(
@@ -632,5 +828,126 @@ final class PaperDatasetRecorderTest extends TestCase
         }
 
         rmdir($directory);
+    }
+}
+
+final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $rollbackTruncations = 0;
+    public int $manifestDirectorySyncs = 0;
+
+    private ?string $appendFailure = null;
+    private bool $partialWriteCompleted = false;
+    private int $appendStatCalls = 0;
+    private ?string $rollbackFailure = null;
+    private bool $failManifestDirectorySync = false;
+
+    public function failNextAppend(string $failure): void
+    {
+        $this->appendFailure = $failure;
+        $this->partialWriteCompleted = false;
+        $this->appendStatCalls = 0;
+    }
+
+    public function failRollback(string $failure): void
+    {
+        $this->rollbackFailure = $failure;
+    }
+
+    public function failNextManifestDirectorySync(): void
+    {
+        $this->failManifestDirectorySync = true;
+    }
+
+    public function write($handle, string $contents, string $operation): int|false
+    {
+        if ($operation !== 'paper_dataset_events_write_failed') {
+            return parent::write($handle, $contents, $operation);
+        }
+        if ($this->appendFailure === 'full_write') {
+            $this->appendFailure = null;
+
+            return false;
+        }
+        if ($this->appendFailure === 'partial_write') {
+            if (!$this->partialWriteCompleted) {
+                $this->partialWriteCompleted = true;
+
+                return parent::write($handle, substr($contents, 0, max(1, intdiv(strlen($contents), 2))), $operation);
+            }
+            $this->appendFailure = null;
+
+            return false;
+        }
+
+        return parent::write($handle, $contents, $operation);
+    }
+
+    public function flush($handle, string $operation): bool
+    {
+        if ($operation === 'paper_dataset_events_flush_failed' && $this->appendFailure === 'flush') {
+            $this->appendFailure = null;
+
+            return false;
+        }
+        if ($operation === 'paper_dataset_events_rollback_failed' && $this->rollbackFailure === 'flush') {
+            $this->rollbackFailure = null;
+
+            return false;
+        }
+
+        return parent::flush($handle, $operation);
+    }
+
+    public function sync($handle, string $operation): bool
+    {
+        if ($operation === 'paper_dataset_manifest_directory_sync_failed') {
+            ++$this->manifestDirectorySyncs;
+            if ($this->failManifestDirectorySync) {
+                $this->failManifestDirectorySync = false;
+
+                return false;
+            }
+        }
+        if ($operation === 'paper_dataset_events_flush_failed' && $this->appendFailure === 'sync') {
+            $this->appendFailure = null;
+
+            return false;
+        }
+        if ($operation === 'paper_dataset_events_rollback_failed' && $this->rollbackFailure === 'sync') {
+            $this->rollbackFailure = null;
+
+            return false;
+        }
+
+        return parent::sync($handle, $operation);
+    }
+
+    public function stat($handle, string $operation): array|false
+    {
+        if ($operation === 'paper_dataset_events_read_failed' && $this->appendFailure === 'post_stat') {
+            ++$this->appendStatCalls;
+            if ($this->appendStatCalls === 2) {
+                $this->appendFailure = null;
+
+                return false;
+            }
+        }
+
+        return parent::stat($handle, $operation);
+    }
+
+    public function truncate($handle, int $size, string $operation): bool
+    {
+        if ($operation === 'paper_dataset_events_rollback_failed') {
+            ++$this->rollbackTruncations;
+            if ($this->rollbackFailure === 'truncate') {
+                $this->rollbackFailure = null;
+
+                return false;
+            }
+        }
+
+        return parent::truncate($handle, $size, $operation);
     }
 }
