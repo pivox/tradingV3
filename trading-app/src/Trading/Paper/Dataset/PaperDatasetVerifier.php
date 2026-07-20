@@ -98,7 +98,7 @@ final class PaperDatasetVerifier
         return $manifest;
     }
 
-    private function assertNoSymlinkComponents(string $path): void
+    private function assertNoSymlinkComponents(#[\SensitiveParameter] string $path): void
     {
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
             $workingDirectory = getcwd();
@@ -126,7 +126,11 @@ final class PaperDatasetVerifier
         }
     }
 
-    private function readRegularFile(string $path, string $readError, string $validationOperation): string
+    private function readRegularFile(
+        #[\SensitiveParameter] string $path,
+        string $readError,
+        string $validationOperation,
+    ): string
     {
         $handle = $this->openRegularFile($path, 'rb', $readError, $validationOperation);
         try {
@@ -151,7 +155,12 @@ final class PaperDatasetVerifier
     }
 
     /** @return resource */
-    private function openRegularFile(string $path, string $mode, string $openError, string $validationOperation)
+    private function openRegularFile(
+        #[\SensitiveParameter] string $path,
+        string $mode,
+        string $openError,
+        string $validationOperation,
+    )
     {
         $before = $this->pathStat($path, $openError);
         $handle = @fopen($path, $mode);
@@ -178,7 +187,11 @@ final class PaperDatasetVerifier
      *
      * @return array<string, mixed>
      */
-    private function assertHandleMatchesPath($handle, string $path, string $validationOperation): array
+    private function assertHandleMatchesPath(
+        $handle,
+        #[\SensitiveParameter] string $path,
+        string $validationOperation,
+    ): array
     {
         $opened = $this->filesystem->stat($handle, $validationOperation);
         if ($opened === false || !$this->isRegularFile($opened)) {
@@ -194,7 +207,7 @@ final class PaperDatasetVerifier
     }
 
     /** @return array<string, mixed> */
-    private function pathStat(string $path, string $missingError): array
+    private function pathStat(#[\SensitiveParameter] string $path, string $missingError): array
     {
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
@@ -228,7 +241,7 @@ final class PaperDatasetVerifier
     }
 
     /** @return array{dev: int, ino: int} */
-    private function pinDirectoryIdentity(string $path, string $error): array
+    private function pinDirectoryIdentity(#[\SensitiveParameter] string $path, string $error): array
     {
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
@@ -245,7 +258,7 @@ final class PaperDatasetVerifier
     }
 
     /** @param array{dev: int, ino: int} $expected */
-    private function assertDirectoryIdentity(string $path, array $expected): void
+    private function assertDirectoryIdentity(#[\SensitiveParameter] string $path, array $expected): void
     {
         try {
             $current = $this->pinDirectoryIdentity($path, 'paper_dataset_directory_changed');
@@ -293,7 +306,7 @@ final class PaperDatasetVerifier
      *   events_checksum: string
      * }
      */
-    private function scan(string $eventsPath, PaperDatasetManifest $manifest): array
+    private function scan(#[\SensitiveParameter] string $eventsPath, PaperDatasetManifest $manifest): array
     {
         /** @var array<string, true> $identities */
         $identities = [];

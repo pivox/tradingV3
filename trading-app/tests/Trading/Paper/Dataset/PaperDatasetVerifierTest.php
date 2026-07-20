@@ -145,6 +145,53 @@ final class PaperDatasetVerifierTest extends TestCase
         self::assertNotEmpty($parameter->getAttributes(\SensitiveParameter::class));
     }
 
+    public function testDeepVerifierTraceRedactsDatasetPathWhenExceptionArgumentsAreEnabled(): void
+    {
+        $this->createCompleteDataset();
+        $safe = $this->testRoot . '/safe';
+        self::assertTrue(mkdir($safe, 0700));
+        $sentinel = 'PAPER_DATASET_DEEP_PATH_TRACE_' . 'SENTINEL_2d9f81';
+        self::assertTrue(symlink($this->datasetRoot(), $safe . '/' . $sentinel));
+        $aliasedDataset = $safe . '/' . $sentinel . '/dataset-okx-001';
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+
+        try {
+            (new PaperDatasetVerifier())->verify($aliasedDataset);
+            self::fail('A dataset path containing an intermediate symlink must fail verification.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+            self::assertStringNotContainsString($aliasedDataset, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+    }
+
+    public function testEveryPathBearingVerifierParameterIsSensitive(): void
+    {
+        $pathBearingParameters = [
+            'verify' => 'datasetDirectory',
+            'assertNoSymlinkComponents' => 'path',
+            'readRegularFile' => 'path',
+            'openRegularFile' => 'path',
+            'assertHandleMatchesPath' => 'path',
+            'pathStat' => 'path',
+            'pinDirectoryIdentity' => 'path',
+            'assertDirectoryIdentity' => 'path',
+            'scan' => 'eventsPath',
+        ];
+
+        foreach ($pathBearingParameters as $method => $parameterName) {
+            $parameter = new \ReflectionParameter([PaperDatasetVerifier::class, $method], $parameterName);
+            self::assertNotEmpty(
+                $parameter->getAttributes(\SensitiveParameter::class),
+                sprintf('%s::%s() must redact $%s from exception traces.', PaperDatasetVerifier::class, $method, $parameterName),
+            );
+        }
+    }
+
     #[DataProvider('forgedManifestFactsProvider')]
     public function testRejectsForgedLastIdentityAndTimestamps(string $field, mixed $value, string $error): void
     {
