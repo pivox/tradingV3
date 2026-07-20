@@ -313,10 +313,7 @@ REGEX;
                 );
             } catch (\JsonException $exception) {
                 if ($exception->getCode() === JSON_ERROR_DEPTH) {
-                    throw new \InvalidArgumentException(
-                        'paper_market_sensitive_decode_depth_exceeded',
-                        previous: $exception,
-                    );
+                    throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
                 }
 
                 $decoded = null;
@@ -389,6 +386,10 @@ REGEX;
         }
 
         $base64Decoded = self::decodeRecoverableBase64($canonical);
+        if ($base64Decoded === null) {
+            $base64Decoded = self::decodeFoldedBase64($canonical);
+        }
+
         if ($base64Decoded !== null) {
             self::consumeDecodedBytes($decodedByteCount, \strlen($base64Decoded));
             self::scanEncodedString(
@@ -417,6 +418,13 @@ REGEX;
             $decodedStrings,
         );
         self::scanEmbeddedBase64Values(
+            $canonical,
+            $decodeDepth,
+            $decodedNodeCount,
+            $decodedByteCount,
+            $decodedStrings,
+        );
+        self::scanEmbeddedFoldedBase64Values(
             $canonical,
             $decodeDepth,
             $decodedNodeCount,
@@ -641,7 +649,7 @@ REGEX;
 
             try {
                 $key = json_decode('"' . $encodedKey . '"', flags: JSON_THROW_ON_ERROR);
-            } catch (\JsonException $exception) {
+            } catch (\JsonException) {
                 if (
                     !$rejectMalformedKey
                     || self::isWindowsPathLikePublicKeyCandidate($encodedKey)
@@ -649,10 +657,7 @@ REGEX;
                     return;
                 }
 
-                throw new \InvalidArgumentException(
-                    'paper_market_sensitive_field_rejected',
-                    previous: $exception,
-                );
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
             }
 
             if (!\is_string($key)) {
@@ -1057,6 +1062,79 @@ REGEX;
         }
     }
 
+    /**
+     * Scans whitespace-folded Base64 candidates in one forward pass. The compacted candidate
+     * must still pass canonical Base64 validation before any decoded content is scanned.
+     *
+     * @param array<string, true> $decodedStrings
+     */
+    private static function scanEmbeddedFoldedBase64Values(
+        #[\SensitiveParameter]
+        string $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+        array &$decodedStrings,
+    ): void {
+        $length = \strlen($value);
+        for ($offset = 0; $offset < $length;) {
+            if (
+                !self::isBase64CandidateLeftBoundary($value, $offset)
+                || !self::isBase64TokenByte($value[$offset], false)
+            ) {
+                ++$offset;
+
+                continue;
+            }
+
+            $candidateStart = $offset;
+            $hasFold = false;
+            do {
+                while ($offset < $length && self::isBase64TokenByte($value[$offset], true)) {
+                    ++$offset;
+                }
+
+                $segmentEnd = $offset;
+                while ($offset < $length && self::isAsciiWhitespace($value[$offset])) {
+                    ++$offset;
+                }
+
+                if (
+                    $offset < $length
+                    && self::isBase64TokenByte($value[$offset], false)
+                ) {
+                    $hasFold = true;
+
+                    continue;
+                }
+
+                $offset = $segmentEnd;
+
+                break;
+            } while (true);
+
+            if (!$hasFold || !self::isBase64CandidateRightBoundary($value, $offset)) {
+                continue;
+            }
+
+            $decoded = self::decodeFoldedBase64(
+                substr($value, $candidateStart, $offset - $candidateStart),
+            );
+            if ($decoded === null) {
+                continue;
+            }
+
+            self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
+            self::scanEncodedString(
+                $decoded,
+                $decodeDepth + 1,
+                $decodedNodeCount,
+                $decodedByteCount,
+                $decodedStrings,
+            );
+        }
+    }
+
     private static function isPhpSerializedCandidateLeftBoundary(string $value, int $offset): bool
     {
         return $offset === 0
@@ -1193,7 +1271,7 @@ REGEX;
         $pairs = [];
         foreach (explode('&', $value) as $part) {
             if ($part === '' || !str_contains($part, '=')) {
-                return;
+                continue;
             }
 
             [$rawKey, $rawValue] = explode('=', $part, 2);
@@ -1203,7 +1281,7 @@ REGEX;
             }
 
             if ($keyMatch !== 1) {
-                return;
+                continue;
             }
 
             $pairs[] = [urldecode($rawKey), urldecode($rawValue)];
@@ -1212,10 +1290,7 @@ REGEX;
         foreach ($pairs as [$key, $item]) {
             self::consumeDecodedBytes($decodedByteCount, \strlen($key));
             $normalizedKey = self::normalizeKey($key);
-            if (
-                self::isSensitiveKey($normalizedKey)
-                && !self::isExplicitlySafeMetadata($normalizedKey, $item)
-            ) {
+            if (self::isSensitiveKey($normalizedKey)) {
                 throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
             }
 
@@ -1266,15 +1341,58 @@ REGEX;
             $canonicalUnpadded = strtr($canonicalUnpadded, '+/', '-_');
         }
 
-        if (
-            $decoded === false
-            || $canonicalUnpadded !== $unpadded
-            || preg_match('//u', $decoded) !== 1
-        ) {
+        if ($decoded === false || $canonicalUnpadded !== $unpadded) {
+            return null;
+        }
+
+        if (preg_match('//u', $decoded) !== 1) {
+            self::assertNoSensitiveBinaryAssignments($decoded);
+
             return null;
         }
 
         return $decoded;
+    }
+
+    private static function decodeFoldedBase64(#[\SensitiveParameter] string $value): ?string
+    {
+        $segments = preg_split('/[\x09-\x0D ]+/', $value);
+        if ($segments === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if (\count($segments) < 2) {
+            return null;
+        }
+
+        $compacted = '';
+        foreach ($segments as $segment) {
+            $match = preg_match('/\A[A-Za-z0-9+\/_-]+=*\z/D', $segment);
+            if ($match === false) {
+                throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+            }
+
+            if ($match !== 1) {
+                return null;
+            }
+
+            $compacted .= $segment;
+        }
+
+        return self::decodeRecoverableBase64($compacted);
+    }
+
+    private static function assertNoSensitiveBinaryAssignments(
+        #[\SensitiveParameter] string $value,
+    ): void {
+        $match = preg_match(self::SENSITIVE_VALUE_PATTERN, strtr($value, self::KEY_CONFUSABLES));
+        if ($match === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($match === 1) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
     }
 
     private static function consumeDecodedNode(int &$decodedNodeCount): void
@@ -1362,10 +1480,7 @@ REGEX;
     {
         for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
             $normalizedKey = self::normalizeKey($key);
-            if (
-                self::isSensitiveKey($normalizedKey)
-                && !self::isExplicitlySafeMetadata($normalizedKey, $value)
-            ) {
+            if (self::isSensitiveKey($normalizedKey)) {
                 throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
             }
 
@@ -1455,24 +1570,5 @@ REGEX;
         }
 
         return false;
-    }
-
-    private static function isExplicitlySafeMetadata(
-        string $normalizedKey,
-        #[\SensitiveParameter] mixed $value,
-    ): bool
-    {
-        return match ($normalizedKey) {
-            'authorization_status' => \is_bool($value)
-                || $value === null
-                || \in_array($value, ['not_applicable', 'not_present', 'absent', 'redacted', 'unknown'], true),
-            'api_key_hint' => $value === null
-                || \in_array($value, ['not_present', 'redacted', 'masked'], true),
-            'signature_count' => (\is_int($value) && $value >= 0)
-                || (\is_string($value) && preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) === 1),
-            'wallet_balance_model' => \in_array($value, ['unknown', 'not_applicable', 'public_aggregate'], true),
-            'seed_phrase_model' => \in_array($value, ['unknown', 'not_applicable'], true),
-            default => false,
-        };
     }
 }

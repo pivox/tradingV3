@@ -300,7 +300,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 
 $sentinel = implode('', ['synthetic', '-trace-', 'sentinel']);
-$payload = ['raw' => '{"api\\q":"' . $sentinel . '"}'];
+$payload = ['raw' => '{"public\\q_' . $sentinel . '":"price"}'];
 $wireData = PaperMarketEvent::create(
     PaperMarketDataVenue::OKX,
     'BTCUSDT',
@@ -332,7 +332,6 @@ foreach ($operations as $index => $operation) {
         $operation();
         exit(10 + $index);
     } catch (\InvalidArgumentException $exception) {
-        $sawPrevious = false;
         $current = $exception;
         do {
             $rendered = print_r([
@@ -344,12 +343,7 @@ foreach ($operations as $index => $operation) {
             }
 
             $current = $current->getPrevious();
-            $sawPrevious = $sawPrevious || $current !== null;
         } while ($current !== null);
-
-        if (!$sawPrevious) {
-            exit(30 + $index);
-        }
     }
 }
 
@@ -391,6 +385,20 @@ foreach ($operations as $index => $operation) {
     }
 }
 
+$credentialJson = json_encode(['api_key' => $sentinel], JSON_THROW_ON_ERROR);
+$credentialBase64 = base64_encode($credentialJson);
+$foldedCredentialBase64 = substr($credentialBase64, 0, 4)
+    . "\r\n "
+    . substr($credentialBase64, 4);
+$invalidUtf8CredentialBase64 = base64_encode("\xFF" . $credentialJson);
+$overDepthJson = str_repeat('[', 130)
+    . json_encode($sentinel, JSON_THROW_ON_ERROR)
+    . str_repeat(']', 130);
+$encodedApiKeyHint = '';
+foreach (str_split(bin2hex('api_key_hint'), 2) as $hexByte) {
+    $encodedApiKeyHint .= chr(37) . $hexByte;
+}
+
 $additionalPayloads = [
     [
         ['header' => 'Basic ' . base64_encode('public-user:' . $sentinel)],
@@ -413,8 +421,36 @@ $additionalPayloads = [
         [$sentinel],
     ],
     [
-        ['raw' => base64_encode(json_encode(['api_key' => $sentinel], JSON_THROW_ON_ERROR))],
-        [base64_encode(json_encode(['api_key' => $sentinel], JSON_THROW_ON_ERROR))],
+        ['raw' => $credentialBase64],
+        [$credentialBase64],
+    ],
+    [
+        ['raw' => $overDepthJson],
+        [$sentinel, $overDepthJson],
+    ],
+    [
+        ['raw' => $foldedCredentialBase64],
+        [$foldedCredentialBase64],
+    ],
+    [
+        ['raw' => 'prefix|' . $foldedCredentialBase64 . '|suffix'],
+        [$foldedCredentialBase64],
+    ],
+    [
+        ['raw' => $invalidUtf8CredentialBase64],
+        [$invalidUtf8CredentialBase64],
+    ],
+    [
+        ['raw' => 'public&api+key=' . $sentinel],
+        [$sentinel],
+    ],
+    [
+        ['authorization_status' => 'not_applicable'],
+        ['authorization_status'],
+    ],
+    [
+        ['raw' => $encodedApiKeyHint . '=not_present'],
+        [$encodedApiKeyHint, 'api_key_hint'],
     ],
 ];
 
@@ -498,6 +534,25 @@ foreach ($operations as $index => $operation) {
     }
 }
 fclose($resource);
+
+$invalidUtf8 = "\xFF" . $sentinel;
+try {
+    CanonicalJson::encode(['raw' => $invalidUtf8]);
+    exit(150);
+} catch (\InvalidArgumentException $exception) {
+    $current = $exception;
+    do {
+        $rendered = print_r([
+            'message' => $current->getMessage(),
+            'trace' => $current->getTrace(),
+        ], true);
+        if (str_contains($rendered, $sentinel)) {
+            exit(151);
+        }
+
+        $current = $current->getPrevious();
+    } while ($current !== null);
+}
 
 try {
     PaperMarketEvent::fromArray(['unexpected' => $sentinel]);
@@ -682,6 +737,19 @@ PHP,
             self::assertSame('3', ini_get('serialize_precision'));
         } finally {
             ini_set('serialize_precision', $previousPrecision);
+        }
+    }
+
+    public function testCanonicalJsonEncodingFailureDoesNotRetainRawJsonException(): void
+    {
+        try {
+            CanonicalJson::encode([
+                'raw' => "\xFFsynthetic-canonical-trace-sentinel",
+            ]);
+            self::fail('Invalid UTF-8 must fail canonical JSON encoding.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_canonical_json_encoding_failed', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
         }
     }
 
@@ -1451,11 +1519,22 @@ PHP,
         yield 'percent-encoded JSON string wrapper' => [rawurlencode($wrapped)];
     }
 
-    public function testCreateAndFromArrayAllowSignatureCountZeroInFormMetadata(): void
+    public function testCreateAndFromArrayRejectSignatureCountFormMetadata(): void
     {
-        $event = self::event(payload: ['raw' => 'signature_count=0']);
+        $payload = ['raw' => 'signature_count=0'];
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: $payload),
+            ['signature_count'],
+        );
 
-        self::assertSame($event->toArray(), PaperMarketEvent::fromArray($event->toArray())->toArray());
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            ['signature_count'],
+        );
     }
 
     public function testCreateAndFromArrayAllowOrdinaryPublicRatioNotation(): void

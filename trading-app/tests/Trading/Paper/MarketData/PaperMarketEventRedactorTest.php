@@ -282,6 +282,37 @@ final class PaperMarketEventRedactorTest extends TestCase
         ];
     }
 
+    #[DataProvider('jsonDecoderFailureProvider')]
+    public function testJsonDecoderFailuresDoNotRetainRawInputExceptions(
+        string $raw,
+        string $expectedCode,
+    ): void {
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A malformed JSON credential representation must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame($expectedCode, $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function jsonDecoderFailureProvider(): iterable
+    {
+        $overDepthJson = str_repeat('[', 130)
+            . '"synthetic-depth-trace-sentinel"'
+            . str_repeat(']', 130);
+
+        yield 'over-depth JSON payload' => [
+            $overDepthJson,
+            'paper_market_sensitive_decode_depth_exceeded',
+        ];
+        yield 'malformed escaped JSON map key' => [
+            '{"public\\q_synthetic-key-trace-sentinel":"price"}',
+            'paper_market_sensitive_field_rejected',
+        ];
+    }
+
     public function testRejectsEscapedSensitiveJsonObjectKeyAfterNonJsonPrefix(): void
     {
         $sentinel = 'synthetic-redaction-sentinel';
@@ -794,6 +825,50 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'URL-safe unpadded' => [rtrim($urlPadded, '=')];
     }
 
+    #[DataProvider('ambiguousRecoverableBase64CredentialProvider')]
+    public function testRejectsAmbiguousRecoverableBase64CredentialEncodings(
+        string $encodedCredential,
+    ): void {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $encodedCredential]),
+            ['synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function ambiguousRecoverableBase64CredentialProvider(): iterable
+    {
+        $json = json_encode(
+            ['api_key' => 'synthetic-redaction-sentinel'],
+            JSON_THROW_ON_ERROR,
+        );
+        $base64 = base64_encode($json);
+
+        yield 'whitespace-folded canonical Base64 JSON' => [
+            substr($base64, 0, 4) . "\r\n " . substr($base64, 4),
+        ];
+        yield 'embedded whitespace-folded canonical Base64 JSON' => [
+            'prefix|'
+            . substr($base64, 0, 4)
+            . "\r\n "
+            . substr($base64, 4)
+            . '|suffix',
+        ];
+        yield 'non-quantum whitespace-folded canonical Base64 JSON' => [
+            substr($base64, 0, 1) . ' ' . substr($base64, 1),
+        ];
+        yield 'embedded non-quantum whitespace-folded canonical Base64 JSON' => [
+            'prefix|'
+            . substr($base64, 0, 1)
+            . ' '
+            . substr($base64, 1)
+            . '|suffix',
+        ];
+        yield 'canonical Base64 with invalid UTF-8 prefix' => [
+            base64_encode("\xFF" . $json),
+        ];
+    }
+
     #[DataProvider('malformedBase64CredentialPaddingProvider')]
     public function testRejectsCredentialsWithMalformedBase64Padding(string $malformed): void
     {
@@ -1009,16 +1084,34 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::addToAssertionCount(1);
     }
 
-    public function testOnlyExactNormalizedSensitiveKeysAreRejected(): void
+    #[DataProvider('formValueWithInvalidComponentProvider')]
+    public function testScansValidFormPairsIndependentlyOfInvalidComponents(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            ['synthetic-redaction-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function formValueWithInvalidComponentProvider(): iterable
+    {
+        yield 'non-pair before sensitive pair' => [
+            'public&api+key=synthetic-redaction-sentinel',
+        ];
+        yield 'non-pair after sensitive pair' => [
+            'api+key=synthetic-redaction-sentinel&public',
+        ];
+        yield 'non-form key before sensitive pair' => [
+            'public note=value&api+key=synthetic-redaction-sentinel',
+        ];
+    }
+
+    public function testAllowsPublicKeysWithoutMandatorySensitiveFragments(): void
     {
         PaperMarketEventRedactor::assertSafe([
-            'authorization_status' => 'not_applicable',
-            'api_key_hint' => 'not_present',
-            'signature_count' => 0,
             'signed_price' => '29999.0',
             'signal' => 'public_trade',
-            'wallet_balance_model' => 'unknown',
-            'seed_phrase_model' => 'not_applicable',
             'assignment' => 'public_partition',
             'design' => 'public_layout',
         ]);
@@ -1033,31 +1126,38 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::addToAssertionCount(1);
     }
 
-    public function testAllowsExplicitlySafeMetadataInFormString(): void
-    {
-        foreach ([false, true] as $encodeKeys) {
-            $pairs = [
-                'authorization_status' => 'not_applicable',
-                'api_key_hint' => 'not_present',
-                'wallet_balance_model' => 'unknown',
-                'seed_phrase_model' => 'not_applicable',
-            ];
-            $form = [];
-            foreach ($pairs as $key => $value) {
-                $form[] = ($encodeKeys ? self::percentEncodeEveryByte($key) : $key) . '=' . $value;
-            }
-
-            PaperMarketEventRedactor::assertSafe(['raw' => implode('&', $form)]);
-        }
-
-        self::addToAssertionCount(1);
+    #[DataProvider('mandatorySensitiveMetadataKeyProvider')]
+    public function testRejectsMandatorySensitiveFragmentsInMetadataMapKeys(
+        string $key,
+        string $value,
+    ): void {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe([$key => $value]),
+            [$key, $value],
+        );
     }
 
-    public function testAllowsSignatureCountZeroInFormMetadata(): void
-    {
-        PaperMarketEventRedactor::assertSafe(['raw' => 'signature_count=0']);
+    #[DataProvider('mandatorySensitiveMetadataKeyProvider')]
+    public function testRejectsMandatorySensitiveFragmentsInDecodedFormKeys(
+        string $key,
+        string $value,
+    ): void {
+        $raw = self::percentEncodeEveryByte($key) . '=' . rawurlencode($value);
 
-        self::addToAssertionCount(1);
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$key, $value],
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function mandatorySensitiveMetadataKeyProvider(): iterable
+    {
+        yield 'authorization fragment' => ['authorization_status', 'not_applicable'];
+        yield 'API key fragment' => ['api_key_hint', 'not_present'];
+        yield 'signature fragment' => ['signature_count', '0'];
+        yield 'wallet fragment' => ['wallet_balance_model', 'unknown'];
+        yield 'seed phrase fragment' => ['seed_phrase_model', 'not_applicable'];
     }
 
     public function testAllowsOrdinaryPublicRatioNotationNearSerializedArrayPrefix(): void

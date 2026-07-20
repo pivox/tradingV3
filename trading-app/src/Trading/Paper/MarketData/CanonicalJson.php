@@ -47,8 +47,8 @@ final class CanonicalJson
         try {
             try {
                 return json_encode($normalized, self::ENCODE_FLAGS);
-            } catch (\JsonException $exception) {
-                throw new \InvalidArgumentException('paper_canonical_json_encoding_failed', previous: $exception);
+            } catch (\JsonException) {
+                throw new \InvalidArgumentException('paper_canonical_json_encoding_failed');
             }
         } finally {
             self::restoreSerializePrecision($previousPrecision);
