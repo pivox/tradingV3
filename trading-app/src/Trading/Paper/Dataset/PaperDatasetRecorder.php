@@ -39,6 +39,11 @@ final class PaperDatasetRecorder
 
     private int $eventCount = 0;
     private int $scannedBytes = 0;
+    private ?string $scannedPrefixSha256 = null;
+
+    /** @var array{dev: int, ino: int}|null */
+    private ?array $scannedFileIdentity = null;
+
     private ?string $lastEventId = null;
     private ?\DateTimeImmutable $startExchangeTimestamp = null;
     private ?\DateTimeImmutable $latestExchangeTimestamp = null;
@@ -106,14 +111,14 @@ final class PaperDatasetRecorder
         return $this->datasetDirectory;
     }
 
-    public function append(PaperMarketEvent $event): PaperDatasetAppendResult
+    public function append(#[\SensitiveParameter] PaperMarketEvent $event): PaperDatasetAppendResult
     {
         $this->assertUsable();
 
         return $this->withDatasetLock(fn (): PaperDatasetAppendResult => $this->appendUnderLock($event));
     }
 
-    private function appendUnderLock(PaperMarketEvent $event): PaperDatasetAppendResult
+    private function appendUnderLock(#[\SensitiveParameter] PaperMarketEvent $event): PaperDatasetAppendResult
     {
         $this->reloadDurableState();
         $this->assertRecording();
@@ -144,7 +149,7 @@ final class PaperDatasetRecorder
         }
 
         $line = $canonicalEvent . "\n";
-        $durableSize = $this->appendDurably($line);
+        $durableAppend = $this->appendDurably($line);
 
         $nextChannels = $this->channels;
         $nextChannels[] = $event->channel->value;
@@ -182,7 +187,9 @@ final class PaperDatasetRecorder
         $this->channels = $nextChannels;
         $this->sequenceGaps = $nextGaps;
         $this->eventCount = $nextManifest->eventCount;
-        $this->scannedBytes = $durableSize;
+        $this->scannedBytes = $durableAppend['size'];
+        $this->scannedPrefixSha256 = $durableAppend['sha256'];
+        $this->scannedFileIdentity = $durableAppend['identity'];
         $this->lastEventId = $event->eventId;
         $this->startExchangeTimestamp = $nextStart;
         $this->latestExchangeTimestamp = $this->maximumTimestamp(
@@ -214,8 +221,7 @@ final class PaperDatasetRecorder
             quality: $this->currentManifest->quality,
             eventsFileSha256: $checksum,
         );
-        $this->writeManifestAtomically($completed);
-        $this->currentManifest = $completed;
+        $this->writeFinalManifestAtomically($completed);
 
         return $this->verifier->verify($this->datasetDirectory);
     }
@@ -240,8 +246,7 @@ final class PaperDatasetRecorder
             quality: PaperMarketDataQuality::INCOMPLETE,
             eventsFileSha256: $checksum,
         );
-        $this->writeManifestAtomically($incomplete);
-        $this->currentManifest = $incomplete;
+        $this->writeFinalManifestAtomically($incomplete);
 
         return $incomplete;
     }
@@ -272,25 +277,60 @@ final class PaperDatasetRecorder
 
     private function scanDurableTail(): void
     {
+        try {
+            $this->scanDurableTailCandidate();
+        } catch (\RuntimeException $failure) {
+            if (\in_array($failure->getMessage(), [
+                'paper_dataset_file_changed',
+                'paper_dataset_events_prefix_changed',
+                'paper_dataset_symlink_rejected',
+            ], true)) {
+                $this->usable = false;
+            }
+
+            throw $failure;
+        }
+    }
+
+    private function scanDurableTailCandidate(): void
+    {
         $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
 
         try {
-            $statistics = fstat($handle);
-            if ($statistics === false) {
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
+            if ($statistics === false
+                || !$this->isRegularFile($statistics)
+                || !isset($statistics['size'])
+                || !\is_int($statistics['size'])
+            ) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
             $durableSize = $statistics['size'];
+            if ($this->scannedFileIdentity !== null
+                && !$this->sameFile($this->scannedFileIdentity, $statistics)
+            ) {
+                throw new \RuntimeException('paper_dataset_file_changed');
+            }
             if ($durableSize < $this->scannedBytes) {
                 throw new \RuntimeException('paper_dataset_events_size_regressed');
             }
-            if ($durableSize === $this->scannedBytes) {
-                return;
-            }
-            if (fseek($handle, $this->scannedBytes) !== 0) {
-                throw new \RuntimeException('paper_dataset_events_read_failed');
+            $prefixSha256 = $this->checksumPrefix($handle, $this->scannedBytes);
+            if ($this->scannedPrefixSha256 !== null
+                && !hash_equals($this->scannedPrefixSha256, $prefixSha256)
+            ) {
+                throw new \RuntimeException('paper_dataset_events_prefix_changed');
             }
 
-            while (($line = fgets($handle)) !== false) {
+            $identities = $this->identities;
+            $lastSequences = $this->lastSequences;
+            $sequenceGaps = $this->sequenceGaps;
+            $channels = $this->channels;
+            $eventCount = $this->eventCount;
+            $lastEventId = $this->lastEventId;
+            $startExchangeTimestamp = $this->startExchangeTimestamp;
+            $latestExchangeTimestamp = $this->latestExchangeTimestamp;
+
+            while (($line = $this->filesystem->readLine($handle, 'paper_dataset_events_read_failed')) !== false) {
                 if (trim($line) === '') {
                     continue;
                 }
@@ -309,38 +349,38 @@ final class PaperDatasetRecorder
                 }
 
                 $this->assertEventMatchesManifest($event);
-                if (isset($this->identities[$event->eventId])) {
+                if (isset($identities[$event->eventId])) {
                     throw new \RuntimeException('paper_dataset_duplicate_identity');
                 }
 
                 $sequenceKey = $this->sequenceKey($event);
                 if ($event->sequence !== null) {
                     $sequence = BigInteger::of($event->sequence);
-                    if (isset($this->lastSequences[$sequenceKey])) {
-                        $last = $this->lastSequences[$sequenceKey];
+                    if (isset($lastSequences[$sequenceKey])) {
+                        $last = $lastSequences[$sequenceKey];
                         if ($sequence->isLessThanOrEqualTo($last)) {
                             throw new \RuntimeException('paper_dataset_sequence_invalid');
                         }
                         if ($sequence->isGreaterThan($last->plus(1))) {
-                            $this->sequenceGaps[$sequenceKey] = ($this->sequenceGaps[$sequenceKey] ?? 0) + 1;
+                            $sequenceGaps[$sequenceKey] = ($sequenceGaps[$sequenceKey] ?? 0) + 1;
                         }
                     }
-                    $this->lastSequences[$sequenceKey] = $sequence;
+                    $lastSequences[$sequenceKey] = $sequence;
                 }
 
-                $this->identities[$event->eventId] = [
+                $identities[$event->eventId] = [
                     'payload_hash' => $event->payloadHash,
                     'event_hash' => hash('sha256', CanonicalJson::encode($event->toArray())),
                 ];
-                $this->channels[] = $event->channel->value;
-                ++$this->eventCount;
-                $this->lastEventId = $event->eventId;
-                $this->startExchangeTimestamp = $this->minimumTimestamp(
-                    $this->startExchangeTimestamp,
+                $channels[] = $event->channel->value;
+                ++$eventCount;
+                $lastEventId = $event->eventId;
+                $startExchangeTimestamp = $this->minimumTimestamp(
+                    $startExchangeTimestamp,
                     $event->exchangeTimestamp,
                 );
-                $this->latestExchangeTimestamp = $this->maximumTimestamp(
-                    $this->latestExchangeTimestamp,
+                $latestExchangeTimestamp = $this->maximumTimestamp(
+                    $latestExchangeTimestamp,
                     $event->exchangeTimestamp,
                 );
             }
@@ -351,15 +391,44 @@ final class PaperDatasetRecorder
             if ($position === false || $position !== $durableSize) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
-            $this->assertHandleMatchesPath($handle, $this->eventsPath);
+            $durableSha256 = $durableSize === $this->scannedBytes
+                ? $prefixSha256
+                : $this->checksumPrefix($handle, $durableSize);
+            $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
+            if ($finalStatistics === false
+                || !isset($finalStatistics['size'])
+                || !\is_int($finalStatistics['size'])
+                || $finalStatistics['size'] !== $durableSize
+                || !$this->sameFile($statistics, $finalStatistics)
+            ) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+            $this->assertHandleMatchesPath(
+                $handle,
+                $this->eventsPath,
+                'paper_dataset_events_tail_validation',
+            );
         } finally {
             fclose($handle);
         }
 
-        $this->channels = array_values(array_unique($this->channels));
-        sort($this->channels, SORT_STRING);
-        ksort($this->sequenceGaps, SORT_STRING);
+        $channels = array_values(array_unique($channels));
+        sort($channels, SORT_STRING);
+        ksort($sequenceGaps, SORT_STRING);
+        $this->identities = $identities;
+        $this->lastSequences = $lastSequences;
+        $this->sequenceGaps = $sequenceGaps;
+        $this->channels = $channels;
+        $this->eventCount = $eventCount;
         $this->scannedBytes = $durableSize;
+        $this->scannedPrefixSha256 = $durableSha256;
+        $this->scannedFileIdentity = [
+            'dev' => $statistics['dev'],
+            'ino' => $statistics['ino'],
+        ];
+        $this->lastEventId = $lastEventId;
+        $this->startExchangeTimestamp = $startExchangeTimestamp;
+        $this->latestExchangeTimestamp = $latestExchangeTimestamp;
     }
 
     private function assertRecording(): void
@@ -377,7 +446,7 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function assertEventMatchesManifest(PaperMarketEvent $event): void
+    private function assertEventMatchesManifest(#[\SensitiveParameter] PaperMarketEvent $event): void
     {
         if ($event->sourceVenue !== $this->currentManifest->venue) {
             throw new \RuntimeException('paper_dataset_event_venue_mismatch');
@@ -392,9 +461,10 @@ final class PaperDatasetRecorder
         return $event->sourceVenue->value . '/' . $event->symbol . '/' . $event->channel->value;
     }
 
-    private function appendDurably(string $line): int
+    /** @return array{size: int, sha256: string, identity: array{dev: int, ino: int}} */
+    private function appendDurably(#[\SensitiveParameter] string $line): array
     {
-        $handle = $this->openRegularFile($this->eventsPath, 'ab', 'paper_dataset_events_open_failed');
+        $handle = $this->openRegularFile($this->eventsPath, 'a+b', 'paper_dataset_events_open_failed');
         try {
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_events_lock_failed');
@@ -416,7 +486,14 @@ final class PaperDatasetRecorder
                     }
                     $this->assertHandleMatchesPath($handle, $this->eventsPath);
 
-                    return $statistics['size'];
+                    return [
+                        'size' => $statistics['size'],
+                        'sha256' => $this->checksumPrefix($handle, $statistics['size']),
+                        'identity' => [
+                            'dev' => $statistics['dev'],
+                            'ino' => $statistics['ino'],
+                        ],
+                    ];
                 } catch (\Throwable $failure) {
                     if (!$this->rollbackAppend($handle, $originalLength)) {
                         $this->usable = false;
@@ -535,6 +612,26 @@ final class PaperDatasetRecorder
         }
     }
 
+    private function writeFinalManifestAtomically(PaperDatasetManifest $manifest): void
+    {
+        try {
+            $this->writeManifestAtomically($manifest);
+        } catch (\Throwable $failure) {
+            $this->usable = false;
+            try {
+                $stored = $this->readStoredManifest();
+                $this->assertSameDataset($this->identityManifest, $stored);
+                $this->currentManifest = $stored;
+            } catch (\Throwable) {
+                // Keep the last unambiguous in-memory manifest while remaining poisoned.
+            }
+
+            throw $failure;
+        }
+
+        $this->currentManifest = $manifest;
+    }
+
     private function syncDatasetDirectory(): void
     {
         $handle = @fopen($this->datasetDirectory, 'rb');
@@ -552,7 +649,7 @@ final class PaperDatasetRecorder
     }
 
     /** @param resource $handle */
-    private function writeAll($handle, string $contents, string $error): void
+    private function writeAll($handle, #[\SensitiveParameter] string $contents, string $error): void
     {
         $offset = 0;
         $length = strlen($contents);
@@ -574,6 +671,31 @@ final class PaperDatasetRecorder
         if (!$this->filesystem->sync($handle, $error)) {
             throw new \RuntimeException($error);
         }
+    }
+
+    /** @param resource $handle */
+    private function checksumPrefix($handle, int $length): string
+    {
+        if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_read_failed')) {
+            throw new \RuntimeException('paper_dataset_events_read_failed');
+        }
+
+        $remaining = $length;
+        $context = hash_init('sha256');
+        while ($remaining > 0) {
+            $chunk = $this->filesystem->read(
+                $handle,
+                min(8192, $remaining),
+                'paper_dataset_events_read_failed',
+            );
+            if ($chunk === false || $chunk === '') {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+            hash_update($context, $chunk);
+            $remaining -= strlen($chunk);
+        }
+
+        return hash_final($context);
     }
 
     private function ensureEventsFile(bool $create): void
@@ -618,7 +740,7 @@ final class PaperDatasetRecorder
      *
      * @return T
      */
-    private function withDatasetLock(callable $operation): mixed
+    private function withDatasetLock(#[\SensitiveParameter] callable $operation): mixed
     {
         $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
 
@@ -683,9 +805,13 @@ final class PaperDatasetRecorder
      *
      * @return array<string, mixed>
      */
-    private function assertHandleMatchesPath($handle, string $path): array
+    private function assertHandleMatchesPath(
+        $handle,
+        string $path,
+        string $operation = 'paper_dataset_file_validation_failed',
+    ): array
     {
-        $opened = $this->filesystem->stat($handle, 'paper_dataset_file_validation_failed');
+        $opened = $this->filesystem->stat($handle, $operation);
         if ($opened === false || !$this->isRegularFile($opened)) {
             throw new \RuntimeException('paper_dataset_file_validation_failed');
         }

@@ -201,6 +201,75 @@ final class PaperDatasetRecorderTest extends TestCase
         $recorder->append($this->event(sequence: '2', microseconds: 2));
     }
 
+    #[DataProvider('sameLengthEventsMutationProvider')]
+    public function testRecorderRejectsSameLengthEventsMutationAndPoisonsItsCachedState(bool $replaceFile): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $original = file_get_contents($eventsPath);
+        $replacement = CanonicalJson::encode($this->event(sequence: '9', microseconds: 9)->toArray()) . "\n";
+        self::assertIsString($original);
+        self::assertNotSame($original, $replacement);
+        self::assertSame(strlen($original), strlen($replacement));
+
+        if ($replaceFile) {
+            $replacementPath = $this->testRoot . '/same-length-events.ndjson';
+            self::assertSame(strlen($replacement), file_put_contents($replacementPath, $replacement));
+            self::assertTrue(chmod($replacementPath, 0600));
+            self::assertTrue(rename($eventsPath, $eventsPath . '.original'));
+            self::assertTrue(rename($replacementPath, $eventsPath));
+            $expectedError = 'paper_dataset_file_changed';
+        } else {
+            self::assertSame(strlen($replacement), file_put_contents($eventsPath, $replacement));
+            $expectedError = 'paper_dataset_events_prefix_changed';
+        }
+
+        try {
+            $recorder->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A same-length mutation must invalidate the durable scan cache.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($expectedError, $exception->getMessage());
+        }
+
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function sameLengthEventsMutationProvider(): iterable
+    {
+        yield 'regular-file replacement' => [true];
+        yield 'same-inode overwrite' => [false];
+    }
+
+    public function testZeroTailValidatesThatTheOpenedDescriptorStillMatchesThePathBeforeReturning(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $event = $this->event(sequence: '1');
+        $recorder->append($event);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $replacementPath = $this->testRoot . '/zero-tail-events.ndjson';
+        $contents = file_get_contents($eventsPath);
+        self::assertIsString($contents);
+        self::assertSame(strlen($contents), file_put_contents($replacementPath, $contents));
+        self::assertTrue(chmod($replacementPath, 0600));
+        $filesystem->swapEventsPathOnTailValidation($eventsPath, $replacementPath);
+
+        try {
+            $recorder->append($event);
+            self::fail('A zero-tail scan must validate handle/path identity before returning.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_file_changed', $exception->getMessage());
+        }
+
+        $this->assertRecorderUnusable($recorder);
+    }
+
     public function testStaleRecorderRejectsATruncatedDurableTail(): void
     {
         $manifest = $this->manifest();
@@ -218,6 +287,68 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_event_line_truncated');
 
         $stale->append($this->event(sequence: '3', microseconds: 3));
+    }
+
+    public function testValidThenTruncatedTailDoesNotPublishGhostStateAndCanBeRetried(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $first = $this->event(sequence: '1');
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $third = $this->event(sequence: '3', microseconds: 3);
+        $recorder->append($first);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $durablePrefix = file_get_contents($eventsPath);
+        self::assertIsString($durablePrefix);
+        $secondLine = CanonicalJson::encode($second->toArray()) . "\n";
+        $truncatedThird = CanonicalJson::encode($third->toArray());
+        self::assertSame(
+            strlen($secondLine . $truncatedThird),
+            file_put_contents($eventsPath, $secondLine . $truncatedThird, FILE_APPEND),
+        );
+        $cachedState = $this->recorderScanState($recorder);
+
+        try {
+            $recorder->append($this->event(sequence: '4', microseconds: 4));
+            self::fail('A truncated tail must fail before candidate scan state is published.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_event_line_truncated', $exception->getMessage());
+        }
+
+        self::assertEquals($cachedState, $this->recorderScanState($recorder));
+        self::assertSame(
+            strlen($durablePrefix . $secondLine),
+            file_put_contents($eventsPath, $durablePrefix . $secondLine),
+        );
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $recorder->append($third));
+        self::assertSame(3, $recorder->manifest()->eventCount);
+    }
+
+    public function testValidThenReadFailureTailDoesNotPublishGhostStateAndCanBeRetried(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+        $first = $this->event(sequence: '1');
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $third = $this->event(sequence: '3', microseconds: 3);
+        $fourth = $this->event(sequence: '4', microseconds: 4);
+        $stale->append($first);
+        $writer = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $writer->append($second);
+        $writer->append($third);
+        $cachedState = $this->recorderScanState($stale);
+        $filesystem->failTailReadAfterLines(1);
+
+        try {
+            $stale->append($fourth);
+            self::fail('A tail read failure must fail before candidate scan state is published.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_read_failed', $exception->getMessage());
+        }
+
+        self::assertEquals($cachedState, $this->recorderScanState($stale));
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $stale->append($fourth));
+        self::assertSame(4, $stale->manifest()->eventCount);
     }
 
     public function testRestartRejectsAValidLastEventLineWithoutItsDurableNewline(): void
@@ -818,6 +949,97 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($event));
     }
 
+    #[DataProvider('postRenameFinalizationFailureProvider')]
+    public function testPostRenameDirectorySyncFailurePoisonsFinalizerAndRestartObservesFrozenState(
+        string $method,
+        PaperDatasetState $expectedState,
+    ): void {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->failNextManifestDirectorySync();
+
+        try {
+            $recorder->{$method}();
+            self::fail('A post-rename directory fsync failure must be reported.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_directory_sync_failed', $exception->getMessage());
+        }
+
+        self::assertSame($expectedState, $recorder->manifest()->state);
+        $this->assertRecorderUnusable($recorder);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame($expectedState, $restarted->manifest()->state);
+        try {
+            $restarted->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A restarted finalized dataset must remain frozen.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string, PaperDatasetState}> */
+    public static function postRenameFinalizationFailureProvider(): iterable
+    {
+        yield 'complete' => ['complete', PaperDatasetState::COMPLETE];
+        yield 'mark incomplete' => ['markIncomplete', PaperDatasetState::INCOMPLETE];
+    }
+
+    public function testPayloadBearingRecorderParametersAreSensitiveAndFullTraceIsRedacted(): void
+    {
+        foreach ([
+            [PaperDatasetRecorder::class, 'append', 'event'],
+            [PaperDatasetRecorder::class, 'appendUnderLock', 'event'],
+            [PaperDatasetRecorder::class, 'assertEventMatchesManifest', 'event'],
+            [PaperDatasetRecorder::class, 'appendDurably', 'line'],
+            [PaperDatasetRecorder::class, 'writeAll', 'contents'],
+            [PaperDatasetRecorder::class, 'withDatasetLock', 'operation'],
+            [PaperDatasetRecorderFilesystem::class, 'write', 'contents'],
+        ] as [$class, $method, $parameter]) {
+            $reflection = new \ReflectionParameter([$class, $method], $parameter);
+            self::assertNotEmpty(
+                $reflection->getAttributes(\SensitiveParameter::class),
+                sprintf('%s::%s($%s) must be sensitive.', $class, $method, $parameter),
+            );
+        }
+
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+        $sentinel = 'PAPER_EVENT_TRACE_SENTINEL_7f5937f5';
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $event = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.000001Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:00:01.000001Z'),
+            sequence: '1',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0', 'note' => $sentinel],
+        );
+        $filesystem->failNextAppend('full_write');
+
+        try {
+            $recorder->append($event);
+            self::fail('The injected write failure must be reported.');
+        } catch (\RuntimeException $exception) {
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+    }
+
     public function testInitialManifestDirectorySyncFailureHasStableError(): void
     {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
@@ -969,6 +1191,40 @@ final class PaperDatasetRecorderTest extends TestCase
         return $this->datasetRoot() . '/dataset-okx-001';
     }
 
+    /** @return array<string, mixed> */
+    private function recorderScanState(PaperDatasetRecorder $recorder): array
+    {
+        $state = [];
+        foreach ([
+            'identities',
+            'lastSequences',
+            'sequenceGaps',
+            'channels',
+            'eventCount',
+            'scannedBytes',
+            'scannedPrefixSha256',
+            'scannedFileIdentity',
+            'lastEventId',
+            'startExchangeTimestamp',
+            'latestExchangeTimestamp',
+        ] as $property) {
+            $reflection = new \ReflectionProperty(PaperDatasetRecorder::class, $property);
+            $state[$property] = $reflection->getValue($recorder);
+        }
+
+        return $state;
+    }
+
+    private function assertRecorderUnusable(PaperDatasetRecorder $recorder): void
+    {
+        try {
+            $recorder->append($this->event(sequence: '8', microseconds: 8));
+            self::fail('A recorder with divergent durable state must be unusable.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_recorder_unusable', $exception->getMessage());
+        }
+    }
+
     private function removeDirectory(string $directory): void
     {
         if (!is_dir($directory) || is_link($directory)) {
@@ -1005,19 +1261,22 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     private ?string $appendFailure = null;
     private bool $partialWriteCompleted = false;
-    private int $appendStatCalls = 0;
+    private bool $appendWriteObserved = false;
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
     private bool $failEventSync = false;
     private bool $shortChecksumRead = false;
     private ?string $verifierEventsPath = null;
     private ?string $verifierEventsTarget = null;
+    private ?string $zeroTailEventsPath = null;
+    private ?string $zeroTailEventsTarget = null;
+    private ?int $tailReadsBeforeFailure = null;
 
     public function failNextAppend(string $failure): void
     {
         $this->appendFailure = $failure;
         $this->partialWriteCompleted = false;
-        $this->appendStatCalls = 0;
+        $this->appendWriteObserved = false;
     }
 
     public function failRollback(string $failure): void
@@ -1046,6 +1305,32 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->verifierEventsTarget = $target;
     }
 
+    public function swapEventsPathOnTailValidation(string $path, string $target): void
+    {
+        $this->zeroTailEventsPath = $path;
+        $this->zeroTailEventsTarget = $target;
+    }
+
+    public function failTailReadAfterLines(int $lines): void
+    {
+        $this->tailReadsBeforeFailure = $lines;
+    }
+
+    /** @param resource $handle */
+    public function readLine($handle, string $operation): string|false
+    {
+        if ($operation === 'paper_dataset_events_read_failed' && $this->tailReadsBeforeFailure !== null) {
+            if ($this->tailReadsBeforeFailure === 0) {
+                $this->tailReadsBeforeFailure = null;
+
+                return false;
+            }
+            --$this->tailReadsBeforeFailure;
+        }
+
+        return parent::readLine($handle, $operation);
+    }
+
     /**
      * @param resource $handle
      *
@@ -1062,7 +1347,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         return parent::checksum($handle, $operation);
     }
 
-    public function write($handle, string $contents, string $operation): int|false
+    public function write($handle, #[\SensitiveParameter] string $contents, string $operation): int|false
     {
         if ($operation !== 'paper_dataset_events_write_failed') {
             return parent::write($handle, $contents, $operation);
@@ -1081,6 +1366,10 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             $this->appendFailure = null;
 
             return false;
+        }
+
+        if ($this->appendFailure === 'post_stat') {
+            $this->appendWriteObserved = true;
         }
 
         return parent::write($handle, $contents, $operation);
@@ -1136,6 +1425,21 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function stat($handle, string $operation): array|false
     {
+        if ($operation === 'paper_dataset_events_tail_validation'
+            && $this->zeroTailEventsPath !== null
+            && $this->zeroTailEventsTarget !== null
+        ) {
+            $statistics = parent::stat($handle, $operation);
+            $path = $this->zeroTailEventsPath;
+            $target = $this->zeroTailEventsTarget;
+            $this->zeroTailEventsPath = null;
+            $this->zeroTailEventsTarget = null;
+            if (!rename($path, $path . '.zero-tail-original') || !rename($target, $path)) {
+                throw new \RuntimeException('Unable to inject zero-tail path substitution.');
+            }
+
+            return $statistics;
+        }
         if ($operation === 'paper_dataset_verifier_events_validation'
             && $this->verifierEventsPath !== null
             && $this->verifierEventsTarget !== null
@@ -1151,13 +1455,14 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
             return $statistics;
         }
-        if ($operation === 'paper_dataset_events_read_failed' && $this->appendFailure === 'post_stat') {
-            ++$this->appendStatCalls;
-            if ($this->appendStatCalls === 2) {
-                $this->appendFailure = null;
+        if ($operation === 'paper_dataset_events_read_failed'
+            && $this->appendFailure === 'post_stat'
+            && $this->appendWriteObserved
+        ) {
+            $this->appendFailure = null;
+            $this->appendWriteObserved = false;
 
-                return false;
-            }
+            return false;
         }
 
         return parent::stat($handle, $operation);

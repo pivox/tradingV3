@@ -7,9 +7,27 @@ namespace App\Trading\Paper\Dataset;
 class PaperDatasetRecorderFilesystem
 {
     /** @param resource $handle */
-    public function write($handle, string $contents, string $operation): int|false
+    public function write($handle, #[\SensitiveParameter] string $contents, string $operation): int|false
     {
         return fwrite($handle, $contents);
+    }
+
+    /** @param resource $handle */
+    public function read($handle, int $length, string $operation): string|false
+    {
+        return fread($handle, $length);
+    }
+
+    /** @param resource $handle */
+    public function readLine($handle, string $operation): string|false
+    {
+        return fgets($handle);
+    }
+
+    /** @param resource $handle */
+    public function seek($handle, int $offset, int $whence, string $operation): bool
+    {
+        return fseek($handle, $offset, $whence) === 0;
     }
 
     /** @param resource $handle */
