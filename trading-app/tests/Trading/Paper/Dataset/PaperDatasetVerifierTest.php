@@ -26,7 +26,11 @@ final class PaperDatasetVerifierTest extends TestCase
         if ($path === false || !unlink($path) || !mkdir($path, 0700)) {
             self::fail('Unable to create test directory.');
         }
-        $this->testRoot = $path;
+        $resolved = realpath($path);
+        if ($resolved === false) {
+            self::fail('Unable to resolve test directory.');
+        }
+        $this->testRoot = $resolved;
     }
 
     protected function tearDown(): void
@@ -116,6 +120,28 @@ final class PaperDatasetVerifierTest extends TestCase
         self::assertTrue(symlink($realEvents, $this->eventsPath()));
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_symlink_rejected', ['29999.0']);
+    }
+
+    public function testRejectsMissingEventsFileWithStableCode(): void
+    {
+        $this->createCompleteDataset();
+        self::assertTrue(unlink($this->eventsPath()));
+
+        $this->assertVerificationFailsWithoutPayload('paper_dataset_file_unreadable', ['29999.0']);
+    }
+
+    public function testRejectsDatasetDirectoryThroughIntermediateSymlink(): void
+    {
+        $this->createCompleteDataset();
+        $safe = $this->testRoot . '/safe';
+        self::assertTrue(mkdir($safe, 0700));
+        self::assertTrue(symlink($this->datasetRoot(), $safe . '/link'));
+        $aliasedDataset = $safe . '/link/dataset-okx-001';
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_symlink_rejected');
+
+        (new PaperDatasetVerifier())->verify($aliasedDataset);
     }
 
     public function testStrictlyRejectsUnknownManifestFields(): void

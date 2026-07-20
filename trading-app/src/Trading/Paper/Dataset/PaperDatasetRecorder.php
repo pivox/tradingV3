@@ -48,24 +48,25 @@ final class PaperDatasetRecorder
 
         $root = $this->prepareDirectory($root);
         $this->datasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
-        $this->assertNotSymlink($this->datasetDirectory);
+        $this->assertNoSymlinkComponents($this->datasetDirectory);
         $this->ensureDirectory($this->datasetDirectory);
 
         $checkpoints = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'checkpoints';
-        $this->assertNotSymlink($checkpoints);
-        $this->ensureDirectory($checkpoints);
-
         $this->eventsPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
         $this->manifestPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'manifest.json';
-        $this->assertNotSymlink($this->eventsPath);
-        $this->assertNotSymlink($this->manifestPath);
-        $this->ensureEventsFile();
+        $this->assertNoSymlinkComponents($checkpoints);
+        $this->assertNoSymlinkComponents($this->eventsPath);
+        $this->assertNoSymlinkComponents($this->manifestPath);
 
         if (is_file($this->manifestPath)) {
+            $this->ensureEventsFile(create: false);
+            $this->ensureDirectory($checkpoints);
             $stored = $this->readStoredManifest();
             $this->assertSameDataset($manifest, $stored);
             $this->currentManifest = $stored;
         } else {
+            $this->ensureDirectory($checkpoints);
+            $this->ensureEventsFile(create: true);
             $this->currentManifest = $manifest;
             $this->writeManifestAtomically($manifest);
         }
@@ -418,9 +419,12 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function ensureEventsFile(): void
+    private function ensureEventsFile(bool $create): void
     {
         if (!file_exists($this->eventsPath)) {
+            if (!$create) {
+                throw new \RuntimeException('paper_dataset_events_missing');
+            }
             $handle = @fopen($this->eventsPath, 'xb');
             if ($handle === false) {
                 throw new \RuntimeException('paper_dataset_events_create_failed');
@@ -459,16 +463,7 @@ final class PaperDatasetRecorder
         if ($directory === '' || str_contains($directory, "\0")) {
             throw new \RuntimeException('paper_dataset_root_invalid');
         }
-        $this->assertNotSymlink($directory);
-        $ancestor = $directory;
-        while (!file_exists($ancestor) && !is_link($ancestor)) {
-            $parent = dirname($ancestor);
-            if ($parent === $ancestor) {
-                break;
-            }
-            $ancestor = $parent;
-        }
-        $this->assertNotSymlink($ancestor);
+        $this->assertNoSymlinkComponents($directory);
         $this->ensureDirectory($directory);
         $resolved = realpath($directory);
         if ($resolved === false) {
@@ -488,10 +483,31 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function assertNotSymlink(string $path): void
+    private function assertNoSymlinkComponents(string $path): void
     {
-        if (is_link($path)) {
-            throw new \RuntimeException('paper_dataset_symlink_rejected');
+        if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            $workingDirectory = getcwd();
+            if ($workingDirectory === false) {
+                throw new \RuntimeException('paper_dataset_root_invalid');
+            }
+            $path = $workingDirectory . DIRECTORY_SEPARATOR . $path;
+        }
+
+        $current = DIRECTORY_SEPARATOR;
+        foreach (explode(DIRECTORY_SEPARATOR, $path) as $component) {
+            if ($component === '' || $component === '.') {
+                continue;
+            }
+            if ($component === '..') {
+                $current = dirname($current);
+
+                continue;
+            }
+
+            $current = rtrim($current, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $component;
+            if (is_link($current)) {
+                throw new \RuntimeException('paper_dataset_symlink_rejected');
+            }
         }
     }
 

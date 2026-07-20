@@ -16,7 +16,8 @@ final class PaperDatasetVerifier
 
     public function verify(string $datasetDirectory): PaperDatasetManifest
     {
-        if (is_link($datasetDirectory) || !is_dir($datasetDirectory) || !is_readable($datasetDirectory)) {
+        $this->assertNoSymlinkComponents($datasetDirectory);
+        if (!is_dir($datasetDirectory) || !is_readable($datasetDirectory)) {
             throw new \RuntimeException('paper_dataset_directory_invalid');
         }
 
@@ -68,6 +69,34 @@ final class PaperDatasetVerifier
         }
 
         return $manifest;
+    }
+
+    private function assertNoSymlinkComponents(string $path): void
+    {
+        if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            $workingDirectory = getcwd();
+            if ($workingDirectory === false) {
+                throw new \RuntimeException('paper_dataset_directory_invalid');
+            }
+            $path = $workingDirectory . DIRECTORY_SEPARATOR . $path;
+        }
+
+        $current = DIRECTORY_SEPARATOR;
+        foreach (explode(DIRECTORY_SEPARATOR, $path) as $component) {
+            if ($component === '' || $component === '.') {
+                continue;
+            }
+            if ($component === '..') {
+                $current = dirname($current);
+
+                continue;
+            }
+
+            $current = rtrim($current, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $component;
+            if (is_link($current)) {
+                throw new \RuntimeException('paper_dataset_symlink_rejected');
+            }
+        }
     }
 
     /**

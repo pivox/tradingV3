@@ -28,7 +28,11 @@ final class PaperDatasetRecorderTest extends TestCase
             self::fail('Unable to create test directory.');
         }
 
-        $this->testRoot = $path;
+        $resolved = realpath($path);
+        if ($resolved === false) {
+            self::fail('Unable to resolve test directory.');
+        }
+        $this->testRoot = $resolved;
     }
 
     protected function tearDown(): void
@@ -164,6 +168,24 @@ final class PaperDatasetRecorderTest extends TestCase
         new PaperDatasetRecorder($this->datasetRoot(), $manifest);
     }
 
+    public function testExistingDatasetRejectsMissingEventsFileWithoutRecreatingIt(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        self::assertTrue(unlink($eventsPath));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('An existing dataset must not recreate a missing events file.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_missing', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($eventsPath);
+    }
+
     public function testCompleteStoresChecksumFreezesDatasetAndVerifiesIt(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
@@ -232,6 +254,20 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_symlink_rejected');
 
         new PaperDatasetRecorder($link . '/paper-market-data', $this->manifest());
+    }
+
+    public function testRecorderRejectsAnIntermediateSymlinkWhenFinalDirectoryAlreadyExists(): void
+    {
+        $safe = $this->testRoot . '/safe';
+        $outside = $this->testRoot . '/outside';
+        self::assertTrue(mkdir($safe, 0700));
+        self::assertTrue(mkdir($outside . '/existing', 0700, true));
+        self::assertTrue(symlink($outside, $safe . '/link'));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_symlink_rejected');
+
+        new PaperDatasetRecorder($safe . '/link/existing', $this->manifest());
     }
 
     public function testManifestRewriteFailurePoisonsInstanceAndRestartRescansDurableAppend(): void
