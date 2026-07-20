@@ -196,6 +196,7 @@ final class PaperDatasetVerifierTest extends TestCase
     public static function invalidManifestProvider(): iterable
     {
         yield 'dataset ID' => [['datasetId' => '../escape'], 'paper_dataset_id_invalid'];
+        yield 'empty symbols' => [['symbols' => []], 'paper_dataset_symbols_invalid'];
         yield 'normalized symbol' => [['symbols' => ['SOLUSDT' => 'SOL-USDT-SWAP']], 'paper_dataset_symbols_invalid'];
         yield 'historical model name and version' => [[
             'quality' => PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,

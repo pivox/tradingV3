@@ -30,13 +30,36 @@ final class CanonicalJson
      */
     public static function encode(#[\SensitiveParameter] mixed $value): string
     {
+        return self::encodeWithReservedBudget($value, 0, 0, 0, 0);
+    }
+
+    /**
+     * Reserves canonical expansion capacity for a containing value without changing the encoded output.
+     */
+    public static function encodeWithReservedBudget(
+        #[\SensitiveParameter]
+        mixed $value,
+        int $reservedNodes,
+        int $reservedBytes,
+        int $reservedKeys,
+        int $reservedDepth,
+    ): string
+    {
+        if ($reservedNodes < 0 || $reservedNodes > self::MAX_NODES
+            || $reservedBytes < 0 || $reservedBytes > self::MAX_BYTES
+            || $reservedKeys < 0 || $reservedKeys > self::MAX_KEYS
+            || $reservedDepth < 0 || $reservedDepth > self::MAX_NESTING_DEPTH
+        ) {
+            throw new \InvalidArgumentException('paper_canonical_json_reserved_budget_invalid');
+        }
+
         $activeArrayReferences = [];
-        $nodeCount = 0;
-        $byteCount = 0;
-        $keyCount = 0;
+        $nodeCount = $reservedNodes;
+        $byteCount = $reservedBytes;
+        $keyCount = $reservedKeys;
         $normalized = self::normalize(
             $value,
-            0,
+            $reservedDepth,
             $activeArrayReferences,
             $nodeCount,
             $byteCount,

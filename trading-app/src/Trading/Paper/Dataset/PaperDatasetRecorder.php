@@ -34,6 +34,7 @@ final class PaperDatasetRecorder
     private array $channels = [];
 
     private int $eventCount = 0;
+    private int $scannedBytes = 0;
     private ?string $lastEventId = null;
     private ?\DateTimeImmutable $startExchangeTimestamp = null;
     private ?\DateTimeImmutable $latestExchangeTimestamp = null;
@@ -130,7 +131,7 @@ final class PaperDatasetRecorder
         }
 
         $line = $canonicalEvent . "\n";
-        $this->appendDurably($line);
+        $durableSize = $this->appendDurably($line);
 
         $nextChannels = $this->channels;
         $nextChannels[] = $event->channel->value;
@@ -168,6 +169,7 @@ final class PaperDatasetRecorder
         $this->channels = $nextChannels;
         $this->sequenceGaps = $nextGaps;
         $this->eventCount = $nextManifest->eventCount;
+        $this->scannedBytes = $durableSize;
         $this->lastEventId = $event->eventId;
         $this->startExchangeTimestamp = $nextStart;
         $this->latestExchangeTimestamp = $this->maximumTimestamp(
@@ -242,8 +244,7 @@ final class PaperDatasetRecorder
         $stored = $this->readStoredManifest();
         $this->assertSameDataset($this->identityManifest, $stored);
         $this->currentManifest = $stored;
-        $this->resetDerivedState();
-        $this->scanEvents();
+        $this->scanDurableTail();
 
         if ($stored->state !== PaperDatasetState::RECORDING) {
             return;
@@ -262,19 +263,7 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function resetDerivedState(): void
-    {
-        $this->identities = [];
-        $this->lastSequences = [];
-        $this->sequenceGaps = [];
-        $this->channels = [];
-        $this->eventCount = 0;
-        $this->lastEventId = null;
-        $this->startExchangeTimestamp = null;
-        $this->latestExchangeTimestamp = null;
-    }
-
-    private function scanEvents(): void
+    private function scanDurableTail(): void
     {
         $handle = @fopen($this->eventsPath, 'rb');
         if ($handle === false) {
@@ -282,6 +271,21 @@ final class PaperDatasetRecorder
         }
 
         try {
+            $statistics = fstat($handle);
+            if ($statistics === false) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+            $durableSize = $statistics['size'];
+            if ($durableSize < $this->scannedBytes) {
+                throw new \RuntimeException('paper_dataset_events_size_regressed');
+            }
+            if ($durableSize === $this->scannedBytes) {
+                return;
+            }
+            if (fseek($handle, $this->scannedBytes) !== 0) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+
             while (($line = fgets($handle)) !== false) {
                 if (trim($line) === '') {
                     continue;
@@ -339,6 +343,10 @@ final class PaperDatasetRecorder
             if (!feof($handle)) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
+            $position = ftell($handle);
+            if ($position === false || $position !== $durableSize) {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
         } finally {
             fclose($handle);
         }
@@ -346,6 +354,7 @@ final class PaperDatasetRecorder
         $this->channels = array_values(array_unique($this->channels));
         sort($this->channels, SORT_STRING);
         ksort($this->sequenceGaps, SORT_STRING);
+        $this->scannedBytes = $durableSize;
     }
 
     private function assertRecording(): void
@@ -378,7 +387,7 @@ final class PaperDatasetRecorder
         return $event->sourceVenue->value . '/' . $event->symbol . '/' . $event->channel->value;
     }
 
-    private function appendDurably(string $line): void
+    private function appendDurably(string $line): int
     {
         $handle = @fopen($this->eventsPath, 'ab');
         if ($handle === false) {
@@ -391,6 +400,12 @@ final class PaperDatasetRecorder
             try {
                 $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
                 $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                $statistics = fstat($handle);
+                if ($statistics === false) {
+                    throw new \RuntimeException('paper_dataset_events_read_failed');
+                }
+
+                return $statistics['size'];
             } finally {
                 flock($handle, LOCK_UN);
             }
@@ -562,6 +577,11 @@ final class PaperDatasetRecorder
             || $requested->datasetId !== $stored->datasetId
             || $requested->venue !== $stored->venue
             || $requested->symbols !== $stored->symbols
+            || ($stored->state !== PaperDatasetState::INCOMPLETE && (
+                $requested->quality !== $stored->quality
+                || $requested->modelName !== $stored->modelName
+                || $requested->modelVersion !== $stored->modelVersion
+            ))
         ) {
             throw new \RuntimeException('paper_dataset_manifest_identity_mismatch');
         }

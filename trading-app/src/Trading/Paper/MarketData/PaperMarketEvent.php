@@ -11,6 +11,21 @@ final readonly class PaperMarketEvent
     /** Far above current exchange counters while bounding identity input deterministically. */
     public const MAX_SEQUENCE_DIGITS = 128;
 
+    /** Outer event map plus its nine non-payload values. */
+    public const CANONICAL_ENVELOPE_NODES = 10;
+
+    /** Ten associative keys in the fixed event contract. */
+    public const CANONICAL_ENVELOPE_KEYS = 10;
+
+    /** The payload is nested one level below the outer event map. */
+    public const CANONICAL_ENVELOPE_DEPTH = 1;
+
+    /**
+     * Event key bytes plus fixed schema, hashes and timestamp scalar bytes. Venue, symbol,
+     * channel and sequence bytes are added from the normalized event identity.
+     */
+    public const CANONICAL_ENVELOPE_FIXED_BYTES = 293;
+
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
     /** @var list<string> */
@@ -77,7 +92,13 @@ final readonly class PaperMarketEvent
         $receivedTimestampUtc = self::normalizeTimestamp($receivedTimestamp);
         self::assertSerializableTimestamp($exchangeTimestampUtc);
         self::assertSerializableTimestamp($receivedTimestampUtc);
-        $payloadHash = hash('sha256', CanonicalJson::encode($payload));
+        $payloadHash = hash('sha256', CanonicalJson::encodeWithReservedBudget(
+            $payload,
+            self::CANONICAL_ENVELOPE_NODES,
+            self::canonicalEnvelopeBytes($venue, $normalizedSymbol, $channel, $sequence),
+            self::CANONICAL_ENVELOPE_KEYS,
+            self::CANONICAL_ENVELOPE_DEPTH,
+        ));
         $eventId = self::eventId(
             venue: $venue,
             symbol: $normalizedSymbol,
@@ -209,6 +230,19 @@ final readonly class PaperMarketEvent
             $exchangeTimestamp->format(self::TIMESTAMP_FORMAT),
             $sequence ?? $payloadHash,
         ]));
+    }
+
+    private static function canonicalEnvelopeBytes(
+        PaperMarketDataVenue $venue,
+        string $symbol,
+        PaperMarketDataChannel $channel,
+        ?string $sequence,
+    ): int {
+        return self::CANONICAL_ENVELOPE_FIXED_BYTES
+            + \strlen($venue->value)
+            + \strlen($symbol)
+            + \strlen($channel->value)
+            + ($sequence === null ? 4 : \strlen($sequence));
     }
 
     private static function assertValidSequence(

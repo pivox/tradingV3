@@ -1052,6 +1052,68 @@ PHP,
         self::assertNotSame('', CanonicalJson::encode($map));
     }
 
+    public function testPaperMarketEventReservesTheExactCanonicalNodeEnvelopeBudget(): void
+    {
+        $payload = array_fill(
+            0,
+            CanonicalJson::MAX_NODES - PaperMarketEvent::CANONICAL_ENVELOPE_NODES - 1,
+            null,
+        );
+        $event = self::event(payload: $payload);
+
+        self::assertNotSame('', CanonicalJson::encode($event->toArray()));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_nodes_exceeded');
+        self::event(payload: [...$payload, null]);
+    }
+
+    public function testPaperMarketEventReservesTheExactCanonicalByteEnvelopeBudget(): void
+    {
+        $sequence = '42';
+        $reservedBytes = PaperMarketEvent::CANONICAL_ENVELOPE_FIXED_BYTES
+            + strlen(PaperMarketDataVenue::OKX->value)
+            + strlen('BTCUSDT')
+            + strlen(PaperMarketDataChannel::TOP_OF_BOOK->value)
+            + strlen($sequence);
+        $valueBytes = CanonicalJson::MAX_BYTES - $reservedBytes - strlen('raw');
+        $payload = ['raw' => str_repeat('~', $valueBytes)];
+        $event = self::event(sequence: $sequence, payload: $payload);
+
+        self::assertNotSame('', CanonicalJson::encode($event->toArray()));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_bytes_exceeded');
+        self::event(sequence: $sequence, payload: ['raw' => str_repeat('~', $valueBytes + 1)]);
+    }
+
+    public function testPaperMarketEventReservesTheExactCanonicalAssociativeKeyEnvelopeBudget(): void
+    {
+        $payload = [];
+        $payloadKeyBudget = CanonicalJson::MAX_KEYS - PaperMarketEvent::CANONICAL_ENVELOPE_KEYS;
+        for ($index = 0; $index < $payloadKeyBudget; ++$index) {
+            $payload[sprintf('k%04d', $index)] = null;
+        }
+        $event = self::event(payload: $payload);
+
+        self::assertNotSame('', CanonicalJson::encode($event->toArray()));
+
+        $payload['overflow'] = null;
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_keys_exceeded');
+        self::event(payload: $payload);
+    }
+
+    public function testPaperMarketEventReservesTheCanonicalEnvelopeDepth(): void
+    {
+        $event = self::event(payload: self::nestedPayload(127));
+        self::assertNotSame('', CanonicalJson::encode($event->toArray()));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_canonical_json_depth_exceeded');
+        self::event(payload: self::nestedPayload(128));
+    }
+
     public function testCanonicalJsonBoundsSharedDagExpansionBeforeMemoryExhaustion(): void
     {
         $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';

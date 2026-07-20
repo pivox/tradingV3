@@ -235,6 +235,10 @@ final readonly class PaperDatasetManifest
      */
     private static function normalizeSymbols(array $symbols): array
     {
+        if ($symbols === []) {
+            throw new \InvalidArgumentException('paper_dataset_symbols_invalid');
+        }
+
         foreach ($symbols as $normalized => $native) {
             if (!\is_string($normalized) || !\in_array($normalized, self::ALLOWED_SYMBOLS, true)
                 || !\is_string($native) || $native === '' || trim($native) !== $native

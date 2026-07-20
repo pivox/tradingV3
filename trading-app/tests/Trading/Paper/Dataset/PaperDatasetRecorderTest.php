@@ -16,6 +16,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperDatasetRecorder::class)]
@@ -170,6 +171,53 @@ final class PaperDatasetRecorderTest extends TestCase
         );
     }
 
+    public function testRecorderRetainsItsDurableByteOffsetAcrossAppends(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $offset = new \ReflectionProperty(PaperDatasetRecorder::class, 'scannedBytes');
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+
+        $recorder->append($this->event(sequence: '1'));
+        self::assertSame(filesize($eventsPath), $offset->getValue($recorder));
+
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        self::assertSame(filesize($eventsPath), $offset->getValue($recorder));
+    }
+
+    public function testRecorderFailsClosedWhenTheDurableFileRegressesBehindItsOffset(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1'));
+        $handle = fopen($this->datasetDirectory() . '/events.ndjson', 'r+b');
+        self::assertIsResource($handle);
+        self::assertTrue(ftruncate($handle, 0));
+        fclose($handle);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_events_size_regressed');
+
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+    }
+
+    public function testStaleRecorderRejectsATruncatedDurableTail(): void
+    {
+        $manifest = $this->manifest();
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $writer = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $stale->append($this->event(sequence: '1'));
+        $writer->append($this->event(sequence: '2', microseconds: 2));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $contents = file_get_contents($eventsPath);
+        self::assertIsString($contents);
+        self::assertSame("\n", substr($contents, -1));
+        file_put_contents($eventsPath, substr($contents, 0, -1));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_event_line_truncated');
+
+        $stale->append($this->event(sequence: '3', microseconds: 3));
+    }
+
     public function testRestartRejectsAValidLastEventLineWithoutItsDurableNewline(): void
     {
         $manifest = $this->manifest();
@@ -300,6 +348,84 @@ final class PaperDatasetRecorderTest extends TestCase
         );
     }
 
+    #[DataProvider('immutableProvenanceProvider')]
+    public function testRecordingAndCompleteDatasetsRejectDifferentRequestedProvenance(
+        bool $complete,
+        PaperMarketDataQuality $storedQuality,
+        ?string $storedModelName,
+        ?string $storedModelVersion,
+        PaperMarketDataQuality $requestedQuality,
+        ?string $requestedModelName,
+        ?string $requestedModelVersion,
+    ): void {
+        $storedManifest = $this->manifest($storedQuality, $storedModelName, $storedModelVersion);
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $storedManifest);
+        if ($complete) {
+            $recorder->append($this->event(sequence: '1'));
+            $recorder->complete();
+        }
+        $eventsBefore = file_get_contents($this->datasetDirectory() . '/events.ndjson');
+        $manifestBefore = file_get_contents($this->datasetDirectory() . '/manifest.json');
+
+        try {
+            new PaperDatasetRecorder(
+                $this->datasetRoot(),
+                $this->manifest($requestedQuality, $requestedModelName, $requestedModelVersion),
+            );
+            self::fail('Dataset provenance must be immutable after creation.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_identity_mismatch', $exception->getMessage());
+        }
+
+        self::assertSame($eventsBefore, file_get_contents($this->datasetDirectory() . '/events.ndjson'));
+        self::assertSame($manifestBefore, file_get_contents($this->datasetDirectory() . '/manifest.json'));
+    }
+
+    /**
+     * @return iterable<string, array{
+     *   bool,
+     *   PaperMarketDataQuality,
+     *   string|null,
+     *   string|null,
+     *   PaperMarketDataQuality,
+     *   string|null,
+     *   string|null
+     * }>
+     */
+    public static function immutableProvenanceProvider(): iterable
+    {
+        foreach ([false, true] as $complete) {
+            $state = $complete ? 'complete' : 'recording';
+            yield $state . ' quality' => [
+                $complete,
+                PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+                null,
+                null,
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+                'public-model',
+                '1.0.0',
+            ];
+            yield $state . ' model name' => [
+                $complete,
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+                'public-model',
+                '1.0.0',
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+                'other-model',
+                '1.0.0',
+            ];
+            yield $state . ' model version' => [
+                $complete,
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+                'public-model',
+                '1.0.0',
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+                'public-model',
+                '2.0.0',
+            ];
+        }
+    }
+
     public function testMarkIncompleteDurablyFreezesDatasetAndPreventsReplayVerification(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
@@ -337,6 +463,38 @@ final class PaperDatasetRecorderTest extends TestCase
 
         $decoded = (new PaperDatasetManifestCodec())->decode($json);
         self::assertSame('dataset-okx-001', $decoded->datasetId);
+    }
+
+    public function testEmptySymbolsAreRejectedBeforeRecorderArtifactsAreCreated(): void
+    {
+        try {
+            new PaperDatasetRecorder(
+                $this->datasetRoot(),
+                new PaperDatasetManifest(
+                    schemaVersion: 1,
+                    recorderVersion: '1.0.0',
+                    datasetId: 'dataset-okx-001',
+                    venue: PaperMarketDataVenue::OKX,
+                    symbols: [],
+                    startExchangeTimestamp: null,
+                    endExchangeTimestamp: null,
+                    channels: [],
+                    eventCount: 0,
+                    sequenceGaps: [],
+                    quality: PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+                    modelName: null,
+                    modelVersion: null,
+                    eventsFileSha256: null,
+                    state: PaperDatasetState::RECORDING,
+                    lastEventId: null,
+                ),
+            );
+            self::fail('An empty symbol map must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_dataset_symbols_invalid', $exception->getMessage());
+        }
+
+        self::assertDirectoryDoesNotExist($this->datasetRoot());
     }
 
     public function testRecorderRejectsAnIntermediateSymlinkBeforeCreatingRoot(): void
@@ -395,8 +553,11 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($second));
     }
 
-    private function manifest(): PaperDatasetManifest
-    {
+    private function manifest(
+        PaperMarketDataQuality $quality = PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+        ?string $modelName = null,
+        ?string $modelVersion = null,
+    ): PaperDatasetManifest {
         return new PaperDatasetManifest(
             schemaVersion: 1,
             recorderVersion: '1.0.0',
@@ -411,9 +572,9 @@ final class PaperDatasetRecorderTest extends TestCase
             channels: [],
             eventCount: 0,
             sequenceGaps: [],
-            quality: PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
-            modelName: null,
-            modelVersion: null,
+            quality: $quality,
+            modelName: $modelName,
+            modelVersion: $modelVersion,
             eventsFileSha256: null,
             state: PaperDatasetState::RECORDING,
             lastEventId: null,
