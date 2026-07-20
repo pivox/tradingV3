@@ -614,7 +614,13 @@ final class PaperDatasetRecorderTest extends TestCase
             $recorder->{$finalizationMethod}();
             self::fail('Finalization must reject a valid same-length event mutation before checksum.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getMessage());
+            self::assertSame(
+                $finalizationMethod === 'complete'
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
+            self::assertSame('paper_dataset_events_snapshot_changed', $exception->getPrevious()?->getMessage());
         }
 
         self::assertSame($replacement, file_get_contents($eventsPath));
@@ -640,6 +646,198 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_event_line_truncated');
 
         new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+    }
+
+    public function testRestartRecoversOnlyAnExactStagedAppendPrefix(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $partial = substr($line, 0, -17);
+        self::assertNotSame('', $partial);
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($partial), file_put_contents($eventsPath, $partial, FILE_APPEND));
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame($committed, file_get_contents($eventsPath));
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertSame(1, $restarted->manifest()->eventCount);
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $restarted->append($second));
+    }
+
+    public function testAppendFsyncsAPrivateFixedIntentBeforeWritingEventsAndRemovesItDurably(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $event = $this->event(sequence: '1');
+        $line = CanonicalJson::encode($event->toArray()) . "\n";
+
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $recorder->append($event));
+
+        self::assertSame(1, $filesystem->appendIntentSyncs);
+        self::assertSame(2, $filesystem->appendIntentDirectorySyncs);
+        self::assertSame(0600, $filesystem->observedAppendIntentMode);
+        self::assertSame([
+            'version' => 1,
+            'dataset_id' => $manifest->datasetId,
+            'event_id' => $event->eventId,
+            'original_events_bytes' => 0,
+            'original_events_sha256' => hash('sha256', ''),
+            'canonical_line_base64' => base64_encode($line),
+            'canonical_line_sha256' => hash('sha256', $line),
+        ], $filesystem->observedAppendIntent);
+        self::assertFileDoesNotExist($this->appendIntentPath());
+    }
+
+    public function testRestartPreservesAnExactCompleteStagedAppend(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($line), file_put_contents($eventsPath, $line, FILE_APPEND));
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame($committed . $line, file_get_contents($eventsPath));
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertSame(2, $restarted->manifest()->eventCount);
+        self::assertSame($second->eventId, $restarted->manifest()->lastEventId);
+        self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($second));
+    }
+
+    public function testRestartRejectsANonMatchingStagedAppendSuffixWithoutMutation(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(8, file_put_contents($eventsPath, '{"wrong"', FILE_APPEND));
+        $eventsBefore = file_get_contents($eventsPath);
+        $markerBefore = file_get_contents($this->appendIntentPath());
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('Only an exact prefix of the marker-bound canonical line may be recovered.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_invalid', $exception->getMessage());
+        }
+
+        self::assertSame($eventsBefore, file_get_contents($eventsPath));
+        self::assertSame($markerBefore, file_get_contents($this->appendIntentPath()));
+    }
+
+    public function testRestartRejectsAnOversizedAppendIntentBeforeReadingItsContents(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $handle = fopen($this->appendIntentPath(), 'x+b');
+        self::assertIsResource($handle);
+        try {
+            self::assertTrue(ftruncate($handle, 9_000_001));
+            self::assertTrue(fflush($handle));
+        } finally {
+            fclose($handle);
+        }
+        self::assertTrue(chmod($this->appendIntentPath(), 0600));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('The append intent bound must be checked before allocating its contents.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(0, $filesystem->appendIntentReads);
+        self::assertSame(9_000_001, filesize($this->appendIntentPath()));
+    }
+
+    public function testFailedAppendRollbackRetainsIntentForExactRestartRecovery(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $event = $this->event(sequence: '1');
+        $filesystem->failNextAppend('partial_write');
+        $filesystem->failRollback('truncate');
+
+        try {
+            $recorder->append($event);
+            self::fail('The injected append rollback failure must leave durable recovery intent.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_events_rollback_failed', $exception->getMessage());
+        }
+
+        self::assertFileExists($this->appendIntentPath());
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $partial = file_get_contents($eventsPath);
+        self::assertIsString($partial);
+        self::assertNotSame('', $partial);
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame('', file_get_contents($eventsPath));
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $restarted->append($event));
+    }
+
+    #[DataProvider('mutationMethodProvider')]
+    public function testEveryStaleRecorderMutationRecoversTheFixedAppendIntent(string $method): void
+    {
+        $manifest = $this->manifest();
+        $writer = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $writer->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $partial = substr($line, 0, -17);
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($partial), file_put_contents($eventsPath, $partial, FILE_APPEND));
+
+        if ($method === 'append') {
+            self::assertSame(PaperDatasetAppendResult::APPENDED, $stale->append($second));
+            self::assertSame($committed . $line, file_get_contents($eventsPath));
+        } else {
+            $finalized = $stale->{$method}();
+            self::assertNotSame(PaperDatasetState::RECORDING, $finalized->state);
+            self::assertSame($committed, file_get_contents($eventsPath));
+        }
+        self::assertFileDoesNotExist($this->appendIntentPath());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function mutationMethodProvider(): iterable
+    {
+        yield 'append' => ['append'];
+        yield 'complete' => ['complete'];
+        yield 'mark incomplete' => ['markIncomplete'];
     }
 
     public function testExistingDatasetRejectsMissingEventsFileWithoutRecreatingIt(): void
@@ -926,7 +1124,10 @@ final class PaperDatasetRecorderTest extends TestCase
 
         self::assertSame($manifestBefore, file_get_contents($manifestPath));
         self::assertSame($publicationsBefore, $filesystem->manifestPublications);
-        self::assertSame([], glob($this->datasetDirectory() . '/.manifest-*'));
+        self::assertSame([
+            $this->manifestBackupPath(),
+            $this->manifestTransitionPath(),
+        ], glob($this->datasetDirectory() . '/.manifest-*'));
         $this->assertRecorderUnusable($recorder);
     }
 
@@ -1636,7 +1837,8 @@ final class PaperDatasetRecorderTest extends TestCase
             );
             self::fail('An initial publication directory replacement must fail closed.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_file_changed', $exception->getMessage());
+            self::assertSame('paper_dataset_manifest_candidate_changed', $exception->getMessage());
+            self::assertSame('paper_dataset_file_changed', $exception->getPrevious()?->getMessage());
         }
 
         foreach ($replacementFiles as $name => $contents) {
@@ -1769,7 +1971,13 @@ final class PaperDatasetRecorderTest extends TestCase
             }
             self::fail('Finalization must reject an events file swapped for a symlink.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+            self::assertSame(
+                $finalizationMethod === 'complete'
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getPrevious()?->getMessage());
         }
 
         self::assertSame($eventsBefore, file_get_contents($targetPath));
@@ -1801,7 +2009,8 @@ final class PaperDatasetRecorderTest extends TestCase
             $recorder->complete();
             self::fail('The injected completion event-file fsync failure must be reported.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_events_flush_failed', $exception->getMessage());
+            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+            self::assertSame('paper_dataset_events_flush_failed', $exception->getPrevious()?->getMessage());
         }
 
         self::assertSame($syncsBeforeCompletion + 1, $filesystem->eventSyncs);
@@ -1832,7 +2041,8 @@ final class PaperDatasetRecorderTest extends TestCase
         }
 
         self::assertInstanceOf(\RuntimeException::class, $failure);
-        self::assertSame('paper_dataset_checksum_failed', $failure->getMessage());
+        self::assertSame('paper_dataset_complete_failed', $failure->getMessage());
+        self::assertSame('paper_dataset_checksum_failed', $failure->getPrevious()?->getMessage());
         self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
     }
 
@@ -1860,7 +2070,8 @@ final class PaperDatasetRecorderTest extends TestCase
         }
 
         self::assertInstanceOf(\RuntimeException::class, $failure);
-        self::assertSame('paper_dataset_symlink_rejected', $failure->getMessage());
+        self::assertSame('paper_dataset_complete_failed', $failure->getMessage());
+        self::assertSame('paper_dataset_symlink_rejected', $failure->getPrevious()?->getMessage());
         self::assertSame($eventsBefore, file_get_contents($targetPath));
     }
 
@@ -1909,6 +2120,43 @@ final class PaperDatasetRecorderTest extends TestCase
         $recorder->append($this->event(sequence: '1'));
 
         self::assertSame(2, $filesystem->manifestDirectorySyncs);
+    }
+
+    public function testManifestRewriteFsyncsAFixedTransitionBindingExactOldAndNewManifests(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $old = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($old);
+        $filesystem->resetManifestTransitionObservation();
+
+        $recorder->append($this->event(sequence: '1'));
+
+        $new = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($new);
+        self::assertSame(1, $filesystem->manifestTransitionSyncs);
+        self::assertSame(2, $filesystem->manifestTransitionDirectorySyncs);
+        self::assertSame(0600, $filesystem->observedManifestTransitionMode);
+        self::assertSame([
+            'version' => 1,
+            'dataset_id' => $manifest->datasetId,
+            'old_manifest_base64' => base64_encode($old),
+            'old_manifest_sha256' => hash('sha256', $old),
+            'new_manifest_base64' => base64_encode($new),
+            'new_manifest_sha256' => hash('sha256', $new),
+        ], $filesystem->observedManifestTransition);
+        self::assertSame($new, $filesystem->observedManifestCandidate);
+        self::assertSame($old, $filesystem->observedManifestBackup);
+        self::assertSame(0600, $filesystem->observedManifestCandidateMode);
+        self::assertSame(0600, $filesystem->observedManifestBackupMode);
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
     }
 
     public function testEveryCreatedDirectoryEntrySynchronizesItsParentWithoutChangingExistingAncestorMode(): void
@@ -2052,7 +2300,16 @@ final class PaperDatasetRecorderTest extends TestCase
             $recorder->{$method}();
             self::fail('A post-rename directory fsync failure must be reported.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_manifest_directory_sync_failed', $exception->getMessage());
+            self::assertSame(
+                $method === 'complete'
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
+            self::assertSame(
+                'paper_dataset_manifest_directory_sync_failed',
+                $exception->getPrevious()?->getMessage(),
+            );
         }
 
         self::assertSame($expectedState, $recorder->manifest()->state);
@@ -2073,6 +2330,293 @@ final class PaperDatasetRecorderTest extends TestCase
     {
         yield 'complete' => ['complete', PaperDatasetState::COMPLETE];
         yield 'mark incomplete' => ['markIncomplete', PaperDatasetState::INCOMPLETE];
+    }
+
+    #[DataProvider('postRenameFinalizationFailureProvider')]
+    public function testAmbiguousFinalizerLeavesOnlyTheFixedTransitionForExactRestartRecovery(
+        string $method,
+        PaperDatasetState $expectedState,
+    ): void {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->failNextManifestPublicationAfterRename('throw');
+
+        try {
+            $recorder->{$method}();
+            self::fail('An ambiguous finalizer must leave one fixed authenticated transition.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                $method === 'complete'
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
+            self::assertSame(
+                'Injected manifest publication failure after rename.',
+                $exception->getPrevious()?->getMessage(),
+            );
+        }
+
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame($expectedState, $restarted->manifest()->state);
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+    }
+
+    public function testRestartRejectsAMutatedExactTransitionBackupWithoutPromotionOrCleanup(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->failNextManifestPublicationAfterRename('throw');
+        try {
+            $recorder->complete();
+            self::fail('The setup must retain an ambiguous terminal transition.');
+        } catch (\RuntimeException) {
+        }
+        $backup = file_get_contents($this->manifestBackupPath());
+        self::assertIsString($backup);
+        $mutated = str_replace('"recorder_version":"1.0.0"', '"recorder_version":"9.9.9"', $backup);
+        self::assertSame(strlen($backup), strlen($mutated));
+        self::assertSame(strlen($mutated), file_put_contents($this->manifestBackupPath(), $mutated));
+        $manifestBefore = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        $markerBefore = file_get_contents($this->manifestTransitionPath());
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A changed exact backup must fail closed without artifact promotion.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertSame($manifestBefore, file_get_contents($this->datasetDirectory() . '/manifest.json'));
+        self::assertSame($markerBefore, file_get_contents($this->manifestTransitionPath()));
+        self::assertSame($mutated, file_get_contents($this->manifestBackupPath()));
+    }
+
+    public function testStaleRecorderChecksAndResolvesTheFixedManifestTransitionBeforeMutation(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $writer = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $writer->append($this->event(sequence: '1'));
+        $filesystem->failNextManifestPublicationAfterRename('throw');
+        try {
+            $writer->complete();
+            self::fail('The setup must retain an ambiguous terminal transition.');
+        } catch (\RuntimeException) {
+        }
+
+        try {
+            $stale->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A stale recorder must resolve terminal transition intent before appending.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+    }
+
+    public function testStaleRecorderRollsForwardExactTerminalIntentPersistedBeforeRename(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $writer = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $writer->append($this->event(sequence: '1'));
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $filesystem->failNextManifestCandidateDirectorySync();
+
+        try {
+            $writer->complete();
+            self::fail('The setup must interrupt terminal publication before rename.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+        }
+        $storedBefore = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($storedBefore);
+        self::assertSame(
+            PaperDatasetState::RECORDING,
+            (new PaperDatasetManifestCodec())->decode($storedBefore)->state,
+        );
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestCandidatePath());
+        self::assertFileExists($this->manifestBackupPath());
+
+        try {
+            $stale->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A stale recorder must not discard a durable terminal transition intent.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+
+        $storedAfter = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($storedAfter);
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetManifestCodec())->decode($storedAfter)->state,
+        );
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+    }
+
+    #[DataProvider('stableFinalizerErrorProvider')]
+    public function testFinalizerExposesOnlyItsStablePublicErrorAndChainsTheCause(
+        string $method,
+        string $expectedError,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->failNextEventSync();
+
+        try {
+            $recorder->{$method}();
+            self::fail('A finalizer failure must expose only the method public contract.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($expectedError, $exception->getMessage());
+            self::assertSame('paper_dataset_events_flush_failed', $exception->getPrevious()?->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function stableFinalizerErrorProvider(): iterable
+    {
+        yield 'complete' => ['complete', 'paper_dataset_complete_failed'];
+        yield 'mark incomplete' => ['markIncomplete', 'paper_dataset_mark_incomplete_failed'];
+    }
+
+    #[DataProvider('postRenameFinalizationFailureProvider')]
+    public function testRestartAuthenticatesTerminalManifestAgainstReadOnlyEventScan(
+        string $method,
+        PaperDatasetState $expectedState,
+    ): void {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        self::assertSame($expectedState, $recorder->{$method}()->state);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $extra = CanonicalJson::encode($this->event(sequence: '2', microseconds: 2)->toArray()) . "\n";
+        self::assertSame(strlen($extra), file_put_contents($eventsPath, $extra, FILE_APPEND));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A terminal manifest must authenticate against all durable event facts.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_terminal_manifest_invalid', $exception->getMessage());
+        }
+    }
+
+    public function testUnrelatedManifestArtifactIsNeverEnumeratedOrPromoted(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $manifestBefore = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($manifestBefore);
+        $artifact = $this->datasetDirectory() . '/.manifest-backup-attacker-controlled';
+        self::assertSame(strlen($manifestBefore), file_put_contents($artifact, $manifestBefore));
+        self::assertTrue(chmod($artifact, 0600));
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame(PaperDatasetState::RECORDING, $restarted->manifest()->state);
+        self::assertSame($manifestBefore, file_get_contents($this->datasetDirectory() . '/manifest.json'));
+        self::assertSame($manifestBefore, file_get_contents($artifact));
+    }
+
+    public function testRestartRejectsOversizedManifestTransitionBeforeReadingItsContents(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $handle = fopen($this->manifestTransitionPath(), 'x+b');
+        self::assertIsResource($handle);
+        try {
+            self::assertTrue(ftruncate($handle, 200_001));
+            self::assertTrue(fflush($handle));
+        } finally {
+            fclose($handle);
+        }
+        self::assertTrue(chmod($this->manifestTransitionPath(), 0600));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('The transition marker bound must be checked before allocating its contents.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(0, $filesystem->manifestTransitionReads);
+        self::assertSame(200_001, filesize($this->manifestTransitionPath()));
+    }
+
+    public function testOrphanedFixedManifestStageFailsClosedWithoutCleanup(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $stored = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($stored);
+        self::assertSame(strlen($stored), file_put_contents($this->manifestCandidatePath(), $stored));
+        self::assertTrue(chmod($this->manifestCandidatePath(), 0600));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A fixed stage without its exact transition marker must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertSame($stored, file_get_contents($this->manifestCandidatePath()));
+        self::assertSame($stored, file_get_contents($this->datasetDirectory() . '/manifest.json'));
+    }
+
+    public function testFinalizedRestartScansEventsReadOnlyWhenNoRecoveryMarkerExists(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $recorder->complete();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+
+        $restarted = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+
+        self::assertSame(PaperDatasetState::COMPLETE, $restarted->manifest()->state);
+        self::assertNotSame([], $filesystem->eventScanModes);
+        self::assertSame(['rb'], array_values(array_unique($filesystem->eventScanModes)));
     }
 
     #[DataProvider('ambiguousFinalizationPublicationFailureProvider')]
@@ -2099,7 +2643,13 @@ final class PaperDatasetRecorderTest extends TestCase
             $recorder->{$method}();
             self::fail('A post-rename finalization ambiguity must be reported.');
         } catch (\RuntimeException $exception) {
-            self::assertSame($expectedError, $exception->getMessage());
+            self::assertSame(
+                $method === 'complete'
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
+            self::assertSame($expectedError, $exception->getPrevious()?->getMessage());
         }
 
         self::assertSame($expectedState, $recorder->manifest()->state);
@@ -2400,6 +2950,45 @@ final class PaperDatasetRecorderTest extends TestCase
         return $this->datasetRoot() . '/dataset-okx-001';
     }
 
+    private function appendIntentPath(): string
+    {
+        return $this->datasetDirectory() . '/.append-intent.json';
+    }
+
+    private function manifestTransitionPath(): string
+    {
+        return $this->datasetDirectory() . '/.manifest-transition.json';
+    }
+
+    private function manifestCandidatePath(): string
+    {
+        return $this->datasetDirectory() . '/.manifest-candidate-fixed';
+    }
+
+    private function manifestBackupPath(): string
+    {
+        return $this->datasetDirectory() . '/.manifest-backup-fixed';
+    }
+
+    private function stageAppendIntent(
+        PaperDatasetManifest $manifest,
+        PaperMarketEvent $event,
+        #[\SensitiveParameter] string $committed,
+        #[\SensitiveParameter] string $canonicalLine,
+    ): void {
+        $marker = json_encode([
+            'version' => 1,
+            'dataset_id' => $manifest->datasetId,
+            'event_id' => $event->eventId,
+            'original_events_bytes' => strlen($committed),
+            'original_events_sha256' => hash('sha256', $committed),
+            'canonical_line_base64' => base64_encode($canonicalLine),
+            'canonical_line_sha256' => hash('sha256', $canonicalLine),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+        self::assertSame(strlen($marker), file_put_contents($this->appendIntentPath(), $marker));
+        self::assertTrue(chmod($this->appendIntentPath(), 0600));
+    }
+
     /** @return array<string, mixed> */
     private function recorderScanState(PaperDatasetRecorder $recorder): array
     {
@@ -2468,6 +3057,28 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public int $manifestDirectorySyncs = 0;
     public int $manifestPublications = 0;
     public int $eventSyncs = 0;
+    public int $appendIntentSyncs = 0;
+    public int $appendIntentDirectorySyncs = 0;
+    public int $appendIntentReads = 0;
+    public int $manifestTransitionSyncs = 0;
+    public int $manifestTransitionDirectorySyncs = 0;
+    public int $manifestTransitionReads = 0;
+    public ?int $observedAppendIntentMode = null;
+
+    public ?int $observedManifestTransitionMode = null;
+    public ?int $observedManifestCandidateMode = null;
+    public ?int $observedManifestBackupMode = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $observedManifestTransition = null;
+    public ?string $observedManifestCandidate = null;
+    public ?string $observedManifestBackup = null;
+
+    /** @var list<string> */
+    public array $eventScanModes = [];
+
+    /** @var array<string, mixed>|null */
+    public ?array $observedAppendIntent = null;
 
     /** @var list<string> */
     public array $createdDirectories = [];
@@ -2481,6 +3092,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
     private bool $failManifestBackupDirectorySync = false;
+    private bool $failManifestCandidateDirectorySync = false;
     private ?string $manifestPublicationFailureAfterRename = null;
     private bool $failEventSync = false;
     private bool $shortChecksumRead = false;
@@ -2675,9 +3287,8 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         if ($this->manifestTemporaryDirectoryToSwap === $path
             && $this->manifestTemporaryModeChangeTarget !== null
         ) {
-            $temporaries = glob($path . '/.manifest-*');
-            if ($temporaries !== false && $temporaries !== []) {
-                $temporary = $temporaries[0];
+            $temporary = $path . '/.manifest-candidate-fixed';
+            if (is_file($temporary)) {
                 $target = $this->manifestTemporaryModeChangeTarget;
                 $this->manifestTemporaryDirectoryToSwap = null;
                 $this->manifestTemporaryModeChangeTarget = null;
@@ -2698,6 +3309,31 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     ): bool {
         if ($operation === 'paper_dataset_manifest_publish') {
             ++$this->manifestPublications;
+            $directory = dirname($destination);
+            $markerPath = $directory . '/.manifest-transition.json';
+            $candidatePath = $directory . '/.manifest-candidate-fixed';
+            $backupPath = $directory . '/.manifest-backup-fixed';
+            $marker = is_file($markerPath) ? file_get_contents($markerPath) : false;
+            $candidate = is_file($candidatePath) ? file_get_contents($candidatePath) : false;
+            $backup = is_file($backupPath) ? file_get_contents($backupPath) : false;
+            $markerMode = is_file($markerPath) ? fileperms($markerPath) : false;
+            $candidateMode = is_file($candidatePath) ? fileperms($candidatePath) : false;
+            $backupMode = is_file($backupPath) ? fileperms($backupPath) : false;
+            if ($marker !== false && $markerMode !== false) {
+                $decoded = json_decode($marker, true, 32, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
+                if (\is_array($decoded) && !array_is_list($decoded)) {
+                    $this->observedManifestTransition = $decoded;
+                    $this->observedManifestTransitionMode = $markerMode & 0777;
+                }
+            }
+            if ($candidate !== false && $candidateMode !== false) {
+                $this->observedManifestCandidate = $candidate;
+                $this->observedManifestCandidateMode = $candidateMode & 0777;
+            }
+            if ($backup !== false && $backupMode !== false) {
+                $this->observedManifestBackup = $backup;
+                $this->observedManifestBackupMode = $backupMode & 0777;
+            }
         }
         if ($operation === 'paper_dataset_manifest_publish'
             && $this->lockPathToReplaceAtPublication !== null
@@ -2880,12 +3516,29 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->failManifestBackupDirectorySync = true;
     }
 
+    public function failNextManifestCandidateDirectorySync(): void
+    {
+        $this->failManifestCandidateDirectorySync = true;
+    }
+
     public function failNextManifestPublicationAfterRename(string $failure): void
     {
         if (!\in_array($failure, ['throw', 'false'], true)) {
             throw new \InvalidArgumentException('Unsupported post-rename publication failure.');
         }
         $this->manifestPublicationFailureAfterRename = $failure;
+    }
+
+    public function resetManifestTransitionObservation(): void
+    {
+        $this->manifestTransitionSyncs = 0;
+        $this->manifestTransitionDirectorySyncs = 0;
+        $this->observedManifestTransitionMode = null;
+        $this->observedManifestCandidateMode = null;
+        $this->observedManifestBackupMode = null;
+        $this->observedManifestTransition = null;
+        $this->observedManifestCandidate = null;
+        $this->observedManifestBackup = null;
     }
 
     public function failNextEventSync(): void
@@ -3001,6 +3654,10 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     /** @param resource $handle */
     public function readLine($handle, string $operation): string|false
     {
+        if ($operation === 'paper_dataset_events_read_failed') {
+            $metadata = stream_get_meta_data($handle);
+            $this->eventScanModes[] = $metadata['mode'];
+        }
         if ($operation === 'paper_dataset_events_read_failed' && $this->tailReadsBeforeFailure !== null) {
             if ($this->tailReadsBeforeFailure === 0) {
                 $this->tailReadsBeforeFailure = null;
@@ -3011,6 +3668,18 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
 
         return parent::readLine($handle, $operation);
+    }
+
+    public function read($handle, int $length, string $operation): string|false
+    {
+        if ($operation === 'paper_dataset_append_intent_read_failed') {
+            ++$this->appendIntentReads;
+        }
+        if ($operation === 'paper_dataset_manifest_transition_read_failed') {
+            ++$this->manifestTransitionReads;
+        }
+
+        return parent::read($handle, $length, $operation);
     }
 
     /**
@@ -3038,6 +3707,20 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     {
         if ($operation !== 'paper_dataset_events_write_failed') {
             return parent::write($handle, $contents, $operation);
+        }
+        $metadata = stream_get_meta_data($handle);
+        $eventsPath = $metadata['uri'];
+        if (\is_string($eventsPath)) {
+            $intentPath = dirname($eventsPath) . '/.append-intent.json';
+            $intent = is_file($intentPath) ? file_get_contents($intentPath) : false;
+            $mode = is_file($intentPath) ? fileperms($intentPath) : false;
+            if ($intent !== false && $mode !== false) {
+                $decoded = json_decode($intent, true, 512, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
+                if (\is_array($decoded) && !array_is_list($decoded)) {
+                    $this->observedAppendIntent = $decoded;
+                    $this->observedAppendIntentMode = $mode & 0777;
+                }
+            }
         }
         if (\in_array($this->publicationMutationTrigger, ['append', 'append_snapshot_validation'], true)) {
             $this->publicationAppendWriteObserved = true;
@@ -3083,12 +3766,31 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function sync($handle, string $operation): bool
     {
+        if ($operation === 'paper_dataset_append_intent_flush_failed') {
+            ++$this->appendIntentSyncs;
+        }
+        if ($operation === 'paper_dataset_append_intent_directory_sync_failed') {
+            ++$this->appendIntentDirectorySyncs;
+        }
+        if ($operation === 'paper_dataset_manifest_transition_flush_failed') {
+            ++$this->manifestTransitionSyncs;
+        }
+        if ($operation === 'paper_dataset_manifest_transition_directory_sync_failed') {
+            ++$this->manifestTransitionDirectorySyncs;
+        }
         if ($operation === 'paper_dataset_manifest_backup_directory_sync') {
             if ($this->failManifestBackupDirectorySync) {
                 $this->failManifestBackupDirectorySync = false;
 
                 return false;
             }
+        }
+        if ($operation === 'paper_dataset_manifest_candidate_directory_sync'
+            && $this->failManifestCandidateDirectorySync
+        ) {
+            $this->failManifestCandidateDirectorySync = false;
+
+            return false;
         }
         if ($operation === 'paper_dataset_directory_parent_sync_failed') {
             $metadata = stream_get_meta_data($handle);
