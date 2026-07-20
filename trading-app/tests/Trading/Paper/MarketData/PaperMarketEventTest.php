@@ -297,6 +297,45 @@ PHP,
         ];
     }
 
+    public function testInitializedTimestampSubclassCannotLieAboutCapturedInstantOrEventIdentity(): void
+    {
+        $instant = '2026-07-19T10:00:00.123456+00:09:21';
+        $lyingTimestamp = new class($instant) extends \DateTimeImmutable {
+            public function format(string $format): string
+            {
+                return '946684800.000000';
+            }
+        };
+        $baseEvent = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable($instant),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.000000Z'),
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+        $subclassEvent = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: $lyingTimestamp,
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.000000Z'),
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+        $baseIdentity = [
+            'exchange_timestamp' => $baseEvent->toArray()['exchange_timestamp'],
+            'event_id' => $baseEvent->eventId,
+        ];
+
+        self::assertSame('2026-07-19T09:50:39.123456Z', $baseIdentity['exchange_timestamp']);
+        self::assertSame($baseIdentity, [
+            'exchange_timestamp' => $subclassEvent->toArray()['exchange_timestamp'],
+            'event_id' => $subclassEvent->eventId,
+        ]);
+    }
+
     public function testCreateOwnsBaseDateTimeImmutableTimestamps(): void
     {
         $formatState = (object) ['poisoned' => false];
