@@ -6,6 +6,22 @@ namespace App\Trading\Paper\Dataset;
 
 class PaperDatasetRecorderFilesystem
 {
+    public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
+    {
+        return @mkdir($directory, $permissions);
+    }
+
+    public function changeMode(#[\SensitiveParameter] string $path, int $permissions): bool
+    {
+        return @chmod($path, $permissions);
+    }
+
+    /** @return resource|false */
+    public function openDirectory(#[\SensitiveParameter] string $directory, string $operation)
+    {
+        return @fopen($directory, 'rb');
+    }
+
     /** @param resource $handle */
     public function write($handle, #[\SensitiveParameter] string $contents, string $operation): int|false
     {
@@ -53,7 +69,7 @@ class PaperDatasetRecorderFilesystem
     }
 
     /** @return array<string, mixed>|false */
-    public function pathStat(string $path, string $operation): array|false
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
     {
         clearstatcache(true, $path);
 

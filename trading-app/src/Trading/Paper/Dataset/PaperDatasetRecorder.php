@@ -57,7 +57,7 @@ final class PaperDatasetRecorder
     private ?\DateTimeImmutable $latestExchangeTimestamp = null;
 
     public function __construct(
-        string $root,
+        #[\SensitiveParameter] string $root,
         PaperDatasetManifest $manifest,
         ?PaperDatasetManifestCodec $codec = null,
         ?PaperDatasetVerifier $verifier = null,
@@ -989,7 +989,7 @@ final class PaperDatasetRecorder
     }
 
     /** @return resource */
-    private function openRegularFile(string $path, string $mode, string $openError)
+    private function openRegularFile(#[\SensitiveParameter] string $path, string $mode, string $openError)
     {
         $before = $this->pathStat($path, $openError);
         $handle = @fopen($path, $mode);
@@ -1018,7 +1018,7 @@ final class PaperDatasetRecorder
      */
     private function assertHandleMatchesPath(
         $handle,
-        string $path,
+        #[\SensitiveParameter] string $path,
         string $operation = 'paper_dataset_file_validation_failed',
     ): array
     {
@@ -1036,7 +1036,7 @@ final class PaperDatasetRecorder
     }
 
     /** @return array<string, mixed> */
-    private function pathStat(string $path, string $missingError): array
+    private function pathStat(#[\SensitiveParameter] string $path, string $missingError): array
     {
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
@@ -1054,7 +1054,7 @@ final class PaperDatasetRecorder
     }
 
     /** @return array<string, mixed>|null */
-    private function pathStatIfPresent(string $path): ?array
+    private function pathStatIfPresent(#[\SensitiveParameter] string $path): ?array
     {
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
@@ -1072,7 +1072,7 @@ final class PaperDatasetRecorder
     }
 
     /** @param array<string, mixed>|null $expected */
-    private function assertPathUnchanged(string $path, ?array $expected): void
+    private function assertPathUnchanged(#[\SensitiveParameter] string $path, ?array $expected): void
     {
         $current = $this->pathStatIfPresent($path);
         if ($expected === null || $current === null) {
@@ -1104,7 +1104,7 @@ final class PaperDatasetRecorder
     }
 
     /** @return array{dev: int, ino: int} */
-    private function pinDirectoryIdentity(string $path, string $error): array
+    private function pinDirectoryIdentity(#[\SensitiveParameter] string $path, string $error): array
     {
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
@@ -1178,7 +1178,7 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function prepareDirectory(string $directory): string
+    private function prepareDirectory(#[\SensitiveParameter] string $directory): string
     {
         if ($directory === '' || str_contains($directory, "\0")) {
             throw new \RuntimeException('paper_dataset_root_invalid');
@@ -1193,7 +1193,10 @@ final class PaperDatasetRecorder
         return $resolved;
     }
 
-    private function storedManifestExists(string $root, PaperDatasetManifest $manifest): bool
+    private function storedManifestExists(
+        #[\SensitiveParameter] string $root,
+        PaperDatasetManifest $manifest,
+    ): bool
     {
         if ($root === '' || str_contains($root, "\0")) {
             throw new \RuntimeException('paper_dataset_root_invalid');
@@ -1209,17 +1212,114 @@ final class PaperDatasetRecorder
         );
     }
 
-    private function ensureDirectory(string $directory): void
+    private function ensureDirectory(#[\SensitiveParameter] string $directory): void
     {
-        if (!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) {
-            throw new \RuntimeException('paper_dataset_directory_create_failed');
+        $this->assertNoSymlinkComponents($directory);
+        if (is_dir($directory)) {
+            if (!$this->filesystem->changeMode($directory, 0700)) {
+                throw new \RuntimeException('paper_dataset_directory_mode_failed');
+            }
+
+            return;
         }
-        if (!@chmod($directory, 0700)) {
+
+        $missing = [];
+        $ancestor = rtrim($directory, DIRECTORY_SEPARATOR);
+        while (!is_dir($ancestor)) {
+            if ($ancestor === ''
+                || file_exists($ancestor)
+                || is_link($ancestor)
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_create_failed');
+            }
+            $missing[] = $ancestor;
+            $parent = dirname($ancestor);
+            if ($parent === $ancestor) {
+                throw new \RuntimeException('paper_dataset_directory_create_failed');
+            }
+            $ancestor = $parent;
+        }
+        $this->assertNoSymlinkComponents($ancestor);
+
+        $targetCreated = false;
+        foreach (array_reverse($missing) as $candidate) {
+            $this->assertNoSymlinkComponents($candidate);
+            if (!$this->filesystem->createDirectory($candidate, 0700)) {
+                $this->assertNoSymlinkComponents($candidate);
+                if (!is_dir($candidate)) {
+                    throw new \RuntimeException('paper_dataset_directory_create_failed');
+                }
+
+                continue;
+            }
+            if (!$this->filesystem->changeMode($candidate, 0700)) {
+                throw new \RuntimeException('paper_dataset_directory_mode_failed');
+            }
+
+            $createdIdentity = $this->pinDirectoryIdentity(
+                $candidate,
+                'paper_dataset_directory_create_failed',
+            );
+            $this->syncDirectoryParent($candidate);
+            $durableIdentity = $this->pinDirectoryIdentity(
+                $candidate,
+                'paper_dataset_directory_create_failed',
+            );
+            if (!$this->sameFile($createdIdentity, $durableIdentity)) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+            if ($candidate === $directory) {
+                $targetCreated = true;
+            }
+        }
+
+        if (!$targetCreated && !$this->filesystem->changeMode($directory, 0700)) {
             throw new \RuntimeException('paper_dataset_directory_mode_failed');
         }
     }
 
-    private function assertNoSymlinkComponents(string $path): void
+    private function syncDirectoryParent(#[\SensitiveParameter] string $directory): void
+    {
+        $parent = dirname($directory);
+        $expected = $this->pinDirectoryIdentity(
+            $parent,
+            'paper_dataset_directory_parent_sync_failed',
+        );
+        $handle = $this->filesystem->openDirectory(
+            $parent,
+            'paper_dataset_directory_parent_sync_failed',
+        );
+        if ($handle === false) {
+            throw new \RuntimeException('paper_dataset_directory_parent_sync_failed');
+        }
+
+        try {
+            $opened = $this->filesystem->stat(
+                $handle,
+                'paper_dataset_directory_parent_sync_failed',
+            );
+            if ($opened === false
+                || !$this->isDirectory($opened)
+                || !$this->sameFile($expected, $opened)
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_parent_sync_failed');
+            }
+            if (!$this->filesystem->sync($handle, 'paper_dataset_directory_parent_sync_failed')) {
+                throw new \RuntimeException('paper_dataset_directory_parent_sync_failed');
+            }
+            $current = $this->pinDirectoryIdentity(
+                $parent,
+                'paper_dataset_directory_parent_sync_failed',
+            );
+            if (!$this->sameFile($expected, $current)) {
+                throw new \RuntimeException('paper_dataset_directory_parent_sync_failed');
+            }
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    private function assertNoSymlinkComponents(#[\SensitiveParameter] string $path): void
     {
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
             $workingDirectory = getcwd();

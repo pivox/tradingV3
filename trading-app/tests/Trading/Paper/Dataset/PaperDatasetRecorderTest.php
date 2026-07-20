@@ -1212,6 +1212,62 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(2, $filesystem->manifestDirectorySyncs);
     }
 
+    public function testEveryCreatedDirectoryEntrySynchronizesItsParentWithoutChangingExistingAncestorMode(): void
+    {
+        $existingAncestor = $this->testRoot . '/existing-ancestor';
+        self::assertTrue(mkdir($existingAncestor, 0750));
+        self::assertTrue(chmod($existingAncestor, 0750));
+        $rootParent = $existingAncestor . '/root-parent';
+        $rootContainer = $rootParent . '/root-container';
+        $root = $rootContainer . '/paper-market-data';
+        $datasetDirectory = $root . '/dataset-okx-001';
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+
+        new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
+
+        self::assertSame([
+            $existingAncestor,
+            $rootParent,
+            $rootContainer,
+            $root,
+            $datasetDirectory,
+        ], $filesystem->directoryParentSyncs);
+        self::assertSame([
+            $rootParent,
+            $rootContainer,
+            $root,
+            $datasetDirectory,
+            $datasetDirectory . '/checkpoints',
+        ], $filesystem->createdDirectories);
+        self::assertSame(0750, fileperms($existingAncestor) & 0777);
+        foreach ($filesystem->createdDirectories as $createdDirectory) {
+            self::assertSame(0700, fileperms($createdDirectory) & 0777);
+        }
+    }
+
+    public function testDirectoryParentSyncFailureStopsConstructionWithStableError(): void
+    {
+        $root = $this->testRoot . '/sync-failure-root';
+        $datasetDirectory = $root . '/dataset-okx-001';
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failDirectoryParentSyncAt(2);
+        $recorder = null;
+
+        try {
+            $recorder = new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
+            self::fail('A directory parent sync failure must stop recorder construction.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_parent_sync_failed', $exception->getMessage());
+            self::assertStringNotContainsString($root, (string) $exception);
+        }
+
+        self::assertNull($recorder);
+        self::assertSame([$this->testRoot, $root], $filesystem->directoryParentSyncs);
+        self::assertDirectoryExists($datasetDirectory);
+        self::assertDirectoryDoesNotExist($datasetDirectory . '/checkpoints');
+        self::assertFileDoesNotExist($datasetDirectory . '/manifest.json');
+    }
+
     public function testManifestDirectorySyncFailureIsNotReportedAsAppendSuccess(): void
     {
         $manifest = $this->manifest();
@@ -1330,6 +1386,49 @@ final class PaperDatasetRecorderTest extends TestCase
             self::assertStringNotContainsString($sentinel, $fullTrace);
         } finally {
             ini_set('zend.exception_ignore_args', $previous);
+        }
+    }
+
+    public function testRootIsRedactedFromFullRecorderTrace(): void
+    {
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+        $sentinel = 'PAPER_DATASET_ROOT_TRACE_SENTINEL_6b8fa2d1';
+        $root = $this->testRoot . DIRECTORY_SEPARATOR . $sentinel;
+        self::assertTrue(symlink($this->testRoot, $root));
+
+        try {
+            new PaperDatasetRecorder($root, $this->manifest());
+            self::fail('A symlinked dataset root must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+    }
+
+    public function testEveryPathBearingRecorderParameterIsSensitive(): void
+    {
+        foreach ([PaperDatasetRecorder::class, PaperDatasetRecorderFilesystem::class] as $class) {
+            foreach ((new \ReflectionClass($class))->getMethods() as $method) {
+                foreach ($method->getParameters() as $parameter) {
+                    if (!preg_match('/(?:root|path|directory|parent)/i', $parameter->getName())) {
+                        continue;
+                    }
+
+                    self::assertNotEmpty(
+                        $parameter->getAttributes(\SensitiveParameter::class),
+                        sprintf(
+                            '%s::%s($%s) must be sensitive.',
+                            $class,
+                            $method->getName(),
+                            $parameter->getName(),
+                        ),
+                    );
+                }
+            }
         }
     }
 
@@ -1563,6 +1662,12 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public int $manifestDirectorySyncs = 0;
     public int $eventSyncs = 0;
 
+    /** @var list<string> */
+    public array $createdDirectories = [];
+
+    /** @var list<string> */
+    public array $directoryParentSyncs = [];
+
     private ?string $appendFailure = null;
     private bool $partialWriteCompleted = false;
     private bool $appendWriteObserved = false;
@@ -1587,6 +1692,19 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private bool $publicationAppendWriteObserved = false;
     private int $publicationSnapshotValidationSeeks = 0;
     private ?int $publicationSnapshotValidationTarget = null;
+    private ?int $directoryParentSyncFailureAt = null;
+
+    public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
+    {
+        $this->createdDirectories[] = $directory;
+
+        return @mkdir($directory, $permissions);
+    }
+
+    public function failDirectoryParentSyncAt(int $sync): void
+    {
+        $this->directoryParentSyncFailureAt = $sync;
+    }
 
     public function failNextAppend(string $failure): void
     {
@@ -1800,6 +1918,20 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function sync($handle, string $operation): bool
     {
+        if ($operation === 'paper_dataset_directory_parent_sync_failed') {
+            $metadata = stream_get_meta_data($handle);
+            $path = $metadata['uri'];
+            $resolved = realpath($path);
+            if ($resolved === false) {
+                throw new \RuntimeException('Unable to resolve directory parent sync.');
+            }
+            $this->directoryParentSyncs[] = $resolved;
+            if (\count($this->directoryParentSyncs) === $this->directoryParentSyncFailureAt) {
+                $this->directoryParentSyncFailureAt = null;
+
+                return false;
+            }
+        }
         if ($operation === 'paper_dataset_manifest_directory_sync_failed') {
             ++$this->manifestDirectorySyncs;
             if ($this->failManifestDirectorySync) {
