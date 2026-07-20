@@ -779,7 +779,7 @@ REGEX;
         int &$decodedByteCount,
         array &$decodedStrings,
     ): void {
-        if (preg_match('/\A[OCERr]:/', $value) === 1) {
+        if (preg_match('/\A[SOCERr]:/', $value) === 1) {
             throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
         }
 
