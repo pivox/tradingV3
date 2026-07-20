@@ -237,6 +237,66 @@ PHP,
         self::assertSame('2026-07-19T10:00:00.654321Z', $event->toArray()['received_timestamp']);
     }
 
+    #[DataProvider('secondPrecisionOffsetInstantProvider')]
+    public function testSecondPrecisionUtcOffsetsNormalizeToExactUtcMicroseconds(
+        string $offsetTimestamp,
+        string $utcTimestamp,
+    ): void {
+        $event = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable($offsetTimestamp),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.000000Z'),
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+
+        self::assertSame($utcTimestamp, $event->toArray()['exchange_timestamp']);
+    }
+
+    #[DataProvider('secondPrecisionOffsetInstantProvider')]
+    public function testEquivalentSecondPrecisionOffsetInstantsDeriveTheSameEventIdentity(
+        string $offsetTimestamp,
+        string $utcTimestamp,
+    ): void {
+        $eventWithOffset = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable($offsetTimestamp),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.000000Z'),
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+        $eventInUtc = PaperMarketEvent::create(
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable($utcTimestamp),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T12:00:00.000000Z'),
+            sequence: '42',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+
+        self::assertSame($eventInUtc->eventId, $eventWithOffset->eventId);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function secondPrecisionOffsetInstantProvider(): iterable
+    {
+        yield 'positive offset' => [
+            '2026-07-19T10:00:00.123456+00:09:21',
+            '2026-07-19T09:50:39.123456Z',
+        ];
+        yield 'negative offset' => [
+            '2026-07-19T10:00:00.654321-00:44:30',
+            '2026-07-19T10:44:30.654321Z',
+        ];
+    }
+
     public function testCreateOwnsBaseDateTimeImmutableTimestamps(): void
     {
         $formatState = (object) ['poisoned' => false];
