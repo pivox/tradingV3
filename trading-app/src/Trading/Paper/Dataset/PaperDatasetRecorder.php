@@ -737,6 +737,7 @@ final class PaperDatasetRecorder
         $handle = null;
         $backup = null;
         $publicationAttempted = false;
+        $directoryChanged = false;
         try {
             $this->assertPinnedDirectories();
             $handle = $this->openRegularFile($temporary, 'r+b', 'paper_dataset_manifest_open_failed');
@@ -779,6 +780,9 @@ final class PaperDatasetRecorder
                     $temporaryStat,
                 );
             } catch (\Throwable $publicationFailure) {
+                if ($this->isDirectoryChangedFailure($publicationFailure)) {
+                    throw $publicationFailure;
+                }
                 $this->restorePreviousManifest($backup);
                 if ($backup !== null) {
                     $this->discardManifestBackup($backup);
@@ -793,22 +797,40 @@ final class PaperDatasetRecorder
                 $this->discardManifestBackup($backup);
                 $backup = null;
             }
+        } catch (\Throwable $failure) {
+            $directoryChanged = $this->isDirectoryChangedFailure($failure);
+
+            throw $failure;
         } finally {
             if (\is_resource($handle)) {
                 fclose($handle);
             }
-            if (file_exists($temporary)) {
+            if (!$directoryChanged && file_exists($temporary)) {
                 @unlink($temporary);
             }
             if ($backup !== null) {
                 if (\is_resource($backup['handle'])) {
                     fclose($backup['handle']);
                 }
-                if (!$publicationAttempted && file_exists($backup['path'])) {
+                if (!$directoryChanged && !$publicationAttempted && file_exists($backup['path'])) {
                     @unlink($backup['path']);
                 }
             }
         }
+    }
+
+    private function isDirectoryChangedFailure(\Throwable $failure): bool
+    {
+        do {
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_directory_changed'
+            ) {
+                return true;
+            }
+            $failure = $failure->getPrevious();
+        } while ($failure !== null);
+
+        return false;
     }
 
     /**
@@ -1061,7 +1083,7 @@ final class PaperDatasetRecorder
         try {
             $statistics = $this->filesystem->stat($handle, $operation);
             if ($statistics === false
-                || !$this->isDirectory($statistics)
+                || !$this->isPrivateDirectory($statistics)
                 || !$this->sameFile($statistics, $this->datasetDirectoryIdentity)
             ) {
                 throw new \RuntimeException('paper_dataset_directory_changed');
@@ -1240,7 +1262,7 @@ final class PaperDatasetRecorder
                 'paper_dataset_lock_open_failed',
             );
             if ($directoryStatistics === false
-                || !$this->isDirectory($directoryStatistics)
+                || !$this->isPrivateDirectory($directoryStatistics)
                 || !$this->sameFile($this->datasetDirectoryIdentity, $directoryStatistics)
             ) {
                 throw new \RuntimeException('paper_dataset_directory_changed');
@@ -1254,6 +1276,7 @@ final class PaperDatasetRecorder
                 $this->datasetDirectory,
                 $this->datasetDirectoryIdentity,
                 'paper_dataset_directory_changed',
+                requirePrivatePermissions: true,
             );
             $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
             if (!flock($handle, LOCK_EX)) {
@@ -1468,6 +1491,15 @@ final class PaperDatasetRecorder
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::DIRECTORY_FILE_TYPE;
     }
 
+    /** @param array<string, mixed> $statistics */
+    private function isPrivateDirectory(array $statistics): bool
+    {
+        return $this->isDirectory($statistics)
+            && isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & 0777) === 0700;
+    }
+
     /** @return array{dev: int, ino: int} */
     private function pinDirectoryIdentity(#[\SensitiveParameter] string $path, string $error): array
     {
@@ -1488,8 +1520,14 @@ final class PaperDatasetRecorder
     private function assertPinnedDirectories(): void
     {
         try {
-            $root = $this->pinDirectoryIdentity($this->datasetRoot, 'paper_dataset_directory_changed');
-            $dataset = $this->pinDirectoryIdentity($this->datasetDirectory, 'paper_dataset_directory_changed');
+            $root = $this->pinManagedDirectoryIdentity(
+                $this->datasetRoot,
+                'paper_dataset_directory_changed',
+            );
+            $dataset = $this->pinManagedDirectoryIdentity(
+                $this->datasetDirectory,
+                'paper_dataset_directory_changed',
+            );
             if (!$this->sameFile($this->datasetRootIdentity, $root)
                 || !$this->sameFile($this->datasetDirectoryIdentity, $dataset)
             ) {
@@ -1505,6 +1543,23 @@ final class PaperDatasetRecorder
 
             throw new \RuntimeException('paper_dataset_directory_changed', 0, $failure);
         }
+    }
+
+    /** @return array{dev: int, ino: int} */
+    private function pinManagedDirectoryIdentity(#[\SensitiveParameter] string $path, string $error): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
+        if ($statistics === false
+            || !$this->isPrivateDirectory($statistics)
+            || !isset($statistics['dev'], $statistics['ino'])
+            || !\is_int($statistics['dev'])
+            || !\is_int($statistics['ino'])
+        ) {
+            throw new \RuntimeException($error);
+        }
+
+        return ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
     }
 
     /**
@@ -1706,11 +1761,16 @@ final class PaperDatasetRecorder
         #[\SensitiveParameter] string $directory,
         array $expected,
         string $error,
+        bool $requirePrivatePermissions = false,
     ): void {
         $opened = $this->filesystem->stat($handle, 'paper_dataset_directory_validation');
-        $current = $this->pinDirectoryIdentity($directory, $error);
+        $current = $requirePrivatePermissions
+            ? $this->pinManagedDirectoryIdentity($directory, $error)
+            : $this->pinDirectoryIdentity($directory, $error);
         if ($opened === false
-            || !$this->isDirectory($opened)
+            || ($requirePrivatePermissions
+                ? !$this->isPrivateDirectory($opened)
+                : !$this->isDirectory($opened))
             || !$this->sameFile($expected, $opened)
             || !$this->sameFile($expected, $current)
         ) {

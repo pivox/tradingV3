@@ -376,6 +376,15 @@ final class PaperDatasetVerifier
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::DIRECTORY_FILE_TYPE;
     }
 
+    /** @param array<string, mixed> $statistics */
+    private function isPrivateDirectory(array $statistics): bool
+    {
+        return $this->isDirectory($statistics)
+            && isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & 0777) === 0700;
+    }
+
     /** @return array{handle: resource, identity: array{dev: int, ino: int}} */
     private function openPinnedDirectory(#[\SensitiveParameter] string $path, string $error): array
     {
@@ -387,7 +396,7 @@ final class PaperDatasetVerifier
         try {
             $statistics = $this->filesystem->stat($handle, 'paper_dataset_directory_validation');
             if ($statistics === false
-                || !$this->isDirectory($statistics)
+                || !$this->isPrivateDirectory($statistics)
                 || !isset($statistics['dev'], $statistics['ino'])
                 || !\is_int($statistics['dev'])
                 || !\is_int($statistics['ino'])
@@ -415,7 +424,7 @@ final class PaperDatasetVerifier
         array $expected,
     ): void {
         $opened = $this->filesystem->stat($handle, 'paper_dataset_directory_validation');
-        if ($opened === false || !$this->isDirectory($opened)) {
+        if ($opened === false || !$this->isPrivateDirectory($opened)) {
             throw new \RuntimeException('paper_dataset_directory_changed');
         }
         $current = $this->pinDirectoryIdentity($path, 'paper_dataset_directory_changed');
@@ -430,7 +439,7 @@ final class PaperDatasetVerifier
         $this->assertNoSymlinkComponents($path);
         $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
         if ($statistics === false
-            || !$this->isDirectory($statistics)
+            || !$this->isPrivateDirectory($statistics)
             || !isset($statistics['dev'], $statistics['ino'])
             || !\is_int($statistics['dev'])
             || !\is_int($statistics['ino'])

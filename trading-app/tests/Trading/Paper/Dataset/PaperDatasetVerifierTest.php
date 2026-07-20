@@ -338,6 +338,26 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    #[DataProvider('managedDirectoryProvider')]
+    public function testRejectsManagedDirectoryPermissionDrift(string $directory): void
+    {
+        $this->createCompleteDataset();
+        $path = $directory === 'root' ? $this->datasetRoot() : $this->datasetDirectory();
+        self::assertTrue(chmod($path, 0750));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_directory_invalid');
+
+        (new PaperDatasetVerifier())->verify($this->datasetDirectory());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function managedDirectoryProvider(): iterable
+    {
+        yield 'dataset root' => ['root'];
+        yield 'dataset directory' => ['dataset'];
+    }
+
     public function testStrictlyRejectsUnknownManifestFields(): void
     {
         $this->createCompleteDataset();
