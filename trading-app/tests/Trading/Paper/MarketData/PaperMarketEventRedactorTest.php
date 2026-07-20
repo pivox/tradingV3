@@ -231,6 +231,64 @@ final class PaperMarketEventRedactorTest extends TestCase
         ];
     }
 
+    #[DataProvider('laterFormPairLeadingPrefixAndComposedKeyProvider')]
+    public function testRejectsLeadingFormSpaceBeforeComposedSensitiveKeyInLaterPair(
+        string $prefix,
+        string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'symbol=BTCUSDT&' . $prefix . $composedKey . '=' . $sentinel;
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A composed sensitive form key in a later pair must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+            $trace = self::renderExceptionTraceChain($exception);
+            self::assertStringNotContainsString($raw, $trace);
+            self::assertStringNotContainsString($sentinel, $trace);
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function laterFormPairLeadingPrefixAndComposedKeyProvider(): iterable
+    {
+        $composedKeys = [
+            'percent-composed JSON Unicode key' => '%22api%5Cu005fkey%22',
+            'percent-composed Base64 key' => '%22YXBpX2tleQ%3D%3D%22',
+        ];
+
+        foreach (self::laterFormPairLeadingPrefixProvider() as $prefixLabel => [$prefix]) {
+            foreach ($composedKeys as $keyLabel => $composedKey) {
+                yield $prefixLabel . ', ' . $keyLabel => [$prefix, $composedKey];
+            }
+        }
+    }
+
+    #[DataProvider('laterFormPairLeadingPrefixProvider')]
+    public function testAllowsLeadingFormSpaceBeforeOrdinaryLaterFormField(string $prefix): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'raw' => 'symbol=BTCUSDT&' . $prefix . 'price=29999.0',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function laterFormPairLeadingPrefixProvider(): iterable
+    {
+        yield 'space' => [' '];
+        yield 'horizontal tab' => ["\t"];
+        yield 'line feed' => ["\n"];
+        yield 'vertical tab' => ["\v"];
+        yield 'form feed' => ["\f"];
+        yield 'carriage return' => ["\r"];
+        yield 'form space' => ['+'];
+        yield 'percent-encoded form space' => ['%2B'];
+    }
+
     #[DataProvider('sensitiveStructuralStringProvider')]
     public function testRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
     {

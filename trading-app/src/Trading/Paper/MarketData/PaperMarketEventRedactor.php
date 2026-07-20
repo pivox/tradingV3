@@ -1373,7 +1373,14 @@ REGEX;
         while ($offset <= $length) {
             $separator = strpos($value, '&', $offset);
             $partEnd = $separator === false ? $length : $separator;
-            $equals = self::formAssignmentOffset($value, $offset, $partEnd);
+            $leadingDecodedKeyBytes = 0;
+            $partStart = self::formKeyStartAfterLeadingSpace(
+                $value,
+                $offset,
+                $partEnd,
+                $leadingDecodedKeyBytes,
+            );
+            $equals = self::formAssignmentOffset($value, $partStart, $partEnd);
             if ($equals === false || $equals >= $partEnd) {
                 if ($separator === false) {
                     break;
@@ -1384,11 +1391,11 @@ REGEX;
             }
 
             $rawKey = rtrim(
-                substr($value, $offset, $equals - $offset),
+                substr($value, $partStart, $equals - $partStart),
                 "\x09\x0A\x0B\x0C\x0D ",
             );
             $key = urldecode($rawKey);
-            $decodedKeyBytes = \strlen($key);
+            $decodedKeyBytes = $leadingDecodedKeyBytes + \strlen($key);
             $key = rtrim($key, "\x09\x0A\x0B\x0C\x0D ");
             $item = urldecode(substr($value, $equals + 1, $partEnd - $equals - 1));
             $rawKeyMatch = preg_match(self::RAW_FORM_KEY_PATTERN, $rawKey);
@@ -1426,6 +1433,27 @@ REGEX;
 
             $offset = $partEnd + 1;
         }
+    }
+
+    private static function formKeyStartAfterLeadingSpace(
+        #[\SensitiveParameter]
+        string $value,
+        int $partStart,
+        int $partEnd,
+        int &$leadingDecodedKeyBytes,
+    ): int {
+        while (
+            $partStart < $partEnd
+            && (
+                self::isAsciiWhitespace($value[$partStart])
+                || $value[$partStart] === '+'
+            )
+        ) {
+            ++$partStart;
+            ++$leadingDecodedKeyBytes;
+        }
+
+        return $partStart;
     }
 
     private static function formAssignmentOffset(

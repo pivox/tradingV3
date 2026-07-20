@@ -1701,6 +1701,64 @@ PHP,
         ];
     }
 
+    #[DataProvider('laterFormPairLeadingPrefixAndComposedKeyProvider')]
+    public function testCreateRejectsLeadingFormSpaceBeforeComposedSensitiveKeyInLaterPair(
+        string $prefix,
+        string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'symbol=BTCUSDT&' . $prefix . $composedKey . '=' . $sentinel;
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    #[DataProvider('laterFormPairLeadingPrefixAndComposedKeyProvider')]
+    public function testFromArrayRejectsLeadingFormSpaceBeforeComposedSensitiveKeyInLaterPair(
+        string $prefix,
+        string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = 'symbol=BTCUSDT&' . $prefix . $composedKey . '=' . $sentinel;
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function laterFormPairLeadingPrefixAndComposedKeyProvider(): iterable
+    {
+        $composedKeys = [
+            'percent-composed JSON Unicode key' => '%22api%5Cu005fkey%22',
+            'percent-composed Base64 key' => '%22YXBpX2tleQ%3D%3D%22',
+        ];
+
+        foreach ([
+            'space' => ' ',
+            'horizontal tab' => "\t",
+            'line feed' => "\n",
+            'vertical tab' => "\v",
+            'form feed' => "\f",
+            'carriage return' => "\r",
+            'form space' => '+',
+            'percent-encoded form space' => '%2B',
+        ] as $prefixLabel => $prefix) {
+            foreach ($composedKeys as $keyLabel => $composedKey) {
+                yield $prefixLabel . ', ' . $keyLabel => [$prefix, $composedKey];
+            }
+        }
+    }
+
     #[DataProvider('sensitiveStructuralStringProvider')]
     public function testCreateRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
     {
