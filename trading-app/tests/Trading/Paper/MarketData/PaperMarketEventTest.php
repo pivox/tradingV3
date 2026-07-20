@@ -1599,6 +1599,115 @@ PHP,
         yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
     }
 
+    #[DataProvider('prefixedComposedDirectMapKeyProvider')]
+    public function testCreateRejectsPrefixedComposedDirectMapKey(
+        #[\SensitiveParameter] string $prefix,
+        #[\SensitiveParameter] string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-prefixed-map-key-sentinel';
+        $key = $prefix . $composedKey;
+
+        self::assertSensitiveRejectionWithFullTraceWithoutDisclosure(
+            static fn () => self::event(payload: [$key => $sentinel]),
+            [$key, $sentinel],
+        );
+    }
+
+    #[DataProvider('prefixedComposedDirectMapKeyProvider')]
+    public function testFromArrayRejectsPrefixedComposedDirectMapKey(
+        #[\SensitiveParameter] string $prefix,
+        #[\SensitiveParameter] string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-prefixed-map-key-sentinel';
+        $key = $prefix . $composedKey;
+        $payload = [$key => $sentinel];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithFullTraceWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$key, $sentinel],
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function prefixedComposedDirectMapKeyProvider(): iterable
+    {
+        $composedKeys = [
+            'percent-composed JSON Unicode key' => '%22api%5Cu005fkey%22',
+            'Base64 key' => 'YXBpX2tleQ==',
+            'Base64 key with non-ASCII suffix' => base64_encode("api_key\u{1F4A5}"),
+            'Base64 key with non-ASCII separator' => base64_encode("api\u{1F4A5}key"),
+            'Base64 key with invalid UTF-8 prefix' => base64_encode("\xFFapi_key"),
+            'Base64 key with invalid UTF-8 suffix' => base64_encode("api_key\xFF"),
+            'unpadded Base64 key with invalid UTF-8 prefix' => rtrim(base64_encode("\xFFapi_key"), '='),
+            'folded Base64 key' => 'YX Bp X2 tl eQ==',
+            'Base64 key in malformed quoted trailing escape' => '"YXBpX2tleQ==\\q"',
+            'Base64 key in malformed quoted leading escape' => '"\\qYXBpX2tleQ=="',
+            'Base64 key in unterminated quoted escape' => \chr(34) . 'YXBpX2tleQ==' . \chr(92),
+        ];
+
+        foreach ([
+            'dot' => '.',
+            'bang' => '!',
+            'at sign' => '@',
+            'colon' => ':',
+            'pipe' => '|',
+            'double quote' => \chr(34),
+            'encoded double quote' => '%22',
+            'double then single quote' => \chr(34) . \chr(39),
+            'single then double quote' => \chr(39) . \chr(34),
+            'token then double quote' => 'x' . \chr(34),
+            'double quote then token' => \chr(34) . 'x',
+            'token then encoded double quote' => 'x%22',
+            'encoded double quote then token' => '%22x',
+            'encoded bang' => '%21',
+            'encoded NUL' => '%00',
+            'repeated punctuation' => '!!',
+            'token then punctuation' => 'x!',
+            'punctuation then token' => '!x',
+            'token then encoded punctuation' => 'x%21',
+            'encoded punctuation then token' => '%21x',
+            'mixed encoded bytes' => '%21%00',
+            'repeated mixed prefix' => 'x_%21-.',
+        ] as $prefixLabel => $prefix) {
+            foreach ($composedKeys as $keyLabel => $composedKey) {
+                yield $prefixLabel . ', ' . $keyLabel => [$prefix, $composedKey];
+            }
+        }
+    }
+
+    #[DataProvider('ordinaryComposedDirectMapKeyProvider')]
+    public function testCreateAndFromArrayAllowOrdinaryComposedDirectMapKeys(string $key): void
+    {
+        $event = self::event(payload: [$key => '29999.0']);
+
+        self::assertSame(
+            $event->toArray(),
+            PaperMarketEvent::fromArray($event->toArray())->toArray(),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function ordinaryComposedDirectMapKeyProvider(): iterable
+    {
+        yield 'Base64 public key with invalid UTF-8 prefix' => [
+            '.' . base64_encode("\xFFprice"),
+        ];
+        yield 'folded Base64 public key' => ['.cH Jp Y2 U='];
+        yield 'Base64 public key in malformed quoted trailing escape' => [
+            '."cHJpY2U=\\q"',
+        ];
+        yield 'Base64 public key in malformed quoted leading escape' => [
+            '."\\qcHJpY2U="',
+        ];
+        yield 'Base64 public key in unterminated quoted escape' => [
+            '.' . \chr(34) . 'cHJpY2U=' . \chr(92),
+        ];
+        yield 'embedded JSON Unicode public key' => ['.!"pr\\u0069ce"'];
+    }
+
     #[DataProvider('composedSensitiveFormKeyProvider')]
     public function testCreateRejectsComposedSensitiveFormKeysWithoutDisclosure(string $key): void
     {
@@ -1757,6 +1866,146 @@ PHP,
                 yield $prefixLabel . ', ' . $keyLabel => [$prefix, $composedKey];
             }
         }
+    }
+
+    #[DataProvider('prefixedComposedSensitiveFormKeyProvider')]
+    public function testCreateRejectsPrefixedComposedSensitiveKeyInLaterFormPair(
+        #[\SensitiveParameter] string $prefix,
+        #[\SensitiveParameter] string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-prefixed-form-key-sentinel';
+        $raw = 'symbol=BTCUSDT&' . $prefix . $composedKey . '=' . $sentinel;
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    #[DataProvider('prefixedComposedSensitiveFormKeyProvider')]
+    public function testFromArrayRejectsPrefixedComposedSensitiveKeyInLaterFormPair(
+        #[\SensitiveParameter] string $prefix,
+        #[\SensitiveParameter] string $composedKey,
+    ): void {
+        $sentinel = 'synthetic-prefixed-form-key-sentinel';
+        $raw = 'symbol=BTCUSDT&' . $prefix . $composedKey . '=' . $sentinel;
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function prefixedComposedSensitiveFormKeyProvider(): iterable
+    {
+        $composedKeys = [
+            'percent-composed JSON Unicode key' => '%22api%5Cu005fkey%22',
+            'percent-composed Base64 key' => '%22YXBpX2tleQ%3D%3D%22',
+        ];
+
+        foreach (self::composedKeyPrefixProvider() as $prefixLabel => [$prefix]) {
+            foreach ($composedKeys as $keyLabel => $composedKey) {
+                yield $prefixLabel . ', ' . $keyLabel => [$prefix, $composedKey];
+            }
+        }
+    }
+
+    #[DataProvider('composedKeyPrefixProvider')]
+    public function testCreateAndFromArrayAllowOrdinaryKeysAndRelationsWithCompositionPrefixes(
+        string $prefix,
+    ): void {
+        $event = self::event(payload: [
+            $prefix . 'price' => '29999.0',
+            'raw' => 'symbol=BTCUSDT&' . $prefix . 'price=29999.0',
+        ]);
+
+        self::assertSame(
+            $event->toArray(),
+            PaperMarketEvent::fromArray($event->toArray())->toArray(),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function composedKeyPrefixProvider(): iterable
+    {
+        yield 'ASCII lowercase letter' => ['x'];
+        yield 'ASCII uppercase letter' => ['Z'];
+        yield 'ASCII digit' => ['0'];
+        yield 'underscore' => ['_'];
+        yield 'hyphen' => ['-'];
+        yield 'dot' => ['.'];
+        yield 'bang' => ['!'];
+        yield 'at sign' => ['@'];
+        yield 'colon' => [':'];
+        yield 'slash' => ['/'];
+        yield 'backslash' => ['\\'];
+        yield 'pipe' => ['|'];
+        yield 'comma' => [','];
+        yield 'semicolon' => [';'];
+        yield 'open parenthesis' => ['('];
+        yield 'close parenthesis' => [')'];
+        yield 'open bracket' => ['['];
+        yield 'close bracket' => [']'];
+        yield 'open brace' => ['{'];
+        yield 'close brace' => ['}'];
+        yield 'question mark' => ['?'];
+        yield 'hash' => ['#'];
+        yield 'dollar' => ['$'];
+        yield 'caret' => ['^'];
+        yield 'asterisk' => ['*'];
+        yield 'double quote' => [\chr(34)];
+        yield 'single quote' => [\chr(39)];
+        yield 'encoded double quote' => ['%22'];
+        yield 'encoded single quote' => ['%27'];
+        yield 'repeated double quote' => [\chr(34) . \chr(34)];
+        yield 'repeated single quote' => [\chr(39) . \chr(39)];
+        yield 'double then single quote' => [\chr(34) . \chr(39)];
+        yield 'single then double quote' => [\chr(39) . \chr(34)];
+        yield 'token then double quote' => ['x' . \chr(34)];
+        yield 'double quote then token' => [\chr(34) . 'x'];
+        yield 'token then encoded double quote' => ['x%22'];
+        yield 'encoded double quote then token' => ['%22x'];
+        yield 'equals' => ['='];
+        yield 'encoded equals' => ['%3D'];
+        yield 'ampersand' => ['&'];
+        yield 'encoded ampersand' => ['%26'];
+        yield 'percent' => ['%'];
+        yield 'malformed percent' => ['%2'];
+        yield 'backtick' => [\chr(96)];
+        yield 'space' => [' '];
+        yield 'horizontal tab' => ["\t"];
+        yield 'line feed' => ["\n"];
+        yield 'vertical tab' => ["\v"];
+        yield 'form feed' => ["\f"];
+        yield 'carriage return' => ["\r"];
+        yield 'form plus' => ['+'];
+        yield 'encoded bang' => ['%21'];
+        yield 'encoded NUL' => ['%00'];
+        yield 'encoded dot' => ['%2E'];
+        yield 'encoded space' => ['%20'];
+        yield 'encoded plus' => ['%2B'];
+        yield 'encoded tab' => ['%09'];
+        yield 'encoded slash' => ['%2F'];
+        yield 'encoded backslash' => ['%5C'];
+        yield 'repeated token' => ['xx'];
+        yield 'repeated punctuation' => ['!!'];
+        yield 'token then punctuation' => ['x!'];
+        yield 'punctuation then token' => ['!x'];
+        yield 'token then encoded punctuation' => ['x%21'];
+        yield 'encoded punctuation then token' => ['%21x'];
+        yield 'mixed underscore and hyphen' => ['_-'];
+        yield 'mixed dot and hyphen' => ['.-'];
+        yield 'mixed encoded bytes' => ['%21%00'];
+        yield 'repeated mixed prefix' => ['x_%21-.'];
+        yield 'form plus then token' => ['+x'];
+        yield 'encoded space then token' => ['%20x'];
     }
 
     #[DataProvider('sensitiveStructuralStringProvider')]
@@ -2320,6 +2569,27 @@ PHP,
 
                 $current = $current->getPrevious();
             } while ($current !== null);
+        }
+    }
+
+    /**
+     * @param callable(): mixed $operation
+     * @param list<string>       $prohibitedFragments
+     */
+    private static function assertSensitiveRejectionWithFullTraceWithoutDisclosure(
+        #[\SensitiveParameter] callable $operation,
+        #[\SensitiveParameter] array $prohibitedFragments,
+    ): void {
+        try {
+            $operation();
+            self::fail('A prefixed composed credential key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+            $trace = self::renderExceptionTraceChain($exception);
+            foreach ($prohibitedFragments as $fragment) {
+                self::assertStringNotContainsString($fragment, $trace);
+            }
         }
     }
 

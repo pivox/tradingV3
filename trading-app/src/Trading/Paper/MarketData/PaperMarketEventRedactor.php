@@ -178,7 +178,12 @@ REGEX;
                     }
 
                     self::consumeBytes($byteCount, \strlen($key));
-                    self::assertMapKeySafe($key, $item);
+                    self::assertMapKeySafe(
+                        $key,
+                        $item,
+                        $decodedNodeCount,
+                        $decodedByteCount,
+                    );
                 }
 
                 if (\is_array($item)) {
@@ -302,7 +307,11 @@ REGEX;
         self::assertNoPrivateKeyEnvelopeMarkers($canonical);
         self::assertNoBasicCredentials($canonical);
         self::assertNoSensitiveAssignments($canonical);
-        self::assertNoSensitiveJsonObjectKeys($canonical);
+        self::assertNoSensitiveJsonObjectKeys(
+            $canonical,
+            $decodedNodeCount,
+            $decodedByteCount,
+        );
 
         $firstByte = $canonical[0];
         if ($firstByte === '{' || $firstByte === '[' || $firstByte === '"') {
@@ -500,10 +509,17 @@ REGEX;
         }
     }
 
-    private static function assertNoSensitiveJsonObjectKeys(#[\SensitiveParameter] string $value): void
-    {
+    private static function assertNoSensitiveJsonObjectKeys(
+        #[\SensitiveParameter] string $value,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
         self::assertNoSensitiveJsonMemberKeys($value);
-        self::assertNoSensitiveUnquotedStructuredKeys($value);
+        self::assertNoSensitiveUnquotedStructuredKeys(
+            $value,
+            $decodedNodeCount,
+            $decodedByteCount,
+        );
     }
 
     private static function assertNoSensitiveJsonMemberKeys(#[\SensitiveParameter] string $value): void
@@ -631,6 +647,8 @@ REGEX;
 
     private static function assertNoSensitiveUnquotedStructuredKeys(
         #[\SensitiveParameter] string $value,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
     ): void
     {
         $length = \strlen($value);
@@ -661,7 +679,12 @@ REGEX;
                 continue;
             }
 
-            self::assertMapKeySafe($candidate, 'synthetic-untrusted-structured-value');
+            self::assertMapKeySafe(
+                $candidate,
+                'synthetic-untrusted-structured-value',
+                $decodedNodeCount,
+                $decodedByteCount,
+            );
         }
     }
 
@@ -1314,7 +1337,12 @@ REGEX;
                 foreach ($value as $key => &$item) {
                     if (\is_string($key)) {
                         self::consumeDecodedBytes($decodedByteCount, \strlen($key));
-                        self::assertMapKeySafe($key, $item);
+                        self::assertMapKeySafe(
+                            $key,
+                            $item,
+                            $decodedNodeCount,
+                            $decodedByteCount,
+                        );
                     }
 
                     self::scanDecodedValue(
@@ -1404,7 +1432,28 @@ REGEX;
                 throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
             }
 
+            self::consumeDecodedBytes($decodedByteCount, $decodedKeyBytes);
             if ($rawKeyMatch !== 1 && $composedKeyMatch !== 1) {
+                self::assertEmbeddedComposedMapKeyCandidatesSafe(
+                    $key,
+                    $item,
+                    $decodeDepth,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                );
+
+                // An early assignment delimiter can leave the real composed relation in the
+                // nominal value (for example, ="encoded-key"=value). Inspect that component for
+                // composed key candidates without recursively reinterpreting arbitrary public
+                // value bytes as an unbounded chain of nested forms.
+                self::assertEmbeddedComposedMapKeyCandidatesSafe(
+                    $item,
+                    null,
+                    $decodeDepth,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                );
+
                 if ($separator === false) {
                     break;
                 }
@@ -1413,8 +1462,12 @@ REGEX;
                 continue;
             }
 
-            self::consumeDecodedBytes($decodedByteCount, $decodedKeyBytes);
-            self::assertMapKeySafe($key, $item);
+            self::assertMapKeySafe(
+                $key,
+                $item,
+                $decodedNodeCount,
+                $decodedByteCount,
+            );
 
             $activeArrayReferences = [];
             self::scanDecodedValue(
@@ -1683,9 +1736,16 @@ REGEX;
     private static function assertMapKeySafe(
         #[\SensitiveParameter] string $key,
         #[\SensitiveParameter] mixed $value,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+        int $startingDecodeDepth = 0,
     ): void
     {
-        for ($decodeDepth = 0; $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH; ++$decodeDepth) {
+        for (
+            $decodeDepth = $startingDecodeDepth;
+            $decodeDepth <= self::MAX_SENSITIVE_DECODE_DEPTH;
+            ++$decodeDepth
+        ) {
             $normalizedKey = self::normalizeKey($key);
             if (self::isSensitiveKey($normalizedKey)) {
                 throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
@@ -1740,6 +1800,14 @@ REGEX;
                 }
 
                 if ($base64Decoded === null) {
+                    self::assertEmbeddedComposedMapKeyCandidatesSafe(
+                        $key,
+                        $value,
+                        $decodeDepth,
+                        $decodedNodeCount,
+                        $decodedByteCount,
+                    );
+
                     return;
                 }
 
@@ -1750,8 +1818,353 @@ REGEX;
                 throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
             }
 
+            self::consumeDecodedNode($decodedNodeCount);
+            self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
             $key = $decoded;
         }
+    }
+
+    /**
+     * Streams over composition boundaries inside an otherwise non-canonical map key. Quoted
+     * candidates and delimiter-bounded Base64 tokens are checked independently without building
+     * a candidate list; ordinary punctuation and prose remain valid when no candidate decodes to
+     * a sensitive key.
+     */
+    private static function assertEmbeddedComposedMapKeyCandidatesSafe(
+        #[\SensitiveParameter] string $key,
+        #[\SensitiveParameter] mixed $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
+        self::scanEmbeddedJsonUnicodeMapKeyCandidate(
+            $key,
+            $value,
+            $decodeDepth,
+            $decodedNodeCount,
+            $decodedByteCount,
+        );
+        self::scanEmbeddedBase64MapKeyCandidates(
+            $key,
+            $value,
+            $decodeDepth,
+            $decodedNodeCount,
+            $decodedByteCount,
+        );
+
+        $length = \strlen($key);
+        for ($offset = 0; $offset < $length;) {
+            $quote = $key[$offset];
+            if ($quote !== '"' && $quote !== "'") {
+                ++$offset;
+                continue;
+            }
+
+            $quoteStart = $offset;
+            ++$offset;
+            while ($offset < $length && $key[$offset] !== $quote) {
+                if ($key[$offset] === '\\') {
+                    $offset += 2;
+
+                    continue;
+                }
+
+                ++$offset;
+            }
+
+            $hasClosingQuote = $offset < $length;
+            $quotedCandidate = substr(
+                $key,
+                $quoteStart,
+                ($hasClosingQuote ? $offset + 1 : $length) - $quoteStart,
+            );
+            if ($hasClosingQuote) {
+                ++$offset;
+            }
+
+            $decodedCandidate = null;
+            if ($quote === '"') {
+                try {
+                    $decodedCandidate = json_decode(
+                        $hasClosingQuote
+                            ? $quotedCandidate
+                            : $quotedCandidate . '"',
+                        flags: JSON_THROW_ON_ERROR,
+                    );
+                } catch (\JsonException) {
+                    $unicodeEscapeMatch = preg_match(
+                        '/\\\\u[0-9A-Fa-f]{4}/',
+                        $quotedCandidate,
+                    );
+                    if ($unicodeEscapeMatch === false) {
+                        throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+                    }
+
+                    if ($unicodeEscapeMatch === 1) {
+                        throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+                    }
+                }
+            } else {
+                $decodedCandidate = substr(
+                    $quotedCandidate,
+                    1,
+                    \strlen($quotedCandidate) - ($hasClosingQuote ? 2 : 1),
+                );
+            }
+
+            if (\is_string($decodedCandidate)) {
+                self::scanDecodedMapKeyCandidate(
+                    $decodedCandidate,
+                    $value,
+                    $decodeDepth + 1,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                );
+            }
+        }
+    }
+
+    private static function scanEmbeddedJsonUnicodeMapKeyCandidate(
+        #[\SensitiveParameter] string $key,
+        #[\SensitiveParameter] mixed $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
+        $unicodeEscapePattern = '/\\\\u(?:[dD][89AaBb][0-9A-Fa-f]{2}'
+            . '\\\\u[dD][c-fC-F][0-9A-Fa-f]{2}|[0-9A-Fa-f]{4})/';
+        $unicodeEscapeMatch = preg_match($unicodeEscapePattern, $key);
+        if ($unicodeEscapeMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($unicodeEscapeMatch !== 1) {
+            return;
+        }
+
+        $decodedCandidate = preg_replace_callback(
+            $unicodeEscapePattern,
+            static function (array $matches): string {
+                try {
+                    $decoded = json_decode(
+                        '"' . $matches[0] . '"',
+                        flags: JSON_THROW_ON_ERROR,
+                    );
+                } catch (\JsonException) {
+                    throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+                }
+
+                if (!\is_string($decoded)) {
+                    throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+                }
+
+                return $decoded;
+            },
+            $key,
+        );
+        if ($decodedCandidate === null) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        self::scanDecodedMapKeyCandidate(
+            $decodedCandidate,
+            $value,
+            $decodeDepth + 1,
+            $decodedNodeCount,
+            $decodedByteCount,
+        );
+    }
+
+    private static function scanEmbeddedBase64MapKeyCandidates(
+        #[\SensitiveParameter] string $key,
+        #[\SensitiveParameter] mixed $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
+        $length = \strlen($key);
+        for ($offset = 0; $offset < $length;) {
+            if (!self::isBase64TokenByte($key[$offset], false)) {
+                ++$offset;
+
+                continue;
+            }
+
+            $candidateStart = $offset;
+            while ($offset < $length && self::isBase64TokenByte($key[$offset], false)) {
+                ++$offset;
+            }
+            while ($offset < $length && $key[$offset] === '=') {
+                ++$offset;
+            }
+
+            $candidate = substr($key, $candidateStart, $offset - $candidateStart);
+            self::scanBase64MapKeyCandidateAlignments(
+                $candidate,
+                $value,
+                $decodeDepth,
+                $decodedNodeCount,
+                $decodedByteCount,
+            );
+
+            if (str_ends_with($candidate, '=')) {
+                continue;
+            }
+
+            // Whitespace-folded Base64 is one composed representation. Compact only the current
+            // maximal run, retain no segment list, and inspect the same four possible alignments.
+            $compacted = $candidate;
+            $segmentCount = 1;
+            $foldedOffset = $offset;
+            while ($foldedOffset < $length) {
+                $whitespaceStart = $foldedOffset;
+                while (
+                    $foldedOffset < $length
+                    && self::isAsciiWhitespace($key[$foldedOffset])
+                ) {
+                    ++$foldedOffset;
+                }
+
+                if (
+                    $foldedOffset === $whitespaceStart
+                    || $foldedOffset >= $length
+                    || !self::isBase64TokenByte($key[$foldedOffset], false)
+                ) {
+                    break;
+                }
+
+                $segmentHasPadding = false;
+                while (
+                    $foldedOffset < $length
+                    && self::isBase64TokenByte($key[$foldedOffset], true)
+                ) {
+                    $segmentHasPadding = $segmentHasPadding || $key[$foldedOffset] === '=';
+                    $compacted .= $key[$foldedOffset];
+                    ++$foldedOffset;
+                }
+                ++$segmentCount;
+
+                if ($segmentHasPadding) {
+                    break;
+                }
+            }
+
+            if ($segmentCount > 1) {
+                self::scanBase64MapKeyCandidateAlignments(
+                    $compacted,
+                    $value,
+                    $decodeDepth,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                );
+                $offset = $foldedOffset;
+            }
+        }
+    }
+
+    private static function scanBase64MapKeyCandidateAlignments(
+        #[\SensitiveParameter] string $candidate,
+        #[\SensitiveParameter] mixed $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
+        if (\strlen($candidate) < 8) {
+            return;
+        }
+
+        for ($alignment = 0; $alignment < 4; ++$alignment) {
+            $decodedCandidate = self::decodeBase64AlignmentStream($candidate, $alignment);
+            if ($decodedCandidate === null) {
+                continue;
+            }
+
+            self::scanDecodedMapKeyCandidate(
+                $decodedCandidate,
+                $value,
+                $decodeDepth + 1,
+                $decodedNodeCount,
+                $decodedByteCount,
+            );
+        }
+    }
+
+    private static function scanDecodedMapKeyCandidate(
+        #[\SensitiveParameter] string $candidate,
+        #[\SensitiveParameter] mixed $value,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+    ): void {
+        // Adjacent prefix/composed quotes produce an empty speculative interval. It carries no
+        // representation and must not consume decode depth before the next opener is inspected.
+        if ($candidate === '') {
+            return;
+        }
+
+        if ($decodeDepth > self::MAX_SENSITIVE_DECODE_DEPTH) {
+            throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
+        }
+
+        self::consumeDecodedNode($decodedNodeCount);
+        self::consumeDecodedBytes($decodedByteCount, \strlen($candidate));
+        if (preg_match('//u', $candidate) !== 1) {
+            self::assertNormalizedMapKeyCandidateSafe(mb_scrub($candidate, 'UTF-8'));
+            self::assertNoSensitiveBinaryAssignments($candidate);
+
+            return;
+        }
+
+        $hasNonAscii = self::assertNormalizedMapKeyCandidateSafe($candidate);
+        if ($hasNonAscii) {
+            return;
+        }
+
+        self::assertMapKeySafe(
+            $candidate,
+            $value,
+            $decodedNodeCount,
+            $decodedByteCount,
+            $decodeDepth,
+        );
+    }
+
+    /** Returns whether non-ASCII code points remain after supported confusable mapping. */
+    private static function assertNormalizedMapKeyCandidateSafe(
+        #[\SensitiveParameter] string $candidate,
+    ): bool {
+        $compatibilityNormalized = \Normalizer::normalize($candidate, \Normalizer::FORM_KC);
+        if ($compatibilityNormalized === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        $candidateWithMappedConfusables = strtr(
+            $compatibilityNormalized,
+            self::KEY_CONFUSABLES,
+        );
+        $withWordBoundaries = preg_replace(
+            [
+                '/(?<=[a-z0-9])(?=[A-Z])/',
+                '/(?<=[A-Z])(?=[A-Z][a-z])/',
+            ],
+            '_',
+            trim($candidateWithMappedConfusables),
+        );
+        $normalizedCandidate = preg_replace(
+            '/[^a-z0-9]+/',
+            '_',
+            strtolower($withWordBoundaries ?? ''),
+        );
+        if (self::isSensitiveKey(trim($normalizedCandidate ?? '', '_'))) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+        }
+
+        $nonAsciiMatch = preg_match('/[^\x00-\x7F]/', $candidateWithMappedConfusables);
+        if ($nonAsciiMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        return $nonAsciiMatch === 1;
     }
 
     private static function decodeNonCanonicalBase64MapKey(
