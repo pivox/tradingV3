@@ -1277,6 +1277,69 @@ PHP,
         }
     }
 
+    #[RunInSeparateProcess]
+    public function testNulTimestampDoesNotLeakItsRawValueThroughAFullTraceChain(): void
+    {
+        ini_set('zend.exception_ignore_args', '0');
+        self::assertSame('0', ini_get('zend.exception_ignore_args'));
+        $sentinel = 'synthetic-timestamp-trace-sentinel';
+        $data = self::event()->toArray();
+        $data['exchange_timestamp'] .= "\0" . $sentinel;
+
+        try {
+            PaperMarketEvent::fromArray($data);
+            self::fail('A NUL-containing timestamp must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_timestamp_invalid', $exception->getMessage());
+            self::assertStringNotContainsString(
+                $sentinel,
+                self::renderExceptionTraceChain($exception),
+            );
+            self::assertNull($exception->getPrevious());
+        }
+    }
+
+    #[RunInSeparateProcess]
+    public function testCreateDoesNotLeakInvalidRawSymbolOrSequenceThroughFullTraces(): void
+    {
+        ini_set('zend.exception_ignore_args', '0');
+        self::assertSame('0', ini_get('zend.exception_ignore_args'));
+        $sentinel = 'synthetic-create-boundary-trace-sentinel';
+        $operations = [
+            'paper_market_symbol_not_allowed' => static fn () => PaperMarketEvent::create(
+                PaperMarketDataVenue::OKX,
+                'SOLUSDT-' . $sentinel,
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+                new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+                '42',
+                ['price' => '29999.0'],
+            ),
+            'paper_market_sequence_invalid' => static fn () => PaperMarketEvent::create(
+                PaperMarketDataVenue::OKX,
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                new \DateTimeImmutable('2026-07-19T10:00:00.123456Z'),
+                new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+                'invalid-' . $sentinel,
+                ['price' => '29999.0'],
+            ),
+        ];
+
+        foreach ($operations as $expectedCode => $operation) {
+            try {
+                $operation();
+                self::fail(sprintf('%s input must be rejected.', $expectedCode));
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame($expectedCode, $exception->getMessage());
+                self::assertStringNotContainsString(
+                    $sentinel,
+                    self::renderExceptionTraceChain($exception),
+                );
+            }
+        }
+    }
+
     /**
      * @return iterable<string, array{string}>
      */
@@ -1942,6 +2005,21 @@ PHP,
                 $current = $current->getPrevious();
             } while ($current !== null);
         }
+    }
+
+    private static function renderExceptionTraceChain(\Throwable $exception): string
+    {
+        $rendered = '';
+        $current = $exception;
+        do {
+            $rendered .= print_r([
+                'message' => $current->getMessage(),
+                'trace' => $current->getTrace(),
+            ], true);
+            $current = $current->getPrevious();
+        } while ($current !== null);
+
+        return $rendered;
     }
 
     /**

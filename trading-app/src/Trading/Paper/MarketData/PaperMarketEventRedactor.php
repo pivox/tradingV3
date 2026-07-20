@@ -385,7 +385,10 @@ REGEX;
             }
         }
 
-        $base64Decoded = self::decodeRecoverableBase64($canonical);
+        $base64Decoded = self::decodeRecoverableBase64(
+            $canonical,
+            rejectInvalidUtf8: self::hasBase64EncodingMarker($canonical),
+        );
         if ($base64Decoded === null) {
             $base64Decoded = self::decodeFoldedBase64($canonical);
         }
@@ -718,11 +721,8 @@ REGEX;
                 'allowed_classes' => false,
                 'max_depth' => self::MAX_NESTING_DEPTH + 1,
             ]);
-        } catch (\Throwable $exception) {
-            throw new \InvalidArgumentException(
-                'paper_market_sensitive_field_rejected',
-                previous: $exception,
-            );
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
         } finally {
             restore_error_handler();
         }
@@ -1044,8 +1044,10 @@ REGEX;
                 continue;
             }
 
+            $candidate = substr($value, $candidateStart, $candidateLength);
             $decoded = self::decodeRecoverableBase64(
-                substr($value, $candidateStart, $candidateLength),
+                $candidate,
+                rejectInvalidUtf8: self::hasBase64EncodingMarker($candidate),
             );
             if ($decoded === null) {
                 continue;
@@ -1062,12 +1064,7 @@ REGEX;
         }
     }
 
-    /**
-     * Scans whitespace-folded Base64 candidates in one forward pass. The compacted candidate
-     * must still pass canonical Base64 validation before any decoded content is scanned.
-     *
-     * @param array<string, true> $decodedStrings
-     */
+    /** @param array<string, true> $decodedStrings */
     private static function scanEmbeddedFoldedBase64Values(
         #[\SensitiveParameter]
         string $value,
@@ -1087,52 +1084,84 @@ REGEX;
                 continue;
             }
 
-            $candidateStart = $offset;
-            $hasFold = false;
-            do {
+            $compacted = '';
+            /** @var array<int, int> $alignmentStarts */
+            $alignmentStarts = [];
+
+            while (true) {
+                $segmentStart = \strlen($compacted);
+                $segmentHasPadding = false;
                 while ($offset < $length && self::isBase64TokenByte($value[$offset], true)) {
+                    $segmentHasPadding = $segmentHasPadding || $value[$offset] === '=';
+                    $compacted .= $value[$offset];
                     ++$offset;
                 }
 
-                $segmentEnd = $offset;
                 while ($offset < $length && self::isAsciiWhitespace($value[$offset])) {
                     ++$offset;
                 }
 
-                if (
-                    $offset < $length
-                    && self::isBase64TokenByte($value[$offset], false)
-                ) {
-                    $hasFold = true;
+                $hasNextSegment = $offset < $length
+                    && self::isBase64TokenByte($value[$offset], false);
+                if (!$hasNextSegment || $segmentHasPadding) {
+                    break;
+                }
 
+                $alignment = $segmentStart % 4;
+                $alignmentStarts[$alignment] ??= $segmentStart;
+            }
+
+            // A later segment start shares one of four Base64 alignments, so its decoded value
+            // is a suffix of the earliest stream for that alignment; no suffix retries are needed.
+            foreach ($alignmentStarts as $alignmentStart) {
+                $decoded = self::decodeBase64AlignmentStream($compacted, $alignmentStart);
+                if ($decoded === null) {
                     continue;
                 }
 
-                $offset = $segmentEnd;
+                self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
+                if (preg_match('//u', $decoded) !== 1) {
+                    $decoded = mb_scrub($decoded, 'UTF-8');
+                }
 
-                break;
-            } while (true);
-
-            if (!$hasFold || !self::isBase64CandidateRightBoundary($value, $offset)) {
-                continue;
+                self::scanEncodedString(
+                    $decoded,
+                    $decodeDepth + 1,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                    $decodedStrings,
+                );
             }
-
-            $decoded = self::decodeFoldedBase64(
-                substr($value, $candidateStart, $offset - $candidateStart),
-            );
-            if ($decoded === null) {
-                continue;
-            }
-
-            self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
-            self::scanEncodedString(
-                $decoded,
-                $decodeDepth + 1,
-                $decodedNodeCount,
-                $decodedByteCount,
-                $decodedStrings,
-            );
         }
+    }
+
+    private static function decodeBase64AlignmentStream(
+        #[\SensitiveParameter] string $compacted,
+        int $start,
+    ): ?string {
+        $candidate = substr($compacted, $start);
+        $unpadded = rtrim($candidate, '=');
+        if (str_contains($unpadded, '=')) {
+            return null;
+        }
+
+        $remainder = \strlen($unpadded) % 4;
+        if ($remainder === 1) {
+            if ($unpadded !== $candidate) {
+                return null;
+            }
+
+            $unpadded = substr($unpadded, 0, -1);
+            $remainder = 0;
+        }
+
+        $standard = strtr($unpadded, '-_', '+/');
+        $decoded = base64_decode(
+            $standard . str_repeat('=', (4 - $remainder) % 4),
+            true,
+        );
+
+        return $decoded === false ? null : $decoded;
     }
 
     private static function isPhpSerializedCandidateLeftBoundary(string $value, int $offset): bool
@@ -1312,6 +1341,8 @@ REGEX;
         string $value,
         int $minimumLength = 8,
         bool $allowUrlSafe = true,
+        bool $rejectInvalidUtf8 = true,
+        bool $recoverInvalidUtf8 = true,
     ): ?string {
         if (\strlen($value) < $minimumLength) {
             return null;
@@ -1347,8 +1378,11 @@ REGEX;
 
         if (preg_match('//u', $decoded) !== 1) {
             self::assertNoSensitiveBinaryAssignments($decoded);
+            if ($rejectInvalidUtf8) {
+                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
+            }
 
-            return null;
+            return $recoverInvalidUtf8 ? mb_scrub($decoded, 'UTF-8') : null;
         }
 
         return $decoded;
@@ -1379,7 +1413,10 @@ REGEX;
             $compacted .= $segment;
         }
 
-        return self::decodeRecoverableBase64($compacted);
+        return self::decodeRecoverableBase64(
+            $compacted,
+            rejectInvalidUtf8: self::hasBase64EncodingMarker($compacted),
+        );
     }
 
     private static function assertNoSensitiveBinaryAssignments(
@@ -1393,6 +1430,11 @@ REGEX;
         if ($match === 1) {
             throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
         }
+    }
+
+    private static function hasBase64EncodingMarker(string $value): bool
+    {
+        return strpbrk($value, '+/=') !== false;
     }
 
     private static function consumeDecodedNode(int &$decodedNodeCount): void
@@ -1507,7 +1549,11 @@ REGEX;
             }
 
             if ($decoded === $key) {
-                $base64Decoded = self::decodeRecoverableBase64($key);
+                $base64Decoded = self::decodeRecoverableBase64(
+                    $key,
+                    rejectInvalidUtf8: false,
+                    recoverInvalidUtf8: false,
+                );
                 if ($base64Decoded === null) {
                     $base64Decoded = self::decodeNonCanonicalBase64MapKey($key);
                 }
@@ -1547,23 +1593,7 @@ REGEX;
     {
         foreach ([self::SENSITIVE_KEYS, self::SENSITIVE_KEY_ALIASES] as $sensitiveKeys) {
             foreach ($sensitiveKeys as $sensitiveKey) {
-                if ($sensitiveKey !== 'sign') {
-                    if (str_contains($normalizedKey, $sensitiveKey)) {
-                        return true;
-                    }
-
-                    continue;
-                }
-
-                $match = preg_match(
-                    '~(?:\A|_)' . preg_quote($sensitiveKey, '~') . '(?:s|[0-9]+)?(?:_|\z)~D',
-                    $normalizedKey,
-                );
-                if ($match === false) {
-                    throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
-                }
-
-                if ($match === 1) {
+                if (str_contains($normalizedKey, $sensitiveKey)) {
                     return true;
                 }
             }

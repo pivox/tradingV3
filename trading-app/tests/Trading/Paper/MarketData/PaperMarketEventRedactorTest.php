@@ -867,6 +867,135 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'canonical Base64 with invalid UTF-8 prefix' => [
             base64_encode("\xFF" . $json),
         ];
+        yield 'canonical Base64 with invalid UTF-8 and percent-encoded form' => [
+            base64_encode("\xFF" . rawurlencode('api_key=synthetic-redaction-sentinel')),
+        ];
+        yield 'alphanumeric unpadded Base64 with invalid UTF-8 and percent-encoded form' => [
+            base64_encode("\x80" . rawurlencode('api_key=synthetic-redaction-sentinel')),
+        ];
+        yield 'canonical Base64 with invalid UTF-8 and nested Base64 JSON' => [
+            base64_encode("\xFF" . base64_encode($json)),
+        ];
+        $nestedJson = json_encode(
+            [
+                'api_key' => 'synthetic-redaction-sentinel',
+                'note' => 'xxxxxx',
+            ],
+            JSON_THROW_ON_ERROR,
+        );
+        yield 'alphanumeric unpadded Base64 with invalid UTF-8 and nested Base64 JSON' => [
+            base64_encode("\x80" . base64_encode($nestedJson)),
+        ];
+        yield 'canonical Base64 containing opaque invalid UTF-8 binary' => [
+            base64_encode("\xFF\x00\xFEsynthetic-redaction-sentinel"),
+        ];
+    }
+
+    public function testRejectsFoldedCredentialBase64AtEveryInternalOffsetAndProseBoundary(): void
+    {
+        $json = json_encode(
+            [
+                'note' => "\u{083E}",
+                'api_key' => 'synthetic-fold-boundary-sentinel',
+                'suffix' => '',
+            ],
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        );
+        $classicPadded = base64_encode($json);
+        $urlPadded = strtr($classicPadded, '+/', '-_');
+        self::assertMatchesRegularExpression('/[+\/]/', $classicPadded);
+        self::assertStringEndsWith('=', $classicPadded);
+        self::assertMatchesRegularExpression('/[-_]/', $urlPadded);
+        $encodings = [
+            'classic padded' => $classicPadded,
+            'classic unpadded' => rtrim($classicPadded, '='),
+            'URL-safe padded' => $urlPadded,
+            'URL-safe unpadded' => rtrim($urlPadded, '='),
+        ];
+        $whitespaceBytes = [
+            'space' => ' ',
+            'horizontal tab' => "\t",
+            'line feed' => "\n",
+            'vertical tab' => "\v",
+            'form feed' => "\f",
+            'carriage return' => "\r",
+        ];
+        $contexts = [
+            'unbounded' => static fn (string $folded): string => $folded,
+            'left prose' => static fn (string $folded): string => 'market ' . $folded,
+            'right prose' => static fn (string $folded): string => $folded . ' snapshot',
+            'both prose' => static fn (string $folded): string => 'market ' . $folded . ' snapshot',
+        ];
+
+        $rejectionCount = 0;
+        foreach ($encodings as $encodingLabel => $encoded) {
+            for ($offset = 1, $length = \strlen($encoded); $offset < $length; ++$offset) {
+                foreach ($whitespaceBytes as $whitespaceLabel => $whitespace) {
+                    $folded = substr($encoded, 0, $offset)
+                        . $whitespace
+                        . substr($encoded, $offset);
+
+                    foreach ($contexts as $contextLabel => $context) {
+                        try {
+                            PaperMarketEventRedactor::assertSafe(['raw' => $context($folded)]);
+                            self::fail(sprintf(
+                                '%s Base64 folded with %s at offset %d was accepted in %s.',
+                                $encodingLabel,
+                                $whitespaceLabel,
+                                $offset,
+                                $contextLabel,
+                            ));
+                        } catch (\InvalidArgumentException $exception) {
+                            self::assertSame(
+                                'paper_market_sensitive_field_rejected',
+                                $exception->getMessage(),
+                                sprintf(
+                                    '%s Base64 folded with %s at offset %d in %s.',
+                                    $encodingLabel,
+                                    $whitespaceLabel,
+                                    $offset,
+                                    $contextLabel,
+                                ),
+                            );
+                            ++$rejectionCount;
+                        }
+                    }
+                }
+            }
+        }
+
+        self::assertGreaterThan(0, $rejectionCount);
+    }
+
+    public function testOneMiBWhitespaceFoldRunStopsAtTheDocumentedDecodeByteBound(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_decode_bytes_exceeded');
+
+        PaperMarketEventRedactor::assertSafe([
+            str_repeat('A ', 524_288),
+        ]);
+    }
+
+    #[RunInSeparateProcess]
+    public function testSerializedDecodeFailureDoesNotLeakItsRawValueThroughAFullTraceChain(): void
+    {
+        ini_set('zend.exception_ignore_args', '0');
+        self::assertSame('0', ini_get('zend.exception_ignore_args'));
+        $sentinel = 'synthetic-serialized-trace-sentinel';
+        $serialized = sprintf('S:%d:"%s";', \strlen($sentinel), $sentinel);
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $serialized]);
+            self::fail('The serialized value must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertStringNotContainsString(
+                $sentinel,
+                self::renderExceptionTraceChain($exception),
+            );
+            self::assertNull($exception->getPrevious());
+        }
     }
 
     #[DataProvider('malformedBase64CredentialPaddingProvider')]
@@ -1077,7 +1206,7 @@ final class PaperMarketEventRedactorTest extends TestCase
     {
         PaperMarketEventRedactor::assertSafe([
             'prose' => 'ignored & websocket disconnected',
-            'assignment' => 'connection_state: disconnected',
+            'status_text' => 'connection_state: disconnected',
             'query_status' => 'ignored&connection_state=disconnected',
         ]);
 
@@ -1107,23 +1236,54 @@ final class PaperMarketEventRedactorTest extends TestCase
         ];
     }
 
-    public function testAllowsPublicKeysWithoutMandatorySensitiveFragments(): void
+    public function testAllowsOnlyThePlanApprovedPublicMarketKeys(): void
     {
         PaperMarketEventRedactor::assertSafe([
-            'signed_price' => '29999.0',
-            'signal' => 'public_trade',
-            'assignment' => 'public_partition',
-            'design' => 'public_layout',
+            'symbol' => 'BTCUSDT',
+            'price' => '29999.0',
+            'size' => '1.25',
+            'bid' => '29998.5',
+            'ask' => '29999.5',
+            'timestamp' => '2026-07-19T10:00:00.123456Z',
+            'sequence' => '42',
         ]);
 
         self::addToAssertionCount(1);
     }
 
-    public function testAllowsDesignAssignmentInFormString(): void
+    #[DataProvider('normalizedSignFragmentProvider')]
+    public function testRejectsEveryNormalizedSignSubstringInDirectMapKeys(string $key): void
     {
-        PaperMarketEventRedactor::assertSafe(['raw' => 'design=public_layout']);
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
 
-        self::addToAssertionCount(1);
+        PaperMarketEventRedactor::assertSafe([$key => 'public-market-value']);
+    }
+
+    #[DataProvider('normalizedSignFragmentProvider')]
+    public function testRejectsEveryNormalizedSignSubstringAfterEncoding(string $key): void
+    {
+        foreach ([
+            rawurlencode($key) . '=public-market-value',
+            base64_encode(json_encode([$key => 'public-market-value'], JSON_THROW_ON_ERROR)),
+        ] as $encoded) {
+            try {
+                PaperMarketEventRedactor::assertSafe(['raw' => $encoded]);
+                self::fail(sprintf('Encoded sign-fragment key %s was accepted.', $key));
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            }
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function normalizedSignFragmentProvider(): iterable
+    {
+        yield 'signed payload' => ['signed_payload'];
+        yield 'signal' => ['signal'];
+        yield 'assignment' => ['assignment'];
+        yield 'design' => ['design'];
+        yield 'resigned payload' => ['resign_payload'];
     }
 
     #[DataProvider('mandatorySensitiveMetadataKeyProvider')]
@@ -1276,6 +1436,21 @@ final class PaperMarketEventRedactorTest extends TestCase
                 $current = $current->getPrevious();
             } while ($current !== null);
         }
+    }
+
+    private static function renderExceptionTraceChain(\Throwable $exception): string
+    {
+        $rendered = '';
+        $current = $exception;
+        do {
+            $rendered .= print_r([
+                'message' => $current->getMessage(),
+                'trace' => $current->getTrace(),
+            ], true);
+            $current = $current->getPrevious();
+        } while ($current !== null);
+
+        return $rendered;
     }
 
     /**

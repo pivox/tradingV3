@@ -52,10 +52,14 @@ final readonly class PaperMarketEvent
      */
     public static function create(
         PaperMarketDataVenue $venue,
+        #[\SensitiveParameter]
         string $symbol,
         PaperMarketDataChannel $channel,
+        #[\SensitiveParameter]
         \DateTimeImmutable $exchangeTimestamp,
+        #[\SensitiveParameter]
         \DateTimeImmutable $receivedTimestamp,
+        #[\SensitiveParameter]
         ?string $sequence,
         #[\SensitiveParameter]
         array $payload,
@@ -207,7 +211,9 @@ final readonly class PaperMarketEvent
         ]));
     }
 
-    private static function assertValidSequence(?string $sequence): void
+    private static function assertValidSequence(
+        #[\SensitiveParameter] ?string $sequence,
+    ): void
     {
         if ($sequence === null) {
             return;
@@ -313,7 +319,9 @@ final readonly class PaperMarketEvent
         }
     }
 
-    private static function parseTimestamp(string $value): \DateTimeImmutable
+    private static function parseTimestamp(
+        #[\SensitiveParameter] string $value,
+    ): \DateTimeImmutable
     {
         try {
             $timestamp = \DateTimeImmutable::createFromFormat(
@@ -321,11 +329,8 @@ final readonly class PaperMarketEvent
                 $value,
                 self::utc(),
             );
-        } catch (\ValueError $exception) {
-            throw new \InvalidArgumentException(
-                'paper_market_timestamp_invalid',
-                previous: $exception,
-            );
+        } catch (\ValueError) {
+            throw new \InvalidArgumentException('paper_market_timestamp_invalid');
         }
         $errors = \DateTimeImmutable::getLastErrors();
 
@@ -339,12 +344,16 @@ final readonly class PaperMarketEvent
         return $timestamp;
     }
 
-    private static function normalizeTimestamp(\DateTimeImmutable $timestamp): \DateTimeImmutable
+    private static function normalizeTimestamp(
+        #[\SensitiveParameter] \DateTimeImmutable $timestamp,
+    ): \DateTimeImmutable
     {
         return \DateTimeImmutable::createFromInterface($timestamp)->setTimezone(self::utc());
     }
 
-    private static function assertSerializableTimestamp(\DateTimeImmutable $timestamp): void
+    private static function assertSerializableTimestamp(
+        #[\SensitiveParameter] \DateTimeImmutable $timestamp,
+    ): void
     {
         self::parseTimestamp($timestamp->format(self::TIMESTAMP_FORMAT));
     }
