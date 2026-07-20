@@ -11,9 +11,15 @@ class PaperDatasetRecorderFilesystem
         return @mkdir($directory, $permissions);
     }
 
-    public function changeMode(#[\SensitiveParameter] string $path, int $permissions): bool
+    /** @return resource|false */
+    public function createPrivateFile(#[\SensitiveParameter] string $path, string $operation)
     {
-        return @chmod($path, $permissions);
+        $previousUmask = umask(0077);
+        try {
+            return @fopen($path, 'x+b');
+        } finally {
+            umask($previousUmask);
+        }
     }
 
     /** @return resource|false */
@@ -74,6 +80,14 @@ class PaperDatasetRecorderFilesystem
         clearstatcache(true, $path);
 
         return @lstat($path);
+    }
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        return @rename($source, $destination);
     }
 
     /** @param resource $handle */

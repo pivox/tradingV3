@@ -115,7 +115,7 @@ final class PaperDatasetManifestCodec
         }
     }
 
-    private function parseTimestamp(?string $value): ?\DateTimeImmutable
+    private function parseTimestamp(#[\SensitiveParameter] ?string $value): ?\DateTimeImmutable
     {
         if ($value === null) {
             return null;

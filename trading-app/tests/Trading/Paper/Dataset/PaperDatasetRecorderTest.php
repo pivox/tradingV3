@@ -92,6 +92,31 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertEquals($manifest, $codec->decode($codec->encode($manifest)));
     }
 
+    public function testManifestTimestampValueIsSensitiveAndRedactedFromFullTrace(): void
+    {
+        $sentinel = 'PAPER_MANIFEST_TIMESTAMP_TRACE_SENTINEL_4d8c2a';
+        $manifest = $this->manifest()->toArray();
+        $manifest['start_exchange_timestamp'] = $sentinel;
+        $json = CanonicalJson::encode($manifest) . "\n";
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+
+        try {
+            (new PaperDatasetManifestCodec())->decode($json);
+            self::fail('An invalid manifest timestamp must fail decoding.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_timestamp_invalid', $exception->getMessage());
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+            self::assertStringNotContainsString($json, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+
+        $parameter = new \ReflectionParameter([PaperDatasetManifestCodec::class, 'parseTimestamp'], 'value');
+        self::assertNotEmpty($parameter->getAttributes(\SensitiveParameter::class));
+    }
+
     public function testDuplicateIdentityWithDifferentPayloadIsRejected(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
@@ -722,38 +747,265 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertFileDoesNotExist($lockPath);
     }
 
-    public function testReplacedTransactionLockCannotSplitExclusionOrDowngradeACompleteManifest(): void
-    {
+    #[DataProvider('finalizationMethodProvider')]
+    public function testTransactionLockReplacementExactlyAtManifestPublicationCannotDowngradeFinalState(
+        string $finalizationMethod,
+    ): void {
+        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        self::assertIsArray($sockets);
         $manifest = $this->manifest();
+        $expectedState = $finalizationMethod === 'complete'
+            ? PaperDatasetState::COMPLETE
+            : PaperDatasetState::INCOMPLETE;
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $stale = new PaperDatasetRecorder(
             $this->datasetRoot(),
             $manifest,
             filesystem: $filesystem,
         );
-        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
-        $filesystem->replaceLockBeforeNextManifestRewrite(
-            $lockPath,
-            $this->datasetDirectory() . '/manifest.json',
-            function () use ($manifest): void {
+        $pid = pcntl_fork();
+        self::assertNotSame(-1, $pid);
+
+        if ($pid === 0) {
+            fclose($sockets[0]);
+            $signal = fread($sockets[1], 1);
+            if ($signal !== 'G') {
+                exit(2);
+            }
+            fwrite($sockets[1], "A\n");
+            fflush($sockets[1]);
+            try {
                 $winner = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
-                $winner->complete();
+                $finalized = $finalizationMethod === 'complete'
+                    ? $winner->complete()
+                    : $winner->markIncomplete();
+                fwrite($sockets[1], 'C:' . $finalized->state->value . "\n");
+                fflush($sockets[1]);
+                exit(0);
+            } catch (\Throwable $failure) {
+                fwrite($sockets[1], 'E:' . $failure->getMessage() . "\n");
+                fflush($sockets[1]);
+                exit(3);
+            }
+        }
+
+        fclose($sockets[1]);
+        $publicationTriggered = false;
+        $winnerResult = null;
+        $childReaped = false;
+        $filesystem->replaceLockAtNextManifestPublication(
+            $this->datasetDirectory() . '/.dataset.lock',
+            function () use ($sockets, &$publicationTriggered, &$winnerResult): void {
+                $publicationTriggered = true;
+                self::assertSame(1, fwrite($sockets[0], 'G'));
+                fflush($sockets[0]);
+                self::assertSame("A\n", fgets($sockets[0]));
+
+                $directoryHandle = fopen($this->datasetDirectory(), 'rb');
+                self::assertIsResource($directoryHandle);
+                $staleHoldsDirectoryLock = !flock($directoryHandle, LOCK_EX | LOCK_NB);
+                if (!$staleHoldsDirectoryLock) {
+                    self::assertTrue(flock($directoryHandle, LOCK_UN));
+                }
+                fclose($directoryHandle);
+
+                if (!$staleHoldsDirectoryLock) {
+                    $winnerResult = fgets($sockets[0]);
+                }
             },
         );
 
         try {
-            $stale->append($this->event(sequence: '1'));
-            self::fail('A recorder holding a replaced lock inode must fail closed.');
+            try {
+                $stale->append($this->event(sequence: '1'));
+                self::fail('A recorder holding a replaced lock inode must fail closed at publication.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('paper_dataset_file_changed', $exception->getMessage());
+            }
+
+            self::assertTrue($publicationTriggered, 'The interleaving must run at manifest publication.');
+            $winnerResult ??= fgets($sockets[0]);
+            self::assertSame('C:' . $expectedState->value . "\n", $winnerResult);
+            self::assertSame($pid, pcntl_waitpid($pid, $childStatus));
+            $childReaped = true;
+            self::assertTrue(pcntl_wifexited($childStatus));
+            self::assertSame(0, pcntl_wexitstatus($childStatus));
+
+            $storedJson = file_get_contents($this->datasetDirectory() . '/manifest.json');
+            self::assertIsString($storedJson);
+            $stored = (new PaperDatasetManifestCodec())->decode($storedJson);
+            self::assertSame($expectedState, $stored->state);
+            self::assertSame(1, $stored->eventCount);
+            if ($expectedState === PaperDatasetState::COMPLETE) {
+                self::assertEquals($stored, (new PaperDatasetVerifier())->verify($this->datasetDirectory()));
+            } else {
+                $reopened = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+                self::assertSame(PaperDatasetState::INCOMPLETE, $reopened->manifest()->state);
+            }
+        } finally {
+            if (!$publicationTriggered) {
+                fwrite($sockets[0], 'G');
+                fflush($sockets[0]);
+            }
+            fclose($sockets[0]);
+            if (!$childReaped) {
+                pcntl_waitpid($pid, $childStatus);
+            }
+        }
+    }
+
+    #[DataProvider('manifestTemporaryMutationProvider')]
+    public function testManifestTemporaryMutationAtPublicationFailsClosedAndPreservesPreviousManifest(
+        bool $substituteInode,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $filesystem->mutateManifestTemporaryAfterValidation(
+            $manifestPath,
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"9.9.9"',
+            $substituteInode,
+        );
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('A manifest temporary changed at publication must fail closed.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_file_changed', $exception->getMessage());
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
         }
 
-        $storedJson = file_get_contents($this->datasetDirectory() . '/manifest.json');
-        self::assertIsString($storedJson);
-        $stored = (new PaperDatasetManifestCodec())->decode($storedJson);
-        self::assertSame(PaperDatasetState::COMPLETE, $stored->state);
-        self::assertSame(1, $stored->eventCount);
-        self::assertEquals($stored, (new PaperDatasetVerifier())->verify($this->datasetDirectory()));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(
+            PaperDatasetState::RECORDING,
+            (new PaperDatasetManifestCodec())->decode($manifestBefore)->state,
+        );
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function manifestTemporaryMutationProvider(): iterable
+    {
+        yield 'same inode and size' => [false];
+        yield 'substituted inode with same size' => [true];
+    }
+
+    public function testManifestBackupDirectorySyncFailureAbortsBeforePublication(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $publicationsBefore = $filesystem->manifestPublications;
+        $filesystem->failNextManifestBackupDirectorySync();
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('A backup directory sync failure must abort before manifest publication.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame($publicationsBefore, $filesystem->manifestPublications);
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    #[DataProvider('manifestTemporaryMutationProvider')]
+    public function testManifestBackupMutationAtPublicationRestoresTrustedPreviousManifest(
+        bool $substituteInode,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $filesystem->mutateManifestTemporaryAfterValidation(
+            $manifestPath,
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"9.9.9"',
+            false,
+        );
+        $filesystem->mutateManifestBackupAtPublication(
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"8.8.8"',
+            $substituteInode,
+        );
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('A changed recovery artifact must fail closed after restoring trusted bytes.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    #[DataProvider('manifestRestorationFailureProvider')]
+    public function testFailedManifestRestorationRetainsPrivatePreviousManifestRecovery(
+        string $failure,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $filesystem->mutateManifestTemporaryAfterValidation(
+            $manifestPath,
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"9.9.9"',
+            false,
+        );
+        if ($failure === 'move') {
+            $filesystem->failNextManifestRestoreMove();
+        } else {
+            $filesystem->failNextManifestDirectorySync();
+        }
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('An uncertain manifest restoration must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
+        if ($failure === 'sync') {
+            self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        }
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function manifestRestorationFailureProvider(): iterable
+    {
+        yield 'restore move failure' => ['move'];
+        yield 'restore directory sync failure' => ['sync'];
     }
 
     public function testStaleRecordingAppendersPreserveEveryEventAndManifestFact(): void
@@ -1011,16 +1263,12 @@ final class PaperDatasetRecorderTest extends TestCase
         new PaperDatasetRecorder($safe . '/link/existing', $this->manifest());
     }
 
-    public function testExistingRootCannotBeSwappedThroughPathBasedDirectoryChmod(): void
+    public function testExistingRootWithWrongModeFailsClosedWithoutPathBasedRepair(): void
     {
         $root = $this->testRoot . '/existing-paper-root';
-        $target = $this->testRoot . '/external-directory-target';
         self::assertTrue(mkdir($root, 0750));
         self::assertTrue(chmod($root, 0750));
-        self::assertTrue(mkdir($target, 0750));
-        self::assertTrue(chmod($target, 0750));
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
-        $filesystem->swapDirectoryDuringChangeMode($root, $target);
 
         try {
             new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
@@ -1031,9 +1279,87 @@ final class PaperDatasetRecorderTest extends TestCase
 
         self::assertTrue(is_dir($root));
         self::assertFalse(is_link($root));
-        self::assertSame(0750, fileperms($target) & 0777);
-        self::assertDirectoryDoesNotExist($target . '/dataset-okx-001');
-        self::assertDirectoryDoesNotExist($root . '.before-mode-swap');
+        self::assertSame(0750, fileperms($root) & 0777);
+        self::assertDirectoryDoesNotExist($root . '/dataset-okx-001');
+    }
+
+    #[DataProvider('wrongModeTerminalFileProvider')]
+    public function testPreexistingWrongModeTerminalFileFailsClosedWithoutModeRepair(string $terminalFile): void
+    {
+        self::assertTrue(mkdir($this->datasetDirectory(), 0700, true));
+        foreach (['.dataset.lock', 'events.ndjson'] as $path) {
+            $fullPath = $this->datasetDirectory() . '/' . $path;
+            self::assertSame(0, file_put_contents($fullPath, ''));
+            self::assertTrue(chmod($fullPath, $path === $terminalFile ? 0640 : 0600));
+        }
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+            self::fail('A preexisting terminal file with a non-private mode must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_file_validation_failed', $exception->getMessage());
+        }
+
+        self::assertSame(0640, fileperms($this->datasetDirectory() . '/' . $terminalFile) & 0777);
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function wrongModeTerminalFileProvider(): iterable
+    {
+        yield 'events' => ['events.ndjson'];
+        yield 'transaction lock' => ['.dataset.lock'];
+    }
+
+    #[DataProvider('newTerminalFileSubstitutionProvider')]
+    public function testNewTerminalFileSubstitutionBeforeLegacyChmodDoesNotTouchExternalFile(
+        string $terminalFile,
+    ): void {
+        $target = $this->testRoot . '/external-' . ltrim($terminalFile, '.') . '-target';
+        self::assertSame(17, file_put_contents($target, 'external-sentinel'));
+        self::assertTrue(chmod($target, 0640));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->swapFileAfterValidationBeforeLegacyModeChange(
+            $this->datasetDirectory() . '/' . $terminalFile,
+            $target,
+        );
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest(), filesystem: $filesystem);
+            self::fail('A substituted new terminal file must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+        }
+
+        self::assertSame('external-sentinel', file_get_contents($target));
+        self::assertSame(0640, fileperms($target) & 0777);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function newTerminalFileSubstitutionProvider(): iterable
+    {
+        yield 'events' => ['events.ndjson'];
+        yield 'transaction lock' => ['.dataset.lock'];
+    }
+
+    public function testManifestTemporarySubstitutionBeforeLegacyChmodDoesNotTouchExternalFile(): void
+    {
+        $target = $this->testRoot . '/external-manifest-target.json';
+        self::assertSame(17, file_put_contents($target, 'external-sentinel'));
+        self::assertTrue(chmod($target, 0640));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->swapManifestTemporaryBeforeLegacyModeChange($this->datasetDirectory(), $target);
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest(), filesystem: $filesystem);
+            self::fail('A substituted manifest temporary must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_symlink_rejected', $exception->getMessage());
+        }
+
+        self::assertSame('external-sentinel', file_get_contents($target));
+        self::assertSame(0640, fileperms($target) & 0777);
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
     }
 
     public function testCreationRejectsPreexistingHardlinkedEventsFileWithoutTouchingExternalInode(): void
@@ -1393,6 +1719,9 @@ final class PaperDatasetRecorderTest extends TestCase
             $manifest,
             filesystem: $filesystem,
         );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
         $event = $this->event(sequence: '1');
         $filesystem->failNextManifestDirectorySync();
 
@@ -1409,6 +1738,12 @@ final class PaperDatasetRecorderTest extends TestCase
         } catch (\RuntimeException $exception) {
             self::assertSame('paper_dataset_recorder_unusable', $exception->getMessage());
         }
+
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
 
         $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($event));
@@ -1530,7 +1865,10 @@ final class PaperDatasetRecorderTest extends TestCase
         foreach ([PaperDatasetRecorder::class, PaperDatasetRecorderFilesystem::class] as $class) {
             foreach ((new \ReflectionClass($class))->getMethods() as $method) {
                 foreach ($method->getParameters() as $parameter) {
-                    if (!preg_match('/(?:root|path|directory|parent)/i', $parameter->getName())) {
+                    if (!preg_match(
+                        '/(?:root|path|directory|parent|source|destination|backup)/i',
+                        $parameter->getName(),
+                    )) {
                         continue;
                     }
 
@@ -1776,6 +2114,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 {
     public int $rollbackTruncations = 0;
     public int $manifestDirectorySyncs = 0;
+    public int $manifestPublications = 0;
     public int $eventSyncs = 0;
 
     /** @var list<string> */
@@ -1789,6 +2128,8 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private bool $appendWriteObserved = false;
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
+    private bool $failManifestBackupDirectorySync = false;
+    private bool $failManifestRestoreMove = false;
     private bool $failEventSync = false;
     private bool $shortChecksumRead = false;
     private ?string $verifierEventsPath = null;
@@ -1809,12 +2150,19 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private int $publicationSnapshotValidationSeeks = 0;
     private ?int $publicationSnapshotValidationTarget = null;
     private ?int $directoryParentSyncFailureAt = null;
-    private ?string $lockPathToReplace = null;
-    private ?string $manifestPathBeforeLockReplacement = null;
-    private ?\Closure $afterLockReplacement = null;
-    private bool $lockReplacementEventWriteCompleted = false;
-    private ?string $directoryToSwapDuringChangeMode = null;
-    private ?string $directoryChangeModeTarget = null;
+    private ?string $lockPathToReplaceAtPublication = null;
+    private ?\Closure $afterPublicationLockReplacement = null;
+    private ?string $manifestPathForTemporaryMutation = null;
+    private ?string $manifestTemporaryMutationSearch = null;
+    private ?string $manifestTemporaryMutationReplacement = null;
+    private bool $substituteManifestTemporaryInode = false;
+    private ?string $manifestBackupMutationSearch = null;
+    private ?string $manifestBackupMutationReplacement = null;
+    private bool $substituteManifestBackupInode = false;
+    private ?string $fileToSwapBeforeLegacyModeChange = null;
+    private ?string $fileModeChangeTarget = null;
+    private ?string $manifestTemporaryDirectoryToSwap = null;
+    private ?string $manifestTemporaryModeChangeTarget = null;
 
     public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
     {
@@ -1828,69 +2176,227 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->directoryParentSyncFailureAt = $sync;
     }
 
-    public function replaceLockBeforeNextManifestRewrite(
+    public function replaceLockAtNextManifestPublication(
         #[\SensitiveParameter] string $lockPath,
-        #[\SensitiveParameter] string $manifestPath,
         callable $afterReplacement,
     ): void {
-        $this->lockPathToReplace = $lockPath;
-        $this->manifestPathBeforeLockReplacement = $manifestPath;
-        $this->afterLockReplacement = $afterReplacement(...);
+        $this->lockPathToReplaceAtPublication = $lockPath;
+        $this->afterPublicationLockReplacement = $afterReplacement(...);
     }
 
-    public function swapDirectoryDuringChangeMode(
+    public function mutateManifestTemporaryAfterValidation(
+        #[\SensitiveParameter] string $manifestPath,
+        #[\SensitiveParameter] string $search,
+        #[\SensitiveParameter] string $replacement,
+        bool $substituteInode,
+    ): void {
+        if (strlen($search) !== strlen($replacement)) {
+            throw new \InvalidArgumentException('Manifest mutations must preserve size.');
+        }
+        $this->manifestPathForTemporaryMutation = $manifestPath;
+        $this->manifestTemporaryMutationSearch = $search;
+        $this->manifestTemporaryMutationReplacement = $replacement;
+        $this->substituteManifestTemporaryInode = $substituteInode;
+    }
+
+    public function mutateManifestBackupAtPublication(
+        #[\SensitiveParameter] string $search,
+        #[\SensitiveParameter] string $replacement,
+        bool $substituteInode,
+    ): void {
+        if (strlen($search) !== strlen($replacement)) {
+            throw new \InvalidArgumentException('Manifest backup mutations must preserve size.');
+        }
+        $this->manifestBackupMutationSearch = $search;
+        $this->manifestBackupMutationReplacement = $replacement;
+        $this->substituteManifestBackupInode = $substituteInode;
+    }
+
+    public function swapFileAfterValidationBeforeLegacyModeChange(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] string $target,
+    ): void {
+        $this->fileToSwapBeforeLegacyModeChange = $path;
+        $this->fileModeChangeTarget = $target;
+    }
+
+    public function swapManifestTemporaryBeforeLegacyModeChange(
         #[\SensitiveParameter] string $directory,
         #[\SensitiveParameter] string $target,
     ): void {
-        $this->directoryToSwapDuringChangeMode = $directory;
-        $this->directoryChangeModeTarget = $target;
-    }
-
-    public function changeMode(#[\SensitiveParameter] string $path, int $permissions): bool
-    {
-        if ($this->directoryToSwapDuringChangeMode === $path
-            && $this->directoryChangeModeTarget !== null
-        ) {
-            $target = $this->directoryChangeModeTarget;
-            $this->directoryToSwapDuringChangeMode = null;
-            $this->directoryChangeModeTarget = null;
-            if (!rename($path, $path . '.before-mode-swap') || !symlink($target, $path)) {
-                throw new \RuntimeException('Unable to inject directory mode swap.');
-            }
-        }
-
-        return parent::changeMode($path, $permissions);
+        $this->manifestTemporaryDirectoryToSwap = $directory;
+        $this->manifestTemporaryModeChangeTarget = $target;
     }
 
     /** @return array<string, mixed>|false */
     public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
     {
-        if ($this->lockReplacementEventWriteCompleted
-            && $this->lockPathToReplace !== null
-            && $this->manifestPathBeforeLockReplacement === $path
-            && $this->afterLockReplacement !== null
+        $statistics = parent::pathStat($path, $operation);
+        if ($this->fileToSwapBeforeLegacyModeChange === $path
+            && $this->fileModeChangeTarget !== null
         ) {
-            $lockPath = $this->lockPathToReplace;
-            $afterReplacement = $this->afterLockReplacement;
-            $this->lockPathToReplace = null;
-            $this->manifestPathBeforeLockReplacement = null;
-            $this->afterLockReplacement = null;
-            $this->lockReplacementEventWriteCompleted = false;
-            if (!unlink($lockPath)) {
-                throw new \RuntimeException('Unable to remove the transaction lock for replacement.');
+            $target = $this->fileModeChangeTarget;
+            $this->fileToSwapBeforeLegacyModeChange = null;
+            $this->fileModeChangeTarget = null;
+            if (!rename($path, $path . '.before-mode-swap') || !symlink($target, $path)) {
+                throw new \RuntimeException('Unable to inject terminal file mode substitution.');
             }
-            $replacement = fopen($lockPath, 'x+b');
+        }
+        if ($this->manifestTemporaryDirectoryToSwap === $path
+            && $this->manifestTemporaryModeChangeTarget !== null
+        ) {
+            $temporaries = glob($path . '/.manifest-*');
+            if ($temporaries !== false && $temporaries !== []) {
+                $temporary = $temporaries[0];
+                $target = $this->manifestTemporaryModeChangeTarget;
+                $this->manifestTemporaryDirectoryToSwap = null;
+                $this->manifestTemporaryModeChangeTarget = null;
+                if (!rename($temporary, $temporary . '.before-mode-swap')
+                    || !symlink($target, $temporary)
+                ) {
+                    throw new \RuntimeException('Unable to inject manifest temporary mode substitution.');
+                }
+            }
+        }
+        return $statistics;
+    }
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        if ($operation === 'paper_dataset_manifest_publish') {
+            ++$this->manifestPublications;
+        }
+        if ($operation === 'paper_dataset_manifest_publish'
+            && $this->lockPathToReplaceAtPublication !== null
+            && $this->afterPublicationLockReplacement !== null
+        ) {
+            $lockPath = $this->lockPathToReplaceAtPublication;
+            $afterReplacement = $this->afterPublicationLockReplacement;
+            $this->lockPathToReplaceAtPublication = null;
+            $this->afterPublicationLockReplacement = null;
+            if (!unlink($lockPath)) {
+                throw new \RuntimeException('Unable to remove the transaction lock at publication.');
+            }
+            $previousUmask = umask(0077);
+            try {
+                $replacement = fopen($lockPath, 'x+b');
+            } finally {
+                umask($previousUmask);
+            }
             if ($replacement === false) {
-                throw new \RuntimeException('Unable to replace the transaction lock.');
+                throw new \RuntimeException('Unable to replace the transaction lock at publication.');
             }
             fclose($replacement);
-            if (!chmod($lockPath, 0600)) {
-                throw new \RuntimeException('Unable to protect the replacement transaction lock.');
-            }
             $afterReplacement();
         }
+        if ($operation === 'paper_dataset_manifest_restore' && $this->failManifestRestoreMove) {
+            $this->failManifestRestoreMove = false;
 
-        return parent::pathStat($path, $operation);
+            return false;
+        }
+        if ($operation === 'paper_dataset_manifest_publish'
+            && $this->manifestPathForTemporaryMutation === $destination
+            && $this->manifestTemporaryMutationSearch !== null
+            && $this->manifestTemporaryMutationReplacement !== null
+        ) {
+            $contents = file_get_contents($source);
+            if ($contents === false
+                || substr_count($contents, $this->manifestTemporaryMutationSearch) !== 1
+            ) {
+                throw new \RuntimeException('Unable to locate manifest temporary mutation target.');
+            }
+            $mutated = str_replace(
+                $this->manifestTemporaryMutationSearch,
+                $this->manifestTemporaryMutationReplacement,
+                $contents,
+            );
+            $substituteInode = $this->substituteManifestTemporaryInode;
+            $this->manifestPathForTemporaryMutation = null;
+            $this->manifestTemporaryMutationSearch = null;
+            $this->manifestTemporaryMutationReplacement = null;
+            $this->substituteManifestTemporaryInode = false;
+
+            if ($substituteInode) {
+                if (!rename($source, $source . '.validated')) {
+                    throw new \RuntimeException('Unable to preserve validated manifest temporary.');
+                }
+                $previousUmask = umask(0077);
+                try {
+                    $replacementHandle = fopen($source, 'x+b');
+                } finally {
+                    umask($previousUmask);
+                }
+                if ($replacementHandle === false) {
+                    throw new \RuntimeException('Unable to substitute manifest temporary inode.');
+                }
+                try {
+                    if (fwrite($replacementHandle, $mutated) !== strlen($mutated)
+                        || !fflush($replacementHandle)
+                    ) {
+                        throw new \RuntimeException('Unable to write substituted manifest temporary.');
+                    }
+                } finally {
+                    fclose($replacementHandle);
+                }
+            } elseif (file_put_contents($source, $mutated) !== strlen($mutated)) {
+                throw new \RuntimeException('Unable to mutate manifest temporary in place.');
+            }
+        }
+        if ($operation === 'paper_dataset_manifest_publish'
+            && $this->manifestBackupMutationSearch !== null
+            && $this->manifestBackupMutationReplacement !== null
+        ) {
+            $backups = glob(dirname($destination) . '/.manifest-backup-*');
+            if ($backups === false || count($backups) !== 1) {
+                throw new \RuntimeException('Unable to locate manifest backup mutation target.');
+            }
+            $backup = $backups[0];
+            $contents = file_get_contents($backup);
+            if ($contents === false
+                || substr_count($contents, $this->manifestBackupMutationSearch) !== 1
+            ) {
+                throw new \RuntimeException('Unable to locate manifest backup mutation contents.');
+            }
+            $mutated = str_replace(
+                $this->manifestBackupMutationSearch,
+                $this->manifestBackupMutationReplacement,
+                $contents,
+            );
+            $substituteInode = $this->substituteManifestBackupInode;
+            $this->manifestBackupMutationSearch = null;
+            $this->manifestBackupMutationReplacement = null;
+            $this->substituteManifestBackupInode = false;
+            if ($substituteInode) {
+                if (!rename($backup, $backup . '.before-inode-swap')) {
+                    throw new \RuntimeException('Unable to retain original manifest backup inode.');
+                }
+                $previousUmask = umask(0077);
+                try {
+                    $replacementHandle = fopen($backup, 'x+b');
+                } finally {
+                    umask($previousUmask);
+                }
+                if ($replacementHandle === false) {
+                    throw new \RuntimeException('Unable to substitute manifest backup inode.');
+                }
+                try {
+                    if (fwrite($replacementHandle, $mutated) !== strlen($mutated)
+                        || !fflush($replacementHandle)
+                    ) {
+                        throw new \RuntimeException('Unable to write substituted manifest backup.');
+                    }
+                } finally {
+                    fclose($replacementHandle);
+                }
+            } elseif (file_put_contents($backup, $mutated) !== strlen($mutated)) {
+                throw new \RuntimeException('Unable to mutate manifest backup in place.');
+            }
+        }
+
+        return parent::move($source, $destination, $operation);
     }
 
     public function failNextAppend(string $failure): void
@@ -1908,6 +2414,16 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failNextManifestDirectorySync(): void
     {
         $this->failManifestDirectorySync = true;
+    }
+
+    public function failNextManifestBackupDirectorySync(): void
+    {
+        $this->failManifestBackupDirectorySync = true;
+    }
+
+    public function failNextManifestRestoreMove(): void
+    {
+        $this->failManifestRestoreMove = true;
     }
 
     public function failNextEventSync(): void
@@ -2084,12 +2600,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             $this->appendWriteObserved = true;
         }
 
-        $written = parent::write($handle, $contents, $operation);
-        if ($this->lockPathToReplace !== null) {
-            $this->lockReplacementEventWriteCompleted = true;
-        }
-
-        return $written;
+        return parent::write($handle, $contents, $operation);
     }
 
     public function flush($handle, string $operation): bool
@@ -2110,6 +2621,13 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function sync($handle, string $operation): bool
     {
+        if ($operation === 'paper_dataset_manifest_backup_directory_sync') {
+            if ($this->failManifestBackupDirectorySync) {
+                $this->failManifestBackupDirectorySync = false;
+
+                return false;
+            }
+        }
         if ($operation === 'paper_dataset_directory_parent_sync_failed') {
             $metadata = stream_get_meta_data($handle);
             $path = $metadata['uri'];

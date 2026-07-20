@@ -714,9 +714,14 @@ final class PaperDatasetRecorder
     private function writeManifestAtomically(PaperDatasetManifest $manifest): void
     {
         $this->assertPinnedDirectories();
+        $encoded = $this->codec->encode($manifest);
+        $encodedBytes = strlen($encoded);
+        $encodedChecksum = hash('sha256', $encoded);
         $destinationStat = $this->pathStatIfPresent($this->manifestPath);
+        $previousContents = null;
         if ($destinationStat !== null) {
-            $stored = $this->readStoredManifest();
+            $previousContents = $this->readStoredManifestContents();
+            $stored = $this->codec->decode($previousContents);
             if ($stored->state !== PaperDatasetState::RECORDING && $stored != $manifest) {
                 throw new \RuntimeException('paper_dataset_not_recording');
             }
@@ -730,27 +735,64 @@ final class PaperDatasetRecorder
             throw new \RuntimeException('paper_dataset_manifest_temp_failed');
         }
         $handle = null;
+        $backup = null;
+        $publicationAttempted = false;
         try {
             $this->assertPinnedDirectories();
-            if (!@chmod($temporary, 0600)) {
-                throw new \RuntimeException('paper_dataset_manifest_mode_failed');
-            }
             $handle = $this->openRegularFile($temporary, 'r+b', 'paper_dataset_manifest_open_failed');
-            $this->writeAll($handle, $this->codec->encode($manifest), 'paper_dataset_manifest_write_failed');
+            $this->writeAll($handle, $encoded, 'paper_dataset_manifest_write_failed');
             $this->flushHandle($handle, 'paper_dataset_manifest_flush_failed');
-            $this->assertHandleMatchesPath($handle, $temporary);
-            $temporaryStat = $this->pathStat($temporary, 'paper_dataset_manifest_temp_failed');
-            fclose($handle);
-            $handle = null;
+            $temporaryStat = $this->assertManifestContentSnapshot(
+                $handle,
+                $temporary,
+                $encodedBytes,
+                $encodedChecksum,
+            );
+            if ($previousContents !== null) {
+                $backup = $this->createManifestBackup($previousContents);
+                $this->syncDatasetDirectory('paper_dataset_manifest_backup_directory_sync');
+            }
             $this->assertPinnedDirectories();
             $this->assertPathUnchanged($this->manifestPath, $destinationStat);
-            if (!@rename($temporary, $this->manifestPath)) {
+            $this->assertManifestContentSnapshot(
+                $handle,
+                $temporary,
+                $encodedBytes,
+                $encodedChecksum,
+                $temporaryStat,
+            );
+            if (!$this->filesystem->move(
+                $temporary,
+                $this->manifestPath,
+                'paper_dataset_manifest_publish',
+            )) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
-            $this->assertPinnedDirectories();
-            $this->assertPathUnchanged($this->manifestPath, $temporaryStat);
+            $publicationAttempted = true;
+            try {
+                $this->assertPinnedDirectories();
+                $this->assertManifestContentSnapshot(
+                    $handle,
+                    $this->manifestPath,
+                    $encodedBytes,
+                    $encodedChecksum,
+                    $temporaryStat,
+                );
+            } catch (\Throwable $publicationFailure) {
+                $this->restorePreviousManifest($backup);
+                if ($backup !== null) {
+                    $this->discardManifestBackup($backup);
+                }
+                $backup = null;
+
+                throw $publicationFailure;
+            }
             $this->syncDatasetDirectory();
             $this->assertPinnedDirectories();
+            if ($backup !== null) {
+                $this->discardManifestBackup($backup);
+                $backup = null;
+            }
         } finally {
             if (\is_resource($handle)) {
                 fclose($handle);
@@ -758,7 +800,232 @@ final class PaperDatasetRecorder
             if (file_exists($temporary)) {
                 @unlink($temporary);
             }
+            if ($backup !== null) {
+                if (\is_resource($backup['handle'])) {
+                    fclose($backup['handle']);
+                }
+                if (!$publicationAttempted && file_exists($backup['path'])) {
+                    @unlink($backup['path']);
+                }
+            }
         }
+    }
+
+    /**
+     * @param resource                     $handle
+     * @param array<string, mixed>|null $expectedIdentity
+     *
+     * @return array<string, mixed>
+     */
+    private function assertManifestContentSnapshot(
+        $handle,
+        #[\SensitiveParameter] string $path,
+        int $expectedBytes,
+        string $expectedChecksum,
+        ?array $expectedIdentity = null,
+    ): array {
+        $statistics = $this->filesystem->stat($handle, 'paper_dataset_manifest_snapshot_validation');
+        if ($statistics === false
+            || !$this->isPrivateRegularFile($statistics)
+            || !isset($statistics['size'])
+            || !\is_int($statistics['size'])
+            || $statistics['size'] !== $expectedBytes
+            || ($expectedIdentity !== null && !$this->sameFile($expectedIdentity, $statistics))
+            || !$this->filesystem->seek(
+                $handle,
+                0,
+                SEEK_SET,
+                'paper_dataset_manifest_snapshot_validation',
+            )
+        ) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+        $snapshot = $this->filesystem->checksum(
+            $handle,
+            'paper_dataset_manifest_snapshot_validation',
+        );
+        if ($snapshot['bytes'] !== $expectedBytes
+            || !hash_equals($expectedChecksum, $snapshot['checksum'])
+        ) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+        $finalStatistics = $this->filesystem->stat(
+            $handle,
+            'paper_dataset_manifest_snapshot_validation',
+        );
+        if ($finalStatistics === false
+            || !$this->isPrivateRegularFile($finalStatistics)
+            || !isset($finalStatistics['size'])
+            || !\is_int($finalStatistics['size'])
+            || $finalStatistics['size'] !== $expectedBytes
+            || !$this->sameFile($statistics, $finalStatistics)
+        ) {
+            throw new \RuntimeException('paper_dataset_file_changed');
+        }
+        $this->assertHandleMatchesPath(
+            $handle,
+            $path,
+            'paper_dataset_manifest_snapshot_validation',
+        );
+
+        return $finalStatistics;
+    }
+
+    /**
+     * @return array{
+     *   path: string,
+     *   handle: resource,
+     *   bytes: int,
+     *   checksum: string,
+     *   identity: array<string, mixed>,
+     *   contents: string
+     * }
+     */
+    private function createManifestBackup(#[\SensitiveParameter] string $contents): array
+    {
+        return $this->createManifestRecoveryFile(
+            $contents,
+            '.manifest-backup-',
+            'paper_dataset_manifest_backup_failed',
+        );
+    }
+
+    /**
+     * @return array{
+     *   path: string,
+     *   handle: resource,
+     *   bytes: int,
+     *   checksum: string,
+     *   identity: array<string, mixed>,
+     *   contents: string
+     * }
+     */
+    private function createManifestRecoveryFile(
+        #[\SensitiveParameter] string $contents,
+        string $prefix,
+        string $error,
+    ): array
+    {
+        $path = @tempnam($this->datasetDirectory, $prefix);
+        if ($path === false || dirname($path) !== $this->datasetDirectory) {
+            if ($path !== false) {
+                @unlink($path);
+            }
+            throw new \RuntimeException($error);
+        }
+        $handle = null;
+        try {
+            $handle = $this->openRegularFile($path, 'r+b', $error);
+            $this->writeAll($handle, $contents, $error);
+            $this->flushHandle($handle, $error);
+            $identity = $this->assertManifestContentSnapshot(
+                $handle,
+                $path,
+                strlen($contents),
+                hash('sha256', $contents),
+            );
+
+            return [
+                'path' => $path,
+                'handle' => $handle,
+                'bytes' => strlen($contents),
+                'checksum' => hash('sha256', $contents),
+                'identity' => $identity,
+                'contents' => $contents,
+            ];
+        } catch (\Throwable $failure) {
+            if (\is_resource($handle)) {
+                fclose($handle);
+            }
+            @unlink($path);
+
+            throw $failure;
+        }
+    }
+
+    /**
+     * @param array{
+     *   path: string,
+     *   handle: resource,
+     *   bytes: int,
+     *   checksum: string,
+     *   identity: array<string, mixed>,
+     *   contents: string
+     * }|null $backup
+     */
+    private function restorePreviousManifest(#[\SensitiveParameter] ?array $backup): void
+    {
+        if ($backup === null) {
+            if (file_exists($this->manifestPath) && !@unlink($this->manifestPath)) {
+                throw new \RuntimeException('paper_dataset_manifest_restore_failed');
+            }
+            $this->syncDatasetDirectory();
+            $this->assertPinnedDirectories();
+
+            return;
+        }
+
+        $backupFailure = null;
+        try {
+            $this->assertManifestContentSnapshot(
+                $backup['handle'],
+                $backup['path'],
+                $backup['bytes'],
+                $backup['checksum'],
+                $backup['identity'],
+            );
+        } catch (\Throwable $failure) {
+            $backupFailure = $failure;
+        }
+        $restore = $this->createManifestRecoveryFile(
+            $backup['contents'],
+            '.manifest-restore-',
+            'paper_dataset_manifest_restore_failed',
+        );
+        try {
+            $this->syncDatasetDirectory('paper_dataset_manifest_restore_candidate_directory_sync');
+            if (!$this->filesystem->move(
+                $restore['path'],
+                $this->manifestPath,
+                'paper_dataset_manifest_restore',
+            )) {
+                throw new \RuntimeException('paper_dataset_manifest_restore_failed');
+            }
+            $this->assertManifestContentSnapshot(
+                $restore['handle'],
+                $this->manifestPath,
+                $restore['bytes'],
+                $restore['checksum'],
+                $restore['identity'],
+            );
+            $this->syncDatasetDirectory();
+            $this->assertPinnedDirectories();
+            if ($backupFailure !== null) {
+                throw $backupFailure;
+            }
+        } finally {
+            if (\is_resource($restore['handle'])) {
+                fclose($restore['handle']);
+            }
+        }
+    }
+
+    /**
+     * @param array{
+     *   path: string,
+     *   handle: resource,
+     *   bytes: int,
+     *   checksum: string,
+     *   identity: array<string, mixed>,
+     *   contents: string
+     * } $backup
+     */
+    private function discardManifestBackup(#[\SensitiveParameter] array $backup): void
+    {
+        if (!@unlink($backup['path'])) {
+            throw new \RuntimeException('paper_dataset_manifest_backup_cleanup_failed');
+        }
+        fclose($backup['handle']);
     }
 
     private function writeFinalManifestAtomically(PaperDatasetManifest $manifest): void
@@ -781,7 +1048,9 @@ final class PaperDatasetRecorder
         $this->currentManifest = $manifest;
     }
 
-    private function syncDatasetDirectory(): void
+    private function syncDatasetDirectory(
+        string $operation = 'paper_dataset_manifest_directory_sync_failed',
+    ): void
     {
         $this->assertPinnedDirectories();
         $handle = @fopen($this->datasetDirectory, 'rb');
@@ -790,14 +1059,14 @@ final class PaperDatasetRecorder
         }
 
         try {
-            $statistics = $this->filesystem->stat($handle, 'paper_dataset_manifest_directory_sync_failed');
+            $statistics = $this->filesystem->stat($handle, $operation);
             if ($statistics === false
                 || !$this->isDirectory($statistics)
                 || !$this->sameFile($statistics, $this->datasetDirectoryIdentity)
             ) {
                 throw new \RuntimeException('paper_dataset_directory_changed');
             }
-            if (!$this->filesystem->sync($handle, 'paper_dataset_manifest_directory_sync_failed')) {
+            if (!$this->filesystem->sync($handle, $operation)) {
                 throw new \RuntimeException('paper_dataset_manifest_directory_sync_failed');
             }
             $this->assertPinnedDirectories();
@@ -903,16 +1172,16 @@ final class PaperDatasetRecorder
             if (!$create) {
                 throw new \RuntimeException('paper_dataset_events_missing');
             }
-            $handle = @fopen($this->eventsPath, 'xb');
+            $handle = $this->filesystem->createPrivateFile(
+                $this->eventsPath,
+                'paper_dataset_events_create_failed',
+            );
             if ($handle === false) {
                 throw new \RuntimeException('paper_dataset_events_create_failed');
             }
             fclose($handle);
         }
         $this->pathStat($this->eventsPath, 'paper_dataset_events_invalid');
-        if (!chmod($this->eventsPath, 0600)) {
-            throw new \RuntimeException('paper_dataset_events_invalid');
-        }
     }
 
     private function ensureLockFile(bool $create): void
@@ -921,7 +1190,10 @@ final class PaperDatasetRecorder
             if (!$create) {
                 throw new \RuntimeException('paper_dataset_lock_invalid');
             }
-            $handle = @fopen($this->lockPath, 'x+b');
+            $handle = $this->filesystem->createPrivateFile(
+                $this->lockPath,
+                'paper_dataset_lock_create_failed',
+            );
             if ($handle === false) {
                 if (!is_file($this->lockPath)) {
                     throw new \RuntimeException('paper_dataset_lock_create_failed');
@@ -932,10 +1204,6 @@ final class PaperDatasetRecorder
         }
 
         $this->pathStat($this->lockPath, 'paper_dataset_lock_invalid');
-        if (!@chmod($this->lockPath, 0600)) {
-            throw new \RuntimeException('paper_dataset_lock_invalid');
-        }
-
         $statistics = $this->pathStat($this->lockPath, 'paper_dataset_lock_invalid');
         $this->lockFileIdentity = [
             'dev' => $statistics['dev'],
@@ -953,11 +1221,40 @@ final class PaperDatasetRecorder
     private function withDatasetLock(#[\SensitiveParameter] callable $operation): mixed
     {
         $this->assertPinnedDirectories();
+        $directoryHandle = null;
+        $directoryLocked = false;
         $handle = null;
         $locked = false;
         $result = null;
         $failure = null;
         try {
+            $directoryHandle = $this->filesystem->openDirectory(
+                $this->datasetDirectory,
+                'paper_dataset_lock_open_failed',
+            );
+            if ($directoryHandle === false) {
+                throw new \RuntimeException('paper_dataset_lock_open_failed');
+            }
+            $directoryStatistics = $this->filesystem->stat(
+                $directoryHandle,
+                'paper_dataset_lock_open_failed',
+            );
+            if ($directoryStatistics === false
+                || !$this->isDirectory($directoryStatistics)
+                || !$this->sameFile($this->datasetDirectoryIdentity, $directoryStatistics)
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+            if (!flock($directoryHandle, LOCK_EX)) {
+                throw new \RuntimeException('paper_dataset_lock_failed');
+            }
+            $directoryLocked = true;
+            $this->assertDirectoryHandleMatchesPath(
+                $directoryHandle,
+                $this->datasetDirectory,
+                $this->datasetDirectoryIdentity,
+                'paper_dataset_directory_changed',
+            );
             $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_lock_failed');
@@ -981,6 +1278,12 @@ final class PaperDatasetRecorder
             }
             if (\is_resource($handle)) {
                 fclose($handle);
+            }
+            if ($directoryLocked && \is_resource($directoryHandle)) {
+                flock($directoryHandle, LOCK_UN);
+            }
+            if (\is_resource($directoryHandle)) {
+                fclose($directoryHandle);
             }
         }
 
@@ -1019,6 +1322,11 @@ final class PaperDatasetRecorder
 
     private function readStoredManifest(): PaperDatasetManifest
     {
+        return $this->codec->decode($this->readStoredManifestContents());
+    }
+
+    private function readStoredManifestContents(): string
+    {
         $handle = $this->openRegularFile($this->manifestPath, 'rb', 'paper_dataset_manifest_unreadable');
         try {
             $json = stream_get_contents($handle);
@@ -1030,7 +1338,7 @@ final class PaperDatasetRecorder
             fclose($handle);
         }
 
-        return $this->codec->decode($json);
+        return $json;
     }
 
     /** @return resource */
@@ -1144,6 +1452,9 @@ final class PaperDatasetRecorder
     private function isPrivateRegularFile(array $statistics): bool
     {
         return $this->isRegularFile($statistics)
+            && isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & 0777) === 0600
             && isset($statistics['nlink'])
             && \is_int($statistics['nlink'])
             && $statistics['nlink'] === 1;

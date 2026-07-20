@@ -115,6 +115,15 @@ final class PaperDatasetVerifier
                 $manifestSnapshot['checksum'],
                 $manifestSnapshot['identity'],
             );
+            $assertDirectories();
+            $this->assertRegularFileSnapshot(
+                $eventsPath,
+                $facts['events_bytes'],
+                $facts['events_checksum'],
+                $facts['events_identity'],
+                'paper_dataset_verifier_events_final_rehash',
+            );
+            $assertDirectories();
 
             return $manifest;
         } finally {
@@ -202,16 +211,17 @@ final class PaperDatasetVerifier
         int $expectedBytes,
         string $expectedChecksum,
         array $expectedIdentity,
+        string $rehashOperation = 'paper_dataset_verifier_manifest_rehash',
     ): void {
         try {
             $handle = $this->openRegularFile(
                 $path,
                 'rb',
                 'paper_dataset_verifier_snapshot_changed',
-                'paper_dataset_verifier_manifest_rehash',
+                $rehashOperation,
             );
             try {
-                $statistics = $this->filesystem->stat($handle, 'paper_dataset_verifier_manifest_rehash');
+                $statistics = $this->filesystem->stat($handle, $rehashOperation);
                 if ($statistics === false
                     || !$this->isPrivateRegularFile($statistics)
                     || !isset($statistics['size'])
@@ -222,12 +232,12 @@ final class PaperDatasetVerifier
                         $handle,
                         0,
                         SEEK_SET,
-                        'paper_dataset_verifier_manifest_rehash',
+                        $rehashOperation,
                     )
                 ) {
                     throw new \RuntimeException('paper_dataset_verifier_snapshot_changed');
                 }
-                $rehash = $this->filesystem->checksum($handle, 'paper_dataset_verifier_manifest_rehash');
+                $rehash = $this->filesystem->checksum($handle, $rehashOperation);
                 if ($rehash['bytes'] !== $expectedBytes
                     || !hash_equals($expectedChecksum, $rehash['checksum'])
                 ) {
@@ -235,7 +245,7 @@ final class PaperDatasetVerifier
                 }
                 $finalStatistics = $this->filesystem->stat(
                     $handle,
-                    'paper_dataset_verifier_manifest_rehash',
+                    $rehashOperation,
                 );
                 if ($finalStatistics === false
                     || !$this->isPrivateRegularFile($finalStatistics)
@@ -249,7 +259,7 @@ final class PaperDatasetVerifier
                 $this->assertHandleMatchesPath(
                     $handle,
                     $path,
-                    'paper_dataset_verifier_manifest_rehash',
+                    $rehashOperation,
                 );
             } finally {
                 fclose($handle);
@@ -350,6 +360,9 @@ final class PaperDatasetVerifier
     private function isPrivateRegularFile(array $statistics): bool
     {
         return $this->isRegularFile($statistics)
+            && isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & 0777) === 0600
             && isset($statistics['nlink'])
             && \is_int($statistics['nlink'])
             && $statistics['nlink'] === 1;
@@ -455,7 +468,9 @@ final class PaperDatasetVerifier
      *   end_exchange_timestamp: \DateTimeImmutable|null,
      *   channels: list<string>,
      *   sequence_gaps: array<string, int>,
-     *   events_checksum: string
+     *   events_checksum: string,
+     *   events_bytes: int,
+     *   events_identity: array{dev: int, ino: int}
      * }
      */
     private function scan(#[\SensitiveParameter] string $eventsPath, PaperDatasetManifest $manifest): array
@@ -482,7 +497,12 @@ final class PaperDatasetVerifier
         );
         try {
             $statistics = $this->filesystem->stat($handle, 'paper_dataset_verifier_events_validation');
-            if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
+            if ($statistics === false
+                || !isset($statistics['size'], $statistics['dev'], $statistics['ino'])
+                || !\is_int($statistics['size'])
+                || !\is_int($statistics['dev'])
+                || !\is_int($statistics['ino'])
+            ) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
             while (($line = fgets($handle)) !== false) {
@@ -575,6 +595,11 @@ final class PaperDatasetVerifier
             'channels' => $channels,
             'sequence_gaps' => $sequenceGaps,
             'events_checksum' => $parsedChecksum,
+            'events_bytes' => $statistics['size'],
+            'events_identity' => [
+                'dev' => $statistics['dev'],
+                'ino' => $statistics['ino'],
+            ],
         ];
     }
 

@@ -122,6 +122,23 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    public function testRejectsSameSizeEventsMutationDuringFinalManifestValidation(): void
+    {
+        $this->createCompleteDataset();
+        $eventsPath = $this->eventsPath();
+        $replacement = CanonicalJson::encode($this->event(sequence: '9', microseconds: 9)->toArray()) . "\n";
+        self::assertSame(filesize($eventsPath), strlen($replacement));
+        $filesystem = new VerifierFaultInjectingPaperDatasetFilesystem();
+        $filesystem->overwriteEventsDuringFinalManifestValidation($eventsPath, $replacement);
+
+        try {
+            (new PaperDatasetVerifier(filesystem: $filesystem))->verify($this->datasetDirectory());
+            self::fail('Verifier must reject events changed during final manifest validation.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_verifier_snapshot_changed', $exception->getMessage());
+        }
+    }
+
     public function testFullVerifierTraceRedactsRawLineWhenExceptionArgumentsAreEnabled(): void
     {
         $this->createCompleteDataset();
@@ -526,6 +543,8 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
     private ?string $eventsMutationContents = null;
     private ?string $manifestMutationPath = null;
     private ?string $manifestMutationContents = null;
+    private ?string $finalManifestEventsMutationPath = null;
+    private ?string $finalManifestEventsMutationContents = null;
     private ?string $rootToSwapBeforeFirstPin = null;
     private ?string $replacementRootBeforeFirstPin = null;
 
@@ -539,6 +558,12 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
     {
         $this->manifestMutationPath = $path;
         $this->manifestMutationContents = $contents;
+    }
+
+    public function overwriteEventsDuringFinalManifestValidation(string $path, string $contents): void
+    {
+        $this->finalManifestEventsMutationPath = $path;
+        $this->finalManifestEventsMutationContents = $contents;
     }
 
     public function swapRootBeforeVerifierFirstPin(string $root, string $replacement): void
@@ -571,6 +596,18 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
      */
     public function checksum($handle, string $operation): array
     {
+        if ($operation === 'paper_dataset_verifier_manifest_rehash'
+            && $this->finalManifestEventsMutationPath !== null
+            && $this->finalManifestEventsMutationContents !== null
+        ) {
+            $path = $this->finalManifestEventsMutationPath;
+            $contents = $this->finalManifestEventsMutationContents;
+            $this->finalManifestEventsMutationPath = null;
+            $this->finalManifestEventsMutationContents = null;
+            if (file_put_contents($path, $contents) !== strlen($contents)) {
+                throw new \RuntimeException('Unable to inject final verifier events mutation.');
+            }
+        }
         if ($operation === 'paper_dataset_verifier_events_rehash'
             && $this->eventsMutationPath !== null
             && $this->eventsMutationContents !== null
