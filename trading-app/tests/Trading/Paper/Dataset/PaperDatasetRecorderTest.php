@@ -926,7 +926,47 @@ final class PaperDatasetRecorderTest extends TestCase
 
         self::assertSame($manifestBefore, file_get_contents($manifestPath));
         self::assertSame($publicationsBefore, $filesystem->manifestPublications);
+        self::assertSame([], glob($this->datasetDirectory() . '/.manifest-*'));
         $this->assertRecorderUnusable($recorder);
+    }
+
+    #[DataProvider('ambiguousManifestPublicationFailureProvider')]
+    public function testManifestPublicationFailureAfterRenameRetainsRecoveryEvidence(string $failure): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $filesystem->failNextManifestPublicationAfterRename($failure);
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('An ambiguous manifest publication must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        $published = file_get_contents($manifestPath);
+        self::assertIsString($published);
+        self::assertSame(1, (new PaperDatasetManifestCodec())->decode($published)->eventCount);
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
+        $this->assertRecorderUnusable($recorder);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function ambiguousManifestPublicationFailureProvider(): iterable
+    {
+        yield 'move throws after rename' => ['throw'];
+        yield 'move returns false after rename' => ['false'];
     }
 
     #[DataProvider('manifestTemporaryMutationProvider')]
@@ -2300,6 +2340,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
     private bool $failManifestBackupDirectorySync = false;
+    private ?string $manifestPublicationFailureAfterRename = null;
     private bool $failEventSync = false;
     private bool $shortChecksumRead = false;
     private ?string $verifierEventsPath = null;
@@ -2642,6 +2683,18 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $moved = parent::move($source, $destination, $operation);
         if ($moved
             && $operation === 'paper_dataset_manifest_publish'
+            && $this->manifestPublicationFailureAfterRename !== null
+        ) {
+            $failure = $this->manifestPublicationFailureAfterRename;
+            $this->manifestPublicationFailureAfterRename = null;
+            if ($failure === 'throw') {
+                throw new \RuntimeException('Injected manifest publication failure after rename.');
+            }
+
+            return false;
+        }
+        if ($moved
+            && $operation === 'paper_dataset_manifest_publish'
             && $this->datasetDirectoryToSwapAfterManifestPublication !== null
             && $this->datasetDirectoryReplacementAfterManifestPublication !== null
         ) {
@@ -2684,6 +2737,14 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failNextManifestBackupDirectorySync(): void
     {
         $this->failManifestBackupDirectorySync = true;
+    }
+
+    public function failNextManifestPublicationAfterRename(string $failure): void
+    {
+        if (!\in_array($failure, ['throw', 'false'], true)) {
+            throw new \InvalidArgumentException('Unsupported post-rename publication failure.');
+        }
+        $this->manifestPublicationFailureAfterRename = $failure;
     }
 
     public function failNextEventSync(): void

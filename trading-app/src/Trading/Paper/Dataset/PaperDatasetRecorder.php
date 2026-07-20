@@ -762,6 +762,7 @@ final class PaperDatasetRecorder
                 $encodedChecksum,
                 $temporaryStat,
             );
+            $publicationAttempted = true;
             if (!$this->filesystem->move(
                 $temporary,
                 $this->manifestPath,
@@ -769,7 +770,6 @@ final class PaperDatasetRecorder
             )) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
-            $publicationAttempted = true;
             try {
                 $this->assertPinnedDirectories();
                 $this->assertManifestContentSnapshot(
