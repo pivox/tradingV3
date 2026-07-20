@@ -52,6 +52,14 @@ class PaperDatasetRecorderFilesystem
         return fstat($handle);
     }
 
+    /** @return array<string, mixed>|false */
+    public function pathStat(string $path, string $operation): array|false
+    {
+        clearstatcache(true, $path);
+
+        return @lstat($path);
+    }
+
     /** @param resource $handle */
     public function truncate($handle, int $size, string $operation): bool
     {

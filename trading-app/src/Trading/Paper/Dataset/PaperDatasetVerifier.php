@@ -11,6 +11,7 @@ use Brick\Math\BigInteger;
 final class PaperDatasetVerifier
 {
     private const REGULAR_FILE_TYPE = 0100000;
+    private const DIRECTORY_FILE_TYPE = 0040000;
     private const FILE_TYPE_MASK = 0170000;
 
     public function __construct(
@@ -25,6 +26,24 @@ final class PaperDatasetVerifier
         if (!is_dir($datasetDirectory) || !is_readable($datasetDirectory)) {
             throw new \RuntimeException('paper_dataset_directory_invalid');
         }
+        $resolvedDatasetDirectory = realpath($datasetDirectory);
+        if ($resolvedDatasetDirectory === false) {
+            throw new \RuntimeException('paper_dataset_directory_invalid');
+        }
+        $datasetDirectory = $resolvedDatasetDirectory;
+        $datasetRoot = dirname($datasetDirectory);
+        $rootIdentity = $this->pinDirectoryIdentity($datasetRoot, 'paper_dataset_directory_invalid');
+        $datasetIdentity = $this->pinDirectoryIdentity($datasetDirectory, 'paper_dataset_directory_invalid');
+        $assertDirectories = function () use (
+            $datasetRoot,
+            $datasetDirectory,
+            $rootIdentity,
+            $datasetIdentity,
+        ): void {
+            $this->assertDirectoryIdentity($datasetRoot, $rootIdentity);
+            $this->assertDirectoryIdentity($datasetDirectory, $datasetIdentity);
+        };
+        $assertDirectories();
 
         $manifestPath = $datasetDirectory . DIRECTORY_SEPARATOR . 'manifest.json';
         $eventsPath = $datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
@@ -41,6 +60,7 @@ final class PaperDatasetVerifier
             'paper_dataset_manifest_unreadable',
             'paper_dataset_verifier_manifest_validation',
         );
+        $assertDirectories();
 
         $manifest = $this->codec->decode($json);
         if ($manifest->state !== PaperDatasetState::COMPLETE) {
@@ -48,6 +68,7 @@ final class PaperDatasetVerifier
         }
 
         $facts = $this->scan($eventsPath, $manifest);
+        $assertDirectories();
         if ($manifest->eventsFileSha256 === null
             || !hash_equals($manifest->eventsFileSha256, $facts['events_checksum'])
         ) {
@@ -71,6 +92,8 @@ final class PaperDatasetVerifier
         if ($facts['sequence_gaps'] !== $manifest->sequenceGaps) {
             throw new \RuntimeException('paper_dataset_sequence_gaps_mismatch');
         }
+
+        $assertDirectories();
 
         return $manifest;
     }
@@ -174,8 +197,7 @@ final class PaperDatasetVerifier
     private function pathStat(string $path, string $missingError): array
     {
         $this->assertNoSymlinkComponents($path);
-        clearstatcache(true, $path);
-        $statistics = @lstat($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
         if ($statistics === false) {
             throw new \RuntimeException($missingError);
         }
@@ -195,6 +217,50 @@ final class PaperDatasetVerifier
         return isset($statistics['mode'])
             && \is_int($statistics['mode'])
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE;
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isDirectory(array $statistics): bool
+    {
+        return isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::DIRECTORY_FILE_TYPE;
+    }
+
+    /** @return array{dev: int, ino: int} */
+    private function pinDirectoryIdentity(string $path, string $error): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
+        if ($statistics === false
+            || !$this->isDirectory($statistics)
+            || !isset($statistics['dev'], $statistics['ino'])
+            || !\is_int($statistics['dev'])
+            || !\is_int($statistics['ino'])
+        ) {
+            throw new \RuntimeException($error);
+        }
+
+        return ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
+    }
+
+    /** @param array{dev: int, ino: int} $expected */
+    private function assertDirectoryIdentity(string $path, array $expected): void
+    {
+        try {
+            $current = $this->pinDirectoryIdentity($path, 'paper_dataset_directory_changed');
+            if (!$this->sameFile($expected, $current)) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+        } catch (\Throwable $failure) {
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_directory_changed'
+            ) {
+                throw $failure;
+            }
+
+            throw new \RuntimeException('paper_dataset_directory_changed', 0, $failure);
+        }
     }
 
     /**
@@ -307,6 +373,26 @@ final class PaperDatasetVerifier
             if ($position === false || $position !== $statistics['size']) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
+            $parsedChecksum = hash_final($checksumContext);
+            if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_verifier_events_rehash')) {
+                throw new \RuntimeException('paper_dataset_verifier_snapshot_changed');
+            }
+            $rehash = $this->filesystem->checksum($handle, 'paper_dataset_verifier_events_rehash');
+            if ($rehash['bytes'] !== $statistics['size']
+                || !hash_equals($parsedChecksum, $rehash['checksum'])
+            ) {
+                throw new \RuntimeException('paper_dataset_verifier_snapshot_changed');
+            }
+            $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_verifier_events_validation');
+            if ($finalStatistics === false
+                || !$this->isRegularFile($finalStatistics)
+                || !isset($finalStatistics['size'])
+                || !\is_int($finalStatistics['size'])
+                || $finalStatistics['size'] !== $statistics['size']
+                || !$this->sameFile($statistics, $finalStatistics)
+            ) {
+                throw new \RuntimeException('paper_dataset_verifier_snapshot_changed');
+            }
             $this->assertHandleMatchesPath($handle, $eventsPath, 'paper_dataset_verifier_events_validation');
         } finally {
             fclose($handle);
@@ -323,7 +409,7 @@ final class PaperDatasetVerifier
             'end_exchange_timestamp' => $end,
             'channels' => $channels,
             'sequence_gaps' => $sequenceGaps,
-            'events_checksum' => hash_final($checksumContext),
+            'events_checksum' => $parsedChecksum,
         ];
     }
 

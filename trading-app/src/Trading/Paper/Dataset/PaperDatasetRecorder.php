@@ -12,11 +12,13 @@ use Brick\Math\BigInteger;
 final class PaperDatasetRecorder
 {
     private const REGULAR_FILE_TYPE = 0100000;
+    private const DIRECTORY_FILE_TYPE = 0040000;
     private const FILE_TYPE_MASK = 0170000;
 
     private PaperDatasetManifestCodec $codec;
     private PaperDatasetVerifier $verifier;
     private PaperDatasetRecorderFilesystem $filesystem;
+    private string $datasetRoot;
     private string $datasetDirectory;
     private string $eventsPath;
     private string $manifestPath;
@@ -24,6 +26,12 @@ final class PaperDatasetRecorder
     private PaperDatasetManifest $identityManifest;
     private PaperDatasetManifest $currentManifest;
     private bool $usable = true;
+
+    /** @var array{dev: int, ino: int} */
+    private array $datasetRootIdentity;
+
+    /** @var array{dev: int, ino: int} */
+    private array $datasetDirectoryIdentity;
 
     /** @var array<string, array{payload_hash: string, event_hash: string}> */
     private array $identities = [];
@@ -66,9 +74,19 @@ final class PaperDatasetRecorder
         }
 
         $root = $this->prepareDirectory($root);
+        $this->datasetRoot = $root;
+        $this->datasetRootIdentity = $this->pinDirectoryIdentity($root, 'paper_dataset_root_invalid');
         $this->datasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
         $this->assertNoSymlinkComponents($this->datasetDirectory);
         $this->ensureDirectory($this->datasetDirectory);
+        $resolvedDatasetDirectory = realpath($this->datasetDirectory);
+        if ($resolvedDatasetDirectory === false || $resolvedDatasetDirectory !== $this->datasetDirectory) {
+            throw new \RuntimeException('paper_dataset_directory_invalid');
+        }
+        $this->datasetDirectoryIdentity = $this->pinDirectoryIdentity(
+            $this->datasetDirectory,
+            'paper_dataset_directory_invalid',
+        );
 
         $checkpoints = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'checkpoints';
         $this->eventsPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
@@ -121,6 +139,7 @@ final class PaperDatasetRecorder
     private function appendUnderLock(#[\SensitiveParameter] PaperMarketEvent $event): PaperDatasetAppendResult
     {
         $this->reloadDurableState();
+        $this->assertPinnedDirectories();
         $this->assertRecording();
         $this->assertEventMatchesManifest($event);
         $canonicalEvent = CanonicalJson::encode($event->toArray());
@@ -150,6 +169,7 @@ final class PaperDatasetRecorder
 
         $line = $canonicalEvent . "\n";
         $durableAppend = $this->appendDurably($line);
+        $this->assertPinnedDirectories();
 
         $nextChannels = $this->channels;
         $nextChannels[] = $event->channel->value;
@@ -172,9 +192,15 @@ final class PaperDatasetRecorder
 
         try {
             $this->writeManifestAtomically($nextManifest);
-        } catch (\Throwable) {
+        } catch (\Throwable $failure) {
             $this->usable = false;
-            throw new \RuntimeException('paper_dataset_manifest_write_failed');
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_directory_changed'
+            ) {
+                throw $failure;
+            }
+
+            throw new \RuntimeException('paper_dataset_manifest_write_failed', 0, $failure);
         }
 
         $this->identities[$event->eventId] = [
@@ -211,9 +237,11 @@ final class PaperDatasetRecorder
     private function completeUnderLock(): PaperDatasetManifest
     {
         $this->reloadDurableState();
+        $this->assertPinnedDirectories();
         $this->assertRecording();
         $this->flushEventsFile();
         $checksum = $this->checksumEventsFile();
+        $this->assertPinnedDirectories();
 
         $completed = $this->currentManifest->finalized(
             state: PaperDatasetState::COMPLETE,
@@ -236,9 +264,11 @@ final class PaperDatasetRecorder
     private function markIncompleteUnderLock(): PaperDatasetManifest
     {
         $this->reloadDurableState();
+        $this->assertPinnedDirectories();
         $this->assertRecording();
         $this->flushEventsFile();
         $checksum = $this->checksumEventsFile();
+        $this->assertPinnedDirectories();
 
         $incomplete = $this->currentManifest->finalized(
             state: PaperDatasetState::INCOMPLETE,
@@ -283,6 +313,8 @@ final class PaperDatasetRecorder
             if (\in_array($failure->getMessage(), [
                 'paper_dataset_file_changed',
                 'paper_dataset_events_prefix_changed',
+                'paper_dataset_events_size_regressed',
+                'paper_dataset_events_snapshot_changed',
                 'paper_dataset_symlink_rejected',
             ], true)) {
                 $this->usable = false;
@@ -314,7 +346,8 @@ final class PaperDatasetRecorder
             if ($durableSize < $this->scannedBytes) {
                 throw new \RuntimeException('paper_dataset_events_size_regressed');
             }
-            $prefixSha256 = $this->checksumPrefix($handle, $this->scannedBytes);
+            $parsedDigest = $this->readPrefixForScan($handle, $this->scannedBytes);
+            $prefixSha256 = $parsedDigest['sha256'];
             if ($this->scannedPrefixSha256 !== null
                 && !hash_equals($this->scannedPrefixSha256, $prefixSha256)
             ) {
@@ -331,6 +364,7 @@ final class PaperDatasetRecorder
             $latestExchangeTimestamp = $this->latestExchangeTimestamp;
 
             while (($line = $this->filesystem->readLine($handle, 'paper_dataset_events_read_failed')) !== false) {
+                hash_update($parsedDigest['context'], $line);
                 if (trim($line) === '') {
                     continue;
                 }
@@ -391,17 +425,25 @@ final class PaperDatasetRecorder
             if ($position === false || $position !== $durableSize) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
-            $durableSha256 = $durableSize === $this->scannedBytes
-                ? $prefixSha256
-                : $this->checksumPrefix($handle, $durableSize);
-            $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
+            $durableSha256 = hash_final($parsedDigest['context']);
+            if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_tail_rehash')) {
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+            }
+            $rehash = $this->filesystem->checksum($handle, 'paper_dataset_events_tail_rehash');
+            if ($rehash['bytes'] !== $durableSize
+                || !hash_equals($durableSha256, $rehash['checksum'])
+            ) {
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
+            }
+            $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_events_tail_validation');
             if ($finalStatistics === false
+                || !$this->isRegularFile($finalStatistics)
                 || !isset($finalStatistics['size'])
                 || !\is_int($finalStatistics['size'])
                 || $finalStatistics['size'] !== $durableSize
                 || !$this->sameFile($statistics, $finalStatistics)
             ) {
-                throw new \RuntimeException('paper_dataset_events_read_failed');
+                throw new \RuntimeException('paper_dataset_events_snapshot_changed');
             }
             $this->assertHandleMatchesPath(
                 $handle,
@@ -464,6 +506,7 @@ final class PaperDatasetRecorder
     /** @return array{size: int, sha256: string, identity: array{dev: int, ino: int}} */
     private function appendDurably(#[\SensitiveParameter] string $line): array
     {
+        $this->assertPinnedDirectories();
         $handle = $this->openRegularFile($this->eventsPath, 'a+b', 'paper_dataset_events_open_failed');
         try {
             if (!flock($handle, LOCK_EX)) {
@@ -478,8 +521,10 @@ final class PaperDatasetRecorder
 
                 $originalLength = $statistics['size'];
                 try {
+                    $this->assertPinnedDirectories();
                     $this->writeAll($handle, $line, 'paper_dataset_events_write_failed');
                     $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                    $this->assertPinnedDirectories();
                     $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
                     if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
                         throw new \RuntimeException('paper_dataset_events_read_failed');
@@ -536,6 +581,7 @@ final class PaperDatasetRecorder
 
     private function flushEventsFile(): void
     {
+        $this->assertPinnedDirectories();
         $handle = $this->openRegularFile($this->eventsPath, 'ab', 'paper_dataset_events_open_failed');
         try {
             if (!flock($handle, LOCK_EX)) {
@@ -544,6 +590,7 @@ final class PaperDatasetRecorder
             try {
                 $this->assertHandleMatchesPath($handle, $this->eventsPath);
                 $this->flushHandle($handle, 'paper_dataset_events_flush_failed');
+                $this->assertPinnedDirectories();
                 $this->assertHandleMatchesPath($handle, $this->eventsPath);
             } finally {
                 flock($handle, LOCK_UN);
@@ -555,6 +602,7 @@ final class PaperDatasetRecorder
 
     private function checksumEventsFile(): string
     {
+        $this->assertPinnedDirectories();
         $handle = $this->openRegularFile($this->eventsPath, 'rb', 'paper_dataset_events_unreadable');
         try {
             $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_checksum_failed');
@@ -565,6 +613,7 @@ final class PaperDatasetRecorder
             if ($result['bytes'] !== $statistics['size']) {
                 throw new \RuntimeException('paper_dataset_checksum_failed');
             }
+            $this->assertPinnedDirectories();
             $this->assertHandleMatchesPath($handle, $this->eventsPath);
 
             return $result['checksum'];
@@ -575,6 +624,7 @@ final class PaperDatasetRecorder
 
     private function writeManifestAtomically(PaperDatasetManifest $manifest): void
     {
+        $this->assertPinnedDirectories();
         $destinationStat = $this->pathStatIfPresent($this->manifestPath);
         $temporary = @tempnam($this->datasetDirectory, '.manifest-');
         if ($temporary === false) {
@@ -586,6 +636,7 @@ final class PaperDatasetRecorder
         }
         $handle = null;
         try {
+            $this->assertPinnedDirectories();
             if (!@chmod($temporary, 0600)) {
                 throw new \RuntimeException('paper_dataset_manifest_mode_failed');
             }
@@ -596,12 +647,15 @@ final class PaperDatasetRecorder
             $temporaryStat = $this->pathStat($temporary, 'paper_dataset_manifest_temp_failed');
             fclose($handle);
             $handle = null;
+            $this->assertPinnedDirectories();
             $this->assertPathUnchanged($this->manifestPath, $destinationStat);
             if (!@rename($temporary, $this->manifestPath)) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
+            $this->assertPinnedDirectories();
             $this->assertPathUnchanged($this->manifestPath, $temporaryStat);
             $this->syncDatasetDirectory();
+            $this->assertPinnedDirectories();
         } finally {
             if (\is_resource($handle)) {
                 fclose($handle);
@@ -634,15 +688,24 @@ final class PaperDatasetRecorder
 
     private function syncDatasetDirectory(): void
     {
+        $this->assertPinnedDirectories();
         $handle = @fopen($this->datasetDirectory, 'rb');
         if ($handle === false) {
             throw new \RuntimeException('paper_dataset_manifest_directory_open_failed');
         }
 
         try {
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_manifest_directory_sync_failed');
+            if ($statistics === false
+                || !$this->isDirectory($statistics)
+                || !$this->sameFile($statistics, $this->datasetDirectoryIdentity)
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
             if (!$this->filesystem->sync($handle, 'paper_dataset_manifest_directory_sync_failed')) {
                 throw new \RuntimeException('paper_dataset_manifest_directory_sync_failed');
             }
+            $this->assertPinnedDirectories();
         } finally {
             fclose($handle);
         }
@@ -698,6 +761,38 @@ final class PaperDatasetRecorder
         return hash_final($context);
     }
 
+    /**
+     * @param resource $handle
+     *
+     * @return array{sha256: string, context: \HashContext}
+     */
+    private function readPrefixForScan($handle, int $length): array
+    {
+        if (!$this->filesystem->seek($handle, 0, SEEK_SET, 'paper_dataset_events_read_failed')) {
+            throw new \RuntimeException('paper_dataset_events_read_failed');
+        }
+
+        $remaining = $length;
+        $context = hash_init('sha256');
+        while ($remaining > 0) {
+            $chunk = $this->filesystem->read(
+                $handle,
+                min(8192, $remaining),
+                'paper_dataset_events_read_failed',
+            );
+            if ($chunk === false || $chunk === '') {
+                throw new \RuntimeException('paper_dataset_events_read_failed');
+            }
+            hash_update($context, $chunk);
+            $remaining -= strlen($chunk);
+        }
+
+        return [
+            'sha256' => hash_final(hash_copy($context)),
+            'context' => $context,
+        ];
+    }
+
     private function ensureEventsFile(bool $create): void
     {
         if (!file_exists($this->eventsPath)) {
@@ -742,23 +837,44 @@ final class PaperDatasetRecorder
      */
     private function withDatasetLock(#[\SensitiveParameter] callable $operation): mixed
     {
-        $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
-
+        $this->assertPinnedDirectories();
+        $handle = null;
+        $locked = false;
+        $result = null;
+        $failure = null;
         try {
+            $handle = $this->openRegularFile($this->lockPath, 'r+b', 'paper_dataset_lock_open_failed');
             if (!flock($handle, LOCK_EX)) {
                 throw new \RuntimeException('paper_dataset_lock_failed');
             }
-
-            try {
-                $this->assertHandleMatchesPath($handle, $this->lockPath);
-
-                return $operation();
-            } finally {
+            $locked = true;
+            $this->assertHandleMatchesPath($handle, $this->lockPath);
+            $this->assertPinnedDirectories();
+            $result = $operation();
+            $this->assertPinnedDirectories();
+        } catch (\Throwable $caught) {
+            $failure = $caught;
+        } finally {
+            if ($locked && \is_resource($handle)) {
                 flock($handle, LOCK_UN);
             }
-        } finally {
-            fclose($handle);
+            if (\is_resource($handle)) {
+                fclose($handle);
+            }
         }
+
+        try {
+            $this->assertPinnedDirectories();
+        } catch (\Throwable $directoryFailure) {
+            $this->usable = false;
+            throw new \RuntimeException('paper_dataset_directory_changed', 0, $failure ?? $directoryFailure);
+        }
+
+        if ($failure !== null) {
+            throw $failure;
+        }
+
+        return $result;
     }
 
     private function readStoredManifest(): PaperDatasetManifest
@@ -828,8 +944,7 @@ final class PaperDatasetRecorder
     private function pathStat(string $path, string $missingError): array
     {
         $this->assertNoSymlinkComponents($path);
-        clearstatcache(true, $path);
-        $statistics = @lstat($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
         if ($statistics === false) {
             throw new \RuntimeException($missingError);
         }
@@ -847,8 +962,7 @@ final class PaperDatasetRecorder
     private function pathStatIfPresent(string $path): ?array
     {
         $this->assertNoSymlinkComponents($path);
-        clearstatcache(true, $path);
-        $statistics = @lstat($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_file_validation_failed');
         if ($statistics === false) {
             return null;
         }
@@ -884,6 +998,53 @@ final class PaperDatasetRecorder
         return isset($statistics['mode'])
             && \is_int($statistics['mode'])
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE;
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isDirectory(array $statistics): bool
+    {
+        return isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::DIRECTORY_FILE_TYPE;
+    }
+
+    /** @return array{dev: int, ino: int} */
+    private function pinDirectoryIdentity(string $path, string $error): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        $statistics = $this->filesystem->pathStat($path, 'paper_dataset_directory_validation');
+        if ($statistics === false
+            || !$this->isDirectory($statistics)
+            || !isset($statistics['dev'], $statistics['ino'])
+            || !\is_int($statistics['dev'])
+            || !\is_int($statistics['ino'])
+        ) {
+            throw new \RuntimeException($error);
+        }
+
+        return ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
+    }
+
+    private function assertPinnedDirectories(): void
+    {
+        try {
+            $root = $this->pinDirectoryIdentity($this->datasetRoot, 'paper_dataset_directory_changed');
+            $dataset = $this->pinDirectoryIdentity($this->datasetDirectory, 'paper_dataset_directory_changed');
+            if (!$this->sameFile($this->datasetRootIdentity, $root)
+                || !$this->sameFile($this->datasetDirectoryIdentity, $dataset)
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+        } catch (\Throwable $failure) {
+            $this->usable = false;
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_directory_changed'
+            ) {
+                throw $failure;
+            }
+
+            throw new \RuntimeException('paper_dataset_directory_changed', 0, $failure);
+        }
     }
 
     /**

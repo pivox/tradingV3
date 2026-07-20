@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Dataset;
 
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
+use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -80,6 +81,45 @@ final class PaperDatasetVerifierTest extends TestCase
         file_put_contents($this->eventsPath(), "\n", FILE_APPEND);
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_checksum_mismatch', ['29999.0']);
+    }
+
+    public function testRejectsMutationOfParsedBytesBeforeFinalDescriptorRehash(): void
+    {
+        $this->createCompleteDataset();
+        $eventsPath = $this->eventsPath();
+        $replacement = CanonicalJson::encode($this->event(sequence: '9', microseconds: 9)->toArray()) . "\n";
+        self::assertSame(filesize($eventsPath), strlen($replacement));
+        $filesystem = new VerifierFaultInjectingPaperDatasetFilesystem();
+        $filesystem->overwriteEventsBeforeVerifierRehash($eventsPath, $replacement);
+
+        try {
+            (new PaperDatasetVerifier(filesystem: $filesystem))->verify($this->datasetDirectory());
+            self::fail('Verifier must reject bytes changed after they were parsed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_verifier_snapshot_changed', $exception->getMessage());
+        }
+    }
+
+    public function testFullVerifierTraceRedactsRawLineWhenExceptionArgumentsAreEnabled(): void
+    {
+        $this->createCompleteDataset();
+        $sentinel = 'PAPER_VERIFIER_RAW_TRACE_SENTINEL_14c9e7';
+        $rawLine = '{"payload":{"note":"' . $sentinel . '"}}';
+        self::assertSame(strlen($rawLine), file_put_contents($this->eventsPath(), $rawLine));
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+
+        try {
+            (new PaperDatasetVerifier())->verify($this->datasetDirectory());
+            self::fail('Malformed raw event line must fail verification.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_event_invalid', $exception->getMessage());
+            $fullTrace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
+            self::assertStringNotContainsString($sentinel, $fullTrace);
+            self::assertStringNotContainsString($rawLine, $fullTrace);
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
     }
 
     #[DataProvider('forgedManifestFactsProvider')]
@@ -327,5 +367,40 @@ final class PaperDatasetVerifierTest extends TestCase
             }
         }
         rmdir($directory);
+    }
+}
+
+final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private ?string $eventsMutationPath = null;
+    private ?string $eventsMutationContents = null;
+
+    public function overwriteEventsBeforeVerifierRehash(string $path, string $contents): void
+    {
+        $this->eventsMutationPath = $path;
+        $this->eventsMutationContents = $contents;
+    }
+
+    /**
+     * @param resource $handle
+     *
+     * @return array{checksum: string, bytes: int}
+     */
+    public function checksum($handle, string $operation): array
+    {
+        if ($operation === 'paper_dataset_verifier_events_rehash'
+            && $this->eventsMutationPath !== null
+            && $this->eventsMutationContents !== null
+        ) {
+            $path = $this->eventsMutationPath;
+            $contents = $this->eventsMutationContents;
+            $this->eventsMutationPath = null;
+            $this->eventsMutationContents = null;
+            if (file_put_contents($path, $contents) !== strlen($contents)) {
+                throw new \RuntimeException('Unable to inject verifier snapshot mutation.');
+            }
+        }
+
+        return parent::checksum($handle, $operation);
     }
 }
