@@ -16,6 +16,8 @@ final class PaperDatasetRecorder
     private string $datasetDirectory;
     private string $eventsPath;
     private string $manifestPath;
+    private string $lockPath;
+    private PaperDatasetManifest $identityManifest;
     private PaperDatasetManifest $currentManifest;
     private bool $usable = true;
 
@@ -45,6 +47,7 @@ final class PaperDatasetRecorder
         PaperDatasetManifest::assertDatasetId($manifest->datasetId);
         $this->codec = $codec ?? new PaperDatasetManifestCodec();
         $this->verifier = $verifier ?? new PaperDatasetVerifier($this->codec);
+        $this->identityManifest = $manifest;
 
         $root = $this->prepareDirectory($root);
         $this->datasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
@@ -54,37 +57,29 @@ final class PaperDatasetRecorder
         $checkpoints = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'checkpoints';
         $this->eventsPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
         $this->manifestPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'manifest.json';
+        $this->lockPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . '.dataset.lock';
         $this->assertNoSymlinkComponents($checkpoints);
         $this->assertNoSymlinkComponents($this->eventsPath);
         $this->assertNoSymlinkComponents($this->manifestPath);
+        $this->assertNoSymlinkComponents($this->lockPath);
+        $this->ensureLockFile();
 
-        if (is_file($this->manifestPath)) {
-            $this->ensureEventsFile(create: false);
-            $this->ensureDirectory($checkpoints);
-            $stored = $this->readStoredManifest();
-            $this->assertSameDataset($manifest, $stored);
-            $this->currentManifest = $stored;
-        } else {
-            $this->ensureDirectory($checkpoints);
-            $this->ensureEventsFile(create: true);
-            $this->currentManifest = $manifest;
-            $this->writeManifestAtomically($manifest);
-        }
-
-        $this->scanEvents();
-        if ($this->currentManifest->state === PaperDatasetState::RECORDING) {
-            $reconciled = $this->currentManifest->withRecordingFacts(
-                startExchangeTimestamp: $this->startExchangeTimestamp,
-                channels: $this->channels,
-                eventCount: $this->eventCount,
-                sequenceGaps: $this->sequenceGaps,
-                lastEventId: $this->lastEventId,
-            );
-            if ($reconciled != $this->currentManifest) {
-                $this->writeManifestAtomically($reconciled);
-                $this->currentManifest = $reconciled;
+        $this->withDatasetLock(function () use ($checkpoints, $manifest): void {
+            if (is_file($this->manifestPath)) {
+                $this->ensureEventsFile(create: false);
+                $this->ensureDirectory($checkpoints);
+                $stored = $this->readStoredManifest();
+                $this->assertSameDataset($manifest, $stored);
+                $this->currentManifest = $stored;
+            } else {
+                $this->ensureDirectory($checkpoints);
+                $this->ensureEventsFile(create: true);
+                $this->currentManifest = $manifest;
+                $this->writeManifestAtomically($manifest);
             }
-        }
+
+            $this->reloadDurableState();
+        });
     }
 
     public function manifest(): PaperDatasetManifest
@@ -99,6 +94,14 @@ final class PaperDatasetRecorder
 
     public function append(PaperMarketEvent $event): PaperDatasetAppendResult
     {
+        $this->assertUsable();
+
+        return $this->withDatasetLock(fn (): PaperDatasetAppendResult => $this->appendUnderLock($event));
+    }
+
+    private function appendUnderLock(PaperMarketEvent $event): PaperDatasetAppendResult
+    {
+        $this->reloadDurableState();
         $this->assertRecording();
         $this->assertEventMatchesManifest($event);
         $canonicalEvent = CanonicalJson::encode($event->toArray());
@@ -178,6 +181,14 @@ final class PaperDatasetRecorder
 
     public function complete(): PaperDatasetManifest
     {
+        $this->assertUsable();
+
+        return $this->withDatasetLock(fn (): PaperDatasetManifest => $this->completeUnderLock());
+    }
+
+    private function completeUnderLock(): PaperDatasetManifest
+    {
+        $this->reloadDurableState();
         $this->assertRecording();
         $this->flushEventsFile();
         $checksum = hash_file('sha256', $this->eventsPath);
@@ -199,6 +210,14 @@ final class PaperDatasetRecorder
 
     public function markIncomplete(): PaperDatasetManifest
     {
+        $this->assertUsable();
+
+        return $this->withDatasetLock(fn (): PaperDatasetManifest => $this->markIncompleteUnderLock());
+    }
+
+    private function markIncompleteUnderLock(): PaperDatasetManifest
+    {
+        $this->reloadDurableState();
         $this->assertRecording();
         $this->flushEventsFile();
         $checksum = hash_file('sha256', $this->eventsPath);
@@ -216,6 +235,43 @@ final class PaperDatasetRecorder
         $this->currentManifest = $incomplete;
 
         return $incomplete;
+    }
+
+    private function reloadDurableState(): void
+    {
+        $stored = $this->readStoredManifest();
+        $this->assertSameDataset($this->identityManifest, $stored);
+        $this->currentManifest = $stored;
+        $this->resetDerivedState();
+        $this->scanEvents();
+
+        if ($stored->state !== PaperDatasetState::RECORDING) {
+            return;
+        }
+
+        $reconciled = $stored->withRecordingFacts(
+            startExchangeTimestamp: $this->startExchangeTimestamp,
+            channels: $this->channels,
+            eventCount: $this->eventCount,
+            sequenceGaps: $this->sequenceGaps,
+            lastEventId: $this->lastEventId,
+        );
+        if ($reconciled != $stored) {
+            $this->writeManifestAtomically($reconciled);
+            $this->currentManifest = $reconciled;
+        }
+    }
+
+    private function resetDerivedState(): void
+    {
+        $this->identities = [];
+        $this->lastSequences = [];
+        $this->sequenceGaps = [];
+        $this->channels = [];
+        $this->eventCount = 0;
+        $this->lastEventId = null;
+        $this->startExchangeTimestamp = null;
+        $this->latestExchangeTimestamp = null;
     }
 
     private function scanEvents(): void
@@ -294,11 +350,16 @@ final class PaperDatasetRecorder
 
     private function assertRecording(): void
     {
-        if (!$this->usable) {
-            throw new \RuntimeException('paper_dataset_recorder_unusable');
-        }
+        $this->assertUsable();
         if ($this->currentManifest->state !== PaperDatasetState::RECORDING) {
             throw new \RuntimeException('paper_dataset_not_recording');
+        }
+    }
+
+    private function assertUsable(): void
+    {
+        if (!$this->usable) {
+            throw new \RuntimeException('paper_dataset_recorder_unusable');
         }
     }
 
@@ -433,6 +494,54 @@ final class PaperDatasetRecorder
         }
         if (!is_file($this->eventsPath) || !chmod($this->eventsPath, 0600)) {
             throw new \RuntimeException('paper_dataset_events_invalid');
+        }
+    }
+
+    private function ensureLockFile(): void
+    {
+        if (!file_exists($this->lockPath)) {
+            $handle = @fopen($this->lockPath, 'x+b');
+            if ($handle === false) {
+                if (!is_file($this->lockPath)) {
+                    throw new \RuntimeException('paper_dataset_lock_create_failed');
+                }
+            } else {
+                fclose($handle);
+            }
+        }
+
+        if (!is_file($this->lockPath) || !@chmod($this->lockPath, 0600)) {
+            throw new \RuntimeException('paper_dataset_lock_invalid');
+        }
+    }
+
+    /**
+     * @template T
+     *
+     * @param callable(): T $operation
+     *
+     * @return T
+     */
+    private function withDatasetLock(callable $operation): mixed
+    {
+        $this->assertNoSymlinkComponents($this->lockPath);
+        $handle = @fopen($this->lockPath, 'r+b');
+        if ($handle === false) {
+            throw new \RuntimeException('paper_dataset_lock_open_failed');
+        }
+
+        try {
+            if (!flock($handle, LOCK_EX)) {
+                throw new \RuntimeException('paper_dataset_lock_failed');
+            }
+
+            try {
+                return $operation();
+            } finally {
+                flock($handle, LOCK_UN);
+            }
+        } finally {
+            fclose($handle);
         }
     }
 

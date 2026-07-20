@@ -64,6 +64,16 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(1, $recorder->manifest()->eventCount);
     }
 
+    public function testDatasetUsesAnEmptyPrivateDurableTransactionLock(): void
+    {
+        new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
+
+        self::assertFileExists($lockPath);
+        self::assertSame(0600, fileperms($lockPath) & 0777);
+        self::assertSame(0, filesize($lockPath));
+    }
+
     public function testManifestCodecRoundTripsAnEmptySequenceGapMap(): void
     {
         $codec = new PaperDatasetManifestCodec();
@@ -202,6 +212,85 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('paper_dataset_not_recording');
         $recorder->append($this->event(sequence: '2', microseconds: 2));
+    }
+
+    public function testStaleRecorderCannotAppendAfterAnotherInstanceCompletes(): void
+    {
+        $manifest = $this->manifest();
+        $first = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $first->append($this->event(sequence: '1'));
+        $first->complete();
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $eventsBefore = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+
+        try {
+            $stale->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A stale recorder must observe the complete durable state.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+
+        self::assertSame($eventsBefore, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        $stored = (new PaperDatasetManifestCodec())->decode((string) $manifestBefore);
+        self::assertSame(PaperDatasetState::COMPLETE, $stored->state);
+        self::assertSame(1, $stored->eventCount);
+    }
+
+    public function testStaleRecorderCannotAppendAfterAnotherInstanceMarksIncomplete(): void
+    {
+        $manifest = $this->manifest();
+        $first = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $stale = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $first->append($this->event(sequence: '1'));
+        $first->markIncomplete();
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $eventsBefore = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+
+        try {
+            $stale->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A stale recorder must observe the incomplete durable state.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+
+        self::assertSame($eventsBefore, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        $stored = (new PaperDatasetManifestCodec())->decode((string) $manifestBefore);
+        self::assertSame(PaperDatasetState::INCOMPLETE, $stored->state);
+        self::assertSame(1, $stored->eventCount);
+    }
+
+    public function testStaleRecordingAppendersPreserveEveryEventAndManifestFact(): void
+    {
+        $manifest = $this->manifest();
+        $first = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $second = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $firstEvent = $this->event(sequence: '1');
+        $secondEvent = $this->event(sequence: '2', microseconds: 2);
+
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $first->append($firstEvent));
+        self::assertSame(PaperDatasetAppendResult::APPENDED, $second->append($secondEvent));
+
+        $manifestJson = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($manifestJson);
+        $stored = (new PaperDatasetManifestCodec())->decode($manifestJson);
+        self::assertSame(2, $stored->eventCount);
+        self::assertSame($secondEvent->eventId, $stored->lastEventId);
+        $lines = file($this->datasetDirectory() . '/events.ndjson', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        self::assertIsArray($lines);
+        self::assertCount(2, $lines);
+
+        self::assertSame(PaperDatasetAppendResult::REPLAYED, $first->append($secondEvent));
+        self::assertCount(
+            2,
+            file($this->datasetDirectory() . '/events.ndjson', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES),
+        );
     }
 
     public function testMarkIncompleteDurablyFreezesDatasetAndPreventsReplayVerification(): void
