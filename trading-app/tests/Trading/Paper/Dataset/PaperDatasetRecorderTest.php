@@ -969,9 +969,69 @@ final class PaperDatasetRecorderTest extends TestCase
         yield 'move returns false after rename' => ['false'];
     }
 
-    #[DataProvider('manifestTemporaryMutationProvider')]
-    public function testManifestBackupMutationAtPublicationRetainsAllPrivateRecoveryEvidence(
+    #[DataProvider('ambiguousManifestPublicationFailureProvider')]
+    public function testReconciliationPublicationAmbiguityPoisonsAppendAndPreservesItsErrorContract(
+        string $failure,
+    ): void {
+        $manifest = $this->manifest();
+        $reconciliationFilesystem = new FaultInjectingPaperDatasetFilesystem();
+        $stale = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $reconciliationFilesystem,
+        );
+        $writerFilesystem = new FaultInjectingPaperDatasetFilesystem();
+        $writer = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $writerFilesystem,
+        );
+        $durableEvent = $this->event(sequence: '1');
+        $writerFilesystem->failNextManifestBackupDirectorySync();
+
+        try {
+            $writer->append($durableEvent);
+            self::fail('The setup append must leave an unreconciled durable event.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        self::assertSame(0, (new PaperDatasetManifestCodec())->decode($manifestBefore)->eventCount);
+        $reconciliationFilesystem->failNextManifestPublicationAfterRename($failure);
+
+        try {
+            $stale->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('Ambiguous reconciliation publication must fail the append closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+        }
+
+        self::assertSame(0, $stale->manifest()->eventCount);
+        $this->assertRecorderUnusable($stale);
+        $published = file_get_contents($manifestPath);
+        self::assertIsString($published);
+        self::assertSame(1, (new PaperDatasetManifestCodec())->decode($published)->eventCount);
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame(1, $restarted->manifest()->eventCount);
+        self::assertSame(
+            PaperDatasetAppendResult::APPENDED,
+            $restarted->append($this->event(sequence: '2', microseconds: 2)),
+        );
+    }
+
+    #[DataProvider('ambiguousMutatedBackupProvider')]
+    public function testManifestBackupMutationAfterPublicationAmbiguityIsSurfacedAsUntrustedEvidence(
         bool $substituteInode,
+        string $publicationFailure,
     ): void {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $recorder = new PaperDatasetRecorder(
@@ -982,28 +1042,31 @@ final class PaperDatasetRecorderTest extends TestCase
         $manifestPath = $this->datasetDirectory() . '/manifest.json';
         $manifestBefore = file_get_contents($manifestPath);
         self::assertIsString($manifestBefore);
-        $filesystem->mutateManifestTemporaryAfterValidation(
-            $manifestPath,
-            '"recorder_version":"1.0.0"',
-            '"recorder_version":"9.9.9"',
-            false,
-        );
         $filesystem->mutateManifestBackupAtPublication(
             '"recorder_version":"1.0.0"',
             '"recorder_version":"8.8.8"',
             $substituteInode,
         );
+        $filesystem->failNextManifestPublicationAfterRename($publicationFailure);
 
+        $failure = null;
         try {
             $recorder->append($this->event(sequence: '1'));
             self::fail('A changed recovery artifact must fail closed without pathname recovery.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
+            $failure = $exception;
         }
+
+        self::assertInstanceOf(\RuntimeException::class, $failure);
+        self::assertSame('paper_dataset_manifest_write_failed', $failure->getMessage());
+        $backupFailure = $failure->getPrevious();
+        self::assertInstanceOf(\RuntimeException::class, $backupFailure);
+        self::assertSame('paper_dataset_manifest_backup_changed', $backupFailure->getMessage());
+        self::assertSame('paper_dataset_file_changed', $backupFailure->getPrevious()?->getMessage());
 
         $published = file_get_contents($manifestPath);
         self::assertIsString($published);
-        self::assertStringContainsString('"recorder_version":"9.9.9"', $published);
+        self::assertSame(1, (new PaperDatasetManifestCodec())->decode($published)->eventCount);
         $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
         self::assertIsArray($recoveries);
         self::assertNotEmpty($recoveries);
@@ -1024,6 +1087,16 @@ final class PaperDatasetRecorderTest extends TestCase
             self::assertContains($manifestBefore, $recoveryContents);
         }
         $this->assertRecorderUnusable($recorder);
+    }
+
+    /** @return iterable<string, array{bool, string}> */
+    public static function ambiguousMutatedBackupProvider(): iterable
+    {
+        foreach (self::manifestTemporaryMutationProvider() as $identity => [$substituteInode]) {
+            foreach (self::ambiguousManifestPublicationFailureProvider() as $ambiguity => [$failure]) {
+                yield $identity . ', ' . $ambiguity => [$substituteInode, $failure];
+            }
+        }
     }
 
     public function testStaleRecordingAppendersPreserveEveryEventAndManifestFact(): void
@@ -2000,6 +2073,74 @@ final class PaperDatasetRecorderTest extends TestCase
     {
         yield 'complete' => ['complete', PaperDatasetState::COMPLETE];
         yield 'mark incomplete' => ['markIncomplete', PaperDatasetState::INCOMPLETE];
+    }
+
+    #[DataProvider('ambiguousFinalizationPublicationFailureProvider')]
+    public function testPostRenamePublicationAmbiguityPoisonsFinalizerAndRestartObservesFrozenState(
+        string $method,
+        PaperDatasetState $expectedState,
+        string $failure,
+        string $expectedError,
+    ): void {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($manifestBefore);
+        $filesystem->failNextManifestPublicationAfterRename($failure);
+
+        try {
+            $recorder->{$method}();
+            self::fail('A post-rename finalization ambiguity must be reported.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($expectedError, $exception->getMessage());
+        }
+
+        self::assertSame($expectedState, $recorder->manifest()->state);
+        $this->assertRecorderUnusable($recorder);
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame($expectedState, $restarted->manifest()->state);
+        try {
+            $restarted->append($this->event(sequence: '2', microseconds: 2));
+            self::fail('A restarted finalized dataset must remain frozen.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_not_recording', $exception->getMessage());
+        }
+
+        if ($expectedState === PaperDatasetState::COMPLETE) {
+            self::assertEquals($restarted->manifest(), (new PaperDatasetVerifier())->verify($this->datasetDirectory()));
+        }
+    }
+
+    /** @return iterable<string, array{string, PaperDatasetState, string, string}> */
+    public static function ambiguousFinalizationPublicationFailureProvider(): iterable
+    {
+        foreach (self::postRenameFinalizationFailureProvider() as $finalizer => [$method, $state]) {
+            yield $finalizer . ', move throws after rename' => [
+                $method,
+                $state,
+                'throw',
+                'Injected manifest publication failure after rename.',
+            ];
+            yield $finalizer . ', move returns false after rename' => [
+                $method,
+                $state,
+                'false',
+                'paper_dataset_manifest_rename_failed',
+            ];
+        }
     }
 
     public function testPayloadBearingRecorderParametersAreSensitiveAndFullTraceIsRedacted(): void

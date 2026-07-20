@@ -193,18 +193,7 @@ final class PaperDatasetRecorder
             lastEventId: $event->eventId,
         );
 
-        try {
-            $this->writeManifestAtomically($nextManifest);
-        } catch (\Throwable $failure) {
-            $this->usable = false;
-            if ($failure instanceof \RuntimeException
-                && $failure->getMessage() === 'paper_dataset_directory_changed'
-            ) {
-                throw $failure;
-            }
-
-            throw new \RuntimeException('paper_dataset_manifest_write_failed', 0, $failure);
-        }
+        $this->writeRecordingManifestAtomically($nextManifest);
 
         $this->identities[$event->eventId] = [
             'payload_hash' => $event->payloadHash,
@@ -301,8 +290,24 @@ final class PaperDatasetRecorder
             lastEventId: $this->lastEventId,
         );
         if ($reconciled != $stored) {
-            $this->writeManifestAtomically($reconciled);
+            $this->writeRecordingManifestAtomically($reconciled);
             $this->currentManifest = $reconciled;
+        }
+    }
+
+    private function writeRecordingManifestAtomically(PaperDatasetManifest $manifest): void
+    {
+        try {
+            $this->writeManifestAtomically($manifest);
+        } catch (\Throwable $failure) {
+            $this->usable = false;
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_directory_changed'
+            ) {
+                throw $failure;
+            }
+
+            throw new \RuntimeException('paper_dataset_manifest_write_failed', 0, $failure);
         }
     }
 
@@ -770,20 +775,14 @@ final class PaperDatasetRecorder
             )) {
                 throw new \RuntimeException('paper_dataset_manifest_rename_failed');
             }
-            try {
-                $this->assertPinnedDirectories();
-                $this->assertManifestContentSnapshot(
-                    $handle,
-                    $this->manifestPath,
-                    $encodedBytes,
-                    $encodedChecksum,
-                    $temporaryStat,
-                );
-            } catch (\Throwable $publicationFailure) {
-                $this->usable = false;
-
-                throw $publicationFailure;
-            }
+            $this->assertPinnedDirectories();
+            $this->assertManifestContentSnapshot(
+                $handle,
+                $this->manifestPath,
+                $encodedBytes,
+                $encodedChecksum,
+                $temporaryStat,
+            );
             $this->syncDatasetDirectory();
             $this->assertPinnedDirectories();
             if ($backup !== null) {
@@ -792,6 +791,28 @@ final class PaperDatasetRecorder
             }
         } catch (\Throwable $failure) {
             $directoryChanged = $this->isDirectoryChangedFailure($failure);
+            if ($publicationAttempted) {
+                $this->usable = false;
+                if ($backup !== null) {
+                    try {
+                        $this->assertManifestContentSnapshot(
+                            $backup['handle'],
+                            $backup['path'],
+                            $backup['bytes'],
+                            $backup['checksum'],
+                            $backup['identity'],
+                        );
+                    } catch (\Throwable $backupFailure) {
+                        if (!$directoryChanged) {
+                            throw new \RuntimeException(
+                                'paper_dataset_manifest_backup_changed',
+                                0,
+                                $backupFailure,
+                            );
+                        }
+                    }
+                }
+            }
 
             throw $failure;
         } finally {
