@@ -1637,6 +1637,68 @@ PHP,
         yield 'percent-encoded JSON Unicode escape' => ['api%5Cu005fkey'];
         yield 'JSON-wrapped Base64 key' => ['"YXBpX2tleQ=="'];
         yield 'percent-encoded JSON-wrapped Base64 key' => ['%22YXBpX2tleQ%3D%3D'];
+
+        $jsonUnicodeKey = '"api\\u005fkey"';
+        $jsonPaddedBase64Key = '"YXBpX2tleQ\\u003d\\u003d"';
+        foreach ([
+            'space' => ' ',
+            'horizontal tab' => "\t",
+            'line feed' => "\n",
+            'vertical tab' => "\v",
+            'form feed' => "\f",
+            'carriage return' => "\r",
+            'form space' => '+',
+            'percent-encoded form space' => '%2B',
+        ] as $label => $whitespace) {
+            yield 'JSON-wrapped Unicode escape before assignment with ' . $label => [
+                $jsonUnicodeKey . $whitespace,
+            ];
+            yield 'percent-composed JSON-wrapped Unicode escape before assignment with ' . $label => [
+                rawurlencode($jsonUnicodeKey) . $whitespace,
+            ];
+            yield 'JSON-wrapped Base64 padding before assignment with ' . $label => [
+                $jsonPaddedBase64Key . $whitespace,
+            ];
+            yield 'percent-composed JSON-wrapped Base64 padding before assignment with ' . $label => [
+                rawurlencode($jsonPaddedBase64Key) . $whitespace,
+            ];
+        }
+
+        $singleQuote = "'";
+        $singleQuotedUnicodeKey = $singleQuote . 'api\\u005fkey' . $singleQuote;
+        $singleQuotedBase64Key = $singleQuote . 'YXBpX2tleQ==' . $singleQuote;
+        yield 'single-quoted JSON Unicode escape' => [$singleQuotedUnicodeKey];
+        yield 'unmatched opening single-quoted JSON Unicode escape' => [
+            $singleQuote . 'api\\u005fkey',
+        ];
+        yield 'unmatched closing single-quoted JSON Unicode escape' => [
+            'api\\u005fkey' . $singleQuote,
+        ];
+        yield 'single-quoted Base64 key with padding' => [$singleQuotedBase64Key];
+        yield 'unmatched opening single-quoted Base64 key with padding' => [
+            $singleQuote . 'YXBpX2tleQ==',
+        ];
+        yield 'unmatched closing single-quoted Base64 key with padding' => [
+            'YXBpX2tleQ==' . $singleQuote,
+        ];
+        yield 'percent-composed single-quoted JSON Unicode escape' => [
+            rawurlencode($singleQuotedUnicodeKey),
+        ];
+        yield 'percent-composed single-quoted Base64 key with padding' => [
+            rawurlencode($singleQuotedBase64Key),
+        ];
+        yield 'single-quoted JSON Unicode escape before assignment with form space' => [
+            $singleQuotedUnicodeKey . '+',
+        ];
+        yield 'single-quoted Base64 key before assignment with form space' => [
+            $singleQuotedBase64Key . '+',
+        ];
+        yield 'percent-composed single-quoted JSON Unicode escape before assignment with form space' => [
+            rawurlencode($singleQuotedUnicodeKey) . '+',
+        ];
+        yield 'percent-composed single-quoted Base64 key before assignment with form space' => [
+            rawurlencode($singleQuotedBase64Key) . '+',
+        ];
     }
 
     #[DataProvider('sensitiveStructuralStringProvider')]
@@ -2003,6 +2065,29 @@ PHP,
         ]);
 
         self::assertSame($event->toArray(), PaperMarketEvent::fromArray($event->toArray())->toArray());
+    }
+
+    #[DataProvider('quotedColonPublicProseProvider')]
+    public function testCreateAndFromArrayAllowQuotedColonPublicProseWithBackslashes(
+        string $raw,
+    ): void {
+        $event = self::event(payload: ['note' => $raw]);
+
+        self::assertSame(
+            $event->toArray(),
+            PaperMarketEvent::fromArray($event->toArray())->toArray(),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function quotedColonPublicProseProvider(): iterable
+    {
+        yield 'bid-backslash-ask prose' => [
+            'Market note: "bid\\ask": public spread.',
+        ];
+        yield 'UNC public folder prose' => [
+            'Market note: "\\\\market-server\\public": BTCUSDT snapshots.',
+        ];
     }
 
     public function testCreateRejectsRawFormPayloadStringsWithEncodedSensitiveKeys(): void

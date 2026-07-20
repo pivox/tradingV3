@@ -102,7 +102,7 @@ REGEX;
 
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
 
-    private const COMPOSED_FORM_KEY_PATTERN = '~\A"?[A-Za-z0-9_.\~%+\[\]\x5C=\-]+"?\z~D';
+    private const COMPOSED_FORM_KEY_PATTERN = '~\A["\']?[A-Za-z0-9_.\~%+\[\]\x5C=\-]+["\']?\z~D';
 
     private const MAX_PHP_SERIALIZED_SCALAR_BYTES = 128;
 
@@ -604,11 +604,26 @@ REGEX;
 
     private static function isJsonMemberLeftBoundary(string $value, int $offset): bool
     {
-        if ($offset === 0 || self::isAsciiWhitespace($value[$offset - 1])) {
+        if ($offset === 0) {
             return true;
         }
 
-        $previousByte = $value[$offset - 1];
+        $boundaryOffset = $offset;
+        while (
+            $boundaryOffset > 0
+            && self::isAsciiWhitespace($value[$boundaryOffset - 1])
+        ) {
+            --$boundaryOffset;
+        }
+
+        if ($boundaryOffset === 0) {
+            return true;
+        }
+
+        $previousByte = $value[$boundaryOffset - 1];
+        if ($boundaryOffset !== $offset) {
+            return \in_array($previousByte, ['{', '[', ','], true);
+        }
 
         return !self::isAsciiAlphaNumeric($previousByte)
             && !\in_array($previousByte, ['_', '\\', '"'], true);
@@ -670,9 +685,17 @@ REGEX;
             try {
                 $key = json_decode('"' . $encodedKey . '"', flags: JSON_THROW_ON_ERROR);
             } catch (\JsonException) {
+                $jsonUnicodeEscapeMatch = preg_match('/\\\\u[0-9A-Fa-f]{4}/', $encodedKey);
+                if ($jsonUnicodeEscapeMatch === false) {
+                    throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+                }
+
                 if (
-                    !$rejectMalformedKey
-                    || self::isWindowsPathLikePublicKeyCandidate($encodedKey)
+                    $jsonUnicodeEscapeMatch !== 1
+                    && (
+                        !$rejectMalformedKey
+                        || self::isWindowsPathLikePublicKeyCandidate($encodedKey)
+                    )
                 ) {
                     return;
                 }
@@ -1360,8 +1383,13 @@ REGEX;
                 continue;
             }
 
-            $rawKey = substr($value, $offset, $equals - $offset);
+            $rawKey = rtrim(
+                substr($value, $offset, $equals - $offset),
+                "\x09\x0A\x0B\x0C\x0D ",
+            );
             $key = urldecode($rawKey);
+            $decodedKeyBytes = \strlen($key);
+            $key = rtrim($key, "\x09\x0A\x0B\x0C\x0D ");
             $item = urldecode(substr($value, $equals + 1, $partEnd - $equals - 1));
             $rawKeyMatch = preg_match(self::RAW_FORM_KEY_PATTERN, $rawKey);
             $composedKeyMatch = preg_match(self::COMPOSED_FORM_KEY_PATTERN, $key);
@@ -1378,7 +1406,7 @@ REGEX;
                 continue;
             }
 
-            self::consumeDecodedBytes($decodedByteCount, \strlen($key));
+            self::consumeDecodedBytes($decodedByteCount, $decodedKeyBytes);
             self::assertMapKeySafe($key, $item);
 
             $activeArrayReferences = [];
@@ -1407,7 +1435,12 @@ REGEX;
         int $partEnd,
     ): int|false {
         $firstEquals = strpos($value, '=', $partStart);
-        if ($firstEquals === false || $firstEquals >= $partEnd || $value[$partStart] !== '"') {
+        if ($firstEquals === false || $firstEquals >= $partEnd) {
+            return $firstEquals;
+        }
+
+        $quote = $value[$partStart];
+        if ($quote !== '"' && $quote !== "'") {
             return $firstEquals;
         }
 
@@ -1417,8 +1450,23 @@ REGEX;
                 continue;
             }
 
-            if ($value[$offset] === '"' && isset($value[$offset + 1]) && $value[$offset + 1] === '=') {
-                return $offset + 1;
+            if ($value[$offset] !== $quote) {
+                continue;
+            }
+
+            $assignmentOffset = $offset + 1;
+            while (
+                $assignmentOffset < $partEnd
+                && (
+                    self::isAsciiWhitespace($value[$assignmentOffset])
+                    || $value[$assignmentOffset] === '+'
+                )
+            ) {
+                ++$assignmentOffset;
+            }
+
+            if ($assignmentOffset < $partEnd && $value[$assignmentOffset] === '=') {
+                return $assignmentOffset;
             }
         }
 
@@ -1634,6 +1682,17 @@ REGEX;
 
                 if (\is_string($jsonDecoded)) {
                     $decoded = $jsonDecoded;
+                } elseif (
+                    \strlen($key) > 1
+                    && str_starts_with($key, "'")
+                    && str_ends_with($key, "'")
+                ) {
+                    $decoded = substr($key, 1, -1);
+                } elseif (
+                    \strlen($key) > 1
+                    && (str_starts_with($key, "'") xor str_ends_with($key, "'"))
+                ) {
+                    $decoded = str_starts_with($key, "'") ? substr($key, 1) : substr($key, 0, -1);
                 } elseif (
                     \strlen($key) > 1
                     && (str_starts_with($key, '"') xor str_ends_with($key, '"'))
