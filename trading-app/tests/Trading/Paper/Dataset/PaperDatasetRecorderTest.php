@@ -15,8 +15,15 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
+#[CoversClass(PaperDatasetRecorder::class)]
+#[CoversClass(PaperDatasetManifest::class)]
+#[CoversClass(PaperDatasetManifestCodec::class)]
+#[CoversClass(PaperDatasetVerifier::class)]
+#[CoversClass(PaperMarketEvent::class)]
+#[CoversClass(CanonicalJson::class)]
 final class PaperDatasetRecorderTest extends TestCase
 {
     private string $testRoot;
