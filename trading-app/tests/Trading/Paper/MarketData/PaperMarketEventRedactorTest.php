@@ -1343,6 +1343,60 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::assertGreaterThan(0, $rejectionCount);
     }
 
+    #[DataProvider('foldedBase64AlphabetBoundaryProvider')]
+    public function testRejectsFoldedCredentialBase64AcrossAlphabetAlignmentBoundaries(
+        string $credential,
+        string $public,
+    ): void {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $credential]),
+            [$credential, 'synthetic-fold-alignment-sentinel'],
+        );
+    }
+
+    #[DataProvider('foldedBase64AlphabetBoundaryProvider')]
+    public function testAllowsFoldedPublicBase64AcrossAlphabetAlignmentBoundaries(
+        string $credential,
+        string $public,
+    ): void {
+        PaperMarketEventRedactor::assertSafe(['raw' => $public]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function foldedBase64AlphabetBoundaryProvider(): iterable
+    {
+        $credentialJson = json_encode(
+            [
+                'api_key' => 'synthetic-fold-alignment-sentinel',
+                'price' => '1',
+            ],
+            JSON_THROW_ON_ERROR,
+        );
+        $publicJson = json_encode(
+            [
+                'price' => 1,
+            ],
+            JSON_THROW_ON_ERROR,
+        );
+
+        foreach (range(1, 3) as $prefixLength) {
+            foreach (range(0, 4) as $suffixLength) {
+                $prefix = str_repeat('A', $prefixLength);
+                $suffix = str_repeat('A', $suffixLength);
+                $fold = static fn (string $encoded): string => substr($encoded, 0, 4)
+                    . "\r\n "
+                    . substr($encoded, 4);
+
+                yield sprintf('prefix %d, suffix %d', $prefixLength, $suffixLength) => [
+                    $prefix . $fold(rtrim(base64_encode($credentialJson), '=')) . $suffix,
+                    $prefix . $fold(rtrim(base64_encode($publicJson), '=')) . $suffix,
+                ];
+            }
+        }
+    }
+
     /**
      * @param array<string, string> $payload
      */
@@ -1463,6 +1517,21 @@ final class PaperMarketEventRedactorTest extends TestCase
         PaperMarketEventRedactor::assertSafe([
             str_repeat('A ', 524_288),
         ]);
+    }
+
+    public function testAllowsOneMiBPublicFormLikeStringInNearLinearTime(): void
+    {
+        $public = str_repeat('x&', 500_000) . 'price=1';
+        self::assertLessThanOrEqual(
+            PaperMarketEventRedactor::MAX_PAYLOAD_STRING_BYTES,
+            \strlen($public),
+        );
+
+        $startedAt = hrtime(true);
+        PaperMarketEventRedactor::assertSafe(['raw' => $public]);
+        $elapsedSeconds = (hrtime(true) - $startedAt) / 1_000_000_000;
+
+        self::assertLessThan(2.0, $elapsedSeconds);
     }
 
     #[RunInSeparateProcess]

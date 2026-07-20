@@ -2304,6 +2304,79 @@ PHP,
         yield 'URL-safe excessive padding' => [strtr($requiresOnePadding . '=', '+/', '-_')];
     }
 
+    #[DataProvider('foldedBase64AlphabetBoundaryProvider')]
+    public function testCreateRejectsFoldedCredentialBase64AcrossAlphabetAlignmentBoundaries(
+        string $credential,
+        string $public,
+    ): void {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $credential]),
+            [$credential, 'synthetic-fold-alignment-sentinel'],
+        );
+    }
+
+    #[DataProvider('foldedBase64AlphabetBoundaryProvider')]
+    public function testFromArrayRejectsFoldedCredentialBase64AcrossAlphabetAlignmentBoundaries(
+        string $credential,
+        string $public,
+    ): void {
+        $payload = ['raw' => $credential];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            [$credential, 'synthetic-fold-alignment-sentinel'],
+        );
+    }
+
+    #[DataProvider('foldedBase64AlphabetBoundaryProvider')]
+    public function testCreateAndFromArrayAllowFoldedPublicBase64AcrossAlphabetAlignmentBoundaries(
+        string $credential,
+        string $public,
+    ): void {
+        $event = self::event(payload: ['raw' => $public]);
+
+        self::assertSame(
+            $event->toArray(),
+            PaperMarketEvent::fromArray($event->toArray())->toArray(),
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function foldedBase64AlphabetBoundaryProvider(): iterable
+    {
+        $credentialJson = json_encode(
+            [
+                'api_key' => 'synthetic-fold-alignment-sentinel',
+                'price' => '1',
+            ],
+            JSON_THROW_ON_ERROR,
+        );
+        $publicJson = json_encode(
+            [
+                'price' => 1,
+            ],
+            JSON_THROW_ON_ERROR,
+        );
+
+        foreach (range(1, 3) as $prefixLength) {
+            foreach (range(0, 4) as $suffixLength) {
+                $prefix = str_repeat('A', $prefixLength);
+                $suffix = str_repeat('A', $suffixLength);
+                $fold = static fn (string $encoded): string => substr($encoded, 0, 4)
+                    . "\r\n "
+                    . substr($encoded, 4);
+
+                yield sprintf('prefix %d, suffix %d', $prefixLength, $suffixLength) => [
+                    $prefix . $fold(rtrim(base64_encode($credentialJson), '=')) . $suffix,
+                    $prefix . $fold(rtrim(base64_encode($publicJson), '=')) . $suffix,
+                ];
+            }
+        }
+    }
+
     /** @return iterable<string, array{string}> */
     public static function embeddedSensitiveRepresentationProvider(): iterable
     {

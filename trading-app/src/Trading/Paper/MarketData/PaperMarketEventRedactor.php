@@ -416,7 +416,15 @@ REGEX;
                 $decodedStrings,
             );
 
-            if (!$isFoldedBase64 && !self::isCompleteJsonValue($base64Decoded)) {
+            if ($isFoldedBase64) {
+                self::scanEmbeddedFoldedBase64Values(
+                    $canonical,
+                    $decodeDepth,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                    $decodedStrings,
+                );
+            } elseif (!self::isCompleteJsonValue($base64Decoded)) {
                 for ($alignment = 1; $alignment < 4; ++$alignment) {
                     self::scanBase64Stream(
                         $canonical,
@@ -1172,17 +1180,19 @@ REGEX;
                 continue;
             }
 
-            // Each whitespace boundary is a semantic reset point. Aggregate decoded-byte and
-            // node limits bound the total suffix work even when an input contains many segments.
+            // Each whitespace boundary is a semantic reset point. Its four possible Base64
+            // alignments are constant work; aggregate limits bound inputs containing many segments.
             foreach ($segmentStarts as $segmentStart) {
-                self::scanBase64Stream(
-                    $compacted,
-                    $segmentStart,
-                    $decodeDepth,
-                    $decodedNodeCount,
-                    $decodedByteCount,
-                    $decodedStrings,
-                );
+                for ($alignment = 0; $alignment < 4; ++$alignment) {
+                    self::scanBase64Stream(
+                        $compacted,
+                        $segmentStart + $alignment,
+                        $decodeDepth,
+                        $decodedNodeCount,
+                        $decodedByteCount,
+                        $decodedStrings,
+                    );
+                }
             }
         }
     }
@@ -1515,9 +1525,9 @@ REGEX;
         int $partStart,
         int $partEnd,
     ): int|false {
-        $firstEquals = strpos($value, '=', $partStart);
-        if ($firstEquals === false || $firstEquals >= $partEnd) {
-            return $firstEquals;
+        $firstEquals = $partStart + strcspn($value, '=', $partStart, $partEnd - $partStart);
+        if ($firstEquals >= $partEnd) {
+            return false;
         }
 
         $quote = $value[$partStart];
