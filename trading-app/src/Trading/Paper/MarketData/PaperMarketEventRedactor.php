@@ -284,7 +284,7 @@ REGEX;
             throw new \InvalidArgumentException('paper_market_sensitive_decode_depth_exceeded');
         }
 
-        $fingerprint = hash('sha256', $value);
+        $fingerprint = $decodeDepth . ':' . hash('sha256', $value);
         if (isset($decodedStrings[$fingerprint])) {
             return;
         }
@@ -389,8 +389,10 @@ REGEX;
             $canonical,
             rejectInvalidUtf8: self::hasBase64EncodingMarker($canonical),
         );
+        $isFoldedBase64 = false;
         if ($base64Decoded === null) {
             $base64Decoded = self::decodeFoldedBase64($canonical);
+            $isFoldedBase64 = $base64Decoded !== null;
         }
 
         if ($base64Decoded !== null) {
@@ -402,6 +404,19 @@ REGEX;
                 $decodedByteCount,
                 $decodedStrings,
             );
+
+            if (!$isFoldedBase64 && !self::isCompleteJsonValue($base64Decoded)) {
+                for ($alignment = 1; $alignment < 4; ++$alignment) {
+                    self::scanBase64Stream(
+                        $canonical,
+                        $alignment,
+                        $decodeDepth,
+                        $decodedNodeCount,
+                        $decodedByteCount,
+                        $decodedStrings,
+                    );
+                }
+            }
 
             return;
         }
@@ -740,9 +755,10 @@ REGEX;
     }
 
     /**
-     * Scans only self-delimiting PHP serialization values whose type marker begins at a safe
-     * token boundary. A small parser finds the exact candidate without trusting attacker-provided
-     * string lengths, array sizes, or nesting before native decoding is attempted.
+     * Scans only self-delimiting PHP serialization values. Arrays are also recognized after an
+     * alphanumeric decoded prefix because their complete grammar is unambiguous; other types keep
+     * the public-prose boundary guard. A small parser finds the exact candidate without trusting
+     * attacker-provided string lengths, array sizes, or nesting before native decoding is attempted.
      *
      * @param array<string, true> $decodedStrings
      */
@@ -756,9 +772,15 @@ REGEX;
     ): void {
         $length = \strlen($value);
         for ($offset = 0; $offset < $length;) {
+            if (!self::isPhpSerializedCandidateStart($value, $offset)) {
+                ++$offset;
+
+                continue;
+            }
+
             if (
                 !self::isPhpSerializedCandidateLeftBoundary($value, $offset)
-                || !self::isPhpSerializedCandidateStart($value, $offset)
+                && $value[$offset] !== 'a'
             ) {
                 ++$offset;
 
@@ -1006,8 +1028,9 @@ REGEX;
     }
 
     /**
-     * Decodes complete Base64 tokens only. Candidate discovery is a linear byte scan bounded by
-     * non-token boundaries; it never tries sliding substrings from prose or noncanonical tokens.
+     * Decodes complete Base64 tokens segmented at padding and non-token boundaries. Each token is
+     * examined at its four possible alignments, a constant amount of work rather than a sliding
+     * substring scan. Padding followed by another alphabet byte starts a new token.
      *
      * @param array<string, true> $decodedStrings
      */
@@ -1021,22 +1044,19 @@ REGEX;
     ): void {
         $length = \strlen($value);
         for ($offset = 0; $offset < $length;) {
-            if (
-                !self::isBase64CandidateLeftBoundary($value, $offset)
-                || !self::isBase64TokenByte($value[$offset], false)
-            ) {
+            if (!self::isBase64TokenByte($value[$offset], false)) {
                 ++$offset;
 
                 continue;
             }
 
             $candidateStart = $offset;
-            while ($offset < $length && self::isBase64TokenByte($value[$offset], true)) {
+            while ($offset < $length && self::isBase64TokenByte($value[$offset], false)) {
                 ++$offset;
             }
 
-            if (!self::isBase64CandidateRightBoundary($value, $offset)) {
-                continue;
+            while ($offset < $length && $value[$offset] === '=') {
+                ++$offset;
             }
 
             $candidateLength = $offset - $candidateStart;
@@ -1045,22 +1065,16 @@ REGEX;
             }
 
             $candidate = substr($value, $candidateStart, $candidateLength);
-            $decoded = self::decodeRecoverableBase64(
-                $candidate,
-                rejectInvalidUtf8: self::hasBase64EncodingMarker($candidate),
-            );
-            if ($decoded === null) {
-                continue;
+            for ($alignment = 0; $alignment < 4; ++$alignment) {
+                self::scanBase64Stream(
+                    $candidate,
+                    $alignment,
+                    $decodeDepth,
+                    $decodedNodeCount,
+                    $decodedByteCount,
+                    $decodedStrings,
+                );
             }
-
-            self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
-            self::scanEncodedString(
-                $decoded,
-                $decodeDepth + 1,
-                $decodedNodeCount,
-                $decodedByteCount,
-                $decodedStrings,
-            );
         }
     }
 
@@ -1075,21 +1089,19 @@ REGEX;
     ): void {
         $length = \strlen($value);
         for ($offset = 0; $offset < $length;) {
-            if (
-                !self::isBase64CandidateLeftBoundary($value, $offset)
-                || !self::isBase64TokenByte($value[$offset], false)
-            ) {
+            if (!self::isBase64TokenByte($value[$offset], false)) {
                 ++$offset;
 
                 continue;
             }
 
             $compacted = '';
-            /** @var array<int, int> $alignmentStarts */
-            $alignmentStarts = [];
+            /** @var list<int> $segmentStarts */
+            $segmentStarts = [];
 
             while (true) {
                 $segmentStart = \strlen($compacted);
+                $segmentStarts[] = $segmentStart;
                 $segmentHasPadding = false;
                 while ($offset < $length && self::isBase64TokenByte($value[$offset], true)) {
                     $segmentHasPadding = $segmentHasPadding || $value[$offset] === '=';
@@ -1106,32 +1118,77 @@ REGEX;
                 if (!$hasNextSegment || $segmentHasPadding) {
                     break;
                 }
-
-                $alignment = $segmentStart % 4;
-                $alignmentStarts[$alignment] ??= $segmentStart;
             }
 
-            // A later segment start shares one of four Base64 alignments, so its decoded value
-            // is a suffix of the earliest stream for that alignment; no suffix retries are needed.
-            foreach ($alignmentStarts as $alignmentStart) {
-                $decoded = self::decodeBase64AlignmentStream($compacted, $alignmentStart);
-                if ($decoded === null) {
-                    continue;
-                }
+            if (\count($segmentStarts) < 2) {
+                continue;
+            }
 
-                self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
-                if (preg_match('//u', $decoded) !== 1) {
-                    $decoded = mb_scrub($decoded, 'UTF-8');
-                }
-
-                self::scanEncodedString(
-                    $decoded,
-                    $decodeDepth + 1,
+            // Each whitespace boundary is a semantic reset point. Aggregate decoded-byte and
+            // node limits bound the total suffix work even when an input contains many segments.
+            foreach ($segmentStarts as $segmentStart) {
+                self::scanBase64Stream(
+                    $compacted,
+                    $segmentStart,
+                    $decodeDepth,
                     $decodedNodeCount,
                     $decodedByteCount,
                     $decodedStrings,
                 );
             }
+        }
+    }
+
+    /** @param array<string, true> $decodedStrings */
+    private static function scanBase64Stream(
+        #[\SensitiveParameter] string $compacted,
+        int $start,
+        int $decodeDepth,
+        int &$decodedNodeCount,
+        int &$decodedByteCount,
+        array &$decodedStrings,
+    ): void {
+        if (\strlen($compacted) - $start < 8) {
+            return;
+        }
+
+        $decoded = self::decodeBase64AlignmentStream($compacted, $start);
+        if ($decoded === null) {
+            return;
+        }
+
+        self::consumeDecodedBytes($decodedByteCount, \strlen($decoded));
+        if (preg_match('//u', $decoded) !== 1) {
+            $decoded = mb_scrub($decoded, 'UTF-8');
+        }
+
+        self::scanEncodedString(
+            $decoded,
+            $decodeDepth + 1,
+            $decodedNodeCount,
+            $decodedByteCount,
+            $decodedStrings,
+        );
+    }
+
+    private static function isCompleteJsonValue(#[\SensitiveParameter] string $value): bool
+    {
+        $canonical = self::trimLeadingWhitespaceAndBom($value);
+        if ($canonical === '' || !\in_array($canonical[0], ['{', '[', '"'], true)) {
+            return false;
+        }
+
+        try {
+            json_decode(
+                $canonical,
+                associative: true,
+                depth: self::MAX_NESTING_DEPTH + 1,
+                flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+            );
+
+            return true;
+        } catch (\JsonException) {
+            return false;
         }
     }
 
@@ -1171,16 +1228,6 @@ REGEX;
                 !self::isAsciiAlphaNumeric($value[$offset - 1])
                 && $value[$offset - 1] !== '_'
             );
-    }
-
-    private static function isBase64CandidateLeftBoundary(string $value, int $offset): bool
-    {
-        return $offset === 0 || !self::isBase64TokenByte($value[$offset - 1], true);
-    }
-
-    private static function isBase64CandidateRightBoundary(string $value, int $offset): bool
-    {
-        return !isset($value[$offset]) || !self::isBase64TokenByte($value[$offset], true);
     }
 
     private static function isBase64TokenByte(string $byte, bool $allowPadding): bool

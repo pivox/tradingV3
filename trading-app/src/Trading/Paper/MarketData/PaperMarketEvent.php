@@ -13,6 +13,8 @@ final readonly class PaperMarketEvent
 
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
+    private const TIMESTAMP_WITH_OFFSET_FORMAT = 'Y-m-d\TH:i:s.uP';
+
     /** @var list<string> */
     private const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 
@@ -348,7 +350,26 @@ final readonly class PaperMarketEvent
         #[\SensitiveParameter] \DateTimeImmutable $timestamp,
     ): \DateTimeImmutable
     {
-        return \DateTimeImmutable::createFromInterface($timestamp)->setTimezone(self::utc());
+        try {
+            $wireTimestamp = $timestamp->format(self::TIMESTAMP_WITH_OFFSET_FORMAT);
+            $normalized = \DateTimeImmutable::createFromFormat(
+                '!' . self::TIMESTAMP_WITH_OFFSET_FORMAT,
+                $wireTimestamp,
+                self::utc(),
+            );
+            $errors = \DateTimeImmutable::getLastErrors();
+
+            if ($normalized === false
+                || ($errors !== false && ($errors['warning_count'] !== 0 || $errors['error_count'] !== 0))
+                || $normalized->format(self::TIMESTAMP_WITH_OFFSET_FORMAT) !== $wireTimestamp
+            ) {
+                throw new \InvalidArgumentException('paper_market_timestamp_invalid');
+            }
+
+            return $normalized->setTimezone(self::utc());
+        } catch (\Throwable) {
+            throw new \InvalidArgumentException('paper_market_timestamp_invalid');
+        }
     }
 
     private static function assertSerializableTimestamp(

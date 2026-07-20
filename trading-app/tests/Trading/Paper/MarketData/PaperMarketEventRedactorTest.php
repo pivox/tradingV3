@@ -967,6 +967,118 @@ final class PaperMarketEventRedactorTest extends TestCase
         self::assertGreaterThan(0, $rejectionCount);
     }
 
+    /**
+     * @param array<string, string> $payload
+     */
+    #[DataProvider('decodeDepthInsertionOrderProvider')]
+    public function testDecodeDepthEnforcementIsIndependentOfMapInsertionOrder(array $payload): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_decode_depth_exceeded');
+
+        PaperMarketEventRedactor::assertSafe($payload);
+    }
+
+    /** @return iterable<string, array{array<string, string>}> */
+    public static function decodeDepthInsertionOrderProvider(): iterable
+    {
+        $shallow = json_encode('public-market-value', JSON_THROW_ON_ERROR);
+        $fiveLevels = $shallow;
+        for ($depth = 0; $depth < 4; ++$depth) {
+            $fiveLevels = json_encode($fiveLevels, JSON_THROW_ON_ERROR);
+        }
+
+        yield 'shallow cache prime before five-level copy' => [[
+            'prime' => $shallow,
+            'deep' => $fiveLevels,
+        ]];
+        yield 'five-level copy before shallow cache prime' => [[
+            'deep' => $fiveLevels,
+            'prime' => $shallow,
+        ]];
+    }
+
+    public function testRejectsFoldedSerializedCredentialAfterSameAlignmentPublicSegment(): void
+    {
+        $credential = base64_encode(serialize([
+            'api_key' => 'synthetic-secret-sentinel',
+        ]));
+        $folded = substr($credential, 0, 4) . "\r\n " . substr($credential, 4);
+        $raw = 'bid1 ' . $folded;
+
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, 'synthetic-secret-sentinel'],
+        );
+    }
+
+    #[DataProvider('unpaddedShortCredentialProseContextProvider')]
+    public function testRejectsUnpaddedShortCredentialAfterSameAlignmentProse(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unpaddedShortCredentialProseContextProvider(): iterable
+    {
+        $credential = rtrim(base64_encode(json_encode(
+            ['api_key' => 'x'],
+            JSON_THROW_ON_ERROR,
+        )), '=');
+
+        yield 'left prose' => ['market' . $credential];
+        yield 'both prose' => ['market' . $credential . 'snapshot'];
+    }
+
+    #[DataProvider('embeddedCanonicalCredentialAfterMalformedBoundaryProvider')]
+    public function testRejectsCanonicalCredentialAfterMalformedBase64Boundary(string $raw): void
+    {
+        self::assertSensitiveRejectionWithoutDisclosure(
+            static fn () => PaperMarketEventRedactor::assertSafe(['raw' => $raw]),
+            [$raw, 'synthetic-secret-sentinel'],
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function embeddedCanonicalCredentialAfterMalformedBoundaryProvider(): iterable
+    {
+        $credential = base64_encode(json_encode(
+            ['api_key' => 'synthetic-secret-sentinel'],
+            JSON_THROW_ON_ERROR,
+        ));
+
+        yield 'after malformed padded token' => ['AAAA==' . $credential];
+        yield 'after delimiter padding' => ['prefix|=' . $credential . '|suffix'];
+        yield 'unpadded after prose padding' => ['note==' . rtrim($credential, '=')];
+    }
+
+    public function testBase64TokenSegmentationPreservesNormalPublicMarketText(): void
+    {
+        PaperMarketEventRedactor::assertSafe([
+            'symbol_text' => 'prefix|=BTCUSDT|suffix',
+            'sequence_text' => 'note==42',
+            'prose' => 'bid1 BTCUSDT snapshot',
+        ]);
+
+        self::addToAssertionCount(1);
+    }
+
+    public function testBase64TokenSegmentationRemainsBoundedByDecodedNodeLimit(): void
+    {
+        $segments = [];
+        for ($index = 0; $index < PaperMarketEventRedactor::MAX_SENSITIVE_DECODE_NODES; ++$index) {
+            $segments[] = base64_encode('public-' . $index);
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_decode_nodes_exceeded');
+
+        PaperMarketEventRedactor::assertSafe(['raw' => implode('|', $segments)]);
+    }
+
     public function testOneMiBWhitespaceFoldRunStopsAtTheDocumentedDecodeByteBound(): void
     {
         $this->expectException(\InvalidArgumentException::class);

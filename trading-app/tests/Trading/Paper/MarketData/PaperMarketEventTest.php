@@ -286,6 +286,40 @@ PHP,
         self::assertSame($serialized, $event->toArray());
     }
 
+    #[RunInSeparateProcess]
+    public function testHostileUninitializedTimestampDoesNotLeakThroughAFullTraceChain(): void
+    {
+        ini_set('zend.exception_ignore_args', '0');
+        self::assertSame('0', ini_get('zend.exception_ignore_args'));
+        $sentinel = 'synthetic-hostile-timestamp-sentinel';
+        $hostileTimestamp = new class($sentinel) extends \DateTimeImmutable {
+            public function __construct(public readonly string $sentinel)
+            {
+            }
+        };
+
+        try {
+            PaperMarketEvent::create(
+                venue: PaperMarketDataVenue::OKX,
+                symbol: 'BTCUSDT',
+                channel: PaperMarketDataChannel::TOP_OF_BOOK,
+                exchangeTimestamp: $hostileTimestamp,
+                receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.223456Z'),
+                sequence: '42',
+                payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+            );
+            self::fail('An uninitialized DateTimeImmutable subclass must be rejected.');
+        } catch (\Throwable $exception) {
+            self::assertStringNotContainsString(
+                $sentinel,
+                self::renderExceptionTraceChain($exception),
+            );
+            self::assertInstanceOf(\InvalidArgumentException::class, $exception);
+            self::assertSame('paper_market_timestamp_invalid', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+        }
+    }
+
     public function testRejectedBoundaryInputsAreHiddenFromFullExceptionTraceChains(): void
     {
         $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
