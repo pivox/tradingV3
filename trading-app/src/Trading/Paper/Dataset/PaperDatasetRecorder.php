@@ -33,6 +33,9 @@ final class PaperDatasetRecorder
     /** @var array{dev: int, ino: int} */
     private array $datasetDirectoryIdentity;
 
+    /** @var array{dev: int, ino: int} */
+    private array $lockFileIdentity;
+
     /** @var array<string, array{payload_hash: string, event_hash: string}> */
     private array $identities = [];
 
@@ -76,17 +79,16 @@ final class PaperDatasetRecorder
         $root = $this->prepareDirectory($root);
         $this->datasetRoot = $root;
         $this->datasetRootIdentity = $this->pinDirectoryIdentity($root, 'paper_dataset_root_invalid');
-        $this->datasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
-        $this->assertNoSymlinkComponents($this->datasetDirectory);
-        $this->ensureDirectory($this->datasetDirectory);
-        $resolvedDatasetDirectory = realpath($this->datasetDirectory);
-        if ($resolvedDatasetDirectory === false || $resolvedDatasetDirectory !== $this->datasetDirectory) {
-            throw new \RuntimeException('paper_dataset_directory_invalid');
-        }
-        $this->datasetDirectoryIdentity = $this->pinDirectoryIdentity(
-            $this->datasetDirectory,
+        $requestedDatasetDirectory = $root . DIRECTORY_SEPARATOR . $manifest->datasetId;
+        $preparedDatasetDirectory = $this->prepareManagedDirectory(
+            $requestedDatasetDirectory,
             'paper_dataset_directory_invalid',
         );
+        if ($preparedDatasetDirectory['path'] !== $requestedDatasetDirectory) {
+            throw new \RuntimeException('paper_dataset_directory_invalid');
+        }
+        $this->datasetDirectory = $preparedDatasetDirectory['path'];
+        $this->datasetDirectoryIdentity = $preparedDatasetDirectory['identity'];
 
         $checkpoints = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'checkpoints';
         $this->eventsPath = $this->datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
@@ -96,7 +98,8 @@ final class PaperDatasetRecorder
         $this->assertNoSymlinkComponents($this->eventsPath);
         $this->assertNoSymlinkComponents($this->manifestPath);
         $this->assertNoSymlinkComponents($this->lockPath);
-        $this->ensureLockFile();
+        $existingDataset = file_exists($this->eventsPath) || file_exists($this->manifestPath);
+        $this->ensureLockFile(create: !$existingDataset);
 
         $this->withDatasetLock(function () use ($checkpoints, $manifest): void {
             if (is_file($this->manifestPath)) {
@@ -329,7 +332,7 @@ final class PaperDatasetRecorder
         try {
             $statistics = $this->filesystem->stat($handle, 'paper_dataset_events_read_failed');
             if ($statistics === false
-                || !$this->isRegularFile($statistics)
+                || !$this->isPrivateRegularFile($statistics)
                 || !isset($statistics['size'])
                 || !\is_int($statistics['size'])
             ) {
@@ -435,7 +438,7 @@ final class PaperDatasetRecorder
             }
             $finalStatistics = $this->filesystem->stat($handle, 'paper_dataset_events_tail_validation');
             if ($finalStatistics === false
-                || !$this->isRegularFile($finalStatistics)
+                || !$this->isPrivateRegularFile($finalStatistics)
                 || !isset($finalStatistics['size'])
                 || !\is_int($finalStatistics['size'])
                 || $finalStatistics['size'] !== $durableSize
@@ -657,7 +660,7 @@ final class PaperDatasetRecorder
                 'paper_dataset_events_snapshot_validation',
             );
             if ($statistics === false
-                || !$this->isRegularFile($statistics)
+                || !$this->isPrivateRegularFile($statistics)
                 || !isset($statistics['size'])
                 || !\is_int($statistics['size'])
                 || $statistics['size'] !== $expectedFileSize
@@ -682,7 +685,7 @@ final class PaperDatasetRecorder
                 'paper_dataset_events_snapshot_validation',
             );
             if ($finalStatistics === false
-                || !$this->isRegularFile($finalStatistics)
+                || !$this->isPrivateRegularFile($finalStatistics)
                 || !isset($finalStatistics['size'])
                 || !\is_int($finalStatistics['size'])
                 || $finalStatistics['size'] !== $expectedFileSize
@@ -712,6 +715,12 @@ final class PaperDatasetRecorder
     {
         $this->assertPinnedDirectories();
         $destinationStat = $this->pathStatIfPresent($this->manifestPath);
+        if ($destinationStat !== null) {
+            $stored = $this->readStoredManifest();
+            if ($stored->state !== PaperDatasetState::RECORDING && $stored != $manifest) {
+                throw new \RuntimeException('paper_dataset_not_recording');
+            }
+        }
         $temporary = @tempnam($this->datasetDirectory, '.manifest-');
         if ($temporary === false) {
             throw new \RuntimeException('paper_dataset_manifest_temp_failed');
@@ -900,14 +909,18 @@ final class PaperDatasetRecorder
             }
             fclose($handle);
         }
-        if (!is_file($this->eventsPath) || !chmod($this->eventsPath, 0600)) {
+        $this->pathStat($this->eventsPath, 'paper_dataset_events_invalid');
+        if (!chmod($this->eventsPath, 0600)) {
             throw new \RuntimeException('paper_dataset_events_invalid');
         }
     }
 
-    private function ensureLockFile(): void
+    private function ensureLockFile(bool $create): void
     {
         if (!file_exists($this->lockPath)) {
+            if (!$create) {
+                throw new \RuntimeException('paper_dataset_lock_invalid');
+            }
             $handle = @fopen($this->lockPath, 'x+b');
             if ($handle === false) {
                 if (!is_file($this->lockPath)) {
@@ -918,9 +931,16 @@ final class PaperDatasetRecorder
             }
         }
 
-        if (!is_file($this->lockPath) || !@chmod($this->lockPath, 0600)) {
+        $this->pathStat($this->lockPath, 'paper_dataset_lock_invalid');
+        if (!@chmod($this->lockPath, 0600)) {
             throw new \RuntimeException('paper_dataset_lock_invalid');
         }
+
+        $statistics = $this->pathStat($this->lockPath, 'paper_dataset_lock_invalid');
+        $this->lockFileIdentity = [
+            'dev' => $statistics['dev'],
+            'ino' => $statistics['ino'],
+        ];
     }
 
     /**
@@ -943,7 +963,7 @@ final class PaperDatasetRecorder
                 throw new \RuntimeException('paper_dataset_lock_failed');
             }
             $locked = true;
-            $this->assertHandleMatchesPath($handle, $this->lockPath);
+            $this->assertDatasetLockHandle($handle);
             $this->assertPinnedDirectories();
             $result = $operation();
             $this->assertPinnedDirectories();
@@ -951,6 +971,12 @@ final class PaperDatasetRecorder
             $failure = $caught;
         } finally {
             if ($locked && \is_resource($handle)) {
+                try {
+                    $this->assertDatasetLockHandle($handle);
+                } catch (\Throwable $lockFailure) {
+                    $this->usable = false;
+                    $failure = $lockFailure;
+                }
                 flock($handle, LOCK_UN);
             }
             if (\is_resource($handle)) {
@@ -970,6 +996,25 @@ final class PaperDatasetRecorder
         }
 
         return $result;
+    }
+
+    /** @param resource $handle */
+    private function assertDatasetLockHandle($handle): void
+    {
+        try {
+            $opened = $this->assertHandleMatchesPath($handle, $this->lockPath);
+            if (!$this->sameFile($this->lockFileIdentity, $opened)) {
+                throw new \RuntimeException('paper_dataset_file_changed');
+            }
+        } catch (\Throwable $failure) {
+            if ($failure instanceof \RuntimeException
+                && $failure->getMessage() === 'paper_dataset_file_changed'
+            ) {
+                throw $failure;
+            }
+
+            throw new \RuntimeException('paper_dataset_file_changed', 0, $failure);
+        }
     }
 
     private function readStoredManifest(): PaperDatasetManifest
@@ -1023,7 +1068,7 @@ final class PaperDatasetRecorder
     ): array
     {
         $opened = $this->filesystem->stat($handle, $operation);
-        if ($opened === false || !$this->isRegularFile($opened)) {
+        if ($opened === false || !$this->isPrivateRegularFile($opened)) {
             throw new \RuntimeException('paper_dataset_file_validation_failed');
         }
 
@@ -1046,7 +1091,7 @@ final class PaperDatasetRecorder
         if (($statistics['mode'] & self::FILE_TYPE_MASK) === 0120000) {
             throw new \RuntimeException('paper_dataset_symlink_rejected');
         }
-        if (!$this->isRegularFile($statistics)) {
+        if (!$this->isPrivateRegularFile($statistics)) {
             throw new \RuntimeException('paper_dataset_file_validation_failed');
         }
 
@@ -1064,7 +1109,7 @@ final class PaperDatasetRecorder
         if (($statistics['mode'] & self::FILE_TYPE_MASK) === 0120000) {
             throw new \RuntimeException('paper_dataset_symlink_rejected');
         }
-        if (!$this->isRegularFile($statistics)) {
+        if (!$this->isPrivateRegularFile($statistics)) {
             throw new \RuntimeException('paper_dataset_file_validation_failed');
         }
 
@@ -1093,6 +1138,15 @@ final class PaperDatasetRecorder
         return isset($statistics['mode'])
             && \is_int($statistics['mode'])
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE;
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isPrivateRegularFile(array $statistics): bool
+    {
+        return $this->isRegularFile($statistics)
+            && isset($statistics['nlink'])
+            && \is_int($statistics['nlink'])
+            && $statistics['nlink'] === 1;
     }
 
     /** @param array<string, mixed> $statistics */
@@ -1183,14 +1237,39 @@ final class PaperDatasetRecorder
         if ($directory === '' || str_contains($directory, "\0")) {
             throw new \RuntimeException('paper_dataset_root_invalid');
         }
-        $this->assertNoSymlinkComponents($directory);
-        $this->ensureDirectory($directory);
-        $resolved = realpath($directory);
-        if ($resolved === false) {
-            throw new \RuntimeException('paper_dataset_root_invalid');
-        }
 
-        return $resolved;
+        return $this->prepareManagedDirectory($directory, 'paper_dataset_root_invalid')['path'];
+    }
+
+    /** @return array{path: string, identity: array{dev: int, ino: int}} */
+    private function prepareManagedDirectory(
+        #[\SensitiveParameter] string $directory,
+        string $error,
+    ): array {
+        $this->assertNoSymlinkComponents($directory);
+        $pinned = is_dir($directory) ? $this->openPinnedDirectory($directory, $error) : null;
+        try {
+            $this->ensureDirectory($directory);
+            if ($pinned === null) {
+                $pinned = $this->openPinnedDirectory($directory, $error);
+            }
+            $resolved = realpath($directory);
+            if ($resolved === false) {
+                throw new \RuntimeException($error);
+            }
+            $this->assertDirectoryHandleMatchesPath(
+                $pinned['handle'],
+                $resolved,
+                $pinned['identity'],
+                'paper_dataset_directory_changed',
+            );
+
+            return ['path' => $resolved, 'identity' => $pinned['identity']];
+        } finally {
+            if ($pinned !== null) {
+                fclose($pinned['handle']);
+            }
+        }
     }
 
     private function storedManifestExists(
@@ -1216,9 +1295,7 @@ final class PaperDatasetRecorder
     {
         $this->assertNoSymlinkComponents($directory);
         if (is_dir($directory)) {
-            if (!$this->filesystem->changeMode($directory, 0700)) {
-                throw new \RuntimeException('paper_dataset_directory_mode_failed');
-            }
+            $this->validateAndSyncManagedDirectory($directory);
 
             return;
         }
@@ -1241,7 +1318,6 @@ final class PaperDatasetRecorder
         }
         $this->assertNoSymlinkComponents($ancestor);
 
-        $targetCreated = false;
         foreach (array_reverse($missing) as $candidate) {
             $this->assertNoSymlinkComponents($candidate);
             if (!$this->filesystem->createDirectory($candidate, 0700)) {
@@ -1249,32 +1325,85 @@ final class PaperDatasetRecorder
                 if (!is_dir($candidate)) {
                     throw new \RuntimeException('paper_dataset_directory_create_failed');
                 }
-
-                continue;
             }
-            if (!$this->filesystem->changeMode($candidate, 0700)) {
+            $this->validateAndSyncManagedDirectory($candidate);
+        }
+    }
+
+    private function validateAndSyncManagedDirectory(#[\SensitiveParameter] string $directory): void
+    {
+        $pinned = $this->openPinnedDirectory($directory, 'paper_dataset_directory_create_failed');
+        try {
+            $statistics = $this->filesystem->stat(
+                $pinned['handle'],
+                'paper_dataset_directory_validation',
+            );
+            if ($statistics === false
+                || !isset($statistics['mode'])
+                || !\is_int($statistics['mode'])
+                || ($statistics['mode'] & 0777) !== 0700
+            ) {
                 throw new \RuntimeException('paper_dataset_directory_mode_failed');
             }
-
-            $createdIdentity = $this->pinDirectoryIdentity(
-                $candidate,
-                'paper_dataset_directory_create_failed',
+            $this->syncDirectoryParent($directory);
+            $this->assertDirectoryHandleMatchesPath(
+                $pinned['handle'],
+                $directory,
+                $pinned['identity'],
+                'paper_dataset_directory_changed',
             );
-            $this->syncDirectoryParent($candidate);
-            $durableIdentity = $this->pinDirectoryIdentity(
-                $candidate,
-                'paper_dataset_directory_create_failed',
-            );
-            if (!$this->sameFile($createdIdentity, $durableIdentity)) {
-                throw new \RuntimeException('paper_dataset_directory_changed');
-            }
-            if ($candidate === $directory) {
-                $targetCreated = true;
-            }
+        } finally {
+            fclose($pinned['handle']);
         }
+    }
 
-        if (!$targetCreated && !$this->filesystem->changeMode($directory, 0700)) {
-            throw new \RuntimeException('paper_dataset_directory_mode_failed');
+    /** @return array{handle: resource, identity: array{dev: int, ino: int}} */
+    private function openPinnedDirectory(#[\SensitiveParameter] string $directory, string $error): array
+    {
+        $this->assertNoSymlinkComponents($directory);
+        $handle = $this->filesystem->openDirectory($directory, 'paper_dataset_directory_validation');
+        if ($handle === false) {
+            throw new \RuntimeException($error);
+        }
+        try {
+            $statistics = $this->filesystem->stat($handle, 'paper_dataset_directory_validation');
+            if ($statistics === false
+                || !$this->isDirectory($statistics)
+                || !isset($statistics['dev'], $statistics['ino'])
+                || !\is_int($statistics['dev'])
+                || !\is_int($statistics['ino'])
+            ) {
+                throw new \RuntimeException($error);
+            }
+            $identity = ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
+            $this->assertDirectoryHandleMatchesPath($handle, $directory, $identity, $error);
+
+            return ['handle' => $handle, 'identity' => $identity];
+        } catch (\Throwable $failure) {
+            fclose($handle);
+
+            throw $failure;
+        }
+    }
+
+    /**
+     * @param resource                     $handle
+     * @param array{dev: int, ino: int} $expected
+     */
+    private function assertDirectoryHandleMatchesPath(
+        $handle,
+        #[\SensitiveParameter] string $directory,
+        array $expected,
+        string $error,
+    ): void {
+        $opened = $this->filesystem->stat($handle, 'paper_dataset_directory_validation');
+        $current = $this->pinDirectoryIdentity($directory, $error);
+        if ($opened === false
+            || !$this->isDirectory($opened)
+            || !$this->sameFile($expected, $opened)
+            || !$this->sameFile($expected, $current)
+        ) {
+            throw new \RuntimeException($error);
         }
     }
 

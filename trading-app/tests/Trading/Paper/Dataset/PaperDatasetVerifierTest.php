@@ -100,6 +100,28 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    public function testRejectsSameSizeManifestMutationDuringEventsRehash(): void
+    {
+        $this->createCompleteDataset();
+        $manifestPath = $this->manifestPath();
+        $original = file_get_contents($manifestPath);
+        self::assertIsString($original);
+        $decoded = json_decode($original, true, 512, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
+        self::assertIsArray($decoded);
+        $decoded['recorder_version'] = '9.9.9';
+        $replacement = CanonicalJson::encode($decoded) . "\n";
+        self::assertSame(strlen($original), strlen($replacement));
+        $filesystem = new VerifierFaultInjectingPaperDatasetFilesystem();
+        $filesystem->overwriteManifestDuringEventsRehash($manifestPath, $replacement);
+
+        try {
+            (new PaperDatasetVerifier(filesystem: $filesystem))->verify($this->datasetDirectory());
+            self::fail('Verifier must reject a manifest changed after its initial read.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_verifier_snapshot_changed', $exception->getMessage());
+        }
+    }
+
     public function testFullVerifierTraceRedactsRawLineWhenExceptionArgumentsAreEnabled(): void
     {
         $this->createCompleteDataset();
@@ -175,11 +197,13 @@ final class PaperDatasetVerifierTest extends TestCase
             'verify' => 'datasetDirectory',
             'assertNoSymlinkComponents' => 'path',
             'readRegularFile' => 'path',
+            'assertRegularFileSnapshot' => 'path',
             'openRegularFile' => 'path',
             'assertHandleMatchesPath' => 'path',
             'pathStat' => 'path',
+            'openPinnedDirectory' => 'path',
+            'assertDirectoryHandleMatchesPath' => 'path',
             'pinDirectoryIdentity' => 'path',
-            'assertDirectoryIdentity' => 'path',
             'scan' => 'eventsPath',
         ];
 
@@ -238,6 +262,26 @@ final class PaperDatasetVerifierTest extends TestCase
         $this->assertVerificationFailsWithoutPayload('paper_dataset_symlink_rejected', ['29999.0']);
     }
 
+    public function testRejectsHardlinkedEventsFileEvenWhenBytesAndChecksumMatch(): void
+    {
+        $this->createCompleteDataset();
+        $eventsPath = $this->eventsPath();
+        $contents = file_get_contents($eventsPath);
+        self::assertIsString($contents);
+        $victimPath = $this->testRoot . '/external-verifier-events-victim.ndjson';
+        self::assertSame(strlen($contents), file_put_contents($victimPath, $contents));
+        self::assertTrue(chmod($victimPath, 0640));
+        self::assertTrue(unlink($eventsPath));
+        self::assertTrue(link($victimPath, $eventsPath));
+
+        $this->assertVerificationFailsWithoutPayload(
+            'paper_dataset_file_validation_failed',
+            ['29999.0'],
+        );
+        self::assertSame($contents, file_get_contents($victimPath));
+        self::assertSame(0640, fileperms($victimPath) & 0777);
+    }
+
     public function testRejectsMissingEventsFileWithStableCode(): void
     {
         $this->createCompleteDataset();
@@ -258,6 +302,23 @@ final class PaperDatasetVerifierTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_symlink_rejected');
 
         (new PaperDatasetVerifier())->verify($aliasedDataset);
+    }
+
+    public function testRejectsRootReplacementBeforeFirstDirectoryPin(): void
+    {
+        $this->createCompleteDataset();
+        $root = $this->datasetRoot();
+        $replacementRoot = $this->testRoot . '/replacement-paper-market-data';
+        $this->copyDirectory($root, $replacementRoot);
+        $filesystem = new VerifierFaultInjectingPaperDatasetFilesystem();
+        $filesystem->swapRootBeforeVerifierFirstPin($root, $replacementRoot);
+
+        try {
+            (new PaperDatasetVerifier(filesystem: $filesystem))->verify($this->datasetDirectory());
+            self::fail('Verifier must not adopt a root replacement after canonicalization.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+        }
     }
 
     public function testStrictlyRejectsUnknownManifestFields(): void
@@ -416,6 +477,25 @@ final class PaperDatasetVerifierTest extends TestCase
         return $this->datasetDirectory() . '/events.ndjson';
     }
 
+    private function copyDirectory(string $source, string $destination): void
+    {
+        self::assertTrue(mkdir($destination, 0700));
+        $entries = scandir($source);
+        self::assertIsArray($entries);
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $sourcePath = $source . '/' . $entry;
+            $destinationPath = $destination . '/' . $entry;
+            if (is_dir($sourcePath)) {
+                $this->copyDirectory($sourcePath, $destinationPath);
+            } else {
+                self::assertTrue(copy($sourcePath, $destinationPath));
+            }
+        }
+    }
+
     private function removeDirectory(string $directory): void
     {
         if (!is_dir($directory) || is_link($directory)) {
@@ -444,11 +524,44 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
 {
     private ?string $eventsMutationPath = null;
     private ?string $eventsMutationContents = null;
+    private ?string $manifestMutationPath = null;
+    private ?string $manifestMutationContents = null;
+    private ?string $rootToSwapBeforeFirstPin = null;
+    private ?string $replacementRootBeforeFirstPin = null;
 
     public function overwriteEventsBeforeVerifierRehash(string $path, string $contents): void
     {
         $this->eventsMutationPath = $path;
         $this->eventsMutationContents = $contents;
+    }
+
+    public function overwriteManifestDuringEventsRehash(string $path, string $contents): void
+    {
+        $this->manifestMutationPath = $path;
+        $this->manifestMutationContents = $contents;
+    }
+
+    public function swapRootBeforeVerifierFirstPin(string $root, string $replacement): void
+    {
+        $this->rootToSwapBeforeFirstPin = $root;
+        $this->replacementRootBeforeFirstPin = $replacement;
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($this->rootToSwapBeforeFirstPin === $path
+            && $this->replacementRootBeforeFirstPin !== null
+        ) {
+            $replacement = $this->replacementRootBeforeFirstPin;
+            $this->rootToSwapBeforeFirstPin = null;
+            $this->replacementRootBeforeFirstPin = null;
+            if (!rename($path, $path . '.before-first-pin') || !rename($replacement, $path)) {
+                throw new \RuntimeException('Unable to inject verifier root replacement.');
+            }
+        }
+
+        return parent::pathStat($path, $operation);
     }
 
     /**
@@ -468,6 +581,18 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
             $this->eventsMutationContents = null;
             if (file_put_contents($path, $contents) !== strlen($contents)) {
                 throw new \RuntimeException('Unable to inject verifier snapshot mutation.');
+            }
+        }
+        if ($operation === 'paper_dataset_verifier_events_rehash'
+            && $this->manifestMutationPath !== null
+            && $this->manifestMutationContents !== null
+        ) {
+            $path = $this->manifestMutationPath;
+            $contents = $this->manifestMutationContents;
+            $this->manifestMutationPath = null;
+            $this->manifestMutationContents = null;
+            if (file_put_contents($path, $contents) !== strlen($contents)) {
+                throw new \RuntimeException('Unable to inject manifest snapshot mutation.');
             }
         }
 

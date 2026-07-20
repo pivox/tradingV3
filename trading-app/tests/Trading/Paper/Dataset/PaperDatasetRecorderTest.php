@@ -705,6 +705,57 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(1, $stored->eventCount);
     }
 
+    public function testExistingDatasetDoesNotRecreateAMissingTransactionLock(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
+        self::assertTrue(unlink($lockPath));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('An existing dataset with no durable lock must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_lock_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($lockPath);
+    }
+
+    public function testReplacedTransactionLockCannotSplitExclusionOrDowngradeACompleteManifest(): void
+    {
+        $manifest = $this->manifest();
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $stale = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
+        $filesystem->replaceLockBeforeNextManifestRewrite(
+            $lockPath,
+            $this->datasetDirectory() . '/manifest.json',
+            function () use ($manifest): void {
+                $winner = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+                $winner->complete();
+            },
+        );
+
+        try {
+            $stale->append($this->event(sequence: '1'));
+            self::fail('A recorder holding a replaced lock inode must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_file_changed', $exception->getMessage());
+        }
+
+        $storedJson = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($storedJson);
+        $stored = (new PaperDatasetManifestCodec())->decode($storedJson);
+        self::assertSame(PaperDatasetState::COMPLETE, $stored->state);
+        self::assertSame(1, $stored->eventCount);
+        self::assertEquals($stored, (new PaperDatasetVerifier())->verify($this->datasetDirectory()));
+    }
+
     public function testStaleRecordingAppendersPreserveEveryEventAndManifestFact(): void
     {
         $manifest = $this->manifest();
@@ -960,6 +1011,54 @@ final class PaperDatasetRecorderTest extends TestCase
         new PaperDatasetRecorder($safe . '/link/existing', $this->manifest());
     }
 
+    public function testExistingRootCannotBeSwappedThroughPathBasedDirectoryChmod(): void
+    {
+        $root = $this->testRoot . '/existing-paper-root';
+        $target = $this->testRoot . '/external-directory-target';
+        self::assertTrue(mkdir($root, 0750));
+        self::assertTrue(chmod($root, 0750));
+        self::assertTrue(mkdir($target, 0750));
+        self::assertTrue(chmod($target, 0750));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->swapDirectoryDuringChangeMode($root, $target);
+
+        try {
+            new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
+            self::fail('An existing directory requiring path-based chmod must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_mode_failed', $exception->getMessage());
+        }
+
+        self::assertTrue(is_dir($root));
+        self::assertFalse(is_link($root));
+        self::assertSame(0750, fileperms($target) & 0777);
+        self::assertDirectoryDoesNotExist($target . '/dataset-okx-001');
+        self::assertDirectoryDoesNotExist($root . '.before-mode-swap');
+    }
+
+    public function testCreationRejectsPreexistingHardlinkedEventsFileWithoutTouchingExternalInode(): void
+    {
+        self::assertTrue(mkdir($this->datasetDirectory(), 0700, true));
+        $victimPath = $this->testRoot . '/external-events-victim.ndjson';
+        self::assertSame(0, file_put_contents($victimPath, ''));
+        self::assertTrue(chmod($victimPath, 0640));
+        self::assertTrue(link($victimPath, $this->datasetDirectory() . '/events.ndjson'));
+        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
+        self::assertSame(0, file_put_contents($lockPath, ''));
+        self::assertTrue(chmod($lockPath, 0600));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+            self::fail('A preexisting multi-link events inode must be rejected before chmod or append.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_file_validation_failed', $exception->getMessage());
+        }
+
+        self::assertSame('', file_get_contents($victimPath));
+        self::assertSame(0640, fileperms($victimPath) & 0777);
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+    }
+
     public function testAppendRejectsEventsSymlinkSwappedAfterConstructionWithoutTouchingTarget(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
@@ -1005,7 +1104,7 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame($manifestBefore, file_get_contents($originalManifestPath));
     }
 
-    public function testAppendRejectsDatasetDirectorySwapWithHardlinkedTerminalFilesDuringTransaction(): void
+    public function testAppendRejectsDatasetDirectorySwapDuringTransaction(): void
     {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $recorder = new PaperDatasetRecorder(
@@ -1018,32 +1117,22 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertTrue(mkdir($replacementDirectory, 0700));
         self::assertTrue(mkdir($replacementDirectory . '/checkpoints', 0700));
         foreach (['.dataset.lock', 'events.ndjson', 'manifest.json'] as $terminalFile) {
-            self::assertTrue(link(
+            self::assertTrue(copy(
                 $datasetDirectory . '/' . $terminalFile,
                 $replacementDirectory . '/' . $terminalFile,
             ));
-        }
-        $terminalIdentities = [];
-        foreach (['.dataset.lock', 'events.ndjson', 'manifest.json'] as $terminalFile) {
-            $terminalIdentities[$terminalFile] = fileinode($datasetDirectory . '/' . $terminalFile);
-            self::assertSame(
-                $terminalIdentities[$terminalFile],
-                fileinode($replacementDirectory . '/' . $terminalFile),
-            );
+            self::assertTrue(chmod($replacementDirectory . '/' . $terminalFile, 0600));
         }
         $filesystem->swapDatasetDirectoryDuringEventsScan($datasetDirectory, $replacementDirectory);
 
         try {
             $recorder->append($this->event(sequence: '1'));
-            self::fail('A dataset directory replacement must fail even when terminal identities are preserved.');
+            self::fail('A dataset directory replacement must fail during the transaction.');
         } catch (\RuntimeException $exception) {
             self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
         }
 
-        foreach ($terminalIdentities as $terminalFile => $inode) {
-            self::assertSame($inode, fileinode($datasetDirectory . '/' . $terminalFile));
-        }
-        self::assertSame('', file_get_contents($datasetDirectory . '/events.ndjson'));
+        self::assertSame('', file_get_contents($datasetDirectory . '.directory-original/events.ndjson'));
         $this->assertRecorderUnusable($recorder);
     }
 
@@ -1266,6 +1355,33 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertDirectoryExists($datasetDirectory);
         self::assertDirectoryDoesNotExist($datasetDirectory . '/checkpoints');
         self::assertFileDoesNotExist($datasetDirectory . '/manifest.json');
+    }
+
+    public function testRetryResynchronizesExistingManagedDirectoryAfterParentSyncFailure(): void
+    {
+        $root = $this->testRoot . '/sync-retry-root';
+        $datasetDirectory = $root . '/dataset-okx-001';
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failDirectoryParentSyncAt(2);
+
+        try {
+            new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
+            self::fail('The injected parent sync failure must interrupt the first construction.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_parent_sync_failed', $exception->getMessage());
+        }
+
+        self::assertDirectoryExists($datasetDirectory);
+
+        new PaperDatasetRecorder($root, $this->manifest(), filesystem: $filesystem);
+
+        self::assertSame([
+            $this->testRoot,
+            $root,
+            $this->testRoot,
+            $root,
+            $datasetDirectory,
+        ], $filesystem->directoryParentSyncs);
     }
 
     public function testManifestDirectorySyncFailureIsNotReportedAsAppendSuccess(): void
@@ -1693,6 +1809,12 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private int $publicationSnapshotValidationSeeks = 0;
     private ?int $publicationSnapshotValidationTarget = null;
     private ?int $directoryParentSyncFailureAt = null;
+    private ?string $lockPathToReplace = null;
+    private ?string $manifestPathBeforeLockReplacement = null;
+    private ?\Closure $afterLockReplacement = null;
+    private bool $lockReplacementEventWriteCompleted = false;
+    private ?string $directoryToSwapDuringChangeMode = null;
+    private ?string $directoryChangeModeTarget = null;
 
     public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
     {
@@ -1704,6 +1826,71 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failDirectoryParentSyncAt(int $sync): void
     {
         $this->directoryParentSyncFailureAt = $sync;
+    }
+
+    public function replaceLockBeforeNextManifestRewrite(
+        #[\SensitiveParameter] string $lockPath,
+        #[\SensitiveParameter] string $manifestPath,
+        callable $afterReplacement,
+    ): void {
+        $this->lockPathToReplace = $lockPath;
+        $this->manifestPathBeforeLockReplacement = $manifestPath;
+        $this->afterLockReplacement = $afterReplacement(...);
+    }
+
+    public function swapDirectoryDuringChangeMode(
+        #[\SensitiveParameter] string $directory,
+        #[\SensitiveParameter] string $target,
+    ): void {
+        $this->directoryToSwapDuringChangeMode = $directory;
+        $this->directoryChangeModeTarget = $target;
+    }
+
+    public function changeMode(#[\SensitiveParameter] string $path, int $permissions): bool
+    {
+        if ($this->directoryToSwapDuringChangeMode === $path
+            && $this->directoryChangeModeTarget !== null
+        ) {
+            $target = $this->directoryChangeModeTarget;
+            $this->directoryToSwapDuringChangeMode = null;
+            $this->directoryChangeModeTarget = null;
+            if (!rename($path, $path . '.before-mode-swap') || !symlink($target, $path)) {
+                throw new \RuntimeException('Unable to inject directory mode swap.');
+            }
+        }
+
+        return parent::changeMode($path, $permissions);
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($this->lockReplacementEventWriteCompleted
+            && $this->lockPathToReplace !== null
+            && $this->manifestPathBeforeLockReplacement === $path
+            && $this->afterLockReplacement !== null
+        ) {
+            $lockPath = $this->lockPathToReplace;
+            $afterReplacement = $this->afterLockReplacement;
+            $this->lockPathToReplace = null;
+            $this->manifestPathBeforeLockReplacement = null;
+            $this->afterLockReplacement = null;
+            $this->lockReplacementEventWriteCompleted = false;
+            if (!unlink($lockPath)) {
+                throw new \RuntimeException('Unable to remove the transaction lock for replacement.');
+            }
+            $replacement = fopen($lockPath, 'x+b');
+            if ($replacement === false) {
+                throw new \RuntimeException('Unable to replace the transaction lock.');
+            }
+            fclose($replacement);
+            if (!chmod($lockPath, 0600)) {
+                throw new \RuntimeException('Unable to protect the replacement transaction lock.');
+            }
+            $afterReplacement();
+        }
+
+        return parent::pathStat($path, $operation);
     }
 
     public function failNextAppend(string $failure): void
@@ -1897,7 +2084,12 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             $this->appendWriteObserved = true;
         }
 
-        return parent::write($handle, $contents, $operation);
+        $written = parent::write($handle, $contents, $operation);
+        if ($this->lockPathToReplace !== null) {
+            $this->lockReplacementEventWriteCompleted = true;
+        }
+
+        return $written;
     }
 
     public function flush($handle, string $operation): bool
