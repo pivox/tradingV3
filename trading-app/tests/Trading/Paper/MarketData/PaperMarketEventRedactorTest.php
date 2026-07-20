@@ -9,6 +9,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
 
 #[CoversClass(PaperMarketEventRedactor::class)]
 final class PaperMarketEventRedactorTest extends TestCase
@@ -139,6 +140,33 @@ final class PaperMarketEventRedactorTest extends TestCase
     {
         yield 'percent-encoded Base64 key' => [rawurlencode(base64_encode('api_key'))];
         yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
+    }
+
+    #[DataProvider('composedSensitiveFormKeyProvider')]
+    public function testRejectsComposedSensitiveFormKeysWithoutDisclosure(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = $key . '=' . $sentinel;
+
+        try {
+            PaperMarketEventRedactor::assertSafe(['raw' => $raw]);
+            self::fail('A composed sensitive form key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+            $trace = self::renderExceptionTraceChain($exception);
+            self::assertStringNotContainsString($raw, $trace);
+            self::assertStringNotContainsString($sentinel, $trace);
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function composedSensitiveFormKeyProvider(): iterable
+    {
+        yield 'JSON Unicode escape' => ['api\\u005fkey'];
+        yield 'percent-encoded JSON Unicode escape' => ['api%5Cu005fkey'];
+        yield 'JSON-wrapped Base64 key' => ['"YXBpX2tleQ=="'];
+        yield 'percent-encoded JSON-wrapped Base64 key' => ['%22YXBpX2tleQ%3D%3D'];
     }
 
     #[DataProvider('sensitiveStructuralStringProvider')]
@@ -1214,6 +1242,48 @@ final class PaperMarketEventRedactorTest extends TestCase
         $this->expectExceptionMessage('paper_market_sensitive_decode_bytes_exceeded');
 
         PaperMarketEventRedactor::assertSafe(['raw' => $nestedBase64]);
+    }
+
+    public function testRejectsManyFormPairsWithinSixtyFourMegabytesWithAStableCode(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+try {
+    \App\Trading\Paper\MarketData\PaperMarketEventRedactor::assertSafe([
+        str_repeat('a=&', 349525),
+    ]);
+} catch (\InvalidArgumentException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit(0);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(2);
+PHP,
+            var_export($autoload, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=64M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(20.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_market_sensitive_decode_nodes_exceeded', $process->getOutput());
     }
 
     #[RunInSeparateProcess]

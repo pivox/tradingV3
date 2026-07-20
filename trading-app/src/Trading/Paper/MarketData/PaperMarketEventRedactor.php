@@ -102,6 +102,8 @@ REGEX;
 
     private const RAW_FORM_KEY_PATTERN = '~\A[A-Za-z0-9_.\~%+\[\]\x80-\xFF-]+\z~D';
 
+    private const COMPOSED_FORM_KEY_PATTERN = '~\A"?[A-Za-z0-9_.\~%+\[\]\x5C=\-]+"?\z~D';
+
     private const MAX_PHP_SERIALIZED_SCALAR_BYTES = 128;
 
     /** @var array<string, string> Cyrillic and Greek cross-script credential-key confusables. */
@@ -1343,32 +1345,41 @@ REGEX;
             return;
         }
 
-        /** @var list<array{string, string}> $pairs */
-        $pairs = [];
-        foreach (explode('&', $value) as $part) {
-            if ($part === '' || !str_contains($part, '=')) {
+        $length = \strlen($value);
+        $offset = 0;
+        while ($offset <= $length) {
+            $separator = strpos($value, '&', $offset);
+            $partEnd = $separator === false ? $length : $separator;
+            $equals = self::formAssignmentOffset($value, $offset, $partEnd);
+            if ($equals === false || $equals >= $partEnd) {
+                if ($separator === false) {
+                    break;
+                }
+
+                $offset = $partEnd + 1;
                 continue;
             }
 
-            [$rawKey, $rawValue] = explode('=', $part, 2);
-            $keyMatch = preg_match(self::RAW_FORM_KEY_PATTERN, $rawKey);
-            if ($keyMatch === false) {
+            $rawKey = substr($value, $offset, $equals - $offset);
+            $key = urldecode($rawKey);
+            $item = urldecode(substr($value, $equals + 1, $partEnd - $equals - 1));
+            $rawKeyMatch = preg_match(self::RAW_FORM_KEY_PATTERN, $rawKey);
+            $composedKeyMatch = preg_match(self::COMPOSED_FORM_KEY_PATTERN, $key);
+            if ($rawKeyMatch === false || $composedKeyMatch === false) {
                 throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
             }
 
-            if ($keyMatch !== 1) {
+            if ($rawKeyMatch !== 1 && $composedKeyMatch !== 1) {
+                if ($separator === false) {
+                    break;
+                }
+
+                $offset = $partEnd + 1;
                 continue;
             }
 
-            $pairs[] = [urldecode($rawKey), urldecode($rawValue)];
-        }
-
-        foreach ($pairs as [$key, $item]) {
             self::consumeDecodedBytes($decodedByteCount, \strlen($key));
-            $normalizedKey = self::normalizeKey($key);
-            if (self::isSensitiveKey($normalizedKey)) {
-                throw new \InvalidArgumentException('paper_market_sensitive_field_rejected');
-            }
+            self::assertMapKeySafe($key, $item);
 
             $activeArrayReferences = [];
             self::scanDecodedValue(
@@ -1380,7 +1391,38 @@ REGEX;
                 $decodedByteCount,
                 $decodedStrings,
             );
+
+            if ($separator === false) {
+                break;
+            }
+
+            $offset = $partEnd + 1;
         }
+    }
+
+    private static function formAssignmentOffset(
+        #[\SensitiveParameter]
+        string $value,
+        int $partStart,
+        int $partEnd,
+    ): int|false {
+        $firstEquals = strpos($value, '=', $partStart);
+        if ($firstEquals === false || $firstEquals >= $partEnd || $value[$partStart] !== '"') {
+            return $firstEquals;
+        }
+
+        for ($offset = $partStart + 1; $offset < $partEnd; ++$offset) {
+            if ($value[$offset] === '\\') {
+                ++$offset;
+                continue;
+            }
+
+            if ($value[$offset] === '"' && isset($value[$offset + 1]) && $value[$offset + 1] === '=') {
+                return $offset + 1;
+            }
+        }
+
+        return $firstEquals;
     }
 
     private static function decodeRecoverableBase64(
@@ -1592,6 +1634,11 @@ REGEX;
 
                 if (\is_string($jsonDecoded)) {
                     $decoded = $jsonDecoded;
+                } elseif (
+                    \strlen($key) > 1
+                    && (str_starts_with($key, '"') xor str_ends_with($key, '"'))
+                ) {
+                    $decoded = str_starts_with($key, '"') ? substr($key, 1) : substr($key, 0, -1);
                 }
             }
 

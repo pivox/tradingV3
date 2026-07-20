@@ -1599,6 +1599,46 @@ PHP,
         yield 'percent-encoded JSON Unicode escape' => [rawurlencode('api\\u005fkey')];
     }
 
+    #[DataProvider('composedSensitiveFormKeyProvider')]
+    public function testCreateRejectsComposedSensitiveFormKeysWithoutDisclosure(string $key): void
+    {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = $key . '=' . $sentinel;
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => self::event(payload: ['raw' => $raw]),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    #[DataProvider('composedSensitiveFormKeyProvider')]
+    public function testFromArrayRejectsComposedSensitiveFormKeysWithoutDisclosure(
+        string $key,
+    ): void {
+        $sentinel = 'synthetic-redaction-sentinel';
+        $raw = $key . '=' . $sentinel;
+        $payload = ['raw' => $raw];
+        $data = self::event(payload: ['price' => '29999.0'])->toArray();
+        $data['payload'] = $payload;
+        $data['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
+
+        self::assertSensitiveFormRejectionWithoutDisclosure(
+            static fn () => PaperMarketEvent::fromArray($data),
+            $raw,
+            $sentinel,
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function composedSensitiveFormKeyProvider(): iterable
+    {
+        yield 'JSON Unicode escape' => ['api\\u005fkey'];
+        yield 'percent-encoded JSON Unicode escape' => ['api%5Cu005fkey'];
+        yield 'JSON-wrapped Base64 key' => ['"YXBpX2tleQ=="'];
+        yield 'percent-encoded JSON-wrapped Base64 key' => ['%22YXBpX2tleQ%3D%3D'];
+    }
+
     #[DataProvider('sensitiveStructuralStringProvider')]
     public function testCreateRejectsSensitiveStructuralKeysAcrossQuoteEncodings(string $raw): void
     {
@@ -2083,7 +2123,7 @@ PHP,
     private static function event(
         string $symbol = 'btcusdt',
         ?string $sequence = '42',
-        array $payload = ['ask' => '30001.0', 'bid' => '29999.0'],
+        #[\SensitiveParameter] array $payload = ['ask' => '30001.0', 'bid' => '29999.0'],
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
             venue: PaperMarketDataVenue::OKX,
@@ -2137,6 +2177,24 @@ PHP,
 
                 $current = $current->getPrevious();
             } while ($current !== null);
+        }
+    }
+
+    /** @param callable(): mixed $operation */
+    private static function assertSensitiveFormRejectionWithoutDisclosure(
+        #[\SensitiveParameter] callable $operation,
+        #[\SensitiveParameter] string $raw,
+        #[\SensitiveParameter] string $sentinel,
+    ): void {
+        try {
+            $operation();
+            self::fail('A composed sensitive form key must be rejected.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_market_sensitive_field_rejected', $exception->getMessage());
+            self::assertNull($exception->getPrevious());
+            $trace = self::renderExceptionTraceChain($exception);
+            self::assertStringNotContainsString($raw, $trace);
+            self::assertStringNotContainsString($sentinel, $trace);
         }
     }
 
