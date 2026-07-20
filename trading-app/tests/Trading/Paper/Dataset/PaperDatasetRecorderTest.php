@@ -1509,6 +1509,109 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->assertRecorderUnusable($recorder);
     }
 
+    public function testInitialManifestRecoveryRevalidatesDirectoryBeforeRemovingPublishedPath(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $datasetDirectory = $this->datasetDirectory();
+        $replacementDirectory = $this->testRoot . '/initial-publication-replacement';
+        self::assertTrue(mkdir($replacementDirectory, 0700));
+        self::assertTrue(mkdir($replacementDirectory . '/checkpoints', 0700));
+        $replacementFiles = [
+            '.dataset.lock' => 'replacement-lock-sentinel',
+            'events.ndjson' => 'replacement-events-sentinel',
+            'manifest.json' => 'replacement-manifest-sentinel',
+        ];
+        foreach ($replacementFiles as $name => $contents) {
+            self::assertSame(strlen($contents), file_put_contents($replacementDirectory . '/' . $name, $contents));
+            self::assertTrue(chmod($replacementDirectory . '/' . $name, 0600));
+        }
+        $filesystem->swapDatasetDirectoryDuringPublishedManifestSnapshotValidation(
+            $datasetDirectory,
+            $replacementDirectory,
+        );
+
+        try {
+            new PaperDatasetRecorder(
+                $this->datasetRoot(),
+                $manifest,
+                filesystem: $filesystem,
+            );
+            self::fail('An initial publication directory replacement must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+        }
+
+        foreach ($replacementFiles as $name => $contents) {
+            self::assertSame($contents, file_get_contents($datasetDirectory . '/' . $name));
+        }
+        self::assertSame(
+            ['.', '..', '.dataset.lock', 'checkpoints', 'events.ndjson', 'manifest.json'],
+            scandir($datasetDirectory),
+        );
+        self::assertSame(0700, fileperms($datasetDirectory) & 0777);
+        $originalDirectory = $datasetDirectory . '.directory-original';
+        self::assertSame(0700, fileperms($originalDirectory) & 0777);
+        self::assertSame(
+            (new PaperDatasetManifestCodec())->encode($manifest),
+            file_get_contents($originalDirectory . '/manifest.json'),
+        );
+        self::assertSame(0600, fileperms($originalDirectory . '/manifest.json') & 0777);
+    }
+
+    public function testExistingManifestRecoveryRevalidatesDirectoryBeforeCreatingRestoreFile(): void
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+        $datasetDirectory = $this->datasetDirectory();
+        $manifestBefore = file_get_contents($datasetDirectory . '/manifest.json');
+        self::assertIsString($manifestBefore);
+        $replacementDirectory = $this->testRoot . '/existing-publication-replacement';
+        self::assertTrue(mkdir($replacementDirectory, 0700));
+        self::assertTrue(mkdir($replacementDirectory . '/checkpoints', 0700));
+        $replacementFiles = [
+            '.dataset.lock' => 'replacement-lock-sentinel',
+            'events.ndjson' => 'replacement-events-sentinel',
+            'manifest.json' => 'replacement-manifest-sentinel',
+        ];
+        foreach ($replacementFiles as $name => $contents) {
+            self::assertSame(strlen($contents), file_put_contents($replacementDirectory . '/' . $name, $contents));
+            self::assertTrue(chmod($replacementDirectory . '/' . $name, 0600));
+        }
+        $filesystem->swapDatasetDirectoryDuringPublishedManifestSnapshotValidation(
+            $datasetDirectory,
+            $replacementDirectory,
+        );
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail('An existing manifest publication directory replacement must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+        }
+
+        foreach ($replacementFiles as $name => $contents) {
+            self::assertSame($contents, file_get_contents($datasetDirectory . '/' . $name));
+        }
+        self::assertSame(
+            ['.', '..', '.dataset.lock', 'checkpoints', 'events.ndjson', 'manifest.json'],
+            scandir($datasetDirectory),
+        );
+        self::assertSame(0700, fileperms($datasetDirectory) & 0777);
+        $originalDirectory = $datasetDirectory . '.directory-original';
+        self::assertSame(0700, fileperms($originalDirectory) & 0777);
+        $recoveries = glob($originalDirectory . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
+        $this->assertRecorderUnusable($recorder);
+    }
+
     public function testAppendRejectsDatasetDirectoryPermissionDriftDuringLockAcquisition(): void
     {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
@@ -2240,6 +2343,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $manifestTemporaryModeChangeTarget = null;
     private ?string $datasetDirectoryToSwapAfterManifestPublication = null;
     private ?string $datasetDirectoryReplacementAfterManifestPublication = null;
+    private ?string $datasetDirectoryToSwapDuringManifestSnapshotValidation = null;
+    private ?string $datasetDirectoryReplacementDuringManifestSnapshotValidation = null;
+    private bool $manifestSnapshotDirectorySwapArmed = false;
     private ?string $directoryToChangeModeOnLockOpen = null;
     private ?int $directoryModeOnLockOpen = null;
 
@@ -2313,6 +2419,14 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     ): void {
         $this->datasetDirectoryToSwapAfterManifestPublication = $path;
         $this->datasetDirectoryReplacementAfterManifestPublication = $replacement;
+    }
+
+    public function swapDatasetDirectoryDuringPublishedManifestSnapshotValidation(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] string $replacement,
+    ): void {
+        $this->datasetDirectoryToSwapDuringManifestSnapshotValidation = $path;
+        $this->datasetDirectoryReplacementDuringManifestSnapshotValidation = $replacement;
     }
 
     public function changeDirectoryModeOnLockOpen(
@@ -2522,6 +2636,13 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             if (!rename($path, $path . '.directory-original') || !rename($replacement, $path)) {
                 throw new \RuntimeException('Unable to inject dataset directory substitution after publication.');
             }
+        }
+        if ($moved
+            && $operation === 'paper_dataset_manifest_publish'
+            && $this->datasetDirectoryToSwapDuringManifestSnapshotValidation !== null
+            && $this->datasetDirectoryReplacementDuringManifestSnapshotValidation !== null
+        ) {
+            $this->manifestSnapshotDirectorySwapArmed = true;
         }
 
         return $moved;
@@ -2837,6 +2958,23 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function stat($handle, string $operation): array|false
     {
+        if ($operation === 'paper_dataset_manifest_snapshot_validation'
+            && $this->manifestSnapshotDirectorySwapArmed
+            && $this->datasetDirectoryToSwapDuringManifestSnapshotValidation !== null
+            && $this->datasetDirectoryReplacementDuringManifestSnapshotValidation !== null
+        ) {
+            $statistics = parent::stat($handle, $operation);
+            $path = $this->datasetDirectoryToSwapDuringManifestSnapshotValidation;
+            $replacement = $this->datasetDirectoryReplacementDuringManifestSnapshotValidation;
+            $this->datasetDirectoryToSwapDuringManifestSnapshotValidation = null;
+            $this->datasetDirectoryReplacementDuringManifestSnapshotValidation = null;
+            $this->manifestSnapshotDirectorySwapArmed = false;
+            if (!rename($path, $path . '.directory-original') || !rename($replacement, $path)) {
+                throw new \RuntimeException('Unable to inject dataset directory substitution during manifest validation.');
+            }
+
+            return $statistics;
+        }
         if ($operation === 'paper_dataset_events_read_failed'
             && $this->datasetDirectoryToSwap !== null
             && $this->datasetDirectoryReplacement !== null

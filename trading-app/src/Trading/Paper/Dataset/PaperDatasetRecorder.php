@@ -978,6 +978,7 @@ final class PaperDatasetRecorder
     private function restorePreviousManifest(#[\SensitiveParameter] ?array $backup): void
     {
         if ($backup === null) {
+            $this->assertPinnedDirectories();
             if (file_exists($this->manifestPath) && !@unlink($this->manifestPath)) {
                 throw new \RuntimeException('paper_dataset_manifest_restore_failed');
             }
@@ -999,6 +1000,7 @@ final class PaperDatasetRecorder
         } catch (\Throwable $failure) {
             $backupFailure = $failure;
         }
+        $this->assertPinnedDirectories();
         $restore = $this->createManifestRecoveryFile(
             $backup['contents'],
             '.manifest-restore-',
