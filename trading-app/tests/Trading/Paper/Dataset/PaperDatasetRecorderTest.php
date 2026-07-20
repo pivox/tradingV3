@@ -855,7 +855,7 @@ final class PaperDatasetRecorderTest extends TestCase
     }
 
     #[DataProvider('manifestTemporaryMutationProvider')]
-    public function testManifestTemporaryMutationAtPublicationFailsClosedAndPreservesPreviousManifest(
+    public function testManifestTemporaryMutationAtPublicationRetainsPublishedAndBackupEvidence(
         bool $substituteInode,
     ): void {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
@@ -881,11 +881,18 @@ final class PaperDatasetRecorderTest extends TestCase
             self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
         }
 
-        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        $published = file_get_contents($manifestPath);
+        self::assertIsString($published);
+        self::assertStringContainsString('"recorder_version":"9.9.9"', $published);
         self::assertSame(
             PaperDatasetState::RECORDING,
-            (new PaperDatasetManifestCodec())->decode($manifestBefore)->state,
+            (new PaperDatasetManifestCodec())->decode($published)->state,
         );
+        $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
+        self::assertIsArray($recoveries);
+        self::assertCount(1, $recoveries);
+        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
+        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
         $this->assertRecorderUnusable($recorder);
     }
 
@@ -923,7 +930,7 @@ final class PaperDatasetRecorderTest extends TestCase
     }
 
     #[DataProvider('manifestTemporaryMutationProvider')]
-    public function testManifestBackupMutationAtPublicationRestoresTrustedPreviousManifest(
+    public function testManifestBackupMutationAtPublicationRetainsAllPrivateRecoveryEvidence(
         bool $substituteInode,
     ): void {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
@@ -949,63 +956,34 @@ final class PaperDatasetRecorderTest extends TestCase
 
         try {
             $recorder->append($this->event(sequence: '1'));
-            self::fail('A changed recovery artifact must fail closed after restoring trusted bytes.');
+            self::fail('A changed recovery artifact must fail closed without pathname recovery.');
         } catch (\RuntimeException $exception) {
             self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
         }
 
-        self::assertSame($manifestBefore, file_get_contents($manifestPath));
-        $this->assertRecorderUnusable($recorder);
-    }
-
-    #[DataProvider('manifestRestorationFailureProvider')]
-    public function testFailedManifestRestorationRetainsPrivatePreviousManifestRecovery(
-        string $failure,
-    ): void {
-        $filesystem = new FaultInjectingPaperDatasetFilesystem();
-        $recorder = new PaperDatasetRecorder(
-            $this->datasetRoot(),
-            $this->manifest(),
-            filesystem: $filesystem,
-        );
-        $manifestPath = $this->datasetDirectory() . '/manifest.json';
-        $manifestBefore = file_get_contents($manifestPath);
-        self::assertIsString($manifestBefore);
-        $filesystem->mutateManifestTemporaryAfterValidation(
-            $manifestPath,
-            '"recorder_version":"1.0.0"',
-            '"recorder_version":"9.9.9"',
-            false,
-        );
-        if ($failure === 'move') {
-            $filesystem->failNextManifestRestoreMove();
-        } else {
-            $filesystem->failNextManifestDirectorySync();
-        }
-
-        try {
-            $recorder->append($this->event(sequence: '1'));
-            self::fail('An uncertain manifest restoration must fail closed.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
-        }
-
+        $published = file_get_contents($manifestPath);
+        self::assertIsString($published);
+        self::assertStringContainsString('"recorder_version":"9.9.9"', $published);
         $recoveries = glob($this->datasetDirectory() . '/.manifest-backup-*');
         self::assertIsArray($recoveries);
-        self::assertCount(1, $recoveries);
-        self::assertSame($manifestBefore, file_get_contents($recoveries[0]));
-        self::assertSame(0600, fileperms($recoveries[0]) & 0777);
-        if ($failure === 'sync') {
-            self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertNotEmpty($recoveries);
+        $mutatedBackup = str_replace(
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"8.8.8"',
+            $manifestBefore,
+        );
+        $recoveryContents = [];
+        foreach ($recoveries as $recovery) {
+            $contents = file_get_contents($recovery);
+            self::assertIsString($contents);
+            $recoveryContents[] = $contents;
+            self::assertSame(0600, fileperms($recovery) & 0777);
+        }
+        self::assertContains($mutatedBackup, $recoveryContents);
+        if ($substituteInode) {
+            self::assertContains($manifestBefore, $recoveryContents);
         }
         $this->assertRecorderUnusable($recorder);
-    }
-
-    /** @return iterable<string, array{string}> */
-    public static function manifestRestorationFailureProvider(): iterable
-    {
-        yield 'restore move failure' => ['move'];
-        yield 'restore directory sync failure' => ['sync'];
     }
 
     public function testStaleRecordingAppendersPreserveEveryEventAndManifestFact(): void
@@ -1509,7 +1487,7 @@ final class PaperDatasetRecorderTest extends TestCase
         $this->assertRecorderUnusable($recorder);
     }
 
-    public function testInitialManifestRecoveryRevalidatesDirectoryBeforeRemovingPublishedPath(): void
+    public function testInitialManifestFailureDoesNotMutateDirectorySwappedAfterRecoveryRevalidation(): void
     {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $manifest = $this->manifest();
@@ -1526,7 +1504,13 @@ final class PaperDatasetRecorderTest extends TestCase
             self::assertSame(strlen($contents), file_put_contents($replacementDirectory . '/' . $name, $contents));
             self::assertTrue(chmod($replacementDirectory . '/' . $name, 0600));
         }
-        $filesystem->swapDatasetDirectoryDuringPublishedManifestSnapshotValidation(
+        $filesystem->mutateManifestTemporaryAfterValidation(
+            $datasetDirectory . '/manifest.json',
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"9.9.9"',
+            false,
+        );
+        $filesystem->swapDatasetDirectoryAfterRecoveryRevalidation(
             $datasetDirectory,
             $replacementDirectory,
         );
@@ -1539,7 +1523,7 @@ final class PaperDatasetRecorderTest extends TestCase
             );
             self::fail('An initial publication directory replacement must fail closed.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+            self::assertSame('paper_dataset_file_changed', $exception->getMessage());
         }
 
         foreach ($replacementFiles as $name => $contents) {
@@ -1552,14 +1536,13 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(0700, fileperms($datasetDirectory) & 0777);
         $originalDirectory = $datasetDirectory . '.directory-original';
         self::assertSame(0700, fileperms($originalDirectory) & 0777);
-        self::assertSame(
-            (new PaperDatasetManifestCodec())->encode($manifest),
-            file_get_contents($originalDirectory . '/manifest.json'),
-        );
+        $published = file_get_contents($originalDirectory . '/manifest.json');
+        self::assertIsString($published);
+        self::assertStringContainsString('"recorder_version":"9.9.9"', $published);
         self::assertSame(0600, fileperms($originalDirectory . '/manifest.json') & 0777);
     }
 
-    public function testExistingManifestRecoveryRevalidatesDirectoryBeforeCreatingRestoreFile(): void
+    public function testBackupBackedManifestFailureDoesNotMutateDirectorySwappedAfterRecoveryRevalidation(): void
     {
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $recorder = new PaperDatasetRecorder(
@@ -1582,7 +1565,13 @@ final class PaperDatasetRecorderTest extends TestCase
             self::assertSame(strlen($contents), file_put_contents($replacementDirectory . '/' . $name, $contents));
             self::assertTrue(chmod($replacementDirectory . '/' . $name, 0600));
         }
-        $filesystem->swapDatasetDirectoryDuringPublishedManifestSnapshotValidation(
+        $filesystem->mutateManifestTemporaryAfterValidation(
+            $datasetDirectory . '/manifest.json',
+            '"recorder_version":"1.0.0"',
+            '"recorder_version":"9.9.9"',
+            false,
+        );
+        $filesystem->swapDatasetDirectoryAfterRecoveryRevalidation(
             $datasetDirectory,
             $replacementDirectory,
         );
@@ -1591,7 +1580,7 @@ final class PaperDatasetRecorderTest extends TestCase
             $recorder->append($this->event(sequence: '1'));
             self::fail('An existing manifest publication directory replacement must fail closed.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+            self::assertSame('paper_dataset_manifest_write_failed', $exception->getMessage());
         }
 
         foreach ($replacementFiles as $name => $contents) {
@@ -1604,6 +1593,10 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(0700, fileperms($datasetDirectory) & 0777);
         $originalDirectory = $datasetDirectory . '.directory-original';
         self::assertSame(0700, fileperms($originalDirectory) & 0777);
+        $published = file_get_contents($originalDirectory . '/manifest.json');
+        self::assertIsString($published);
+        self::assertStringContainsString('"recorder_version":"9.9.9"', $published);
+        self::assertSame(0600, fileperms($originalDirectory . '/manifest.json') & 0777);
         $recoveries = glob($originalDirectory . '/.manifest-backup-*');
         self::assertIsArray($recoveries);
         self::assertCount(1, $recoveries);
@@ -2307,7 +2300,6 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $rollbackFailure = null;
     private bool $failManifestDirectorySync = false;
     private bool $failManifestBackupDirectorySync = false;
-    private bool $failManifestRestoreMove = false;
     private bool $failEventSync = false;
     private bool $shortChecksumRead = false;
     private ?string $verifierEventsPath = null;
@@ -2346,6 +2338,10 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private ?string $datasetDirectoryToSwapDuringManifestSnapshotValidation = null;
     private ?string $datasetDirectoryReplacementDuringManifestSnapshotValidation = null;
     private bool $manifestSnapshotDirectorySwapArmed = false;
+    private ?string $datasetDirectoryToSwapAfterRecoveryRevalidation = null;
+    private ?string $datasetDirectoryReplacementAfterRecoveryRevalidation = null;
+    private int $recoveryRevalidationManifestPublication = 0;
+    private int $datasetDirectoryValidationsAfterManifestPublication = 0;
     private ?string $directoryToChangeModeOnLockOpen = null;
     private ?int $directoryModeOnLockOpen = null;
 
@@ -2429,6 +2425,16 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->datasetDirectoryReplacementDuringManifestSnapshotValidation = $replacement;
     }
 
+    public function swapDatasetDirectoryAfterRecoveryRevalidation(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] string $replacement,
+    ): void {
+        $this->datasetDirectoryToSwapAfterRecoveryRevalidation = $path;
+        $this->datasetDirectoryReplacementAfterRecoveryRevalidation = $replacement;
+        $this->recoveryRevalidationManifestPublication = $this->manifestPublications + 1;
+        $this->datasetDirectoryValidationsAfterManifestPublication = 0;
+    }
+
     public function changeDirectoryModeOnLockOpen(
         #[\SensitiveParameter] string $directory,
         int $mode,
@@ -2459,6 +2465,21 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
     {
         $statistics = parent::pathStat($path, $operation);
+        if ($operation === 'paper_dataset_directory_validation'
+            && $path === $this->datasetDirectoryToSwapAfterRecoveryRevalidation
+            && $this->datasetDirectoryReplacementAfterRecoveryRevalidation !== null
+            && $this->manifestPublications >= $this->recoveryRevalidationManifestPublication
+        ) {
+            ++$this->datasetDirectoryValidationsAfterManifestPublication;
+            if ($this->datasetDirectoryValidationsAfterManifestPublication === 2) {
+                $replacement = $this->datasetDirectoryReplacementAfterRecoveryRevalidation;
+                $this->datasetDirectoryToSwapAfterRecoveryRevalidation = null;
+                $this->datasetDirectoryReplacementAfterRecoveryRevalidation = null;
+                if (!rename($path, $path . '.directory-original') || !rename($replacement, $path)) {
+                    throw new \RuntimeException('Unable to inject dataset substitution after recovery revalidation.');
+                }
+            }
+        }
         if ($this->fileToSwapBeforeLegacyModeChange === $path
             && $this->fileModeChangeTarget !== null
         ) {
@@ -2518,11 +2539,6 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             }
             fclose($replacement);
             $afterReplacement();
-        }
-        if ($operation === 'paper_dataset_manifest_restore' && $this->failManifestRestoreMove) {
-            $this->failManifestRestoreMove = false;
-
-            return false;
         }
         if ($operation === 'paper_dataset_manifest_publish'
             && $this->manifestPathForTemporaryMutation === $destination
@@ -2668,11 +2684,6 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failNextManifestBackupDirectorySync(): void
     {
         $this->failManifestBackupDirectorySync = true;
-    }
-
-    public function failNextManifestRestoreMove(): void
-    {
-        $this->failManifestRestoreMove = true;
     }
 
     public function failNextEventSync(): void

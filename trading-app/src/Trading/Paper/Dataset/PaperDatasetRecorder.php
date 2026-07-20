@@ -780,14 +780,7 @@ final class PaperDatasetRecorder
                     $temporaryStat,
                 );
             } catch (\Throwable $publicationFailure) {
-                if ($this->isDirectoryChangedFailure($publicationFailure)) {
-                    throw $publicationFailure;
-                }
-                $this->restorePreviousManifest($backup);
-                if ($backup !== null) {
-                    $this->discardManifestBackup($backup);
-                }
-                $backup = null;
+                $this->usable = false;
 
                 throw $publicationFailure;
             }
@@ -805,7 +798,7 @@ final class PaperDatasetRecorder
             if (\is_resource($handle)) {
                 fclose($handle);
             }
-            if (!$directoryChanged && file_exists($temporary)) {
+            if (!$directoryChanged && !$publicationAttempted && file_exists($temporary)) {
                 @unlink($temporary);
             }
             if ($backup !== null) {
@@ -899,36 +892,13 @@ final class PaperDatasetRecorder
      *   handle: resource,
      *   bytes: int,
      *   checksum: string,
-     *   identity: array<string, mixed>,
-     *   contents: string
+     *   identity: array<string, mixed>
      * }
      */
     private function createManifestBackup(#[\SensitiveParameter] string $contents): array
     {
-        return $this->createManifestRecoveryFile(
-            $contents,
-            '.manifest-backup-',
-            'paper_dataset_manifest_backup_failed',
-        );
-    }
-
-    /**
-     * @return array{
-     *   path: string,
-     *   handle: resource,
-     *   bytes: int,
-     *   checksum: string,
-     *   identity: array<string, mixed>,
-     *   contents: string
-     * }
-     */
-    private function createManifestRecoveryFile(
-        #[\SensitiveParameter] string $contents,
-        string $prefix,
-        string $error,
-    ): array
-    {
-        $path = @tempnam($this->datasetDirectory, $prefix);
+        $error = 'paper_dataset_manifest_backup_failed';
+        $path = @tempnam($this->datasetDirectory, '.manifest-backup-');
         if ($path === false || dirname($path) !== $this->datasetDirectory) {
             if ($path !== false) {
                 @unlink($path);
@@ -953,7 +923,6 @@ final class PaperDatasetRecorder
                 'bytes' => strlen($contents),
                 'checksum' => hash('sha256', $contents),
                 'identity' => $identity,
-                'contents' => $contents,
             ];
         } catch (\Throwable $failure) {
             if (\is_resource($handle)) {
@@ -971,77 +940,7 @@ final class PaperDatasetRecorder
      *   handle: resource,
      *   bytes: int,
      *   checksum: string,
-     *   identity: array<string, mixed>,
-     *   contents: string
-     * }|null $backup
-     */
-    private function restorePreviousManifest(#[\SensitiveParameter] ?array $backup): void
-    {
-        if ($backup === null) {
-            $this->assertPinnedDirectories();
-            if (file_exists($this->manifestPath) && !@unlink($this->manifestPath)) {
-                throw new \RuntimeException('paper_dataset_manifest_restore_failed');
-            }
-            $this->syncDatasetDirectory();
-            $this->assertPinnedDirectories();
-
-            return;
-        }
-
-        $backupFailure = null;
-        try {
-            $this->assertManifestContentSnapshot(
-                $backup['handle'],
-                $backup['path'],
-                $backup['bytes'],
-                $backup['checksum'],
-                $backup['identity'],
-            );
-        } catch (\Throwable $failure) {
-            $backupFailure = $failure;
-        }
-        $this->assertPinnedDirectories();
-        $restore = $this->createManifestRecoveryFile(
-            $backup['contents'],
-            '.manifest-restore-',
-            'paper_dataset_manifest_restore_failed',
-        );
-        try {
-            $this->syncDatasetDirectory('paper_dataset_manifest_restore_candidate_directory_sync');
-            if (!$this->filesystem->move(
-                $restore['path'],
-                $this->manifestPath,
-                'paper_dataset_manifest_restore',
-            )) {
-                throw new \RuntimeException('paper_dataset_manifest_restore_failed');
-            }
-            $this->assertManifestContentSnapshot(
-                $restore['handle'],
-                $this->manifestPath,
-                $restore['bytes'],
-                $restore['checksum'],
-                $restore['identity'],
-            );
-            $this->syncDatasetDirectory();
-            $this->assertPinnedDirectories();
-            if ($backupFailure !== null) {
-                throw $backupFailure;
-            }
-        } finally {
-            if (\is_resource($restore['handle'])) {
-                fclose($restore['handle']);
-            }
-        }
-    }
-
-    /**
-     * @param array{
-     *   path: string,
-     *   handle: resource,
-     *   bytes: int,
-     *   checksum: string,
-     *   identity: array<string, mixed>,
-     *   contents: string
+     *   identity: array<string, mixed>
      * } $backup
      */
     private function discardManifestBackup(#[\SensitiveParameter] array $backup): void
