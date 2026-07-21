@@ -89,7 +89,7 @@ final class PositionTradeAnalysisBackfillDivergenceCommandTest extends TestCase
         self::assertFileExists($tmpDir . '/report.json');
         self::assertFileExists($tmpDir . '/report.csv');
         self::assertStringContainsString('"comparison_key": "entry_event_id"', (string) file_get_contents($tmpDir . '/report.json'));
-        self::assertStringContainsString('entry_event_id,classification,symbol,exchange,market_type', (string) file_get_contents($tmpDir . '/report.csv'));
+        self::assertStringContainsString('entry_event_id,classification,symbol,exchange,market_data_venue,market_type', (string) file_get_contents($tmpDir . '/report.csv'));
     }
 
     public function testApplyModeIsRejectedAndDoesNotCallReportService(): void
