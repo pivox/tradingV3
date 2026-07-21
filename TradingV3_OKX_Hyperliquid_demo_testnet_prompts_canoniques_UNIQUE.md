@@ -21,20 +21,21 @@
 | 10 | #195 — Inventaire statique Bitmart | pending | — | — | — | — | — | — | — |
 | 11 | #195 — Vérification runtime Bitmart | pending | — | — | — | — | — | — | — |
 | 12 | #195 — Matrice de remplacement | pending | — | — | — | — | — | — | — |
-| 13 | #132 — Baseline PnL représentative | pending | — | — | — | — | — | — | — |
+| 13 | #132 — Baseline PnL représentative | in_progress | issue/132-paper-market-replay-foundation | #291 | 5298760adc0b7863a477bcae476b417534e1b055 | worker_critical → review_fix → review_escalated | verte | favorable sur 5298760adc | 2026-07-21T02:52:34Z |
 | 14 | #188 — Preuve R1-R16 représentative | pending | — | — | — | — | — | — | — |
 | 15 | DEMO-005 — Réévaluation | pending | — | — | — | — | — | — | — |
 | 16 | OKX-010 — Activation OKX Demo | pending | — | — | — | — | — | — | — |
 | 17 | DEMO-006 — Rapport final | pending | — | — | — | — | — | — | — |
 <!-- CODEX_ORCHESTRATION_STATE_END -->
 
+Remarque: ne pas faire le scope de Birmart !
 ## 0. Etat actuel au 16 juillet 2026
 
 | Domaine | Etat | Prochaine preuve requise |
 |---|---|---|
 | Fake/Paper #196 | 14 scénarios golden exécutables sur 20 | Implémenter les 6 gaps restants, le daily loss cap et la liquidation, puis auditer `20/20`. |
 | Inventaire Bitmart #195 | Issue ouverte, inventaire global incomplet | Inventaire statique, vérification runtime dry-run, matrice de remplacement. |
-| Baseline PnL #132 | Outillage prêt, dataset local vide | Extraire des lignes certifiées `regular`, `scalper`, `scalper_micro` depuis une base représentative. |
+| Baseline PnL #132 | Fondation dataset/replay Paper mergée via #291 ; aucun dataset représentatif multi-profils certifié à ce stade | Produire des trades Fake/Paper complets pour `regular`, `scalper` et `scalper_micro`, puis exécuter l'export certifié sans tuning. |
 | Recette orchestrateur #188 | Outillée, scénarios critiques déjà exercés, preuve représentative incomplète | Rejouer R1-R16 sur un vrai jeu et consolider les preuves automatiques/guidées. |
 | DEMO-005 | Rapport mergé avec décision `blocked` | Réévaluer après les preuves #196/#188/#132 et les runtime-checks exchange. |
 | Hyperliquid HL-012 | Code contrôlé mergé, désactivé par défaut | Exécution testnet réelle seulement après décision autorisant la fenêtre. |
