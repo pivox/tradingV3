@@ -276,6 +276,79 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         self::assertEquals($checkpoint, $store->load($this->datasetDirectory, $checkpoint->consumerId));
     }
 
+    public function testExactRetryCompletesUncertainDirectoryPublicationWithoutRepublishing(): void
+    {
+        $checkpoint = self::checkpoint();
+        $filesystem = new RetryableDirectorySyncCheckpointFilesystem();
+        $store = new PaperReplayCheckpointStore($filesystem);
+
+        try {
+            $store->save($this->datasetDirectory, $checkpoint);
+            self::fail('The first post-rename directory sync failure must be reported as uncertain.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+        }
+        $identity = lstat($this->checkpointPath());
+
+        $store->save($this->datasetDirectory, $checkpoint);
+
+        self::assertSame(2, $filesystem->directorySyncAttempts);
+        self::assertSame(1, $filesystem->publicationMoves);
+        self::assertGreaterThan(0, $filesystem->retryDirectoryValidations);
+        self::assertGreaterThan(0, $filesystem->retryLockValidations);
+        self::assertGreaterThan(0, $filesystem->retryVisibleCheckpointValidations);
+        self::assertSame($identity['ino'] ?? null, lstat($this->checkpointPath())['ino'] ?? null);
+        self::assertEquals(
+            $checkpoint,
+            (new PaperReplayCheckpointStore())->load($this->datasetDirectory, $checkpoint->consumerId),
+        );
+    }
+
+    public function testExactRetryRemainsUncertainWhenDirectorySyncStillFails(): void
+    {
+        $checkpoint = self::checkpoint();
+        $filesystem = new DirectorySyncFailingCheckpointFilesystem();
+        $store = new PaperReplayCheckpointStore($filesystem);
+
+        foreach ([1, 2] as $attempt) {
+            try {
+                $store->save($this->datasetDirectory, $checkpoint);
+                self::fail(sprintf('Directory sync attempt %d must fail closed as uncertain.', $attempt));
+            } catch (\RuntimeException $exception) {
+                self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+            }
+        }
+
+        self::assertSame(2, $filesystem->directorySyncAttempts);
+        self::assertSame(1, $filesystem->publicationMoves);
+    }
+
+    public function testExactRetryRemainsUncertainWhenVisibleCheckpointRevalidationFails(): void
+    {
+        $checkpoint = self::checkpoint();
+        $filesystem = new RetryVisibleCheckpointValidationFailingFilesystem();
+        $store = new PaperReplayCheckpointStore($filesystem);
+
+        try {
+            $store->save($this->datasetDirectory, $checkpoint);
+            self::fail('The first post-rename directory sync failure must be reported as uncertain.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+        }
+        $identity = lstat($this->checkpointPath());
+
+        try {
+            $store->save($this->datasetDirectory, $checkpoint);
+            self::fail('A failed post-sync visible checkpoint validation must remain uncertain.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+        }
+
+        self::assertSame(2, $filesystem->directorySyncAttempts);
+        self::assertSame(1, $filesystem->publicationMoves);
+        self::assertSame($identity['ino'] ?? null, lstat($this->checkpointPath())['ino'] ?? null);
+    }
+
     /** @param array<string, mixed> $contentOverride */
     #[DataProvider('sameIndexConflictProvider')]
     public function testRejectsConflictingSameIndexCheckpointWithoutReplacingTheOriginal(
@@ -1140,12 +1213,141 @@ final class MoveSwapCheckpointFilesystem extends PaperDatasetRecorderFilesystem
 
 final class DirectorySyncFailingCheckpointFilesystem extends PaperDatasetRecorderFilesystem
 {
+    public int $directorySyncAttempts = 0;
+    public int $publicationMoves = 0;
+
     /** @param resource $handle */
     public function sync($handle, string $operation): bool
     {
-        return $operation === 'paper_replay_checkpoint_directory_sync'
-            ? false
-            : parent::sync($handle, $operation);
+        if ($operation === 'paper_replay_checkpoint_directory_sync') {
+            ++$this->directorySyncAttempts;
+
+            return false;
+        }
+
+        return parent::sync($handle, $operation);
+    }
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        if ($operation === 'paper_replay_checkpoint_publish') {
+            ++$this->publicationMoves;
+        }
+
+        return parent::move($source, $destination, $operation);
+    }
+}
+
+final class RetryableDirectorySyncCheckpointFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $directorySyncAttempts = 0;
+    public int $publicationMoves = 0;
+    public int $retryDirectoryValidations = 0;
+    public int $retryLockValidations = 0;
+    public int $retryVisibleCheckpointValidations = 0;
+    private bool $retryDirectorySynced = false;
+
+    /** @param resource $handle */
+    public function sync($handle, string $operation): bool
+    {
+        if ($operation !== 'paper_replay_checkpoint_directory_sync') {
+            return parent::sync($handle, $operation);
+        }
+
+        ++$this->directorySyncAttempts;
+        if ($this->directorySyncAttempts === 1) {
+            return false;
+        }
+        $synced = parent::sync($handle, $operation);
+        $this->retryDirectorySynced = $synced;
+
+        return $synced;
+    }
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        if ($operation === 'paper_replay_checkpoint_publish') {
+            ++$this->publicationMoves;
+        }
+
+        return parent::move($source, $destination, $operation);
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($this->retryDirectorySynced) {
+            if ($operation === 'paper_replay_checkpoint_directory_validation'
+                && basename($path) === 'checkpoints'
+            ) {
+                ++$this->retryDirectoryValidations;
+            }
+            if ($operation === 'paper_replay_checkpoint_lock_validation' && str_ends_with($path, '.lock')) {
+                ++$this->retryLockValidations;
+            }
+            if ($operation === 'paper_replay_checkpoint_load' && str_ends_with($path, '.json')) {
+                ++$this->retryVisibleCheckpointValidations;
+            }
+        }
+
+        return parent::pathStat($path, $operation);
+    }
+}
+
+final class RetryVisibleCheckpointValidationFailingFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $directorySyncAttempts = 0;
+    public int $publicationMoves = 0;
+    private bool $failVisibleCheckpointValidation = false;
+
+    /** @param resource $handle */
+    public function sync($handle, string $operation): bool
+    {
+        if ($operation !== 'paper_replay_checkpoint_directory_sync') {
+            return parent::sync($handle, $operation);
+        }
+
+        ++$this->directorySyncAttempts;
+        if ($this->directorySyncAttempts === 1) {
+            return false;
+        }
+        $synced = parent::sync($handle, $operation);
+        $this->failVisibleCheckpointValidation = $synced;
+
+        return $synced;
+    }
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        if ($operation === 'paper_replay_checkpoint_publish') {
+            ++$this->publicationMoves;
+        }
+
+        return parent::move($source, $destination, $operation);
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($this->failVisibleCheckpointValidation
+            && $operation === 'paper_replay_checkpoint_load'
+            && str_ends_with($path, '.json')
+        ) {
+            $this->failVisibleCheckpointValidation = false;
+
+            return false;
+        }
+
+        return parent::pathStat($path, $operation);
     }
 }
 

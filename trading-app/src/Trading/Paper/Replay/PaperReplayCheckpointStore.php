@@ -55,6 +55,14 @@ final class PaperReplayCheckpointStore
                     throw new \RuntimeException('paper_replay_checkpoint_regression');
                 }
 
+                $this->completeIdempotentPublication(
+                    $directoryPin,
+                    $lock,
+                    $datasetDirectory,
+                    $directory,
+                    $checkpoint,
+                );
+
                 return;
             }
 
@@ -72,6 +80,37 @@ final class PaperReplayCheckpointStore
                 fclose($lock['handle']);
             }
             fclose($directoryPin['handle']);
+        }
+    }
+
+    /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}}               $directoryPin
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $lock
+     */
+    private function completeIdempotentPublication(
+        array $directoryPin,
+        array $lock,
+        #[\SensitiveParameter] string $datasetDirectory,
+        #[\SensitiveParameter] string $directory,
+        PaperReplayCheckpoint $checkpoint,
+    ): void {
+        try {
+            if (!$this->filesystem->sync(
+                $directoryPin['handle'],
+                'paper_replay_checkpoint_directory_sync',
+            )) {
+                throw new \RuntimeException('paper_replay_checkpoint_publication_uncertain');
+            }
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
+            $visible = $this->load($datasetDirectory, $checkpoint->consumerId);
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
+            if ($visible === null || $visible->toArray() !== $checkpoint->toArray()) {
+                throw new \RuntimeException('paper_replay_checkpoint_publication_uncertain');
+            }
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_replay_checkpoint_publication_uncertain');
         }
     }
 
