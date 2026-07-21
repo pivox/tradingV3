@@ -722,6 +722,64 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($second));
     }
 
+    public function testRestartFsyncsACompleteStagedAppendBeforeRemovingItsIntent(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($line), file_put_contents($eventsPath, $line, FILE_APPEND));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failNextAppendRecoverySync();
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('A complete recovered line must be fsynced before its intent is removed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_invalid', $exception->getMessage());
+            self::assertSame('paper_dataset_append_recovery_failed', $exception->getPrevious()?->getMessage());
+        }
+
+        self::assertSame(1, $filesystem->appendRecoverySyncs);
+        self::assertFileExists($this->appendIntentPath());
+        self::assertSame($committed . $line, file_get_contents($eventsPath));
+    }
+
+    public function testRestartRevalidatesACompleteStagedAppendAfterItsFsync(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $committed = file_get_contents($eventsPath);
+        self::assertIsString($committed);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $mutatedLine = str_replace('"sequence":"2"', '"sequence":"3"', $line);
+        self::assertSame(strlen($line), strlen($mutatedLine));
+        self::assertNotSame($line, $mutatedLine);
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($line), file_put_contents($eventsPath, $line, FILE_APPEND));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->overwriteEventsAfterAppendRecoverySync($eventsPath, $committed . $mutatedLine);
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('A recovered full line changed after fsync must retain its durable intent.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(1, $filesystem->appendRecoverySyncs);
+        self::assertFileExists($this->appendIntentPath());
+        self::assertSame($committed . $mutatedLine, file_get_contents($eventsPath));
+    }
+
     public function testRestartRejectsANonMatchingStagedAppendSuffixWithoutMutation(): void
     {
         $manifest = $this->manifest();
@@ -746,6 +804,165 @@ final class PaperDatasetRecorderTest extends TestCase
 
         self::assertSame($eventsBefore, file_get_contents($eventsPath));
         self::assertSame($markerBefore, file_get_contents($this->appendIntentPath()));
+    }
+
+    #[DataProvider('fixedArtifactWriteFailureProvider')]
+    public function testFixedArtifactsNeverExposePartialAuthoritativeContents(
+        string $artifact,
+        string $failure,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $filesystem->failNextFixedArtifactPublication($artifact, $failure);
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail(sprintf('The %s %s failure must interrupt publication.', $artifact, $failure));
+        } catch (\RuntimeException) {
+        }
+
+        $authoritative = $this->fixedArtifactPath($artifact);
+        $staging = $authoritative . '.staging';
+        self::assertFileDoesNotExist($authoritative);
+        self::assertFileExists($staging);
+        $mode = fileperms($staging);
+        self::assertIsInt($mode);
+        self::assertSame(0600, $mode & 0777);
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertFileDoesNotExist($staging);
+        self::assertSame(
+            $artifact === 'append_intent' ? 0 : 1,
+            $restarted->manifest()->eventCount,
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function fixedArtifactWriteFailureProvider(): iterable
+    {
+        foreach (['append_intent', 'manifest_transition', 'manifest_backup', 'manifest_candidate'] as $artifact) {
+            foreach (['short_write', 'flush', 'sync'] as $failure) {
+                yield $artifact . ' ' . $failure => [$artifact, $failure];
+            }
+        }
+    }
+
+    #[DataProvider('fixedArtifactCrashBoundaryProvider')]
+    public function testFixedArtifactCrashBoundariesRecoverWithoutPartialAuthority(
+        string $artifact,
+        string $boundary,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $publicationsBefore = $filesystem->fixedArtifactPublications[$artifact] ?? 0;
+        $filesystem->failNextFixedArtifactPublication($artifact, $boundary);
+
+        try {
+            $recorder->append($this->event(sequence: '1'));
+            self::fail(sprintf('The %s %s crash boundary must interrupt publication.', $artifact, $boundary));
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                $artifact === 'append_intent'
+                    ? ($boundary === 'after_directory_sync'
+                        ? 'paper_dataset_append_intent_directory_sync_failed'
+                        : 'paper_dataset_append_intent_flush_failed')
+                    : 'paper_dataset_manifest_write_failed',
+                $exception->getMessage(),
+            );
+        }
+
+        $authoritative = $this->fixedArtifactPath($artifact);
+        $staging = $authoritative . '.staging';
+        self::assertSame(
+            $publicationsBefore + 1,
+            $filesystem->fixedArtifactPublications[$artifact] ?? 0,
+        );
+        if ($boundary === 'before_rename') {
+            self::assertFileDoesNotExist($authoritative);
+            self::assertFileExists($staging);
+        } else {
+            self::assertFileExists($authoritative);
+            self::assertFileDoesNotExist($staging);
+        }
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertFileDoesNotExist($staging);
+        self::assertSame(
+            $artifact === 'append_intent' ? 0 : 1,
+            $restarted->manifest()->eventCount,
+        );
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function fixedArtifactCrashBoundaryProvider(): iterable
+    {
+        foreach (['append_intent', 'manifest_transition', 'manifest_backup', 'manifest_candidate'] as $artifact) {
+            foreach (['before_rename', 'after_rename', 'after_directory_sync'] as $boundary) {
+                yield $artifact . ' ' . $boundary => [$artifact, $boundary];
+            }
+        }
+    }
+
+    #[DataProvider('fixedArtifactProvider')]
+    public function testLoneFixedArtifactStagingIsDiscardedWithoutParsing(string $artifact): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $staging = $this->fixedArtifactPath($artifact) . '.staging';
+        self::assertSame(8, file_put_contents($staging, 'not-json'));
+        self::assertTrue(chmod($staging, 0600));
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+
+        self::assertSame(PaperDatasetState::RECORDING, $restarted->manifest()->state);
+        self::assertFileDoesNotExist($staging);
+    }
+
+    #[DataProvider('fixedArtifactProvider')]
+    public function testFixedArtifactStagingAndAuthorityCollisionFailsClosed(string $artifact): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $authoritative = $this->fixedArtifactPath($artifact);
+        $staging = $authoritative . '.staging';
+        foreach ([$authoritative, $staging] as $path) {
+            self::assertSame(8, file_put_contents($path, 'not-json'));
+            self::assertTrue(chmod($path, 0600));
+        }
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A fixed staging/authority collision must fail before parsing either artifact.');
+        } catch (\RuntimeException $exception) {
+            self::assertContains($exception->getMessage(), [
+                'paper_dataset_append_intent_invalid',
+                'paper_dataset_manifest_transition_invalid',
+            ]);
+        }
+
+        self::assertSame('not-json', file_get_contents($authoritative));
+        self::assertSame('not-json', file_get_contents($staging));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function fixedArtifactProvider(): iterable
+    {
+        yield 'append intent' => ['append_intent'];
+        yield 'manifest transition' => ['manifest_transition'];
+        yield 'manifest backup' => ['manifest_backup'];
+        yield 'manifest candidate' => ['manifest_candidate'];
     }
 
     public function testRestartRejectsAnOversizedAppendIntentBeforeReadingItsContents(): void
@@ -2409,6 +2626,62 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame($mutated, file_get_contents($this->manifestBackupPath()));
     }
 
+    public function testManifestTransitionSurvivesLstatFailureOnPresentBackupDuringCleanup(): void
+    {
+        $manifest = $this->manifest();
+        $publishingFilesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $publishingFilesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $publishingFilesystem->failNextManifestPublicationAfterRename('throw');
+        try {
+            $recorder->complete();
+            self::fail('The setup must retain a terminal transition and backup.');
+        } catch (\RuntimeException) {
+        }
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        $transitionBefore = file_get_contents($this->manifestTransitionPath());
+        $backupBefore = file_get_contents($this->manifestBackupPath());
+        $recoveringFilesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recoveringFilesystem->failPathStatAt($this->manifestBackupPath(), 6);
+
+        try {
+            new PaperDatasetRecorder(
+                $this->datasetRoot(),
+                $manifest,
+                filesystem: $recoveringFilesystem,
+            );
+            self::fail('A failed lstat on a present cleanup artifact must fail closed.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertSame($transitionBefore, file_get_contents($this->manifestTransitionPath()));
+        self::assertSame($backupBefore, file_get_contents($this->manifestBackupPath()));
+    }
+
+    public function testActuallyAbsentProtocolArtifactsRemainPositiveAbsence(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertFileDoesNotExist($this->appendIntentPath());
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+
+        $restarted = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: new FaultInjectingPaperDatasetFilesystem(),
+        );
+
+        self::assertSame(PaperDatasetState::RECORDING, $restarted->manifest()->state);
+    }
+
     public function testStaleRecorderChecksAndResolvesTheFixedManifestTransitionBeforeMutation(): void
     {
         $manifest = $this->manifest();
@@ -2533,6 +2806,137 @@ final class PaperDatasetRecorderTest extends TestCase
             self::fail('A terminal manifest must authenticate against all durable event facts.');
         } catch (\RuntimeException $exception) {
             self::assertSame('paper_dataset_terminal_manifest_invalid', $exception->getMessage());
+        }
+    }
+
+    #[DataProvider('terminalPublicationMutationProvider')]
+    public function testFinalizerAuthenticatesEventsThroughTerminalPublication(
+        string $method,
+        string $boundary,
+        string $publicError,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $original = file_get_contents($eventsPath);
+        self::assertIsString($original);
+        $replacement = CanonicalJson::encode(
+            $this->event(sequence: '1', microseconds: 2)->toArray(),
+        ) . "\n";
+        self::assertSame(strlen($original), strlen($replacement));
+        self::assertNotSame($original, $replacement);
+        $filesystem->overwriteEventsAtTerminalPublication($eventsPath, $replacement, $boundary);
+
+        try {
+            $recorder->{$method}();
+            self::fail('A divergent event snapshot must never produce finalization success.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($publicError, $exception->getMessage());
+        }
+
+        self::assertSame($replacement, file_get_contents($eventsPath));
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('Restart must reject the divergent pending terminal publication.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_terminal_manifest_invalid', $exception->getMessage());
+        }
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+    }
+
+    /** @return iterable<string, array{string, string, string}> */
+    public static function terminalPublicationMutationProvider(): iterable
+    {
+        foreach (['before_rename', 'after_rename', 'after_directory_sync'] as $boundary) {
+            yield 'complete ' . $boundary => [
+                'complete',
+                $boundary,
+                'paper_dataset_complete_failed',
+            ];
+            yield 'mark incomplete ' . $boundary => [
+                'markIncomplete',
+                $boundary,
+                'paper_dataset_mark_incomplete_failed',
+            ];
+        }
+    }
+
+    #[DataProvider('terminalRetryRecoveryProvider')]
+    public function testMatchingTerminalRetryReturnsExactAuthenticatedManifestAfterRecovery(
+        string $method,
+        string $oppositeMethod,
+        PaperDatasetState $expectedState,
+        string $boundary,
+        string $oppositePublicError,
+    ): void {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        match ($boundary) {
+            'before_rename' => $filesystem->failNextManifestCandidateDirectorySync(),
+            'after_rename' => $filesystem->failNextManifestPublicationAfterRename('throw'),
+            'after_directory_sync' => $filesystem->failNextManifestDirectorySync(),
+            'during_cleanup' => $filesystem->failNextTerminalCleanupSync('backup'),
+            default => throw new \InvalidArgumentException('Unknown terminal retry boundary.'),
+        };
+
+        try {
+            $recorder->{$method}();
+            self::fail('The injected terminal boundary must interrupt the first finalization.');
+        } catch (\RuntimeException) {
+        }
+
+        $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $authenticatedContents = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($authenticatedContents);
+        $authenticated = (new PaperDatasetManifestCodec())->decode($authenticatedContents);
+        self::assertSame($expectedState, $authenticated->state);
+
+        $retried = $restarted->{$method}();
+
+        self::assertSame($expectedState, $retried->state);
+        self::assertSame($authenticatedContents, (new PaperDatasetManifestCodec())->encode($retried));
+        self::assertSame($authenticatedContents, file_get_contents($this->datasetDirectory() . '/manifest.json'));
+        try {
+            $restarted->{$oppositeMethod}();
+            self::fail('An opposite terminal intent must remain rejected after matching retry.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame($oppositePublicError, $exception->getMessage());
+        }
+    }
+
+    /** @return iterable<string, array{string, string, PaperDatasetState, string, string}> */
+    public static function terminalRetryRecoveryProvider(): iterable
+    {
+        foreach (['before_rename', 'after_rename', 'after_directory_sync', 'during_cleanup'] as $boundary) {
+            yield 'complete ' . $boundary => [
+                'complete',
+                'markIncomplete',
+                PaperDatasetState::COMPLETE,
+                $boundary,
+                'paper_dataset_mark_incomplete_failed',
+            ];
+            yield 'mark incomplete ' . $boundary => [
+                'markIncomplete',
+                'complete',
+                PaperDatasetState::INCOMPLETE,
+                $boundary,
+                'paper_dataset_complete_failed',
+            ];
         }
     }
 
@@ -2970,6 +3374,17 @@ final class PaperDatasetRecorderTest extends TestCase
         return $this->datasetDirectory() . '/.manifest-backup-fixed';
     }
 
+    private function fixedArtifactPath(string $artifact): string
+    {
+        return match ($artifact) {
+            'append_intent' => $this->appendIntentPath(),
+            'manifest_transition' => $this->manifestTransitionPath(),
+            'manifest_backup' => $this->manifestBackupPath(),
+            'manifest_candidate' => $this->manifestCandidatePath(),
+            default => throw new \InvalidArgumentException('Unknown fixed artifact.'),
+        };
+    }
+
     private function stageAppendIntent(
         PaperDatasetManifest $manifest,
         PaperMarketEvent $event,
@@ -3060,6 +3475,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public int $appendIntentSyncs = 0;
     public int $appendIntentDirectorySyncs = 0;
     public int $appendIntentReads = 0;
+    public int $appendRecoverySyncs = 0;
     public int $manifestTransitionSyncs = 0;
     public int $manifestTransitionDirectorySyncs = 0;
     public int $manifestTransitionReads = 0;
@@ -3076,6 +3492,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     /** @var list<string> */
     public array $eventScanModes = [];
+
+    /** @var array<string, int> */
+    public array $fixedArtifactPublications = [];
 
     /** @var array<string, mixed>|null */
     public ?array $observedAppendIntent = null;
@@ -3095,6 +3514,9 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private bool $failManifestCandidateDirectorySync = false;
     private ?string $manifestPublicationFailureAfterRename = null;
     private bool $failEventSync = false;
+    private bool $failAppendRecoverySync = false;
+    private ?string $appendRecoveryMutationPath = null;
+    private ?string $appendRecoveryMutationContents = null;
     private bool $shortChecksumRead = false;
     private ?string $verifierEventsPath = null;
     private ?string $verifierEventsTarget = null;
@@ -3138,6 +3560,20 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     private int $datasetDirectoryValidationsAfterManifestPublication = 0;
     private ?string $directoryToChangeModeOnLockOpen = null;
     private ?int $directoryModeOnLockOpen = null;
+    private ?string $fixedArtifactFailureArtifact = null;
+    private ?string $fixedArtifactFailure = null;
+    private bool $fixedArtifactShortWriteCompleted = false;
+
+    /** @var array<string, int> */
+    private array $pathStatFailureAt = [];
+
+    /** @var array<string, int> */
+    private array $pathStatCalls = [];
+    private ?string $terminalMutationPath = null;
+    private ?string $terminalMutationContents = null;
+    private ?string $terminalMutationBoundary = null;
+    private ?string $terminalCleanupFailure = null;
+    private bool $terminalCleanupFailureArmed = false;
 
     public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
     {
@@ -3149,6 +3585,15 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failDirectoryParentSyncAt(int $sync): void
     {
         $this->directoryParentSyncFailureAt = $sync;
+    }
+
+    public function failPathStatAt(#[\SensitiveParameter] string $path, int $call): void
+    {
+        if ($call < 1) {
+            throw new \InvalidArgumentException('Path stat failure call must be positive.');
+        }
+        $this->pathStatFailureAt[$path] = $call;
+        $this->pathStatCalls[$path] = 0;
     }
 
     public function replaceLockAtNextManifestPublication(
@@ -3259,6 +3704,14 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
     {
         $statistics = parent::pathStat($path, $operation);
+        if (isset($this->pathStatFailureAt[$path])) {
+            $this->pathStatCalls[$path] = ($this->pathStatCalls[$path] ?? 0) + 1;
+            if ($this->pathStatCalls[$path] === $this->pathStatFailureAt[$path]) {
+                unset($this->pathStatFailureAt[$path]);
+
+                return false;
+            }
+        }
         if ($operation === 'paper_dataset_directory_validation'
             && $path === $this->datasetDirectoryToSwapAfterRecoveryRevalidation
             && $this->datasetDirectoryReplacementAfterRecoveryRevalidation !== null
@@ -3307,6 +3760,30 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         #[\SensitiveParameter] string $destination,
         string $operation,
     ): bool {
+        $fixedArtifact = $this->fixedArtifactForPublishOperation($operation);
+        if ($fixedArtifact !== null) {
+            $this->fixedArtifactPublications[$fixedArtifact] = (
+                $this->fixedArtifactPublications[$fixedArtifact] ?? 0
+            ) + 1;
+            if ($fixedArtifact === $this->fixedArtifactFailureArtifact
+                && $this->fixedArtifactFailure === 'before_rename'
+            ) {
+                $this->clearFixedArtifactFailure();
+
+                return false;
+            }
+            $moved = parent::move($source, $destination, $operation);
+            if ($moved
+                && $fixedArtifact === $this->fixedArtifactFailureArtifact
+                && $this->fixedArtifactFailure === 'after_rename'
+            ) {
+                $this->clearFixedArtifactFailure();
+
+                throw new \RuntimeException('Injected crash after fixed artifact rename.');
+            }
+
+            return $moved;
+        }
         if ($operation === 'paper_dataset_manifest_publish') {
             ++$this->manifestPublications;
             $directory = dirname($destination);
@@ -3357,6 +3834,11 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             }
             fclose($replacement);
             $afterReplacement();
+        }
+        if ($operation === 'paper_dataset_manifest_publish'
+            && $this->terminalMutationBoundary === 'before_rename'
+        ) {
+            $this->injectTerminalPublicationMutation();
         }
         if ($operation === 'paper_dataset_manifest_publish'
             && $this->manifestPathForTemporaryMutation === $destination
@@ -3410,11 +3892,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             && $this->manifestBackupMutationSearch !== null
             && $this->manifestBackupMutationReplacement !== null
         ) {
-            $backups = glob(dirname($destination) . '/.manifest-backup-*');
-            if ($backups === false || count($backups) !== 1) {
-                throw new \RuntimeException('Unable to locate manifest backup mutation target.');
-            }
-            $backup = $backups[0];
+            $backup = dirname($destination) . '/.manifest-backup-fixed';
             $contents = file_get_contents($backup);
             if ($contents === false
                 || substr_count($contents, $this->manifestBackupMutationSearch) !== 1
@@ -3458,6 +3936,18 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
 
         $moved = parent::move($source, $destination, $operation);
+        if ($moved
+            && $operation === 'paper_dataset_manifest_publish'
+            && $this->terminalCleanupFailure !== null
+        ) {
+            $this->terminalCleanupFailureArmed = true;
+        }
+        if ($moved
+            && $operation === 'paper_dataset_manifest_publish'
+            && $this->terminalMutationBoundary === 'after_rename'
+        ) {
+            $this->injectTerminalPublicationMutation();
+        }
         if ($moved
             && $operation === 'paper_dataset_manifest_publish'
             && $this->manifestPublicationFailureAfterRename !== null
@@ -3529,6 +4019,15 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->manifestPublicationFailureAfterRename = $failure;
     }
 
+    public function failNextTerminalCleanupSync(string $artifact): void
+    {
+        if (!\in_array($artifact, ['backup', 'transition'], true)) {
+            throw new \InvalidArgumentException('Unsupported terminal cleanup artifact.');
+        }
+        $this->terminalCleanupFailure = $artifact;
+        $this->terminalCleanupFailureArmed = false;
+    }
+
     public function resetManifestTransitionObservation(): void
     {
         $this->manifestTransitionSyncs = 0;
@@ -3544,6 +4043,54 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     public function failNextEventSync(): void
     {
         $this->failEventSync = true;
+    }
+
+    public function failNextAppendRecoverySync(): void
+    {
+        $this->failAppendRecoverySync = true;
+    }
+
+    public function failNextFixedArtifactPublication(string $artifact, string $failure): void
+    {
+        if (!\in_array($artifact, [
+            'append_intent',
+            'manifest_transition',
+            'manifest_backup',
+            'manifest_candidate',
+        ], true) || !\in_array($failure, [
+            'short_write',
+            'flush',
+            'sync',
+            'before_rename',
+            'after_rename',
+            'after_directory_sync',
+        ], true)) {
+            throw new \InvalidArgumentException('Unsupported fixed artifact failure.');
+        }
+        $this->fixedArtifactFailureArtifact = $artifact;
+        $this->fixedArtifactFailure = $failure;
+        $this->fixedArtifactShortWriteCompleted = false;
+    }
+
+    public function overwriteEventsAfterAppendRecoverySync(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] string $contents,
+    ): void {
+        $this->appendRecoveryMutationPath = $path;
+        $this->appendRecoveryMutationContents = $contents;
+    }
+
+    public function overwriteEventsAtTerminalPublication(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] string $contents,
+        string $boundary,
+    ): void {
+        if (!\in_array($boundary, ['before_rename', 'after_rename', 'after_directory_sync'], true)) {
+            throw new \InvalidArgumentException('Unsupported terminal mutation boundary.');
+        }
+        $this->terminalMutationPath = $path;
+        $this->terminalMutationContents = $contents;
+        $this->terminalMutationBoundary = $boundary;
     }
 
     public function shortReadNextChecksum(): void
@@ -3705,6 +4252,23 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function write($handle, #[\SensitiveParameter] string $contents, string $operation): int|false
     {
+        $fixedArtifact = $this->fixedArtifactForContentOperation($operation);
+        if ($fixedArtifact === $this->fixedArtifactFailureArtifact
+            && $this->fixedArtifactFailure === 'short_write'
+        ) {
+            if (!$this->fixedArtifactShortWriteCompleted) {
+                $this->fixedArtifactShortWriteCompleted = true;
+
+                return parent::write(
+                    $handle,
+                    substr($contents, 0, max(1, intdiv(strlen($contents), 2))),
+                    $operation,
+                );
+            }
+            $this->clearFixedArtifactFailure();
+
+            return false;
+        }
         if ($operation !== 'paper_dataset_events_write_failed') {
             return parent::write($handle, $contents, $operation);
         }
@@ -3750,6 +4314,13 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function flush($handle, string $operation): bool
     {
+        if ($this->fixedArtifactForContentOperation($operation) === $this->fixedArtifactFailureArtifact
+            && $this->fixedArtifactFailure === 'flush'
+        ) {
+            $this->clearFixedArtifactFailure();
+
+            return false;
+        }
         if ($operation === 'paper_dataset_events_flush_failed' && $this->appendFailure === 'flush') {
             $this->appendFailure = null;
 
@@ -3766,6 +4337,60 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
 
     public function sync($handle, string $operation): bool
     {
+        $terminalCleanupOperation = match ($this->terminalCleanupFailure) {
+            'backup' => 'paper_dataset_manifest_backup_cleanup_directory_sync',
+            'transition' => 'paper_dataset_manifest_transition_directory_sync_failed',
+            default => null,
+        };
+        if ($this->terminalCleanupFailureArmed && $operation === $terminalCleanupOperation) {
+            $this->terminalCleanupFailure = null;
+            $this->terminalCleanupFailureArmed = false;
+
+            return false;
+        }
+        if ($this->fixedArtifactForContentOperation($operation) === $this->fixedArtifactFailureArtifact
+            && $this->fixedArtifactFailure === 'sync'
+        ) {
+            $this->clearFixedArtifactFailure();
+
+            return false;
+        }
+        if ($this->fixedArtifactForDirectorySyncOperation($operation) === $this->fixedArtifactFailureArtifact
+            && $this->fixedArtifactFailure === 'after_directory_sync'
+        ) {
+            $synced = parent::sync($handle, $operation);
+            $this->clearFixedArtifactFailure();
+            if (!$synced) {
+                return false;
+            }
+
+            throw new \RuntimeException('Injected crash after fixed artifact directory sync.');
+        }
+        if ($operation === 'paper_dataset_append_recovery_failed') {
+            ++$this->appendRecoverySyncs;
+            if ($this->failAppendRecoverySync) {
+                $this->failAppendRecoverySync = false;
+
+                return false;
+            }
+            $synced = parent::sync($handle, $operation);
+            if (!$synced) {
+                return false;
+            }
+            if ($this->appendRecoveryMutationPath !== null
+                && $this->appendRecoveryMutationContents !== null
+            ) {
+                $path = $this->appendRecoveryMutationPath;
+                $contents = $this->appendRecoveryMutationContents;
+                $this->appendRecoveryMutationPath = null;
+                $this->appendRecoveryMutationContents = null;
+                if (file_put_contents($path, $contents) !== strlen($contents)) {
+                    throw new \RuntimeException('Unable to inject recovered append mutation.');
+                }
+            }
+
+            return true;
+        }
         if ($operation === 'paper_dataset_append_intent_flush_failed') {
             ++$this->appendIntentSyncs;
         }
@@ -3812,6 +4437,15 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
                 $this->failManifestDirectorySync = false;
 
                 return false;
+            }
+            if ($this->terminalMutationBoundary === 'after_directory_sync') {
+                $synced = parent::sync($handle, $operation);
+                if (!$synced) {
+                    return false;
+                }
+                $this->injectTerminalPublicationMutation();
+
+                return true;
             }
         }
         if ($operation === 'paper_dataset_events_flush_failed') {
@@ -3868,6 +4502,20 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
         if (filesize($path) < $offset + strlen($contents)) {
             throw new \RuntimeException('Unable to inject publication snapshot mutation.');
+        }
+    }
+
+    private function injectTerminalPublicationMutation(): void
+    {
+        $path = $this->terminalMutationPath;
+        $contents = $this->terminalMutationContents;
+        $this->terminalMutationPath = null;
+        $this->terminalMutationContents = null;
+        $this->terminalMutationBoundary = null;
+        if ($path === null || $contents === null
+            || file_put_contents($path, $contents) !== strlen($contents)
+        ) {
+            throw new \RuntimeException('Unable to inject terminal publication mutation.');
         }
     }
 
@@ -3960,5 +4608,45 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         }
 
         return parent::truncate($handle, $size, $operation);
+    }
+
+    private function fixedArtifactForContentOperation(string $operation): ?string
+    {
+        return match ($operation) {
+            'paper_dataset_append_intent_flush_failed' => 'append_intent',
+            'paper_dataset_manifest_transition_flush_failed' => 'manifest_transition',
+            'paper_dataset_manifest_backup_failed' => 'manifest_backup',
+            'paper_dataset_manifest_flush_failed' => 'manifest_candidate',
+            default => null,
+        };
+    }
+
+    private function fixedArtifactForPublishOperation(string $operation): ?string
+    {
+        return match ($operation) {
+            'paper_dataset_append_intent_publish' => 'append_intent',
+            'paper_dataset_manifest_transition_publish' => 'manifest_transition',
+            'paper_dataset_manifest_backup_publish' => 'manifest_backup',
+            'paper_dataset_manifest_candidate_publish' => 'manifest_candidate',
+            default => null,
+        };
+    }
+
+    private function fixedArtifactForDirectorySyncOperation(string $operation): ?string
+    {
+        return match ($operation) {
+            'paper_dataset_append_intent_directory_sync_failed' => 'append_intent',
+            'paper_dataset_manifest_transition_directory_sync_failed' => 'manifest_transition',
+            'paper_dataset_manifest_backup_directory_sync' => 'manifest_backup',
+            'paper_dataset_manifest_candidate_directory_sync' => 'manifest_candidate',
+            default => null,
+        };
+    }
+
+    private function clearFixedArtifactFailure(): void
+    {
+        $this->fixedArtifactFailureArtifact = null;
+        $this->fixedArtifactFailure = null;
+        $this->fixedArtifactShortWriteCompleted = false;
     }
 }
