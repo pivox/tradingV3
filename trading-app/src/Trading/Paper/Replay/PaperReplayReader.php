@@ -92,6 +92,7 @@ final class PaperReplayReader
                 $datasetDirectory,
                 $consumerId,
                 $datasetPin['identity'],
+                true,
             );
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,

@@ -180,6 +180,38 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         self::assertFileDoesNotExist($this->checkpointPath());
     }
 
+    public function testSaveRejectsNonPrivateDatasetDirectoryWithoutCreatingCheckpointState(): void
+    {
+        self::assertTrue(chmod($this->datasetDirectory, 0777));
+        $failure = null;
+
+        try {
+            (new PaperReplayCheckpointStore())->save($this->datasetDirectory, self::checkpoint());
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        } finally {
+            self::assertTrue(chmod($this->datasetDirectory, 0700));
+        }
+
+        self::assertNotNull($failure, 'Checkpoint save must reject a non-private dataset parent.');
+        self::assertSame('paper_replay_checkpoint_directory_invalid', $failure->getMessage());
+        self::assertDirectoryDoesNotExist($this->datasetDirectory . '/checkpoints');
+    }
+
+    public function testStandaloneLoadKeepsSupportingNonPrivateDatasetDirectory(): void
+    {
+        $checkpoint = self::checkpoint();
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $checkpoint);
+        self::assertTrue(chmod($this->datasetDirectory, 0777));
+
+        try {
+            self::assertEquals($checkpoint, $store->load($this->datasetDirectory, $checkpoint->consumerId));
+        } finally {
+            self::assertTrue(chmod($this->datasetDirectory, 0700));
+        }
+    }
+
     public function testCheckpointDirectoryRetryCannotBypassFailedParentSync(): void
     {
         $filesystem = new ParentSyncFailingCheckpointFilesystem();
