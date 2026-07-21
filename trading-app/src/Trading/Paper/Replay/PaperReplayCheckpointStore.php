@@ -96,8 +96,19 @@ final class PaperReplayCheckpointStore
             $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
             $this->assertDestinationIsNotSymlink($path);
             $this->assertHandleMatchesPath($handle, $temporaryPath, $temporaryIdentity);
-            if (!$this->filesystem->move($temporaryPath, $path, 'paper_replay_checkpoint_publish')) {
-                throw new \RuntimeException('paper_replay_checkpoint_write_failed');
+            try {
+                if (!$this->filesystem->move($temporaryPath, $path, 'paper_replay_checkpoint_publish')) {
+                    throw new \RuntimeException('paper_replay_checkpoint_write_failed');
+                }
+            } catch (\Throwable $failure) {
+                $renamed = $this->publishedCheckpointMatches(
+                    $handle,
+                    $path,
+                    $temporaryIdentity,
+                    $contents,
+                );
+
+                throw $failure;
             }
             $renamed = true;
 
@@ -228,47 +239,55 @@ final class PaperReplayCheckpointStore
             return null;
         }
 
-        $path = $directory . DIRECTORY_SEPARATOR . $consumerId . '.json';
-        $statistics = $this->filesystem->pathStat($path, 'paper_replay_checkpoint_load');
-        if ($statistics === false) {
-            if (file_exists($path) || is_link($path)) {
+        $directoryPin = $this->openPinnedDirectory($directory);
+        try {
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            $path = $directory . DIRECTORY_SEPARATOR . $consumerId . '.json';
+            $statistics = $this->filesystem->pathStat($path, 'paper_replay_checkpoint_load');
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            if ($statistics === false) {
+                if (file_exists($path) || is_link($path)) {
+                    throw new \RuntimeException('paper_replay_checkpoint_invalid');
+                }
+
+                return null;
+            }
+            if (($statistics['mode'] & self::FILE_TYPE_MASK) === self::SYMLINK_FILE_TYPE) {
+                throw new \RuntimeException('paper_replay_checkpoint_symlink_rejected');
+            }
+            if (!$this->isPrivateRegularFile($statistics)
+                || !isset($statistics['size'])
+                || !\is_int($statistics['size'])
+                || $statistics['size'] <= 0
+                || $statistics['size'] > self::MAX_CHECKPOINT_BYTES
+            ) {
                 throw new \RuntimeException('paper_replay_checkpoint_invalid');
             }
 
-            return null;
-        }
-        if (($statistics['mode'] & self::FILE_TYPE_MASK) === self::SYMLINK_FILE_TYPE) {
-            throw new \RuntimeException('paper_replay_checkpoint_symlink_rejected');
-        }
-        if (!$this->isPrivateRegularFile($statistics)
-            || !isset($statistics['size'])
-            || !\is_int($statistics['size'])
-            || $statistics['size'] <= 0
-            || $statistics['size'] > self::MAX_CHECKPOINT_BYTES
-        ) {
-            throw new \RuntimeException('paper_replay_checkpoint_invalid');
-        }
-
-        $contents = $this->readSnapshot($path, $statistics);
-        try {
-            $data = json_decode($contents, true, 32, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
-            if (!\is_array($data) || array_is_list($data)) {
-                throw new \InvalidArgumentException();
+            $contents = $this->readSnapshot($directoryPin, $directory, $path, $statistics);
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            try {
+                $data = json_decode($contents, true, 32, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
+                if (!\is_array($data) || array_is_list($data)) {
+                    throw new \InvalidArgumentException();
+                }
+                /** @var array<string, mixed> $data */
+                $checkpoint = PaperReplayCheckpoint::fromArray($data);
+                if (CanonicalJson::encode($checkpoint->toArray()) . "\n" !== $contents) {
+                    throw new \InvalidArgumentException();
+                }
+            } catch (\Throwable) {
+                throw new \RuntimeException('paper_replay_checkpoint_invalid');
             }
-            /** @var array<string, mixed> $data */
-            $checkpoint = PaperReplayCheckpoint::fromArray($data);
-            if (CanonicalJson::encode($checkpoint->toArray()) . "\n" !== $contents) {
-                throw new \InvalidArgumentException();
+
+            if (!hash_equals($consumerId, $checkpoint->consumerId)) {
+                throw new \RuntimeException('paper_replay_checkpoint_mismatch');
             }
-        } catch (\Throwable) {
-            throw new \RuntimeException('paper_replay_checkpoint_invalid');
-        }
 
-        if (!hash_equals($consumerId, $checkpoint->consumerId)) {
-            throw new \RuntimeException('paper_replay_checkpoint_mismatch');
+            return $checkpoint;
+        } finally {
+            fclose($directoryPin['handle']);
         }
-
-        return $checkpoint;
     }
 
     private function checkpointDirectory(
@@ -290,31 +309,12 @@ final class PaperReplayCheckpointStore
             if (!$create) {
                 return null;
             }
-            $parentPin = $this->openPinnedDirectory($resolved);
-            try {
-                if (!$this->filesystem->createDirectory($directory, 0700)) {
-                    throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
-                }
-                $statistics = $this->filesystem->pathStat($directory, 'paper_replay_checkpoint_directory');
-                if ($statistics === false || !$this->isPrivateDirectory($statistics)) {
-                    throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
-                }
-                $directoryPin = $this->openPinnedDirectory($directory);
-                try {
-                    $this->assertPinnedDirectory($parentPin, $resolved);
-                    if (!$this->filesystem->sync(
-                        $parentPin['handle'],
-                        'paper_replay_checkpoint_directory_parent_sync',
-                    )) {
-                        throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
-                    }
-                    $this->assertPinnedDirectory($parentPin, $resolved);
-                    $this->assertPinnedDirectory($directoryPin, $directory);
-                } finally {
-                    fclose($directoryPin['handle']);
-                }
-            } finally {
-                fclose($parentPin['handle']);
+            if (!$this->filesystem->createDirectory($directory, 0700)) {
+                throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+            }
+            $statistics = $this->filesystem->pathStat($directory, 'paper_replay_checkpoint_directory');
+            if ($statistics === false || !$this->isPrivateDirectory($statistics)) {
+                throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
             }
         }
         if (($statistics['mode'] & self::FILE_TYPE_MASK) === self::SYMLINK_FILE_TYPE) {
@@ -323,8 +323,37 @@ final class PaperReplayCheckpointStore
         if (!$this->isPrivateDirectory($statistics)) {
             throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
         }
+        if ($create) {
+            $this->syncCheckpointDirectoryParent($resolved, $directory);
+        }
 
         return $directory;
+    }
+
+    private function syncCheckpointDirectoryParent(
+        #[\SensitiveParameter] string $parent,
+        #[\SensitiveParameter] string $directory,
+    ): void {
+        $parentPin = $this->openPinnedDirectory($parent);
+        try {
+            $directoryPin = $this->openPinnedDirectory($directory);
+            try {
+                $this->assertPinnedDirectory($parentPin, $parent);
+                $this->assertPinnedDirectory($directoryPin, $directory);
+                if (!$this->filesystem->sync(
+                    $parentPin['handle'],
+                    'paper_replay_checkpoint_directory_parent_sync',
+                )) {
+                    throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+                }
+                $this->assertPinnedDirectory($parentPin, $parent);
+                $this->assertPinnedDirectory($directoryPin, $directory);
+            } finally {
+                fclose($directoryPin['handle']);
+            }
+        } finally {
+            fclose($parentPin['handle']);
+        }
     }
 
     private function assertDestinationIsNotSymlink(#[\SensitiveParameter] string $path): void
@@ -366,17 +395,22 @@ final class PaperReplayCheckpointStore
     }
 
     /**
-     * @param array<string, mixed> $expectedStatistics
+     * @param array{handle: resource, identity: array{dev: int, ino: int}} $directoryPin
+     * @param array<string, mixed>                                        $expectedStatistics
      */
     private function readSnapshot(
+        array $directoryPin,
+        #[\SensitiveParameter] string $directory,
         #[\SensitiveParameter] string $path,
         array $expectedStatistics,
     ): string {
+        $this->assertPinnedDirectory($directoryPin, $directory);
         $handle = @fopen($path, 'rb');
         if ($handle === false) {
             throw new \RuntimeException('paper_replay_checkpoint_invalid');
         }
         try {
+            $this->assertPinnedDirectory($directoryPin, $directory);
             $opened = $this->filesystem->stat($handle, 'paper_replay_checkpoint_load');
             if ($opened === false
                 || !$this->isPrivateRegularFile($opened)
@@ -412,7 +446,9 @@ final class PaperReplayCheckpointStore
             if (!$this->sameCheckpointSnapshot($opened, $afterRead)) {
                 throw new \RuntimeException('paper_replay_checkpoint_invalid');
             }
+            $this->assertPinnedDirectory($directoryPin, $directory);
             $current = $this->filesystem->pathStat($path, 'paper_replay_checkpoint_load');
+            $this->assertPinnedDirectory($directoryPin, $directory);
             if (!$this->sameCheckpointSnapshot($opened, $current)) {
                 throw new \RuntimeException('paper_replay_checkpoint_invalid');
             }
@@ -420,6 +456,7 @@ final class PaperReplayCheckpointStore
             if (!$this->sameCheckpointSnapshot($opened, $final)) {
                 throw new \RuntimeException('paper_replay_checkpoint_invalid');
             }
+            $this->assertPinnedDirectory($directoryPin, $directory);
 
             return $contents;
         } finally {
