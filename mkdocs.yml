@@ -55,6 +55,7 @@ nav:
       - Piles d'execution: graphs/execution-stacks.md
   - Runbooks:
       - Exploitation: runbooks/operations.md
+      - Paper market replay: runbooks/paper-market-replay.md
       - Investigation: runbooks/investigation.md
       - Demo/Testnet kill switch: runbooks/demo-testnet-kill-switch.md
       - Demo/Testnet operations: runbooks/demo-testnet-operations.md

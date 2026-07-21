@@ -1,4 +1,5 @@
 /vendor/
+# Paper market datasets are local-only and must never be committed.
 /var/
 /.env.local
 /.env.*.local
