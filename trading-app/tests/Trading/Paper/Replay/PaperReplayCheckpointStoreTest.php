@@ -174,6 +174,23 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         self::assertSame(2, $filesystem->parentSyncAttempts);
     }
 
+    public function testSaveAcceptsCheckpointDirectoryCreatedByConcurrentMkdirWinner(): void
+    {
+        $filesystem = new ConcurrentCheckpointDirectoryCreationFilesystem();
+        $checkpoint = self::checkpoint();
+
+        (new PaperReplayCheckpointStore($filesystem))->save($this->datasetDirectory, $checkpoint);
+
+        self::assertTrue($filesystem->raced);
+        self::assertGreaterThanOrEqual(2, $filesystem->directoryPathStats);
+        self::assertSame(1, $filesystem->parentSyncAttempts);
+        self::assertSame(0700, fileperms($this->datasetDirectory . '/checkpoints') & 0777);
+        self::assertEquals(
+            $checkpoint,
+            (new PaperReplayCheckpointStore())->load($this->datasetDirectory, $checkpoint->consumerId),
+        );
+    }
+
     public function testSavesCanonicalJsonAtomicallyWithPrivateModeAndLoadsIt(): void
     {
         $checkpoint = self::checkpoint();
@@ -410,6 +427,48 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         );
     }
 
+    public function testMoveExceptionWithTransientPublicationValidationFailureRemainsUncertain(): void
+    {
+        $original = self::checkpoint();
+        (new PaperReplayCheckpointStore())->save($this->datasetDirectory, $original);
+        $replacement = self::checkpointAt(18, 'c', '2026-07-19T10:00:01.123456Z');
+
+        try {
+            (new PaperReplayCheckpointStore(
+                new PostRenameThrowingTransientValidationFilesystem(),
+            ))->save($this->datasetDirectory, $replacement);
+            self::fail('An indeterminate move result must remain an uncertain publication.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+        }
+
+        self::assertEquals(
+            $replacement,
+            (new PaperReplayCheckpointStore())->load($this->datasetDirectory, $replacement->consumerId),
+        );
+    }
+
+    public function testMoveExceptionCleanupFailureRemainsUncertain(): void
+    {
+        $original = self::checkpoint();
+        (new PaperReplayCheckpointStore())->save($this->datasetDirectory, $original);
+        $replacement = self::checkpointAt(18, 'c', '2026-07-19T10:00:01.123456Z');
+
+        try {
+            (new PaperReplayCheckpointStore(
+                new PostRenameThrowingCleanupFailingFilesystem(),
+            ))->save($this->datasetDirectory, $replacement);
+            self::fail('Temporary cleanup failure must not mask an uncertain publication.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_publication_uncertain', $exception->getMessage());
+        }
+
+        self::assertEquals(
+            $replacement,
+            (new PaperReplayCheckpointStore())->load($this->datasetDirectory, $replacement->consumerId),
+        );
+    }
+
     public function testPostRenameCheckpointDirectorySwapRemovesForgedVisibleDestination(): void
     {
         $replacement = self::checkpointAt(18, 'c', '2026-07-19T10:00:01.123456Z');
@@ -477,6 +536,41 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         }
 
         self::assertNotNull($failure, 'A substituted checkpoint directory must not load an external checkpoint.');
+        self::assertSame('paper_replay_checkpoint_directory_invalid', $failure->getMessage());
+        self::assertTrue($filesystem->swapped);
+    }
+
+    public function testLoadRejectsPrivateCheckpointDirectoryReplacementAfterInitialStat(): void
+    {
+        $checkpoint = self::checkpoint();
+        (new PaperReplayCheckpointStore())->save($this->datasetDirectory, $checkpoint);
+        $external = self::checkpointAt(99, 'd', '2026-07-19T10:00:09.123456Z');
+        $checkpointDirectory = $this->datasetDirectory . '/checkpoints';
+        $displacedDirectory = $this->testRoot . '/displaced-private-checkpoints';
+        $replacementDirectory = $this->testRoot . '/replacement-private-checkpoints';
+        self::assertTrue(mkdir($replacementDirectory, 0700));
+        self::assertGreaterThan(0, file_put_contents(
+            $replacementDirectory . '/paper.worker-01.json',
+            CanonicalJson::encode($external->toArray()) . "\n",
+        ));
+        self::assertTrue(chmod($replacementDirectory . '/paper.worker-01.json', 0600));
+        $filesystem = new InitialCheckpointDirectoryReplacementFilesystem(
+            $checkpointDirectory,
+            $displacedDirectory,
+            $replacementDirectory,
+        );
+
+        $failure = null;
+        try {
+            (new PaperReplayCheckpointStore($filesystem))->load(
+                $this->datasetDirectory,
+                $checkpoint->consumerId,
+            );
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        }
+
+        self::assertNotNull($failure, 'A private replacement directory must not inherit the observed identity.');
         self::assertSame('paper_replay_checkpoint_directory_invalid', $failure->getMessage());
         self::assertTrue($filesystem->swapped);
     }
@@ -747,6 +841,37 @@ final class LoadCheckpointDirectorySwapFilesystem extends PaperDatasetRecorderFi
     }
 }
 
+final class InitialCheckpointDirectoryReplacementFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public bool $swapped = false;
+
+    public function __construct(
+        private readonly string $checkpointDirectory,
+        private readonly string $displacedDirectory,
+        private readonly string $replacementDirectory,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        $statistics = parent::pathStat($path, $operation);
+        if ($operation === 'paper_replay_checkpoint_directory'
+            && $path === $this->checkpointDirectory
+            && !$this->swapped
+        ) {
+            $this->swapped = true;
+            if (!rename($this->checkpointDirectory, $this->displacedDirectory)
+                || !rename($this->replacementDirectory, $this->checkpointDirectory)
+            ) {
+                throw new \RuntimeException('Unable to inject private checkpoint directory replacement.');
+            }
+        }
+
+        return $statistics;
+    }
+}
+
 final class ParentSyncFailingCheckpointFilesystem extends PaperDatasetRecorderFilesystem
 {
     public bool $parentSyncAttempted = false;
@@ -760,6 +885,46 @@ final class ParentSyncFailingCheckpointFilesystem extends PaperDatasetRecorderFi
             ++$this->parentSyncAttempts;
 
             return false;
+        }
+
+        return parent::sync($handle, $operation);
+    }
+}
+
+final class ConcurrentCheckpointDirectoryCreationFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public bool $raced = false;
+    public int $directoryPathStats = 0;
+    public int $parentSyncAttempts = 0;
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === 'paper_replay_checkpoint_directory') {
+            ++$this->directoryPathStats;
+            if ($this->directoryPathStats === 1) {
+                return false;
+            }
+        }
+
+        return parent::pathStat($path, $operation);
+    }
+
+    public function createDirectory(#[\SensitiveParameter] string $directory, int $permissions): bool
+    {
+        $this->raced = true;
+        if (!parent::createDirectory($directory, $permissions)) {
+            throw new \RuntimeException('Unable to inject concurrent checkpoint directory creation.');
+        }
+
+        return false;
+    }
+
+    /** @param resource $handle */
+    public function sync($handle, string $operation): bool
+    {
+        if ($operation === 'paper_replay_checkpoint_directory_parent_sync') {
+            ++$this->parentSyncAttempts;
         }
 
         return parent::sync($handle, $operation);
@@ -915,6 +1080,68 @@ final class PostRenameThrowingCheckpointFilesystem extends PaperDatasetRecorderF
         }
 
         return $moved;
+    }
+}
+
+final class PostRenameThrowingTransientValidationFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private bool $failNextPublicationValidation = false;
+
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        $moved = parent::move($source, $destination, $operation);
+        if ($operation === 'paper_replay_checkpoint_publish' && $moved) {
+            $this->failNextPublicationValidation = true;
+
+            throw new \RuntimeException('Injected failure after checkpoint rename.');
+        }
+
+        return $moved;
+    }
+
+    /** @param resource $handle
+     *  @return array<string, mixed>|false
+     */
+    public function stat($handle, string $operation): array|false
+    {
+        if ($operation === 'paper_replay_checkpoint_publication_validation'
+            && $this->failNextPublicationValidation
+        ) {
+            $this->failNextPublicationValidation = false;
+
+            return false;
+        }
+
+        return parent::stat($handle, $operation);
+    }
+}
+
+final class PostRenameThrowingCleanupFailingFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public function move(
+        #[\SensitiveParameter] string $source,
+        #[\SensitiveParameter] string $destination,
+        string $operation,
+    ): bool {
+        $moved = parent::move($source, $destination, $operation);
+        if ($operation === 'paper_replay_checkpoint_publish' && $moved) {
+            throw new \RuntimeException('Injected failure after checkpoint rename.');
+        }
+
+        return $moved;
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === 'paper_replay_checkpoint_cleanup') {
+            throw new \RuntimeException('Injected checkpoint cleanup failure.');
+        }
+
+        return parent::pathStat($path, $operation);
     }
 }
 
