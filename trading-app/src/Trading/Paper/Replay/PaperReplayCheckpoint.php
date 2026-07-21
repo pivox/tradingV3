@@ -49,12 +49,17 @@ final readonly class PaperReplayCheckpoint
             throw new \InvalidArgumentException('paper_replay_checkpoint_checksum_invalid');
         }
 
+        $canonicalTimestamp = $exchangeTimestamp
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format(self::TIMESTAMP_FORMAT);
+        $validatedTimestamp = self::parseTimestamp($canonicalTimestamp);
+
         $this->schemaVersion = self::SCHEMA_VERSION;
         $this->datasetId = $datasetId;
         $this->consumerId = $consumerId;
         $this->eventId = $eventId;
         $this->eventIndex = $eventIndex;
-        $this->exchangeTimestamp = $exchangeTimestamp->setTimezone(new \DateTimeZone('UTC'));
+        $this->exchangeTimestamp = $validatedTimestamp;
         $this->eventsFileSha256 = $eventsFileSha256;
     }
 

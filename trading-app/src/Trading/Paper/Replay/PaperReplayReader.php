@@ -18,6 +18,7 @@ final class PaperReplayReader
     public const DEFAULT_EVENT_LIMIT = 1_000_000;
 
     private const REGULAR_FILE_TYPE = 0100000;
+    private const DIRECTORY_FILE_TYPE = 0040000;
     private const SYMLINK_FILE_TYPE = 0120000;
     private const FILE_TYPE_MASK = 0170000;
 
@@ -52,33 +53,76 @@ final class PaperReplayReader
         ?PaperReplayCheckpoint $checkpoint = null,
     ): \Generator {
         $this->currentEventIndex = null;
-        $manifest = $this->verifier->verify($datasetDirectory);
-        if ($manifest->eventCount > $this->eventLimit) {
-            throw new \RuntimeException('paper_replay_event_limit_exceeded');
-        }
+        $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory);
+        $datasetDirectory = $datasetPin['path'];
+        try {
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_before_verify',
+            );
+            $manifest = $this->verifier->verify($datasetDirectory);
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_after_verify',
+            );
+            if ($manifest->eventCount > $this->eventLimit) {
+                throw new \RuntimeException('paper_replay_event_limit_exceeded');
+            }
 
-        $events = $this->readEvents($datasetDirectory, $manifest);
-        usort($events, self::compare(...));
+            $events = $this->readEvents($datasetDirectory, $manifest, $datasetPin);
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_after_events_load',
+            );
+            usort($events, self::compare(...));
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_after_sort',
+            );
 
-        $checkpoint ??= $this->checkpointStore->load($datasetDirectory, $consumerId);
-        $startIndex = $this->resumeIndex($events, $manifest, $consumerId, $checkpoint);
-        $count = count($events);
-        for ($index = $startIndex; $index < $count; ++$index) {
-            $event = $events[$index]['event'];
-            $this->clock->advanceTo($event->exchangeTimestamp);
-            $this->currentEventIndex = $index;
+            $checkpoint ??= $this->checkpointStore->load($datasetDirectory, $consumerId);
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_after_checkpoint_load',
+            );
+            $startIndex = $this->resumeIndex($events, $manifest, $consumerId, $checkpoint);
+            $this->assertPinnedDatasetDirectory(
+                $datasetPin,
+                'paper_replay_dataset_after_resume',
+            );
+            $count = count($events);
+            for ($index = $startIndex; $index < $count; ++$index) {
+                $this->assertPinnedDatasetDirectory(
+                    $datasetPin,
+                    'paper_replay_dataset_before_yield',
+                );
+                $event = $events[$index]['event'];
+                $this->clock->advanceTo($event->exchangeTimestamp);
+                $this->currentEventIndex = $index;
 
-            yield $index => $event;
+                yield $index => $event;
+
+                $this->assertPinnedDatasetDirectory(
+                    $datasetPin,
+                    'paper_replay_dataset_after_yield',
+                );
+            }
+        } finally {
+            fclose($datasetPin['handle']);
         }
     }
 
     /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
+     *
      * @return list<array{event: PaperMarketEvent, input_index: int}>
      */
     private function readEvents(
         #[\SensitiveParameter] string $datasetDirectory,
         PaperDatasetManifest $manifest,
+        array $datasetPin,
     ): array {
+        $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_before_events_open');
         $path = $datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson';
         $before = $this->filesystem->pathStat($path, 'paper_replay_events_validation');
         if ($before === false) {
@@ -90,6 +134,7 @@ final class PaperReplayReader
         if (!$this->isPrivateRegularFile($before)) {
             throw new \RuntimeException('paper_dataset_file_unreadable');
         }
+        $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_after_events_lstat');
         $handle = @fopen($path, 'rb');
         if ($handle === false) {
             throw new \RuntimeException('paper_dataset_file_unreadable');
@@ -105,6 +150,7 @@ final class PaperReplayReader
             ) {
                 throw new \RuntimeException('paper_replay_events_changed');
             }
+            $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_after_events_open');
             while (($line = $this->lineReader->read(
                 $handle,
                 'paper_replay_events_read_failed',
@@ -148,6 +194,7 @@ final class PaperReplayReader
             if (!$this->isPrivateRegularFile($current) || !$this->sameFile($opened, $current)) {
                 throw new \RuntimeException('paper_replay_events_changed');
             }
+            $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_after_events_read');
         } finally {
             fclose($handle);
         }
@@ -160,6 +207,94 @@ final class PaperReplayReader
         }
 
         return $events;
+    }
+
+    /** @return array{handle: resource, identity: array{dev: int, ino: int}, path: string} */
+    private function openPinnedDatasetDirectory(#[\SensitiveParameter] string $path): array
+    {
+        $this->assertNoSymlinkComponents($path);
+        $before = $this->filesystem->pathStat($path, 'paper_replay_dataset_directory_validation');
+        if ($before === false || !$this->isPrivateDirectory($before)) {
+            throw new \RuntimeException('paper_dataset_directory_invalid');
+        }
+        $handle = $this->filesystem->openDirectory($path, 'paper_replay_dataset_directory_validation');
+        if ($handle === false) {
+            throw new \RuntimeException('paper_dataset_directory_invalid');
+        }
+
+        try {
+            $opened = $this->filesystem->stat($handle, 'paper_replay_dataset_directory_validation');
+            if ($opened === false
+                || !$this->isPrivateDirectory($opened)
+                || !$this->sameFile($before, $opened)
+                || !isset($opened['dev'], $opened['ino'])
+                || !\is_int($opened['dev'])
+                || !\is_int($opened['ino'])
+            ) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+            $resolved = realpath($path);
+            if ($resolved === false) {
+                throw new \RuntimeException('paper_dataset_directory_changed');
+            }
+            $pin = [
+                'handle' => $handle,
+                'identity' => ['dev' => $opened['dev'], 'ino' => $opened['ino']],
+                'path' => $resolved,
+            ];
+            $this->assertPinnedDatasetDirectory($pin, 'paper_replay_dataset_directory_validation');
+
+            return $pin;
+        } catch (\Throwable $failure) {
+            fclose($handle);
+
+            throw $failure;
+        }
+    }
+
+    /** @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $pin */
+    private function assertPinnedDatasetDirectory(array $pin, string $operation): void
+    {
+        $opened = $this->filesystem->stat($pin['handle'], $operation);
+        $current = $this->filesystem->pathStat($pin['path'], $operation);
+        if ($current !== false && $this->isSymlink($current)) {
+            throw new \RuntimeException('paper_dataset_symlink_rejected');
+        }
+        if ($opened === false
+            || $current === false
+            || !$this->isPrivateDirectory($opened)
+            || !$this->isPrivateDirectory($current)
+            || !$this->sameFile($pin['identity'], $opened)
+            || !$this->sameFile($pin['identity'], $current)
+        ) {
+            throw new \RuntimeException('paper_dataset_directory_changed');
+        }
+    }
+
+    private function assertNoSymlinkComponents(#[\SensitiveParameter] string $path): void
+    {
+        if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            $workingDirectory = getcwd();
+            if ($workingDirectory === false) {
+                throw new \RuntimeException('paper_dataset_directory_invalid');
+            }
+            $path = $workingDirectory . DIRECTORY_SEPARATOR . $path;
+        }
+
+        $current = DIRECTORY_SEPARATOR;
+        foreach (explode(DIRECTORY_SEPARATOR, $path) as $component) {
+            if ($component === '' || $component === '.') {
+                continue;
+            }
+            if ($component === '..') {
+                $current = dirname($current);
+                continue;
+            }
+            $current = rtrim($current, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $component;
+            if (is_link($current)) {
+                throw new \RuntimeException('paper_dataset_symlink_rejected');
+            }
+        }
     }
 
     /**
@@ -253,6 +388,15 @@ final class PaperReplayReader
             && \is_int($statistics['mode'])
             && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::REGULAR_FILE_TYPE
             && ($statistics['mode'] & 0777) === 0600;
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function isPrivateDirectory(array $statistics): bool
+    {
+        return isset($statistics['mode'])
+            && \is_int($statistics['mode'])
+            && ($statistics['mode'] & self::FILE_TYPE_MASK) === self::DIRECTORY_FILE_TYPE
+            && ($statistics['mode'] & 0777) === 0700;
     }
 
     /** @param array<string, mixed> $statistics */

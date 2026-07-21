@@ -256,6 +256,91 @@ final class PaperReplayReaderTest extends TestCase
         iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
     }
 
+    public function testRejectsDatasetDirectorySubstitutionBetweenVerifyAndReadBeforeYield(): void
+    {
+        $event = $this->event(
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            '1',
+            '2026-07-19T10:00:00.000000Z',
+            '2026-07-19T10:00:00.100000Z',
+        );
+        $dataset = $this->completeDataset([$event]);
+        $filesystem = new DatasetDirectorySwapOnEventsOpenFilesystem(
+            $dataset['directory'],
+            $this->testRoot . '/displaced-before-read',
+        );
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            new PaperReplayClock($event->exchangeTimestamp),
+            filesystem: $filesystem,
+        );
+
+        try {
+            iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+            self::fail('A substituted dataset directory must be rejected before any yield.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+        }
+
+        self::assertNull($reader->currentEventIndex());
+    }
+
+    public function testRejectsDatasetDirectorySubstitutionImmediatelyAfterCheckpointLoad(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        (new PaperReplayCheckpointStore())->save(
+            $dataset['directory'],
+            $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[0], 0),
+        );
+        $filesystem = new DatasetDirectorySwapAtBoundaryFilesystem(
+            $dataset['directory'],
+            $this->testRoot . '/displaced-after-load',
+            'paper_replay_dataset_after_checkpoint_load',
+        );
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            new PaperReplayClock($events[0]->exchangeTimestamp),
+            filesystem: $filesystem,
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_directory_changed');
+
+        iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+    }
+
+    public function testRevalidatesPinnedDatasetBeforeEveryYieldAfterGeneratorResume(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $reader = $this->reader(new PaperReplayClock($events[0]->exchangeTimestamp));
+        $generator = $reader->read($dataset['directory'], 'paper.worker-01');
+
+        self::assertSame($events[0]->eventId, $generator->current()->eventId);
+        $displaced = $this->testRoot . '/displaced-after-yield';
+        self::assertTrue(rename($dataset['directory'], $displaced));
+        self::assertTrue(mkdir($dataset['directory'], 0700));
+
+        try {
+            $generator->next();
+            self::fail('A dataset swap while the generator is suspended must block the next yield.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_directory_changed', $exception->getMessage());
+        }
+
+        self::assertFalse($generator->valid());
+    }
+
     private function reader(PaperReplayClock $clock): PaperReplayReader
     {
         return new PaperReplayReader(
@@ -384,5 +469,70 @@ final class EventsPathSwapFilesystem extends PaperDatasetRecorderFilesystem
         }
 
         return parent::stat($handle, $operation);
+    }
+}
+
+final class DatasetDirectorySwapOnEventsOpenFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private bool $swapped = false;
+
+    public function __construct(
+        private readonly string $datasetDirectory,
+        private readonly string $displacedDirectory,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === 'paper_replay_events_validation' && !$this->swapped) {
+            $this->swapped = true;
+            $this->swapWithPrivateCopy();
+        }
+
+        return parent::pathStat($path, $operation);
+    }
+
+    private function swapWithPrivateCopy(): void
+    {
+        if (!rename($this->datasetDirectory, $this->displacedDirectory)
+            || !mkdir($this->datasetDirectory, 0700)
+        ) {
+            throw new \RuntimeException('Unable to inject dataset directory substitution.');
+        }
+        foreach (['manifest.json', 'events.ndjson'] as $filename) {
+            $source = $this->displacedDirectory . '/' . $filename;
+            $destination = $this->datasetDirectory . '/' . $filename;
+            if (!copy($source, $destination) || !chmod($destination, 0600)) {
+                throw new \RuntimeException('Unable to copy substituted dataset fixture.');
+            }
+        }
+    }
+}
+
+final class DatasetDirectorySwapAtBoundaryFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private bool $swapped = false;
+
+    public function __construct(
+        private readonly string $datasetDirectory,
+        private readonly string $displacedDirectory,
+        private readonly string $boundaryOperation,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === $this->boundaryOperation && !$this->swapped) {
+            $this->swapped = true;
+            if (!rename($this->datasetDirectory, $this->displacedDirectory)
+                || !mkdir($this->datasetDirectory, 0700)
+            ) {
+                throw new \RuntimeException('Unable to inject dataset boundary substitution.');
+            }
+        }
+
+        return parent::pathStat($path, $operation);
     }
 }
