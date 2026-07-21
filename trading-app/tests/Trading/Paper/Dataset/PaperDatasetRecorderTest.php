@@ -2754,6 +2754,110 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame($expectedContents, file_get_contents($manifestPath));
     }
 
+    public function testAuthenticTerminalTransitionRecoversWithoutManifestUsingTerminalIdentity(): void
+    {
+        $initial = $this->manifest();
+        $expectedContents = $this->leaveAuthenticTerminalTransition($initial);
+        $terminal = (new PaperDatasetManifestCodec())->decode($expectedContents);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+
+        $recovered = new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+
+        self::assertSame(PaperDatasetState::COMPLETE, $recovered->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+    }
+
+    public function testAuthenticPublishedCandidateRecoversWithoutManifestAndIsIdempotent(): void
+    {
+        $initial = $this->manifest();
+        $expectedContents = $this->leaveAuthenticManifestAbsentTransitionWithCandidate($initial);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+
+        $recovered = new PaperDatasetRecorder($this->datasetRoot(), $initial);
+
+        self::assertSame(PaperDatasetState::COMPLETE, $recovered->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+
+        $again = new PaperDatasetRecorder($this->datasetRoot(), $initial);
+        self::assertSame(PaperDatasetState::COMPLETE, $again->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+    }
+
+    #[DataProvider('forgedManifestAbsentCandidateRecoveryArtifactProvider')]
+    public function testManifestAbsentCandidateRecoveryRejectsForgedCandidateOrBackup(string $artifact): void
+    {
+        $initial = $this->manifest();
+        $expectedContents = $this->leaveAuthenticManifestAbsentTransitionWithCandidate($initial);
+        $terminal = (new PaperDatasetManifestCodec())->decode($expectedContents);
+        $artifactPath = $artifact === 'candidate'
+            ? $this->manifestCandidatePath()
+            : $this->manifestBackupPath();
+        $contents = file_get_contents($artifactPath);
+        self::assertIsString($contents);
+        $mutated = str_replace('"recorder_version":"1.0.0"', '"recorder_version":"9.9.9"', $contents);
+        self::assertSame(strlen($contents), strlen($mutated));
+        self::assertNotSame($contents, $mutated);
+        self::assertSame(strlen($mutated), file_put_contents($artifactPath, $mutated));
+        $transitionBefore = file_get_contents($this->manifestTransitionPath());
+        $candidateBefore = file_get_contents($this->manifestCandidatePath());
+        $backupBefore = file_get_contents($this->manifestBackupPath());
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+            self::fail('Forged candidate recovery evidence must never be promoted.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+        self::assertSame($transitionBefore, file_get_contents($this->manifestTransitionPath()));
+        self::assertSame($candidateBefore, file_get_contents($this->manifestCandidatePath()));
+        self::assertSame($backupBefore, file_get_contents($this->manifestBackupPath()));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function forgedManifestAbsentCandidateRecoveryArtifactProvider(): iterable
+    {
+        yield 'forged candidate' => ['candidate'];
+        yield 'forged backup' => ['backup'];
+    }
+
+    #[DataProvider('missingManifestAbsentCandidateRecoveryArtifactProvider')]
+    public function testManifestAbsentCandidateRecoveryRejectsMissingTransitionOrBackup(string $artifact): void
+    {
+        $manifest = $this->manifest();
+        $this->leaveAuthenticManifestAbsentTransitionWithCandidate($manifest);
+        $artifactPath = $artifact === 'transition'
+            ? $this->manifestTransitionPath()
+            : $this->manifestBackupPath();
+        self::assertTrue(unlink($artifactPath));
+        $candidateBefore = file_get_contents($this->manifestCandidatePath());
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('Incomplete candidate recovery evidence must never be promoted.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+        self::assertSame($candidateBefore, file_get_contents($this->manifestCandidatePath()));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function missingManifestAbsentCandidateRecoveryArtifactProvider(): iterable
+    {
+        yield 'missing transition' => ['transition'];
+        yield 'missing backup' => ['backup'];
+    }
+
     public function testManifestAbsentRecoveryRemainsIdempotentAfterRepublishDirectorySyncFailure(): void
     {
         $manifest = $this->manifest();
@@ -3666,6 +3770,30 @@ final class PaperDatasetRecorderTest extends TestCase
         );
 
         return $contents;
+    }
+
+    private function leaveAuthenticManifestAbsentTransitionWithCandidate(
+        PaperDatasetManifest $manifest,
+    ): string {
+        $expectedContents = $this->leaveAuthenticTerminalTransition($manifest);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failNextFixedArtifactPublication('manifest_candidate', 'after_directory_sync');
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('The setup must crash after durable candidate publication.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($manifestPath);
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        self::assertFileExists($this->manifestCandidatePath());
+
+        return $expectedContents;
     }
 
     /** @return array<string, mixed> */

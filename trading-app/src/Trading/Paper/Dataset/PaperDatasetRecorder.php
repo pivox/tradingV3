@@ -85,7 +85,9 @@ final class PaperDatasetRecorder
         $this->lineReader = new PaperDatasetLineReader($this->filesystem);
         $this->identityManifest = $manifest;
 
-        if ($manifest->state !== PaperDatasetState::RECORDING && !$this->storedManifestExists($root, $manifest)) {
+        if ($manifest->state !== PaperDatasetState::RECORDING
+            && !$this->storedManifestOrRecoveryEvidenceExists($root, $manifest)
+        ) {
             throw new \RuntimeException('paper_dataset_initial_state_invalid');
         }
 
@@ -128,6 +130,9 @@ final class PaperDatasetRecorder
         $this->assertNoSymlinkComponents($this->manifestBackupPath);
         $this->assertNoSymlinkComponents($this->manifestBackupStagingPath);
         $virginCohort = $this->cohortHasNoArtifacts();
+        if ($manifest->state !== PaperDatasetState::RECORDING && $virginCohort) {
+            throw new \RuntimeException('paper_dataset_initial_state_invalid');
+        }
         $this->ensureLockFile(create: $virginCohort);
 
         $this->withDatasetLock(function () use ($checkpoints, $manifest, $virginCohort): void {
@@ -1514,7 +1519,6 @@ final class PaperDatasetRecorder
             $matchesNew = $stored !== null && hash_equals($transition['new_manifest'], $stored);
             $recoverableMissingPublication = $stored === null
                 && $transition['old_manifest'] !== null
-                && !$candidatePresent
                 && $backupPresent;
             if (!$matchesOld && !$matchesNew && !$recoverableMissingPublication) {
                 throw new \RuntimeException('paper_dataset_manifest_transition_invalid');
@@ -2813,7 +2817,7 @@ final class PaperDatasetRecorder
         }
     }
 
-    private function storedManifestExists(
+    private function storedManifestOrRecoveryEvidenceExists(
         #[\SensitiveParameter] string $root,
         PaperDatasetManifest $manifest,
     ): bool
@@ -2822,14 +2826,28 @@ final class PaperDatasetRecorder
             throw new \RuntimeException('paper_dataset_root_invalid');
         }
         $this->assertNoSymlinkComponents($root);
+        $datasetDirectory = rtrim($root, DIRECTORY_SEPARATOR)
+            . DIRECTORY_SEPARATOR
+            . $manifest->datasetId;
+        $manifestPath = $datasetDirectory . DIRECTORY_SEPARATOR . 'manifest.json';
+        $this->assertNoSymlinkComponents($manifestPath);
+        if (is_file($manifestPath)) {
+            return true;
+        }
 
-        return is_file(
-            rtrim($root, DIRECTORY_SEPARATOR)
-            . DIRECTORY_SEPARATOR
-            . $manifest->datasetId
-            . DIRECTORY_SEPARATOR
-            . 'manifest.json',
-        );
+        foreach ([
+            $datasetDirectory . DIRECTORY_SEPARATOR . 'events.ndjson',
+            $datasetDirectory . DIRECTORY_SEPARATOR . '.dataset.lock',
+            $datasetDirectory . DIRECTORY_SEPARATOR . '.manifest-transition.json',
+            $datasetDirectory . DIRECTORY_SEPARATOR . '.manifest-backup-fixed',
+        ] as $recoveryPath) {
+            $this->assertNoSymlinkComponents($recoveryPath);
+            if (!is_file($recoveryPath)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function ensureDirectory(#[\SensitiveParameter] string $directory): void
