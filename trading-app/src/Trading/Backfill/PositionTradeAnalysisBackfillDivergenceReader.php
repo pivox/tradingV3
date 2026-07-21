@@ -55,6 +55,7 @@ SELECT
     (v2.entry_event_id IS NOT NULL) AS v2_present,
     COALESCE(v2.symbol, v1.symbol) AS symbol,
     v2.exchange AS exchange,
+    v2.market_data_venue AS market_data_venue,
     v2.market_type AS market_type,
     v2.mtf_profile AS profile,
     COALESCE(v2.entry_time, v1.entry_time) AS entry_time,

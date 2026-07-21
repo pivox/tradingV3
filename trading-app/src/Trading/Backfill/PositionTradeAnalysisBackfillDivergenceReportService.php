@@ -183,6 +183,7 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
             'classification' => $classification,
             'symbol' => $row['symbol'] ?? null,
             'exchange' => $row['exchange'] ?? null,
+            'market_data_venue' => ($venue = trim((string) ($row['market_data_venue'] ?? ''))) !== '' ? $venue : null,
             'market_type' => $row['market_type'] ?? null,
             'profile' => $row['profile'] ?? null,
             'entry_time' => $this->stringOrNull($row['entry_time'] ?? null),

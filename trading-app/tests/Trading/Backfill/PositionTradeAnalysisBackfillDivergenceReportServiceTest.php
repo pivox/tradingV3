@@ -191,6 +191,25 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
         self::assertStringNotContainsString('api_secret', $json);
     }
 
+    public function testMarketDataVenueIsTrimmedWithoutBeingInferredForBlankOrLegacyRows(): void
+    {
+        $service = new PositionTradeAnalysisBackfillDivergenceReportService(new RecordingDivergenceReader([
+            $this->row(401, ['market_data_venue' => '  okx  ']),
+            $this->row(402, ['market_data_venue' => '   ', 'exchange' => 'hyperliquid']),
+            $this->row(403, ['v2_present' => false, 'exchange' => 'fake']),
+        ]));
+
+        $report = $service->buildReport(new BackfillDivergenceCriteria());
+
+        self::assertSame('okx', $report['rows'][0]['market_data_venue']);
+        self::assertNull($report['rows'][1]['market_data_venue']);
+        self::assertNull($report['rows'][2]['market_data_venue']);
+
+        $json = json_encode($report, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('"market_data_venue":"okx"', $json);
+        self::assertSame(3, substr_count($json, '"market_data_venue"'));
+    }
+
     /**
      * @param array<string,mixed> $overrides
      * @return array<string,mixed>

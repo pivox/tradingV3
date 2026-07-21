@@ -64,6 +64,9 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true)]
     private ?string $exchange = null;
 
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'market_data_venue')]
+    private ?string $marketDataVenue = null;
+
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'market_type')]
     private ?string $marketType = null;
 
@@ -301,6 +304,11 @@ class PositionTradeAnalysisV2
     public function getExchange(): ?string
     {
         return $this->exchange;
+    }
+
+    public function getMarketDataVenue(): ?string
+    {
+        return $this->marketDataVenue;
     }
 
     public function getMarketType(): ?string

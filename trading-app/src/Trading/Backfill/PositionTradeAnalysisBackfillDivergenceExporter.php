@@ -32,6 +32,7 @@ final class PositionTradeAnalysisBackfillDivergenceExporter
             'classification',
             'symbol',
             'exchange',
+            'market_data_venue',
             'market_type',
             'profile',
             'entry_time',
