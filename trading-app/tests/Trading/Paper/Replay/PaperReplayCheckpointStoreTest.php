@@ -226,6 +226,88 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         self::assertEquals($latest, $store->load($this->datasetDirectory, $latest->consumerId));
     }
 
+    /** @param array<string, mixed> $lineageOverride */
+    #[DataProvider('foreignCheckpointLineageProvider')]
+    public function testRejectsForeignCheckpointLineageWithoutReplacingTheOriginal(
+        array $lineageOverride,
+    ): void {
+        $original = self::checkpoint();
+        $replacement = PaperReplayCheckpoint::fromArray(array_replace(
+            $original->toArray(),
+            [
+                'event_id' => str_repeat('c', 64),
+                'event_index' => 18,
+                'exchange_timestamp' => '2026-07-19T10:00:01.123456Z',
+            ],
+            $lineageOverride,
+        ));
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $original);
+
+        try {
+            $store->save($this->datasetDirectory, $replacement);
+            self::fail('A checkpoint from another dataset lineage must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_mismatch', $exception->getMessage());
+        }
+
+        self::assertEquals($original, $store->load($this->datasetDirectory, $original->consumerId));
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function foreignCheckpointLineageProvider(): iterable
+    {
+        yield 'dataset id' => [['dataset_id' => 'dataset-okx-002']];
+        yield 'events checksum' => [['events_file_sha256' => str_repeat('d', 64)]];
+    }
+
+    public function testExactSameIndexCheckpointSaveIsIdempotent(): void
+    {
+        $checkpoint = self::checkpoint();
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $checkpoint);
+        $contents = file_get_contents($this->checkpointPath());
+        $identity = lstat($this->checkpointPath());
+
+        $store->save($this->datasetDirectory, $checkpoint);
+
+        self::assertSame($contents, file_get_contents($this->checkpointPath()));
+        self::assertSame($identity['ino'] ?? null, lstat($this->checkpointPath())['ino'] ?? null);
+        self::assertEquals($checkpoint, $store->load($this->datasetDirectory, $checkpoint->consumerId));
+    }
+
+    /** @param array<string, mixed> $contentOverride */
+    #[DataProvider('sameIndexConflictProvider')]
+    public function testRejectsConflictingSameIndexCheckpointWithoutReplacingTheOriginal(
+        array $contentOverride,
+    ): void {
+        $original = self::checkpoint();
+        $replacement = PaperReplayCheckpoint::fromArray(array_replace(
+            $original->toArray(),
+            $contentOverride,
+        ));
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $original);
+
+        try {
+            $store->save($this->datasetDirectory, $replacement);
+            self::fail('Conflicting content at the same event index must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_regression', $exception->getMessage());
+        }
+
+        self::assertEquals($original, $store->load($this->datasetDirectory, $original->consumerId));
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function sameIndexConflictProvider(): iterable
+    {
+        yield 'event id' => [['event_id' => str_repeat('c', 64)]];
+        yield 'exchange timestamp' => [[
+            'exchange_timestamp' => '2026-07-19T10:00:01.123456Z',
+        ]];
+    }
+
     public function testRejectsConsumerLockSymlinkWithoutFollowingOrRemovingIt(): void
     {
         $checkpoints = $this->datasetDirectory . '/checkpoints';

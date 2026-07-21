@@ -44,6 +44,19 @@ final class PaperReplayCheckpointStore
             if ($previous !== null && $checkpoint->eventIndex < $previous->eventIndex) {
                 throw new \RuntimeException('paper_replay_checkpoint_regression');
             }
+            if ($previous !== null
+                && (!hash_equals($previous->datasetId, $checkpoint->datasetId)
+                    || !hash_equals($previous->eventsFileSha256, $checkpoint->eventsFileSha256))
+            ) {
+                throw new \RuntimeException('paper_replay_checkpoint_mismatch');
+            }
+            if ($previous !== null && $checkpoint->eventIndex === $previous->eventIndex) {
+                if ($checkpoint->toArray() !== $previous->toArray()) {
+                    throw new \RuntimeException('paper_replay_checkpoint_regression');
+                }
+
+                return;
+            }
 
             $this->publishCheckpoint(
                 $directoryPin,

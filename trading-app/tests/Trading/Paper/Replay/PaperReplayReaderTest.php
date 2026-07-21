@@ -9,6 +9,7 @@ use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -198,6 +199,48 @@ final class PaperReplayReaderTest extends TestCase
         $dataset = $this->completeDataset($events);
         $clock = new PaperReplayClock($events[0]->exchangeTimestamp);
         $reader = new PaperReplayReader(new PaperDatasetVerifier(), new PaperReplayCheckpointStore(), $clock, 1);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_replay_event_limit_exceeded');
+
+        iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+    }
+
+    public function testConfiguredEventLimitBoundsVerificationWhenManifestUnderstatesCount(): void
+    {
+        $event = $this->event(
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            '1',
+            '2026-07-19T10:00:00.000000Z',
+            '2026-07-19T10:00:00.100000Z',
+        );
+        $dataset = $this->completeDataset([$event]);
+        $eventsPath = $dataset['directory'] . '/events.ndjson';
+        $eventLine = file_get_contents($eventsPath);
+        self::assertIsString($eventLine);
+        self::assertSame(strlen($eventLine), file_put_contents($eventsPath, $eventLine, FILE_APPEND));
+
+        $manifestPath = $dataset['directory'] . '/manifest.json';
+        $manifest = json_decode(
+            (string) file_get_contents($manifestPath),
+            true,
+            512,
+            JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
+        self::assertIsArray($manifest);
+        $manifest['events_file_sha256'] = hash_file('sha256', $eventsPath);
+        self::assertGreaterThan(0, file_put_contents(
+            $manifestPath,
+            CanonicalJson::encode($manifest) . "\n",
+        ));
+
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            new PaperReplayClock($event->exchangeTimestamp),
+            1,
+        );
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('paper_replay_event_limit_exceeded');

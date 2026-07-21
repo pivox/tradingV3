@@ -60,7 +60,15 @@ final class PaperReplayReader
                 $datasetPin,
                 'paper_replay_dataset_before_verify',
             );
-            $manifest = $this->verifier->verify($datasetDirectory);
+            try {
+                $manifest = $this->verifier->verify($datasetDirectory, $this->eventLimit);
+            } catch (\RuntimeException $failure) {
+                if ($failure->getMessage() === 'paper_dataset_event_limit_exceeded') {
+                    throw new \RuntimeException('paper_replay_event_limit_exceeded');
+                }
+
+                throw $failure;
+            }
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_verify',
