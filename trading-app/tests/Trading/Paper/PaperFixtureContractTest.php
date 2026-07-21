@@ -210,6 +210,23 @@ final class PaperFixtureContractTest extends TestCase
         ];
     }
 
+    #[DataProvider('hyphenatedForbiddenFragmentProvider')]
+    public function testPublicFixtureContractRejectsHyphenatedForbiddenFragments(string $value): void
+    {
+        $this->expectException(AssertionFailedError::class);
+
+        $this->assertPublicValue($value);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function hyphenatedForbiddenFragmentProvider(): iterable
+    {
+        yield 'API key' => ['api-key'];
+        yield 'API secret' => ['api-secret'];
+        yield 'secret key' => ['secret-key'];
+        yield 'private key' => ['private-key'];
+    }
+
     public function testFixtureDiscoveryIncludesEverySupportedFileRecursively(): void
     {
         $temporaryRoot = tempnam(sys_get_temp_dir(), 'paper-fixture-discovery-');
@@ -323,9 +340,14 @@ final class PaperFixtureContractTest extends TestCase
 
     private function assertNoForbiddenValue(string $value): void
     {
+        $normalizedValue = str_replace(['_', '-'], '', strtolower($value));
+
         foreach (self::FORBIDDEN_FRAGMENTS as $fragment) {
             self::assertFalse(
-                str_contains(strtolower($value), strtolower($fragment)),
+                str_contains(
+                    $normalizedValue,
+                    str_replace(['_', '-'], '', strtolower($fragment)),
+                ),
                 sprintf('Fixture contains forbidden public-data fragment "%s".', $fragment),
             );
         }
