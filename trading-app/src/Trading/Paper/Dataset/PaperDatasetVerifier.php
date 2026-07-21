@@ -23,8 +23,10 @@ final class PaperDatasetVerifier
         $this->lineReader = new PaperDatasetLineReader($this->filesystem);
     }
 
-    public function verify(#[\SensitiveParameter] string $datasetDirectory): PaperDatasetManifest
-    {
+    public function verify(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): PaperDatasetManifest {
         $this->assertNoSymlinkComponents($datasetDirectory);
         $unresolvedRoot = dirname($datasetDirectory);
         $rootPin = $this->openPinnedDirectory($unresolvedRoot, 'paper_dataset_directory_invalid');
@@ -86,7 +88,7 @@ final class PaperDatasetVerifier
                 throw new \RuntimeException('paper_dataset_not_complete');
             }
 
-            $facts = $this->scan($eventsPath, $manifest);
+            $facts = $this->scan($eventsPath, $manifest, $eventLimit);
             $assertDirectories();
             if ($manifest->eventsFileSha256 === null
                 || !hash_equals($manifest->eventsFileSha256, $facts['events_checksum'])
@@ -493,8 +495,11 @@ final class PaperDatasetVerifier
      *   events_identity: array{dev: int, ino: int}
      * }
      */
-    private function scan(#[\SensitiveParameter] string $eventsPath, PaperDatasetManifest $manifest): array
-    {
+    private function scan(
+        #[\SensitiveParameter] string $eventsPath,
+        PaperDatasetManifest $manifest,
+        ?int $eventLimit,
+    ): array {
         /** @var array<string, true> $identities */
         $identities = [];
         /** @var array<string, BigInteger> $lastSequences */
@@ -533,6 +538,9 @@ final class PaperDatasetVerifier
                 hash_update($checksumContext, $line);
                 if (trim($line) === '') {
                     continue;
+                }
+                if ($eventLimit !== null && $count >= $eventLimit) {
+                    throw new \RuntimeException('paper_dataset_event_limit_exceeded');
                 }
 
                 $raw = substr($line, 0, -1);
