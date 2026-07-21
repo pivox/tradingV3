@@ -1816,7 +1816,14 @@ final class PaperDatasetRecorder
             }
             if ($oldManifest !== null) {
                 $old = $this->codec->decode($oldManifest);
-                $this->assertSameDataset($this->identityManifest, $old);
+                if ($this->identityManifest->state === PaperDatasetState::INCOMPLETE
+                    && $new->state === PaperDatasetState::INCOMPLETE
+                ) {
+                    $this->assertSameDatasetIdentity($this->identityManifest, $old);
+                    $this->assertRecordingToIncompleteProvenanceTransition($old, $new);
+                } else {
+                    $this->assertSameDataset($this->identityManifest, $old);
+                }
                 if ($old->state !== PaperDatasetState::RECORDING
                     || !hash_equals($this->codec->encode($old), $oldManifest)
                 ) {
@@ -2762,16 +2769,39 @@ final class PaperDatasetRecorder
 
     private function assertSameDataset(PaperDatasetManifest $requested, PaperDatasetManifest $stored): void
     {
+        $this->assertSameDatasetIdentity($requested, $stored);
+        if ($stored->state !== PaperDatasetState::INCOMPLETE
+            && ($requested->quality !== $stored->quality
+                || $requested->modelName !== $stored->modelName
+                || $requested->modelVersion !== $stored->modelVersion)
+        ) {
+            throw new \RuntimeException('paper_dataset_manifest_identity_mismatch');
+        }
+    }
+
+    private function assertSameDatasetIdentity(
+        PaperDatasetManifest $requested,
+        PaperDatasetManifest $stored,
+    ): void {
         if ($requested->schemaVersion !== $stored->schemaVersion
             || $requested->recorderVersion !== $stored->recorderVersion
             || $requested->datasetId !== $stored->datasetId
             || $requested->venue !== $stored->venue
             || $requested->symbols !== $stored->symbols
-            || ($stored->state !== PaperDatasetState::INCOMPLETE && (
-                $requested->quality !== $stored->quality
-                || $requested->modelName !== $stored->modelName
-                || $requested->modelVersion !== $stored->modelVersion
-            ))
+        ) {
+            throw new \RuntimeException('paper_dataset_manifest_identity_mismatch');
+        }
+    }
+
+    private function assertRecordingToIncompleteProvenanceTransition(
+        PaperDatasetManifest $old,
+        PaperDatasetManifest $new,
+    ): void {
+        if ($old->state !== PaperDatasetState::RECORDING
+            || $new->state !== PaperDatasetState::INCOMPLETE
+            || $new->quality !== PaperMarketDataQuality::INCOMPLETE
+            || $new->modelName !== null
+            || $new->modelVersion !== null
         ) {
             throw new \RuntimeException('paper_dataset_manifest_identity_mismatch');
         }

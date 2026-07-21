@@ -2771,6 +2771,37 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertFileDoesNotExist($this->manifestCandidatePath());
     }
 
+    public function testAuthenticIncompleteTransitionRecoversWithoutManifestUsingTerminalIdentity(): void
+    {
+        $initial = $this->manifest(
+            PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+            'public-model',
+            '1.0.0',
+        );
+        $expectedContents = $this->leaveAuthenticTerminalTransition(
+            $initial,
+            PaperDatasetState::INCOMPLETE,
+        );
+        $terminal = (new PaperDatasetManifestCodec())->decode($expectedContents);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+
+        $recovered = new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+
+        self::assertSame(PaperDatasetState::INCOMPLETE, $recovered->manifest()->state);
+        self::assertSame(PaperMarketDataQuality::INCOMPLETE, $recovered->manifest()->quality);
+        self::assertNull($recovered->manifest()->modelName);
+        self::assertNull($recovered->manifest()->modelVersion);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+
+        $again = new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+        self::assertSame(PaperDatasetState::INCOMPLETE, $again->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+    }
+
     public function testAuthenticPublishedCandidateRecoversWithoutManifestAndIsIdempotent(): void
     {
         $initial = $this->manifest();
@@ -2787,6 +2818,36 @@ final class PaperDatasetRecorderTest extends TestCase
 
         $again = new PaperDatasetRecorder($this->datasetRoot(), $initial);
         self::assertSame(PaperDatasetState::COMPLETE, $again->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+    }
+
+    public function testAuthenticIncompletePublishedCandidateRecoversWithoutManifestAndIsIdempotent(): void
+    {
+        $initial = $this->manifest(
+            PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
+            'public-model',
+            '1.0.0',
+        );
+        $expectedContents = $this->leaveAuthenticManifestAbsentTransitionWithCandidate(
+            $initial,
+            PaperDatasetState::INCOMPLETE,
+        );
+        $terminal = (new PaperDatasetManifestCodec())->decode($expectedContents);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+
+        $recovered = new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+
+        self::assertSame(PaperDatasetState::INCOMPLETE, $recovered->manifest()->state);
+        self::assertSame(PaperMarketDataQuality::INCOMPLETE, $recovered->manifest()->quality);
+        self::assertNull($recovered->manifest()->modelName);
+        self::assertNull($recovered->manifest()->modelVersion);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+
+        $again = new PaperDatasetRecorder($this->datasetRoot(), $terminal);
+        self::assertSame(PaperDatasetState::INCOMPLETE, $again->manifest()->state);
         self::assertSame($expectedContents, file_get_contents($manifestPath));
     }
 
@@ -3742,8 +3803,13 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertTrue(chmod($this->appendIntentPath(), 0600));
     }
 
-    private function leaveAuthenticTerminalTransition(PaperDatasetManifest $manifest): string
-    {
+    private function leaveAuthenticTerminalTransition(
+        PaperDatasetManifest $manifest,
+        PaperDatasetState $terminalState = PaperDatasetState::COMPLETE,
+    ): string {
+        if ($terminalState === PaperDatasetState::RECORDING) {
+            throw new \InvalidArgumentException('A terminal transition cannot target RECORDING.');
+        }
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
         $recorder = new PaperDatasetRecorder(
             $this->datasetRoot(),
@@ -3753,10 +3819,19 @@ final class PaperDatasetRecorderTest extends TestCase
         $recorder->append($this->event(sequence: '1'));
         $filesystem->failNextManifestPublicationAfterRename('throw');
         try {
-            $recorder->complete();
+            if ($terminalState === PaperDatasetState::COMPLETE) {
+                $recorder->complete();
+            } else {
+                $recorder->markIncomplete();
+            }
             self::fail('The setup must retain an authentic terminal transition and backup.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+            self::assertSame(
+                $terminalState === PaperDatasetState::COMPLETE
+                    ? 'paper_dataset_complete_failed'
+                    : 'paper_dataset_mark_incomplete_failed',
+                $exception->getMessage(),
+            );
         }
 
         self::assertFileExists($this->manifestTransitionPath());
@@ -3765,7 +3840,7 @@ final class PaperDatasetRecorderTest extends TestCase
         $contents = file_get_contents($this->datasetDirectory() . '/manifest.json');
         self::assertIsString($contents);
         self::assertSame(
-            PaperDatasetState::COMPLETE,
+            $terminalState,
             (new PaperDatasetManifestCodec())->decode($contents)->state,
         );
 
@@ -3774,8 +3849,9 @@ final class PaperDatasetRecorderTest extends TestCase
 
     private function leaveAuthenticManifestAbsentTransitionWithCandidate(
         PaperDatasetManifest $manifest,
+        PaperDatasetState $terminalState = PaperDatasetState::COMPLETE,
     ): string {
-        $expectedContents = $this->leaveAuthenticTerminalTransition($manifest);
+        $expectedContents = $this->leaveAuthenticTerminalTransition($manifest, $terminalState);
         $manifestPath = $this->datasetDirectory() . '/manifest.json';
         self::assertTrue(unlink($manifestPath));
         $filesystem = new FaultInjectingPaperDatasetFilesystem();
