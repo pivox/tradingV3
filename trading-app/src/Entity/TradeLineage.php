@@ -7,6 +7,7 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\TradeLineageRepository;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -61,6 +62,9 @@ final class TradeLineage
 
     #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
     private string $exchange = 'bitmart';
+
+    #[ORM\Column(name: 'market_data_venue', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $marketDataVenue = null;
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32, options: ['default' => 'perpetual'])]
     private string $marketType = 'perpetual';
@@ -236,6 +240,31 @@ final class TradeLineage
     public function setExchange(Exchange|string $exchange): self
     {
         $this->exchange = $exchange instanceof Exchange ? $exchange->value : strtolower($exchange);
+
+        return $this->touch();
+    }
+
+    public function getMarketDataVenue(): ?string
+    {
+        return $this->marketDataVenue;
+    }
+
+    public function setMarketDataVenue(PaperMarketDataVenue|string|null $marketDataVenue): self
+    {
+        if ($marketDataVenue === null) {
+            $this->marketDataVenue = null;
+
+            return $this->touch();
+        }
+
+        $normalized = $marketDataVenue instanceof PaperMarketDataVenue
+            ? $marketDataVenue->value
+            : strtolower(trim($marketDataVenue));
+        if (PaperMarketDataVenue::tryFrom($normalized) === null) {
+            throw new \InvalidArgumentException('market_data_venue_invalid');
+        }
+
+        $this->marketDataVenue = $normalized;
 
         return $this->touch();
     }
