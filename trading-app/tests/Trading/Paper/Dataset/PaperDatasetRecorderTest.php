@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Dataset;
 
 use App\Trading\Paper\Dataset\PaperDatasetAppendResult;
+use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
@@ -648,6 +649,55 @@ final class PaperDatasetRecorderTest extends TestCase
         new PaperDatasetRecorder($this->datasetRoot(), $manifest);
     }
 
+    public function testRecorderReadsEventLinesThroughTheSharedBoundedContract(): void
+    {
+        $filesystem = new BoundedRecorderLineFilesystem();
+
+        new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(),
+            filesystem: $filesystem,
+        );
+
+        self::assertNotEmpty($filesystem->lineReadLengths);
+        self::assertSame(
+            [PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1],
+            array_values(array_unique($filesystem->lineReadLengths)),
+        );
+    }
+
+    public function testRecorderRejectsAnEventLineExceedingTheSharedBound(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $oversized = str_repeat(' ', PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1) . "\n";
+        self::assertSame(
+            strlen($oversized),
+            file_put_contents($this->datasetDirectory() . '/events.ndjson', $oversized),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_event_line_truncated');
+
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+    }
+
+    public function testRecorderRejectsAMaximumLengthFragmentWithoutNewline(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $fragment = str_repeat(' ', PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES);
+        self::assertSame(
+            strlen($fragment),
+            file_put_contents($this->datasetDirectory() . '/events.ndjson', $fragment),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_event_line_truncated');
+
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+    }
+
     public function testRestartRecoversOnlyAnExactStagedAppendPrefix(): void
     {
         $manifest = $this->manifest();
@@ -1073,6 +1123,94 @@ final class PaperDatasetRecorderTest extends TestCase
         }
 
         self::assertFileDoesNotExist($eventsPath);
+    }
+
+    public function testTerminalDatasetWithoutManifestOrRecoveryEvidenceFailsClosed(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorder->append($this->event(sequence: '1'));
+        $recorder->complete();
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('A terminal cohort whose manifest was lost must never restart as recording.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_missing', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($manifestPath);
+        $lines = file($this->datasetDirectory() . '/events.ndjson');
+        self::assertIsArray($lines);
+        self::assertCount(1, $lines);
+    }
+
+    public function testExistingEventsWithoutManifestFailClosed(): void
+    {
+        $manifest = $this->manifest();
+        new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('Existing event storage without a manifest must not be adopted as a new cohort.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_missing', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($manifestPath);
+        self::assertSame('', file_get_contents($this->datasetDirectory() . '/events.ndjson'));
+    }
+
+    public function testExistingLockWithoutManifestFailsClosed(): void
+    {
+        self::assertTrue(mkdir($this->datasetDirectory(), 0700, true));
+        $lockPath = $this->datasetDirectory() . '/.dataset.lock';
+        self::assertSame(0, file_put_contents($lockPath, ''));
+        self::assertTrue(chmod($lockPath, 0600));
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+            self::fail('A preexisting cohort lock must distinguish the cohort from a virgin creation.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_missing', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/events.ndjson');
+    }
+
+    public function testUnauthenticatedProtocolArtifactWithoutManifestFailsClosed(): void
+    {
+        self::assertTrue(mkdir($this->datasetDirectory(), 0700, true));
+        foreach (['.dataset.lock' => '', '.manifest-transition.json.staging' => 'not-json'] as $name => $contents) {
+            $path = $this->datasetDirectory() . '/' . $name;
+            self::assertSame(strlen($contents), file_put_contents($path, $contents));
+            self::assertTrue(chmod($path, 0600));
+        }
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+            self::fail('Protocol residue without an authenticated transition must not create a cohort.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_missing', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/manifest.json');
+        self::assertFileDoesNotExist($this->datasetDirectory() . '/events.ndjson');
+    }
+
+    public function testVirginCohortCreationRemainsAllowed(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+
+        self::assertSame(PaperDatasetState::RECORDING, $recorder->manifest()->state);
+        self::assertFileExists($this->datasetDirectory() . '/manifest.json');
+        self::assertFileExists($this->datasetDirectory() . '/events.ndjson');
+        self::assertFileExists($this->datasetDirectory() . '/.dataset.lock');
     }
 
     public function testCompleteStoresChecksumFreezesDatasetAndVerifiesIt(): void
@@ -2590,6 +2728,102 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertFileDoesNotExist($this->manifestCandidatePath());
     }
 
+    public function testAuthenticTerminalTransitionRecoversWhenManifestIsAbsentAndIsIdempotent(): void
+    {
+        $manifest = $this->manifest();
+        $expectedContents = $this->leaveAuthenticTerminalTransition($manifest);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+
+        $recovered = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+
+        self::assertSame(PaperDatasetState::COMPLETE, $recovered->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertSame(1, $filesystem->manifestDirectorySyncs);
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+
+        $again = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame(PaperDatasetState::COMPLETE, $again->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+    }
+
+    public function testManifestAbsentRecoveryRemainsIdempotentAfterRepublishDirectorySyncFailure(): void
+    {
+        $manifest = $this->manifest();
+        $expectedContents = $this->leaveAuthenticTerminalTransition($manifest);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->failNextManifestDirectorySync();
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('A failed recovery directory fsync must retain authenticated replay evidence.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+            self::assertSame(
+                'paper_dataset_manifest_directory_sync_failed',
+                $exception->getPrevious()?->getMessage(),
+            );
+        }
+
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        $recovered = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        self::assertSame(PaperDatasetState::COMPLETE, $recovered->manifest()->state);
+        self::assertSame($expectedContents, file_get_contents($manifestPath));
+        self::assertFileDoesNotExist($this->manifestTransitionPath());
+        self::assertFileDoesNotExist($this->manifestBackupPath());
+    }
+
+    #[DataProvider('invalidManifestAbsentRecoveryArtifactProvider')]
+    public function testManifestAbsentRecoveryRejectsInvalidTransitionOrBackup(string $artifact): void
+    {
+        $manifest = $this->manifest();
+        $this->leaveAuthenticTerminalTransition($manifest);
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        self::assertTrue(unlink($manifestPath));
+        $artifactPath = $artifact === 'transition'
+            ? $this->manifestTransitionPath()
+            : $this->manifestBackupPath();
+        $contents = file_get_contents($artifactPath);
+        self::assertIsString($contents);
+        $mutated = $artifact === 'transition'
+            ? str_replace('dataset-okx-001', 'dataset-okx-002', $contents)
+            : str_replace('"recorder_version":"1.0.0"', '"recorder_version":"9.9.9"', $contents);
+        self::assertSame(strlen($contents), strlen($mutated));
+        self::assertNotSame($contents, $mutated);
+        self::assertSame(strlen($mutated), file_put_contents($artifactPath, $mutated));
+        $transitionBefore = file_get_contents($this->manifestTransitionPath());
+        $backupBefore = file_get_contents($this->manifestBackupPath());
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+            self::fail('Invalid manifest recovery evidence must never be promoted.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_manifest_transition_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($manifestPath);
+        self::assertSame($transitionBefore, file_get_contents($this->manifestTransitionPath()));
+        self::assertSame($backupBefore, file_get_contents($this->manifestBackupPath()));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidManifestAbsentRecoveryArtifactProvider(): iterable
+    {
+        yield 'invalid transition' => ['transition'];
+        yield 'invalid backup' => ['backup'];
+    }
+
     public function testRestartRejectsAMutatedExactTransitionBackupWithoutPromotionOrCleanup(): void
     {
         $manifest = $this->manifest();
@@ -3404,6 +3638,36 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertTrue(chmod($this->appendIntentPath(), 0600));
     }
 
+    private function leaveAuthenticTerminalTransition(PaperDatasetManifest $manifest): string
+    {
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $manifest,
+            filesystem: $filesystem,
+        );
+        $recorder->append($this->event(sequence: '1'));
+        $filesystem->failNextManifestPublicationAfterRename('throw');
+        try {
+            $recorder->complete();
+            self::fail('The setup must retain an authentic terminal transition and backup.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+        }
+
+        self::assertFileExists($this->manifestTransitionPath());
+        self::assertFileExists($this->manifestBackupPath());
+        self::assertFileDoesNotExist($this->manifestCandidatePath());
+        $contents = file_get_contents($this->datasetDirectory() . '/manifest.json');
+        self::assertIsString($contents);
+        self::assertSame(
+            PaperDatasetState::COMPLETE,
+            (new PaperDatasetManifestCodec())->decode($contents)->state,
+        );
+
+        return $contents;
+    }
+
     /** @return array<string, mixed> */
     private function recorderScanState(PaperDatasetRecorder $recorder): array
     {
@@ -4199,7 +4463,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
     }
 
     /** @param resource $handle */
-    public function readLine($handle, string $operation): string|false
+    public function readLine($handle, int $length, string $operation): string|false
     {
         if ($operation === 'paper_dataset_events_read_failed') {
             $metadata = stream_get_meta_data($handle);
@@ -4214,7 +4478,7 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
             --$this->tailReadsBeforeFailure;
         }
 
-        return parent::readLine($handle, $operation);
+        return parent::readLine($handle, $length, $operation);
     }
 
     public function read($handle, int $length, string $operation): string|false
@@ -4648,5 +4912,19 @@ final class FaultInjectingPaperDatasetFilesystem extends PaperDatasetRecorderFil
         $this->fixedArtifactFailureArtifact = null;
         $this->fixedArtifactFailure = null;
         $this->fixedArtifactShortWriteCompleted = false;
+    }
+}
+
+final class BoundedRecorderLineFilesystem extends PaperDatasetRecorderFilesystem
+{
+    /** @var list<int> */
+    public array $lineReadLengths = [];
+
+    /** @param resource $handle */
+    public function readLine($handle, int $length, string $operation): string|false
+    {
+        $this->lineReadLengths[] = $length;
+
+        return parent::readLine($handle, $length, $operation);
     }
 }

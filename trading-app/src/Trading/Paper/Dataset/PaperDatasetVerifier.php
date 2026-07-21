@@ -14,10 +14,13 @@ final class PaperDatasetVerifier
     private const DIRECTORY_FILE_TYPE = 0040000;
     private const FILE_TYPE_MASK = 0170000;
 
+    private readonly PaperDatasetLineReader $lineReader;
+
     public function __construct(
         private readonly PaperDatasetManifestCodec $codec = new PaperDatasetManifestCodec(),
         private readonly PaperDatasetRecorderFilesystem $filesystem = new PaperDatasetRecorderFilesystem(),
     ) {
+        $this->lineReader = new PaperDatasetLineReader($this->filesystem);
     }
 
     public function verify(#[\SensitiveParameter] string $datasetDirectory): PaperDatasetManifest
@@ -74,6 +77,7 @@ final class PaperDatasetVerifier
                 $manifestPath,
                 'paper_dataset_manifest_unreadable',
                 'paper_dataset_verifier_manifest_validation',
+                PaperDatasetFormatLimits::MAX_MANIFEST_BYTES,
             );
             $assertDirectories();
 
@@ -174,16 +178,23 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] string $path,
         string $readError,
         string $validationOperation,
+        int $maximumBytes,
     ): array {
         $handle = $this->openRegularFile($path, 'rb', $readError, $validationOperation);
         try {
             $statistics = $this->filesystem->stat($handle, $validationOperation);
-            $contents = stream_get_contents($handle);
-            $position = ftell($handle);
             if ($statistics === false
                 || !isset($statistics['size'])
                 || !\is_int($statistics['size'])
-                || $contents === false
+                || $statistics['size'] <= 0
+                || $statistics['size'] > $maximumBytes
+            ) {
+                throw new \RuntimeException($readError);
+            }
+            $contents = stream_get_contents($handle, $statistics['size']);
+            $position = ftell($handle);
+            if ($contents === false
+                || strlen($contents) !== $statistics['size']
                 || $position === false
                 || $position !== $statistics['size']
                 || !isset($statistics['dev'], $statistics['ino'])
@@ -514,13 +525,14 @@ final class PaperDatasetVerifier
             ) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
-            while (($line = fgets($handle)) !== false) {
+            while (($line = $this->lineReader->read(
+                $handle,
+                'paper_dataset_verifier_events_read_failed',
+                'paper_dataset_event_invalid',
+            )) !== false) {
                 hash_update($checksumContext, $line);
                 if (trim($line) === '') {
                     continue;
-                }
-                if (!str_ends_with($line, "\n")) {
-                    throw new \RuntimeException('paper_dataset_event_invalid');
                 }
 
                 $raw = substr($line, 0, -1);

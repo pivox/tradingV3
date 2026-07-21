@@ -11,9 +11,7 @@ use Brick\Math\BigInteger;
 
 final class PaperDatasetRecorder
 {
-    private const MAX_CANONICAL_EVENT_LINE_BYTES = (CanonicalJson::MAX_BYTES * 6) + 200_000;
     private const MAX_APPEND_INTENT_BYTES = 9_000_000;
-    private const MAX_MANIFEST_BYTES = 65_536;
     private const MAX_MANIFEST_TRANSITION_BYTES = 200_000;
     private const REGULAR_FILE_TYPE = 0100000;
     private const DIRECTORY_FILE_TYPE = 0040000;
@@ -22,6 +20,7 @@ final class PaperDatasetRecorder
     private PaperDatasetManifestCodec $codec;
     private PaperDatasetVerifier $verifier;
     private PaperDatasetRecorderFilesystem $filesystem;
+    private PaperDatasetLineReader $lineReader;
     private string $datasetRoot;
     private string $datasetDirectory;
     private string $eventsPath;
@@ -83,6 +82,7 @@ final class PaperDatasetRecorder
         $this->codec = $codec ?? new PaperDatasetManifestCodec();
         $this->verifier = $verifier ?? new PaperDatasetVerifier($this->codec);
         $this->filesystem = $filesystem ?? new PaperDatasetRecorderFilesystem();
+        $this->lineReader = new PaperDatasetLineReader($this->filesystem);
         $this->identityManifest = $manifest;
 
         if ($manifest->state !== PaperDatasetState::RECORDING && !$this->storedManifestExists($root, $manifest)) {
@@ -127,10 +127,10 @@ final class PaperDatasetRecorder
         $this->assertNoSymlinkComponents($this->manifestCandidateStagingPath);
         $this->assertNoSymlinkComponents($this->manifestBackupPath);
         $this->assertNoSymlinkComponents($this->manifestBackupStagingPath);
-        $existingDataset = file_exists($this->eventsPath) || file_exists($this->manifestPath);
-        $this->ensureLockFile(create: !$existingDataset);
+        $virginCohort = $this->cohortHasNoArtifacts();
+        $this->ensureLockFile(create: $virginCohort);
 
-        $this->withDatasetLock(function () use ($checkpoints, $manifest): void {
+        $this->withDatasetLock(function () use ($checkpoints, $manifest, $virginCohort): void {
             $this->recoverPendingAppendIntent();
             $this->recoverPendingManifestTransition();
             if (is_file($this->manifestPath)) {
@@ -142,6 +142,9 @@ final class PaperDatasetRecorder
             } else {
                 if ($manifest->state !== PaperDatasetState::RECORDING) {
                     throw new \RuntimeException('paper_dataset_initial_state_invalid');
+                }
+                if (!$virginCohort || $this->pathEntryAppearsPresent($this->eventsPath)) {
+                    throw new \RuntimeException('paper_dataset_manifest_missing');
                 }
                 $this->ensureDirectory($checkpoints);
                 $this->ensureEventsFile(create: true);
@@ -377,7 +380,7 @@ final class PaperDatasetRecorder
         #[\SensitiveParameter] PaperMarketEvent $event,
         #[\SensitiveParameter] string $canonicalLine,
     ): void {
-        if (strlen($canonicalLine) > self::MAX_CANONICAL_EVENT_LINE_BYTES
+        if (strlen($canonicalLine) > PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES
             || $this->scannedPrefixSha256 === null
         ) {
             throw new \RuntimeException('paper_dataset_append_intent_invalid');
@@ -712,7 +715,7 @@ final class PaperDatasetRecorder
         $line = base64_decode($decoded['canonical_line_base64'], true);
         if ($line === false
             || $line === ''
-            || strlen($line) > self::MAX_CANONICAL_EVENT_LINE_BYTES
+            || strlen($line) > PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES
             || !str_ends_with($line, "\n")
             || str_contains(substr($line, 0, -1), "\n")
             || !hash_equals($decoded['canonical_line_sha256'], hash('sha256', $line))
@@ -815,13 +818,14 @@ final class PaperDatasetRecorder
             $startExchangeTimestamp = $this->startExchangeTimestamp;
             $latestExchangeTimestamp = $this->latestExchangeTimestamp;
 
-            while (($line = $this->filesystem->readLine($handle, 'paper_dataset_events_read_failed')) !== false) {
+            while (($line = $this->lineReader->read(
+                $handle,
+                'paper_dataset_events_read_failed',
+                'paper_dataset_event_line_truncated',
+            )) !== false) {
                 hash_update($parsedDigest['context'], $line);
                 if (trim($line) === '') {
                     continue;
-                }
-                if (!str_ends_with($line, "\n")) {
-                    throw new \RuntimeException('paper_dataset_event_line_truncated');
                 }
                 try {
                     $decoded = json_decode($line, true, 512, JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING);
@@ -1205,7 +1209,7 @@ final class PaperDatasetRecorder
     {
         $this->assertPinnedDirectories();
         $encoded = $this->codec->encode($manifest);
-        if (strlen($encoded) > self::MAX_MANIFEST_BYTES) {
+        if (strlen($encoded) > PaperDatasetFormatLimits::MAX_MANIFEST_BYTES) {
             throw new \RuntimeException('paper_dataset_manifest_write_failed');
         }
         $encodedBytes = strlen($encoded);
@@ -1508,10 +1512,14 @@ final class PaperDatasetRecorder
                 : $transition['old_manifest'] !== null
                     && hash_equals($transition['old_manifest'], $stored);
             $matchesNew = $stored !== null && hash_equals($transition['new_manifest'], $stored);
-            if (!$matchesOld && !$matchesNew) {
+            $recoverableMissingPublication = $stored === null
+                && $transition['old_manifest'] !== null
+                && !$candidatePresent
+                && $backupPresent;
+            if (!$matchesOld && !$matchesNew && !$recoverableMissingPublication) {
                 throw new \RuntimeException('paper_dataset_manifest_transition_invalid');
             }
-            if ($matchesOld) {
+            if ($matchesOld || $recoverableMissingPublication) {
                 $this->rollForwardManifestTransition(
                     $transition['old_manifest'],
                     $transition['new_manifest'],
@@ -1714,7 +1722,7 @@ final class PaperDatasetRecorder
     ): void {
         $actual = $this->readBoundedFixedFile(
             $path,
-            self::MAX_MANIFEST_BYTES,
+            PaperDatasetFormatLimits::MAX_MANIFEST_BYTES,
             'paper_dataset_manifest_transition_read_failed',
         );
         if (!hash_equals($expected, $actual)) {
@@ -1784,11 +1792,11 @@ final class PaperDatasetRecorder
         $newManifest = base64_decode($decoded['new_manifest_base64'], true);
         if ($newManifest === false
             || $newManifest === ''
-            || strlen($newManifest) > self::MAX_MANIFEST_BYTES
+            || strlen($newManifest) > PaperDatasetFormatLimits::MAX_MANIFEST_BYTES
             || !hash_equals($decoded['new_manifest_sha256'], hash('sha256', $newManifest))
             || ($oldManifest !== null && (
                 $oldManifest === ''
-                || strlen($oldManifest) > self::MAX_MANIFEST_BYTES
+                || strlen($oldManifest) > PaperDatasetFormatLimits::MAX_MANIFEST_BYTES
                 || !hash_equals((string) $decoded['old_manifest_sha256'], hash('sha256', $oldManifest))
             ))
             || !hash_equals($this->encodeManifestTransition($oldManifest, $newManifest), $contents)
@@ -2301,6 +2309,31 @@ final class PaperDatasetRecorder
         ];
     }
 
+    private function cohortHasNoArtifacts(): bool
+    {
+        foreach ([
+            $this->eventsPath,
+            $this->manifestPath,
+            $this->lockPath,
+            $this->appendIntentPath,
+            $this->appendIntentStagingPath,
+            $this->manifestTransitionPath,
+            $this->manifestTransitionStagingPath,
+            $this->manifestCandidatePath,
+            $this->manifestCandidateStagingPath,
+            $this->manifestBackupPath,
+            $this->manifestBackupStagingPath,
+        ] as $path) {
+            if ($this->pathEntryAppearsPresent($path)) {
+                $this->pathStat($path, 'paper_dataset_file_validation_failed');
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function ensureEventsFile(bool $create): void
     {
         if (!file_exists($this->eventsPath)) {
@@ -2465,7 +2498,7 @@ final class PaperDatasetRecorder
     {
         return $this->readBoundedFixedFile(
             $this->manifestPath,
-            self::MAX_MANIFEST_BYTES,
+            PaperDatasetFormatLimits::MAX_MANIFEST_BYTES,
             'paper_dataset_manifest_unreadable',
         );
     }

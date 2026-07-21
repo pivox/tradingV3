@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Dataset;
 
+use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
+use App\Trading\Paper\Dataset\PaperDatasetLineReader;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
@@ -51,6 +53,79 @@ final class PaperDatasetVerifierTest extends TestCase
         file_put_contents($this->eventsPath(), '{"payload":{"bid":"private-sentinel"}');
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', ['private-sentinel']);
+    }
+
+    public function testBoundedLineReaderAcceptsTerminatedValidJsonExactlyAtEventLineLimit(): void
+    {
+        $line = '['
+            . str_repeat(' ', PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES - 3)
+            . "]\n";
+        self::assertSame(PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES, strlen($line));
+        self::assertIsArray(json_decode($line, true, 2, JSON_THROW_ON_ERROR));
+        $handle = tmpfile();
+        self::assertIsResource($handle);
+        try {
+            self::assertSame(strlen($line), fwrite($handle, $line));
+            self::assertTrue(rewind($handle));
+            $reader = new PaperDatasetLineReader(new PaperDatasetRecorderFilesystem());
+
+            self::assertSame(
+                $line,
+                $reader->read(
+                    $handle,
+                    'paper_dataset_events_read_failed',
+                    'paper_dataset_event_invalid',
+                ),
+            );
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    public function testVerifierReadsEventLinesThroughTheSharedBoundedContract(): void
+    {
+        $this->createCompleteDataset();
+        $filesystem = new BoundedVerifierLineFilesystem();
+
+        (new PaperDatasetVerifier(filesystem: $filesystem))->verify($this->datasetDirectory());
+
+        self::assertNotEmpty($filesystem->lineReadLengths);
+        self::assertSame(
+            [PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1],
+            array_values(array_unique($filesystem->lineReadLengths)),
+        );
+    }
+
+    public function testVerifierRejectsAnEventLineExceedingTheSharedBound(): void
+    {
+        $this->createCompleteDataset();
+        $oversized = str_repeat(' ', PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES + 1) . "\n";
+        self::assertSame(strlen($oversized), file_put_contents($this->eventsPath(), $oversized));
+
+        $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', []);
+    }
+
+    public function testVerifierRejectsAMaximumLengthFragmentWithoutNewline(): void
+    {
+        $this->createCompleteDataset();
+        $fragment = str_repeat(' ', PaperDatasetFormatLimits::MAX_CANONICAL_EVENT_LINE_BYTES);
+        self::assertSame(strlen($fragment), file_put_contents($this->eventsPath(), $fragment));
+
+        $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', []);
+    }
+
+    public function testRejectsOversizedManifestBeforeReadingItsContents(): void
+    {
+        $this->createCompleteDataset();
+        $handle = fopen($this->manifestPath(), 'r+b');
+        self::assertIsResource($handle);
+        try {
+            self::assertTrue(ftruncate($handle, PaperDatasetFormatLimits::MAX_MANIFEST_BYTES + 1));
+        } finally {
+            fclose($handle);
+        }
+
+        $this->assertVerificationFailsWithoutPayload('paper_dataset_manifest_unreadable', []);
     }
 
     public function testRejectsForgedEventPayloadHash(): void
@@ -654,5 +729,19 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
         }
 
         return parent::checksum($handle, $operation);
+    }
+}
+
+final class BoundedVerifierLineFilesystem extends PaperDatasetRecorderFilesystem
+{
+    /** @var list<int> */
+    public array $lineReadLengths = [];
+
+    /** @param resource $handle */
+    public function readLine($handle, int $length, string $operation): string|false
+    {
+        $this->lineReadLengths[] = $length;
+
+        return parent::readLine($handle, $length, $operation);
     }
 }

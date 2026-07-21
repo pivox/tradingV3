@@ -41,9 +41,9 @@ class PaperDatasetRecorderFilesystem
     }
 
     /** @param resource $handle */
-    public function readLine($handle, string $operation): string|false
+    public function readLine($handle, int $length, string $operation): string|false
     {
-        return fgets($handle);
+        return fgets($handle, $length);
     }
 
     /** @param resource $handle */
