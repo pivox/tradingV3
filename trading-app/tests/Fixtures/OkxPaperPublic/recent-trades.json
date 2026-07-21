@@ -1,0 +1,17 @@
+{
+  "code": "0",
+  "msg": "",
+  "data": [
+    {
+      "instId": "ETH-USDT-SWAP",
+      "tradeId": "342720720",
+      "px": "3525.5000",
+      "sz": "7.250",
+      "side": "sell",
+      "count": "2",
+      "source": "0",
+      "ts": "1784595702123",
+      "seqId": 88001
+    }
+  ]
+}
