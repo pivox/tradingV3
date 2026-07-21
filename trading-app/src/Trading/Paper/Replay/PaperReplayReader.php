@@ -197,6 +197,7 @@ final class PaperReplayReader
             if (!feof($handle)) {
                 throw new \RuntimeException('paper_replay_events_read_failed');
             }
+            $position = ftell($handle);
             $current = $this->filesystem->pathStat($path, 'paper_replay_events_validation');
             if ($current === false) {
                 throw new \RuntimeException('paper_replay_events_changed');
@@ -204,7 +205,25 @@ final class PaperReplayReader
             if ($this->isSymlink($current)) {
                 throw new \RuntimeException('paper_dataset_symlink_rejected');
             }
-            if (!$this->isPrivateRegularFile($current) || !$this->sameFile($opened, $current)) {
+            if (!$this->isPrivateRegularFile($current)
+                || !isset($opened['size'], $current['size'])
+                || !\is_int($opened['size'])
+                || !\is_int($current['size'])
+                || $position === false
+                || $position !== $opened['size']
+                || $opened['size'] !== $current['size']
+                || !$this->sameFile($opened, $current)
+            ) {
+                throw new \RuntimeException('paper_replay_events_changed');
+            }
+            $final = $this->filesystem->stat($handle, 'paper_replay_events_validation');
+            if ($final === false
+                || !$this->isPrivateRegularFile($final)
+                || !isset($final['size'])
+                || !\is_int($final['size'])
+                || $final['size'] !== $opened['size']
+                || !$this->sameFile($opened, $final)
+            ) {
                 throw new \RuntimeException('paper_replay_events_changed');
             }
             $this->assertPinnedDatasetDirectory($datasetPin, 'paper_replay_dataset_after_events_read');

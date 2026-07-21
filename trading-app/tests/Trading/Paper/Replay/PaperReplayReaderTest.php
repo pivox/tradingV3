@@ -299,6 +299,16 @@ final class PaperReplayReaderTest extends TestCase
         iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
     }
 
+    public function testRejectsSameInodeEventsAppendAfterEof(): void
+    {
+        $this->assertRejectsEventsInPlaceSizeChange(true);
+    }
+
+    public function testRejectsSameInodeEventsTruncateAfterEof(): void
+    {
+        $this->assertRejectsEventsInPlaceSizeChange(false);
+    }
+
     public function testRejectsDatasetDirectorySubstitutionBetweenVerifyAndReadBeforeYield(): void
     {
         $event = $this->event(
@@ -425,6 +435,44 @@ final class PaperReplayReaderTest extends TestCase
         }
 
         self::assertFalse($generator->valid());
+    }
+
+    private function assertRejectsEventsInPlaceSizeChange(bool $append): void
+    {
+        $event = $this->event(
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            '1',
+            '2026-07-19T10:00:00.000000Z',
+            '2026-07-19T10:00:00.100000Z',
+        );
+        $dataset = $this->completeDataset([$event]);
+        $eventsPath = $dataset['directory'] . '/events.ndjson';
+        $before = lstat($eventsPath);
+        self::assertIsArray($before);
+        self::assertIsInt($before['size']);
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore(),
+            new PaperReplayClock($event->exchangeTimestamp),
+            filesystem: new EventsInPlaceSizeChangeAfterEofFilesystem($eventsPath, $append),
+        );
+
+        $failure = null;
+        try {
+            iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        }
+
+        self::assertNotNull($failure, 'An in-place events size change after EOF must invalidate the replay snapshot.');
+        self::assertSame('paper_replay_events_changed', $failure->getMessage());
+        self::assertNull($reader->currentEventIndex());
+        $after = lstat($eventsPath);
+        self::assertIsArray($after);
+        self::assertSame($before['dev'], $after['dev']);
+        self::assertSame($before['ino'], $after['ino']);
+        self::assertSame($append ? $before['size'] + 1 : $before['size'] - 1, $after['size']);
     }
 
     private function reader(PaperReplayClock $clock): PaperReplayReader
@@ -555,6 +603,48 @@ final class EventsPathSwapFilesystem extends PaperDatasetRecorderFilesystem
         }
 
         return parent::stat($handle, $operation);
+    }
+}
+
+final class EventsInPlaceSizeChangeAfterEofFilesystem extends PaperDatasetRecorderFilesystem
+{
+    private int $eventsPathStats = 0;
+
+    public function __construct(
+        private readonly string $eventsPath,
+        private readonly bool $append,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        if ($operation === 'paper_replay_events_validation'
+            && $path === $this->eventsPath
+            && ++$this->eventsPathStats === 2
+        ) {
+            $statistics = parent::pathStat($path, $operation);
+            if ($statistics === false || !isset($statistics['size']) || !\is_int($statistics['size'])) {
+                throw new \RuntimeException('Unable to inspect events before in-place size change.');
+            }
+
+            $handle = fopen($path, 'r+b');
+            if ($handle === false) {
+                throw new \RuntimeException('Unable to open events for in-place size change.');
+            }
+            try {
+                $changed = $this->append
+                    ? fseek($handle, 0, SEEK_END) === 0 && fwrite($handle, "\n") === 1
+                    : ftruncate($handle, $statistics['size'] - 1);
+                if (!$changed) {
+                    throw new \RuntimeException('Unable to inject in-place events size change.');
+                }
+            } finally {
+                fclose($handle);
+            }
+        }
+
+        return parent::pathStat($path, $operation);
     }
 }
 
