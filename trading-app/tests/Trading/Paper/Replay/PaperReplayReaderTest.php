@@ -359,6 +359,49 @@ final class PaperReplayReaderTest extends TestCase
         iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
     }
 
+    public function testRejectsTemporaryDatasetReplacementDuringCheckpointLoadBeforeItCanSkipEvents(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:00.100000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $replacement = $this->testRoot . '/replacement-dataset-during-checkpoint-load';
+        self::assertTrue(mkdir($replacement, 0700));
+        foreach (['manifest.json', 'events.ndjson'] as $filename) {
+            self::assertTrue(copy($dataset['directory'] . '/' . $filename, $replacement . '/' . $filename));
+            self::assertTrue(chmod($replacement . '/' . $filename, 0600));
+        }
+        (new PaperReplayCheckpointStore())->save(
+            $replacement,
+            $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[1], 1),
+        );
+        $checkpointFilesystem = new TemporaryDatasetReplacementOnCheckpointLoadFilesystem(
+            $dataset['directory'],
+            $this->testRoot . '/displaced-dataset-during-checkpoint-load',
+            $replacement,
+        );
+        $reader = new PaperReplayReader(
+            new PaperDatasetVerifier(),
+            new PaperReplayCheckpointStore($checkpointFilesystem),
+            new PaperReplayClock($events[0]->exchangeTimestamp),
+        );
+
+        $failure = null;
+        try {
+            iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        } finally {
+            $checkpointFilesystem->restoreOriginalDataset();
+        }
+
+        self::assertNotNull($failure, 'A temporary dataset replacement must not supply a forged resume checkpoint.');
+        self::assertSame('paper_replay_checkpoint_directory_invalid', $failure->getMessage());
+        self::assertTrue($checkpointFilesystem->restored);
+        self::assertNull($reader->currentEventIndex());
+    }
+
     public function testRevalidatesPinnedDatasetBeforeEveryYieldAfterGeneratorResume(): void
     {
         $events = [
@@ -577,5 +620,75 @@ final class DatasetDirectorySwapAtBoundaryFilesystem extends PaperDatasetRecorde
         }
 
         return parent::pathStat($path, $operation);
+    }
+}
+
+final class TemporaryDatasetReplacementOnCheckpointLoadFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public bool $restored = false;
+
+    private bool $swapped = false;
+    private int $checkpointLoadPathStats = 0;
+
+    /** @var array<string, mixed>|null */
+    private ?array $replacementCheckpointDirectoryStatistics = null;
+
+    public function __construct(
+        private readonly string $datasetDirectory,
+        private readonly string $displacedDirectory,
+        private readonly string $replacementDirectory,
+    ) {
+    }
+
+    /** @return array<string, mixed>|false */
+    public function pathStat(#[\SensitiveParameter] string $path, string $operation): array|false
+    {
+        $checkpointDirectory = $this->datasetDirectory . '/checkpoints';
+        if ($operation === 'paper_replay_checkpoint_directory'
+            && $path === $checkpointDirectory
+            && !$this->swapped
+        ) {
+            $this->swapped = true;
+            if (!rename($this->datasetDirectory, $this->displacedDirectory)
+                || !rename($this->replacementDirectory, $this->datasetDirectory)
+            ) {
+                throw new \RuntimeException('Unable to inject temporary dataset replacement during checkpoint load.');
+            }
+        }
+
+        if ($this->restored && $path === $checkpointDirectory) {
+            return $this->replacementCheckpointDirectoryStatistics
+                ?? throw new \RuntimeException('Missing replacement checkpoint directory identity.');
+        }
+
+        $statistics = parent::pathStat($path, $operation);
+        if ($operation === 'paper_replay_checkpoint_directory'
+            && $path === $checkpointDirectory
+            && \is_array($statistics)
+        ) {
+            $this->replacementCheckpointDirectoryStatistics = $statistics;
+        }
+
+        if ($operation === 'paper_replay_checkpoint_load'
+            && str_ends_with($path, '/paper.worker-01.json')
+            && ++$this->checkpointLoadPathStats === 2
+        ) {
+            $this->restoreOriginalDataset();
+        }
+
+        return $statistics;
+    }
+
+    public function restoreOriginalDataset(): void
+    {
+        if (!$this->swapped || $this->restored) {
+            return;
+        }
+        if (!rename($this->datasetDirectory, $this->replacementDirectory)
+            || !rename($this->displacedDirectory, $this->datasetDirectory)
+        ) {
+            throw new \RuntimeException('Unable to restore dataset after checkpoint load race.');
+        }
+        $this->restored = true;
     }
 }

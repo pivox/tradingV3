@@ -25,7 +25,23 @@ final class PaperReplayCheckpointStore
         #[\SensitiveParameter] PaperReplayCheckpoint $checkpoint,
     ): void {
         PaperReplayCheckpoint::assertConsumerId($checkpoint->consumerId);
-        $checkpointDirectory = $this->checkpointDirectory($datasetDirectory, create: true);
+        $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory);
+        try {
+            $this->savePinnedDataset($datasetPin, $checkpoint);
+            $this->assertPinnedDatasetDirectory($datasetPin);
+        } finally {
+            fclose($datasetPin['handle']);
+        }
+    }
+
+    /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
+     */
+    private function savePinnedDataset(array $datasetPin, PaperReplayCheckpoint $checkpoint): void
+    {
+        $this->assertPinnedDatasetDirectory($datasetPin);
+        $datasetDirectory = $datasetPin['path'];
+        $checkpointDirectory = $this->checkpointDirectory($datasetPin, create: true);
         if ($checkpointDirectory === null) {
             throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
         }
@@ -38,7 +54,11 @@ final class PaperReplayCheckpointStore
             $this->assertPinnedDirectory($directoryPin, $directory);
             $lock = $this->acquireConsumerLock($directoryPin, $directory, $checkpoint->consumerId);
             $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
-            $previous = $this->load($datasetDirectory, $checkpoint->consumerId);
+            $previous = $this->load(
+                $datasetDirectory,
+                $checkpoint->consumerId,
+                $datasetPin['identity'],
+            );
             $this->assertPinnedDirectory($directoryPin, $directory);
             $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
             if ($previous !== null && $checkpoint->eventIndex < $previous->eventIndex) {
@@ -61,6 +81,7 @@ final class PaperReplayCheckpointStore
                     $datasetDirectory,
                     $directory,
                     $checkpoint,
+                    $datasetPin['identity'],
                 );
 
                 return;
@@ -86,6 +107,7 @@ final class PaperReplayCheckpointStore
     /**
      * @param array{handle: resource, identity: array{dev: int, ino: int}}               $directoryPin
      * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $lock
+     * @param array{dev: int, ino: int}                                                  $expectedDatasetIdentity
      */
     private function completeIdempotentPublication(
         array $directoryPin,
@@ -93,6 +115,7 @@ final class PaperReplayCheckpointStore
         #[\SensitiveParameter] string $datasetDirectory,
         #[\SensitiveParameter] string $directory,
         PaperReplayCheckpoint $checkpoint,
+        array $expectedDatasetIdentity,
     ): void {
         try {
             if (!$this->filesystem->sync(
@@ -103,7 +126,11 @@ final class PaperReplayCheckpointStore
             }
             $this->assertPinnedDirectory($directoryPin, $directory);
             $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
-            $visible = $this->load($datasetDirectory, $checkpoint->consumerId);
+            $visible = $this->load(
+                $datasetDirectory,
+                $checkpoint->consumerId,
+                $expectedDatasetIdentity,
+            );
             $this->assertPinnedDirectory($directoryPin, $directory);
             $this->assertPinnedFile($lock, $lock['path'], 'paper_replay_checkpoint_lock_failed');
             if ($visible === null || $visible->toArray() !== $checkpoint->toArray()) {
@@ -294,12 +321,31 @@ final class PaperReplayCheckpointStore
         }
     }
 
+    /** @param array{dev: int, ino: int}|null $expectedDatasetIdentity */
     public function load(
         #[\SensitiveParameter] string $datasetDirectory,
         string $consumerId,
+        ?array $expectedDatasetIdentity = null,
     ): ?PaperReplayCheckpoint {
         PaperReplayCheckpoint::assertConsumerId($consumerId);
-        $checkpointDirectory = $this->checkpointDirectory($datasetDirectory, create: false);
+        $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory, $expectedDatasetIdentity);
+        try {
+            $checkpoint = $this->loadPinnedDataset($datasetPin, $consumerId);
+            $this->assertPinnedDatasetDirectory($datasetPin);
+
+            return $checkpoint;
+        } finally {
+            fclose($datasetPin['handle']);
+        }
+    }
+
+    /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
+     */
+    private function loadPinnedDataset(array $datasetPin, string $consumerId): ?PaperReplayCheckpoint
+    {
+        $this->assertPinnedDatasetDirectory($datasetPin);
+        $checkpointDirectory = $this->checkpointDirectory($datasetPin, create: false);
         if ($checkpointDirectory === null) {
             return null;
         }
@@ -356,19 +402,20 @@ final class PaperReplayCheckpointStore
         }
     }
 
-    /** @return array{path: string, identity: array{dev: int, ino: int}}|null */
+    /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
+     *
+     * @return array{path: string, identity: array{dev: int, ino: int}}|null
+     */
     private function checkpointDirectory(
-        #[\SensitiveParameter] string $datasetDirectory,
+        array $datasetPin,
         bool $create,
     ): ?array {
-        $this->assertNoSymlinkComponents($datasetDirectory);
-        $resolved = realpath($datasetDirectory);
-        if ($resolved === false || !is_dir($resolved)) {
-            throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
-        }
-
+        $this->assertPinnedDatasetDirectory($datasetPin);
+        $resolved = $datasetPin['path'];
         $directory = $resolved . DIRECTORY_SEPARATOR . 'checkpoints';
         $statistics = $this->filesystem->pathStat($directory, 'paper_replay_checkpoint_directory');
+        $this->assertPinnedDatasetDirectory($datasetPin);
         if ($statistics === false) {
             if (!$create) {
                 if (file_exists($directory) || is_link($directory)) {
@@ -377,8 +424,11 @@ final class PaperReplayCheckpointStore
 
                 return null;
             }
+            $this->assertPinnedDatasetDirectory($datasetPin);
             $this->filesystem->createDirectory($directory, 0700);
+            $this->assertPinnedDatasetDirectory($datasetPin);
             $statistics = $this->filesystem->pathStat($directory, 'paper_replay_checkpoint_directory');
+            $this->assertPinnedDatasetDirectory($datasetPin);
             if ($statistics === false || !$this->isPrivateDirectory($statistics)) {
                 throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
             }
@@ -397,37 +447,36 @@ final class PaperReplayCheckpointStore
         }
         $identity = ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
         if ($create) {
-            $this->syncCheckpointDirectoryParent($resolved, $directory, $identity);
+            $this->syncCheckpointDirectoryParent($datasetPin, $directory, $identity);
         }
+        $this->assertPinnedDatasetDirectory($datasetPin);
 
         return ['path' => $directory, 'identity' => $identity];
     }
 
-    /** @param array{dev: int, ino: int} $expectedDirectoryIdentity */
+    /**
+     * @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $datasetPin
+     * @param array{dev: int, ino: int}                                                    $expectedDirectoryIdentity
+     */
     private function syncCheckpointDirectoryParent(
-        #[\SensitiveParameter] string $parent,
+        array $datasetPin,
         #[\SensitiveParameter] string $directory,
         array $expectedDirectoryIdentity,
     ): void {
-        $parentPin = $this->openPinnedDirectory($parent);
+        $directoryPin = $this->openPinnedDirectory($directory, $expectedDirectoryIdentity);
         try {
-            $directoryPin = $this->openPinnedDirectory($directory, $expectedDirectoryIdentity);
-            try {
-                $this->assertPinnedDirectory($parentPin, $parent);
-                $this->assertPinnedDirectory($directoryPin, $directory);
-                if (!$this->filesystem->sync(
-                    $parentPin['handle'],
-                    'paper_replay_checkpoint_directory_parent_sync',
-                )) {
-                    throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
-                }
-                $this->assertPinnedDirectory($parentPin, $parent);
-                $this->assertPinnedDirectory($directoryPin, $directory);
-            } finally {
-                fclose($directoryPin['handle']);
+            $this->assertPinnedDatasetDirectory($datasetPin);
+            $this->assertPinnedDirectory($directoryPin, $directory);
+            if (!$this->filesystem->sync(
+                $datasetPin['handle'],
+                'paper_replay_checkpoint_directory_parent_sync',
+            )) {
+                throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
             }
+            $this->assertPinnedDatasetDirectory($datasetPin);
+            $this->assertPinnedDirectory($directoryPin, $directory);
         } finally {
-            fclose($parentPin['handle']);
+            fclose($directoryPin['handle']);
         }
     }
 
@@ -726,6 +775,94 @@ final class PaperReplayCheckpointStore
             }
         } catch (\Throwable) {
             return false;
+        }
+    }
+
+    /**
+     * @param array{dev: int, ino: int}|null $expectedIdentity
+     *
+     * @return array{handle: resource, identity: array{dev: int, ino: int}, path: string}
+     */
+    private function openPinnedDatasetDirectory(
+        #[\SensitiveParameter] string $directory,
+        ?array $expectedIdentity = null,
+    ): array {
+        $this->assertNoSymlinkComponents($directory);
+        $before = $this->filesystem->pathStat(
+            $directory,
+            'paper_replay_checkpoint_dataset_directory_validation',
+        );
+        if ($before !== false && $this->isSymlink($before)) {
+            throw new \RuntimeException('paper_replay_checkpoint_symlink_rejected');
+        }
+        if ($before === false || !$this->isDirectory($before)) {
+            throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+        }
+
+        $handle = $this->filesystem->openDirectory(
+            $directory,
+            'paper_replay_checkpoint_dataset_directory_validation',
+        );
+        if ($handle === false) {
+            throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+        }
+
+        try {
+            $opened = $this->filesystem->stat(
+                $handle,
+                'paper_replay_checkpoint_dataset_directory_validation',
+            );
+            if ($opened === false
+                || !$this->isDirectory($opened)
+                || !$this->sameFile($before, $opened)
+                || ($expectedIdentity !== null && !$this->sameFile($expectedIdentity, $opened))
+                || !isset($opened['dev'], $opened['ino'])
+                || !\is_int($opened['dev'])
+                || !\is_int($opened['ino'])
+            ) {
+                throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+            }
+            $resolved = realpath($directory);
+            if ($resolved === false) {
+                throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
+            }
+            $pin = [
+                'handle' => $handle,
+                'identity' => ['dev' => $opened['dev'], 'ino' => $opened['ino']],
+                'path' => $resolved,
+            ];
+            $this->assertPinnedDatasetDirectory($pin);
+
+            return $pin;
+        } catch (\Throwable $failure) {
+            fclose($handle);
+
+            throw $failure;
+        }
+    }
+
+    /** @param array{handle: resource, identity: array{dev: int, ino: int}, path: string} $pin */
+    private function assertPinnedDatasetDirectory(array $pin): void
+    {
+        $opened = $this->filesystem->stat(
+            $pin['handle'],
+            'paper_replay_checkpoint_dataset_directory_validation',
+        );
+        $current = $this->filesystem->pathStat(
+            $pin['path'],
+            'paper_replay_checkpoint_dataset_directory_validation',
+        );
+        if ($current !== false && $this->isSymlink($current)) {
+            throw new \RuntimeException('paper_replay_checkpoint_symlink_rejected');
+        }
+        if ($opened === false
+            || $current === false
+            || !$this->isDirectory($opened)
+            || !$this->isDirectory($current)
+            || !$this->sameFile($pin['identity'], $opened)
+            || !$this->sameFile($pin['identity'], $current)
+        ) {
+            throw new \RuntimeException('paper_replay_checkpoint_directory_invalid');
         }
     }
 

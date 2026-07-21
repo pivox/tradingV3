@@ -88,7 +88,11 @@ final class PaperReplayReader
                 'paper_replay_dataset_after_sort',
             );
 
-            $checkpoint ??= $this->checkpointStore->load($datasetDirectory, $consumerId);
+            $checkpoint ??= $this->checkpointStore->load(
+                $datasetDirectory,
+                $consumerId,
+                $datasetPin['identity'],
+            );
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_checkpoint_load',
