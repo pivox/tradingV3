@@ -7,6 +7,7 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\FillCostLedgerEntryRepository;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -44,6 +45,9 @@ final class FillCostLedgerEntry
 
     #[ORM\Column(type: Types::STRING, length: 32)]
     private string $exchange;
+
+    #[ORM\Column(name: 'market_data_venue', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $marketDataVenue = null;
 
     #[ORM\Column(name: 'market_type', type: Types::STRING, length: 32)]
     private string $marketType;
@@ -207,6 +211,31 @@ final class FillCostLedgerEntry
     public function getExchange(): string
     {
         return $this->exchange;
+    }
+
+    public function getMarketDataVenue(): ?string
+    {
+        return $this->marketDataVenue;
+    }
+
+    public function setMarketDataVenue(PaperMarketDataVenue|string|null $marketDataVenue): self
+    {
+        if ($marketDataVenue === null) {
+            $this->marketDataVenue = null;
+
+            return $this;
+        }
+
+        $normalized = $marketDataVenue instanceof PaperMarketDataVenue
+            ? $marketDataVenue->value
+            : strtolower(trim($marketDataVenue));
+        if (PaperMarketDataVenue::tryFrom($normalized) === null) {
+            throw new \InvalidArgumentException('market_data_venue_invalid');
+        }
+
+        $this->marketDataVenue = $normalized;
+
+        return $this;
     }
 
     public function getMarketType(): string
