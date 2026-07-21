@@ -830,6 +830,47 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame($committed . $mutatedLine, file_get_contents($eventsPath));
     }
 
+    public function testRestartRevalidatesAPartialStagedAppendAfterItsFsync(): void
+    {
+        $manifest = $this->manifest();
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
+        $recorded = $this->event(sequence: '1');
+        $recorder->append($recorded);
+        $eventsPath = $this->datasetDirectory() . '/events.ndjson';
+        $manifestPath = $this->datasetDirectory() . '/manifest.json';
+        $committed = file_get_contents($eventsPath);
+        $manifestBefore = file_get_contents($manifestPath);
+        self::assertIsString($committed);
+        self::assertIsString($manifestBefore);
+        $mutatedPrefix = $this->sameLengthValidReplacement($recorded);
+        self::assertSame(strlen($committed), strlen($mutatedPrefix));
+        self::assertNotSame($committed, $mutatedPrefix);
+        $second = $this->event(sequence: '2', microseconds: 2);
+        $line = CanonicalJson::encode($second->toArray()) . "\n";
+        $partial = substr($line, 0, -17);
+        self::assertNotSame('', $partial);
+        $this->stageAppendIntent($manifest, $second, $committed, $line);
+        self::assertSame(strlen($partial), file_put_contents($eventsPath, $partial, FILE_APPEND));
+        $filesystem = new FaultInjectingPaperDatasetFilesystem();
+        $filesystem->overwriteEventsAfterAppendRecoverySync($eventsPath, $mutatedPrefix);
+
+        try {
+            new PaperDatasetRecorder($this->datasetRoot(), $manifest, filesystem: $filesystem);
+            self::fail('A recovered partial line with a prefix changed after fsync must retain its durable intent.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_append_intent_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(1, $filesystem->appendRecoverySyncs);
+        self::assertFileExists($this->appendIntentPath());
+        self::assertSame($mutatedPrefix, file_get_contents($eventsPath));
+        self::assertSame($manifestBefore, file_get_contents($manifestPath));
+        self::assertSame(
+            PaperDatasetState::RECORDING,
+            (new PaperDatasetManifestCodec())->decode($manifestBefore)->state,
+        );
+    }
+
     public function testRestartRejectsANonMatchingStagedAppendSuffixWithoutMutation(): void
     {
         $manifest = $this->manifest();

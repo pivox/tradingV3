@@ -560,6 +560,9 @@ final class PaperDatasetRecorder
         ) {
             throw new \RuntimeException('paper_dataset_append_recovery_failed');
         }
+        $recoveredPrefix = $intent;
+        $recoveredPrefix['canonical_line'] = '';
+        $this->assertRecoveredAppendSnapshot($handle, $recovered, $recoveredPrefix);
     }
 
     /**
