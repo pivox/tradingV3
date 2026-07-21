@@ -117,6 +117,9 @@ services:
     App\Trading\Lineage\ReadModel\LineageReadStoreInterface:
         alias: App\Trading\Lineage\ReadModel\DoctrineLineageReadStore
 
+    App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface:
+        alias: App\Trading\Paper\Runtime\DoctrinePaperDatabaseInspector
+
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader
 
