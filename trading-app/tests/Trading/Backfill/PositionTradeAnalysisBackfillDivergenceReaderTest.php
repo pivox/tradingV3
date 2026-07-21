@@ -17,6 +17,7 @@ use DoctrineMigrations\Version20260623010000;
 use DoctrineMigrations\Version20260625000000;
 use DoctrineMigrations\Version20260625020000;
 use DoctrineMigrations\Version20260626000000;
+use DoctrineMigrations\Version20260719130000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -64,8 +65,8 @@ final class PositionTradeAnalysisBackfillDivergenceReaderTest extends TestCase
     {
         $run = 'run_backfill_divergence';
 
-        $this->entry('BTCUSDT', $run, ['trade_id' => 'T-good'], '2026-06-20 10:00:00+00', 300);
-        $this->close('BTCUSDT', $run, ['trade_id' => 'T-good', 'pnl' => 5.0], null, '2026-06-20 10:05:00+00', 400);
+        $this->entry('BTCUSDT', $run, ['trade_id' => 'T-good'], '2026-06-20 10:00:00+00', 300, 'okx');
+        $this->close('BTCUSDT', $run, ['trade_id' => 'T-good', 'pnl' => 5.0], null, '2026-06-20 10:05:00+00', 400, 'okx');
 
         $this->entry('BTCUSDT', $run, ['trade_id' => 'T-legacy-only'], '2026-06-20 10:10:00+00', 301);
         $this->close('BTCUSDT', $run, ['trade_id' => 'unrelated-close', 'pnl' => -7.0], null, '2026-06-20 10:15:00+00', 401);
@@ -81,7 +82,9 @@ final class PositionTradeAnalysisBackfillDivergenceReaderTest extends TestCase
         }
 
         self::assertArrayHasKey(301, $rowsByEntryId);
+        self::assertSame('okx', $rowsByEntryId[300]['market_data_venue']);
         self::assertSame('unmatched', $rowsByEntryId[301]['classification']);
+        self::assertNull($rowsByEntryId[301]['market_data_venue']);
         self::assertSame(401, $rowsByEntryId[301]['v1_close_event_id']);
         self::assertNull($rowsByEntryId[301]['v2_close_event_id']);
         self::assertSame('unmatched', $rowsByEntryId[301]['close_match_status']);
@@ -106,6 +109,7 @@ CREATE TABLE trade_lifecycle_event (
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
     exchange VARCHAR(32) DEFAULT 'bitmart',
+    market_data_venue VARCHAR(32),
     market_type VARCHAR(32) DEFAULT 'perpetual',
     extra JSONB,
     happened_at TIMESTAMPTZ NOT NULL
@@ -132,6 +136,7 @@ SQL);
             Version20260625000000::class => 'Version20260625000000.php',
             Version20260625020000::class => 'Version20260625020000.php',
             Version20260626000000::class => 'Version20260626000000.php',
+            Version20260719130000::class => 'Version20260719130000.php',
         ];
 
         foreach ($classes as $class => $file) {
@@ -149,7 +154,7 @@ SQL);
     /**
      * @param array<string,mixed> $extra
      */
-    private function entry(string $symbol, string $runId, array $extra, string $happenedAt, int $forcedId): void
+    private function entry(string $symbol, string $runId, array $extra, string $happenedAt, int $forcedId, ?string $marketDataVenue = null): void
     {
         $extra += [
             'orchestration_run_id' => $runId,
@@ -158,21 +163,21 @@ SQL);
         ];
 
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, config_profile, exchange, market_type, extra, happened_at)
-             VALUES (?, ?, \'order_submitted\', ?, \'scalper\', \'fake\', \'perpetual\', ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, config_profile, exchange, market_data_venue, market_type, extra, happened_at)
+             VALUES (?, ?, \'order_submitted\', ?, \'scalper\', \'fake\', ?, \'perpetual\', ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $marketDataVenue, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 
     /**
      * @param array<string,mixed> $extra
      */
-    private function close(string $symbol, string $runId, array $extra, ?string $positionId, string $happenedAt, int $forcedId): void
+    private function close(string $symbol, string $runId, array $extra, ?string $positionId, string $happenedAt, int $forcedId, ?string $marketDataVenue = null): void
     {
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
-             VALUES (?, ?, \'position_closed\', ?, ?, \'fake\', \'perpetual\', ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $positionId, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_data_venue, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_closed\', ?, ?, \'fake\', ?, \'perpetual\', ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, $marketDataVenue, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 }

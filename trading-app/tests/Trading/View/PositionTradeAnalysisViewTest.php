@@ -13,6 +13,7 @@ use DoctrineMigrations\Version20260623010000;
 use DoctrineMigrations\Version20260625000000;
 use DoctrineMigrations\Version20260625020000;
 use DoctrineMigrations\Version20260626000000;
+use DoctrineMigrations\Version20260719130000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -34,6 +35,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260625000000::class)]
 #[CoversClass(Version20260625020000::class)]
 #[CoversClass(Version20260626000000::class)]
+#[CoversClass(Version20260719130000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -153,6 +155,234 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('not_applicable', $eth['cost_completeness']);
         self::assertNull($eth['close_event_id']);
         self::assertNull($eth['recorded_pnl_usdt']);
+    }
+
+    public function testMarketDataVenueIsProjectedAndScopesInternalTradeIdMatch(): void
+    {
+        $run = 'run_market_data_venue';
+
+        $this->entry('BTCUSDT', $run, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-venue-okx',
+            'trade_id' => 'shared-external-trade',
+            'position_id' => 'shared-external-position',
+        ], '2026-07-19 13:00:00+00', 2300, 'okx');
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-venue-okx',
+            'trade_id' => 'shared-external-trade',
+            'pnl' => 1.0,
+        ], 'shared-external-position', '2026-07-19 13:01:00+00', 2301, 'fake', 'perpetual', 'okx');
+
+        $this->entry('BTCUSDT', $run, 's2', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-venue-hyperliquid',
+            'trade_id' => 'shared-external-trade',
+            'position_id' => 'shared-external-position',
+        ], '2026-07-19 13:02:00+00', 2302, 'hyperliquid');
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => 'itd-venue-hyperliquid',
+            'trade_id' => 'shared-external-trade',
+            'pnl' => 2.0,
+        ], 'shared-external-position', '2026-07-19 13:03:00+00', 2303, 'fake', 'perpetual', 'hyperliquid');
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT market_data_venue, exchange, analysis_status
+             FROM position_trade_analysis_v2
+             WHERE run_id = ?
+             ORDER BY market_data_venue',
+            [$run],
+        );
+
+        self::assertSame([
+            ['market_data_venue' => 'hyperliquid', 'exchange' => 'fake', 'analysis_status' => 'matched_closed'],
+            ['market_data_venue' => 'okx', 'exchange' => 'fake', 'analysis_status' => 'matched_closed'],
+        ], $rows);
+
+        $mismatchRun = 'run_market_data_venue_mismatch';
+        $this->entry('BTCUSDT', $mismatchRun, 's1', 'scalper', 'fake', 'perpetual', [
+            'internal_trade_id' => 'itd-venue-mismatch',
+            'trade_id' => 'mismatch-external-trade',
+            'position_id' => 'mismatch-external-position',
+        ], '2026-07-19 14:00:00+00', 2310, 'okx');
+        $this->close('BTCUSDT', $mismatchRun, [
+            'internal_trade_id' => 'itd-venue-mismatch',
+            'trade_id' => 'mismatch-external-trade',
+            'pnl' => 99.0,
+        ], 'mismatch-external-position', '2026-07-19 14:01:00+00', 2311, 'fake', 'perpetual', 'hyperliquid');
+
+        $mismatch = $this->conn->fetchAssociative(
+            'SELECT market_data_venue, close_event_id, analysis_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$mismatchRun],
+        );
+
+        self::assertIsArray($mismatch);
+        self::assertSame('okx', $mismatch['market_data_venue']);
+        self::assertNull($mismatch['close_event_id']);
+        self::assertSame('unmatched', $mismatch['analysis_status']);
+        self::assertNull($mismatch['recorded_pnl_usdt']);
+    }
+
+    public function testMarketDataVenueScopesTradeIdMatchWithoutInternalTradeId(): void
+    {
+        $matchingRun = 'run_md_venue_trade_id_match';
+        $this->entry('BTCUSDT', $matchingRun, 'trade-match', 'scalper', 'fake', 'perpetual', [
+            'trade_id' => 'md-venue-trade-match',
+        ], '2026-07-19 15:00:00+00', 2400, 'okx');
+        $this->close('BTCUSDT', $matchingRun, [
+            'trade_id' => 'md-venue-trade-match',
+            'pnl' => 3.0,
+        ], null, '2026-07-19 15:01:00+00', 2401, 'fake', 'perpetual', 'okx');
+
+        $matching = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, trade_id, close_event_id, close_matched_by, analysis_status
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$matchingRun],
+        );
+
+        self::assertIsArray($matching);
+        self::assertNull($matching['internal_trade_id']);
+        self::assertSame('md-venue-trade-match', $matching['trade_id']);
+        self::assertSame(2401, (int) $matching['close_event_id']);
+        self::assertSame('matched_trade_id', $matching['close_matched_by']);
+        self::assertSame('matched_closed', $matching['analysis_status']);
+
+        $mismatchRun = 'run_md_venue_trade_id_mismatch';
+        $this->entry('BTCUSDT', $mismatchRun, 'trade-mismatch', 'scalper', 'fake', 'perpetual', [
+            'trade_id' => 'md-venue-trade-mismatch',
+        ], '2026-07-19 15:10:00+00', 2410, 'okx');
+        $this->close('BTCUSDT', $mismatchRun, [
+            'trade_id' => 'md-venue-trade-mismatch',
+            'pnl' => 99.0,
+        ], null, '2026-07-19 15:11:00+00', 2411, 'fake', 'perpetual', 'hyperliquid');
+
+        $mismatch = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, close_event_id, close_matched_by, analysis_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$mismatchRun],
+        );
+
+        self::assertIsArray($mismatch);
+        self::assertNull($mismatch['internal_trade_id']);
+        self::assertNull($mismatch['close_event_id']);
+        self::assertSame('unmatched', $mismatch['close_matched_by']);
+        self::assertSame('unmatched', $mismatch['analysis_status']);
+        self::assertNull($mismatch['recorded_pnl_usdt']);
+    }
+
+    public function testMarketDataVenueScopesPositionIdMatchWithoutHigherPriorityIdentifiers(): void
+    {
+        $matchingRun = 'run_md_venue_position_id_match';
+        $this->entry('ETHUSDT', $matchingRun, 'position-match', 'scalper', 'fake', 'perpetual', [
+            'position_id' => 'md-venue-position-match',
+        ], '2026-07-19 16:00:00+00', 2420, 'okx');
+        $this->close('ETHUSDT', $matchingRun, [
+            'pnl' => 4.0,
+        ], 'md-venue-position-match', '2026-07-19 16:01:00+00', 2421, 'fake', 'perpetual', 'okx');
+
+        $matching = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, trade_id, position_id, close_event_id, close_matched_by, analysis_status
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$matchingRun],
+        );
+
+        self::assertIsArray($matching);
+        self::assertNull($matching['internal_trade_id']);
+        self::assertNull($matching['trade_id']);
+        self::assertSame('md-venue-position-match', $matching['position_id']);
+        self::assertSame(2421, (int) $matching['close_event_id']);
+        self::assertSame('matched_position_id', $matching['close_matched_by']);
+        self::assertSame('matched_closed', $matching['analysis_status']);
+
+        $mismatchRun = 'run_md_venue_position_id_mismatch';
+        $this->entry('ETHUSDT', $mismatchRun, 'position-mismatch', 'scalper', 'fake', 'perpetual', [
+            'position_id' => 'md-venue-position-mismatch',
+        ], '2026-07-19 16:10:00+00', 2430, 'okx');
+        $this->close('ETHUSDT', $mismatchRun, [
+            'pnl' => 99.0,
+        ], 'md-venue-position-mismatch', '2026-07-19 16:11:00+00', 2431, 'fake', 'perpetual', 'hyperliquid');
+
+        $mismatch = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, trade_id, close_event_id, close_matched_by, analysis_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$mismatchRun],
+        );
+
+        self::assertIsArray($mismatch);
+        self::assertNull($mismatch['internal_trade_id']);
+        self::assertNull($mismatch['trade_id']);
+        self::assertNull($mismatch['close_event_id']);
+        self::assertSame('unmatched', $mismatch['close_matched_by']);
+        self::assertSame('unmatched', $mismatch['analysis_status']);
+        self::assertNull($mismatch['recorded_pnl_usdt']);
+    }
+
+    public function testMarketDataVenueScopesOpenedBridgeBeforePositionIdMatch(): void
+    {
+        $matchingRun = 'run_md_venue_opened_bridge_match';
+        $this->entry('SOLUSDT', $matchingRun, 'bridge-match', 'scalper', 'fake', 'perpetual', [
+            'trade_id' => 'md-venue-bridge-match',
+        ], '2026-07-19 17:00:00+00', 2440, 'okx');
+        $this->opened(
+            'SOLUSDT',
+            $matchingRun,
+            'md-venue-bridge-match',
+            'md-venue-bridge-position-match',
+            '2026-07-19 17:00:30+00',
+            2441,
+            'fake',
+            'perpetual',
+            'okx',
+        );
+        $this->close('SOLUSDT', $matchingRun, [
+            'pnl' => 5.0,
+        ], 'md-venue-bridge-position-match', '2026-07-19 17:01:00+00', 2442, 'fake', 'perpetual', 'okx');
+
+        $matching = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, trade_id, position_id, close_event_id, close_matched_by, analysis_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$matchingRun],
+        );
+
+        self::assertIsArray($matching);
+        self::assertNull($matching['internal_trade_id']);
+        self::assertSame('md-venue-bridge-match', $matching['trade_id']);
+        self::assertSame('md-venue-bridge-position-match', $matching['position_id']);
+        self::assertSame(2442, (int) $matching['close_event_id']);
+        self::assertSame('matched_position_id', $matching['close_matched_by']);
+        self::assertSame('matched_closed', $matching['analysis_status']);
+
+        $mismatchRun = 'run_md_venue_opened_bridge_mismatch';
+        $this->entry('SOLUSDT', $mismatchRun, 'bridge-mismatch', 'scalper', 'fake', 'perpetual', [
+            'trade_id' => 'md-venue-bridge-mismatch',
+        ], '2026-07-19 17:10:00+00', 2450, 'okx');
+        $this->opened(
+            'SOLUSDT',
+            $mismatchRun,
+            'md-venue-bridge-mismatch',
+            'md-venue-bridge-position-mismatch',
+            '2026-07-19 17:10:30+00',
+            2451,
+            'fake',
+            'perpetual',
+            'hyperliquid',
+        );
+        $this->close('SOLUSDT', $mismatchRun, [
+            'pnl' => 99.0,
+        ], 'md-venue-bridge-position-mismatch', '2026-07-19 17:11:00+00', 2452, 'fake', 'perpetual', 'hyperliquid');
+
+        $mismatch = $this->conn->fetchAssociative(
+            'SELECT internal_trade_id, trade_id, position_id, close_event_id, close_matched_by, analysis_status, recorded_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ?',
+            [$mismatchRun],
+        );
+
+        self::assertIsArray($mismatch);
+        self::assertNull($mismatch['internal_trade_id']);
+        self::assertSame('md-venue-bridge-mismatch', $mismatch['trade_id']);
+        self::assertNull($mismatch['position_id'], 'a mismatched venue must not create the opened bridge');
+        self::assertNull($mismatch['close_event_id']);
+        self::assertSame('unmatched', $mismatch['close_matched_by']);
+        self::assertSame('unmatched', $mismatch['analysis_status']);
+        self::assertNull($mismatch['recorded_pnl_usdt']);
     }
 
     public function testCertifiedNetPnlRequiresExplicitCompleteFinancialContract(): void
@@ -965,6 +1195,7 @@ CREATE TABLE trade_lifecycle_event (
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
     exchange VARCHAR(32) DEFAULT 'bitmart',
+    market_data_venue VARCHAR(32),
     market_type VARCHAR(32) DEFAULT 'perpetual',
     extra JSONB,
     happened_at TIMESTAMPTZ NOT NULL
@@ -1000,8 +1231,11 @@ SQL);
         if (!class_exists(Version20260626000000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260626000000.php';
         }
+        if (!class_exists(Version20260719130000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260719130000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {
@@ -1023,6 +1257,7 @@ SQL);
         array $extra,
         string $happenedAt,
         int $forcedId,
+        ?string $marketDataVenue = null,
     ): void {
         $extra += [
             'orchestration_run_id' => $runId,
@@ -1031,9 +1266,9 @@ SQL);
         ];
 
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, config_profile, exchange, market_type, extra, happened_at)
-             VALUES (?, ?, \'order_submitted\', ?, ?, ?, ?, ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $profile, $exchange, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, config_profile, exchange, market_data_venue, market_type, extra, happened_at)
+             VALUES (?, ?, \'order_submitted\', ?, ?, ?, ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $profile, $exchange, $marketDataVenue, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 
@@ -1050,11 +1285,12 @@ SQL);
         int $forcedId,
         string $exchange = 'bitmart',
         string $marketType = 'perpetual',
+        ?string $marketDataVenue = null,
     ): void {
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
-             VALUES (?, ?, \'position_opened\', ?, ?, ?, ?, ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketType, json_encode(['trade_id' => $tradeId], JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_data_venue, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_opened\', ?, ?, ?, ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketDataVenue, $marketType, json_encode(['trade_id' => $tradeId], JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 
@@ -1070,11 +1306,12 @@ SQL);
         int $forcedId,
         string $exchange = 'bitmart',
         string $marketType = 'perpetual',
+        ?string $marketDataVenue = null,
     ): void {
         $this->conn->executeStatement(
-            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_type, extra, happened_at)
-             VALUES (?, ?, \'position_closed\', ?, ?, ?, ?, ?::jsonb, ?)',
-            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+            'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_data_venue, market_type, extra, happened_at)
+             VALUES (?, ?, \'position_closed\', ?, ?, ?, ?, ?, ?::jsonb, ?)',
+            [$forcedId, $symbol, $runId, $positionId, $exchange, $marketDataVenue, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
         );
     }
 }
