@@ -67,6 +67,7 @@ parameters:
     env(PAPER_MARKET_ACQUISITION_ENABLED): '0'
     env(OKX_PAPER_PUBLIC_REST_BASE_URI): 'https://www.okx.com'
     env(OKX_PAPER_PUBLIC_WS_URI): 'wss://ws.okx.com:8443/ws/v5/public'
+    env(OKX_PAPER_PUBLIC_BUSINESS_WS_URI): 'wss://ws.okx.com:8443/ws/v5/business'
     env(PAPER_MARKET_DATA_ROOT): '%kernel.project_dir%/var/paper-market-data'
     env(REDIS_HOST): '127.0.0.1'
     env(REDIS_PORT): '6379'
@@ -349,6 +350,7 @@ services:
             $restBaseUri: '%env(string:OKX_PAPER_PUBLIC_REST_BASE_URI)%'
             $webSocketUri: '%env(string:OKX_PAPER_PUBLIC_WS_URI)%'
             $dataRoot: '%env(resolve:PAPER_MARKET_DATA_ROOT)%'
+            $businessWebSocketUri: '%env(string:OKX_PAPER_PUBLIC_BUSINESS_WS_URI)%'
 
     okx.paper_public.history_limiter:
         class: Symfony\Component\RateLimiter\LimiterInterface

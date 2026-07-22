@@ -35,6 +35,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
         self::assertFalse($config->acquisitionEnabled);
         self::assertSame('https://www.okx.com', $config->restBaseUri);
         self::assertSame('wss://ws.okx.com:8443/ws/v5/public', $config->webSocketUri);
+        self::assertSame('wss://ws.okx.com:8443/ws/v5/business', $config->businessWebSocketUri);
         self::assertSame(self::getContainer()->getParameter('kernel.project_dir') . '/var/paper-market-data', $config->dataRoot);
     }
 

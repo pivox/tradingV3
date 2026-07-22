@@ -19,11 +19,13 @@ final class OkxPaperPublicConfigTest extends TestCase
             restBaseUri: 'https://www.okx.com',
             webSocketUri: 'wss://ws.okx.com:8443/ws/v5/public',
             dataRoot: '/srv/app/var/paper-market-data',
+            businessWebSocketUri: 'wss://ws.okx.com:8443/ws/v5/business',
         );
 
         self::assertFalse($config->acquisitionEnabled);
         self::assertSame('https://www.okx.com', $config->restBaseUri);
         self::assertSame('wss://ws.okx.com:8443/ws/v5/public', $config->webSocketUri);
+        self::assertSame('wss://ws.okx.com:8443/ws/v5/business', $config->businessWebSocketUri);
         self::assertSame('/srv/app/var/paper-market-data', $config->dataRoot);
     }
 
@@ -66,12 +68,46 @@ final class OkxPaperPublicConfigTest extends TestCase
         yield 'wrong port' => ['wss://ws.okx.com:443/ws/v5/public'];
         yield 'trailing slash' => ['wss://ws.okx.com:8443/ws/v5/public/'];
         yield 'private path' => ['wss://ws.okx.com:8443/ws/v5/private'];
-        yield 'business path' => ['wss://ws.okx.com:8443/ws/v5/business'];
+        yield 'business path on public socket' => ['wss://ws.okx.com:8443/ws/v5/business'];
         yield 'query' => ['wss://ws.okx.com:8443/ws/v5/public?channel=books'];
         yield 'fragment' => ['wss://ws.okx.com:8443/ws/v5/public#books'];
         yield 'demo host' => ['wss://wseeapap.okx.com:8443/ws/v5/public'];
         yield 'host suffix' => ['wss://ws.okx.com.example.test:8443/ws/v5/public'];
         yield 'blank' => [''];
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function rejectedBusinessWebSocketUris(): iterable
+    {
+        yield 'unencrypted' => ['ws://ws.okx.com:8443/ws/v5/business'];
+        yield 'userinfo' => ['wss://user:password@ws.okx.com:8443/ws/v5/business'];
+        yield 'missing port' => ['wss://ws.okx.com/ws/v5/business'];
+        yield 'wrong port' => ['wss://ws.okx.com:443/ws/v5/business'];
+        yield 'trailing slash' => ['wss://ws.okx.com:8443/ws/v5/business/'];
+        yield 'private path' => ['wss://ws.okx.com:8443/ws/v5/private'];
+        yield 'public path on business socket' => ['wss://ws.okx.com:8443/ws/v5/public'];
+        yield 'query' => ['wss://ws.okx.com:8443/ws/v5/business?channel=candle1m'];
+        yield 'fragment' => ['wss://ws.okx.com:8443/ws/v5/business#candle1m'];
+        yield 'demo host' => ['wss://wspap.okx.com:8443/ws/v5/business'];
+        yield 'application host' => ['wss://ws.app.okx.com:8443/ws/v5/business'];
+        yield 'host suffix' => ['wss://ws.okx.com.example.test:8443/ws/v5/business'];
+        yield 'blank' => [''];
+    }
+
+    #[DataProvider('rejectedBusinessWebSocketUris')]
+    public function testRejectsEveryBusinessWebSocketUriOutsideTheExactAllowlist(
+        string $businessWebSocketUri,
+    ): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_paper_public_business_ws_uri_not_allowed');
+
+        new OkxPaperPublicConfig(
+            acquisitionEnabled: false,
+            restBaseUri: 'https://www.okx.com',
+            webSocketUri: 'wss://ws.okx.com:8443/ws/v5/public',
+            dataRoot: '/srv/app/var/paper-market-data',
+            businessWebSocketUri: $businessWebSocketUri,
+        );
     }
 
     #[DataProvider('rejectedWebSocketUris')]
@@ -99,12 +135,12 @@ final class OkxPaperPublicConfigTest extends TestCase
         );
 
         self::assertSame(
-            ['acquisitionenabled', 'restbaseuri', 'websocketuri', 'dataroot'],
+            ['acquisitionenabled', 'restbaseuri', 'websocketuri', 'dataroot', 'businesswebsocketuri'],
             $parameterNames,
         );
         self::assertSame([], array_values(array_filter(
             $parameterNames,
-            static fn (string $name): bool => preg_match('/key|secret|passphrase|private|business|sign|simulated/', $name) === 1,
+            static fn (string $name): bool => preg_match('/key|secret|passphrase|private|sign|simulated|header|login/', $name) === 1,
         )));
     }
 }

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a deterministic, credential-free OKX public WebSocket source that warms BTC/ETH from the existing public REST client, durably records every accepted normalized event before downstream use, recovers boundedly from book gaps and disconnects, and proves live-fixture/replay event-sequence equality.
+**Goal:** Add a deterministic, credential-free OKX public-market WebSocket source that warms BTC/ETH from the existing public REST client, receives trades/books through the OKX Public socket and candles through the OKX Business socket, durably records every accepted normalized event before downstream use, recovers boundedly from book gaps and disconnects, and proves live-fixture/replay event-sequence equality.
 
-**Architecture:** Keep the existing exchange-neutral `PaperMarketEvent`, acknowledged-source, ordinal, recorder, verifier, and replay contracts as the durable core. Add a small OKX-public live stack split into per-session transport construction, protocol/subscription validation, bounded frame queue, full-book materialization, an authoritative durable state-machine checkpoint, acknowledged stream frontiers, and orchestration; copy the proven generation/timer shape of the private Pawl worker without sharing any private endpoint, login, credential, header, status-store, or mutation dependency. A generic `PaperLiveDatasetCapture` owns the record-before-idempotent-effect boundary and is the only component allowed to complete or mark the manifest incomplete.
+**Architecture:** Keep the existing exchange-neutral `PaperMarketEvent`, acknowledged-source, ordinal, recorder, verifier, and replay contracts as the durable core. Add a small OKX-public live stack split into two fresh per-source transports, explicit Public/Business subscription routing, strict socket-aware protocol validation, one bounded raw-frame queue per socket, full-book materialization, an authoritative durable state-machine checkpoint, acknowledged stream frontiers, and orchestration. The Public socket is fixed to `wss://ws.okx.com:8443/ws/v5/public` for trades/books; the Business socket is fixed to `wss://ws.okx.com:8443/ws/v5/business` solely for credential-free public candles. Copy the proven generation/timer shape of the private Pawl worker without sharing any private endpoint, login, credential, header, status-store, or mutation dependency. A generic `PaperLiveDatasetCapture` owns the record-before-idempotent-effect boundary and is the only component allowed to complete or mark the manifest incomplete.
 
 **Tech Stack:** PHP 8.2, Symfony 7.1 Clock/Dependency Injection/HTTP Client, ReactPHP event loop, Ratchet Pawl 0.4, Brick Math, PHPUnit 11, PHPStan, NDJSON/SHA-256 Paper datasets.
 
@@ -18,22 +18,22 @@ This is the remaining live-capture sub-plan of the approved OKX public-source lo
 - `AcknowledgedPaperMarketDataSourceInterface` for pending-event acknowledgement;
 - `PaperDatasetRecorder` for durable append, exact replay detection, identity conflict detection, sequence-gap accounting, crash-tail recovery, incomplete state, and explicit completion;
 - `PaperReplayReader` for the equality proof;
-- `OkxPaperPublicConfig` for the exact REST and public WebSocket URI allowlists;
+- `OkxPaperPublicConfig` for the exact REST, Public WebSocket, and credential-free Business WebSocket URI allowlists;
 - `OkxPaperPublicRestClientInterface` for current candles, recent trades, and REST order-book snapshots;
 - `OkxPaperMarketEventNormalizer`, `OkxPaperSourceOrdinal`, `OkxMaterializedBookState`, and `OkxPaperInstrumentMap` for all accepted market events;
 - the callback-generation, delayed-connection close, deterministic timer, heartbeat, and reconnect patterns from `PawlOkxPrivateWebSocketTransport` and `OkxPrivateWebSocketWorker`, but none of their authenticated dependencies.
 
-The implementation is limited to public OKX BTC/ETH acquisition and durable local recording. It does not add an operator command, web endpoint, controller, Messenger handler, execution coordinator, provider integration, database write, exchange account read, credential, login/signature, simulated-trading header, private/business WebSocket path, or exchange mutation. It does not change strategy, MTF, indicators, EntryZone, sizing, leverage, Risk, SL/TP, live guards, Fake execution, or any YAML strategy profile. CI uses only fakes and checked-in fixtures; a real public-network smoke test remains opt-in and is not part of the required gates.
+The implementation is limited to public OKX BTC/ETH acquisition and durable local recording. It does not add an operator command, web endpoint, controller, Messenger handler, execution coordinator, provider integration, database write, exchange account read, credential, login/signature, simulated-trading header, private WebSocket path, or exchange mutation. The Business WebSocket path is allowed only at the exact canonical URI and only as the credential-free public candles transport; no authenticated or private Business operation enters scope. It does not change strategy, MTF, indicators, EntryZone, sizing, leverage, Risk, SL/TP, live guards, Fake execution, or any YAML strategy profile. CI uses only fakes and checked-in fixtures; a real public-network smoke test remains opt-in and is not part of the required gates.
 
 ## Existing Contracts That Must Remain Stable
 
 - Keep `PaperMarketDataSourceInterface::events(): iterable` and `AcknowledgedPaperMarketDataSourceInterface::{acknowledge(),stop(),isComplete()}` unchanged.
 - Keep `PaperDatasetRecorder::append()` as the authority for `APPENDED`, `REPLAYED`, `market_event_identity_conflict`, `market_event_out_of_order`, and manifest sequence-gap counts.
-- Keep `OkxPaperPublicConfig::WEB_SOCKET_URI` equal to `wss://ws.okx.com:8443/ws/v5/public`; the live transport receives only `$config->webSocketUri` after that constructor has accepted it.
+- Keep `OkxPaperPublicConfig::WEB_SOCKET_URI` equal to `wss://ws.okx.com:8443/ws/v5/public` and `OkxPaperPublicConfig::BUSINESS_WEB_SOCKET_URI` equal to `wss://ws.okx.com:8443/ws/v5/business`. The Public transport receives only `$config->webSocketUri`; the Business transport receives only `$config->businessWebSocketUri`; both values reach a transport only after exact constructor allowlist validation.
 - Keep `OkxPaperPublicRestClientInterface` credential-free and restricted to its five existing `GET` methods. Initial capture uses `currentCandles()`, `recentTrades()`, and `orderBook()`; reconnect may additionally use the existing `historyCandles()`/`historyTrades()` pagination solely to prove bounded exact overlap when the acknowledged frontier is absent from current/recent results.
 - Preserve the existing public normalizer constructor named arguments (`clock`, `instruments`, `ordinals`) and existing normalized payload fields. New live methods must use the same injected `OkxPaperSourceOrdinal` instance restored from the live checkpoint.
 - Keep `PaperLiveMarketDataSourceInterface` as a dedicated live-only contract; do not fold healthy-stop or failure state into the historical or generic source interfaces.
-- A source `stop()` is an unhealthy/emergency stop and must leave the dataset incomplete. Only the new explicit `requestHealthyOperatorStop()` method may make `isComplete()` true, and only after the queue is drained, no event is pending acknowledgement, subscriptions are ready, freshness is healthy, and the checkpointed stop continuation has acknowledged both final symbol events.
+- A source `stop()` is an unhealthy/emergency stop and must leave the dataset incomplete. Only the new explicit `requestHealthyOperatorStop()` method may make `isComplete()` true, and only after both socket queues are drained, no event is pending acknowledgement, Public readiness is 4/4, Business readiness is 8/8, both sockets are fresh, and the checkpointed stop continuation has acknowledged both final symbol events.
 - Detect a sequential gap only for the `books` stream, where OKX `seqId`/`prevSeqId` proves continuity. Trades and candles have no invented sequence: recovery is allowed only from exact acknowledged `{source_identity,natural_identity,canonical_digest}` overlap, and failure to prove that overlap is fatal `market_data_gap_unresolved`.
 
 ## Proposed Public Signatures
@@ -60,6 +60,47 @@ interface OkxPaperPublicWebSocketTransportInterface
 interface OkxPaperPublicWebSocketTransportFactoryInterface
 {
     public function create(LoopInterface $loop): OkxPaperPublicWebSocketTransportInterface;
+}
+
+final readonly class OkxPaperPublicConfig
+{
+    public const REST_BASE_URI = 'https://www.okx.com';
+    public const WEB_SOCKET_URI = 'wss://ws.okx.com:8443/ws/v5/public';
+    public const BUSINESS_WEB_SOCKET_URI = 'wss://ws.okx.com:8443/ws/v5/business';
+
+    public function __construct(
+        public bool $acquisitionEnabled,
+        public string $restBaseUri,
+        public string $webSocketUri,
+        public string $dataRoot,
+        public string $businessWebSocketUri = self::BUSINESS_WEB_SOCKET_URI,
+    );
+}
+
+final class OkxPaperPublicSubscriptionSet
+{
+    /** @return list<array{channel: string, instId: string}> */
+    public function publicArguments(): array;
+    /** @return list<array{channel: string, instId: string}> */
+    public function businessArguments(): array;
+    /** @param array<array-key, mixed> $arg */
+    public function acknowledgePublic(array $arg): void;
+    /** @param array<array-key, mixed> $arg */
+    public function acknowledgeBusiness(array $arg): void;
+    public function isPublicRequired(string $channel, string $instrumentId): bool;
+    public function isBusinessRequired(string $channel, string $instrumentId): bool;
+    public function isPublicReady(): bool;
+    public function isBusinessReady(): bool;
+    public function isReady(): bool;
+    public function reset(): void;
+}
+
+final readonly class OkxPaperPublicFrameDecoder
+{
+    /** @return array<string, mixed> */
+    public function decodePublic(#[\SensitiveParameter] string $frame): array;
+    /** @return array<string, mixed> */
+    public function decodeBusiness(#[\SensitiveParameter] string $frame): array;
 }
 
 final readonly class OkxPaperLivePolicy
@@ -149,22 +190,22 @@ final class PaperLiveDatasetCapture
 
 Create focused runtime units under `trading-app/src/Trading/Paper/Okx/Live/`:
 
-- `OkxPaperPublicWebSocketTransportInterface.php`: injectable public-only callback transport port.
-- `OkxPaperPublicWebSocketTransportFactoryInterface.php`: creates a fresh public transport bound to one supplied `LoopInterface`.
+- `OkxPaperPublicWebSocketTransportInterface.php`: injectable credential-free callback transport port used only with a config-validated Public or Business URI.
+- `OkxPaperPublicWebSocketTransportFactoryInterface.php`: creates a fresh credential-free transport bound to one supplied `LoopInterface`; the live-source factory calls it twice per source.
 - `PawlOkxPaperPublicWebSocketTransportFactory.php`: constructs one fresh Pawl connector/transport per `create()` with the exact loop used by its source.
 - `PawlOkxPaperPublicWebSocketTransport.php`: per-session Pawl adapter with stale-generation suppression, literal ping frames, bounded frame admission, and delayed-connection close.
 - `OkxPaperLivePolicy.php`: one location for finite reconnect, heartbeat, frame/queue, and resync limits.
-- `OkxPaperPublicSubscriptionSet.php`: deterministic 12-entry BTC/ETH public subscription allowlist and acknowledgement validation.
-- `OkxPaperPublicFrameDecoder.php`: bounded strict decoding of `pong`, subscribe/error controls, trades, candles, and books frames.
-- `OkxPaperPublicFrameQueue.php`: FIFO count/byte backpressure boundary.
+- `OkxPaperPublicSubscriptionSet.php`: deterministic split allowlist and acknowledgement validation: four Public trades/books pairs plus eight Business candle pairs, with total readiness only at 4+8 exact ACKs.
+- `OkxPaperPublicFrameDecoder.php`: bounded strict socket-aware decoding of `pong`, realistic subscribe/error controls, Public trades/books, and Business candles.
+- `OkxPaperPublicFrameQueue.php`: FIFO count/byte backpressure boundary; the source owns one fresh instance per socket so raw origin cannot be lost.
 - `OkxPaperBookDeltaStatus.php` and `OkxPaperBookDeltaResult.php`: explicit `APPLIED`/`REPLAYED` delta outcome without a nullable book state.
 - `OkxPaperOrderBookMaterializer.php`: full four-field raw bid/ask state, zero-size deletion, REST/WS snapshot replacement, and strict `prevSeqId` continuity.
 - `OkxPaperStreamFrontier.php`: validated acknowledged `{source_identity,natural_identity,canonical_digest}` evidence shared by REST/WS recovery.
 - `OkxPaperLiveCheckpoint.php`: typed authoritative checkpoint containing dataset/config identity, phase and pending continuation, remaining symbols/boundaries, acknowledged stream frontiers, per-symbol source epochs, ordinal state, exact pending event/frontier, healthy-stop progress, reconnect stability/budget, and per-symbol resync budget/deadline/evidence.
 - `OkxPaperLiveCheckpointStore.php`: private atomic checkpoint persistence below the dataset's existing `checkpoints/` directory.
 - `OkxPaperLiveIntegrityException.php`: stable public-source failure codes without raw payload/error text.
-- `OkxPaperPublicLiveSource.php`: acknowledged source state machine coordinating warm-up, transport, normalization, resync, heartbeat, reconnect, and clean stop.
-- `OkxPaperPublicLiveSourceFactory.php`: runtime factory that validates the stored manifest, computes the canonical config hash, loads the matching checkpoint, and creates one fresh loop-bound source/transport session for a dataset directory without making scalar-dependent runtime objects autowired singletons.
+- `OkxPaperPublicLiveSource.php`: acknowledged source state machine coordinating warm-up, two transports/queues, exact 4+8 subscription readiness, normalization, resync, heartbeat, reconnect, and clean stop.
+- `OkxPaperPublicLiveSourceFactory.php`: runtime factory that validates the stored manifest, computes the canonical config hash, loads the matching checkpoint, and creates two fresh loop-bound transport sessions plus one source for a dataset directory without making scalar-dependent runtime objects autowired singletons.
 
 Create one generic durable bridge:
 
@@ -200,7 +241,7 @@ Modify these existing contract tests rather than adding overlapping scanners:
 - `trading-app/tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php`
 - `trading-app/tests/Trading/Paper/PaperFixtureContractTest.php`
 
-### Task 1: Public-Only Pawl Transport and Deterministic CI Fake
+### Task 1: Credential-Free Public-Market Pawl Transport and Deterministic CI Fake
 
 **Files:**
 - Create: `trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicWebSocketTransportInterface.php`
@@ -241,7 +282,7 @@ self::assertSame(
 );
 ```
 
-Also prove that the connector closure receives exactly one string URI and no headers/options, `send()` before open fails with `okx_paper_public_ws_not_connected`, a frame above `MAX_FRAME_BYTES` closes and reports only `okx_paper_public_ws_frame_too_large`, a delayed connection resolved after `close()` is immediately closed without calling `onOpen`, and callbacks from an old generation are ignored after reconnect. Test `PawlOkxPaperPublicWebSocketTransportFactory::create(LoopInterface $loop)` twice: each call returns a distinct transport and distinct Pawl connector, each connector uses the exact supplied loop, and callbacks/connections from one instance never appear in the other. Reflect the interfaces, factory, and Pawl constructor to prove they expose no `key`, `secret`, `passphrase`, `sign`, `authorization`, `header`, `private`, `business`, or simulated-trading parameter.
+Also prove that the connector closure receives exactly one config-validated string URI and no headers/options, `send()` before open fails with `okx_paper_public_ws_not_connected`, a frame above `MAX_FRAME_BYTES` closes and reports only `okx_paper_public_ws_frame_too_large`, a delayed connection resolved after `close()` is immediately closed without calling `onOpen`, and callbacks from an old generation are ignored after reconnect. Test `PawlOkxPaperPublicWebSocketTransportFactory::create(LoopInterface $loop)` twice: each call returns a distinct transport and distinct Pawl connector, each connector uses the exact supplied loop, and callbacks/connections from one instance never appear in the other. Reflect the interfaces, factory, and Pawl constructor to prove they expose no credential, auth, header, private-path, simulated-trading, or free-form endpoint-kind selector; the same credential-free adapter is instantiated independently for the allowlisted Public and Business URIs.
 
 The deterministic fake retains callback sets by connection attempt and exposes:
 
@@ -312,38 +353,51 @@ git commit -m "feat(paper): add injectable OKX public websocket transport"
 - Create: `trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicFrameDecoder.php`
 - Create: `trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicFrameQueue.php`
 - Test: `trading-app/tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php`
+- Modify: `trading-app/src/Trading/Paper/Okx/OkxPaperPublicConfig.php`
+- Modify: `trading-app/tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php`
+- Modify: `trading-app/tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php`
+- Modify: `trading-app/config/services.yaml`
 
 - [ ] **Step 1: Write failing subscription, decoding, and backpressure tests**
 
-Assert that `OkxPaperPublicSubscriptionSet::arguments()` returns this exact stable list for the instrument-map order BTC then ETH:
+Assert that `OkxPaperPublicSubscriptionSet::publicArguments()` returns exactly four Public-socket subscriptions in instrument-map order BTC then ETH:
 
 ```php
 [
     ['channel' => 'trades', 'instId' => 'BTC-USDT-SWAP'],
-    ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
-    ['channel' => 'candle5m', 'instId' => 'BTC-USDT-SWAP'],
-    ['channel' => 'candle15m', 'instId' => 'BTC-USDT-SWAP'],
-    ['channel' => 'candle1H', 'instId' => 'BTC-USDT-SWAP'],
     ['channel' => 'books', 'instId' => 'BTC-USDT-SWAP'],
     ['channel' => 'trades', 'instId' => 'ETH-USDT-SWAP'],
-    ['channel' => 'candle1m', 'instId' => 'ETH-USDT-SWAP'],
-    ['channel' => 'candle5m', 'instId' => 'ETH-USDT-SWAP'],
-    ['channel' => 'candle15m', 'instId' => 'ETH-USDT-SWAP'],
-    ['channel' => 'candle1H', 'instId' => 'ETH-USDT-SWAP'],
     ['channel' => 'books', 'instId' => 'ETH-USDT-SWAP'],
 ]
 ```
 
-Prove that acknowledgements are idempotent only for an exact allowlisted `(channel, instId)` pair; an unknown symbol, `tickers`, `books-l2-tbt`, `trades-all`, private/account channel, missing field, additional arg field, or error acknowledgement fails with `okx_paper_public_subscription_invalid`. `isReady()` becomes true only after all 12 exact acknowledgements.
+Assert that `businessArguments()` returns exactly eight credential-free Business-socket candle subscriptions:
 
-For `OkxPaperPublicFrameDecoder::decode(string $frame): array`, accept only:
+```php
+[
+    ['channel' => 'candle1m', 'instId' => 'BTC-USDT-SWAP'],
+    ['channel' => 'candle5m', 'instId' => 'BTC-USDT-SWAP'],
+    ['channel' => 'candle15m', 'instId' => 'BTC-USDT-SWAP'],
+    ['channel' => 'candle1H', 'instId' => 'BTC-USDT-SWAP'],
+    ['channel' => 'candle1m', 'instId' => 'ETH-USDT-SWAP'],
+    ['channel' => 'candle5m', 'instId' => 'ETH-USDT-SWAP'],
+    ['channel' => 'candle15m', 'instId' => 'ETH-USDT-SWAP'],
+    ['channel' => 'candle1H', 'instId' => 'ETH-USDT-SWAP'],
+]
+```
+
+Use only the explicit `acknowledgePublic()` and `acknowledgeBusiness()` methods. Prove that acknowledgements are idempotent only for an exact allowlisted `(channel, instId)` pair on the correct socket; a Public candle ACK, Business trades/books ACK, unknown symbol, `tickers`, `books-l2-tbt`, `trades-all`, private/account channel, missing field, additional arg field, or error acknowledgement fails with `okx_paper_public_subscription_invalid`. `isPublicReady()` becomes true only after its four ACKs, `isBusinessReady()` only after its eight ACKs, and total `isReady()` only after all 12 exact ACKs.
+
+For the explicit `decodePublic()` and `decodeBusiness()` entry points, accept only:
 
 - literal `pong`;
-- `{"event":"subscribe","arg":{"channel":"trades","instId":"BTC-USDT-SWAP"}}` (and the other exact required pairs) with no extra arg field;
-- an OKX `error` control frame reduced to stable code `okx_paper_public_protocol_error` without its message;
-- data frames with an exact `arg`, list `data`, and channel-specific `action` rules (`books` requires `snapshot|update`; trades/candles reject `action`).
+- realistic OKX subscribe ACKs with exact `event`, exact socket-routed `arg`, mandatory `connId`, and optional `id`;
+- realistic OKX `error` frames with exact `event`, `code`, `msg`, mandatory `connId`, and optional `id`/exact socket-routed `arg`, always reduced to stable code `okx_paper_public_protocol_error` without returning metadata or message;
+- Public data frames only for `trades`/`books`, Business data frames only for the four candle channels, with an exact `arg`, list `data`, and channel-specific `action` rules (`books` requires `snapshot|update`; trades/candles reject `action`).
 
-Reject malformed JSON, list roots, blank/oversized frames, login controls, unexpected fields that alter routing, unknown instruments/channels, and non-list `data` with `okx_paper_public_message_invalid` and no raw bytes in the exception.
+Validate `id` as `^[A-Za-z0-9]{1,32}$` as required by OKX. Validate `connId` conservatively as the bounded canonical identifier `^[A-Za-z0-9]{1,64}$`. Both fields are transport metadata: after validation, remove them from the returned subscribe control and never use them to choose a channel, instrument, or socket. Keep every `arg` strict and exact. Reject missing/empty/non-string/overlong/non-canonical metadata, extra root metadata, malformed JSON, list roots, blank/oversized frames, login controls, wrong-socket channels, unknown instruments/channels, and non-list `data` with `okx_paper_public_message_invalid`. Inline realistic fixtures for subscribe with `connId`, subscribe with `id`+`connId`, error with `connId`, error with optional `id`/`arg`, and every invalid metadata class. No exception may contain raw frame bytes, OKX `msg`, `id`, or `connId`.
+
+Extend `OkxPaperPublicConfig` with the exact `BUSINESS_WEB_SOCKET_URI = 'wss://ws.okx.com:8443/ws/v5/business'` and a dedicated `businessWebSocketUri` value supplied by `OKX_PAPER_PUBLIC_BUSINESS_WS_URI`. Prove that the Public and Business properties each accept only their one exact URI and reject cross-routed paths, `/private`, wrong schemes/hosts/ports, userinfo, suffixes, query, fragment, slash, and blank values. The Business socket remains a public, credential-free candle channel: add no key, secret, passphrase, header, login, signature, or simulated-trading option.
 
 For `OkxPaperPublicFrameQueue`, enqueue raw strings FIFO while tracking count and bytes. The 257th frame or any enqueue above 2 MiB aggregate throws `market_data_backpressure_exhausted`; `dequeue()` subtracts exact bytes; `clear()` returns count/bytes to zero.
 
@@ -351,26 +405,38 @@ For `OkxPaperPublicFrameQueue`, enqueue raw strings FIFO while tracking count an
 
 ```bash
 cd trading-app
-php vendor/bin/phpunit tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php
+php vendor/bin/phpunit \
+  tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php
 ```
 
-Expected: failures identify the missing subscription, decoder, and queue classes.
+Expected: failures identify the missing explicit Public/Business subscription/decoder methods, realistic control metadata handling, Business URI config value, and dedicated service wiring while the bounded queue cases remain red/green according to their current implementation state.
 
 - [ ] **Step 3: Implement the allowlisted protocol components**
 
-Use `OkxPaperInstrumentMap::nativeInstrumentIds()` and the fixed channel order above; do not accept caller-supplied channels or symbols. Expose these methods:
+Use `OkxPaperInstrumentMap::nativeInstrumentIds()` and the fixed per-socket channel orders above; do not accept caller-supplied channels, symbols, endpoint strings, or route selectors. Expose these methods:
 
 ```php
 /** @return list<array{channel: string, instId: string}> */
-public function arguments(): array;
+public function publicArguments(): array;
+/** @return list<array{channel: string, instId: string}> */
+public function businessArguments(): array;
 /** @param array<array-key, mixed> $arg */
-public function acknowledge(array $arg): void;
-public function isRequired(string $channel, string $instrumentId): bool;
+public function acknowledgePublic(array $arg): void;
+/** @param array<array-key, mixed> $arg */
+public function acknowledgeBusiness(array $arg): void;
+public function isPublicRequired(string $channel, string $instrumentId): bool;
+public function isBusinessRequired(string $channel, string $instrumentId): bool;
+public function isPublicReady(): bool;
+public function isBusinessReady(): bool;
 public function isReady(): bool;
 public function reset(): void;
 
 /** @return array<string, mixed> */
-public function decode(#[\SensitiveParameter] string $frame): array;
+public function decodePublic(#[\SensitiveParameter] string $frame): array;
+/** @return array<string, mixed> */
+public function decodeBusiness(#[\SensitiveParameter] string $frame): array;
 
 public function enqueue(#[\SensitiveParameter] string $frame): void;
 public function dequeue(): ?string;
@@ -379,17 +445,23 @@ public function bytes(): int;
 public function clear(): void;
 ```
 
-Mark raw frame parameters `#[\SensitiveParameter]`. Convert every `JsonException`, shape failure, or protocol error to a stable `OkxPaperLiveIntegrityException`; never concatenate frame contents or OKX `msg` values.
+Mark raw frame parameters `#[\SensitiveParameter]`. Both decoder methods share only private structural logic and select membership through their explicit method, never a caller-supplied endpoint string. Convert every `JsonException`, shape failure, or protocol error to a stable `OkxPaperLiveIntegrityException`; never concatenate frame contents, metadata, or OKX `msg` values.
 
 - [ ] **Step 4: Run focused tests and PHPStan**
 
 ```bash
 cd trading-app
 php vendor/bin/phpunit tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php
+php vendor/bin/phpunit \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php
 php vendor/bin/phpstan analyse \
+  src/Trading/Paper/Okx/OkxPaperPublicConfig.php \
   src/Trading/Paper/Okx/Live/OkxPaperPublicSubscriptionSet.php \
   src/Trading/Paper/Okx/Live/OkxPaperPublicFrameDecoder.php \
   src/Trading/Paper/Okx/Live/OkxPaperPublicFrameQueue.php \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php \
+  tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php \
   tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php \
   --memory-limit=1G
 ```
@@ -403,7 +475,11 @@ git add \
   trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicSubscriptionSet.php \
   trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicFrameDecoder.php \
   trading-app/src/Trading/Paper/Okx/Live/OkxPaperPublicFrameQueue.php \
-  trading-app/tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php
+  trading-app/tests/Trading/Paper/Okx/Live/OkxPaperPublicProtocolTest.php \
+  trading-app/src/Trading/Paper/Okx/OkxPaperPublicConfig.php \
+  trading-app/tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php \
+  trading-app/tests/Trading/Paper/Okx/Http/OkxPaperPublicServiceWiringTest.php \
+  trading-app/config/services.yaml
 git commit -m "feat(paper): constrain OKX public subscriptions and frames"
 ```
 
@@ -688,7 +764,7 @@ Expected: failures identify the missing stream frontier, authoritative checkpoin
 
 - [ ] **Step 3: Implement typed validation and atomic persistence**
 
-Reuse `PaperDatasetManifest::assertDatasetId()`, `CanonicalJson`, `PaperMarketEvent::fromArray()`, `OkxPaperSourceOrdinal::restore()`, and `PaperDatasetRecorderFilesystem`; do not invent another event format. `configuration_sha256` is the canonical hash of venue `okx`, the exact accepted REST/WS URIs from the validated config instance, both native symbols, the exact 12 subscription args, and all deterministic `OkxPaperLivePolicy` values. It contains no filesystem path or environment value. The runtime factory, not the source, computes this hash and supplies the already-loaded checkpoint.
+Reuse `PaperDatasetManifest::assertDatasetId()`, `CanonicalJson`, `PaperMarketEvent::fromArray()`, `OkxPaperSourceOrdinal::restore()`, and `PaperDatasetRecorderFilesystem`; do not invent another event format. `configuration_sha256` is the canonical hash of venue `okx`, the exact accepted REST/Public-WS/Business-WS URIs from the validated config instance, both native symbols, the ordered four Public subscription args, the ordered eight Business subscription args, and all deterministic `OkxPaperLivePolicy` values. It contains no filesystem path or environment value. The runtime factory, not the source, computes this hash and supplies the already-loaded checkpoint.
 
 Each transition is write-ahead: persist the exact next external transition and its attempt/deadline/boundaries before executing it; after success, persist the next continuation before issuing the next external action. On restart, repeat the persisted transition idempotently with the same budget and absolute UTC deadline. A deadline already elapsed fails/advances the same saved attempt according to policy instead of granting a fresh timeout.
 
@@ -830,8 +906,10 @@ BTC orderBook
 ETH currentCandles 1m,5m,15m,1H
 ETH recentTrades
 ETH orderBook
-connect wss://ws.okx.com:8443/ws/v5/public
-send one subscribe command containing the exact 12 args
+connect Public transport to wss://ws.okx.com:8443/ws/v5/public
+send Public subscribe command containing only the exact 4 trades/books args
+connect Business transport to wss://ws.okx.com:8443/ws/v5/business
+send Business subscribe command containing only the exact 8 candle args
 ```
 
 For current candles, request limit `300`, sort confirmed rows by timestamp ascending, compare each row to its durable acknowledged REST frontier, skip only hash-verified rows through that exact frontier, and normalize later rows with `warmupCandle()`. Request recent trades with limit `500`, sort by `(ts, numeric tradeId)` ascending, and apply the same exact frontier rule before `recoveryTrade()`. A fresh stream with a null frontier emits the validated response; a restarted warm-up with a non-null frontier must find exact overlap in current/recent data or use the bounded historical-overlap algorithm specified in Task 8, otherwise it fails `market_data_gap_unresolved`. Every accepted row receives an `OkxPaperStreamFrontier`; advance it only with the event acknowledgement, including every row of a multi-row response. Request order-book depth `400`, require exactly the existing single response row, checkpoint the pending transition/source epoch/remaining boundary before the REST call and before each yield, materialize it before connecting, then emit in order:
@@ -843,13 +921,13 @@ snapshot_boundary(reason=initial)
 
 The test transport emits a books update synchronously from `connect()`. Assert that its normalized `top_of_book(origin=ws_books)` appears only after both REST snapshot/boundary pairs have been yielded and acknowledged.
 
-Feed exact subscribe acknowledgements, the four candle fixtures, `ws-trades.json`, `ws-books-snapshot.json`, and `ws-books-update.json`. Assert each data row is routed to the existing normalizer, unconfirmed candles are skipped, every accepted REST/WS/control event advances its exact stream frontier only after acknowledgement, all events use only BTCUSDT/ETHUSDT and supported channels, and no raw frame or header reaches the payload. Replay a multi-row trades frame after acknowledging only its first row: the acknowledged row is hash-verified and skipped, while each remaining row is yielded exactly once in original frame order; a crash before an acknowledgement re-yields that exact pending event first.
+Feed the four exact Public subscribe acknowledgements on the Public fake, the eight exact Business acknowledgements on the Business fake, the four candle fixtures only through Business, and `ws-trades.json`, `ws-books-snapshot.json`, and `ws-books-update.json` only through Public. Assert each data row is routed to the existing normalizer, unconfirmed candles are skipped, every accepted REST/WS/control event advances its exact stream frontier only after acknowledgement, all events use only BTCUSDT/ETHUSDT and supported channels, and no raw frame or header reaches the payload. Prove that Public candle controls/data and Business trades/books controls/data fail closed before normalization. Replay a multi-row trades frame after acknowledging only its first row: the acknowledged row is hash-verified and skipped, while each remaining row is yielded exactly once in original frame order; a crash before an acknowledgement re-yields that exact pending event first.
 
 Also prove:
 
 - acquisition disabled fails before REST or transport with `okx_paper_public_acquisition_disabled`;
-- any config URI outside the existing constants is rejected by `OkxPaperPublicConfig` construction before the source can be created;
-- no data frame is consumed until all 12 subscription acknowledgements are received; frames may wait only in the bounded queue;
+- any config URI outside the exact REST, Public WS, and Business WS constants is rejected by `OkxPaperPublicConfig` construction before the source can be created;
+- no data frame is consumed until Public readiness is 4/4, Business readiness is 8/8, and combined readiness is 12/12; frames may wait only in their socket's bounded queue;
 - one yielded event must be acknowledged before another event is yielded; a wrong/missing acknowledgement raises `okx_paper_live_acknowledgement_invalid`;
 - pending checkpoint event is yielded before any REST call on restart;
 - restarting from `phase`, `pending_transition`, `remaining_symbols`, or `remaining_boundaries` repeats that exact next transition with the saved source epoch/budget, and never skips to the next symbol or boundary.
@@ -870,7 +948,8 @@ Construct the source with explicit dependencies and no credentials:
 ```php
 public function __construct(
     private OkxPaperPublicRestClientInterface $restClient,
-    private OkxPaperPublicWebSocketTransportInterface $transport,
+    private OkxPaperPublicWebSocketTransportInterface $publicTransport,
+    private OkxPaperPublicWebSocketTransportInterface $businessTransport,
     private OkxPaperPublicConfig $config,
     private ClockInterface $clock,
     private OkxPaperLiveCheckpointStore $checkpointStore,
@@ -879,7 +958,8 @@ public function __construct(
     ?OkxPaperInstrumentMap $instruments = null,
     ?OkxPaperPublicSubscriptionSet $subscriptions = null,
     ?OkxPaperPublicFrameDecoder $decoder = null,
-    ?OkxPaperPublicFrameQueue $queue = null,
+    ?OkxPaperPublicFrameQueue $publicQueue = null,
+    ?OkxPaperPublicFrameQueue $businessQueue = null,
 );
 ```
 
@@ -887,7 +967,7 @@ The runtime factory passes an already manifest/config-validated checkpoint. At c
 
 Derive frontiers from raw validated source rows before normalization. `source_identity` is `tradeId` for trades, `<bar>/<opening-ts>` for candles, and `seqId` for books; `natural_identity` includes OKX/native instrument/channel plus that identity; `canonical_digest` hashes the canonical market fields and excludes receipt timestamp and REST/WS origin. Control/boundary identities are stable from state/reason plus persisted epoch/sequence. Never use arrival index, ordinal, local time, or a fabricated `prev/seq` for trades/candles.
 
-Use `LoopInterface::run()`/`stop()` as the pull bridge: stop the loop when at least one normalized event is ready or the source reaches a terminal state, yield one event, and resume the loop only after acknowledgement. Raw transport callbacks only enqueue bounded frames and schedule draining; they never call the recorder or downstream consumer. For `OkxPaperBookDeltaResult`, emit only `APPLIED.materializedState()` and silently hash-verify `REPLAYED`; never test a nullable state.
+Use `LoopInterface::run()`/`stop()` as the pull bridge: stop the loop when at least one normalized event is ready or the source reaches a terminal state, yield one event, and resume the loop only after acknowledgement. Public callbacks enqueue only into `$publicQueue` and drain only through `decodePublic()`; Business callbacks enqueue only into `$businessQueue` and drain only through `decodeBusiness()`. Raw transport callbacks never call the recorder or downstream consumer. For `OkxPaperBookDeltaResult`, emit only `APPLIED.materializedState()` and silently hash-verify `REPLAYED`; never test a nullable state.
 
 - [ ] **Step 4: Run the initial-flow suite and PHPStan**
 
@@ -919,10 +999,10 @@ git commit -m "feat(paper): stream warmed OKX public market events"
 
 - [ ] **Step 1: Write failing sequence-gap recovery tests**
 
-After a valid books snapshot/update, deliver `ws-books-gap.json`. Assert the source:
+After a valid books snapshot/update on the Public transport, deliver `ws-books-gap.json`. Assert the source:
 
 1. does not emit/apply the gapped delta;
-2. pauses frame draining for that instrument while leaving frames in the bounded queue;
+2. pauses frame draining for that instrument while leaving frames in the Public bounded queue;
 3. checkpoints `phase=resyncing`, the exact pending transition, remaining boundary, and that symbol's `{attempt:1,frontier:<last acknowledged ws/books frontier>,source_sequence:<current seqId>,deadline_at:<now+10s>,policy:'book_seq_overlap_v1'}` before scheduling a timeout or calling REST;
 4. calls `OkxPaperSourceOrdinal::reserveGap('okx/<SYMBOL>/top_of_book')` exactly once for the whole recovery cycle, including restart/retry;
 5. increments and durably saves the symbol source epoch before the external transition;
@@ -932,22 +1012,22 @@ After a valid books snapshot/update, deliver `ws-books-gap.json`. Assert the sou
 9. clears that symbol's resync state only after both acknowledgements and verified book overlap, then resumes FIFO processing;
 10. causes `PaperDatasetRecorder` to count the reserved normalized ordinal as one visible top-of-book sequence gap.
 
-Expire attempt one exactly at `RESYNC_ATTEMPT_TIMEOUT_SECONDS`, ignore its late REST result/timer callback by generation, persist attempt two with a new absolute deadline before starting it, and preserve the same behavior across restart. Make three consecutive REST failures, timeouts, or snapshots that cannot connect to the first retained delta terminate with exactly `market_data_gap_unresolved`. Assert no fourth REST call, no fresh timeout budget after restart, no fallback venue/client/path, queue draining stops, transport closes, and `PaperLiveDatasetCapture` leaves the manifest incomplete. Explicitly assert that this `seqId`/`prevSeqId` gap path is reachable only for `books`; trade/candle frames never enter it or receive a fabricated source sequence.
+Expire attempt one exactly at `RESYNC_ATTEMPT_TIMEOUT_SECONDS`, ignore its late REST result/timer callback by generation, persist attempt two with a new absolute deadline before starting it, and preserve the same behavior across restart. Make three consecutive REST failures, timeouts, or snapshots that cannot connect to the first retained delta terminate with exactly `market_data_gap_unresolved`. Assert no fourth REST call, no fresh timeout budget after restart, no fallback venue/client/path, both queues stop draining, both transports close, and `PaperLiveDatasetCapture` leaves the manifest incomplete. Explicitly assert that this `seqId`/`prevSeqId` gap path is reachable only for `books` on Public; trade/candle frames never enter it or receive a fabricated source sequence.
 
 - [ ] **Step 2: Write failing reconnect, heartbeat, freshness, and backpressure tests**
 
 Use `MockClock` and `DeterministicLoop` to prove:
 
-- close/error schedules exact delays `1,2,4,8,15,30` seconds and attempt seven fails with `okx_paper_public_reconnect_exhausted` rather than looping forever;
-- reconnect attempt/deadline/pending-connect transition is checkpointed before timer/connect, and restart repeats that same transition/delay/budget rather than granting another attempt;
-- a full exact 12-channel resubscription, subscription ACK, pong, control-event ACK, or replayed data ACK does not reset reconnect attempts;
+- close/error on either socket closes both sessions, clears both acknowledgement subsets, schedules exact delays `1,2,4,8,15,30` seconds for the pair, and attempt seven fails with `okx_paper_public_reconnect_exhausted` rather than looping forever;
+- reconnect attempt/deadline/pending-connect transitions for Public then Business are checkpointed before timer/connect, and restart repeats that same next transition/delay/budget rather than granting another attempt or skipping one socket;
+- a full exact resubscription of four Public plus eight Business pairs, subscription ACK, pong, control-event ACK, or replayed data ACK does not reset reconnect attempts;
 - after streaming resumes, checkpoint `stable_since` and increment `accepted_events` only when a newly accepted REST/WS market-data event advances its acknowledged frontier; reset reconnect attempt/deadline to zero/null only after both 30 uninterrupted seconds and 12 such accepted events, persist the reset, and prove a disconnect before either threshold continues with the next retry delay;
-- stale callbacks from earlier transport generations cannot enqueue, acknowledge, resync, or complete;
-- reconnect performs exact-frontier recovery for all candle/trade logical streams and sequenced recovery for books, increments source epochs, emits `connection_state=reconnecting`, then recovered rows, `top_of_book`, `snapshot_boundary=reconnect`, and only then resumes queued WS data;
-- after 20 seconds without any inbound frame, the source sends literal ping; `pong` within 10 seconds refreshes health and is never normalized/recorded; missing pong triggers reconnect;
-- a non-pong valid control/data frame also refreshes inbound freshness, but subscription readiness does not mask a stale socket;
-- frame 257 or aggregate queued bytes above 2 MiB fails with `market_data_backpressure_exhausted`, clears/closes transport, cancels all timers, and leaves the capture incomplete;
-- transport close, timer cancellation, and loop stop are idempotent.
+- stale callbacks from earlier generations of either transport cannot enqueue, acknowledge, resync, or complete;
+- reconnect creates/opens Public and Business sessions, sends only their exact 4/8 sets, performs exact-frontier recovery for all candle/trade logical streams and sequenced recovery for books, increments source epochs, emits `connection_state=reconnecting`, then recovered rows, `top_of_book`, `snapshot_boundary=reconnect`, and only then resumes the two queued WS flows;
+- each socket has independent inbound freshness: after 20 seconds without an inbound frame on that socket, the source sends literal ping on that transport; `pong` within 10 seconds refreshes only that socket and is never normalized/recorded; a missing pong on either socket triggers paired reconnect;
+- a non-pong valid socket-routed control/data frame refreshes only that socket's inbound freshness, and combined subscription readiness does not mask either stale socket;
+- frame 257 or aggregate queued bytes above 2 MiB on either queue fails with `market_data_backpressure_exhausted`, clears both queues, closes both transports, cancels all timers, and leaves the capture incomplete;
+- both transport closes, timer cancellation, and loop stop are idempotent.
 
 For each candle/trade stream, use its last acknowledged frontier as the reconnect anchor. First query `currentCandles($native,$bar,null,null,300)` or `recentTrades($native,500)`. Accept an exact frontier anywhere in the validated/sorted response, not only adjacent to the newest row, then emit only later rows in chronological order. If absent, persist `overlap_pagination_by_stream` before each call and follow the existing credential-free pagination contracts: candles use `historyCandles($native,$bar,$after,300)`; trades start with `historyTrades($native,2,$after,100)`, then persist the validated oldest `tradeId` and continue with `historyTrades($native,1,$tradeId,100)` exactly as `OkxHistoricalEventStream` does. Continue until the exact target frontier is found, the saved `pages_remaining` reaches zero, or the original saved deadline expires. A restart resumes the same endpoint, pagination type, cursor, target, remaining budget, and deadline. Test all of these cases:
 
@@ -958,7 +1038,7 @@ For each candle/trade stream, use its last acknowledged frontier as the reconnec
 
 For queued WS data after REST recovery, require an exact raw-row frontier overlap for trades/candles before accepting newer rows; exact duplicates are hash-verified and skipped. For books only, require `prevSeqId ===` the current materialized `seqId`. Never infer trade/candle continuity from numeric-looking `tradeId`, timestamp adjacency, row count, REST page order alone, or a local ordinal.
 
-For stopping, prove `stop()` always ends incomplete. Prove `requestHealthyOperatorStop()` is explicit and succeeds only when all subscriptions are ready, heartbeat freshness is within policy, no reconnect/resync is active, raw/normalized queues are drained, and no event awaits acknowledgement. It checkpoints `phase=stopping`, `healthy_stop.requested=true`, and ordered `remaining_symbols` before stopping callback admission; yields one final `connection_state=stopped` per saved symbol; removes a symbol only on acknowledgement; and checkpoints close/cancel/loop-stop transitions before executing them. Restart resumes the same next stopped event/transition. Only after both final acknowledgements and cleanup may it persist `phase=complete` and make `isComplete()` true. If any precondition becomes false, it ends incomplete with stable `okx_paper_public_healthy_stop_invalid`.
+For stopping, prove `stop()` always ends incomplete. Prove `requestHealthyOperatorStop()` is explicit and succeeds only when Public is 4/4 ready, Business is 8/8 ready, both socket freshness values are within policy, no reconnect/resync is active, both raw queues and the normalized queue are drained, and no event awaits acknowledgement. It checkpoints `phase=stopping`, `healthy_stop.requested=true`, and ordered `remaining_symbols` before stopping callback admission; yields one final `connection_state=stopped` per saved symbol; removes a symbol only on acknowledgement; and checkpoints both closes/cancel/loop-stop transitions before executing them. Restart resumes the same next stopped event/transition. Only after both final acknowledgements and cleanup may it persist `phase=complete` and make `isComplete()` true. If any precondition becomes false, it ends incomplete with stable `okx_paper_public_healthy_stop_invalid`.
 
 - [ ] **Step 3: Run recovery tests and verify the red state**
 
@@ -1121,13 +1201,13 @@ Boot the test kernel and prove:
 - `OkxPaperPublicWebSocketTransportFactoryInterface` resolves to `PawlOkxPaperPublicWebSocketTransportFactory`; no shared `OkxPaperPublicWebSocketTransportInterface` service exists;
 - `OkxPaperPublicLiveSourceFactory` receives only the public REST interface, public transport factory interface, `OkxPaperPublicConfig`, clock, `PaperDatasetManifestCodec`, and `PaperDatasetRecorderFilesystem`; its constructor has no credential/private/mutation dependency;
 - `create(string $datasetDirectory, ?LoopInterface $loop = null)` safely reads and decodes that directory's `manifest.json`, rejects symlink/replacement/non-recording/wrong-venue/wrong-BTC-ETH-symbol manifests, verifies the path dataset identity, computes the canonical configuration SHA-256 defined in Task 5, calls `loadOrCreate($manifest->datasetId,$configurationSha256)`, and passes the returned checkpoint into the source constructor;
-- each `create()` builds a fresh checkpoint store, subscriptions, decoder, queue, materializers, source, Pawl connector, and transport; it selects `$sessionLoop = $loop ?? Loop::get()` once and passes that exact object to both transport factory and source;
-- two sessions created with one loop have distinct transports/connectors/callback generations and no shared mutable state while both reference that one loop; sessions made with different loops never cross timers/callbacks; a checkpoint pending in dataset A never appears in dataset B;
+- each `create()` builds a fresh checkpoint store, split subscriptions, socket-aware decoder, Public queue, Business queue, materializers, source, two Pawl connectors, and two transports; it selects `$sessionLoop = $loop ?? Loop::get()` once, calls the transport factory twice, and passes that exact object to both transports and the source;
+- each source's Public and Business transports have distinct connectors/callback generations and no shared mutable state while both reference that source's one loop; two sources created with one loop therefore have four distinct transports/connectors, sources made with different loops never cross timers/callbacks, and a checkpoint pending in dataset A never appears in dataset B;
 - runtime-created `OkxPaperPublicLiveSource`, `OkxPaperLiveCheckpointStore`, and `PawlOkxPaperPublicWebSocketTransport` are excluded from automatic service construction, so no scalar dataset path/loop or singleton session is guessed by the container;
-- the config still defaults acquisition to false and to the exact canonical REST/WS URIs;
+- the config still defaults acquisition to false and to the exact canonical REST, Public WS, and Business WS URIs;
 - no service alias crosses into `App\Exchange\Okx\PrivateWebSocket`, `App\Exchange\Okx\OkxRestClient`, any gateway, signer, account, order, or mutation client.
 
-Extend `PaperFixtureContractTest` discovery to include `tests/Fixtures/OkxPaperPublic/**/*.json` in its size/header/secret/private-key scan while preserving the existing complete-dataset verification. Parse every new fixture as JSON, enforce 16 KiB maximum per fixture, and reject raw HTTP headers, credential fragments, login payloads, `/private`, `/business`, account IDs, wallets, and mutation paths. Allow public fixture channel values such as `books`, `trades`, and `candle1m`.
+Extend `PaperFixtureContractTest` discovery to include `tests/Fixtures/OkxPaperPublic/**/*.json` in its size/header/secret/private-key scan while preserving the existing complete-dataset verification. Parse every new fixture as JSON, enforce 16 KiB maximum per fixture, and reject raw HTTP headers, credential fragments, login payloads, `/private`, account IDs, wallets, and mutation paths. Do not treat the exact `/ws/v5/business` URI as private: if any endpoint URI appears, allow only the two exact canonical Public/Business values. Allow public fixture channel values such as `books`, `trades`, and `candle1m`.
 
 - [ ] **Step 2: Run wiring and fixture tests and verify the red state**
 
@@ -1154,7 +1234,7 @@ App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportFactoryInterface:
 App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory: ~
 ```
 
-Add the exact source, checkpoint-store, and Pawl transport paths to the existing `App\` resource `exclude` list because the factories own their dataset/loop-scoped construction. In `create()`, pin/read `manifest.json` through the existing filesystem protections, validate it before constructing any transport, derive the config hash from the validated config/instruments/subscriptions/policy, load the checkpoint, choose one loop, create one fresh transport with it, then pass that same loop and the loaded checkpoint to the fresh source. Do not add environment variables; the current `PAPER_MARKET_ACQUISITION_ENABLED`, `OKX_PAPER_PUBLIC_REST_BASE_URI`, `OKX_PAPER_PUBLIC_WS_URI`, and `PAPER_MARKET_DATA_ROOT` remain the entire public configuration surface. Do not expose the source or transport as a controller/command/public container service.
+Add the exact source, checkpoint-store, and Pawl transport paths to the existing `App\` resource `exclude` list because the factories own their dataset/loop-scoped construction. In `create()`, pin/read `manifest.json` through the existing filesystem protections, validate it before constructing any transport, derive the config hash from the validated config/instruments/split subscriptions/policy, load the checkpoint, choose one loop, create two fresh transports with it, then pass that same loop, both transports, both queues, and the loaded checkpoint to the fresh source. Add only the dedicated `OKX_PAPER_PUBLIC_BUSINESS_WS_URI` environment value with exact default `wss://ws.okx.com:8443/ws/v5/business`; together with `PAPER_MARKET_ACQUISITION_ENABLED`, `OKX_PAPER_PUBLIC_REST_BASE_URI`, `OKX_PAPER_PUBLIC_WS_URI`, and `PAPER_MARKET_DATA_ROOT`, this remains the entire credential-free public configuration surface. Do not expose the source or transports as a controller/command/public container service.
 
 - [ ] **Step 4: Run focused tests, container lint, YAML lint, and static analysis**
 
@@ -1182,18 +1262,30 @@ Expected: tests and lints pass; PHPStan reports no errors.
 
 ```bash
 cd trading-app
-! rg -n -i \
-  'authorization|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login' \
+set -euo pipefail
+require_no_match() {
+  set +e
+  rg "$@"
+  rc=$?
+  set -e
+  test "$rc" -eq 1
+}
+php vendor/bin/phpunit tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php
+rg -n \
+  'wss://ws\.okx\.com:8443/ws/v5/(public|business)' \
+  src/Trading/Paper/Okx/OkxPaperPublicConfig.php config/services.yaml
+require_no_match -n -i \
+  'authorization|authentication|authenticator|auth[_-]?header|headers?|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login|App\\Exchange\\Okx\\PrivateWebSocket' \
   src/Trading/Paper/Okx/Live
-! rg -n \
-  '/ws/v5/(private|business)|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' \
+require_no_match -n \
+  '/ws/v5/private|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' \
   src/Trading/Paper/Okx/Live
-! rg -n -i \
-  'authorization|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|wallet|mnemonic|/private|/business' \
+require_no_match -n -i \
+  'authorization|authentication|authenticator|auth[_-]?header|headers?|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|wallet|mnemonic|/private|App\\Exchange\\Okx\\PrivateWebSocket' \
   tests/Fixtures/OkxPaperPublic
 ```
 
-Expected: all three negated scans exit `0` with no matches. These scans deliberately target production live code and public fixtures so guard assertions in tests do not create false positives.
+Expected: the config contract test proves exact rejection of cross-routed, private, wrong-host/port/query values; the positive scan finds both and only the intended canonical defaults in the OKX Paper config/wiring. `require_no_match` succeeds only when `rg` returns exactly `1`; a match (`0`) or scan error (`>=2`) fails the gate. These scans cover credentials, authorization/authentication helpers, headers, the private WebSocket namespace, private URI and mutation paths. They deliberately target production live code and public fixtures so guard assertions in tests do not create false positives. `/ws/v5/business` is no longer globally forbidden because its one exact credential-free candle endpoint is required.
 
 - [ ] **Step 6: Commit wiring and public safety gates**
 
@@ -1242,14 +1334,23 @@ Expected: PHPStan reports no errors and both Symfony lints pass.
 
 ```bash
 cd trading-app
+set -euo pipefail
+require_no_match() {
+  set +e
+  rg "$@"
+  rc=$?
+  set -e
+  test "$rc" -eq 1
+}
 rg -n \
-  'https://www\.okx\.com|wss://ws\.okx\.com:8443/ws/v5/public|/api/v5/market/(history-candles|candles|history-trades|trades|books)' \
+  'https://www\.okx\.com|wss://ws\.okx\.com:8443/ws/v5/(public|business)|/api/v5/market/(history-candles|candles|history-trades|trades|books)' \
   src/Trading/Paper/Okx config/services.yaml
-! rg -n -i \
-  'authorization|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login' \
+php vendor/bin/phpunit tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php
+require_no_match -n -i \
+  'authorization|authentication|authenticator|auth[_-]?header|headers?|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login|App\\Exchange\\Okx\\PrivateWebSocket' \
   src/Trading/Paper/Okx/Live
-! rg -n \
-  '/ws/v5/(private|business)|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' \
+require_no_match -n \
+  '/ws/v5/private|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' \
   src/Trading/Paper/Okx/Live
 git diff --name-only 9b30db96...HEAD
 git diff --check 9b30db96...HEAD
@@ -1260,7 +1361,7 @@ git diff --check
 git diff --cached --check
 ```
 
-Expected: positive hits are limited to the existing canonical public config/market endpoints; both negative scans return no matches; the union of committed, unstaged, staged, and untracked name lists contains only files listed in this plan and contains no command, controller, route, strategy/MTF/EntryZone/Risk/SLTP/live-guard file; all diff checks exit `0`.
+Expected: positive hits include exactly the canonical REST, Public WS, Business WS, and public market endpoints; `OkxPaperPublicConfigTest` proves each socket property rejects the other path and every non-canonical value; both negative scans return no matches; the union of committed, unstaged, staged, and untracked name lists contains only files listed in this plan and contains no command, controller, route, strategy/MTF/EntryZone/Risk/SLTP/live-guard file; all diff checks exit `0`.
 
 - [ ] **Step 4: Prove no real network is required and no large dataset is tracked**
 
@@ -1307,6 +1408,14 @@ Expected: create this commit only when verification required an implementation/t
 
 ```bash
 cd trading-app
+set -euo pipefail
+require_no_match() {
+  set +e
+  rg "$@"
+  rc=$?
+  set -e
+  test "$rc" -eq 1
+}
 php vendor/bin/phpunit tests/Trading/Paper
 php vendor/bin/phpunit \
   tests/Exchange/Okx/PrivateWebSocket/OkxPrivateWebSocketWorkerTest.php \
@@ -1315,9 +1424,10 @@ php vendor/bin/phpunit \
 php vendor/bin/phpstan analyse src/Trading/Paper tests/Trading/Paper --memory-limit=1G
 php bin/console lint:container --no-debug
 php bin/console lint:yaml config
-rg -n 'https://www\.okx\.com|wss://ws\.okx\.com:8443/ws/v5/public|/api/v5/market/(history-candles|candles|history-trades|trades|books)' src/Trading/Paper/Okx config/services.yaml
-! rg -n -i 'authorization|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login' src/Trading/Paper/Okx/Live
-! rg -n '/ws/v5/(private|business)|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' src/Trading/Paper/Okx/Live
+php vendor/bin/phpunit tests/Trading/Paper/Okx/Http/OkxPaperPublicConfigTest.php
+rg -n 'https://www\.okx\.com|wss://ws\.okx\.com:8443/ws/v5/(public|business)|/api/v5/market/(history-candles|candles|history-trades|trades|books)' src/Trading/Paper/Okx config/services.yaml
+require_no_match -n -i 'authorization|authentication|authenticator|auth[_-]?header|headers?|ok-access|api[_-]?key|api[_-]?secret|passphrase|private[_-]?key|signature|simulated[_-]?trading|login|App\\Exchange\\Okx\\PrivateWebSocket' src/Trading/Paper/Okx/Live
+require_no_match -n '/ws/v5/private|/api/v5/(trade|account|asset)|place-order|cancel-order|amend-order' src/Trading/Paper/Okx/Live
 rg -n 'MockHttpClient|OkxPaperPublicRestClientInterface|FakeOkxPaperPublicWebSocketTransport|DeterministicLoop' tests/Trading/Paper/Okx/Live
 rg -n 'market_event_identity_conflict|market_data_gap_unresolved|market_data_backpressure_exhausted|okx_paper_public_reconnect_exhausted|okx_paper_public_healthy_stop_invalid|paper_live_capture_incomplete_persist_failed|okx_paper_book_delta_state_unavailable' src/Trading/Paper tests/Trading/Paper
 test -z "$(git ls-files 'var/paper-market-data/**')"
@@ -1336,9 +1446,9 @@ Expected: all tests, PHPStan, lints, endpoint/seam/failure-code audits and negat
 
 ## Completion Checklist
 
-- The public transport is injectable, deterministic under CI, separate from all private WebSocket types, and freshly constructed per source with the exact same `LoopInterface`.
-- `OkxPaperPublicConfig` remains the exact REST/WS URI authority; no auth/header/private/business/mutative surface enters the live namespace.
-- The subscription set is exactly BTC/ETH × trades, 1m/5m/15m/1H candles, and books.
+- The credential-free transport is injectable, deterministic under CI, separate from all private WebSocket types, and freshly constructed twice per source with the exact same `LoopInterface`.
+- `OkxPaperPublicConfig` remains the exact REST/Public-WS/Business-WS URI authority; Business is permitted only at `wss://ws.okx.com:8443/ws/v5/business` for public candles, and no auth/header/private/mutative surface enters the live namespace.
+- The subscription set is routed exactly as Public = BTC/ETH × trades/books (4) and Business = BTC/ETH × 1m/5m/15m/1H candles (8); combined readiness requires all 12 exact ACKs and wrong-socket controls/data fail closed.
 - Each symbol receives a REST order-book snapshot and durable boundary before any delta is consumed.
 - The runtime factory validates the stored manifest, computes the canonical configuration hash, loads the matching checkpoint, and passes it into a fresh source/session without shared mutable state.
 - Every accepted event is normalized through the existing Paper/OKX classes and durably appended before the idempotent consumer for both `APPENDED` and `REPLAYED`.
@@ -1350,7 +1460,7 @@ Expected: all tests, PHPStan, lints, endpoint/seam/failure-code audits and negat
 - Every REST/WS/control event advances its `{source_identity,natural_identity,canonical_digest}` frontier only on acknowledgement; multi-row frame replay skips only the acknowledged exact prefix.
 - Book gaps alone use proven `seqId`/`prevSeqId`, pause, REST-resnapshot with a 10-second timeout per persisted attempt, reserve one visible normalized gap, emit `snapshot_boundary`, and resume only on verified sequence overlap; exhaustion ends `market_data_gap_unresolved`.
 - Trades/candles never receive an invented sequence: reconnect requires exact non-adjacent overlap, uses bounded existing history pagination when current/recent pages omit the frontier, and fails `market_data_gap_unresolved` when continuity cannot be proved.
-- Reconnect, heartbeat, freshness, resync attempts/timeouts, overlap pages, frame size, queued count, and queued bytes are finite and deterministic; subscription/simple ACK never resets reconnect budget, which resets only after 30 stable seconds and 12 newly accepted acknowledged data events.
+- Paired reconnect, per-socket heartbeat/freshness, resync attempts/timeouts, overlap pages, frame size, per-socket queued count, and queued bytes are finite and deterministic; subscription/simple ACK never resets reconnect budget, which resets only after 30 stable seconds and 12 newly accepted acknowledged data events.
 - Emergency/error stop is incomplete; only checkpointed explicit healthy operator stop can complete after both final symbol events and cleanup, with no operator command in this sub-plan.
 - Pending-event/transition/frontier recovery and recorder restart do not duplicate durable events, downstream effects, attempts, deadlines, boundaries, or accepted rows.
 - A complete fake-live fixture capture replays to the exact same `PaperMarketEvent::toArray()` sequence.
