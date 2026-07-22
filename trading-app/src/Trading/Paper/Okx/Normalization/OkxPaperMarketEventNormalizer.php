@@ -12,6 +12,19 @@ use Symfony\Component\Clock\ClockInterface;
 
 final class OkxPaperMarketEventNormalizer
 {
+    /** @var list<string> */
+    private const CONNECTION_STATES = ['connected', 'subscribed', 'reconnecting', 'stopped'];
+
+    /** @var list<string> */
+    private const SNAPSHOT_REASONS = ['initial', 'reconnect', 'sequence_gap'];
+
+    /** @var list<string> */
+    private const TOP_OF_BOOK_ORIGINS = [
+        'rest_initial_snapshot',
+        'rest_resync_snapshot',
+        'ws_books',
+    ];
+
     private readonly OkxPaperInstrumentMap $instruments;
     private readonly OkxPaperSourceOrdinal $ordinals;
 
@@ -33,7 +46,13 @@ final class OkxPaperMarketEventNormalizer
         #[\SensitiveParameter]
         array $row,
     ): ?PaperMarketEvent {
-        return $this->candle($instrumentId, $bar, $row, historical: true);
+        return $this->candle(
+            $instrumentId,
+            $bar,
+            $row,
+            origin: 'rest_history',
+            receiptAtExchangeTime: true,
+        );
     }
 
     /**
@@ -45,7 +64,31 @@ final class OkxPaperMarketEventNormalizer
         #[\SensitiveParameter]
         array $row,
     ): ?PaperMarketEvent {
-        return $this->candle($instrumentId, $bar, $row, historical: false);
+        return $this->candle(
+            $instrumentId,
+            $bar,
+            $row,
+            origin: 'rest_warmup',
+            receiptAtExchangeTime: false,
+        );
+    }
+
+    /**
+     * @param array<array-key, mixed> $row
+     */
+    public function webSocketCandle(
+        string $instrumentId,
+        string $bar,
+        #[\SensitiveParameter]
+        array $row,
+    ): ?PaperMarketEvent {
+        return $this->candle(
+            $instrumentId,
+            $this->webSocketBar($bar),
+            $row,
+            origin: 'ws_candle',
+            receiptAtExchangeTime: false,
+        );
     }
 
     /** @param array<string, mixed> $row */
@@ -66,14 +109,78 @@ final class OkxPaperMarketEventNormalizer
         return $this->trade($row, 'ws_aggregated', historical: false, aggregationRequired: true);
     }
 
+    public function connectionState(
+        string $instrumentId,
+        string $state,
+        int $connectionEpoch,
+    ): PaperMarketEvent {
+        if (!\in_array($state, self::CONNECTION_STATES, true) || $connectionEpoch < 1) {
+            throw new \InvalidArgumentException('okx_paper_connection_state_invalid');
+        }
+
+        $timestamp = $this->receiptTimestamp();
+
+        return $this->event(
+            symbol: $this->instruments->normalizedSymbol($instrumentId),
+            channel: PaperMarketDataChannel::CONNECTION_STATE,
+            exchangeTimestamp: $timestamp,
+            receivedTimestamp: $timestamp,
+            naturalIdentity: implode('|', ['connection', (string) $connectionEpoch, $state]),
+            payload: [
+                'native_symbol' => $instrumentId,
+                'state' => $state,
+                'connection_epoch' => $connectionEpoch,
+            ],
+        );
+    }
+
+    public function snapshotBoundary(
+        string $instrumentId,
+        string $reason,
+        int $sourceEpoch,
+        string $sourceSequence,
+    ): PaperMarketEvent {
+        if (!\in_array($reason, self::SNAPSHOT_REASONS, true) || $sourceEpoch < 1) {
+            throw new \InvalidArgumentException('okx_paper_snapshot_boundary_invalid');
+        }
+        $sourceSequence = $this->sourceSequence($sourceSequence);
+        if (preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $sourceSequence) !== 1) {
+            throw new \InvalidArgumentException('okx_paper_source_sequence_invalid');
+        }
+        $timestamp = $this->receiptTimestamp();
+
+        return $this->event(
+            symbol: $this->instruments->normalizedSymbol($instrumentId),
+            channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            exchangeTimestamp: $timestamp,
+            receivedTimestamp: $timestamp,
+            naturalIdentity: implode('|', [
+                'snapshot',
+                (string) $sourceEpoch,
+                $sourceSequence,
+                $reason,
+            ]),
+            payload: [
+                'native_symbol' => $instrumentId,
+                'reason' => $reason,
+                'source_epoch' => $sourceEpoch,
+                'source_seq_id' => $sourceSequence,
+            ],
+        );
+    }
+
     /** Normalize only a complete book proven by OkxMaterializedBookState construction. */
     public function materializedTopOfBook(
         string $instrumentId,
         OkxMaterializedBookState $materializedBookState,
         int $sourceEpoch,
+        string $origin = 'ws_books',
     ): PaperMarketEvent {
         if ($sourceEpoch < 1) {
             throw new \InvalidArgumentException('okx_paper_materialized_order_book_invalid');
+        }
+        if (!\in_array($origin, self::TOP_OF_BOOK_ORIGINS, true)) {
+            throw new \InvalidArgumentException('okx_paper_top_of_book_origin_invalid');
         }
 
         $bid = $materializedBookState->bestBid();
@@ -94,7 +201,7 @@ final class OkxPaperMarketEventNormalizer
             'source_seq_id' => $sourceSequence,
             'source_prev_seq_id' => $sourcePreviousSequence,
             'source_epoch' => $sourceEpoch,
-            'origin' => 'ws_books',
+            'origin' => $origin,
         ];
 
         return $this->event(
@@ -115,7 +222,8 @@ final class OkxPaperMarketEventNormalizer
         string $bar,
         #[\SensitiveParameter]
         array $row,
-        bool $historical,
+        string $origin,
+        bool $receiptAtExchangeTime,
     ): ?PaperMarketEvent {
         [$channel, $normalizedBar] = $this->timeframe($bar);
         $symbol = $this->instruments->normalizedSymbol($instrumentId);
@@ -143,7 +251,7 @@ final class OkxPaperMarketEventNormalizer
             symbol: $symbol,
             channel: $channel,
             exchangeTimestamp: $exchangeTimestamp,
-            receivedTimestamp: $historical ? $exchangeTimestamp : $this->clock->now(),
+            receivedTimestamp: $receiptAtExchangeTime ? $exchangeTimestamp : $this->receiptTimestamp(),
             naturalIdentity: implode('|', ['candle', $bar, $timestampValue]),
             payload: [
                 'native_symbol' => $instrumentId,
@@ -156,7 +264,7 @@ final class OkxPaperMarketEventNormalizer
                 'volume_base' => $volumeBase,
                 'volume_quote' => $volumeQuote,
                 'confirmed' => true,
-                'origin' => $historical ? 'rest_history' : 'rest_warmup',
+                'origin' => $origin,
             ],
         );
     }
@@ -276,6 +384,23 @@ final class OkxPaperMarketEventNormalizer
             '1H' => [PaperMarketDataChannel::CANDLE_1H, '1h'],
             default => throw new \InvalidArgumentException('okx_paper_timeframe_not_allowed'),
         };
+    }
+
+    private function webSocketBar(string $channel): string
+    {
+        return match ($channel) {
+            'candle1m' => '1m',
+            'candle5m' => '5m',
+            'candle15m' => '15m',
+            'candle1H' => '1H',
+            default => throw new \InvalidArgumentException('okx_paper_timeframe_not_allowed'),
+        };
+    }
+
+    private function receiptTimestamp(): \DateTimeImmutable
+    {
+        return \DateTimeImmutable::createFromInterface($this->clock->now())
+            ->setTimezone(new \DateTimeZone('UTC'));
     }
 
     private function decimal(#[\SensitiveParameter] mixed $value): string

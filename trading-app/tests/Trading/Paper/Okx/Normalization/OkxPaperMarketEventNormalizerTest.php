@@ -66,6 +66,148 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         self::assertNull($this->normalizer()->warmupCandle('ETH-USDT-SWAP', '1H', $fixture['data'][1]));
     }
 
+    /**
+     * @return iterable<string, array{string, string, PaperMarketDataChannel, string}>
+     */
+    public static function exactWebSocketCandleProvider(): iterable
+    {
+        yield 'one minute' => [
+            'ws-candle-1m.json',
+            'candle1m',
+            PaperMarketDataChannel::CANDLE_1M,
+            '1m',
+        ];
+        yield 'five minutes' => [
+            'ws-candle-5m.json',
+            'candle5m',
+            PaperMarketDataChannel::CANDLE_5M,
+            '5m',
+        ];
+        yield 'fifteen minutes' => [
+            'ws-candle-15m.json',
+            'candle15m',
+            PaperMarketDataChannel::CANDLE_15M,
+            '15m',
+        ];
+        yield 'one hour' => [
+            'ws-candle-1H.json',
+            'candle1H',
+            PaperMarketDataChannel::CANDLE_1H,
+            '1h',
+        ];
+    }
+
+    #[DataProvider('exactWebSocketCandleProvider')]
+    public function testWebSocketCandleFixturesMapExactBusinessChannelsAndPreservePayload(
+        string $fixtureName,
+        string $expectedNativeChannel,
+        PaperMarketDataChannel $expectedChannel,
+        string $expectedBar,
+    ): void {
+        $fixture = $this->fixture($fixtureName);
+        self::assertSame(
+            ['channel' => $expectedNativeChannel, 'instId' => $fixture['arg']['instId']],
+            $fixture['arg'],
+        );
+        self::assertIsArray($fixture['data']);
+        self::assertNotEmpty($fixture['data']);
+        foreach ($fixture['data'] as $row) {
+            self::assertIsArray($row);
+            self::assertTrue(array_is_list($row));
+            self::assertCount(9, $row);
+            foreach ($row as $value) {
+                self::assertIsString($value);
+            }
+        }
+
+        $row = $fixture['data'][0];
+        $event = $this->normalizer()->webSocketCandle(
+            $fixture['arg']['instId'],
+            $fixture['arg']['channel'],
+            $row,
+        );
+
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        self::assertSame($expectedChannel, $event->channel);
+        self::assertSame('2026-07-21T02:00:00.000000Z', $event->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame([
+            'native_symbol' => $fixture['arg']['instId'],
+            'bar' => $expectedBar,
+            'open' => $row[1],
+            'high' => $row[2],
+            'low' => $row[3],
+            'close' => $row[4],
+            'volume_contracts' => $row[5],
+            'volume_base' => $row[6],
+            'volume_quote' => $row[7],
+            'confirmed' => true,
+            'origin' => 'ws_candle',
+        ], $event->payload);
+    }
+
+    public function testUnconfirmedWebSocketCandleDoesNotConsumeAnOrdinal(): void
+    {
+        $fixture = $this->fixture('ws-candle-1m.json');
+        $ordinals = new OkxPaperSourceOrdinal();
+        $normalizer = $this->normalizer(ordinals: $ordinals);
+
+        self::assertNull($normalizer->webSocketCandle(
+            $fixture['arg']['instId'],
+            $fixture['arg']['channel'],
+            $fixture['data'][1],
+        ));
+        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+
+        $event = $normalizer->webSocketCandle(
+            $fixture['arg']['instId'],
+            $fixture['arg']['channel'],
+            $fixture['data'][0],
+        );
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        self::assertSame('1', $event->sequence);
+        self::assertStringContainsString(
+            '"natural_identity":"candle|1m|1784595720000"',
+            json_encode($ordinals->snapshot(), JSON_THROW_ON_ERROR),
+        );
+    }
+
+    public function testLiveNormalizerPublicSignaturesRemainExactAndConstructorNamesStayStable(): void
+    {
+        $constructor = new \ReflectionMethod(OkxPaperMarketEventNormalizer::class, '__construct');
+        self::assertSame(
+            ['clock', 'instruments', 'ordinals'],
+            array_map(
+                static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
+                $constructor->getParameters(),
+            ),
+        );
+
+        $expectedMethods = [
+            'webSocketCandle' => ['instrumentId', 'bar', 'row'],
+            'connectionState' => ['instrumentId', 'state', 'connectionEpoch'],
+            'snapshotBoundary' => ['instrumentId', 'reason', 'sourceEpoch', 'sourceSequence'],
+            'materializedTopOfBook' => ['instrumentId', 'materializedBookState', 'sourceEpoch', 'origin'],
+        ];
+        foreach ($expectedMethods as $methodName => $expectedParameterNames) {
+            $method = new \ReflectionMethod(OkxPaperMarketEventNormalizer::class, $methodName);
+            self::assertTrue($method->isPublic());
+            self::assertSame(
+                $expectedParameterNames,
+                array_map(
+                    static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
+                    $method->getParameters(),
+                ),
+            );
+        }
+
+        $origin = (new \ReflectionMethod(
+            OkxPaperMarketEventNormalizer::class,
+            'materializedTopOfBook',
+        ))->getParameters()[3];
+        self::assertTrue($origin->isDefaultValueAvailable());
+        self::assertSame('ws_books', $origin->getDefaultValue());
+    }
+
     /** @return iterable<string, array{string, PaperMarketDataChannel, string}> */
     public static function exactTimeframeProvider(): iterable
     {
@@ -457,6 +599,194 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         self::assertArrayNotHasKey('checksum', $event->payload);
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function topOfBookOriginProvider(): iterable
+    {
+        yield 'initial REST snapshot' => ['rest_initial_snapshot'];
+        yield 'REST resync snapshot' => ['rest_resync_snapshot'];
+        yield 'WebSocket books' => ['ws_books'];
+    }
+
+    #[DataProvider('topOfBookOriginProvider')]
+    public function testMaterializedTopOfBookAllowsOnlyExplicitPublicOrigins(string $origin): void
+    {
+        $row = $this->fixture('order-book.json')['data'][0];
+        $event = $this->normalizer()->materializedTopOfBook(
+            'BTC-USDT-SWAP',
+            OkxMaterializedBookState::fromSnapshot($row),
+            1,
+            $origin,
+        );
+
+        self::assertSame($origin, $event->payload['origin']);
+    }
+
+    public function testConnectionStatesAndSnapshotBoundariesUseExactControlContracts(): void
+    {
+        $ordinals = new OkxPaperSourceOrdinal();
+        $normalizer = $this->normalizer(ordinals: $ordinals);
+
+        foreach (['connected', 'subscribed', 'reconnecting', 'stopped'] as $index => $state) {
+            $event = $normalizer->connectionState('BTC-USDT-SWAP', $state, 7);
+            self::assertSame(PaperMarketDataVenue::OKX, $event->sourceVenue);
+            self::assertSame('BTCUSDT', $event->symbol);
+            self::assertSame(PaperMarketDataChannel::CONNECTION_STATE, $event->channel);
+            self::assertSame((string) ($index + 1), $event->sequence);
+            self::assertSame('2026-07-21T02:00:00.000000Z', $event->exchangeTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+            self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+            self::assertSame([
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'state' => $state,
+                'connection_epoch' => 7,
+            ], $event->payload);
+            PaperMarketEventRedactor::assertSafe($event->payload);
+        }
+
+        foreach (['initial', 'reconnect', 'sequence_gap'] as $index => $reason) {
+            $event = $normalizer->snapshotBoundary('ETH-USDT-SWAP', $reason, 11, '323457');
+            self::assertSame(PaperMarketDataVenue::OKX, $event->sourceVenue);
+            self::assertSame('ETHUSDT', $event->symbol);
+            self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $event->channel);
+            self::assertSame((string) ($index + 1), $event->sequence);
+            self::assertSame('2026-07-21T02:00:00.000000Z', $event->exchangeTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+            self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+            self::assertSame([
+                'native_symbol' => 'ETH-USDT-SWAP',
+                'reason' => $reason,
+                'source_epoch' => 11,
+                'source_seq_id' => '323457',
+            ], $event->payload);
+            PaperMarketEventRedactor::assertSafe($event->payload);
+        }
+
+        $scopes = $ordinals->snapshot()['scopes'];
+        self::assertSame(
+            'connection|7|stopped',
+            $scopes['okx/BTCUSDT/connection_state']['latest']['natural_identity'],
+        );
+        self::assertSame(
+            'snapshot|11|323457|sequence_gap',
+            $scopes['okx/ETHUSDT/snapshot_boundary']['latest']['natural_identity'],
+        );
+    }
+
+    /**
+     * @return iterable<string, array{callable(OkxPaperMarketEventNormalizer): void, string}>
+     */
+    public static function invalidLiveControlProvider(): iterable
+    {
+        yield 'unknown connection state' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->connectionState('BTC-USDT-SWAP', 'disconnected', 1);
+            },
+            'okx_paper_connection_state_invalid',
+        ];
+        yield 'zero connection epoch' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->connectionState('BTC-USDT-SWAP', 'connected', 0);
+            },
+            'okx_paper_connection_state_invalid',
+        ];
+        yield 'negative connection epoch' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->connectionState('BTC-USDT-SWAP', 'connected', -1);
+            },
+            'okx_paper_connection_state_invalid',
+        ];
+        yield 'unknown snapshot reason' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'manual', 1, '123457');
+            },
+            'okx_paper_snapshot_boundary_invalid',
+        ];
+        yield 'zero snapshot epoch' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 0, '123457');
+            },
+            'okx_paper_snapshot_boundary_invalid',
+        ];
+        yield 'malformed snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '123.457');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'negative snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '-1');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'negative zero snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '-0');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'leading-zero snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '01');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'explicit-positive snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '+1');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'whitespace-padded snapshot sequence' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, ' 1');
+            },
+            'okx_paper_source_sequence_invalid',
+        ];
+        yield 'unknown top-of-book origin' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->materializedTopOfBook(
+                    'BTC-USDT-SWAP',
+                    OkxMaterializedBookState::fromSnapshot(
+                        self::staticFixture('order-book.json')['data'][0],
+                    ),
+                    1,
+                    'business_books',
+                );
+            },
+            'okx_paper_top_of_book_origin_invalid',
+        ];
+        yield 'zero top-of-book epoch' => [
+            static function (OkxPaperMarketEventNormalizer $normalizer): void {
+                $normalizer->materializedTopOfBook(
+                    'BTC-USDT-SWAP',
+                    OkxMaterializedBookState::fromSnapshot(
+                        self::staticFixture('order-book.json')['data'][0],
+                    ),
+                    0,
+                );
+            },
+            'okx_paper_materialized_order_book_invalid',
+        ];
+    }
+
+    /** @param callable(OkxPaperMarketEventNormalizer): void $normalize */
+    #[DataProvider('invalidLiveControlProvider')]
+    public function testInvalidLiveControlsFailBeforeOrdinalCommit(
+        callable $normalize,
+        string $expectedCode,
+    ): void {
+        $ordinals = new OkxPaperSourceOrdinal();
+        $normalizer = $this->normalizer(ordinals: $ordinals);
+
+        try {
+            $normalize($normalizer);
+            self::fail('Invalid live normalization input must fail closed.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame($expectedCode, $exception->getMessage());
+        }
+
+        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+    }
+
     public function testMaterializedBookStateHasExplicitSnapshotAndAppliedDeltaFactories(): void
     {
         self::assertTrue(class_exists(OkxMaterializedBookState::class));
@@ -626,6 +956,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         $wsSnapshot = $this->fixture('ws-books-snapshot.json');
         $materializedAfterUpdate = $this->fixture('materialized-after-update.json');
         $wsTrades = $this->fixture('ws-trades.json');
+        $wsCandle = $this->fixture('ws-candle-1m.json');
 
         $events = [
             $normalizer->historyCandle('BTC-USDT-SWAP', '1m', $historyCandles['data'][0]),
@@ -651,6 +982,13 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             ),
             $normalizer->webSocketTrade($wsTrades['data'][0]),
             $normalizer->webSocketTrade($wsTrades['data'][1]),
+            $normalizer->webSocketCandle(
+                $wsCandle['arg']['instId'],
+                $wsCandle['arg']['channel'],
+                $wsCandle['data'][0],
+            ),
+            $normalizer->connectionState('BTC-USDT-SWAP', 'connected', 1),
+            $normalizer->snapshotBoundary('BTC-USDT-SWAP', 'initial', 1, '123457'),
         ];
 
         foreach ($events as $event) {
@@ -676,6 +1014,12 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
 
     /** @return array<string, mixed> */
     private function fixture(string $name): array
+    {
+        return self::staticFixture($name);
+    }
+
+    /** @return array<string, mixed> */
+    private static function staticFixture(string $name): array
     {
         $path = dirname(__DIR__, 4) . '/Fixtures/OkxPaperPublic/' . $name;
         $contents = file_get_contents($path);
