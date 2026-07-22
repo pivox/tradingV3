@@ -670,6 +670,26 @@ final class OkxHistoricalEventStreamTest extends TestCase
         self::assertArrayHasKey('source_digest', $checkpoint['streams']['BTCUSDT/public_trade']['durable_frontier']);
     }
 
+    public function testTradePageSpanningBothSidesOfPreviousTemporalBoundaryFailsClosed(): void
+    {
+        $request = $this->request('okx-history-straddling-trade-page-001');
+        $client = new StraddlingTradePageRestClient(ScriptedHistoricalRestClient::completeRange($request));
+        $recorder = $this->recorder($request);
+
+        $manifest = (new PaperHistoricalDatasetBuilder())->build(
+            $recorder,
+            new OkxHistoricalEventStream(
+                $client,
+                new MockClock('2026-07-21T12:00:00.000000Z'),
+                $request,
+                $recorder->datasetDirectory(),
+            ),
+        );
+
+        self::assertSame(PaperDatasetState::INCOMPLETE, $manifest->state);
+        self::assertSame('okx_history_trade_cursor_not_progressing', $this->emission($recorder)['failure_reason']);
+    }
+
     public function testNonAdjacentTradeOverlapIsRejectedByTheDurableFrontier(): void
     {
         $request = $this->request('okx-history-non-adjacent-overlap-001');
@@ -1868,6 +1888,50 @@ final class NonAdjacentTradeOverlapRestClient implements OkxPaperPublicRestClien
                 'source' => '0',
                 'ts' => '1784629800123',
             ]);
+        }
+
+        return $rows;
+    }
+
+    public function currentCandles(string $instrumentId, string $bar, ?string $after = null, ?string $before = null, int $limit = 300): array
+    {
+        throw new \LogicException('unexpected_non_historical_call');
+    }
+
+    public function recentTrades(string $instrumentId, int $limit = 500): array
+    {
+        throw new \LogicException('unexpected_non_historical_call');
+    }
+
+    public function orderBook(string $instrumentId, int $depth = 400): array
+    {
+        throw new \LogicException('unexpected_non_historical_call');
+    }
+}
+
+final class StraddlingTradePageRestClient implements OkxPaperPublicRestClientInterface
+{
+    private int $tradeCalls = 0;
+    private ?string $previousOldestTimestamp = null;
+
+    public function __construct(private readonly OkxPaperPublicRestClientInterface $inner)
+    {
+    }
+
+    public function historyCandles(string $instrumentId, string $bar, ?string $after = null, int $limit = 300): array
+    {
+        return $this->inner->historyCandles($instrumentId, $bar, $after, $limit);
+    }
+
+    public function historyTrades(string $instrumentId, int $paginationType = 2, ?string $after = null, int $limit = 100): array
+    {
+        $rows = $this->inner->historyTrades($instrumentId, $paginationType, $after, $limit);
+        ++$this->tradeCalls;
+        if ($this->tradeCalls === 1 && $rows !== []) {
+            $this->previousOldestTimestamp = min(array_column($rows, 'ts'));
+        } elseif ($this->tradeCalls === 2 && \count($rows) >= 2 && $this->previousOldestTimestamp !== null) {
+            $rows[0]['ts'] = (string) ((int) $this->previousOldestTimestamp + 1);
+            $rows[array_key_last($rows)]['ts'] = (string) ((int) $this->previousOldestTimestamp - 1);
         }
 
         return $rows;

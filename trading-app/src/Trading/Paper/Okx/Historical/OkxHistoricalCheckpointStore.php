@@ -21,6 +21,12 @@ final class OkxHistoricalCheckpointStore
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
     private const UNSIGNED_INTEGER_PATTERN = '/\A(?:0|[1-9][0-9]*)\z/D';
     private const WRITER_LOCK_FILENAME = '.writer.lock';
+    private const ACQUISITION_CHECKPOINT_BASE_BYTES = CanonicalJson::MAX_BYTES;
+    private const ACQUISITION_CHECKPOINT_BYTES_PER_PAGE = 512;
+    private const ACQUISITION_JSON_FLAGS = \JSON_THROW_ON_ERROR
+        | \JSON_UNESCAPED_SLASHES
+        | \JSON_UNESCAPED_UNICODE
+        | \JSON_PRESERVE_ZERO_FRACTION;
 
     private readonly PaperDatasetRecorderFilesystem $filesystem;
     private readonly string $directory;
@@ -149,14 +155,20 @@ final class OkxHistoricalCheckpointStore
     /** @param array<string, mixed> $state */
     public function saveAcquisition(#[\SensitiveParameter] array $state): void
     {
-        $this->atomicWrite($this->checkpointPath, CanonicalJson::encode([
+        $acquisition = [
             'schema_version' => self::SCHEMA_VERSION,
             'dataset_id' => $state['dataset_id'] ?? null,
             'request_sha256' => $state['request_sha256'] ?? null,
             'streams' => $state['streams'] ?? null,
             'page_count' => $state['page_count'] ?? null,
             'event_count' => $state['event_count'] ?? null,
-        ]) . "\n", $this->directoryPin);
+        ];
+        $this->validateAcquisitionState($acquisition);
+        $this->atomicWrite(
+            $this->checkpointPath,
+            $this->encodeAcquisitionState($acquisition) . "\n",
+            $this->directoryPin,
+        );
     }
 
     /** @param array<string, mixed> $state */
@@ -340,6 +352,51 @@ final class OkxHistoricalCheckpointStore
         if ($pageCount !== $state['page_count'] || $state['event_count'] > $rowCount) {
             throw new OkxHistoricalIntegrityException('okx_acquisition_checkpoint_invalid');
         }
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     */
+    private function encodeAcquisitionState(#[\SensitiveParameter] array $state): string
+    {
+        $streams = $state['streams'];
+        ksort($streams, \SORT_STRING);
+        foreach ($streams as &$stream) {
+            foreach ($stream['pages'] as &$page) {
+                ksort($page, \SORT_STRING);
+            }
+            unset($page);
+            if (isset($stream['durable_frontier'])) {
+                ksort($stream['durable_frontier'], \SORT_STRING);
+            }
+            ksort($stream, \SORT_STRING);
+        }
+        unset($stream);
+        $normalized = [
+            'dataset_id' => $state['dataset_id'],
+            'event_count' => $state['event_count'],
+            'page_count' => $state['page_count'],
+            'request_sha256' => $state['request_sha256'],
+            'schema_version' => $state['schema_version'],
+            'streams' => $streams,
+        ];
+
+        try {
+            $encoded = json_encode($normalized, self::ACQUISITION_JSON_FLAGS);
+        } catch (\JsonException $exception) {
+            throw new OkxHistoricalIntegrityException('okx_acquisition_checkpoint_invalid', 0, $exception);
+        }
+        if (strlen($encoded) + 1 > $this->maximumAcquisitionCheckpointBytes()) {
+            throw new OkxHistoricalIntegrityException('okx_acquisition_checkpoint_invalid');
+        }
+
+        return $encoded;
+    }
+
+    private function maximumAcquisitionCheckpointBytes(): int
+    {
+        return self::ACQUISITION_CHECKPOINT_BASE_BYTES
+            + ($this->request->maximumPages * self::ACQUISITION_CHECKPOINT_BYTES_PER_PAGE);
     }
 
     /** @param array<string, mixed> $stream */
@@ -838,6 +895,8 @@ final class OkxHistoricalCheckpointStore
             $parentPin,
             allowEmpty: false,
             unreadableError: 'okx_acquisition_checkpoint_unreadable',
+            maximumBytes: $path === $this->checkpointPath ? $this->maximumAcquisitionCheckpointBytes() : null,
+            oversizedError: 'okx_acquisition_checkpoint_invalid',
         );
         try {
             $state = json_decode($contents, true, 512, \JSON_THROW_ON_ERROR);
@@ -859,6 +918,8 @@ final class OkxHistoricalCheckpointStore
         array $parentPin,
         bool $allowEmpty,
         string $unreadableError,
+        ?int $maximumBytes = null,
+        ?string $oversizedError = null,
     ): string {
         $this->assertManagedDirectories();
         $this->assertPinnedDirectory($parentPin);
@@ -872,6 +933,9 @@ final class OkxHistoricalCheckpointStore
         }
         if (!isset($before['size']) || !\is_int($before['size']) || (!$allowEmpty && $before['size'] === 0)) {
             throw new OkxHistoricalIntegrityException($unreadableError);
+        }
+        if ($maximumBytes !== null && $before['size'] > $maximumBytes) {
+            throw new OkxHistoricalIntegrityException($oversizedError ?? $unreadableError);
         }
         $handle = @fopen($path, 'rb');
         if ($handle === false) {

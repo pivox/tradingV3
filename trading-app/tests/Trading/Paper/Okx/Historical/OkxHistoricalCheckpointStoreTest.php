@@ -33,6 +33,58 @@ final class OkxHistoricalCheckpointStoreTest extends TestCase
         $this->removeDirectory($this->testRoot);
     }
 
+    public function testLargeValidAcquisitionCheckpointCanBeSavedDeterministicallyAndResumed(): void
+    {
+        $request = new OkxHistoricalRequest(
+            datasetId: 'okx-checkpoint-large-valid-acquisition',
+            symbols: ['BTCUSDT'],
+            from: new \DateTimeImmutable('2026-07-21T10:00:00.000000Z'),
+            to: new \DateTimeImmutable('2026-07-21T10:01:00.000000Z'),
+        );
+        $directory = $this->datasetDirectory('large-valid-acquisition');
+        $store = new OkxHistoricalCheckpointStore($directory, $request);
+        $state = $store->loadOrCreate();
+        $pages = [];
+        $previousChain = str_repeat('0', 64);
+        for ($pageNumber = 1; $pageNumber <= 2_501; ++$pageNumber) {
+            $sha256 = hash('sha256', 'page-' . $pageNumber);
+            $chainSha256 = hash('sha256', $previousChain . $sha256);
+            $pages[] = [
+                'file' => 'BTCUSDT-candle_1m-'
+                    . str_pad((string) $pageNumber, 6, '0', \STR_PAD_LEFT)
+                    . '.ndjson',
+                'sha256' => $sha256,
+                'row_count' => 1,
+                'chain_sha256' => $chainSha256,
+            ];
+            $previousChain = $chainSha256;
+        }
+        $state['streams']['BTCUSDT/candle_1m'] = [
+            'kind' => 'candle',
+            'symbol' => 'BTCUSDT',
+            'bar' => '1m',
+            'next_cursor' => '1',
+            'complete' => false,
+            'pages' => $pages,
+        ];
+        $state['page_count'] = 2_501;
+        $state['event_count'] = 2_501;
+
+        $store->saveAcquisition($state);
+        $checkpointPath = $this->checkpointDirectory($directory) . '/checkpoint.json';
+        $firstEncoding = file_get_contents($checkpointPath);
+        self::assertIsString($firstEncoding);
+        unset($store);
+
+        $resumedStore = new OkxHistoricalCheckpointStore($directory, $request);
+        $resumed = $resumedStore->loadOrCreate();
+        self::assertSame(2_501, $resumed['page_count']);
+        self::assertCount(2_501, $resumed['streams']['BTCUSDT/candle_1m']['pages']);
+
+        $resumedStore->saveAcquisition($resumed);
+        self::assertSame($firstEncoding, file_get_contents($checkpointPath));
+    }
+
     /** @return iterable<string, array{\Closure(array<string, mixed>): array<string, mixed>}> */
     public static function invalidAcquisitionStateProvider(): iterable
     {

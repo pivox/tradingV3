@@ -280,6 +280,7 @@ final class OkxHistoricalEventStream implements AcknowledgedPaperMarketDataSourc
             $records = [];
             $oldestId = null;
             $oldestTimestamp = null;
+            $newestTimestamp = null;
             $previousTimestamp = null;
             $previousId = null;
             foreach ($rows as $row) {
@@ -315,11 +316,15 @@ final class OkxHistoricalEventStream implements AcknowledgedPaperMarketDataSourc
                     || BigInteger::of($timestamp)->isLessThan(BigInteger::of($oldestTimestamp))
                     ? $timestamp
                     : $oldestTimestamp;
+                $newestTimestamp = $newestTimestamp === null
+                    || BigInteger::of($timestamp)->isGreaterThan(BigInteger::of($newestTimestamp))
+                    ? $timestamp
+                    : $newestTimestamp;
                 $records[] = $this->record('trade', $symbol, $native, null, $tradeId, $row);
             }
             $priorOldestTimestamp = $stream['oldest_timestamp'] ?? null;
             if (\is_string($priorOldestTimestamp)
-                && BigInteger::of($oldestTimestamp)->isGreaterThan(BigInteger::of($priorOldestTimestamp))
+                && BigInteger::of($newestTimestamp)->isGreaterThan(BigInteger::of($priorOldestTimestamp))
             ) {
                 throw new OkxHistoricalIntegrityException('okx_history_trade_cursor_not_progressing');
             }
