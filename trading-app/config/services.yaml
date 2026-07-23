@@ -64,6 +64,11 @@ parameters:
     env(DEMO_TRADING_ENABLED): '0'
     env(OKX_DEMO_TRADING_ENABLED): '0'
     env(OKX_LIVE_ENABLED): '0'
+    env(PAPER_MARKET_ACQUISITION_ENABLED): '0'
+    env(OKX_PAPER_PUBLIC_REST_BASE_URI): 'https://www.okx.com'
+    env(OKX_PAPER_PUBLIC_WS_URI): 'wss://ws.okx.com:8443/ws/v5/public'
+    env(OKX_PAPER_PUBLIC_BUSINESS_WS_URI): 'wss://ws.okx.com:8443/ws/v5/business'
+    env(PAPER_MARKET_DATA_ROOT): '%kernel.project_dir%/var/paper-market-data'
     env(REDIS_HOST): '127.0.0.1'
     env(REDIS_PORT): '6379'
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
@@ -338,6 +343,37 @@ services:
     App\Exchange\Okx\OkxRestClient:
         arguments:
             $httpClient: '@app.http_client.exchange_guard.okx'
+
+    App\Trading\Paper\Okx\OkxPaperPublicConfig:
+        arguments:
+            $acquisitionEnabled: '%env(bool:PAPER_MARKET_ACQUISITION_ENABLED)%'
+            $restBaseUri: '%env(string:OKX_PAPER_PUBLIC_REST_BASE_URI)%'
+            $webSocketUri: '%env(string:OKX_PAPER_PUBLIC_WS_URI)%'
+            $dataRoot: '%env(resolve:PAPER_MARKET_DATA_ROOT)%'
+            $businessWebSocketUri: '%env(string:OKX_PAPER_PUBLIC_BUSINESS_WS_URI)%'
+
+    okx.paper_public.history_limiter:
+        class: Symfony\Component\RateLimiter\LimiterInterface
+        factory: ['@limiter.okx_paper_history', 'create']
+        arguments: ['public']
+
+    okx.paper_public.snapshot_limiter:
+        class: Symfony\Component\RateLimiter\LimiterInterface
+        factory: ['@limiter.okx_paper_snapshot', 'create']
+        arguments: ['public']
+
+    App\Trading\Paper\Okx\Http\OkxPaperPublicRateLimiter:
+        arguments:
+            $historyLimiter: '@okx.paper_public.history_limiter'
+            $snapshotLimiter: '@okx.paper_public.snapshot_limiter'
+
+    App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient:
+        arguments:
+            $httpClient: '@http_client'
+
+    App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface:
+        alias: App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient
+        public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:
         abstract: true
