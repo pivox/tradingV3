@@ -1059,12 +1059,104 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         );
     }
 
-    public function testAcknowledgementHasExactlyTheCanonicalTwoArgumentContract(): void
+    public function testPendingWarmupRestAcknowledgementAtomicallyPersistsExactContinuation(): void
+    {
+        $directory = $this->datasetDirectory('pending-warmup-rest-continuation');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $exactContinuation = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => 'BTCUSDT/rest/candle_1m',
+            'stage' => 'current_candles',
+        ];
+        $writeAhead = $store->saveTransition(
+            $checkpoint,
+            'warming',
+            $exactContinuation,
+        );
+        $event = $this->candleEvent(
+            'rest_warmup',
+            '2026-07-22T10:00:01.000000Z',
+        );
+        $frontier = OkxPaperStreamFrontier::fromEvent($event);
+        $pending = $store->savePending(
+            $writeAhead,
+            $event,
+            $this->advanceOrdinal(
+                $writeAhead->ordinalState,
+                $event,
+                $frontier->naturalIdentity,
+            ),
+            [
+                'stream' => 'BTCUSDT/rest/candle_1m',
+                'frontier' => $frontier->toArray(),
+            ],
+        );
+        $path = $this->checkpointPath($directory);
+        $pendingBytes = file_get_contents($path);
+        self::assertIsString($pendingBytes);
+
+        foreach ([
+            'skipped stream' => [
+                'kind' => 'rest_fetch',
+                'symbol' => 'BTCUSDT',
+                'stream' => 'BTCUSDT/rest/candle_5m',
+                'stage' => 'current_candles',
+            ],
+            'arbitrary REST work' => [
+                'kind' => 'rest_fetch',
+                'symbol' => 'BTCUSDT',
+                'stream' => 'BTCUSDT/rest/public_trade',
+                'stage' => 'recent_trades',
+            ],
+            'wrong symbol' => [
+                'kind' => 'rest_fetch',
+                'symbol' => 'ETHUSDT',
+                'stream' => 'ETHUSDT/rest/candle_1m',
+                'stage' => 'current_candles',
+            ],
+        ] as $label => $invalidContinuation) {
+            try {
+                $store->acknowledge(
+                    $pending,
+                    $event->eventId,
+                    $invalidContinuation,
+                );
+                self::fail($label . ' must not replace the exact pending REST work.');
+            } catch (OkxPaperLiveIntegrityException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+            self::assertSame($pendingBytes, file_get_contents($path), $label);
+        }
+
+        $acknowledged = $store->acknowledge(
+            $pending,
+            $event->eventId,
+            $exactContinuation,
+        );
+        self::assertNull($acknowledged->pendingEvent);
+        self::assertNull($acknowledged->pendingFrontier);
+        self::assertSame($exactContinuation, $acknowledged->pendingTransition);
+        self::assertSame(
+            $frontier->toArray(),
+            $acknowledged->streamFrontiers['BTCUSDT/rest/candle_1m']?->toArray(),
+        );
+        self::assertSame(
+            CanonicalJson::encode($acknowledged->toArray()) . "\n",
+            file_get_contents($path),
+        );
+    }
+
+    public function testAcknowledgementHasTwoRequiredArgumentsAndOptionalExactContinuation(): void
     {
         $method = new \ReflectionMethod(OkxPaperLiveCheckpointStore::class, 'acknowledge');
 
-        self::assertCount(2, $method->getParameters());
+        self::assertCount(3, $method->getParameters());
         self::assertSame(2, $method->getNumberOfRequiredParameters());
+        self::assertSame('continuationTransition', $method->getParameters()[2]->getName());
+        self::assertTrue($method->getParameters()[2]->allowsNull());
+        self::assertNull($method->getParameters()[2]->getDefaultValue());
     }
 
     public function testTwoArgumentBoundaryAcknowledgementConsumesOnlyTheExactWorkHeads(): void

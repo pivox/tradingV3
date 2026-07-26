@@ -411,9 +411,11 @@ final class OkxPaperLiveCheckpointStore
         }
     }
 
+    /** @param array<string, mixed>|null $continuationTransition */
     public function acknowledge(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
         string $eventId,
+        #[\SensitiveParameter] ?array $continuationTransition = null,
     ): OkxPaperLiveCheckpoint {
         $this->assertCurrent($checkpoint);
         if (preg_match(self::SHA256_PATTERN, $eventId) !== 1) {
@@ -421,6 +423,9 @@ final class OkxPaperLiveCheckpointStore
         }
 
         if ($checkpoint->pendingEvent === null) {
+            if ($continuationTransition !== null) {
+                throw self::invalidCheckpoint();
+            }
             if ($checkpoint->lastAcknowledgedEventId !== null
                 && hash_equals($checkpoint->lastAcknowledgedEventId, $eventId)
             ) {
@@ -432,6 +437,10 @@ final class OkxPaperLiveCheckpointStore
         if (!hash_equals($checkpoint->pendingEvent->eventId, $eventId)) {
             throw new OkxPaperLiveIntegrityException('okx_paper_live_acknowledgement_invalid');
         }
+        $this->assertExactAcknowledgementContinuation(
+            $checkpoint,
+            $continuationTransition,
+        );
 
         $state = $checkpoint->toArray();
         $acknowledgedFrontier = $checkpoint->pendingFrontier;
@@ -459,6 +468,7 @@ final class OkxPaperLiveCheckpointStore
         $state['last_acknowledged_event_id'] = $eventId;
         $state['pending_event'] = null;
         $state['pending_frontier'] = null;
+        $state['pending_transition'] = $continuationTransition;
         if ($state['phase'] === 'reconnecting') {
             $candidate = $this->validatedCheckpoint($state);
             $completedStream = $checkpoint->pendingFrontier['stream']
@@ -476,6 +486,34 @@ final class OkxPaperLiveCheckpointStore
         $this->persist($next);
 
         return $next;
+    }
+
+    /** @param array<string, mixed>|null $continuationTransition */
+    private function assertExactAcknowledgementContinuation(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        #[\SensitiveParameter] ?array $continuationTransition,
+    ): void {
+        if ($continuationTransition === null) {
+            return;
+        }
+        if ($checkpoint->phase !== 'warming'
+            || $checkpoint->pendingEvent === null
+            || $checkpoint->pendingFrontier === null
+            || ($continuationTransition['kind'] ?? null) !== 'rest_fetch'
+            || !\in_array(
+                $continuationTransition['stage'] ?? null,
+                ['current_candles', 'recent_trades'],
+                true,
+            )
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $this->assertTransitionProducesEvent(
+            $checkpoint,
+            $continuationTransition,
+            $checkpoint->pendingEvent,
+            $checkpoint->pendingFrontier,
+        );
     }
 
     /** @param array<string, mixed> $state */
@@ -1123,6 +1161,14 @@ final class OkxPaperLiveCheckpointStore
                 default => true,
             };
         }
+        if ($phase === 'warming'
+            && $this->isExactAcknowledgedWarmingRestSuccessor(
+                $current,
+                $pendingTransition,
+            )
+        ) {
+            return true;
+        }
         if ($this->isExactOverlapCompletionTransition($candidate, $phase, $pendingTransition)
             || $this->isExactHistoryPaginationSuccessor(
                 $current,
@@ -1150,6 +1196,29 @@ final class OkxPaperLiveCheckpointStore
             ),
             default => false,
         };
+    }
+
+    /** @param array<string, mixed>|null $nextTransition */
+    private function isExactAcknowledgedWarmingRestSuccessor(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $current,
+        #[\SensitiveParameter] ?array $nextTransition,
+    ): bool {
+        $currentTransition = $current->pendingTransition;
+        $symbol = $currentTransition['symbol'] ?? null;
+        $stream = $currentTransition['stream'] ?? null;
+
+        return ($currentTransition['kind'] ?? null) === 'rest_fetch'
+            && \in_array(
+                $currentTransition['stage'] ?? null,
+                ['current_candles', 'recent_trades'],
+                true,
+            )
+            && \is_string($symbol)
+            && \is_string($stream)
+            && $current->streamFrontiers[$stream] instanceof OkxPaperStreamFrontier
+            && ($current->resyncBySymbol[$symbol] ?? null) === null
+            && ($current->overlapPaginationByStream[$stream] ?? null) === null
+            && $this->isExactNextWarmingTransition($currentTransition, $nextTransition);
     }
 
     /** @param array<string, mixed>|null $nextTransition */

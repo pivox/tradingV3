@@ -93,6 +93,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         }
 
         if ($this->checkpoint->pendingEvent !== null) {
+            $this->continuationTransition = $this->pendingWarmupContinuation();
+            if ($this->continuationTransition !== null) {
+                $this->requiresOverlap[$this->continuationTransition['stream']] = true;
+            }
             yield $this->checkpoint->pendingEvent;
             $this->assertPendingWasAcknowledged();
         }
@@ -136,15 +140,12 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
 
     public function acknowledge(string $eventId): void
     {
-        $this->checkpoint = $this->checkpointStore->acknowledge($this->checkpoint, $eventId);
-        if ($this->continuationTransition !== null) {
-            $this->checkpoint = $this->checkpointStore->saveTransition(
-                $this->checkpoint,
-                $this->checkpoint->phase,
-                $this->continuationTransition,
-            );
-            $this->continuationTransition = null;
-        }
+        $this->checkpoint = $this->checkpointStore->acknowledge(
+            $this->checkpoint,
+            $eventId,
+            $this->continuationTransition,
+        );
+        $this->continuationTransition = null;
     }
 
     public function stop(): void
@@ -296,6 +297,41 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'stream' => $stream,
             'stage' => $stage,
         ];
+    }
+
+    /** @return array{kind: string, symbol: string, stream: string, stage: string}|null */
+    private function pendingWarmupContinuation(): ?array
+    {
+        if ($this->checkpoint->phase !== 'warming'
+            || $this->checkpoint->pendingEvent === null
+            || $this->checkpoint->pendingFrontier === null
+        ) {
+            return null;
+        }
+
+        $pendingStream = $this->checkpoint->pendingFrontier['stream'];
+        foreach ($this->checkpoint->remainingSymbols as $symbol) {
+            foreach (['1m', '5m', '15m', '1H'] as $bar) {
+                $transition = $this->restTransition(
+                    $symbol,
+                    $symbol . '/rest/candle_' . $bar,
+                    'current_candles',
+                );
+                if ($transition['stream'] === $pendingStream) {
+                    return $transition;
+                }
+            }
+            $tradeTransition = $this->restTransition(
+                $symbol,
+                $symbol . '/rest/public_trade',
+                'recent_trades',
+            );
+            if ($tradeTransition['stream'] === $pendingStream) {
+                return $tradeTransition;
+            }
+        }
+
+        return null;
     }
 
     /** @param array<string, mixed> $transition */

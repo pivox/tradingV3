@@ -660,6 +660,287 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame(PaperMarketDataChannel::CANDLE_5M, $resumedEvents->current()?->channel);
     }
 
+    public function testPendingMultiRowRestRestartRecoversSuffixWithAckGatedFrontiers(): void
+    {
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $initialRest = Task7RestClient::withInitialDataset();
+        $initialRest->candleRows['BTC-USDT-SWAP/1m'] = [
+            ['1784970000000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ['1784970001000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+            ['1784970002000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+        ];
+        $source = $this->source(
+            $initialRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $pending = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        self::assertSame('1784970000000', $pending->exchangeTimestamp->format('Uv'));
+        self::assertSame(
+            [['currentCandles', ['BTC-USDT-SWAP', '1m', null, null, 300]]],
+            $initialRest->calls,
+        );
+        $crashed = $this->checkpointState();
+        self::assertNull($crashed['stream_frontiers']['BTCUSDT/rest/candle_1m'] ?? null);
+        self::assertSame(
+            '1m|1784970000000',
+            $crashed['pending_frontier']['frontier']['source_identity'] ?? null,
+        );
+
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $resumedRest = Task7RestClient::withInitialDataset();
+        $resumedRest->candleRows['BTC-USDT-SWAP/1m'] = [
+            ['1784970000000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ['1784970001000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+            ['1784970002000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+        ];
+        $resumed = $this->source(
+            $resumedRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $replayed = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayed);
+        self::assertEquals($pending->toArray(), $replayed->toArray());
+        self::assertSame([], $resumedRest->calls);
+        self::assertNull(
+            $this->checkpointState()['stream_frontiers']['BTCUSDT/rest/candle_1m'] ?? null,
+        );
+
+        $resumed->acknowledge($replayed->eventId);
+        $acknowledgedT0 = $this->checkpointState();
+        self::assertNull($acknowledgedT0['pending_frontier']);
+        self::assertSame(
+            '1m|1784970000000',
+            $acknowledgedT0['stream_frontiers']['BTCUSDT/rest/candle_1m']['source_identity']
+                ?? null,
+        );
+        self::assertSame(
+            [
+                'kind' => 'rest_fetch',
+                'stage' => 'current_candles',
+                'stream' => 'BTCUSDT/rest/candle_1m',
+                'symbol' => 'BTCUSDT',
+            ],
+            $acknowledgedT0['pending_transition'],
+        );
+
+        unset($resumedEvents, $resumed);
+        gc_collect_cycles();
+
+        $postAcknowledgementRest = Task7RestClient::withInitialDataset();
+        $postAcknowledgementRest->candleRows['BTC-USDT-SWAP/1m'] = [
+            ['1784970000000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ['1784970001000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+            ['1784970002000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+        ];
+        $postAcknowledgementSource = $this->source(
+            $postAcknowledgementRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $postAcknowledgementEvents = $postAcknowledgementSource->events();
+        self::assertInstanceOf(\Generator::class, $postAcknowledgementEvents);
+        $t1 = $postAcknowledgementEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $t1);
+        self::assertSame('1784970001000', $t1->exchangeTimestamp->format('Uv'));
+        self::assertSame(
+            [['currentCandles', ['BTC-USDT-SWAP', '1m', null, null, 300]]],
+            $postAcknowledgementRest->calls,
+        );
+        $pendingT1 = $this->checkpointState();
+        self::assertSame(
+            '1m|1784970000000',
+            $pendingT1['stream_frontiers']['BTCUSDT/rest/candle_1m']['source_identity']
+                ?? null,
+        );
+        self::assertSame(
+            '1m|1784970001000',
+            $pendingT1['pending_frontier']['frontier']['source_identity'] ?? null,
+        );
+
+        $postAcknowledgementSource->acknowledge($t1->eventId);
+        self::assertSame(
+            '1m|1784970001000',
+            $this->checkpointState()['stream_frontiers']
+                ['BTCUSDT/rest/candle_1m']['source_identity'] ?? null,
+        );
+        $postAcknowledgementEvents->next();
+        $t2 = $postAcknowledgementEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $t2);
+        self::assertSame('1784970002000', $t2->exchangeTimestamp->format('Uv'));
+        self::assertSame(
+            [['currentCandles', ['BTC-USDT-SWAP', '1m', null, null, 300]]],
+            $postAcknowledgementRest->calls,
+        );
+        $pendingT2 = $this->checkpointState();
+        self::assertSame(
+            '1m|1784970001000',
+            $pendingT2['stream_frontiers']['BTCUSDT/rest/candle_1m']['source_identity']
+                ?? null,
+        );
+        self::assertSame(
+            '1m|1784970002000',
+            $pendingT2['pending_frontier']['frontier']['source_identity'] ?? null,
+        );
+
+        $postAcknowledgementSource->acknowledge($t2->eventId);
+        $postAcknowledgementEvents->next();
+        self::assertSame(
+            PaperMarketDataChannel::CANDLE_5M,
+            $postAcknowledgementEvents->current()?->channel,
+        );
+        self::assertSame(
+            [
+                ['currentCandles', ['BTC-USDT-SWAP', '1m', null, null, 300]],
+                ['currentCandles', ['BTC-USDT-SWAP', '5m', null, null, 300]],
+            ],
+            $postAcknowledgementRest->calls,
+        );
+    }
+
+    public function testPendingMultiRowRestRestartRejectsConflictingReplayOverlap(): void
+    {
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $initialRest = Task7RestClient::withInitialDataset();
+        $initialRest->candleRows['BTC-USDT-SWAP/1m'] = [
+            ['1784970000000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+            ['1784970001000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+            ['1784970002000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+        ];
+        $source = $this->source(
+            $initialRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $pending = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $resumedRest = Task7RestClient::withInitialDataset();
+        $resumedRest->candleRows['BTC-USDT-SWAP/1m'] = [
+            ['1784970000000', '100', '101', '99', '100.6', '10', '1', '1000', '1'],
+            ['1784970001000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+            ['1784970002000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+        ];
+        $resumed = $this->source(
+            $resumedRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $replayed = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayed);
+        self::assertEquals($pending->toArray(), $replayed->toArray());
+        self::assertSame([], $resumedRest->calls);
+        $resumed->acknowledge($replayed->eventId);
+        $beforeConflict = $this->checkpointState();
+
+        try {
+            $resumedEvents->next();
+            self::fail('The reconstructed REST overlap must retain the acknowledged digest.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('market_event_identity_conflict', $exception->getMessage());
+        }
+
+        self::assertSame(
+            [['currentCandles', ['BTC-USDT-SWAP', '1m', null, null, 300]]],
+            $resumedRest->calls,
+        );
+        $afterConflict = $this->checkpointState();
+        self::assertNull($afterConflict['pending_event']);
+        self::assertNull($afterConflict['pending_frontier']);
+        self::assertSame($beforeConflict['ordinal_state'], $afterConflict['ordinal_state']);
+        self::assertSame($beforeConflict['stream_frontiers'], $afterConflict['stream_frontiers']);
+        self::assertSame(
+            $beforeConflict['pending_transition'],
+            $afterConflict['pending_transition'],
+        );
+    }
+
+    public function testPendingInitialRestBookRestartReplaysBeforeRestAndContinuesBoundary(): void
+    {
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        for ($index = 0; $index < 5; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+        $book = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $book);
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $book->channel);
+        self::assertSame('rest_initial_snapshot', $book->payload['origin'] ?? null);
+        $pending = $this->checkpointState();
+        self::assertNull($pending['stream_frontiers']['BTCUSDT/rest/top_of_book'] ?? null);
+        self::assertSame(
+            'BTCUSDT/rest/top_of_book',
+            $pending['pending_frontier']['stream'] ?? null,
+        );
+
+        unset($events, $source);
+        gc_collect_cycles();
+
+        $resumedRest = Task7RestClient::withInitialDataset();
+        $resumed = $this->source(
+            $resumedRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $replayed = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayed);
+        self::assertEquals($book->toArray(), $replayed->toArray());
+        self::assertSame([], $resumedRest->calls);
+        self::assertNull(
+            $this->checkpointState()['stream_frontiers']['BTCUSDT/rest/top_of_book'] ?? null,
+        );
+
+        $resumed->acknowledge($replayed->eventId);
+        $acknowledged = $this->checkpointState();
+        self::assertNull($acknowledged['pending_event']);
+        self::assertNull($acknowledged['pending_frontier']);
+        self::assertSame(
+            '9001',
+            $acknowledged['stream_frontiers']['BTCUSDT/rest/top_of_book']['source_identity']
+                ?? null,
+        );
+        $resumedEvents->next();
+        $boundary = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $boundary);
+        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $boundary->channel);
+        self::assertSame('BTCUSDT', $boundary->symbol);
+        self::assertSame('initial', $boundary->payload['reason'] ?? null);
+        self::assertSame([], $resumedRest->calls);
+    }
+
     /** @param array<string, mixed> $expectedTransition */
     #[DataProvider('transportContinuationProvider')]
     public function testContinuationRestartsWithExactSavedTransportAction(
