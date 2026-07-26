@@ -35,6 +35,28 @@ final class OkxPaperPublicFrameQueue
         return $frame;
     }
 
+    public function peek(): ?string
+    {
+        return $this->frames[0] ?? null;
+    }
+
+    /** @return list<string> */
+    public function frames(): array
+    {
+        return $this->frames;
+    }
+
+    /** @param list<string> $frames */
+    public function replace(array $frames): void
+    {
+        $replacement = new self();
+        foreach ($frames as $frame) {
+            $replacement->enqueue($frame);
+        }
+        $this->frames = $replacement->frames;
+        $this->bytes = $replacement->bytes;
+    }
+
     public function count(): int
     {
         return count($this->frames);

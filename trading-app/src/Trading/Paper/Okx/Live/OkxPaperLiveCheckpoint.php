@@ -36,6 +36,9 @@ final readonly class OkxPaperLiveCheckpoint
         'market_event_identity_conflict',
         'market_data_gap_unresolved',
         'market_data_backpressure_exhausted',
+        'okx_paper_book_sequence_invalid',
+        'okx_paper_book_snapshot_required',
+        'okx_paper_materialized_order_book_invalid',
         'okx_paper_public_acquisition_disabled',
         'okx_paper_public_healthy_stop_invalid',
         'okx_paper_public_message_invalid',
@@ -57,6 +60,8 @@ final readonly class OkxPaperLiveCheckpoint
      * @param array<string, mixed>                       $reconnect
      * @param array<string, mixed>                       $resyncBySymbol
      * @param array<string, mixed>                       $overlapPaginationByStream
+     * @param array{public: list<string>, business: list<string>} $streamingQueues
+     * @param array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
     private function __construct(
@@ -79,6 +84,9 @@ final readonly class OkxPaperLiveCheckpoint
         public array $reconnect,
         public array $resyncBySymbol,
         public array $overlapPaginationByStream,
+        public array $streamingQueues,
+        public array $acknowledgedIdentityHistory,
+        private bool $streamingQueuesExplicit,
     ) {
     }
 
@@ -122,7 +130,7 @@ final readonly class OkxPaperLiveCheckpoint
     public static function fromArray(#[\SensitiveParameter] array $state): self
     {
         try {
-            self::assertExactKeys($state, [
+            $expectedKeys = [
                 'schema_version',
                 'dataset_id',
                 'configuration_sha256',
@@ -142,7 +150,14 @@ final readonly class OkxPaperLiveCheckpoint
                 'reconnect',
                 'resync_by_symbol',
                 'overlap_pagination_by_stream',
-            ]);
+            ];
+            if (array_key_exists('streaming_queues', $state)) {
+                $expectedKeys[] = 'streaming_queues';
+            }
+            if (array_key_exists('acknowledged_identity_history', $state)) {
+                $expectedKeys[] = 'acknowledged_identity_history';
+            }
+            self::assertExactKeys($state, $expectedKeys);
             if ($state['schema_version'] !== self::SCHEMA_VERSION
                 || !\is_string($state['dataset_id'])
                 || !\is_string($state['configuration_sha256'])
@@ -203,6 +218,17 @@ final readonly class OkxPaperLiveCheckpoint
             foreach ($state['overlap_pagination_by_stream'] as $stream => $pagination) {
                 $paginationByStream[$stream] = self::pagination($pagination, $stream);
             }
+            $streamingQueuesExplicit = array_key_exists('streaming_queues', $state);
+            $streamingQueues = $streamingQueuesExplicit
+                ? self::streamingQueues($state['streaming_queues'])
+                : self::legacyResyncStreamingQueues($resyncBySymbol);
+            self::assertResyncQueueMirrorsMatchStreamingQueues(
+                $resyncBySymbol,
+                $streamingQueues,
+            );
+            $acknowledgedIdentityHistory = self::acknowledgedIdentityHistory(
+                $state['acknowledged_identity_history'] ?? [],
+            );
 
             $pendingEvent = self::pendingEvent($state['pending_event']);
             $pendingFrontier = self::pendingFrontier($state['pending_frontier'], $pendingEvent);
@@ -291,6 +317,9 @@ final readonly class OkxPaperLiveCheckpoint
                 reconnect: $reconnect,
                 resyncBySymbol: $resyncBySymbol,
                 overlapPaginationByStream: $paginationByStream,
+                streamingQueues: $streamingQueues,
+                acknowledgedIdentityHistory: $acknowledgedIdentityHistory,
+                streamingQueuesExplicit: $streamingQueuesExplicit,
             );
         } catch (\Throwable $exception) {
             if ($exception instanceof \InvalidArgumentException
@@ -306,7 +335,7 @@ final readonly class OkxPaperLiveCheckpoint
     /** @return array<string, mixed> */
     public function toArray(): array
     {
-        return [
+        $state = [
             'configuration_sha256' => $this->configurationSha256,
             'connection_epoch' => $this->connectionEpoch,
             'dataset_id' => $this->datasetId,
@@ -315,15 +344,25 @@ final readonly class OkxPaperLiveCheckpoint
             'last_acknowledged_event_id' => $this->lastAcknowledgedEventId,
             'ordinal_state' => $this->ordinalState,
             'overlap_pagination_by_stream' => array_map(
-                static fn (?array $pagination): ?array => $pagination === null ? null : [
-                    'endpoint' => $pagination['endpoint'],
-                    'pagination_type' => $pagination['pagination_type'],
-                    'next_cursor' => $pagination['next_cursor'],
-                    'pages_consumed' => $pagination['pages_consumed'],
-                    'pages_remaining' => $pagination['pages_remaining'],
-                    'target_frontier' => $pagination['target_frontier']->toArray(),
-                    'deadline_at' => $pagination['deadline_at'],
-                ],
+                static function (?array $pagination): ?array {
+                    if ($pagination === null) {
+                        return null;
+                    }
+                    $state = [
+                        'endpoint' => $pagination['endpoint'],
+                        'pagination_type' => $pagination['pagination_type'],
+                        'next_cursor' => $pagination['next_cursor'],
+                        'pages_consumed' => $pagination['pages_consumed'],
+                        'pages_remaining' => $pagination['pages_remaining'],
+                        'target_frontier' => $pagination['target_frontier']->toArray(),
+                        'deadline_at' => $pagination['deadline_at'],
+                    ];
+                    if (array_key_exists('retained_rows', $pagination)) {
+                        $state['retained_rows'] = $pagination['retained_rows'];
+                    }
+
+                    return $state;
+                },
                 $this->overlapPaginationByStream,
             ),
             'pending_event' => $this->pendingEvent?->toArray(),
@@ -337,13 +376,29 @@ final readonly class OkxPaperLiveCheckpoint
             'remaining_boundaries' => $this->remainingBoundaries,
             'remaining_symbols' => $this->remainingSymbols,
             'resync_by_symbol' => array_map(
-                static fn (?array $resync): ?array => $resync === null ? null : [
-                    'attempt' => $resync['attempt'],
-                    'frontier' => $resync['frontier']->toArray(),
-                    'source_sequence' => $resync['source_sequence'],
-                    'deadline_at' => $resync['deadline_at'],
-                    'policy' => $resync['policy'],
-                ],
+                static function (?array $resync): ?array {
+                    if ($resync === null) {
+                        return null;
+                    }
+                    $state = [
+                        'attempt' => $resync['attempt'],
+                        'frontier' => $resync['frontier']->toArray(),
+                        'source_sequence' => $resync['source_sequence'],
+                        'deadline_at' => $resync['deadline_at'],
+                        'policy' => $resync['policy'],
+                    ];
+                    foreach ([
+                        'book_snapshot',
+                        'queued_public_frames',
+                        'queued_business_frames',
+                    ] as $field) {
+                        if (array_key_exists($field, $resync)) {
+                            $state[$field] = $resync[$field];
+                        }
+                    }
+
+                    return $state;
+                },
                 $this->resyncBySymbol,
             ),
             'schema_version' => $this->schemaVersion,
@@ -352,6 +407,110 @@ final readonly class OkxPaperLiveCheckpoint
                 static fn (?OkxPaperStreamFrontier $frontier): ?array => $frontier?->toArray(),
                 $this->streamFrontiers,
             ),
+        ];
+        if ($this->streamingQueuesExplicit) {
+            $state['streaming_queues'] = $this->streamingQueues;
+        }
+        if ($this->acknowledgedIdentityHistory !== []) {
+            $state['acknowledged_identity_history'] = $this->acknowledgedIdentityHistory;
+        }
+
+        return $state;
+    }
+
+    /**
+     * @return array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>>
+     */
+    private static function acknowledgedIdentityHistory(mixed $value): array
+    {
+        if (!\is_array($value) || ($value !== [] && array_is_list($value))) {
+            throw new \InvalidArgumentException();
+        }
+        $allowed = array_fill_keys(self::logicalIdentityStreamKeys(), true);
+        $validated = [];
+        foreach ($value as $stream => $entries) {
+            if (!\is_string($stream)
+                || !isset($allowed[$stream])
+                || !\is_array($entries)
+                || !array_is_list($entries)
+                || \count($entries)
+                    > OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream)
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $seen = [];
+            foreach ($entries as $entry) {
+                if (!\is_array($entry) || array_is_list($entry)) {
+                    throw new \InvalidArgumentException();
+                }
+                self::assertExactKeys(
+                    $entry,
+                    ['natural_identity_sha256', 'canonical_digest'],
+                );
+                $identity = $entry['natural_identity_sha256'] ?? null;
+                $digest = $entry['canonical_digest'] ?? null;
+                if (!\is_string($identity)
+                    || !\is_string($digest)
+                    || preg_match(self::SHA256_PATTERN, $identity) !== 1
+                    || preg_match(self::SHA256_PATTERN, $digest) !== 1
+                    || isset($seen[$identity])
+                ) {
+                    throw new \InvalidArgumentException();
+                }
+                $seen[$identity] = true;
+            }
+            $validated[$stream] = $entries;
+        }
+
+        return $validated;
+    }
+
+    /** @return list<string> */
+    private static function logicalIdentityStreamKeys(): array
+    {
+        $keys = [];
+        foreach (self::SYMBOLS as $symbol) {
+            foreach (['candle_1m', 'candle_5m', 'candle_15m', 'candle_1H', 'public_trade'] as $channel) {
+                $keys[] = $symbol . '/' . $channel;
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * @return array{public: list<string>, business: list<string>}
+     */
+    private static function streamingQueues(mixed $value): array
+    {
+        if (!\is_array($value) || array_is_list($value)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactKeys($value, ['public', 'business']);
+        foreach (['public', 'business'] as $socket) {
+            if (!\is_array($value[$socket]) || !array_is_list($value[$socket])) {
+                throw new \InvalidArgumentException();
+            }
+            $bytes = 0;
+            foreach ($value[$socket] as $frame) {
+                if (!\is_string($frame)
+                    || $frame === ''
+                    || \strlen($frame) > OkxPaperLivePolicy::MAX_FRAME_BYTES
+                ) {
+                    throw new \InvalidArgumentException();
+                }
+                $bytes += \strlen($frame);
+            }
+            if (\count($value[$socket]) > OkxPaperLivePolicy::MAX_QUEUED_FRAMES
+                || $bytes > OkxPaperLivePolicy::MAX_QUEUED_BYTES
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        }
+
+        return [
+            'public' => $value['public'],
+            'business' => $value['business'],
         ];
     }
 
@@ -445,6 +604,8 @@ final readonly class OkxPaperLiveCheckpoint
                 || ($stage === 'cancel_resync_timer' && self::isSymbolBookStream($symbol, $stream)),
             'emit_boundary' => \in_array($stage, ['initial', 'reconnect', 'sequence_gap'], true)
                 && self::isSymbolControlStream($symbol, $stream, 'snapshot_boundary'),
+            'emit_connection_state' => $stage === 'reconnecting'
+                && self::isSymbolControlStream($symbol, $stream, 'connection_state'),
             'healthy_stop' => ($stage === 'emit_stopped'
                     && self::isSymbolControlStream($symbol, $stream, 'connection_state'))
                 || ($stage === 'finalize' && $symbol === null && $stream === null),
@@ -496,7 +657,11 @@ final readonly class OkxPaperLiveCheckpoint
             'connecting' => $kind === 'transport_connect',
             'subscribing' => $kind === 'subscription_send',
             'streaming', 'complete' => false,
-            'resyncing' => $kind === 'rest_fetch'
+            'resyncing' => \in_array($kind, [
+                'rest_fetch',
+                'transport_connect',
+                'subscription_send',
+            ], true)
                 || ($kind === 'timer_schedule' && $stage === 'resync_timeout')
                 || ($kind === 'timer_cancel' && $stage === 'cancel_resync_timer')
                 || ($kind === 'emit_boundary' && $stage === 'sequence_gap'),
@@ -505,6 +670,7 @@ final readonly class OkxPaperLiveCheckpoint
                 'transport_connect',
                 'transport_close',
                 'subscription_send',
+                'emit_connection_state',
             ], true)
                 || ($kind === 'timer_schedule' && $stage === 'reconnect_delay')
                 || ($kind === 'timer_schedule' && $stage === 'resync_timeout')
@@ -641,6 +807,12 @@ final readonly class OkxPaperLiveCheckpoint
             return;
         }
         $resync = $resyncBySymbol[$symbol];
+        if (\in_array($phase, ['failed', 'stopping'], true)
+            && ($transition['kind'] ?? null) === 'timer_cancel'
+            && $transition['stage'] === 'cancel_resync_timer'
+        ) {
+            return;
+        }
         $stream = $transition['stream'] ?? $pendingFrontier['stream'] ?? null;
         if ($stream === null && $pendingEvent !== null) {
             $stream = $symbol . '/control/' . $pendingEvent->channel->value;
@@ -652,7 +824,9 @@ final readonly class OkxPaperLiveCheckpoint
         if ($resync['policy'] === 'book_seq_overlap_v1') {
             if (!self::sameFrontier(
                 $resync['frontier'],
-                $streamFrontiers[$symbol . '/ws/top_of_book'] ?? null,
+                $streamFrontiers[$symbol . '/ws/top_of_book']
+                    ?? $streamFrontiers[$symbol . '/rest/top_of_book']
+                    ?? null,
             )) {
                 throw new \InvalidArgumentException();
             }
@@ -818,6 +992,56 @@ final readonly class OkxPaperLiveCheckpoint
     }
 
     /**
+     * @param array<string, mixed> $resyncBySymbol
+     * @return array{public: list<string>, business: list<string>}
+     */
+    private static function legacyResyncStreamingQueues(array $resyncBySymbol): array
+    {
+        $legacy = null;
+        foreach ($resyncBySymbol as $resync) {
+            if (!\is_array($resync)
+                || !array_key_exists('queued_public_frames', $resync)
+                || !array_key_exists('queued_business_frames', $resync)
+            ) {
+                continue;
+            }
+            $candidate = [
+                'public' => $resync['queued_public_frames'],
+                'business' => $resync['queued_business_frames'],
+            ];
+            if ($legacy !== null && $legacy !== $candidate) {
+                throw new \InvalidArgumentException();
+            }
+            $legacy = $candidate;
+        }
+
+        return $legacy ?? ['public' => [], 'business' => []];
+    }
+
+    /**
+     * @param array<string, mixed> $resyncBySymbol
+     * @param array{public: list<string>, business: list<string>} $streamingQueues
+     */
+    private static function assertResyncQueueMirrorsMatchStreamingQueues(
+        array $resyncBySymbol,
+        array $streamingQueues,
+    ): void {
+        foreach ($resyncBySymbol as $resync) {
+            if (!\is_array($resync)
+                || !array_key_exists('queued_public_frames', $resync)
+                || !array_key_exists('queued_business_frames', $resync)
+            ) {
+                continue;
+            }
+            if ($resync['queued_public_frames'] !== $streamingQueues['public']
+                || $resync['queued_business_frames'] !== $streamingQueues['business']
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        }
+    }
+
+    /**
      * @param array<string, mixed> $healthyStop
      * @return array{requested: bool, remaining_symbols: list<string>}
      */
@@ -875,7 +1099,7 @@ final readonly class OkxPaperLiveCheckpoint
         ];
     }
 
-    /** @return array{attempt: int, frontier: OkxPaperStreamFrontier, source_sequence: string|null, deadline_at: string, policy: string}|null */
+    /** @return array<string, mixed>|null */
     private static function resync(mixed $resync, string $symbol): ?array
     {
         if ($resync === null) {
@@ -884,7 +1108,19 @@ final readonly class OkxPaperLiveCheckpoint
         if (!\is_array($resync) || array_is_list($resync)) {
             throw new \InvalidArgumentException();
         }
-        self::assertExactKeys($resync, ['attempt', 'frontier', 'source_sequence', 'deadline_at', 'policy']);
+        $keys = ['attempt', 'frontier', 'source_sequence', 'deadline_at', 'policy'];
+        $hasDurableBook = array_key_exists('book_snapshot', $resync)
+            || array_key_exists('queued_public_frames', $resync)
+            || array_key_exists('queued_business_frames', $resync);
+        if ($hasDurableBook) {
+            $keys = [
+                ...$keys,
+                'book_snapshot',
+                'queued_public_frames',
+                'queued_business_frames',
+            ];
+        }
+        self::assertExactKeys($resync, $keys);
         if (!\is_int($resync['attempt'])
             || $resync['attempt'] < 1
             || $resync['attempt'] > OkxPaperLivePolicy::MAX_RESYNC_ATTEMPTS
@@ -902,12 +1138,18 @@ final readonly class OkxPaperLiveCheckpoint
             if ($channel !== 'top_of_book'
                 || !\is_string($sourceSequence)
                 || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $sourceSequence) !== 1
+                || ($hasDurableBook
+                    && (($resync['book_snapshot'] !== null
+                            && !\is_array($resync['book_snapshot']))
+                        || !\is_array($resync['queued_public_frames'])
+                        || !\is_array($resync['queued_business_frames'])))
             ) {
                 throw new \InvalidArgumentException();
             }
         } elseif ($resync['policy'] === 'frontier_overlap_v1') {
             if ((!str_starts_with($channel, 'candle_') && $channel !== 'public_trade')
                 || $sourceSequence !== null
+                || $hasDurableBook
             ) {
                 throw new \InvalidArgumentException();
             }
@@ -915,16 +1157,40 @@ final readonly class OkxPaperLiveCheckpoint
             throw new \InvalidArgumentException();
         }
 
-        return [
+        $validated = [
             'attempt' => $resync['attempt'],
             'frontier' => $frontier,
             'source_sequence' => $sourceSequence,
             'deadline_at' => self::requiredUtc($resync['deadline_at']),
             'policy' => $resync['policy'],
         ];
+        if ($hasDurableBook) {
+            foreach (['queued_public_frames', 'queued_business_frames'] as $field) {
+                if (!array_is_list($resync[$field])
+                    || \count($resync[$field]) > OkxPaperLivePolicy::MAX_QUEUED_FRAMES
+                ) {
+                    throw new \InvalidArgumentException();
+                }
+                $bytes = 0;
+                foreach ($resync[$field] as $frame) {
+                    if (!\is_string($frame)) {
+                        throw new \InvalidArgumentException();
+                    }
+                    $bytes += \strlen($frame);
+                }
+                if ($bytes > OkxPaperLivePolicy::MAX_QUEUED_BYTES) {
+                    throw new \InvalidArgumentException();
+                }
+            }
+            $validated['book_snapshot'] = $resync['book_snapshot'];
+            $validated['queued_public_frames'] = $resync['queued_public_frames'];
+            $validated['queued_business_frames'] = $resync['queued_business_frames'];
+        }
+
+        return $validated;
     }
 
-    /** @return array{endpoint: string, pagination_type: int|null, next_cursor: string|null, pages_consumed: int, pages_remaining: int, target_frontier: OkxPaperStreamFrontier, deadline_at: string}|null */
+    /** @return array<string, mixed>|null */
     private static function pagination(mixed $pagination, string $stream): ?array
     {
         if ($pagination === null) {
@@ -933,7 +1199,7 @@ final readonly class OkxPaperLiveCheckpoint
         if (!\is_array($pagination) || array_is_list($pagination)) {
             throw new \InvalidArgumentException();
         }
-        self::assertExactKeys($pagination, [
+        $expectedKeys = [
             'endpoint',
             'pagination_type',
             'next_cursor',
@@ -941,7 +1207,12 @@ final readonly class OkxPaperLiveCheckpoint
             'pages_remaining',
             'target_frontier',
             'deadline_at',
-        ]);
+        ];
+        $hasRetainedRows = array_key_exists('retained_rows', $pagination);
+        if ($hasRetainedRows) {
+            $expectedKeys[] = 'retained_rows';
+        }
+        self::assertExactKeys($pagination, $expectedKeys);
         if (!\is_string($pagination['endpoint'])
             || ($pagination['pagination_type'] !== null && !\is_int($pagination['pagination_type']))
             || ($pagination['next_cursor'] !== null && !\is_string($pagination['next_cursor']))
@@ -953,6 +1224,7 @@ final readonly class OkxPaperLiveCheckpoint
             || $pagination['pages_consumed'] > OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES
             || $pagination['pages_remaining'] !== OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES
                 - $pagination['pages_consumed']
+            || ($hasRetainedRows && !\is_array($pagination['retained_rows']))
         ) {
             throw new \InvalidArgumentException();
         }
@@ -995,7 +1267,7 @@ final readonly class OkxPaperLiveCheckpoint
             throw new \InvalidArgumentException();
         }
 
-        return [
+        $validated = [
             'endpoint' => $pagination['endpoint'],
             'pagination_type' => $pagination['pagination_type'],
             'next_cursor' => $pagination['next_cursor'],
@@ -1004,6 +1276,24 @@ final readonly class OkxPaperLiveCheckpoint
             'target_frontier' => $frontier,
             'deadline_at' => self::requiredUtc($pagination['deadline_at']),
         ];
+        if ($hasRetainedRows) {
+            if (!array_is_list($pagination['retained_rows'])
+                || \count($pagination['retained_rows']) > 3_500
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            foreach ($pagination['retained_rows'] as $row) {
+                if (!\is_array($row)) {
+                    throw new \InvalidArgumentException();
+                }
+            }
+            if (\strlen(CanonicalJson::encode($pagination['retained_rows'])) > 786_432) {
+                throw new \InvalidArgumentException();
+            }
+            $validated['retained_rows'] = $pagination['retained_rows'];
+        }
+
+        return $validated;
     }
 
     private static function pendingEvent(mixed $pendingEvent): ?PaperMarketEvent
