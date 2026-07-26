@@ -61,6 +61,13 @@ final readonly class OkxPaperLiveCheckpoint
      * @param array<string, mixed>                       $resyncBySymbol
      * @param array<string, mixed>                       $overlapPaginationByStream
      * @param array{public: list<string>, business: list<string>} $streamingQueues
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * }|null $streamingQueueRef
      * @param array<string, list<array{natural_identity_sha256: string, canonical_digest: string}>> $acknowledgedIdentityHistory
      * @param array{stream: string, frontier: OkxPaperStreamFrontier}|null $pendingFrontier
      */
@@ -85,6 +92,7 @@ final readonly class OkxPaperLiveCheckpoint
         public array $resyncBySymbol,
         public array $overlapPaginationByStream,
         public array $streamingQueues,
+        public ?array $streamingQueueRef,
         public array $acknowledgedIdentityHistory,
         private bool $streamingQueuesExplicit,
     ) {
@@ -154,6 +162,9 @@ final readonly class OkxPaperLiveCheckpoint
             if (array_key_exists('streaming_queues', $state)) {
                 $expectedKeys[] = 'streaming_queues';
             }
+            if (array_key_exists('streaming_queue_ref', $state)) {
+                $expectedKeys[] = 'streaming_queue_ref';
+            }
             if (array_key_exists('acknowledged_identity_history', $state)) {
                 $expectedKeys[] = 'acknowledged_identity_history';
             }
@@ -219,12 +230,21 @@ final readonly class OkxPaperLiveCheckpoint
                 $paginationByStream[$stream] = self::pagination($pagination, $stream);
             }
             $streamingQueuesExplicit = array_key_exists('streaming_queues', $state);
+            $streamingQueueRef = array_key_exists('streaming_queue_ref', $state)
+                ? self::streamingQueueRef($state['streaming_queue_ref'])
+                : null;
+            if ($streamingQueuesExplicit && $streamingQueueRef !== null) {
+                throw new \InvalidArgumentException();
+            }
             $streamingQueues = $streamingQueuesExplicit
                 ? self::streamingQueues($state['streaming_queues'])
-                : self::legacyResyncStreamingQueues($resyncBySymbol);
+                : ($streamingQueueRef === null
+                    ? self::legacyResyncStreamingQueues($resyncBySymbol)
+                    : ['public' => [], 'business' => []]);
             self::assertResyncQueueMirrorsMatchStreamingQueues(
                 $resyncBySymbol,
                 $streamingQueues,
+                $streamingQueueRef,
             );
             $acknowledgedIdentityHistory = self::acknowledgedIdentityHistory(
                 $state['acknowledged_identity_history'] ?? [],
@@ -318,6 +338,7 @@ final readonly class OkxPaperLiveCheckpoint
                 resyncBySymbol: $resyncBySymbol,
                 overlapPaginationByStream: $paginationByStream,
                 streamingQueues: $streamingQueues,
+                streamingQueueRef: $streamingQueueRef,
                 acknowledgedIdentityHistory: $acknowledgedIdentityHistory,
                 streamingQueuesExplicit: $streamingQueuesExplicit,
             );
@@ -408,7 +429,9 @@ final readonly class OkxPaperLiveCheckpoint
                 $this->streamFrontiers,
             ),
         ];
-        if ($this->streamingQueuesExplicit) {
+        if ($this->streamingQueueRef !== null) {
+            $state['streaming_queue_ref'] = $this->streamingQueueRef;
+        } elseif ($this->streamingQueuesExplicit) {
             $state['streaming_queues'] = $this->streamingQueues;
         }
         if ($this->acknowledgedIdentityHistory !== []) {
@@ -512,6 +535,54 @@ final readonly class OkxPaperLiveCheckpoint
             'public' => $value['public'],
             'business' => $value['business'],
         ];
+    }
+
+    /**
+     * @return array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * }
+     */
+    private static function streamingQueueRef(mixed $value): array
+    {
+        if (!\is_array($value) || array_is_list($value)) {
+            throw new \InvalidArgumentException();
+        }
+        self::assertExactKeys(
+            $value,
+            ['format', 'sha256', 'storage_bytes', 'public', 'business'],
+        );
+        if ($value['format'] !== 'okx_raw_queue_v1'
+            || !\is_string($value['sha256'])
+            || preg_match(self::SHA256_PATTERN, $value['sha256']) !== 1
+            || !\is_int($value['storage_bytes'])
+            || $value['storage_bytes'] < 14
+            || $value['storage_bytes'] > 2 * OkxPaperLivePolicy::MAX_QUEUED_BYTES
+                + 8 * OkxPaperLivePolicy::MAX_QUEUED_FRAMES
+                + 14
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        foreach (['public', 'business'] as $socket) {
+            if (!\is_array($value[$socket]) || array_is_list($value[$socket])) {
+                throw new \InvalidArgumentException();
+            }
+            self::assertExactKeys($value[$socket], ['frames', 'bytes']);
+            if (!\is_int($value[$socket]['frames'])
+                || $value[$socket]['frames'] < 0
+                || $value[$socket]['frames'] > OkxPaperLivePolicy::MAX_QUEUED_FRAMES
+                || !\is_int($value[$socket]['bytes'])
+                || $value[$socket]['bytes'] < 0
+                || $value[$socket]['bytes'] > OkxPaperLivePolicy::MAX_QUEUED_BYTES
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        }
+
+        return $value;
     }
 
     /** @return list<string> */
@@ -1021,10 +1092,12 @@ final readonly class OkxPaperLiveCheckpoint
     /**
      * @param array<string, mixed> $resyncBySymbol
      * @param array{public: list<string>, business: list<string>} $streamingQueues
+     * @param array<string, mixed>|null $streamingQueueRef
      */
     private static function assertResyncQueueMirrorsMatchStreamingQueues(
         array $resyncBySymbol,
         array $streamingQueues,
+        ?array $streamingQueueRef,
     ): void {
         foreach ($resyncBySymbol as $resync) {
             if (!\is_array($resync)
@@ -1033,7 +1106,8 @@ final readonly class OkxPaperLiveCheckpoint
             ) {
                 continue;
             }
-            if ($resync['queued_public_frames'] !== $streamingQueues['public']
+            if ($streamingQueueRef !== null
+                || $resync['queued_public_frames'] !== $streamingQueues['public']
                 || $resync['queued_business_frames'] !== $streamingQueues['business']
             ) {
                 throw new \InvalidArgumentException();
@@ -1109,16 +1183,20 @@ final readonly class OkxPaperLiveCheckpoint
             throw new \InvalidArgumentException();
         }
         $keys = ['attempt', 'frontier', 'source_sequence', 'deadline_at', 'policy'];
-        $hasDurableBook = array_key_exists('book_snapshot', $resync)
-            || array_key_exists('queued_public_frames', $resync)
-            || array_key_exists('queued_business_frames', $resync);
-        if ($hasDurableBook) {
-            $keys = [
-                ...$keys,
-                'book_snapshot',
-                'queued_public_frames',
-                'queued_business_frames',
-            ];
+        $hasBookSnapshot = array_key_exists('book_snapshot', $resync);
+        $hasPublicQueueMirror = array_key_exists('queued_public_frames', $resync);
+        $hasBusinessQueueMirror = array_key_exists('queued_business_frames', $resync);
+        if ($hasPublicQueueMirror !== $hasBusinessQueueMirror
+            || ($hasPublicQueueMirror && !$hasBookSnapshot)
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        if ($hasBookSnapshot) {
+            $keys[] = 'book_snapshot';
+        }
+        if ($hasPublicQueueMirror) {
+            $keys[] = 'queued_public_frames';
+            $keys[] = 'queued_business_frames';
         }
         self::assertExactKeys($resync, $keys);
         if (!\is_int($resync['attempt'])
@@ -1138,18 +1216,17 @@ final readonly class OkxPaperLiveCheckpoint
             if ($channel !== 'top_of_book'
                 || !\is_string($sourceSequence)
                 || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $sourceSequence) !== 1
-                || ($hasDurableBook
-                    && (($resync['book_snapshot'] !== null
-                            && !\is_array($resync['book_snapshot']))
-                        || !\is_array($resync['queued_public_frames'])
-                        || !\is_array($resync['queued_business_frames'])))
+                || ($hasBookSnapshot
+                    && $resync['book_snapshot'] !== null
+                    && !\is_array($resync['book_snapshot']))
             ) {
                 throw new \InvalidArgumentException();
             }
         } elseif ($resync['policy'] === 'frontier_overlap_v1') {
             if ((!str_starts_with($channel, 'candle_') && $channel !== 'public_trade')
                 || $sourceSequence !== null
-                || $hasDurableBook
+                || $hasBookSnapshot
+                || $hasPublicQueueMirror
             ) {
                 throw new \InvalidArgumentException();
             }
@@ -1164,7 +1241,10 @@ final readonly class OkxPaperLiveCheckpoint
             'deadline_at' => self::requiredUtc($resync['deadline_at']),
             'policy' => $resync['policy'],
         ];
-        if ($hasDurableBook) {
+        if ($hasBookSnapshot) {
+            $validated['book_snapshot'] = $resync['book_snapshot'];
+        }
+        if ($hasPublicQueueMirror) {
             foreach (['queued_public_frames', 'queued_business_frames'] as $field) {
                 if (!array_is_list($resync[$field])
                     || \count($resync[$field]) > OkxPaperLivePolicy::MAX_QUEUED_FRAMES
@@ -1182,7 +1262,6 @@ final readonly class OkxPaperLiveCheckpoint
                     throw new \InvalidArgumentException();
                 }
             }
-            $validated['book_snapshot'] = $resync['book_snapshot'];
             $validated['queued_public_frames'] = $resync['queued_public_frames'];
             $validated['queued_business_frames'] = $resync['queued_business_frames'];
         }

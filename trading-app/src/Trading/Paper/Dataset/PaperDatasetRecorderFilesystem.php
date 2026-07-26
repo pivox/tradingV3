@@ -90,6 +90,32 @@ class PaperDatasetRecorderFilesystem
         return @rename($source, $destination);
     }
 
+    /** @param array<string, mixed> $expectedStatistics */
+    public function removeFile(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] array $expectedStatistics,
+        string $operation,
+    ): bool {
+        $actualStatistics = $this->pathStat($path, $operation);
+        foreach (['dev', 'ino', 'mode', 'nlink', 'size'] as $field) {
+            if (!isset($expectedStatistics[$field], $actualStatistics[$field])
+                || !\is_int($expectedStatistics[$field])
+                || !\is_int($actualStatistics[$field])
+                || $expectedStatistics[$field] !== $actualStatistics[$field]
+            ) {
+                return false;
+            }
+        }
+        if (($actualStatistics['mode'] & 0170000) !== 0100000
+            || ($actualStatistics['mode'] & 0777) !== 0600
+            || $actualStatistics['nlink'] !== 1
+        ) {
+            return false;
+        }
+
+        return @unlink($path);
+    }
+
     /** @param resource $handle */
     public function truncate($handle, int $size, string $operation): bool
     {

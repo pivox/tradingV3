@@ -125,9 +125,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         foreach ($this->instruments->nativeInstrumentIds() as $instrumentId) {
             $this->books[$instrumentId] = new OkxPaperOrderBookMaterializer();
         }
-        if ($checkpoint->streamingQueues !== ['public' => [], 'business' => []]) {
-            $this->publicQueue->replace($checkpoint->streamingQueues['public']);
-            $this->businessQueue->replace($checkpoint->streamingQueues['business']);
+        $streamingQueues = $this->checkpointStore->streamingQueues($checkpoint);
+        if ($streamingQueues !== ['public' => [], 'business' => []]) {
+            $this->publicQueue->replace($streamingQueues['public']);
+            $this->businessQueue->replace($streamingQueues['business']);
         }
         foreach ($checkpoint->resyncBySymbol as $symbol => $resync) {
             if (!\is_array($resync) || $resync['policy'] !== 'book_seq_overlap_v1') {
@@ -1957,10 +1958,12 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ];
         if (($transition['stage'] ?? null) === 'order_book') {
             $state['resync_by_symbol'][$symbol]['book_snapshot'] = null;
-            $state['resync_by_symbol'][$symbol]['queued_public_frames'] =
-                $this->publicQueue->frames();
-            $state['resync_by_symbol'][$symbol]['queued_business_frames'] =
-                $this->businessQueue->frames();
+            if ($this->checkpoint->streamingQueueRef === null) {
+                $state['resync_by_symbol'][$symbol]['queued_public_frames'] =
+                    $this->publicQueue->frames();
+                $state['resync_by_symbol'][$symbol]['queued_business_frames'] =
+                    $this->businessQueue->frames();
+            }
         }
         $this->checkpoint = $this->checkpointStore->saveTransition(
             OkxPaperLiveCheckpoint::fromArray($state),
@@ -2059,12 +2062,22 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->sortCandleRows($rows);
 
             try {
-                return $this->acceptedRecoveryCandleEvents(
+                $events = $this->acceptedRecoveryCandleEvents(
                     $stream,
                     $instrumentId,
                     $bar,
                     $rows,
                 );
+                $this->persistCurrentCandleSuffix(
+                    $symbol,
+                    $stream,
+                    $instrumentId,
+                    $bar,
+                    $rows,
+                    $events,
+                );
+
+                return $events;
             } catch (OkxPaperLiveIntegrityException $exception) {
                 if ($exception->getMessage() !== 'market_data_gap_unresolved') {
                     throw $exception;
@@ -2089,7 +2102,10 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         $this->sortTradeRows($rows);
 
         try {
-            return $this->acceptedRecoveryTradeEvents($stream, $rows);
+            $events = $this->acceptedRecoveryTradeEvents($stream, $rows);
+            $this->persistRecentTradeSuffix($symbol, $stream, $rows, $events);
+
+            return $events;
         } catch (OkxPaperLiveIntegrityException $exception) {
             if ($exception->getMessage() !== 'market_data_gap_unresolved') {
                 throw $exception;
@@ -2151,6 +2167,119 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $row,
             ),
             true,
+        );
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @param list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }> $events
+     */
+    private function persistCurrentCandleSuffix(
+        string $symbol,
+        string $stream,
+        string $instrumentId,
+        string $bar,
+        array $rows,
+        array $events,
+    ): void {
+        if (\count($events) < 2) {
+            return;
+        }
+        $resync = $this->checkpoint->resyncBySymbol[$symbol] ?? null;
+        if (!\is_array($resync)) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $historyTransition = $this->restTransition(
+            $symbol,
+            $stream,
+            'history_candles',
+        );
+        $state = $this->checkpoint->toArray();
+        $state['overlap_pagination_by_stream'][$stream] = [
+            'endpoint' => 'history_candles',
+            'pagination_type' => null,
+            'next_cursor' => $this->validatedOldestCandleTimestamp(
+                $rows,
+                $instrumentId,
+                $bar,
+                null,
+            ),
+            'pages_consumed' => 0,
+            'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
+            'target_frontier' => $resync['frontier']->toArray(),
+            'deadline_at' => $resync['deadline_at'],
+            'retained_rows' => $rows,
+        ];
+        $state['pending_transition'] = $historyTransition;
+        $this->checkpoint = $this->checkpointStore->saveTransition(
+            OkxPaperLiveCheckpoint::fromArray($state),
+            'reconnecting',
+            $historyTransition,
+        );
+    }
+
+    /**
+     * @param list<array<array-key, mixed>> $rows
+     * @param list<array{
+     *     event: PaperMarketEvent,
+     *     frontier: OkxPaperStreamFrontier,
+     *     ordinal_state: array<string, mixed>
+     * }> $events
+     */
+    private function persistRecentTradeSuffix(
+        string $symbol,
+        string $stream,
+        array $rows,
+        array $events,
+    ): void {
+        if (\count($events) < 2) {
+            return;
+        }
+        $resync = $this->checkpoint->resyncBySymbol[$symbol] ?? null;
+        if (!\is_array($resync)) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $oldestTimestamp = null;
+        foreach ($rows as $row) {
+            $this->tradeFrontier($row);
+            $timestamp = $row['ts'] ?? null;
+            if (!\is_string($timestamp)) {
+                $this->failTerminal('market_data_gap_unresolved');
+            }
+            if ($oldestTimestamp === null
+                || self::compareUnsigned($timestamp, $oldestTimestamp) < 0
+            ) {
+                $oldestTimestamp = $timestamp;
+            }
+        }
+        if (!\is_string($oldestTimestamp)) {
+            $this->failTerminal('market_data_gap_unresolved');
+        }
+        $historyTransition = $this->restTransition(
+            $symbol,
+            $stream,
+            'history_trades',
+        );
+        $state = $this->checkpoint->toArray();
+        $state['overlap_pagination_by_stream'][$stream] = [
+            'endpoint' => 'history_trades',
+            'pagination_type' => 2,
+            'next_cursor' => $oldestTimestamp,
+            'pages_consumed' => 0,
+            'pages_remaining' => OkxPaperLivePolicy::MAX_OVERLAP_HISTORY_PAGES,
+            'target_frontier' => $resync['frontier']->toArray(),
+            'deadline_at' => $resync['deadline_at'],
+            'retained_rows' => $rows,
+        ];
+        $state['pending_transition'] = $historyTransition;
+        $this->checkpoint = $this->checkpointStore->saveTransition(
+            OkxPaperLiveCheckpoint::fromArray($state),
+            'reconnecting',
+            $historyTransition,
         );
     }
 
@@ -3000,11 +3129,15 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         if (\in_array($this->checkpoint->phase, ['complete', 'failed', 'stopping'], true)) {
             return;
         }
-        $this->checkpoint = $this->checkpointStore->saveStreamingQueues(
-            $this->checkpoint,
-            $this->publicQueue->frames(),
-            $this->businessQueue->frames(),
-        );
+        try {
+            $this->checkpoint = $this->checkpointStore->saveStreamingQueues(
+                $this->checkpoint,
+                $this->publicQueue->frames(),
+                $this->businessQueue->frames(),
+            );
+        } catch (\Throwable $failure) {
+            $this->reconcileAfterCheckpointWriteFailure($failure);
+        }
     }
 
     /** @param array<string, mixed> $message */
@@ -3062,9 +3195,13 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             'deadline_at' => $deadline->format('Y-m-d\TH:i:s.u\Z'),
             'policy' => 'book_seq_overlap_v1',
             'book_snapshot' => null,
-            'queued_public_frames' => $this->publicQueue->frames(),
-            'queued_business_frames' => $this->businessQueue->frames(),
         ];
+        if ($this->checkpoint->streamingQueueRef === null) {
+            $state['resync_by_symbol'][$symbol]['queued_public_frames'] =
+                $this->publicQueue->frames();
+            $state['resync_by_symbol'][$symbol]['queued_business_frames'] =
+                $this->businessQueue->frames();
+        }
         $timerTransition = [
             'kind' => 'timer_schedule',
             'symbol' => $symbol,
@@ -3157,6 +3294,11 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                     $restTransition,
                 );
             } catch (\Throwable $exception) {
+                if ($exception->getMessage()
+                    === 'okx_paper_live_checkpoint_write_failed'
+                ) {
+                    throw $exception;
+                }
                 if ($this->isIdentityConflict($exception)) {
                     $this->failTerminal('market_event_identity_conflict');
                 }
@@ -3350,24 +3492,55 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         array $snapshot,
         array $transition,
     ): void {
-        $state = $this->checkpoint->toArray();
-        $resync = $state['resync_by_symbol'][$symbol] ?? null;
-        if (!\is_array($resync)) {
-            throw new OkxPaperLiveIntegrityException('market_data_gap_unresolved');
+        try {
+            $this->checkpoint =
+                $this->checkpointStore->saveBookRecoverySnapshotAndStreamingQueues(
+                    $this->checkpoint,
+                    $symbol,
+                    $snapshot,
+                    $transition,
+                    $this->publicQueue->frames(),
+                    $this->businessQueue->frames(),
+                );
+        } catch (\Throwable $failure) {
+            $this->reconcileAfterCheckpointWriteFailure($failure);
         }
-        $resync['book_snapshot'] = $snapshot;
-        $resync['queued_public_frames'] = $this->publicQueue->frames();
-        $resync['queued_business_frames'] = $this->businessQueue->frames();
-        $state['streaming_queues'] = [
-            'public' => $resync['queued_public_frames'],
-            'business' => $resync['queued_business_frames'],
-        ];
-        $state['resync_by_symbol'][$symbol] = $resync;
-        $this->checkpoint = $this->checkpointStore->saveTransition(
-            OkxPaperLiveCheckpoint::fromArray($state),
-            $this->checkpoint->phase,
-            $transition,
-        );
+    }
+
+    private function reconcileAfterCheckpointWriteFailure(
+        \Throwable $failure,
+    ): never {
+        if ($failure->getMessage() !== 'okx_paper_live_checkpoint_write_failed') {
+            throw $failure;
+        }
+        try {
+            $visible = $this->checkpointStore->loadOrCreate(
+                $this->checkpoint->datasetId,
+                $this->checkpoint->configurationSha256,
+            );
+            $queues = $this->checkpointStore->streamingQueues($visible);
+            $this->publicQueue->replace($queues['public']);
+            $this->businessQueue->replace($queues['business']);
+            foreach ($visible->resyncBySymbol as $symbol => $resync) {
+                if (!\is_array($resync)
+                    || $resync['policy'] !== 'book_seq_overlap_v1'
+                    || !\is_array($resync['book_snapshot'] ?? null)
+                ) {
+                    continue;
+                }
+                $this->books[$this->instruments->nativeInstrumentId($symbol)]
+                    ->replaceSnapshot($resync['book_snapshot']);
+            }
+            $this->checkpoint = $visible;
+        } catch (\Throwable $reconciliationFailure) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+                0,
+                $reconciliationFailure,
+            );
+        }
+
+        throw $failure;
     }
 
     private function connectResumedBookRecoverySockets(): void

@@ -1579,9 +1579,15 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(PaperMarketEvent::class, $pending);
         self::assertSame('9101', $pending->payload['trade_id'] ?? null);
         $pendingState = $this->checkpointState();
+        self::assertArrayHasKey('streaming_queue_ref', $pendingState);
+        self::assertArrayNotHasKey('streaming_queues', $pendingState);
+        $pendingQueues = $store->streamingQueues($store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        ));
         self::assertCount(
             1,
-            $pendingState['streaming_queues']['public'] ?? [],
+            $pendingQueues['public'],
             'The complete raw frame must be durable before its first row is acknowledged.',
         );
 
@@ -2871,11 +2877,17 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             'public' => $public,
         ] = $this->sourceAtGapReplacement();
         $public->message(Task7Transport::bookFrame('9006', '9005', '6'));
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
         self::assertCount(
             2,
-            $this->checkpointState()['resync_by_symbol']['BTCUSDT'][
-                'queued_public_frames'
-            ],
+            $store->streamingQueues($checkpoint)['public'],
+        );
+        self::assertArrayNotHasKey(
+            'queued_public_frames',
+            $checkpoint->resyncBySymbol['BTCUSDT'],
         );
         $source->acknowledge($replacement->eventId);
         $source->stop();
@@ -4767,6 +4779,190 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertCount(1, $restartBusiness->connections);
     }
 
+    #[DataProvider('currentReconnectSuffixProvider')]
+    public function testReconnectCurrentResponseSuffixSurvivesCrashAfterFirstPendingEvent(
+        string $kind,
+    ): void {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $normalizer = new \App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer(
+            $clock,
+        );
+        if ($kind === 'trade') {
+            $stream = 'BTCUSDT/rest/public_trade';
+            $stage = 'recent_trades';
+            $rows = [
+                self::restTrade('100', '1784970100000'),
+                self::restTrade('200', '1784970101000'),
+                self::restTrade('300', '1784970102000'),
+            ];
+            $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+                $normalizer->recoveryTrade($rows[0]),
+            );
+        } else {
+            $stream = 'BTCUSDT/rest/candle_1m';
+            $stage = 'current_candles';
+            $rows = [
+                ['1784970000000', '100', '101', '99', '100.5', '10', '1', '1000', '1'],
+                ['1784970060000', '101', '102', '100', '101.5', '11', '1', '1100', '1'],
+                ['1784970120000', '102', '103', '101', '102.5', '12', '1', '1200', '1'],
+            ];
+            $anchor = $normalizer->warmupCandle(
+                'BTC-USDT-SWAP',
+                '1m',
+                $rows[0],
+            );
+            self::assertInstanceOf(PaperMarketEvent::class, $anchor);
+            $frontier = \App\Trading\Paper\Okx\Live\OkxPaperStreamFrontier::fromEvent(
+                $anchor,
+            );
+        }
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        $state['phase'] = 'reconnecting';
+        $state['connection_epoch'] = 2;
+        $state['remaining_symbols'] = ['BTCUSDT', 'ETHUSDT'];
+        $state['remaining_boundaries'] = [
+            ['symbol' => 'BTCUSDT', 'reason' => 'reconnect'],
+            ['symbol' => 'ETHUSDT', 'reason' => 'reconnect'],
+        ];
+        $state['reconnect'] = [
+            'attempt' => 1,
+            'deadline_at' => '2026-07-25T10:00:01.000000Z',
+            'stable_since' => null,
+            'accepted_events' => 0,
+        ];
+        $state['stream_frontiers'][$stream] = $frontier->toArray();
+        $state['resync_by_symbol']['BTCUSDT'] = [
+            'attempt' => 1,
+            'frontier' => $frontier->toArray(),
+            'source_sequence' => null,
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'policy' => 'frontier_overlap_v1',
+        ];
+        $state['pending_transition'] = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => $stream,
+            'stage' => $stage,
+        ];
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        unset($seed);
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            CanonicalJson::encode(
+                OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+            ) . "\n",
+        ));
+
+        $rest = new Task7RestClient();
+        if ($kind === 'trade') {
+            $rest->tradeRows['BTC-USDT-SWAP'] = $rows;
+        } else {
+            $rest->candleRows['BTC-USDT-SWAP/1m'] = $rows;
+        }
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'public',
+        );
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $source = $this->source(
+            $rest,
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $pendingA = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pendingA);
+        self::assertSame(
+            $kind === 'trade' ? '200' : '1784970060000',
+            $kind === 'trade'
+                ? ($pendingA->payload['trade_id'] ?? null)
+                : $pendingA->exchangeTimestamp->format('Uv'),
+        );
+        $crashed = $this->checkpointState();
+        self::assertEquals($pendingA->toArray(), $crashed['pending_event']);
+        $crashedOrdinals = $crashed['ordinal_state'];
+        $crashedFrontiers = $crashed['stream_frontiers'];
+        $source->stop();
+        unset($events, $source, $store, $public, $business);
+        gc_collect_cycles();
+
+        $restartRest = new Task7RestClient();
+        $restartPublic = new Task7Transport();
+        $restartBusiness = new Task7Transport();
+        $restartPublic->responses = Task7Transport::acknowledgements(
+            self::publicArguments(),
+            'restartPublic',
+        );
+        $restartBusiness->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'restartBusiness',
+        );
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $resumed = $this->source(
+            $restartRest,
+            $restartPublic,
+            $restartBusiness,
+            checkpointStore: $restartStore,
+            clock: $clock,
+        );
+        $resumedEvents = $resumed->events();
+        self::assertInstanceOf(\Generator::class, $resumedEvents);
+        $replayedA = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayedA);
+        self::assertEquals($pendingA->toArray(), $replayedA->toArray());
+        self::assertSame($crashedOrdinals, $this->checkpointState()['ordinal_state']);
+        self::assertSame($crashedFrontiers, $this->checkpointState()['stream_frontiers']);
+
+        try {
+            $resumed->acknowledge($replayedA->eventId);
+            self::assertSame($crashedOrdinals, $this->checkpointState()['ordinal_state']);
+            $resumedEvents->next();
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::fail(sprintf(
+                'The durable reconnect suffix was lost after replaying A: %s',
+                $exception->getMessage(),
+            ));
+        }
+        $replayedB = $resumedEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $replayedB);
+        self::assertSame(
+            $kind === 'trade' ? '300' : '1784970120000',
+            $kind === 'trade'
+                ? ($replayedB->payload['trade_id'] ?? null)
+                : $replayedB->exchangeTimestamp->format('Uv'),
+        );
+        self::assertSame([], $restartRest->calls);
+        $pendingB = $this->checkpointState();
+        self::assertSame(
+            $kind === 'trade' ? '200' : '1m|1784970060000',
+            $pendingB['stream_frontiers'][$stream]['source_identity'] ?? null,
+        );
+        self::assertSame(
+            $kind === 'trade' ? '300' : '1m|1784970120000',
+            $pendingB['pending_frontier']['frontier']['source_identity'] ?? null,
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function currentReconnectSuffixProvider(): iterable
+    {
+        yield 'current candles' => ['candle'];
+        yield 'recent trades' => ['trade'];
+    }
+
     public function testHistoryTradePaginationCheckpointDurablyRoundTripsRetainedRows(): void
     {
         $state = OkxPaperLiveCheckpoint::fresh(
@@ -6314,6 +6510,1228 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         }
     }
 
+    public function testValidNearLimitFrameIsDurablyAdmittedWithSaturatedIdentityLedger(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $this->seedSaturatedIdentityCheckpoint();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            clock: $clock,
+            publicQueue: $publicQueue,
+        );
+        $frame = self::paddedTradeFrame(
+            '7101',
+            OkxPaperLivePolicy::MAX_FRAME_BYTES - 1,
+        );
+        $admit = new \ReflectionMethod($source, 'admitSocketFrame');
+        $admit->invoke($source, $frame, $publicQueue, 1, 'public');
+
+        self::assertSame(1, $publicQueue->count());
+        self::assertSame(OkxPaperLivePolicy::MAX_FRAME_BYTES - 1, $publicQueue->bytes());
+        $checkpointContents = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($checkpointContents);
+        self::assertLessThanOrEqual(
+            OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES,
+            \strlen($checkpointContents),
+        );
+        self::assertStringNotContainsString($frame, $checkpointContents);
+        $source->stop();
+        $store->__destruct();
+        unset($source, $store);
+        gc_collect_cycles();
+
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot, clock: $clock);
+        $checkpoint = $restartStore->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $restartStore->streamingQueues($checkpoint),
+        );
+    }
+
+    public function testDurableRawQueueHonorsExactFrameAndAggregateByteLimits(): void
+    {
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $frameA = self::paddedTradeFrame(
+            '7201',
+            OkxPaperLivePolicy::MAX_FRAME_BYTES,
+        );
+        $frameB = self::paddedTradeFrame(
+            '7202',
+            OkxPaperLivePolicy::MAX_FRAME_BYTES,
+        );
+        $tooLarge = $frameA . ' ';
+        try {
+            $store->saveStreamingQueues($checkpoint, [$tooLarge], []);
+            self::fail('MAX_FRAME_BYTES + 1 must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('market_data_backpressure_exhausted', $exception->getMessage());
+        }
+
+        try {
+            $checkpoint = $store->saveStreamingQueues($checkpoint, [$frameA], []);
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::fail(sprintf(
+                'A frame at MAX_FRAME_BYTES must be admitted: %s',
+                $exception->getMessage(),
+            ));
+        }
+        $checkpoint = $store->saveStreamingQueues(
+            $checkpoint,
+            [$frameA, $frameB],
+            [],
+        );
+        try {
+            $store->saveStreamingQueues(
+                $checkpoint,
+                [$frameA, $frameB, 'x'],
+                [],
+            );
+            self::fail('MAX_QUEUED_BYTES + 1 must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('market_data_backpressure_exhausted', $exception->getMessage());
+        }
+
+        $checkpointContents = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($checkpointContents);
+        self::assertLessThanOrEqual(
+            OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES,
+            \strlen($checkpointContents),
+        );
+        $state = json_decode($checkpointContents, true, 512, \JSON_THROW_ON_ERROR);
+        self::assertIsArray($state);
+        self::assertArrayHasKey('streaming_queue_ref', $state);
+        self::assertArrayNotHasKey('streaming_queues', $state);
+        self::assertSame(
+            OkxPaperLivePolicy::MAX_QUEUED_BYTES,
+            $state['streaming_queue_ref']['public']['bytes'] ?? null,
+        );
+        $store->__destruct();
+        unset($store);
+        gc_collect_cycles();
+
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restartStore->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            ['public' => [$frameA, $frameB], 'business' => []],
+            $restartStore->streamingQueues($restored),
+        );
+    }
+
+    #[DataProvider('unpreparedQueueTransitionMutationProvider')]
+    public function testSaveTransitionRejectsUnpreparedQueueMutation(
+        string $mutation,
+    ): void {
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $frame = json_encode(Task7Transport::tradeFrame(['7251']), \JSON_THROW_ON_ERROR);
+        $checkpoint = $store->saveStreamingQueues($checkpoint, [$frame], []);
+        $before = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($before);
+        $state = $checkpoint->toArray();
+        if ($mutation === 'missing_digest') {
+            $state['streaming_queue_ref']['sha256'] = str_repeat('b', 64);
+        } else {
+            unset($state['streaming_queue_ref']);
+            $state['streaming_queues'] = [
+                'public' => ['raw-secret-downgrade'],
+                'business' => [],
+            ];
+        }
+        $candidate = OkxPaperLiveCheckpoint::fromArray($state);
+
+        try {
+            $store->saveTransition(
+                $candidate,
+                $checkpoint->phase,
+                $checkpoint->pendingTransition,
+            );
+            self::fail(sprintf(
+                'saveTransition() must reject the unprepared %s queue mutation.',
+                $mutation,
+            ));
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+        }
+
+        self::assertSame(
+            $before,
+            file_get_contents($this->testRoot . '/checkpoints/okx-live/checkpoint.json'),
+        );
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $store->streamingQueues($checkpoint),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unpreparedQueueTransitionMutationProvider(): iterable
+    {
+        yield 'missing content-addressed blob' => ['missing_digest'];
+        yield 'externalized to embedded downgrade' => ['embedded_downgrade'];
+    }
+
+    public function testPreparedBookRecoveryStillPublishesSnapshotAndQueueAtomically(): void
+    {
+        $gap = $this->sourceAtGapReplacement();
+        $state = $this->checkpointState();
+        self::assertArrayHasKey('streaming_queue_ref', $state);
+        self::assertArrayNotHasKey('streaming_queues', $state);
+        self::assertSame(
+            '9004',
+            $state['resync_by_symbol']['BTCUSDT']['book_snapshot']['seqId'] ?? null,
+        );
+        $checkpoint = $gap['store']->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $queues = $gap['store']->streamingQueues($checkpoint);
+        self::assertNotSame([], $queues['public']);
+        self::assertSame(
+            '9005',
+            json_decode($queues['public'][0], true, 512, \JSON_THROW_ON_ERROR)
+                ['data'][0]['seqId'] ?? null,
+        );
+    }
+
+    #[DataProvider('queuePublicationRetryProvider')]
+    public function testFailedQueuePublicationRetriesDoNotReusePriorPublishedState(
+        string $savePath,
+    ): void {
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $frameA = json_encode(Task7Transport::tradeFrame(['7261']), \JSON_THROW_ON_ERROR);
+        $checkpoint = $store->saveStreamingQueues($checkpoint, [$frameA], []);
+        $transition = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => 'BTCUSDT/rest/top_of_book',
+            'stage' => 'order_book',
+        ];
+        $snapshot = [
+            'asks' => [['102', '2', '0', '1']],
+            'bids' => [['101', '3', '0', '2']],
+            'ts' => '1784970301000',
+            'seqId' => '9004',
+        ];
+        if ($savePath === 'book_recovery') {
+            $checkpoint = $this->bookResyncCheckpoint($checkpoint, $transition);
+            $store->__destruct();
+            unset($store);
+            self::assertNotFalse(file_put_contents(
+                $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+                CanonicalJson::encode($checkpoint->toArray()) . "\n",
+            ));
+            $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+            $checkpoint = $store->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            $checkpoint = $store->saveBookRecoverySnapshotAndStreamingQueues(
+                $checkpoint,
+                'BTCUSDT',
+                $snapshot,
+                $transition,
+                [$frameA],
+                [],
+            );
+        }
+        self::assertCount(1, $this->managedQueueBlobPaths());
+        $this->replaceCheckpointInodeByteIdentically();
+
+        for ($attempt = 1; $attempt <= 5; ++$attempt) {
+            $frame = json_encode(
+                Task7Transport::tradeFrame([(string) (7261 + $attempt)]),
+                \JSON_THROW_ON_ERROR,
+            );
+            try {
+                if ($savePath === 'streaming_queues') {
+                    $store->saveStreamingQueues($checkpoint, [$frameA, $frame], []);
+                } else {
+                    $store->saveBookRecoverySnapshotAndStreamingQueues(
+                        $checkpoint,
+                        'BTCUSDT',
+                        $snapshot,
+                        $transition,
+                        [$frameA, $frame],
+                        [],
+                    );
+                }
+                self::fail('A byte-identical checkpoint inode replacement must interrupt.');
+            } catch (OkxPaperLiveIntegrityException $exception) {
+                self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+            }
+        }
+
+        self::assertCount(
+            1,
+            $this->managedQueueBlobPaths(),
+            'Pre-publication retries must clean their newly prepared queue blob immediately.',
+        );
+        self::assertSame(
+            ['public' => [$frameA], 'business' => []],
+            $store->streamingQueues($checkpoint),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function queuePublicationRetryProvider(): iterable
+    {
+        yield 'streaming queues' => ['streaming_queues'];
+        yield 'book recovery snapshot and queues' => ['book_recovery'];
+    }
+
+    #[DataProvider('durableRawQueueWriteFaultProvider')]
+    public function testDurableRawQueueWriteFaultLeavesOneUnchangedTruth(
+        string $fault,
+    ): void {
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $frameA = json_encode(Task7Transport::tradeFrame(['7301']), \JSON_THROW_ON_ERROR);
+        $frameB = json_encode(Task7Transport::tradeFrame(['7302']), \JSON_THROW_ON_ERROR);
+        $checkpoint = $store->saveStreamingQueues($checkpoint, [$frameA], []);
+        $before = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($before);
+        if ($fault === 'queue') {
+            $filesystem->failNextQueueSync = true;
+        } else {
+            $filesystem->failNextCheckpointSync = true;
+        }
+
+        $writeFailure = null;
+        try {
+            $store->saveStreamingQueues($checkpoint, [$frameA, $frameB], []);
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            $writeFailure = $exception;
+        }
+        if (!$writeFailure instanceof OkxPaperLiveIntegrityException) {
+            unset($store);
+            gc_collect_cycles();
+            self::fail(sprintf('The injected %s write fault must interrupt.', $fault));
+        }
+        self::assertSame(
+            'okx_paper_live_checkpoint_write_failed',
+            $writeFailure->getMessage(),
+        );
+        self::assertSame(
+            $before,
+            file_get_contents($this->testRoot . '/checkpoints/okx-live/checkpoint.json'),
+        );
+        $store->__destruct();
+        unset($store);
+        gc_collect_cycles();
+
+        $restartStore = new OkxPaperLiveCheckpointStore(
+            $this->testRoot,
+            $filesystem,
+        );
+        $restored = $restartStore->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            ['public' => [$frameA], 'business' => []],
+            $restartStore->streamingQueues($restored),
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function durableRawQueueWriteFaultProvider(): iterable
+    {
+        yield 'queue blob sync' => ['queue'];
+        yield 'checkpoint sync after blob publication' => ['checkpoint'];
+    }
+
+    #[DataProvider('queueCheckpointCommitFaultProvider')]
+    public function testQueueCheckpointFaultKeepsTheVisibleCommitRestartable(
+        string $savePath,
+        string $failedOperation,
+        bool $renameCommitted,
+    ): void {
+        $frameA = json_encode(Task7Transport::tradeFrame(['7401']), \JSON_THROW_ON_ERROR);
+        $frameB = json_encode(Task7Transport::tradeFrame(['7402']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frameA], []);
+        $snapshot = [
+            'asks' => [['102', '2', '0', '1']],
+            'bids' => [['101', '3', '0', '2']],
+            'ts' => '1784970301000',
+            'seqId' => '9004',
+        ];
+        $transition = [
+            'kind' => 'rest_fetch',
+            'symbol' => 'BTCUSDT',
+            'stream' => 'BTCUSDT/rest/top_of_book',
+            'stage' => 'order_book',
+        ];
+        if ($savePath === 'book_recovery') {
+            $frontier = [
+                'source_identity' => '9002',
+                'natural_identity' => 'okx|BTC-USDT-SWAP|top_of_book|9002',
+                'canonical_digest' => str_repeat('b', 64),
+            ];
+            $state = $checkpoint->toArray();
+            $state['phase'] = 'resyncing';
+            $state['remaining_symbols'] = ['BTCUSDT'];
+            $state['remaining_boundaries'] = [[
+                'symbol' => 'BTCUSDT',
+                'reason' => 'sequence_gap',
+            ]];
+            $state['source_epochs']['BTCUSDT'] = 2;
+            $state['stream_frontiers']['BTCUSDT/ws/top_of_book'] = $frontier;
+            $state['resync_by_symbol']['BTCUSDT'] = [
+                'attempt' => 1,
+                'frontier' => $frontier,
+                'source_sequence' => '9002',
+                'deadline_at' => '2026-07-25T10:00:10.000000Z',
+                'policy' => 'book_seq_overlap_v1',
+                'book_snapshot' => null,
+            ];
+            $state['pending_transition'] = $transition;
+            $checkpoint = OkxPaperLiveCheckpoint::fromArray($state);
+        }
+        $seed->__destruct();
+        unset($seed);
+        if ($savePath === 'book_recovery') {
+            self::assertNotFalse(file_put_contents(
+                $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+                CanonicalJson::encode($checkpoint->toArray()) . "\n",
+            ));
+        }
+
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $filesystem->failNextOperation = $failedOperation;
+        try {
+            if ($savePath === 'streaming_queues') {
+                $store->saveStreamingQueues($checkpoint, [$frameA, $frameB], []);
+            } else {
+                $store->saveBookRecoverySnapshotAndStreamingQueues(
+                    $checkpoint,
+                    'BTCUSDT',
+                    $snapshot,
+                    $transition,
+                    [$frameA, $frameB],
+                    [],
+                );
+            }
+            self::fail(sprintf('The injected %s fault must interrupt.', $failedOperation));
+        } catch (\Throwable $exception) {
+            self::assertInstanceOf(OkxPaperLiveIntegrityException::class, $exception);
+            self::assertSame(
+                'okx_paper_live_checkpoint_write_failed',
+                $exception->getMessage(),
+            );
+        }
+
+        try {
+            $visible = $store->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            $visibleQueues = $store->streamingQueues($visible);
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::fail(sprintf(
+                'The checkpoint visible after %s is not restartable: %s',
+                $failedOperation,
+                $exception->getMessage(),
+            ));
+        }
+        self::assertSame(
+            ['public' => $renameCommitted ? [$frameA, $frameB] : [$frameA], 'business' => []],
+            $visibleQueues,
+        );
+        $visibleRef = $visible->streamingQueueRef;
+        self::assertIsArray($visibleRef);
+        self::assertFileExists(
+            $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+                . $visibleRef['sha256'] . '.bin',
+        );
+        if ($savePath === 'book_recovery') {
+            self::assertEquals(
+                $renameCommitted ? $snapshot : null,
+                $visible->resyncBySymbol['BTCUSDT']['book_snapshot'] ?? null,
+            );
+        }
+
+        $store->__destruct();
+        unset($store);
+        $restart = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restart->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame($visible->toArray(), $restored->toArray());
+        self::assertSame($visibleQueues, $restart->streamingQueues($restored));
+    }
+
+    public function testBookResyncDirectorySyncFailureReconcilesSourceAndPreservesWriteError(): void
+    {
+        $clock = new MockClock('2026-07-25T10:00:00.000000Z');
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore(
+            $this->testRoot,
+            $filesystem,
+            $clock,
+        );
+        $rest = Task7RestClient::withInitialDataset();
+        $public = new Task7Transport();
+        $business = new Task7Transport();
+        $public->responses = [
+            ...Task7Transport::acknowledgements(self::publicArguments(), 'public'),
+            Task7Transport::bookFrame('9002', '9001', '4'),
+            Task7Transport::bookFrame('9005', '9004', '5'),
+        ];
+        $business->responses = Task7Transport::acknowledgements(
+            self::businessArguments(),
+            'business',
+        );
+        $source = $this->source(
+            $rest,
+            $public,
+            $business,
+            checkpointStore: $store,
+            clock: $clock,
+            loop: new DeterministicLoop(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $this->acknowledgeWarmup($source, $events);
+        $rest->bookRows['BTC-USDT-SWAP'] = [[
+            'asks' => [['102', '2', '0', '1']],
+            'bids' => [['101', '3', '0', '2']],
+            'ts' => '1784970301000',
+            'seqId' => '9004',
+        ]];
+        $rest->beforeOrderBook = static function () use ($filesystem): void {
+            $filesystem->failNextOperation =
+                'okx_paper_live_checkpoint_directory_sync';
+        };
+        $book = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $book);
+        self::assertSame('9002', $book->payload['source_seq_id'] ?? null);
+        $source->acknowledge($book->eventId);
+
+        try {
+            $events->next();
+            self::fail('The post-rename book checkpoint directory sync fault must interrupt.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'okx_paper_live_checkpoint_write_failed',
+                $exception->getMessage(),
+            );
+        }
+
+        $disk = OkxPaperLiveCheckpoint::fromArray($this->checkpointState());
+        self::assertSame(
+            '9004',
+            $disk->resyncBySymbol['BTCUSDT']['book_snapshot']['seqId'] ?? null,
+        );
+        $adopted = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $sourceCheckpoint = $this->sourceCheckpoint($source);
+        self::assertSame($disk->toArray(), $adopted->toArray());
+        self::assertSame($disk->toArray(), $sourceCheckpoint->toArray());
+        self::assertSame(
+            ['public' => [json_encode(
+                Task7Transport::bookFrame('9005', '9004', '5'),
+                \JSON_THROW_ON_ERROR,
+            )], 'business' => []],
+            $store->streamingQueues($adopted),
+        );
+        self::assertSame(
+            2,
+            \count(array_filter(
+                $rest->calls,
+                static fn (array $call): bool => $call === [
+                    'orderBook',
+                    ['BTC-USDT-SWAP', 400],
+                ],
+            )),
+            'A persistence failure must not start another REST resync attempt.',
+        );
+
+        $store->__destruct();
+        unset($events, $source, $store, $public, $business, $rest);
+        gc_collect_cycles();
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restart = $restartStore->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame($disk->toArray(), $restart->toArray());
+        self::assertSame(
+            '9004',
+            $restart->resyncBySymbol['BTCUSDT']['book_snapshot']['seqId'] ?? null,
+        );
+    }
+
+    public function testStreamingQueueDirectorySyncFailureReconcilesSourceCheckpoint(): void
+    {
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $publicQueue = new OkxPaperPublicFrameQueue();
+        $source = $this->source(
+            new Task7RestClient(),
+            new Task7Transport(),
+            new Task7Transport(),
+            checkpointStore: $store,
+            publicQueue: $publicQueue,
+        );
+        $frame = json_encode(Task7Transport::tradeFrame(['7451']), \JSON_THROW_ON_ERROR);
+        $publicQueue->enqueue($frame);
+        $filesystem->failNextOperation =
+            'okx_paper_live_checkpoint_directory_sync';
+        $persist = new \ReflectionMethod($source, 'persistStreamingQueues');
+
+        try {
+            $persist->invoke($source);
+            self::fail('The post-rename streaming queue directory sync fault must interrupt.');
+        } catch (\Throwable $exception) {
+            self::assertInstanceOf(OkxPaperLiveIntegrityException::class, $exception);
+            self::assertSame(
+                'okx_paper_live_checkpoint_write_failed',
+                $exception->getMessage(),
+            );
+        }
+
+        $disk = OkxPaperLiveCheckpoint::fromArray($this->checkpointState());
+        $adopted = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame($disk->toArray(), $adopted->toArray());
+        self::assertSame(
+            $disk->toArray(),
+            $this->sourceCheckpoint($source)->toArray(),
+        );
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $store->streamingQueues($adopted),
+        );
+
+        $store->__destruct();
+        unset($source, $store);
+        gc_collect_cycles();
+        $restartStore = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restart = $restartStore->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame($disk->toArray(), $restart->toArray());
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $restartStore->streamingQueues($restart),
+        );
+    }
+
+    /** @return iterable<string, array{string, string, bool}> */
+    public static function queueCheckpointCommitFaultProvider(): iterable
+    {
+        foreach (['streaming_queues', 'book_recovery'] as $savePath) {
+            yield $savePath . ' checkpoint file sync' => [
+                $savePath,
+                'okx_paper_live_checkpoint_sync',
+                false,
+            ];
+            yield $savePath . ' checkpoint publish' => [
+                $savePath,
+                'okx_paper_live_checkpoint_publish',
+                false,
+            ];
+            yield $savePath . ' checkpoint directory sync' => [
+                $savePath,
+                'okx_paper_live_checkpoint_directory_sync',
+                true,
+            ];
+        }
+    }
+
+    public function testReloadCollectsHardCrashQueueBlobsAndPreservesReferencedBlob(): void
+    {
+        if (!function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the hard-crash queue test.');
+        }
+
+        $frameA = json_encode(Task7Transport::tradeFrame(['7501']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frameA], []);
+        $referencedSha256 = $checkpoint->streamingQueueRef['sha256'] ?? null;
+        self::assertIsString($referencedSha256);
+        $seed->__destruct();
+        unset($seed);
+
+        $managedDirectory = $this->testRoot . '/checkpoints/okx-live';
+        $unmanaged = $managedDirectory . '/streaming-queues-not-managed.bin';
+        self::assertSame(9, file_put_contents($unmanaged, 'sentinel!'));
+        self::assertTrue(chmod($unmanaged, 0600));
+        for ($index = 0; $index < 3; ++$index) {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+                $store = new OkxPaperLiveCheckpointStore(
+                    $this->testRoot,
+                    $filesystem,
+                );
+                $childCheckpoint = $store->loadOrCreate(
+                    self::DATASET_ID,
+                    self::CONFIGURATION_SHA256,
+                );
+                $frame = json_encode(
+                    Task7Transport::tradeFrame([(string) (7502 + $index)]),
+                    \JSON_THROW_ON_ERROR,
+                );
+                $filesystem->crashAtCheckpointSync = true;
+                $store->saveStreamingQueues(
+                    $childCheckpoint,
+                    [$frameA, $frame],
+                    [],
+                );
+                exit(87);
+            }
+            pcntl_waitpid($pid, $status);
+            self::assertTrue(pcntl_wifexited($status));
+            self::assertSame(86, pcntl_wexitstatus($status));
+        }
+
+        $beforeReload = array_values(array_filter(
+            glob($managedDirectory . '/streaming-queues-*.bin') ?: [],
+            static fn (string $path): bool => preg_match(
+                '/\\Astreaming-queues-[a-f0-9]{64}\\.bin\\z/D',
+                basename($path),
+            ) === 1,
+        ));
+        $restart = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restart->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $afterReload = array_values(array_filter(
+            glob($managedDirectory . '/streaming-queues-*.bin') ?: [],
+            static fn (string $path): bool => preg_match(
+                '/\\Astreaming-queues-[a-f0-9]{64}\\.bin\\z/D',
+                basename($path),
+            ) === 1,
+        ));
+
+        self::assertLessThanOrEqual(
+            2,
+            \count($beforeReload),
+            'Each reload under the writer lock must collect the previous crash orphan.',
+        );
+        self::assertSame(
+            [$managedDirectory . '/streaming-queues-' . $referencedSha256 . '.bin'],
+            $afterReload,
+        );
+        self::assertSame(
+            ['public' => [$frameA], 'business' => []],
+            $restart->streamingQueues($restored),
+        );
+        self::assertSame('sentinel!', file_get_contents($unmanaged));
+    }
+
+    public function testReloadCollectsQueueTemporaryLeftByHardCrashDuringQueueSync(): void
+    {
+        if (!function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the hard-crash queue test.');
+        }
+
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $seed->__destruct();
+        unset($seed);
+
+        $pid = pcntl_fork();
+        self::assertNotSame(-1, $pid);
+        if ($pid === 0) {
+            $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+            $filesystem->crashAtQueueSync = true;
+            $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+            $store->saveStreamingQueues(
+                $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256),
+                [json_encode(Task7Transport::tradeFrame(['7511']), \JSON_THROW_ON_ERROR)],
+                [],
+            );
+            exit(91);
+        }
+        pcntl_waitpid($pid, $status);
+        self::assertTrue(pcntl_wifexited($status));
+        self::assertSame(90, pcntl_wexitstatus($status));
+
+        $managedDirectory = $this->testRoot . '/checkpoints/okx-live';
+        $temporaries = glob($managedDirectory . '/.okx-live-queue-*') ?: [];
+        self::assertCount(1, $temporaries);
+
+        (new OkxPaperLiveCheckpointStore($this->testRoot))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+
+        self::assertSame([], glob($managedDirectory . '/.okx-live-queue-*') ?: []);
+    }
+
+    #[DataProvider('unsafeQueueTemporaryProvider')]
+    public function testReloadRejectsUnsafeQueueTemporaryWithoutRemovingIt(string $kind): void
+    {
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $seed->__destruct();
+        unset($seed);
+
+        $temporary = $this->testRoot . '/checkpoints/okx-live/.okx-live-queue-'
+            . str_repeat('a', 32);
+        if ($kind === 'symlink') {
+            $outside = $this->testRoot . '/outside-temporary';
+            self::assertSame(8, file_put_contents($outside, 'sentinel'));
+            self::assertTrue(symlink($outside, $temporary));
+        } else {
+            self::assertSame(6, file_put_contents($temporary, 'orphan'));
+            self::assertTrue(chmod($temporary, 0644));
+        }
+
+        $this->expectException(OkxPaperLiveIntegrityException::class);
+        try {
+            (new OkxPaperLiveCheckpointStore($this->testRoot))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+        } finally {
+            self::assertTrue(file_exists($temporary) || is_link($temporary));
+            if ($kind === 'symlink') {
+                self::assertSame('sentinel', file_get_contents($this->testRoot . '/outside-temporary'));
+            }
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unsafeQueueTemporaryProvider(): iterable
+    {
+        yield 'symlink' => ['symlink'];
+        yield 'non-private regular file' => ['permissions'];
+    }
+
+    public function testReloadPreservesUnmanagedTemporaryLookalikes(): void
+    {
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $seed->__destruct();
+        unset($seed);
+
+        $directory = $this->testRoot . '/checkpoints/okx-live';
+        $lookalikes = [
+            $directory . '/.okx-live-queue-' . str_repeat('b', 31),
+            $directory . '/.okx-live-queue-' . str_repeat('c', 32) . '.tmp',
+        ];
+        foreach ($lookalikes as $path) {
+            self::assertSame(8, file_put_contents($path, 'sentinel'));
+            self::assertTrue(chmod($path, 0600));
+        }
+
+        (new OkxPaperLiveCheckpointStore($this->testRoot))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+
+        foreach ($lookalikes as $path) {
+            self::assertSame('sentinel', file_get_contents($path));
+        }
+    }
+
+    public function testRepeatedReloadsBoundQueueTemporaryCleanup(): void
+    {
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $seed->__destruct();
+        unset($seed);
+
+        $directory = $this->testRoot . '/checkpoints/okx-live';
+        for ($index = 0; $index < 3; ++$index) {
+            $temporary = $directory . '/.okx-live-queue-'
+                . str_pad(dechex($index), 32, '0', STR_PAD_LEFT);
+            self::assertSame(6, file_put_contents($temporary, 'orphan'));
+            self::assertTrue(chmod($temporary, 0600));
+
+            (new OkxPaperLiveCheckpointStore($this->testRoot))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+
+            self::assertSame([], glob($directory . '/.okx-live-queue-*') ?: []);
+        }
+    }
+
+    public function testReloadCollectsSafeQueueQuarantineAfterCrashImmediatelyAfterRename(): void
+    {
+        if (!function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the quarantine crash test.');
+        }
+
+        $frame = json_encode(Task7Transport::tradeFrame(['7505']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frame], []);
+        $referencedSha256 = $checkpoint->streamingQueueRef['sha256'] ?? null;
+        self::assertIsString($referencedSha256);
+        $referenced = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . $referencedSha256 . '.bin';
+        $seed->__destruct();
+        unset($seed);
+
+        $orphan = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . str_repeat('b', 64) . '.bin';
+        self::assertSame(6, file_put_contents($orphan, 'orphan'));
+        self::assertTrue(chmod($orphan, 0600));
+        $pid = pcntl_fork();
+        self::assertNotSame(-1, $pid);
+        if ($pid === 0) {
+            $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+            $filesystem->crashAfterMoveOperation =
+                'okx_paper_live_queue_cleanup_quarantine';
+            (new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                $filesystem,
+            ))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            exit(89);
+        }
+        pcntl_waitpid($pid, $status);
+        self::assertTrue(pcntl_wifexited($status));
+        self::assertSame(88, pcntl_wexitstatus($status));
+        self::assertFileDoesNotExist($orphan);
+        $afterCrash = $this->managedQueueBlobPaths();
+        self::assertCount(2, $afterCrash);
+        $quarantines = array_values(array_diff($afterCrash, [$referenced]));
+        self::assertCount(1, $quarantines);
+        self::assertSame('orphan', file_get_contents($quarantines[0]));
+        self::assertSame(0600, fileperms($quarantines[0]) & 0777);
+        self::assertSame(1, lstat($quarantines[0])['nlink'] ?? null);
+
+        $restart = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restart->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame([$referenced], $this->managedQueueBlobPaths());
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $restart->streamingQueues($restored),
+        );
+    }
+
+    #[DataProvider('unsafeManagedQueueBlobProvider')]
+    public function testReloadRejectsUnsafeManagedQueueBlobWithoutRemovingIt(
+        string $kind,
+    ): void {
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $seed->__destruct();
+        unset($seed);
+        $managed = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . str_repeat('c', 64) . '.bin';
+        if ($kind === 'symlink') {
+            $outside = $this->testRoot . '/outside-queue';
+            self::assertSame(8, file_put_contents($outside, 'sentinel'));
+            self::assertTrue(symlink($outside, $managed));
+        } else {
+            self::assertSame(6, file_put_contents($managed, 'orphan'));
+            self::assertTrue(chmod($managed, 0644));
+        }
+
+        try {
+            (new OkxPaperLiveCheckpointStore($this->testRoot))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            self::fail('An unsafe strictly named managed queue blob must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+        }
+        self::assertTrue(file_exists($managed) || is_link($managed));
+        if ($kind === 'symlink') {
+            self::assertTrue(is_link($managed));
+            self::assertSame(
+                'sentinel',
+                file_get_contents($this->testRoot . '/outside-queue'),
+            );
+        }
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unsafeManagedQueueBlobProvider(): iterable
+    {
+        yield 'symlink' => ['symlink'];
+        yield 'non-private regular file' => ['permissions'];
+    }
+
+    public function testQueueCleanupQuarantineRejectsPostStatSubstitutionWithoutDeletingIt(): void
+    {
+        $frame = json_encode(Task7Transport::tradeFrame(['7551']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frame], []);
+        $referenced = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . ($checkpoint->streamingQueueRef['sha256'] ?? '') . '.bin';
+        self::assertFileExists($referenced);
+        $seed->__destruct();
+        unset($seed);
+
+        $orphan = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . str_repeat('d', 64) . '.bin';
+        $displaced = $this->testRoot . '/checkpoints/okx-live/.race-original';
+        $sentinel = $this->testRoot . '/race-sentinel';
+        self::assertSame(6, file_put_contents($orphan, 'orphan'));
+        self::assertTrue(chmod($orphan, 0600));
+        self::assertSame(8, file_put_contents($sentinel, 'sentinel'));
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $filesystem->replaceAfterSecondPathStat = $orphan;
+        $filesystem->replacementTarget = $sentinel;
+        $filesystem->replacementBackup = $displaced;
+
+        try {
+            (new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                $filesystem,
+            ))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            self::fail('A post-stat queue pathname substitution must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
+        }
+
+        self::assertTrue($filesystem->raceTriggered);
+        self::assertTrue(is_link($orphan));
+        self::assertSame($sentinel, readlink($orphan));
+        self::assertSame('sentinel', file_get_contents($sentinel));
+        self::assertFileExists($displaced);
+        self::assertFileExists($referenced);
+    }
+
+    public function testQueueCleanupRejectsSubstitutionImmediatelyBeforeUnlink(): void
+    {
+        $frame = json_encode(Task7Transport::tradeFrame(['7552']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frame], []);
+        $referenced = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . ($checkpoint->streamingQueueRef['sha256'] ?? '') . '.bin';
+        $referencedContents = file_get_contents($referenced);
+        self::assertIsString($referencedContents);
+        $seed->__destruct();
+        unset($seed);
+
+        $orphan = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . str_repeat('f', 64) . '.bin';
+        $displaced = $this->testRoot . '/checkpoints/okx-live/.race-quarantined-original';
+        $sentinel = $this->testRoot . '/race-unlink-sentinel';
+        self::assertSame(6, file_put_contents($orphan, 'orphan'));
+        self::assertTrue(chmod($orphan, 0600));
+        self::assertSame(8, file_put_contents($sentinel, 'sentinel'));
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $filesystem->replaceBeforeRemoveOperation =
+            'okx_paper_live_queue_cleanup_unlink';
+        $filesystem->replacementTarget = $sentinel;
+        $filesystem->replacementBackup = $displaced;
+
+        try {
+            (new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                $filesystem,
+            ))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            self::fail('A last-moment quarantine substitution must fail closed.');
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'okx_paper_live_checkpoint_write_failed',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertTrue($filesystem->raceTriggered);
+        self::assertIsString($filesystem->replacementPath);
+        self::assertTrue(is_link($filesystem->replacementPath));
+        self::assertSame($sentinel, readlink($filesystem->replacementPath));
+        self::assertSame('sentinel', file_get_contents($sentinel));
+        self::assertSame('orphan', file_get_contents($displaced));
+        self::assertSame($referencedContents, file_get_contents($referenced));
+    }
+
+    #[DataProvider('queueCleanupFaultProvider')]
+    public function testQueueCleanupFaultPreservesTheReferencedBlobAndFailsClosed(
+        string $fault,
+    ): void {
+        $frame = json_encode(Task7Transport::tradeFrame(['7561']), \JSON_THROW_ON_ERROR);
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $checkpoint = $seed->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $checkpoint = $seed->saveStreamingQueues($checkpoint, [$frame], []);
+        $referenced = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . ($checkpoint->streamingQueueRef['sha256'] ?? '') . '.bin';
+        $seed->__destruct();
+        unset($seed);
+        $orphan = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . str_repeat('e', 64) . '.bin';
+        self::assertSame(6, file_put_contents($orphan, 'orphan'));
+        self::assertTrue(chmod($orphan, 0600));
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        if ($fault === 'rename') {
+            $filesystem->failNextOperation =
+                'okx_paper_live_queue_cleanup_quarantine';
+        } elseif ($fault === 'unlink') {
+            $filesystem->failNextRemoveOperation =
+                'okx_paper_live_queue_cleanup_unlink';
+        } else {
+            $filesystem->failNextOperation =
+                'okx_paper_live_queue_cleanup_directory_sync';
+        }
+
+        try {
+            (new OkxPaperLiveCheckpointStore(
+                $this->testRoot,
+                $filesystem,
+            ))->loadOrCreate(
+                self::DATASET_ID,
+                self::CONFIGURATION_SHA256,
+            );
+            self::fail(sprintf('The injected queue cleanup %s fault must interrupt.', $fault));
+        } catch (OkxPaperLiveIntegrityException $exception) {
+            self::assertSame(
+                'okx_paper_live_checkpoint_write_failed',
+                $exception->getMessage(),
+            );
+        }
+        self::assertFileExists($referenced);
+        if ($fault === 'fsync') {
+            self::assertFileDoesNotExist($orphan);
+        } else {
+            self::assertFileExists($orphan);
+        }
+
+        $restart = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restart->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            ['public' => [$frame], 'business' => []],
+            $restart->streamingQueues($restored),
+        );
+        self::assertSame([$referenced], $this->managedQueueBlobPaths());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function queueCleanupFaultProvider(): iterable
+    {
+        yield 'quarantine rename' => ['rename'];
+        yield 'quarantine unlink' => ['unlink'];
+        yield 'cleanup directory fsync' => ['fsync'];
+    }
+
+    public function testNormalQueueBlobReplacementDurablyDeletesTheOldBlob(): void
+    {
+        $filesystem = new Task8FailNextCheckpointSyncFilesystem();
+        $store = new OkxPaperLiveCheckpointStore($this->testRoot, $filesystem);
+        $checkpoint = $store->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $frameA = json_encode(Task7Transport::tradeFrame(['7601']), \JSON_THROW_ON_ERROR);
+        $frameB = json_encode(Task7Transport::tradeFrame(['7602']), \JSON_THROW_ON_ERROR);
+        $checkpoint = $store->saveStreamingQueues($checkpoint, [$frameA], []);
+        $oldSha256 = $checkpoint->streamingQueueRef['sha256'] ?? null;
+        self::assertIsString($oldSha256);
+        $oldPath = $this->testRoot . '/checkpoints/okx-live/streaming-queues-'
+            . $oldSha256 . '.bin';
+        self::assertFileExists($oldPath);
+        $filesystem->operations = [];
+
+        $checkpoint = $store->saveStreamingQueues($checkpoint, [$frameB], []);
+
+        self::assertFileDoesNotExist($oldPath);
+        self::assertContains(
+            'sync:okx_paper_live_queue_cleanup_directory_sync',
+            $filesystem->operations,
+        );
+        $store->__destruct();
+        unset($store);
+        $restart = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $restored = $restart->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame(
+            ['public' => [$frameB], 'business' => []],
+            $restart->streamingQueues($restored),
+        );
+    }
+
     public function testAcknowledgedCrossOriginIdentityHistoryRoundTripsDurablyAndIsBounded(): void
     {
         $state = OkxPaperLiveCheckpoint::fresh(
@@ -6622,6 +8040,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::DATASET_ID,
             self::CONFIGURATION_SHA256,
         );
+        $beforeQueues = $store->streamingQueues($checkpoint);
+        $beforeContents = file_get_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+        );
+        self::assertIsString($beforeContents);
         $newFrame = json_encode(
             Task7Transport::tradeFrame(['9972']),
             \JSON_THROW_ON_ERROR,
@@ -6630,8 +8053,8 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         try {
             $store->saveStreamingQueues(
                 $checkpoint,
-                [...$checkpoint->streamingQueues['public'], $newFrame],
-                $checkpoint->streamingQueues['business'],
+                [...$beforeQueues['public'], $newFrame],
+                $beforeQueues['business'],
             );
             self::fail('The atomic resync queue write fault must interrupt.');
         } catch (OkxPaperLiveIntegrityException $exception) {
@@ -6647,25 +8070,21 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         );
         self::assertIsArray($restoredState);
         $restored = OkxPaperLiveCheckpoint::fromArray($restoredState);
+        self::assertSame($beforeContents, CanonicalJson::encode($restored->toArray()) . "\n");
+        $restoredQueues = $store->streamingQueues($restored);
         self::assertSame(
-            $before['streaming_queues']['public'],
-            $restored->streamingQueues['public'],
+            $beforeQueues['public'],
+            $restoredQueues['public'],
         );
         self::assertSame(
-            $before['streaming_queues']['business'],
-            $restored->streamingQueues['business'],
+            $beforeQueues['business'],
+            $restoredQueues['business'],
         );
         $resync = $restored->resyncBySymbol['BTCUSDT'] ?? null;
         self::assertIsArray($resync);
-        self::assertSame(
-            $restored->streamingQueues['public'],
-            $resync['queued_public_frames'] ?? null,
-        );
-        self::assertSame(
-            $restored->streamingQueues['business'],
-            $resync['queued_business_frames'] ?? null,
-        );
-        self::assertNotContains($newFrame, $restored->streamingQueues['public']);
+        self::assertArrayNotHasKey('queued_public_frames', $resync);
+        self::assertArrayNotHasKey('queued_business_frames', $resync);
+        self::assertNotContains($newFrame, $restoredQueues['public']);
     }
 
     public function testFilteredBookOverlapRestartsFromTheOnlyDurableQueueWithoutFalseGap(): void
@@ -6761,13 +8180,29 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     {
         $gap = $this->sourceAtGapReplacement();
         $state = $this->checkpointState();
+        $checkpoint = $gap['store']->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        $queues = $gap['store']->streamingQueues($checkpoint);
+        self::assertArrayHasKey('streaming_queue_ref', $state);
+        self::assertArrayNotHasKey('streaming_queues', $state);
+        self::assertArrayNotHasKey(
+            'queued_public_frames',
+            $state['resync_by_symbol']['BTCUSDT'],
+        );
         $source = $gap['source'];
         $events = $gap['events'];
         $source->stop();
         unset($events, $source, $gap);
         gc_collect_cycles();
 
-        $divergent = $state;
+        $legacy = $state;
+        unset($legacy['streaming_queue_ref']);
+        $legacy['streaming_queues'] = $queues;
+        $legacy['resync_by_symbol']['BTCUSDT']['queued_public_frames'] = $queues['public'];
+        $legacy['resync_by_symbol']['BTCUSDT']['queued_business_frames'] = $queues['business'];
+        $divergent = $legacy;
         $divergent['resync_by_symbol']['BTCUSDT']['queued_public_frames'] = [];
         try {
             OkxPaperLiveCheckpoint::fromArray($divergent);
@@ -6776,7 +8211,6 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             self::assertSame('okx_paper_live_checkpoint_invalid', $exception->getMessage());
         }
 
-        $legacy = $state;
         unset($legacy['streaming_queues']);
         $restored = OkxPaperLiveCheckpoint::fromArray($legacy);
         self::assertSame(
@@ -6978,6 +8412,59 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ];
     }
 
+    private function seedSaturatedIdentityCheckpoint(): void
+    {
+        $seed = new OkxPaperLiveCheckpointStore($this->testRoot);
+        $seed->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        unset($seed);
+        gc_collect_cycles();
+
+        $state = OkxPaperLiveCheckpoint::fresh(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        )->toArray();
+        foreach (['BTCUSDT', 'ETHUSDT'] as $symbol) {
+            foreach (['public_trade', 'candle_1m', 'candle_5m', 'candle_15m', 'candle_1H'] as $channel) {
+                $stream = $symbol . '/' . $channel;
+                $window = OkxPaperLivePolicy::acknowledgedIdentityHistoryWindow($stream);
+                $state['acknowledged_identity_history'][$stream] = array_map(
+                    static fn (int $index): array => [
+                        'natural_identity_sha256' => hash(
+                            'sha256',
+                            $stream . '|identity|' . $index,
+                        ),
+                        'canonical_digest' => hash(
+                            'sha256',
+                            $stream . '|digest|' . $index,
+                        ),
+                    ],
+                    range(1, $window),
+                );
+            }
+        }
+        $encoded = CanonicalJson::encode(
+            OkxPaperLiveCheckpoint::fromArray($state)->toArray(),
+        ) . "\n";
+        self::assertLessThanOrEqual(OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES, \strlen($encoded));
+        self::assertNotFalse(file_put_contents(
+            $this->testRoot . '/checkpoints/okx-live/checkpoint.json',
+            $encoded,
+        ));
+    }
+
+    private static function paddedTradeFrame(string $tradeId, int $bytes): string
+    {
+        $frame = json_encode(
+            Task7Transport::tradeFrame([$tradeId]),
+            \JSON_THROW_ON_ERROR,
+        );
+        if (\strlen($frame) > $bytes) {
+            throw new \LogicException('task8_test_frame_target_too_small');
+        }
+
+        return $frame . str_repeat(' ', $bytes - \strlen($frame));
+    }
+
     private function source(
         Task7RestClient $rest,
         OkxPaperPublicWebSocketTransportInterface $public,
@@ -7140,6 +8627,80 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertIsArray($state);
 
         return $state;
+    }
+
+    private function sourceCheckpoint(
+        OkxPaperPublicLiveSource $source,
+    ): OkxPaperLiveCheckpoint {
+        $property = new \ReflectionProperty($source, 'checkpoint');
+        $checkpoint = $property->getValue($source);
+        self::assertInstanceOf(OkxPaperLiveCheckpoint::class, $checkpoint);
+
+        return $checkpoint;
+    }
+
+    /**
+     * @param array<string, mixed> $transition
+     */
+    private function bookResyncCheckpoint(
+        OkxPaperLiveCheckpoint $checkpoint,
+        array $transition,
+    ): OkxPaperLiveCheckpoint {
+        $frontier = [
+            'source_identity' => '9002',
+            'natural_identity' => 'okx|BTC-USDT-SWAP|top_of_book|9002',
+            'canonical_digest' => str_repeat('b', 64),
+        ];
+        $state = $checkpoint->toArray();
+        $state['phase'] = 'resyncing';
+        $state['remaining_symbols'] = ['BTCUSDT'];
+        $state['remaining_boundaries'] = [[
+            'symbol' => 'BTCUSDT',
+            'reason' => 'sequence_gap',
+        ]];
+        $state['source_epochs']['BTCUSDT'] = 2;
+        $state['stream_frontiers']['BTCUSDT/ws/top_of_book'] = $frontier;
+        $state['resync_by_symbol']['BTCUSDT'] = [
+            'attempt' => 1,
+            'frontier' => $frontier,
+            'source_sequence' => '9002',
+            'deadline_at' => '2026-07-25T10:00:10.000000Z',
+            'policy' => 'book_seq_overlap_v1',
+            'book_snapshot' => null,
+        ];
+        $state['pending_transition'] = $transition;
+
+        return OkxPaperLiveCheckpoint::fromArray($state);
+    }
+
+    private function replaceCheckpointInodeByteIdentically(): void
+    {
+        $checkpointPath = $this->testRoot . '/checkpoints/okx-live/checkpoint.json';
+        $contents = file_get_contents($checkpointPath);
+        self::assertIsString($contents);
+        $before = fileinode($checkpointPath);
+        self::assertIsInt($before);
+        $replacement = dirname($checkpointPath) . '/.byte-identical-replacement';
+        self::assertSame(\strlen($contents), file_put_contents($replacement, $contents));
+        self::assertTrue(chmod($replacement, 0600));
+        self::assertTrue(rename($replacement, $checkpointPath));
+        clearstatcache(true, $checkpointPath);
+        $after = fileinode($checkpointPath);
+        self::assertIsInt($after);
+        self::assertNotSame($before, $after);
+    }
+
+    /** @return list<string> */
+    private function managedQueueBlobPaths(): array
+    {
+        return array_values(array_filter(
+            glob($this->testRoot . '/checkpoints/okx-live/streaming-queues-*.bin')
+                ?: [],
+            static fn (string $path): bool => preg_match(
+                '/\\Astreaming-queues-[a-f0-9]{64}\\.bin\\z/D',
+                basename($path),
+            ) === 1,
+        ));
     }
 }
 
@@ -7442,9 +9003,116 @@ final class Task7Transport implements OkxPaperPublicWebSocketTransportInterface
 final class Task8FailNextCheckpointSyncFilesystem extends \App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem
 {
     public bool $failNextCheckpointSync = false;
+    public bool $failNextQueueSync = false;
+    public ?string $failNextOperation = null;
+    public bool $crashAtCheckpointSync = false;
+    public bool $crashAtQueueSync = false;
+    public ?string $crashAfterMoveOperation = null;
+    public ?string $failNextRemoveOperation = null;
+    public ?string $replaceAfterSecondPathStat = null;
+    public ?string $replaceBeforeRemoveOperation = null;
+    public ?string $replacementTarget = null;
+    public ?string $replacementBackup = null;
+    public ?string $replacementPath = null;
+    public bool $raceTriggered = false;
+
+    /** @var list<string> */
+    public array $operations = [];
+
+    /** @var array<string, int> */
+    private array $pathStatCounts = [];
+
+    public function move(string $source, string $destination, string $operation): bool
+    {
+        $this->operations[] = 'move:' . $operation;
+        if ($this->failNextOperation === $operation) {
+            $this->failNextOperation = null;
+
+            return false;
+        }
+
+        $moved = parent::move($source, $destination, $operation);
+        if ($moved && $this->crashAfterMoveOperation === $operation) {
+            exit(88);
+        }
+
+        return $moved;
+    }
+
+    public function removeFile(
+        string $path,
+        array $expectedStatistics,
+        string $operation,
+    ): bool {
+        $this->operations[] = 'remove:' . $operation;
+        if ($this->failNextRemoveOperation === $operation) {
+            $this->failNextRemoveOperation = null;
+
+            return false;
+        }
+        if ($this->replaceBeforeRemoveOperation === $operation) {
+            $this->replaceBeforeRemoveOperation = null;
+            $backup = $this->replacementBackup
+                ?? throw new \LogicException('task8_race_backup_missing');
+            $target = $this->replacementTarget
+                ?? throw new \LogicException('task8_race_target_missing');
+            if (!rename($path, $backup) || !symlink($target, $path)) {
+                throw new \RuntimeException('task8_race_injection_failed');
+            }
+            $this->replacementPath = $path;
+            $this->raceTriggered = true;
+        }
+
+        return parent::removeFile($path, $expectedStatistics, $operation);
+    }
+
+    public function pathStat(string $path, string $operation): array|false
+    {
+        $statistics = parent::pathStat($path, $operation);
+        if ($path !== $this->replaceAfterSecondPathStat) {
+            return $statistics;
+        }
+        $count = ($this->pathStatCounts[$path] ?? 0) + 1;
+        $this->pathStatCounts[$path] = $count;
+        if ($count === 2 && $statistics !== false) {
+            $backup = $this->replacementBackup
+                ?? throw new \LogicException('task8_race_backup_missing');
+            $target = $this->replacementTarget
+                ?? throw new \LogicException('task8_race_target_missing');
+            if (!rename($path, $backup) || !symlink($target, $path)) {
+                throw new \RuntimeException('task8_race_injection_failed');
+            }
+            $this->raceTriggered = true;
+        }
+
+        return $statistics;
+    }
 
     public function sync($handle, string $operation): bool
     {
+        $this->operations[] = 'sync:' . $operation;
+        if ($this->crashAtCheckpointSync
+            && $operation === 'okx_paper_live_checkpoint_sync'
+        ) {
+            exit(86);
+        }
+        if ($this->crashAtQueueSync
+            && $operation === 'okx_paper_live_queue_sync'
+        ) {
+            exit(90);
+        }
+        if ($this->failNextOperation === $operation) {
+            $this->failNextOperation = null;
+
+            return false;
+        }
+        if ($this->failNextQueueSync
+            && $operation === 'okx_paper_live_queue_sync'
+        ) {
+            $this->failNextQueueSync = false;
+
+            return false;
+        }
         if ($this->failNextCheckpointSync
             && $operation === 'okx_paper_live_checkpoint_sync'
         ) {

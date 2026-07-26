@@ -21,7 +21,12 @@ final class OkxPaperLiveCheckpointStore
     private const FILE_TYPE_MASK = 0170000;
     private const WRITER_LOCK_FILENAME = '.writer.lock';
     private const CHECKPOINT_FILENAME = 'checkpoint.json';
+    private const QUEUE_BLOB_MAGIC = "OKXQ1\0";
+    private const QUEUE_BLOB_PREFIX = 'streaming-queues-';
+    private const QUEUE_BLOB_SUFFIX = '.bin';
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
+    private const QUEUE_BLOB_FILENAME_PATTERN = '/\Astreaming-queues-([a-f0-9]{64})\.bin\z/D';
+    private const QUEUE_TEMPORARY_FILENAME_PATTERN = '/\A\.okx-live-queue-[a-f0-9]{32}\z/D';
 
     /** @var list<array{suffix: string, stages: list<string>}> */
     private const WARMING_REST_WORK = [
@@ -123,6 +128,9 @@ final class OkxPaperLiveCheckpointStore
         if ($statistics === false) {
             $checkpoint = OkxPaperLiveCheckpoint::fresh($datasetId, $configurationSha256);
             $this->persist($checkpoint);
+            $this->streamingQueuesFromCheckpoint($checkpoint);
+            $this->collectOrphanedQueueBlobs(null);
+            $this->assertManagedDirectories();
 
             return $checkpoint;
         }
@@ -147,9 +155,22 @@ final class OkxPaperLiveCheckpointStore
         $this->currentStateHash = $this->stateHash($checkpoint);
         $this->currentFileIdentity = $this->checkpointIdentity();
         $this->currentCheckpoint = $checkpoint;
+        $this->streamingQueuesFromCheckpoint($checkpoint);
+        $this->collectOrphanedQueueBlobs(
+            $checkpoint->streamingQueueRef['sha256'] ?? null,
+        );
         $this->assertManagedDirectories();
 
         return $checkpoint;
+    }
+
+    /** @return array{public: list<string>, business: list<string>} */
+    public function streamingQueues(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): array {
+        $this->assertCurrent($checkpoint);
+
+        return $this->streamingQueuesFromCheckpoint($checkpoint);
     }
 
     public function save(#[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint): void
@@ -181,7 +202,7 @@ final class OkxPaperLiveCheckpointStore
         $state['pending_transition'] = self::CLEANUP_ACTIONS[0];
         $state['pending_event'] = null;
         $state['pending_frontier'] = null;
-        $state['streaming_queues'] = ['public' => [], 'business' => []];
+        unset($state['streaming_queues'], $state['streaming_queue_ref']);
         foreach ($checkpoint->resyncBySymbol as $symbol => $resync) {
             if (\is_array($resync)
                 && array_key_exists('queued_public_frames', $resync)
@@ -193,6 +214,9 @@ final class OkxPaperLiveCheckpointStore
         }
         $failed = $this->validatedCheckpoint($state);
         $this->persist($failed);
+        if ($checkpoint->streamingQueueRef !== null) {
+            $this->removeQueueBlob($checkpoint->streamingQueueRef);
+        }
 
         return $failed;
     }
@@ -203,12 +227,45 @@ final class OkxPaperLiveCheckpointStore
         string $phase,
         #[\SensitiveParameter] ?array $pendingTransition,
     ): OkxPaperLiveCheckpoint {
+        return $this->savePreparedTransition(
+            $checkpoint,
+            $phase,
+            $pendingTransition,
+            null,
+        );
+    }
+
+    /**
+     * @param array<string, mixed>|null $pendingTransition
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * }|null $preparedQueueRef
+     */
+    private function savePreparedTransition(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $phase,
+        #[\SensitiveParameter] ?array $pendingTransition,
+        #[\SensitiveParameter] ?array $preparedQueueRef,
+        ?\stdClass $checkpointPublication = null,
+    ): OkxPaperLiveCheckpoint {
         $stabilityAction = $this->reconnectStabilityTransitionAction(
             $checkpoint,
             $phase,
             $pendingTransition,
         );
-        $this->assertTransitionMutationsMatchAction($checkpoint, $phase, $pendingTransition);
+        $this->assertTransitionMutationsMatchAction(
+            $checkpoint,
+            $phase,
+            $pendingTransition,
+            $preparedQueueRef,
+        );
+        if ($preparedQueueRef !== null) {
+            $this->readQueueBlob($preparedQueueRef);
+        }
         $state = $checkpoint->toArray();
         $state['phase'] = $phase;
         $state['pending_transition'] = $pendingTransition;
@@ -240,7 +297,7 @@ final class OkxPaperLiveCheckpointStore
         $this->assertTransitionTargetsWorkHead($next);
         $this->assertDurableHealthyStopCleanupOrder($next);
         $this->assertCompleteIsTerminal($next, allowFinalizedTransition: true);
-        $this->persist($next);
+        $this->persist($next, $checkpointPublication);
 
         return $next;
     }
@@ -258,39 +315,151 @@ final class OkxPaperLiveCheckpointStore
         if (\in_array($checkpoint->phase, ['complete', 'failed', 'stopping'], true)) {
             throw self::invalidCheckpoint();
         }
-        $state = $checkpoint->toArray();
-        $state['streaming_queues'] = [
-            'public' => $publicFrames,
-            'business' => $businessFrames,
-        ];
-        foreach ($checkpoint->resyncBySymbol as $symbol => $resync) {
-            if (\is_array($resync) && $resync['policy'] === 'book_seq_overlap_v1') {
-                $state['resync_by_symbol'][$symbol]['queued_public_frames'] = $publicFrames;
-                $state['resync_by_symbol'][$symbol]['queued_business_frames'] = $businessFrames;
-            }
-        }
-        $next = $this->validatedCheckpoint($state);
+        $queues = $this->validatedRawQueues($publicFrames, $businessFrames);
+        $blob = $this->encodeQueueBlob($queues);
+        $queueRef = $this->queueRef($blob, $queues);
+        $blobWritten = false;
+        $checkpointPublication = $this->checkpointPublicationState();
         try {
-            $encoded = CanonicalJson::encode($next->toArray()) . "\n";
-        } catch (\InvalidArgumentException $exception) {
-            if (\in_array($exception->getMessage(), [
-                'paper_canonical_json_bytes_exceeded',
-                'paper_canonical_json_nodes_exceeded',
-                'paper_canonical_json_keys_exceeded',
-            ], true)) {
+            $this->writeQueueBlob($blob, $queueRef);
+            $blobWritten = true;
+            $state = $checkpoint->toArray();
+            unset($state['streaming_queues']);
+            $state['streaming_queue_ref'] = $queueRef;
+            foreach ($checkpoint->resyncBySymbol as $symbol => $resync) {
+                if (\is_array($resync) && $resync['policy'] === 'book_seq_overlap_v1') {
+                    unset(
+                        $state['resync_by_symbol'][$symbol]['queued_public_frames'],
+                        $state['resync_by_symbol'][$symbol]['queued_business_frames'],
+                    );
+                }
+            }
+            $next = $this->validatedCheckpoint($state);
+            try {
+                $encoded = CanonicalJson::encode($next->toArray()) . "\n";
+            } catch (\InvalidArgumentException $exception) {
+                if (\in_array($exception->getMessage(), [
+                    'paper_canonical_json_bytes_exceeded',
+                    'paper_canonical_json_nodes_exceeded',
+                    'paper_canonical_json_keys_exceeded',
+                ], true)) {
+                    throw new OkxPaperLiveIntegrityException(
+                        'market_data_backpressure_exhausted',
+                        0,
+                        $exception,
+                    );
+                }
+
+                throw self::invalidCheckpoint($exception);
+            }
+            if (\strlen($encoded) > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES) {
                 throw new OkxPaperLiveIntegrityException(
                     'market_data_backpressure_exhausted',
-                    0,
-                    $exception,
                 );
             }
+            $this->persist($next, $checkpointPublication);
+        } catch (\Throwable $failure) {
+            if ($blobWritten
+                && !$checkpointPublication->published
+                && ($checkpoint->streamingQueueRef === null
+                || !hash_equals(
+                    $checkpoint->streamingQueueRef['sha256'],
+                    $queueRef['sha256'],
+                ))
+            ) {
+                $this->removeQueueBlob($queueRef);
+            }
 
-            throw self::invalidCheckpoint($exception);
+            throw $failure;
         }
-        if (\strlen($encoded) > OkxPaperLivePolicy::MAX_CHECKPOINT_BYTES) {
-            throw new OkxPaperLiveIntegrityException('market_data_backpressure_exhausted');
+        if ($checkpoint->streamingQueueRef !== null
+            && !hash_equals(
+                $checkpoint->streamingQueueRef['sha256'],
+                $queueRef['sha256'],
+            )
+        ) {
+            $this->removeQueueBlob($checkpoint->streamingQueueRef);
         }
-        $this->persist($next);
+
+        return $next;
+    }
+
+    /**
+     * Publishes a filtered raw queue and its matching REST book snapshot through
+     * one checkpoint commit. The content-addressed blob is prepared first; until
+     * the checkpoint pointer is replaced, the prior queue remains authoritative.
+     *
+     * @param array<array-key, mixed> $snapshot
+     * @param array<string, mixed>     $transition
+     * @param list<string>             $publicFrames
+     * @param list<string>             $businessFrames
+     */
+    public function saveBookRecoverySnapshotAndStreamingQueues(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        string $symbol,
+        #[\SensitiveParameter] array $snapshot,
+        #[\SensitiveParameter] array $transition,
+        #[\SensitiveParameter] array $publicFrames,
+        #[\SensitiveParameter] array $businessFrames,
+    ): OkxPaperLiveCheckpoint {
+        $this->assertCurrent($checkpoint);
+        $resync = $checkpoint->resyncBySymbol[$symbol] ?? null;
+        if (!\is_array($resync)
+            || $resync['policy'] !== 'book_seq_overlap_v1'
+            || $checkpoint->pendingTransition !== $transition
+            || ($transition['kind'] ?? null) !== 'rest_fetch'
+            || ($transition['symbol'] ?? null) !== $symbol
+            || ($transition['stream'] ?? null) !== $symbol . '/rest/top_of_book'
+            || ($transition['stage'] ?? null) !== 'order_book'
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $queues = $this->validatedRawQueues($publicFrames, $businessFrames);
+        $blob = $this->encodeQueueBlob($queues);
+        $queueRef = $this->queueRef($blob, $queues);
+        $blobWritten = false;
+        $checkpointPublication = $this->checkpointPublicationState();
+        try {
+            $this->writeQueueBlob($blob, $queueRef);
+            $blobWritten = true;
+            $state = $checkpoint->toArray();
+            unset($state['streaming_queues']);
+            $state['streaming_queue_ref'] = $queueRef;
+            $state['resync_by_symbol'][$symbol]['book_snapshot'] = $snapshot;
+            unset(
+                $state['resync_by_symbol'][$symbol]['queued_public_frames'],
+                $state['resync_by_symbol'][$symbol]['queued_business_frames'],
+            );
+            $candidate = $this->validatedCheckpoint($state);
+            $next = $this->savePreparedTransition(
+                $candidate,
+                $checkpoint->phase,
+                $transition,
+                $queueRef,
+                $checkpointPublication,
+            );
+        } catch (\Throwable $failure) {
+            if ($blobWritten
+                && !$checkpointPublication->published
+                && ($checkpoint->streamingQueueRef === null
+                || !hash_equals(
+                    $checkpoint->streamingQueueRef['sha256'],
+                    $queueRef['sha256'],
+                ))
+            ) {
+                $this->removeQueueBlob($queueRef);
+            }
+
+            throw $failure;
+        }
+        if ($checkpoint->streamingQueueRef !== null
+            && !hash_equals(
+                $checkpoint->streamingQueueRef['sha256'],
+                $queueRef['sha256'],
+            )
+        ) {
+            $this->removeQueueBlob($checkpoint->streamingQueueRef);
+        }
 
         return $next;
     }
@@ -1208,8 +1377,567 @@ final class OkxPaperLiveCheckpointStore
         }
     }
 
-    private function persist(#[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint): void
+    /**
+     * @param list<string> $publicFrames
+     * @param list<string> $businessFrames
+     * @return array{public: list<string>, business: list<string>}
+     */
+    private function validatedRawQueues(
+        #[\SensitiveParameter] array $publicFrames,
+        #[\SensitiveParameter] array $businessFrames,
+    ): array {
+        $queues = ['public' => $publicFrames, 'business' => $businessFrames];
+        foreach ($queues as $frames) {
+            if (!array_is_list($frames)
+                || \count($frames) > OkxPaperLivePolicy::MAX_QUEUED_FRAMES
+            ) {
+                throw new OkxPaperLiveIntegrityException(
+                    'market_data_backpressure_exhausted',
+                );
+            }
+            $bytes = 0;
+            foreach ($frames as $frame) {
+                if (!\is_string($frame)
+                    || $frame === ''
+                    || \strlen($frame) > OkxPaperLivePolicy::MAX_FRAME_BYTES
+                ) {
+                    throw new OkxPaperLiveIntegrityException(
+                        'market_data_backpressure_exhausted',
+                    );
+                }
+                $bytes += \strlen($frame);
+            }
+            if ($bytes > OkxPaperLivePolicy::MAX_QUEUED_BYTES) {
+                throw new OkxPaperLiveIntegrityException(
+                    'market_data_backpressure_exhausted',
+                );
+            }
+        }
+
+        return $queues;
+    }
+
+    /**
+     * @param array{public: list<string>, business: list<string>} $queues
+     */
+    private function encodeQueueBlob(#[\SensitiveParameter] array $queues): string
     {
+        $blob = self::QUEUE_BLOB_MAGIC;
+        foreach (['public', 'business'] as $socket) {
+            $blob .= pack('N', \count($queues[$socket]));
+            foreach ($queues[$socket] as $frame) {
+                $blob .= pack('N', \strlen($frame)) . $frame;
+            }
+        }
+
+        return $blob;
+    }
+
+    /**
+     * @param array{public: list<string>, business: list<string>} $queues
+     * @return array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * }
+     */
+    private function queueRef(
+        #[\SensitiveParameter] string $blob,
+        #[\SensitiveParameter] array $queues,
+    ): array {
+        return [
+            'format' => 'okx_raw_queue_v1',
+            'sha256' => hash('sha256', $blob),
+            'storage_bytes' => \strlen($blob),
+            'public' => [
+                'frames' => \count($queues['public']),
+                'bytes' => array_sum(array_map(\strlen(...), $queues['public'])),
+            ],
+            'business' => [
+                'frames' => \count($queues['business']),
+                'bytes' => array_sum(array_map(\strlen(...), $queues['business'])),
+            ],
+        ];
+    }
+
+    /**
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * } $queueRef
+     */
+    private function writeQueueBlob(
+        #[\SensitiveParameter] string $blob,
+        #[\SensitiveParameter] array $queueRef,
+    ): void {
+        $path = $this->queueBlobPath($queueRef['sha256']);
+        $statistics = $this->pathStatistics($path);
+        if ($statistics !== false) {
+            $this->readQueueBlob($queueRef);
+
+            return;
+        }
+        $this->assertManagedDirectories();
+        try {
+            $temporaryPath = $this->directoryPin['path']
+                . '/.okx-live-queue-' . bin2hex(random_bytes(16));
+        } catch (\Throwable $exception) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+                0,
+                $exception,
+            );
+        }
+        $handle = $this->filesystem->createPrivateFile(
+            $temporaryPath,
+            'okx_paper_live_queue_create',
+        );
+        if ($handle === false) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+            );
+        }
+        $renamed = false;
+        try {
+            $temporaryIdentity = $this->assertHandleMatchesPath(
+                $handle,
+                $temporaryPath,
+            );
+            $offset = 0;
+            while ($offset < \strlen($blob)) {
+                $written = $this->filesystem->write(
+                    $handle,
+                    substr($blob, $offset),
+                    'okx_paper_live_queue_write',
+                );
+                if ($written === false || $written < 1) {
+                    throw new OkxPaperLiveIntegrityException(
+                        'okx_paper_live_checkpoint_write_failed',
+                    );
+                }
+                $offset += $written;
+            }
+            if (!$this->filesystem->flush($handle, 'okx_paper_live_queue_flush')
+                || !$this->filesystem->sync($handle, 'okx_paper_live_queue_sync')
+            ) {
+                throw new OkxPaperLiveIntegrityException(
+                    'okx_paper_live_checkpoint_write_failed',
+                );
+            }
+            $this->assertHandleMatchesPath($handle, $temporaryPath, $temporaryIdentity);
+            $this->assertManagedDirectories();
+            if (!$this->filesystem->move(
+                $temporaryPath,
+                $path,
+                'okx_paper_live_queue_publish',
+            )) {
+                throw new OkxPaperLiveIntegrityException(
+                    'okx_paper_live_checkpoint_write_failed',
+                );
+            }
+            $renamed = true;
+            $this->assertHandleMatchesPath($handle, $path, $temporaryIdentity);
+            if (!$this->filesystem->sync(
+                $this->directoryPin['handle'],
+                'okx_paper_live_queue_directory_sync',
+            )) {
+                throw new OkxPaperLiveIntegrityException(
+                    'okx_paper_live_checkpoint_write_failed',
+                );
+            }
+            $this->assertHandleMatchesPath($handle, $path, $temporaryIdentity);
+        } catch (\Throwable $failure) {
+            if ($renamed) {
+                $this->removeQueueBlob($queueRef);
+            } else {
+                $this->removeTemporaryPath($temporaryPath);
+            }
+            if ($failure instanceof OkxPaperLiveIntegrityException) {
+                throw $failure;
+            }
+
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+                0,
+                $failure,
+            );
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /** @return array{public: list<string>, business: list<string>} */
+    private function streamingQueuesFromCheckpoint(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+    ): array {
+        if ($checkpoint->streamingQueueRef === null) {
+            return $checkpoint->streamingQueues;
+        }
+
+        return $this->readQueueBlob($checkpoint->streamingQueueRef);
+    }
+
+    /**
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * } $queueRef
+     * @return array{public: list<string>, business: list<string>}
+     */
+    private function readQueueBlob(#[\SensitiveParameter] array $queueRef): array
+    {
+        $path = $this->queueBlobPath($queueRef['sha256']);
+        $this->assertManagedDirectories();
+        $before = $this->pathStatistics($path);
+        if ($before === false
+            || $this->isSymlink($before)
+            || !$this->isPrivateRegularFile($before)
+            || !isset($before['size'])
+            || !\is_int($before['size'])
+            || $before['size'] !== $queueRef['storage_bytes']
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            throw self::invalidCheckpoint();
+        }
+        try {
+            $opened = $this->filesystem->stat($handle, 'okx_paper_live_queue_load');
+            if ($opened === false || !$this->sameSnapshot($before, $opened)) {
+                throw self::invalidCheckpoint();
+            }
+            $blob = '';
+            while (\strlen($blob) < $queueRef['storage_bytes']) {
+                $chunk = $this->filesystem->read(
+                    $handle,
+                    min(8192, $queueRef['storage_bytes'] - \strlen($blob)),
+                    'okx_paper_live_queue_load',
+                );
+                if ($chunk === false || $chunk === '') {
+                    throw self::invalidCheckpoint();
+                }
+                $blob .= $chunk;
+            }
+            $extra = $this->filesystem->read($handle, 1, 'okx_paper_live_queue_load');
+            $afterHandle = $this->filesystem->stat($handle, 'okx_paper_live_queue_load');
+            $afterPath = $this->pathStatistics($path);
+            if ($extra === false
+                || $extra !== ''
+                || !$this->sameSnapshot($opened, $afterHandle)
+                || !$this->sameSnapshot($opened, $afterPath)
+                || !hash_equals($queueRef['sha256'], hash('sha256', $blob))
+            ) {
+                throw self::invalidCheckpoint();
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return $this->decodeQueueBlob($blob, $queueRef);
+    }
+
+    /**
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * } $queueRef
+     * @return array{public: list<string>, business: list<string>}
+     */
+    private function decodeQueueBlob(
+        #[\SensitiveParameter] string $blob,
+        #[\SensitiveParameter] array $queueRef,
+    ): array {
+        if (!str_starts_with($blob, self::QUEUE_BLOB_MAGIC)) {
+            throw self::invalidCheckpoint();
+        }
+        $offset = \strlen(self::QUEUE_BLOB_MAGIC);
+        $queues = ['public' => [], 'business' => []];
+        foreach (['public', 'business'] as $socket) {
+            $count = $this->queueBlobUnsignedInt($blob, $offset);
+            if ($count > OkxPaperLivePolicy::MAX_QUEUED_FRAMES) {
+                throw self::invalidCheckpoint();
+            }
+            $bytes = 0;
+            for ($index = 0; $index < $count; ++$index) {
+                $length = $this->queueBlobUnsignedInt($blob, $offset);
+                if ($length < 1
+                    || $length > OkxPaperLivePolicy::MAX_FRAME_BYTES
+                    || $length > \strlen($blob) - $offset
+                ) {
+                    throw self::invalidCheckpoint();
+                }
+                $frame = substr($blob, $offset, $length);
+                $offset += $length;
+                $bytes += $length;
+                if ($bytes > OkxPaperLivePolicy::MAX_QUEUED_BYTES) {
+                    throw self::invalidCheckpoint();
+                }
+                $queues[$socket][] = $frame;
+            }
+            if ($count !== $queueRef[$socket]['frames']
+                || $bytes !== $queueRef[$socket]['bytes']
+            ) {
+                throw self::invalidCheckpoint();
+            }
+        }
+        if ($offset !== \strlen($blob)) {
+            throw self::invalidCheckpoint();
+        }
+
+        return $queues;
+    }
+
+    private function queueBlobUnsignedInt(
+        #[\SensitiveParameter] string $blob,
+        int &$offset,
+    ): int {
+        if (\strlen($blob) - $offset < 4) {
+            throw self::invalidCheckpoint();
+        }
+        $decoded = unpack('Nvalue', substr($blob, $offset, 4));
+        $offset += 4;
+        $value = $decoded['value'] ?? null;
+        if (!\is_int($value)) {
+            throw self::invalidCheckpoint();
+        }
+
+        return $value;
+    }
+
+    private function queueBlobPath(string $sha256): string
+    {
+        if (preg_match(self::SHA256_PATTERN, $sha256) !== 1) {
+            throw self::invalidCheckpoint();
+        }
+
+        return $this->directoryPin['path'] . '/'
+            . self::QUEUE_BLOB_PREFIX . $sha256 . self::QUEUE_BLOB_SUFFIX;
+    }
+
+    /** @param array{sha256: string} $queueRef */
+    private function removeQueueBlob(#[\SensitiveParameter] array $queueRef): void
+    {
+        $path = $this->queueBlobPath($queueRef['sha256']);
+        $statistics = $this->pathStatistics($path);
+        if ($statistics === false) {
+            return;
+        }
+        $this->removeManagedQueueBlob($path, $statistics);
+        $this->syncQueueCleanupDirectory();
+    }
+
+    private function collectOrphanedQueueBlobs(?string $referencedSha256): void
+    {
+        if ($referencedSha256 !== null
+            && preg_match(self::SHA256_PATTERN, $referencedSha256) !== 1
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $this->assertManagedDirectories();
+        $entries = @scandir($this->directoryPin['path'], \SCANDIR_SORT_ASCENDING);
+        if ($entries === false) {
+            throw self::invalidCheckpoint();
+        }
+        $removed = false;
+        foreach ($entries as $entry) {
+            $matches = [];
+            $isQueueBlob = preg_match(
+                self::QUEUE_BLOB_FILENAME_PATTERN,
+                $entry,
+                $matches,
+            ) === 1;
+            $isQueueTemporary = preg_match(
+                self::QUEUE_TEMPORARY_FILENAME_PATTERN,
+                $entry,
+            ) === 1;
+            if (!$isQueueBlob && !$isQueueTemporary) {
+                continue;
+            }
+            $sha256 = $matches[1] ?? null;
+            if ($isQueueBlob
+                && $referencedSha256 !== null
+                && hash_equals($referencedSha256, $sha256)
+            ) {
+                continue;
+            }
+            $path = $this->directoryPin['path'] . '/' . $entry;
+            $statistics = $this->pathStatistics($path);
+            if ($statistics === false) {
+                throw self::invalidCheckpoint();
+            }
+            $this->removeManagedQueueBlob($path, $statistics);
+            $removed = true;
+        }
+        $this->assertManagedDirectories();
+        if ($removed) {
+            $this->syncQueueCleanupDirectory();
+        }
+    }
+
+    /** @param array<string, mixed> $statistics */
+    private function removeManagedQueueBlob(
+        #[\SensitiveParameter] string $path,
+        #[\SensitiveParameter] array $statistics,
+    ): void {
+        if ($this->isSymlink($statistics)
+            || !$this->isPrivateRegularFile($statistics)
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        $verified = $this->pathStatistics($path);
+        if (!$this->sameSnapshot($statistics, $verified)) {
+            throw self::invalidCheckpoint();
+        }
+        $this->assertManagedDirectories();
+        try {
+            do {
+                $quarantinePath = $this->queueBlobPath(bin2hex(random_bytes(32)));
+            } while ($this->pathStatistics($quarantinePath) !== false);
+        } catch (\Throwable $exception) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+                0,
+                $exception,
+            );
+        }
+        if (!$this->filesystem->move(
+            $path,
+            $quarantinePath,
+            'okx_paper_live_queue_cleanup_quarantine',
+        )) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+            );
+        }
+        try {
+            $sourceStillExists = $this->managedPathExists($path);
+            $quarantinedStatistics = $this->managedPathStatistics($quarantinePath);
+            if ($sourceStillExists
+                || $quarantinedStatistics === false
+                || $this->isSymlink($quarantinedStatistics)
+                || !$this->isPrivateRegularFile($quarantinedStatistics)
+                || !$this->sameSnapshot($statistics, $quarantinedStatistics)
+            ) {
+                $this->restoreQuarantinedQueueBlob(
+                    $quarantinePath,
+                    $path,
+                    $quarantinedStatistics,
+                );
+                throw self::invalidCheckpoint();
+            }
+            if (!$this->filesystem->removeFile(
+                $quarantinePath,
+                $quarantinedStatistics,
+                'okx_paper_live_queue_cleanup_unlink',
+            ) || $this->managedPathExists($quarantinePath)) {
+                $this->restoreQuarantinedQueueBlob(
+                    $quarantinePath,
+                    $path,
+                    $quarantinedStatistics,
+                );
+                throw new OkxPaperLiveIntegrityException(
+                    'okx_paper_live_checkpoint_write_failed',
+                );
+            }
+        } catch (\Throwable $failure) {
+            if ($this->managedPathExists($quarantinePath)
+                && !$this->managedPathExists($path)
+            ) {
+                $this->restoreQuarantinedQueueBlob(
+                    $quarantinePath,
+                    $path,
+                    $quarantinedStatistics ?? false,
+                );
+            }
+
+            throw $failure;
+        }
+        $this->assertManagedDirectories();
+    }
+
+    /** @param array<string, mixed>|false $quarantinedStatistics */
+    private function restoreQuarantinedQueueBlob(
+        #[\SensitiveParameter] string $quarantinePath,
+        #[\SensitiveParameter] string $originalPath,
+        #[\SensitiveParameter] array|false $quarantinedStatistics,
+    ): void {
+        if (!$this->samePathSnapshot(
+            $quarantinedStatistics,
+            $this->pathStatistics($quarantinePath),
+        )
+            || $this->pathStatistics($originalPath) !== false
+        ) {
+            return;
+        }
+        if (!$this->filesystem->move(
+            $quarantinePath,
+            $originalPath,
+            'okx_paper_live_queue_cleanup_restore',
+        )) {
+            throw self::invalidCheckpoint();
+        }
+        $restored = $this->pathStatistics($originalPath);
+        if (!$this->sameSnapshot($quarantinedStatistics, $restored)
+            || $this->pathStatistics($quarantinePath) !== false
+        ) {
+            throw self::invalidCheckpoint();
+        }
+        if (!$this->filesystem->sync(
+            $this->directoryPin['handle'],
+            'okx_paper_live_queue_cleanup_restore_directory_sync',
+        )) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+            );
+        }
+        $this->assertManagedDirectories();
+    }
+
+    private function syncQueueCleanupDirectory(): void
+    {
+        $this->assertManagedDirectories();
+        if (!$this->filesystem->sync(
+            $this->directoryPin['handle'],
+            'okx_paper_live_queue_cleanup_directory_sync',
+        )) {
+            throw new OkxPaperLiveIntegrityException(
+                'okx_paper_live_checkpoint_write_failed',
+            );
+        }
+        $this->assertManagedDirectories();
+    }
+
+    private function managedPathExists(#[\SensitiveParameter] string $path): bool
+    {
+        return $this->pathStatistics($path) !== false;
+    }
+
+    /** @return array<string, mixed>|false */
+    private function managedPathStatistics(
+        #[\SensitiveParameter] string $path,
+    ): array|false {
+        return $this->pathStatistics($path);
+    }
+
+    private function persist(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        ?\stdClass $checkpointPublication = null,
+    ): void
+    {
+        $checkpointPublication ??= $this->checkpointPublicationState();
+        $checkpointPublication->published = false;
         $this->assertBoundIdentity($checkpoint);
         $checkpoint = $this->validatedCheckpoint($checkpoint->toArray());
         $this->assertSemanticallyResumable($checkpoint);
@@ -1222,7 +1950,43 @@ final class OkxPaperLiveCheckpointStore
             throw self::invalidCheckpoint();
         }
         $this->assertDurableStateUnchanged();
-        $this->atomicWrite($contents);
+        try {
+            $this->atomicWrite($contents, $checkpointPublication);
+        } catch (\Throwable $failure) {
+            if ($this->checkpointWasPublished($checkpointPublication)) {
+                try {
+                    if (!hash_equals($contents, $this->readCheckpoint())) {
+                        throw self::invalidCheckpoint();
+                    }
+                    $this->adoptCurrentCheckpoint($checkpoint, $contents);
+                } catch (\Throwable $reconciliationFailure) {
+                    throw self::invalidCheckpoint($reconciliationFailure);
+                }
+            }
+
+            throw $failure;
+        }
+        $this->adoptCurrentCheckpoint($checkpoint, $contents);
+    }
+
+    /** @return \stdClass&object{published: bool} */
+    private function checkpointPublicationState(): \stdClass
+    {
+        $state = new \stdClass();
+        $state->published = false;
+
+        return $state;
+    }
+
+    private function checkpointWasPublished(\stdClass $state): bool
+    {
+        return $state->published === true;
+    }
+
+    private function adoptCurrentCheckpoint(
+        #[\SensitiveParameter] OkxPaperLiveCheckpoint $checkpoint,
+        #[\SensitiveParameter] string $contents,
+    ): void {
         $this->currentStateHash = hash('sha256', $contents);
         $this->currentFileIdentity = $this->checkpointIdentity();
         $this->currentCheckpoint = $checkpoint;
@@ -2327,11 +3091,21 @@ final class OkxPaperLiveCheckpointStore
             && $parts[2] === $reason;
     }
 
-    /** @param array<string, mixed>|null $pendingTransition */
+    /**
+     * @param array<string, mixed>|null $pendingTransition
+     * @param array{
+     *     format: string,
+     *     sha256: string,
+     *     storage_bytes: int,
+     *     public: array{frames: int, bytes: int},
+     *     business: array{frames: int, bytes: int}
+     * }|null $preparedQueueRef
+     */
     private function assertTransitionMutationsMatchAction(
         #[\SensitiveParameter] OkxPaperLiveCheckpoint $candidate,
         string $phase,
         #[\SensitiveParameter] ?array $pendingTransition,
+        #[\SensitiveParameter] ?array $preparedQueueRef,
     ): void {
         $this->assertBoundIdentity($candidate);
         $current = $this->currentCheckpoint;
@@ -2341,6 +3115,22 @@ final class OkxPaperLiveCheckpointStore
         $this->assertPhaseGraphTransition($current, $candidate, $phase, $pendingTransition);
         $currentState = $current->toArray();
         $candidateState = $candidate->toArray();
+        if ($preparedQueueRef === null) {
+            if (!$this->sameCanonicalValue(
+                $current->streamingQueueRef,
+                $candidate->streamingQueueRef,
+            ) || !$this->sameCanonicalValue(
+                $current->streamingQueues,
+                $candidate->streamingQueues,
+            )) {
+                throw self::invalidCheckpoint();
+            }
+        } elseif (!$this->sameCanonicalValue(
+            $preparedQueueRef,
+            $candidate->streamingQueueRef,
+        ) || $candidate->streamingQueues !== ['public' => [], 'business' => []]) {
+            throw self::invalidCheckpoint();
+        }
         if (!\in_array($candidate->phase, [$current->phase, $phase], true)
             || (!$this->sameCanonicalValue($candidate->pendingTransition, $current->pendingTransition)
                 && !$this->sameCanonicalValue($candidate->pendingTransition, $pendingTransition))
@@ -3558,7 +4348,10 @@ final class OkxPaperLiveCheckpointStore
         }
     }
 
-    private function atomicWrite(#[\SensitiveParameter] string $contents): void
+    private function atomicWrite(
+        #[\SensitiveParameter] string $contents,
+        \stdClass $checkpointPublication,
+    ): void
     {
         $this->assertManagedDirectories();
         $this->assertDestinationIsSafe();
@@ -3595,6 +4388,7 @@ final class OkxPaperLiveCheckpointStore
                 throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_write_failed');
             }
             $renamed = true;
+            $checkpointPublication->published = true;
             $this->assertManagedDirectories();
             $this->assertHandleMatchesPath($handle, $this->checkpointPath, $temporaryIdentity);
             if (!$this->filesystem->sync($this->directoryPin['handle'], 'okx_paper_live_checkpoint_directory_sync')) {
@@ -3751,11 +4545,29 @@ final class OkxPaperLiveCheckpointStore
     {
         return $actual !== false
             && $this->isPrivateRegularFile($actual)
-            && $this->sameFile($expected, $actual)
-            && isset($expected['size'], $actual['size'])
-            && \is_int($expected['size'])
-            && \is_int($actual['size'])
-            && $expected['size'] === $actual['size'];
+            && $this->samePathSnapshot($expected, $actual);
+    }
+
+    /**
+     * @param array<string, mixed>|false $expected
+     * @param array<string, mixed>|false $actual
+     */
+    private function samePathSnapshot(array|false $expected, array|false $actual): bool
+    {
+        if ($expected === false || $actual === false) {
+            return false;
+        }
+        foreach (['dev', 'ino', 'mode', 'nlink', 'size'] as $field) {
+            if (!isset($expected[$field], $actual[$field])
+                || !\is_int($expected[$field])
+                || !\is_int($actual[$field])
+                || $expected[$field] !== $actual[$field]
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function assertNoSymlinkComponents(string $path): void
