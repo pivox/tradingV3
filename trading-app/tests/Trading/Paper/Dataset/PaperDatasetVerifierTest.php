@@ -150,6 +150,34 @@ final class PaperDatasetVerifierTest extends TestCase
         $this->assertVerificationFailsWithoutPayload('paper_dataset_event_count_mismatch', ['29999.0']);
     }
 
+    public function testRejectsAnOtherwiseValidEventFromAnotherNetwork(): void
+    {
+        $this->createCompleteDataset();
+        $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::TESTNET,
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::TOP_OF_BOOK,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.000001Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:00:01.000001Z'),
+            sequence: '1',
+            payload: ['ask' => '30001.0', 'bid' => '29999.0'],
+        );
+        self::assertNotFalse(file_put_contents(
+            $this->eventsPath(),
+            CanonicalJson::encode($event->toArray()) . "\n",
+        ));
+        $this->rewriteManifest([
+            'events_file_sha256' => hash_file('sha256', $this->eventsPath()),
+            'last_event_id' => $event->eventId,
+        ]);
+
+        $this->assertVerificationFailsWithoutPayload(
+            'paper_dataset_event_network_mismatch',
+            ['29999.0'],
+        );
+    }
+
     public function testRejectsEventFileChangedAfterCompletion(): void
     {
         $this->createCompleteDataset();
@@ -451,10 +479,11 @@ final class PaperDatasetVerifierTest extends TestCase
     public function testManifestEnforcesRequiredInvariants(array $overrides, string $error): void
     {
         $arguments = [
-            'schemaVersion' => 1,
+            'schemaVersion' => PaperDatasetManifest::SCHEMA_VERSION,
             'recorderVersion' => '1.0.0',
             'datasetId' => 'dataset-okx-001',
             'venue' => PaperMarketDataVenue::OKX,
+            'network' => \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             'symbols' => ['BTCUSDT' => 'BTC-USDT-SWAP'],
             'startExchangeTimestamp' => null,
             'endExchangeTimestamp' => null,
@@ -479,6 +508,12 @@ final class PaperDatasetVerifierTest extends TestCase
     public static function invalidManifestProvider(): iterable
     {
         yield 'dataset ID' => [['datasetId' => '../escape'], 'paper_dataset_id_invalid'];
+        yield 'legacy network in v2' => [[
+            'network' => \App\Trading\Paper\MarketData\PaperMarketDataNetwork::LEGACY_UNKNOWN,
+        ], 'paper_dataset_network_provenance_invalid'];
+        yield 'known network in v1' => [[
+            'schemaVersion' => PaperDatasetManifest::LEGACY_SCHEMA_VERSION,
+        ], 'paper_dataset_network_provenance_invalid'];
         yield 'empty symbols' => [['symbols' => []], 'paper_dataset_symbols_invalid'];
         yield 'normalized symbol' => [['symbols' => ['SOLUSDT' => 'SOL-USDT-SWAP']], 'paper_dataset_symbols_invalid'];
         yield 'historical model name and version' => [[
@@ -537,10 +572,11 @@ final class PaperDatasetVerifierTest extends TestCase
     private function manifest(): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: 'dataset-okx-001',
             venue: PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: ['BTCUSDT' => 'BTC-USDT-SWAP', 'ETHUSDT' => 'ETH-USDT-SWAP'],
             startExchangeTimestamp: null,
             endExchangeTimestamp: null,
@@ -559,6 +595,7 @@ final class PaperDatasetVerifierTest extends TestCase
     private function event(string $sequence, int $microseconds): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,

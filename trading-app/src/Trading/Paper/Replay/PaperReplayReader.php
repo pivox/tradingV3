@@ -386,6 +386,9 @@ final class PaperReplayReader
         if (!hash_equals($consumerId, $checkpoint->consumerId)) {
             throw new \RuntimeException('paper_replay_checkpoint_consumer_mismatch');
         }
+        if ($manifest->network !== $checkpoint->network) {
+            throw new \RuntimeException('paper_replay_checkpoint_network_mismatch');
+        }
         if ($manifest->eventsFileSha256 === null
             || !hash_equals($manifest->eventsFileSha256, $checkpoint->eventsFileSha256)
         ) {

@@ -369,6 +369,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
             self::assertInstanceOf(OkxPaperLiveCheckpointStore::class, $checkpointStoreA);
             $checkpointA = self::property($sourceA, 'checkpoint');
             $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 venue: PaperMarketDataVenue::OKX,
                 symbol: 'BTCUSDT',
                 channel: PaperMarketDataChannel::PUBLIC_TRADE,
@@ -519,6 +520,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
             recorderVersion: '1.0.0',
             datasetId: $manifestDatasetId ?? $directoryName,
             venue: $venue,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: $symbols,
             startExchangeTimestamp: null,
             endExchangeTimestamp: null,

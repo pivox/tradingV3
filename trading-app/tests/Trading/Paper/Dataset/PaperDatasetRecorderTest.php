@@ -90,6 +90,9 @@ final class PaperDatasetRecorderTest extends TestCase
         $codec = new PaperDatasetManifestCodec();
         $manifest = $this->manifest();
 
+        self::assertSame(2, $manifest->toArray()['schema_version']);
+        self::assertSame('mainnet', $manifest->toArray()['source_network']);
+        self::assertTrue($manifest->hasCertifiableNetworkProvenance());
         self::assertEquals($manifest, $codec->decode($codec->encode($manifest)));
     }
 
@@ -166,7 +169,7 @@ final class PaperDatasetRecorderTest extends TestCase
         $recorder->append($this->event(sequence: '1'));
         $recorder->append($this->event(sequence: '3', microseconds: 2));
         self::assertSame(
-            ['okx/BTCUSDT/top_of_book' => 1],
+            ['mainnet/okx/BTCUSDT/top_of_book' => 1],
             $recorder->manifest()->sequenceGaps,
         );
 
@@ -179,6 +182,19 @@ final class PaperDatasetRecorderTest extends TestCase
             )),
         );
         self::assertSame(['public_trade', 'top_of_book'], $recorder->manifest()->channels);
+    }
+
+    public function testRecorderRejectsAnEventFromAnotherNetwork(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_event_network_mismatch');
+
+        $recorder->append($this->event(
+            sequence: '1',
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::TESTNET,
+        ));
     }
 
     public function testOneHundredTwentyEightDigitSequencesSurviveGapComparisonRestartAndVerification(): void
@@ -199,7 +215,7 @@ final class PaperDatasetRecorderTest extends TestCase
         }
 
         self::assertSame(PaperDatasetAppendResult::APPENDED, $recorder->append($this->event(sequence: $gap, microseconds: 3)));
-        self::assertSame(['okx/BTCUSDT/top_of_book' => 1], $recorder->manifest()->sequenceGaps);
+        self::assertSame(['mainnet/okx/BTCUSDT/top_of_book' => 1], $recorder->manifest()->sequenceGaps);
 
         $restarted = new PaperDatasetRecorder($this->datasetRoot(), $manifest);
         self::assertSame(PaperDatasetAppendResult::REPLAYED, $restarted->append($this->event(sequence: $gap, microseconds: 3)));
@@ -207,7 +223,7 @@ final class PaperDatasetRecorderTest extends TestCase
         $completed = $restarted->complete();
 
         self::assertEquals($completed, (new PaperDatasetVerifier())->verify($this->datasetDirectory()));
-        self::assertSame(['okx/BTCUSDT/top_of_book' => 1], $completed->sequenceGaps);
+        self::assertSame(['mainnet/okx/BTCUSDT/top_of_book' => 1], $completed->sequenceGaps);
     }
 
     public function testRestartRebuildsIdentitySequenceAndReconcilesStaleRecordingManifest(): void
@@ -1756,6 +1772,21 @@ final class PaperDatasetRecorderTest extends TestCase
         self::assertSame($manifestBefore, file_get_contents($this->datasetDirectory() . '/manifest.json'));
     }
 
+    public function testRestartRejectsARequestedNetworkDifferentFromTheStoredManifest(): void
+    {
+        new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_manifest_identity_mismatch');
+
+        new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->manifest(
+                network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::TESTNET,
+            ),
+        );
+    }
+
     /**
      * @return iterable<string, array{
      *   bool,
@@ -1846,10 +1877,11 @@ final class PaperDatasetRecorderTest extends TestCase
             new PaperDatasetRecorder(
                 $this->datasetRoot(),
                 new PaperDatasetManifest(
-                    schemaVersion: 1,
+                    schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
                     recorderVersion: '1.0.0',
                     datasetId: 'dataset-okx-001',
                     venue: PaperMarketDataVenue::OKX,
+                    network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                     symbols: [],
                     startExchangeTimestamp: null,
                     endExchangeTimestamp: null,
@@ -3565,6 +3597,7 @@ final class PaperDatasetRecorderTest extends TestCase
             filesystem: $filesystem,
         );
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -3733,12 +3766,15 @@ final class PaperDatasetRecorderTest extends TestCase
         PaperMarketDataQuality $quality = PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
         ?string $modelName = null,
         ?string $modelVersion = null,
+        \App\Trading\Paper\MarketData\PaperMarketDataNetwork $network =
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
     ): PaperDatasetManifest {
         return new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: 'dataset-okx-001',
             venue: PaperMarketDataVenue::OKX,
+            network: $network,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',
@@ -3761,8 +3797,11 @@ final class PaperDatasetRecorderTest extends TestCase
         string $sequence,
         int $microseconds = 1,
         PaperMarketDataChannel $channel = PaperMarketDataChannel::TOP_OF_BOOK,
+        \App\Trading\Paper\MarketData\PaperMarketDataNetwork $network =
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
+            $network,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: $channel,

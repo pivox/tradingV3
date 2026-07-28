@@ -1792,6 +1792,7 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
     private static function conflictingEvent(PaperMarketEvent $event): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $event->symbol,
             channel: $event->channel,
@@ -2103,10 +2104,11 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
     private static function manifest(string $datasetId = self::DATASET_ID): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: $datasetId,
             venue: PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',

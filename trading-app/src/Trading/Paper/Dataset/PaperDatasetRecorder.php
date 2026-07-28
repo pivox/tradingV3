@@ -957,6 +957,9 @@ final class PaperDatasetRecorder
         if ($event->sourceVenue !== $this->currentManifest->venue) {
             throw new \RuntimeException('paper_dataset_event_venue_mismatch');
         }
+        if ($event->sourceNetwork !== $this->currentManifest->network) {
+            throw new \RuntimeException('paper_dataset_event_network_mismatch');
+        }
         if (!array_key_exists($event->symbol, $this->currentManifest->symbols)) {
             throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
         }
@@ -964,7 +967,12 @@ final class PaperDatasetRecorder
 
     private function sequenceKey(PaperMarketEvent $event): string
     {
-        return $event->sourceVenue->value . '/' . $event->symbol . '/' . $event->channel->value;
+        $parts = [$event->sourceVenue->value, $event->symbol, $event->channel->value];
+        if ($event->schemaVersion === PaperMarketEvent::SCHEMA_VERSION) {
+            array_unshift($parts, $event->sourceNetwork->value);
+        }
+
+        return implode('/', $parts);
     }
 
     /** @return array{size: int, sha256: string, identity: array{dev: int, ino: int}} */
@@ -2790,6 +2798,7 @@ final class PaperDatasetRecorder
             || $requested->recorderVersion !== $stored->recorderVersion
             || $requested->datasetId !== $stored->datasetId
             || $requested->venue !== $stored->venue
+            || $requested->network !== $stored->network
             || $requested->symbols !== $stored->symbols
         ) {
             throw new \RuntimeException('paper_dataset_manifest_identity_mismatch');

@@ -7,8 +7,12 @@ namespace App\Tests\Trading\Paper;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
+use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Replay\PaperReplayReader;
 use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -138,13 +142,44 @@ final class PaperFixtureContractTest extends TestCase
             self::assertNotSame('fake', $event->sourceVenue->value);
         }
 
-        $manifest = $this->verifyCompleteDatasetFixture($datasetDirectory);
+        $manifest = $this->verifyCompleteDatasetFixture(
+            $datasetDirectory,
+            assertion: static function (
+                string $temporaryDatasetDirectory,
+                PaperDatasetManifest $verifiedManifest,
+            ): void {
+                self::assertNotNull($verifiedManifest->startExchangeTimestamp);
+                $events = iterator_to_array((new PaperReplayReader(
+                    new PaperDatasetVerifier(),
+                    new PaperReplayCheckpointStore(),
+                    new PaperReplayClock($verifiedManifest->startExchangeTimestamp),
+                ))->read($temporaryDatasetDirectory, 'legacy.fixture-reader'), false);
+
+                self::assertCount(1, $events);
+                self::assertSame(PaperMarketDataNetwork::LEGACY_UNKNOWN, $events[0]->sourceNetwork);
+            },
+        );
         self::assertInstanceOf(PaperDatasetManifest::class, $manifest);
         self::assertSame(count($events), $manifest->eventCount);
         self::assertNotSame('fake', $manifest->venue->value);
         foreach (array_keys($manifest->symbols) as $symbol) {
             self::assertContains($symbol, ['BTCUSDT', 'ETHUSDT']);
         }
+    }
+
+    public function testLegacyDatasetRemainsReplayReadableButCannotCertifyANewBaseline(): void
+    {
+        $datasetDirectory = $this->fixtureRoot() . '/complete-dataset';
+        $manifest = $this->verifyCompleteDatasetFixture($datasetDirectory);
+
+        self::assertSame(1, $manifest->schemaVersion);
+        self::assertSame(PaperMarketDataNetwork::LEGACY_UNKNOWN, $manifest->network);
+        self::assertFalse($manifest->hasCertifiableNetworkProvenance());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_network_provenance_uncertifiable');
+
+        $this->verifyCompleteDatasetFixture($datasetDirectory, true);
     }
 
     #[DataProvider('rawHttpHeaderProvider')]
@@ -447,7 +482,11 @@ final class PaperFixtureContractTest extends TestCase
         return $files;
     }
 
-    private function verifyCompleteDatasetFixture(string $fixtureDirectory): PaperDatasetManifest
+    private function verifyCompleteDatasetFixture(
+        string $fixtureDirectory,
+        bool $forBaseline = false,
+        ?callable $assertion = null,
+    ): PaperDatasetManifest
     {
         $temporaryRoot = tempnam(sys_get_temp_dir(), 'paper-fixture-contract-');
         self::assertIsString($temporaryRoot);
@@ -463,7 +502,16 @@ final class PaperFixtureContractTest extends TestCase
                 self::assertTrue(chmod($target, 0600));
             }
 
-            return (new PaperDatasetVerifier())->verify($datasetDirectory);
+            $verifier = new PaperDatasetVerifier();
+
+            $manifest = $forBaseline
+                ? $verifier->verifyForBaseline($datasetDirectory)
+                : $verifier->verify($datasetDirectory);
+            if ($assertion !== null) {
+                $assertion($datasetDirectory, $manifest);
+            }
+
+            return $manifest;
         } finally {
             foreach (['manifest.json', 'events.ndjson'] as $filename) {
                 @unlink($datasetDirectory . '/' . $filename);

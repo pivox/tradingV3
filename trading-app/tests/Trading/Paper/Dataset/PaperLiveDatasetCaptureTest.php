@@ -801,10 +801,11 @@ final class PaperLiveDatasetCaptureTest extends TestCase
     private static function manifest(string $datasetId): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: $datasetId,
             venue: PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',
@@ -833,6 +834,7 @@ final class PaperLiveDatasetCaptureTest extends TestCase
         int $microseconds = 1,
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: $channel,
@@ -1378,10 +1380,11 @@ function runPaperLiveCrashHarness(
     string $logPath,
 ): int {
     $manifest = new PaperDatasetManifest(
-        schemaVersion: 1,
+        schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
         recorderVersion: '1.0.0',
         datasetId: $datasetId,
         venue: PaperMarketDataVenue::OKX,
+        network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         symbols: [
             'BTCUSDT' => 'BTC-USDT-SWAP',
             'ETHUSDT' => 'ETH-USDT-SWAP',
@@ -1399,6 +1402,7 @@ function runPaperLiveCrashHarness(
         lastEventId: null,
     );
     $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         venue: PaperMarketDataVenue::OKX,
         symbol: 'BTCUSDT',
         channel: PaperMarketDataChannel::PUBLIC_TRADE,

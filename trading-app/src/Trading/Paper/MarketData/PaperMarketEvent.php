@@ -6,16 +6,17 @@ namespace App\Trading\Paper\MarketData;
 
 final readonly class PaperMarketEvent
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
+    public const LEGACY_SCHEMA_VERSION = 1;
 
     /** Far above current exchange counters while bounding identity input deterministically. */
     public const MAX_SEQUENCE_DIGITS = 128;
 
-    /** Outer event map plus its nine non-payload values. */
-    public const CANONICAL_ENVELOPE_NODES = 10;
+    /** Outer event map plus its ten non-payload values. */
+    public const CANONICAL_ENVELOPE_NODES = 11;
 
-    /** Ten associative keys in the fixed event contract. */
-    public const CANONICAL_ENVELOPE_KEYS = 10;
+    /** Eleven associative keys in the fixed event contract. */
+    public const CANONICAL_ENVELOPE_KEYS = 11;
 
     /** The payload is nested one level below the outer event map. */
     public const CANONICAL_ENVELOPE_DEPTH = 1;
@@ -24,7 +25,11 @@ final readonly class PaperMarketEvent
      * Event key bytes plus fixed schema, hashes and timestamp scalar bytes. Venue, symbol,
      * channel and sequence bytes are added from the normalized event identity.
      */
-    public const CANONICAL_ENVELOPE_FIXED_BYTES = 293;
+    public const CANONICAL_ENVELOPE_FIXED_BYTES = 313;
+
+    private const LEGACY_CANONICAL_ENVELOPE_NODES = 10;
+    private const LEGACY_CANONICAL_ENVELOPE_KEYS = 10;
+    private const LEGACY_CANONICAL_ENVELOPE_FIXED_BYTES = 293;
 
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
@@ -32,7 +37,22 @@ final readonly class PaperMarketEvent
     private const ALLOWED_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
 
     /** @var list<string> */
-    private const CONTRACT_KEYS = [
+    private const CONTRACT_KEYS_V2 = [
+        'schema_version',
+        'event_id',
+        'source_network',
+        'source_venue',
+        'symbol',
+        'channel',
+        'exchange_timestamp',
+        'received_timestamp',
+        'sequence',
+        'payload',
+        'payload_hash',
+    ];
+
+    /** @var list<string> */
+    private const CONTRACT_KEYS_V1 = [
         'schema_version',
         'event_id',
         'source_venue',
@@ -51,6 +71,7 @@ final readonly class PaperMarketEvent
     private function __construct(
         public int $schemaVersion,
         public string $eventId,
+        public PaperMarketDataNetwork $sourceNetwork,
         public PaperMarketDataVenue $sourceVenue,
         public string $symbol,
         public PaperMarketDataChannel $channel,
@@ -66,6 +87,7 @@ final readonly class PaperMarketEvent
      * @param array<array-key, mixed> $payload
      */
     public static function create(
+        PaperMarketDataNetwork $network,
         PaperMarketDataVenue $venue,
         #[\SensitiveParameter]
         string $symbol,
@@ -79,6 +101,10 @@ final readonly class PaperMarketEvent
         #[\SensitiveParameter]
         array $payload,
     ): self {
+        if ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN) {
+            throw new \InvalidArgumentException('paper_market_network_legacy_forbidden');
+        }
+
         $normalizedSymbol = strtoupper($symbol);
         if (!\in_array($normalizedSymbol, self::ALLOWED_SYMBOLS, true)) {
             throw new \InvalidArgumentException('paper_market_symbol_not_allowed');
@@ -95,11 +121,20 @@ final readonly class PaperMarketEvent
         $payloadHash = hash('sha256', CanonicalJson::encodeWithReservedBudget(
             $payload,
             self::CANONICAL_ENVELOPE_NODES,
-            self::canonicalEnvelopeBytes($venue, $normalizedSymbol, $channel, $sequence),
+            self::canonicalEnvelopeBytes(
+                self::SCHEMA_VERSION,
+                $network,
+                $venue,
+                $normalizedSymbol,
+                $channel,
+                $sequence,
+            ),
             self::CANONICAL_ENVELOPE_KEYS,
             self::CANONICAL_ENVELOPE_DEPTH,
         ));
         $eventId = self::eventId(
+            schemaVersion: self::SCHEMA_VERSION,
+            network: $network,
             venue: $venue,
             symbol: $normalizedSymbol,
             channel: $channel,
@@ -111,6 +146,7 @@ final readonly class PaperMarketEvent
         return new self(
             schemaVersion: self::SCHEMA_VERSION,
             eventId: $eventId,
+            sourceNetwork: $network,
             sourceVenue: $venue,
             symbol: $normalizedSymbol,
             channel: $channel,
@@ -127,11 +163,14 @@ final readonly class PaperMarketEvent
      */
     public static function fromArray(#[\SensitiveParameter] array $data): self
     {
-        self::assertContractShape($data);
-
-        if ($data['schema_version'] !== self::SCHEMA_VERSION) {
+        if (!isset($data['schema_version']) || !\is_int($data['schema_version'])) {
             throw new \InvalidArgumentException('paper_market_schema_version_unsupported');
         }
+        $schemaVersion = $data['schema_version'];
+        if (!\in_array($schemaVersion, [self::LEGACY_SCHEMA_VERSION, self::SCHEMA_VERSION], true)) {
+            throw new \InvalidArgumentException('paper_market_schema_version_unsupported');
+        }
+        self::assertContractShape($data, $schemaVersion);
 
         if (!\is_string($data['event_id'])
             || !\is_string($data['source_venue'])
@@ -144,6 +183,9 @@ final readonly class PaperMarketEvent
         ) {
             throw new \InvalidArgumentException('paper_market_event_shape_invalid');
         }
+        if ($schemaVersion === self::SCHEMA_VERSION && !\is_string($data['source_network'])) {
+            throw new \InvalidArgumentException('paper_market_event_shape_invalid');
+        }
 
         if ($data['sequence'] !== null && !\is_string($data['sequence'])) {
             throw new \InvalidArgumentException('paper_market_sequence_invalid');
@@ -152,6 +194,12 @@ final readonly class PaperMarketEvent
         $venue = PaperMarketDataVenue::tryFrom($data['source_venue']);
         if ($venue === null) {
             throw new \InvalidArgumentException('paper_market_venue_unsupported');
+        }
+        $network = $schemaVersion === self::LEGACY_SCHEMA_VERSION
+            ? PaperMarketDataNetwork::LEGACY_UNKNOWN
+            : PaperMarketDataNetwork::tryFrom($data['source_network']);
+        if ($network === null || ($schemaVersion === self::SCHEMA_VERSION && !$network->isCertifiable())) {
+            throw new \InvalidArgumentException('paper_market_network_unsupported');
         }
 
         $channel = PaperMarketDataChannel::tryFrom($data['channel']);
@@ -163,31 +211,66 @@ final readonly class PaperMarketEvent
             throw new \InvalidArgumentException('paper_market_symbol_not_allowed');
         }
 
-        $event = self::create(
+        self::assertValidSequence($data['sequence']);
+        PaperMarketEventRedactor::assertSafe($data['payload']);
+        $payload = self::detachPayload($data['payload']);
+        $exchangeTimestamp = self::parseTimestamp($data['exchange_timestamp']);
+        $receivedTimestamp = self::parseTimestamp($data['received_timestamp']);
+        $payloadHash = hash('sha256', CanonicalJson::encodeWithReservedBudget(
+            $payload,
+            $schemaVersion === self::SCHEMA_VERSION
+                ? self::CANONICAL_ENVELOPE_NODES
+                : self::LEGACY_CANONICAL_ENVELOPE_NODES,
+            self::canonicalEnvelopeBytes(
+                $schemaVersion,
+                $network,
+                $venue,
+                $data['symbol'],
+                $channel,
+                $data['sequence'],
+            ),
+            $schemaVersion === self::SCHEMA_VERSION
+                ? self::CANONICAL_ENVELOPE_KEYS
+                : self::LEGACY_CANONICAL_ENVELOPE_KEYS,
+            self::CANONICAL_ENVELOPE_DEPTH,
+        ));
+        if (!hash_equals($payloadHash, $data['payload_hash'])) {
+            throw new \InvalidArgumentException('paper_market_payload_hash_mismatch');
+        }
+        $eventId = self::eventId(
+            schemaVersion: $schemaVersion,
+            network: $network,
             venue: $venue,
             symbol: $data['symbol'],
             channel: $channel,
-            exchangeTimestamp: self::parseTimestamp($data['exchange_timestamp']),
-            receivedTimestamp: self::parseTimestamp($data['received_timestamp']),
+            exchangeTimestamp: $exchangeTimestamp,
             sequence: $data['sequence'],
-            payload: $data['payload'],
+            payloadHash: $payloadHash,
         );
-
-        if (!hash_equals($event->payloadHash, $data['payload_hash'])) {
-            throw new \InvalidArgumentException('paper_market_payload_hash_mismatch');
-        }
-
-        if (!hash_equals($event->eventId, $data['event_id'])) {
+        if (!hash_equals($eventId, $data['event_id'])) {
             throw new \InvalidArgumentException('paper_market_event_id_mismatch');
         }
 
-        return $event;
+        return new self(
+            schemaVersion: $schemaVersion,
+            eventId: $eventId,
+            sourceNetwork: $network,
+            sourceVenue: $venue,
+            symbol: $data['symbol'],
+            channel: $channel,
+            exchangeTimestamp: $exchangeTimestamp,
+            receivedTimestamp: $receivedTimestamp,
+            sequence: $data['sequence'],
+            payload: $payload,
+            payloadHash: $payloadHash,
+        );
     }
 
     /**
      * @return array{
      *     schema_version: int,
      *     event_id: string,
+     *     source_network?: string,
      *     source_venue: string,
      *     symbol: string,
      *     channel: string,
@@ -200,9 +283,14 @@ final readonly class PaperMarketEvent
      */
     public function toArray(): array
     {
-        return [
+        $data = [
             'schema_version' => $this->schemaVersion,
             'event_id' => $this->eventId,
+        ];
+        if ($this->schemaVersion === self::SCHEMA_VERSION) {
+            $data['source_network'] = $this->sourceNetwork->value;
+        }
+        $data += [
             'source_venue' => $this->sourceVenue->value,
             'symbol' => $this->symbol,
             'channel' => $this->channel->value,
@@ -212,9 +300,13 @@ final readonly class PaperMarketEvent
             'payload' => $this->payload,
             'payload_hash' => $this->payloadHash,
         ];
+
+        return $data;
     }
 
     private static function eventId(
+        int $schemaVersion,
+        PaperMarketDataNetwork $network,
         PaperMarketDataVenue $venue,
         string $symbol,
         PaperMarketDataChannel $channel,
@@ -222,23 +314,31 @@ final readonly class PaperMarketEvent
         ?string $sequence,
         string $payloadHash,
     ): string {
-        return hash('sha256', implode('|', [
-            (string) self::SCHEMA_VERSION,
-            $venue->value,
+        $identity = [
+            (string) $schemaVersion,
             $symbol,
             $channel->value,
             $exchangeTimestamp->format(self::TIMESTAMP_FORMAT),
             $sequence ?? $payloadHash,
-        ]));
+        ];
+        array_splice($identity, 1, 0, $schemaVersion === self::SCHEMA_VERSION
+            ? [$network->value, $venue->value]
+            : [$venue->value]);
+
+        return hash('sha256', implode('|', $identity));
     }
 
     private static function canonicalEnvelopeBytes(
+        int $schemaVersion,
+        PaperMarketDataNetwork $network,
         PaperMarketDataVenue $venue,
         string $symbol,
         PaperMarketDataChannel $channel,
         ?string $sequence,
     ): int {
-        return self::CANONICAL_ENVELOPE_FIXED_BYTES
+        return ($schemaVersion === self::SCHEMA_VERSION
+                ? self::CANONICAL_ENVELOPE_FIXED_BYTES + \strlen($network->value)
+                : self::LEGACY_CANONICAL_ENVELOPE_FIXED_BYTES)
             + \strlen($venue->value)
             + \strlen($symbol)
             + \strlen($channel->value)
@@ -341,10 +441,15 @@ final readonly class PaperMarketEvent
     /**
      * @param array<string, mixed> $data
      */
-    private static function assertContractShape(#[\SensitiveParameter] array $data): void
+    private static function assertContractShape(
+        #[\SensitiveParameter] array $data,
+        int $schemaVersion,
+    ): void
     {
         $actualKeys = array_keys($data);
-        $expectedKeys = self::CONTRACT_KEYS;
+        $expectedKeys = $schemaVersion === self::SCHEMA_VERSION
+            ? self::CONTRACT_KEYS_V2
+            : self::CONTRACT_KEYS_V1;
         sort($actualKeys, SORT_STRING);
         sort($expectedKeys, SORT_STRING);
 
