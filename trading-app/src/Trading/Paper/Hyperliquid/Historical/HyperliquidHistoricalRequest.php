@@ -1,0 +1,106 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Trading\Paper\Hyperliquid\Historical;
+
+use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
+use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+
+final readonly class HyperliquidHistoricalRequest
+{
+    /** @var list<string> */
+    public array $symbols;
+
+    /** @var list<string> */
+    public array $intervals;
+
+    public \DateTimeImmutable $from;
+    public \DateTimeImmutable $to;
+
+    /** @param list<string> $symbols */
+    public function __construct(
+        public string $datasetId,
+        public PaperMarketDataNetwork $network,
+        array $symbols,
+        \DateTimeImmutable $from,
+        \DateTimeImmutable $to,
+        public int $maximumEvents = 1_000_000,
+        public int $maximumPages = 100_000,
+        public int $maximumResponseBytes = 1_048_576,
+        public int $maximumRetries = 5,
+    ) {
+        PaperDatasetManifest::assertDatasetId($this->datasetId);
+        if ($this->network === PaperMarketDataNetwork::LEGACY_UNKNOWN) {
+            throw new \InvalidArgumentException('hyperliquid_historical_network_invalid');
+        }
+        if ($this->maximumEvents < 1 || $this->maximumEvents > 1_000_000
+            || $this->maximumPages < 1 || $this->maximumPages > 100_000
+            || $this->maximumResponseBytes < 1 || $this->maximumResponseBytes > 1_048_576
+            || $this->maximumRetries < 0 || $this->maximumRetries > 5
+        ) {
+            throw new \InvalidArgumentException('hyperliquid_historical_bound_invalid');
+        }
+
+        $symbols = self::normalizeSymbols($symbols);
+        $utc = new \DateTimeZone('UTC');
+        $from = \DateTimeImmutable::createFromInterface($from)->setTimezone($utc);
+        $to = \DateTimeImmutable::createFromInterface($to)->setTimezone($utc);
+        if ($from >= $to) {
+            throw new \InvalidArgumentException('hyperliquid_historical_range_invalid');
+        }
+
+        $this->symbols = $symbols;
+        $this->intervals = ['1m', '5m', '15m', '1h'];
+        $this->from = $from;
+        $this->to = $to;
+    }
+
+    public function requestSha256(): string
+    {
+        return hash('sha256', CanonicalJson::encode([
+            'schema_version' => 1,
+            'dataset_id' => $this->datasetId,
+            'network' => $this->network->value,
+            'venue' => 'hyperliquid',
+            'symbols' => $this->symbols,
+            'intervals' => $this->intervals,
+            'from' => $this->from->format('Y-m-d\TH:i:s.u\Z'),
+            'to' => $this->to->format('Y-m-d\TH:i:s.u\Z'),
+            'maximum_events' => $this->maximumEvents,
+            'maximum_pages' => $this->maximumPages,
+            'maximum_response_bytes' => $this->maximumResponseBytes,
+            'maximum_retries' => $this->maximumRetries,
+        ]));
+    }
+
+    /** @param array<mixed> $symbols
+     *  @return list<string>
+     */
+    private static function normalizeSymbols(array $symbols): array
+    {
+        if ($symbols === []) {
+            throw new \InvalidArgumentException('hyperliquid_historical_symbols_invalid');
+        }
+
+        $instruments = new HyperliquidPaperInstrumentMap();
+        foreach ($symbols as $symbol) {
+            if (!\is_string($symbol)) {
+                throw new \InvalidArgumentException('hyperliquid_historical_symbols_invalid');
+            }
+
+            try {
+                $instruments->nativeCoin($symbol);
+            } catch (\InvalidArgumentException) {
+                throw new \InvalidArgumentException('hyperliquid_historical_symbols_invalid');
+            }
+        }
+
+        $symbols = array_values(array_unique($symbols));
+        sort($symbols, \SORT_STRING);
+
+        return $symbols;
+    }
+}
