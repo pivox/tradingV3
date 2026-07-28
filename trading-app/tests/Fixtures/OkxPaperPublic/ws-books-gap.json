@@ -1,0 +1,21 @@
+{
+  "arg": {
+    "channel": "books",
+    "instId": "ETH-USDT-SWAP"
+  },
+  "action": "update",
+  "data": [
+    {
+      "asks": [
+        ["3525.5500", "1.250", "0", "1"]
+      ],
+      "bids": [
+        ["3525.5000", "2.500", "0", "1"]
+      ],
+      "ts": "1784595706123",
+      "checksum": 0,
+      "prevSeqId": 323458,
+      "seqId": 323459
+    }
+  ]
+}
