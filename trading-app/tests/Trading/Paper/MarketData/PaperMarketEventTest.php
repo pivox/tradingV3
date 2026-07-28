@@ -41,6 +41,7 @@ final class PaperMarketEventTest extends TestCase
         self::assertSame([
             'recorded_public_book_and_trades',
             'public_historical_candles_and_trades',
+            'public_historical_candles_modelled_book',
             'incomplete',
         ], array_column(PaperMarketDataQuality::cases(), 'value'));
     }
