@@ -87,6 +87,145 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         }
     }
 
+    public function testLinkedWebSocketBookSequenceResetIsDurableAcrossRestart(): void
+    {
+        $directory = $this->datasetDirectory('linked-book-sequence-reset');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $stream = 'BTCUSDT/ws/top_of_book';
+        $beforeReset = $this->bookEvent('ws_books', '323456', sequence: '1');
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $beforeReset,
+            'book|323456',
+            $stream,
+        );
+        $reset = $this->bookEvent(
+            'ws_books',
+            '42',
+            sequence: '2',
+            sourcePreviousSequence: '323456',
+        );
+
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $reset,
+            'book|42',
+            $stream,
+        );
+
+        self::assertSame('42', $checkpoint->streamFrontiers[$stream]?->sourceIdentity);
+        unset($store);
+
+        $resumed = (new OkxPaperLiveCheckpointStore($directory))->loadOrCreate(
+            self::DATASET_ID,
+            self::CONFIGURATION_SHA256,
+        );
+        self::assertSame('42', $resumed->streamFrontiers[$stream]?->sourceIdentity);
+    }
+
+    public function testUnlinkedOrNonWebSocketBookSequenceResetFailsClosed(): void
+    {
+        foreach ([
+            [
+                'origin' => 'ws_books',
+                'previous' => '323455',
+                'error' => 'market_event_identity_conflict',
+            ],
+            [
+                'origin' => 'rest_initial_snapshot',
+                'previous' => '323456',
+                'error' => 'okx_paper_live_checkpoint_invalid',
+            ],
+        ] as $case) {
+            $directory = $this->datasetDirectory(
+                'invalid-book-sequence-reset-' . $case['origin'],
+            );
+            $store = new OkxPaperLiveCheckpointStore($directory);
+            $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+            $stream = 'BTCUSDT/ws/top_of_book';
+            $checkpoint = $this->acknowledgeEventForTest(
+                $store,
+                $checkpoint,
+                $this->bookEvent('ws_books', '323456', sequence: '1'),
+                'book|323456',
+                $stream,
+            );
+            $reset = $this->bookEvent(
+                $case['origin'],
+                '42',
+                sequence: '2',
+                sourcePreviousSequence: $case['previous'],
+            );
+
+            try {
+                $this->acknowledgeEventForTest(
+                    $store,
+                    $checkpoint,
+                    $reset,
+                    'book|42',
+                    $stream,
+                );
+                self::fail('An unlinked or non-WebSocket sequence reset must fail closed.');
+            } catch (OkxPaperLiveIntegrityException $exception) {
+                self::assertSame($case['error'], $exception->getMessage());
+            }
+        }
+    }
+
+    public function testPendingLinkedBookResetCanBeAcknowledgedAfterRestart(): void
+    {
+        $directory = $this->datasetDirectory('pending-linked-book-sequence-reset');
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        $stream = 'BTCUSDT/ws/top_of_book';
+        $checkpoint = $this->acknowledgeEventForTest(
+            $store,
+            $checkpoint,
+            $this->bookEvent('ws_books', '323456', sequence: '1'),
+            'book|323456',
+            $stream,
+        );
+        $reset = $this->bookEvent(
+            'ws_books',
+            '42',
+            sequence: '2',
+            sourcePreviousSequence: '323456',
+        );
+        $pending = $store->savePending(
+            $checkpoint,
+            $reset,
+            $this->advanceOrdinal($checkpoint->ordinalState, $reset, 'book|42'),
+            [
+                'stream' => $stream,
+                'frontier' => OkxPaperStreamFrontier::fromEvent($reset)->toArray(),
+            ],
+        );
+        unset($store);
+
+        $store = new OkxPaperLiveCheckpointStore($directory);
+        $resumed = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
+        self::assertSame($reset->eventId, $resumed->pendingEvent?->eventId);
+        $acknowledged = $store->acknowledge($resumed, $reset->eventId);
+        $next = $this->bookEvent(
+            'ws_books',
+            '43',
+            sequence: '3',
+            sourcePreviousSequence: '42',
+        );
+        $acknowledged = $this->acknowledgeEventForTest(
+            $store,
+            $acknowledged,
+            $next,
+            'book|43',
+            $stream,
+        );
+
+        self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
+    }
+
     public function testFreshCheckpointHasTheCompleteClosedVersionTwoSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
@@ -6503,6 +6642,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         string $symbol = 'BTCUSDT',
         int $sourceEpoch = 2,
         string $sequence = '1',
+        string $sourcePreviousSequence = '9000',
     ): PaperMarketEvent
     {
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
@@ -6523,7 +6663,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
                 'ask_size_contracts' => '8',
                 'ask_order_count' => '3',
                 'source_seq_id' => $sourceSequence,
-                'source_prev_seq_id' => '9000',
+                'source_prev_seq_id' => $sourcePreviousSequence,
                 'source_epoch' => $sourceEpoch,
                 'origin' => $origin,
             ],

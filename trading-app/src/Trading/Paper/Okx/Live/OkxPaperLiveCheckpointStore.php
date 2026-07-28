@@ -745,6 +745,7 @@ final class OkxPaperLiveCheckpointStore
                         $opaqueUnsequencedFrontiers
                             || $checkpoint->phase === 'reconnecting'
                             || $checkpoint->reconnect['attempt'] > 0,
+                        $checkpoint->pendingEvent,
                     );
                 }
             }
@@ -1356,6 +1357,7 @@ final class OkxPaperLiveCheckpointStore
                 $pendingFrontier['frontier'],
                 $checkpoint->phase === 'reconnecting'
                     || $checkpoint->reconnect['attempt'] > 0,
+                $event,
             );
 
             return true;
@@ -4024,6 +4026,7 @@ final class OkxPaperLiveCheckpointStore
         OkxPaperStreamFrontier $current,
         OkxPaperStreamFrontier $next,
         bool $opaqueUnsequenced = false,
+        ?PaperMarketEvent $event = null,
     ): void {
         if (hash_equals($current->naturalIdentity, $next->naturalIdentity)) {
             if (!hash_equals($current->canonicalDigest, $next->canonicalDigest)) {
@@ -4040,9 +4043,33 @@ final class OkxPaperLiveCheckpointStore
             // unsequenced streams. Numeric-looking identities are opaque.
             return;
         }
+        if ($channel === 'top_of_book'
+            && str_contains($stream, '/ws/')
+            && $this->isLinkedBookSequenceReset($current, $next, $event)
+        ) {
+            return;
+        }
         if ($this->compareSourceIdentities($stream, $current->sourceIdentity, $next->sourceIdentity) >= 0) {
             throw new OkxPaperLiveIntegrityException('market_event_identity_conflict');
         }
+    }
+
+    private function isLinkedBookSequenceReset(
+        OkxPaperStreamFrontier $current,
+        OkxPaperStreamFrontier $next,
+        ?PaperMarketEvent $event,
+    ): bool {
+        if ($event === null
+            || $event->channel->value !== 'top_of_book'
+            || ($event->payload['origin'] ?? null) !== 'ws_books'
+            || ($event->payload['source_prev_seq_id'] ?? null) !== $current->sourceIdentity
+            || ($event->payload['source_seq_id'] ?? null) !== $next->sourceIdentity
+        ) {
+            return false;
+        }
+
+        return BigInteger::of($next->sourceIdentity)
+            ->isLessThan(BigInteger::of($current->sourceIdentity));
     }
 
     private function compareSourceIdentities(string $stream, string $left, string $right): int

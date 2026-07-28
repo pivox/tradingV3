@@ -600,11 +600,15 @@ git commit -m "feat(paper): normalize OKX live candles and recovery events"
 Start from `order-book.json`, require `replaceSnapshot()` before `applyDelta()`, then apply the existing `ws-books-update.json` semantics to a complete ETH state. Prove:
 
 - REST and WS snapshots replace the complete state, validate both sides through `OkxMaterializedBookState::fromSnapshot()`, and expose their `seqId`;
-- a delta requires `prevSeqId === current seqId` and `seqId > prevSeqId` using `BigInteger`, never native integer arithmetic;
+- a delta requires `prevSeqId === current seqId`, using `BigInteger`, never native integer arithmetic;
+- a normal delta advances `seqId`; an exact empty keepalive with `seqId === prevSeqId === current seqId` is a no-op, while an OKX maintenance reset may decrease `seqId` only when `prevSeqId` still links to the current sequence;
+- the deprecated OKX `checksum` field is fixed to `0` and must not be used for integrity validation; sequence linkage and canonical event identity remain authoritative;
 - a positive-size level upserts by exact decimal price; a zero-size level deletes; all four raw OKX strings `[price,size,raw_field_3,order_count]` remain intact in candidate/full state until the complete four-field rows cross `OkxMaterializedBookState::fromAppliedDelta()`; bids sort descending and asks ascending before that call;
-- deletion of the final level on either side, crossed book, malformed level, negative sequence, sequence regression, or update before snapshot fails closed;
+- deletion of the final level on either side, crossed book, malformed level, negative sequence, unlinked sequence regression, or update before snapshot fails closed;
 - `ws-books-gap.json` has `prevSeqId` different from the current `seqId` and raises exactly `okx_paper_book_sequence_gap` without mutating the prior materialized state;
 - replay of the same already-applied `(prevSeqId,seqId)` update returns status `REPLAYED` and does not emit a second state; the same sequence pair with another canonical row hash raises `market_event_identity_conflict`.
+
+Protocol references: [OKX WebSocket order book sequence rules](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-order-book-channel) and [OKX checksum field deprecation, effective June 23, 2026](https://www.okx.com/en-gb/help/okx-order-book-channels-checksum-field-deprecation).
 
 Use the explicit result types from **Proposed Public Signatures** and keep the public API exact:
 

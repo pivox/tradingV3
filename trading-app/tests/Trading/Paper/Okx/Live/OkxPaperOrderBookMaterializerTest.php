@@ -163,7 +163,7 @@ final class OkxPaperOrderBookMaterializerTest extends TestCase
 
     /** @param callable(array<string, mixed>): void $mutate */
     #[DataProvider('invalidSequenceProvider')]
-    public function testNegativeOrNonIncreasingSequenceFailsWithoutPublishingCandidate(
+    public function testNegativeSequenceFailsWithoutPublishingCandidate(
         callable $mutate,
     ): void {
         $materializer = new OkxPaperOrderBookMaterializer();
@@ -197,8 +197,70 @@ final class OkxPaperOrderBookMaterializerTest extends TestCase
     {
         yield 'negative previous sequence' => [static function (array &$delta): void { $delta['prevSeqId'] = '-1'; }];
         yield 'negative sequence' => [static function (array &$delta): void { $delta['seqId'] = '-1'; }];
-        yield 'equal sequence' => [static function (array &$delta): void { $delta['seqId'] = 323456; }];
-        yield 'regressed sequence' => [static function (array &$delta): void { $delta['seqId'] = 323455; }];
+    }
+
+    public function testEmptyEqualSequenceKeepaliveIsReplayedWithoutMutatingState(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $before = $materializer->replaceSnapshot($this->ethSnapshot());
+
+        $result = $materializer->applyDelta([
+            'asks' => [],
+            'bids' => [],
+            'checksum' => 0,
+            'ts' => '1784595705123',
+            'prevSeqId' => 323456,
+            'seqId' => 323456,
+        ]);
+
+        self::assertSame(OkxPaperBookDeltaStatus::REPLAYED, $result->status());
+        self::assertSame('323456', $materializer->sourceSequence());
+        self::assertSame('3525.3000', $before->bestBid()['price']);
+        self::assertSame('3525.7000', $before->bestAsk()['price']);
+        self::assertSame(
+            OkxPaperBookDeltaStatus::APPLIED,
+            $this->applyNoop($materializer, '323456', '323457')->status(),
+        );
+    }
+
+    public function testEqualSequenceWithBookUpdatesFailsClosed(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $materializer->replaceSnapshot($this->ethSnapshot());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('okx_paper_book_sequence_invalid');
+        $materializer->applyDelta([
+            'asks' => [['3525.6000', '1.000', '0', '1']],
+            'bids' => [],
+            'checksum' => 0,
+            'ts' => '1784595705123',
+            'prevSeqId' => 323456,
+            'seqId' => 323456,
+        ]);
+    }
+
+    public function testLinkedMaintenanceSequenceResetAppliesAndEstablishesNewFrontier(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $materializer->replaceSnapshot($this->ethSnapshot());
+
+        $reset = $materializer->applyDelta([
+            'asks' => [],
+            'bids' => [['3525.4000', '5.000', '0', '2']],
+            'checksum' => 0,
+            'ts' => '1784595705123',
+            'prevSeqId' => 323456,
+            'seqId' => 42,
+        ]);
+
+        self::assertSame(OkxPaperBookDeltaStatus::APPLIED, $reset->status());
+        self::assertSame('42', $materializer->sourceSequence());
+        self::assertSame('3525.4000', $reset->materializedState()->bestBid()['price']);
+        self::assertSame(
+            OkxPaperBookDeltaStatus::APPLIED,
+            $this->applyNoop($materializer, '42', '43')->status(),
+        );
     }
 
     public function testNegativeSnapshotSequenceFailsWithoutReplacingPriorState(): void
@@ -265,6 +327,20 @@ final class OkxPaperOrderBookMaterializerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('okx_paper_book_delta_state_unavailable');
         $replay->materializedState();
+    }
+
+    public function testDeprecatedChecksumDoesNotParticipateInReplayIdentity(): void
+    {
+        $materializer = new OkxPaperOrderBookMaterializer();
+        $materializer->replaceSnapshot($this->ethSnapshot());
+        $delta = $this->fixture('ws-books-update.json')['data'][0];
+        $materializer->applyDelta($delta);
+        unset($delta['checksum']);
+
+        $replay = $materializer->applyDelta($delta);
+
+        self::assertSame(OkxPaperBookDeltaStatus::REPLAYED, $replay->status());
+        self::assertSame('323457', $materializer->sourceSequence());
     }
 
     public function testSameSequencePairWithDifferentCanonicalRowHashConflictsAtomically(): void

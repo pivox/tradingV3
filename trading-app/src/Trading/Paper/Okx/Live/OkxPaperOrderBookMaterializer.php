@@ -61,11 +61,12 @@ final class OkxPaperOrderBookMaterializer
 
         $previousSequence = self::nonNegativeSequence($delta['prevSeqId'] ?? null);
         $sequence = self::nonNegativeSequence($delta['seqId'] ?? null);
-        if (!BigInteger::of($sequence)->isGreaterThan(BigInteger::of($previousSequence))) {
-            throw new \InvalidArgumentException('okx_paper_book_sequence_invalid');
-        }
+        $bidUpdates = self::deltaLevels($delta['bids'] ?? null);
+        $askUpdates = self::deltaLevels($delta['asks'] ?? null);
 
-        $deltaHash = hash('sha256', CanonicalJson::encode($delta));
+        $deltaIdentity = $delta;
+        unset($deltaIdentity['checksum']);
+        $deltaHash = hash('sha256', CanonicalJson::encode($deltaIdentity));
         if ($previousSequence === $this->lastDeltaPreviousSequence
             && $sequence === $this->lastDeltaSequence
         ) {
@@ -79,9 +80,13 @@ final class OkxPaperOrderBookMaterializer
         if ($previousSequence !== $this->currentSequence) {
             throw new \RuntimeException('okx_paper_book_sequence_gap');
         }
+        if ($sequence === $previousSequence) {
+            if ($bidUpdates === [] && $askUpdates === []) {
+                return OkxPaperBookDeltaResult::replayed();
+            }
 
-        $bidUpdates = self::deltaLevels($delta['bids'] ?? null);
-        $askUpdates = self::deltaLevels($delta['asks'] ?? null);
+            throw new \InvalidArgumentException('okx_paper_book_sequence_invalid');
+        }
         $candidateBids = self::applyLevelUpdates($this->bids, $bidUpdates);
         $candidateAsks = self::applyLevelUpdates($this->asks, $askUpdates);
         $completeState = self::completeState(
