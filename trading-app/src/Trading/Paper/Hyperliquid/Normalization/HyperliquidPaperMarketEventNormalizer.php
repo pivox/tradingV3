@@ -9,23 +9,10 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
-use Brick\Math\BigDecimal;
 
 final class HyperliquidPaperMarketEventNormalizer
 {
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
-    private const MAX_DECIMAL_LENGTH = 128;
-
-    /** @var list<string> */
-    private const MODELLED_BOOK_KEYS = [
-        'ask',
-        'atr',
-        'bid',
-        'model_name',
-        'model_version',
-        'size',
-        'spread_bps',
-    ];
 
     private HyperliquidPaperSourceOrdinal $ordinals;
 
@@ -84,7 +71,10 @@ final class HyperliquidPaperMarketEventNormalizer
             return null;
         }
 
-        $this->assertModelledBook($candle, $book);
+        $validationWitness = HyperliquidPaperSourceOrdinal::modelValidationWitness(
+            $candle,
+            $book,
+        );
         $timestamp = $this->timestamp($candle->closeTime);
         $payload = [
             'bid_price' => $book['bid'],
@@ -111,11 +101,13 @@ final class HyperliquidPaperMarketEventNormalizer
                 HyperliquidPrudentBookModel::VERSION,
             ]),
             payload: $payload,
+            validationWitness: $validationWitness,
         );
     }
 
     /**
      * @param array<array-key, mixed> $payload
+     * @param array<array-key, mixed>|null $validationWitness
      */
     private function event(
         string $symbol,
@@ -124,6 +116,8 @@ final class HyperliquidPaperMarketEventNormalizer
         string $naturalIdentity,
         #[\SensitiveParameter]
         array $payload,
+        #[\SensitiveParameter]
+        ?array $validationWitness = null,
     ): PaperMarketEvent {
         $scope = implode('/', [
             $this->network->value,
@@ -152,56 +146,15 @@ final class HyperliquidPaperMarketEventNormalizer
             sequence: $assignment['sequence'],
             payload: $payload,
         );
-        $this->ordinals->commit($scope, $naturalIdentity, $digest, $event);
+        $this->ordinals->commit(
+            $scope,
+            $naturalIdentity,
+            $digest,
+            $event,
+            $validationWitness,
+        );
 
         return $event;
-    }
-
-    /** @param array<array-key, mixed> $book */
-    private function assertModelledBook(HyperliquidCandle $candle, array $book): void
-    {
-        try {
-            $keys = array_keys($book);
-            sort($keys, \SORT_STRING);
-            if ($keys !== self::MODELLED_BOOK_KEYS
-                || $book['model_name'] !== HyperliquidPrudentBookModel::NAME
-                || $book['model_version'] !== HyperliquidPrudentBookModel::VERSION
-            ) {
-                throw new \InvalidArgumentException();
-            }
-
-            $bid = $this->decimal($book['bid'], positive: true);
-            $ask = $this->decimal($book['ask'], positive: true);
-            $this->decimal($book['size'], positive: true);
-            $this->decimal($book['spread_bps'], positive: false);
-            $this->decimal($book['atr'], positive: false);
-            if (!$bid->isLessThan($candle->close)
-                || !$ask->isGreaterThan($candle->close)
-            ) {
-                throw new \InvalidArgumentException();
-            }
-        } catch (\Throwable) {
-            throw new \InvalidArgumentException('hyperliquid_paper_modelled_book_invalid');
-        }
-    }
-
-    private function decimal(mixed $value, bool $positive): BigDecimal
-    {
-        if (!\is_string($value)
-            || \strlen($value) > self::MAX_DECIMAL_LENGTH
-            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
-        ) {
-            throw new \InvalidArgumentException();
-        }
-
-        $decimal = BigDecimal::of($value);
-        if ((string) $decimal->stripTrailingZeros() !== $value
-            || ($positive ? !$decimal->isGreaterThan(0) : $decimal->isLessThan(0))
-        ) {
-            throw new \InvalidArgumentException();
-        }
-
-        return $decimal;
     }
 
     private function channel(string $interval): PaperMarketDataChannel

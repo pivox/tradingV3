@@ -220,7 +220,7 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         $candle = $this->candle();
 
         self::assertNull($normalizer->modelledTopOfBook($candle, null));
-        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
 
         $book = (new HyperliquidPrudentBookModel())->push($candle);
         self::assertNotNull($book);
@@ -304,6 +304,31 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         $wrongNameType = $valid;
         $wrongNameType['model_name'] = null;
         yield 'wrong model name type' => [$wrongNameType];
+
+        $inconsistentSpread = $valid;
+        $inconsistentSpread['spread_bps'] = '29';
+        yield 'spread inconsistent with candle range and atr' => [$inconsistentSpread];
+
+        $inconsistentAtr = $valid;
+        $inconsistentAtr['atr'] = '3';
+        yield 'atr inconsistent with the supplied spread' => [$inconsistentAtr];
+
+        $inconsistentSize = $valid;
+        $inconsistentSize['size'] = '1';
+        yield 'size inconsistent with volume per trade' => [$inconsistentSize];
+
+        $outsideClamp = $valid;
+        $outsideClamp['spread_bps'] = '51';
+        yield 'spread outside model clamp' => [$outsideClamp];
+
+        $extremeBook = $valid;
+        $extremeBook['bid'] = '1';
+        $extremeBook['ask'] = '200';
+        yield 'extreme prices inconsistent with spread' => [$extremeBook];
+
+        $asymmetricBook = $valid;
+        $asymmetricBook['bid'] = '99.84';
+        yield 'asymmetric bid inconsistent with spread' => [$asymmetricBook];
     }
 
     /** @param array<array-key, mixed> $book */
@@ -320,10 +345,10 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
             self::assertSame('hyperliquid_paper_modelled_book_invalid', $exception->getMessage());
         }
 
-        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
     }
 
-    public function testModelledBookReplaysAndConflictingLatestIdentityFailsWithoutConsumption(): void
+    public function testModelledBookReplaysAndInvalidProofFailsWithoutConsumption(): void
     {
         $ordinals = new HyperliquidPaperSourceOrdinal();
         $normalizer = $this->normalizer(ordinals: $ordinals);
@@ -339,9 +364,9 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         $conflicting['size'] = '1';
         try {
             $normalizer->modelledTopOfBook($candle, $conflicting);
-            self::fail('A model identity cannot be reassigned to another payload.');
-        } catch (\RuntimeException $exception) {
-            self::assertSame('hyperliquid_paper_natural_identity_conflict', $exception->getMessage());
+            self::fail('A model identity cannot accept a nondeterministic proof.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('hyperliquid_paper_modelled_book_invalid', $exception->getMessage());
         }
 
         $nextCandle = $this->candle(start: 1_681_924_500_000);
@@ -374,7 +399,7 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
             self::assertSame('hyperliquid_paper_timestamp_invalid', $exception->getMessage());
         }
 
-        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
         self::assertSame(
             '1',
             $normalizer->candle($this->candle(interval: '1m', start: 0))->sequence,
@@ -402,6 +427,97 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
             json_encode($continuous->candle($nextCandle)->toArray(), \JSON_THROW_ON_ERROR),
             json_encode($resumed->candle($nextCandle)->toArray(), \JSON_THROW_ON_ERROR),
         );
+    }
+
+    public function testModelWitnessRejectsRehashedForgedBookOnRestoreAndCommit(): void
+    {
+        $candle = $this->candle();
+        $book = (new HyperliquidPrudentBookModel())->push($candle);
+        self::assertNotNull($book);
+        $ordinals = new HyperliquidPaperSourceOrdinal();
+        $event = $this->normalizer(ordinals: $ordinals)
+            ->modelledTopOfBook($candle, $book);
+        self::assertNotNull($event);
+
+        $scope = 'mainnet/hyperliquid/BTCUSDT/top_of_book';
+        $naturalIdentity = implode('|', [
+            'BTC',
+            '15m',
+            '1681923600000',
+            '1681924499999',
+            HyperliquidPrudentBookModel::NAME,
+            HyperliquidPrudentBookModel::VERSION,
+        ]);
+        $snapshot = $ordinals->snapshot();
+        self::assertSame(2, $snapshot['schema_version']);
+        $witness = $snapshot['scopes'][$scope]['latest']['validation_witness'];
+        self::assertSame([
+            'source_candle' => [
+                'native_symbol' => 'BTC',
+                'interval' => '15m',
+                'start_time' => '1681923600000',
+                'close_time' => '1681924499999',
+                'open' => '100',
+                'high' => '101',
+                'low' => '99',
+                'close' => '100',
+                'volume' => '5',
+                'trade_count' => '10',
+            ],
+            'spread_bps' => '30',
+            'atr' => '2',
+        ], $witness);
+
+        $forgedPayload = $event->payload;
+        $forgedPayload['bid_price'] = '99';
+        $forgedPayload['ask_price'] = '101';
+        $forged = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $event->exchangeTimestamp,
+            $event->receivedTimestamp,
+            '1',
+            $forgedPayload,
+        );
+        $digest = HyperliquidPaperSourceOrdinal::assignmentDigest(
+            $naturalIdentity,
+            $forged->exchangeTimestamp,
+            $forged->payload,
+        );
+        $forgedState = $snapshot;
+        $forgedState['scopes'][$scope]['latest']['event'] = $forged->toArray();
+        $forgedState['scopes'][$scope]['latest']['assignment_digest'] = $digest;
+
+        try {
+            HyperliquidPaperSourceOrdinal::restore($forgedState);
+            self::fail('A rehashed model event without matching deterministic proof must fail.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame(
+                'hyperliquid_paper_source_ordinal_state_invalid',
+                $exception->getMessage(),
+            );
+        }
+
+        $fresh = new HyperliquidPaperSourceOrdinal();
+        self::assertSame('1', $fresh->preview($scope, $naturalIdentity, $digest)['sequence']);
+        try {
+            $fresh->commit($scope, $naturalIdentity, $digest, $forged, $witness);
+            self::fail('A forged model event commit must fail before ordinal mutation.');
+        } catch (\LogicException $exception) {
+            self::assertSame(
+                'hyperliquid_paper_source_ordinal_transaction_invalid',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $fresh->snapshot());
+
+        $missingProof = $snapshot;
+        $missingProof['scopes'][$scope]['latest']['validation_witness'] = null;
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_source_ordinal_state_invalid');
+        HyperliquidPaperSourceOrdinal::restore($missingProof);
     }
 
     public function testConstructorIsNetworkOnlyWithOptionalOrdinalsAndLegacyIsRejected(): void

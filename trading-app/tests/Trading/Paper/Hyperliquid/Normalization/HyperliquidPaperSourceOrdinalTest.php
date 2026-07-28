@@ -39,7 +39,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
             'replayed' => false,
             'event' => null,
         ], $ordinals->preview(self::MAINNET_CANDLE_SCOPE, $naturalIdentity, $digest));
-        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
 
         $first = $this->commitCandle(
             $ordinals,
@@ -172,6 +172,9 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
             array_keys($snapshot['scopes'][self::MAINNET_CANDLE_SCOPE]),
         );
         self::assertSame('100', $snapshot['scopes'][self::MAINNET_CANDLE_SCOPE]['last_sequence']);
+        self::assertNull(
+            $snapshot['scopes'][self::MAINNET_CANDLE_SCOPE]['latest']['validation_witness'],
+        );
         self::assertSame(
             'BTC|1m|5940000|5999999',
             $snapshot['scopes'][self::MAINNET_CANDLE_SCOPE]['latest']['natural_identity'],
@@ -232,9 +235,9 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
 
         $cases = [];
         $cases['root extra key'] = $valid + ['extra' => true];
-        $cases['wrong schema'] = ['schema_version' => 2, 'scopes' => $valid['scopes']];
-        $cases['scalar scopes'] = ['schema_version' => 1, 'scopes' => 'secret'];
-        $cases['list scopes'] = ['schema_version' => 1, 'scopes' => [$valid['scopes']]];
+        $cases['wrong schema'] = ['schema_version' => 1, 'scopes' => $valid['scopes']];
+        $cases['scalar scopes'] = ['schema_version' => 2, 'scopes' => 'secret'];
+        $cases['list scopes'] = ['schema_version' => 2, 'scopes' => [$valid['scopes']]];
 
         $wrongScope = $valid;
         $wrongScope['scopes']['mainnet/hyperliquid/DOGEUSDT/candle_1m']
@@ -345,7 +348,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                 $payload,
             );
             $state = [
-                'schema_version' => 1,
+                'schema_version' => 2,
                 'scopes' => [
                     self::MAINNET_CANDLE_SCOPE => [
                         'last_sequence' => '1',
@@ -357,6 +360,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                                 $event->payload,
                             ),
                             'event' => $event->toArray(),
+                            'validation_witness' => null,
                         ],
                     ],
                 ],
@@ -377,7 +381,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
 
     public function testRestoreBoundsScopesAndSequenceThenPreviewDetectsExhaustion(): void
     {
-        $tooMany = ['schema_version' => 1, 'scopes' => []];
+        $tooMany = ['schema_version' => 2, 'scopes' => []];
         for ($index = 0; $index < 21; ++$index) {
             $tooMany['scopes']['invalid-' . $index] = [];
         }
@@ -404,7 +408,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
             $payload,
         );
         $restored = HyperliquidPaperSourceOrdinal::restore([
-            'schema_version' => 1,
+            'schema_version' => 2,
             'scopes' => [
                 self::MAINNET_CANDLE_SCOPE => [
                     'last_sequence' => $maximum,
@@ -416,6 +420,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                             $payload,
                         ),
                         'event' => $event->toArray(),
+                        'validation_witness' => null,
                     ],
                 ],
             ],
@@ -491,7 +496,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
             );
             self::fail('Sensitive event construction must fail.');
         } catch (\InvalidArgumentException) {
-            self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+            self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
         }
 
         $event = PaperMarketEvent::create(
@@ -519,7 +524,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
             );
         }
 
-        self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
+        self::assertSame(['schema_version' => 2, 'scopes' => []], $ordinals->snapshot());
         $ordinals->commit(self::MAINNET_CANDLE_SCOPE, $identity, $digest, $event);
         self::assertSame('1', $event->sequence);
     }
@@ -575,7 +580,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                 $event->payload,
             );
             $state = [
-                'schema_version' => 1,
+                'schema_version' => 2,
                 'scopes' => [
                     self::MAINNET_CANDLE_SCOPE => [
                         'last_sequence' => '1',
@@ -583,6 +588,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                             'natural_identity' => $identity,
                             'assignment_digest' => $digest,
                             'event' => $event->toArray(),
+                            'validation_witness' => null,
                         ],
                     ],
                 ],
@@ -615,7 +621,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
                 );
             }
             self::assertSame(
-                ['schema_version' => 1, 'scopes' => []],
+                ['schema_version' => 2, 'scopes' => []],
                 $ordinals->snapshot(),
                 $label,
             );
