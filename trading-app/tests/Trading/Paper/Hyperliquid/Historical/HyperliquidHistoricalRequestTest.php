@@ -69,6 +69,7 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         yield 'other coin' => [['SOLUSDT']];
     }
 
+    /** @param list<string> $symbols */
     #[DataProvider('invalidSymbols')]
     public function testRejectsInvalidSymbolLists(array $symbols): void
     {
@@ -120,12 +121,21 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         );
     }
 
-    public function testHashChangesForTheNetworkAndEveryBound(): void
+    public function testRequestSha256PinsTheCanonicalRequestAndIncludesEveryBoundInput(): void
     {
         $base = $this->request();
 
+        self::assertSame(
+            'faf0c7be555beeddf13d3c8227f3c1f73175aaeabe3525fd5976006359812440',
+            $base->requestSha256(),
+        );
+
         foreach ([
+            $this->request(datasetId: 'hyperliquid-history-test-002'),
             $this->request(network: PaperMarketDataNetwork::TESTNET),
+            $this->request(symbols: ['ETHUSDT']),
+            $this->request(from: new \DateTimeImmutable('2026-07-21T10:00:00.000001Z')),
+            $this->request(to: new \DateTimeImmutable('2026-07-21T11:00:00.000001Z')),
             $this->request(maximumEvents: 2),
             $this->request(maximumPages: 2),
             $this->request(maximumResponseBytes: 2),
@@ -135,6 +145,7 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         }
     }
 
+    /** @param list<string> $symbols */
     private function request(
         PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
         array $symbols = ['BTCUSDT'],
@@ -144,9 +155,10 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         int $maximumPages = 100_000,
         int $maximumResponseBytes = 1_048_576,
         int $maximumRetries = 5,
+        string $datasetId = 'hyperliquid-history-test-001',
     ): HyperliquidHistoricalRequest {
         return new HyperliquidHistoricalRequest(
-            datasetId: 'hyperliquid-history-test-001',
+            datasetId: $datasetId,
             network: $network,
             symbols: $symbols,
             from: $from ?? new \DateTimeImmutable('2026-07-21T10:00:00.000000Z'),
