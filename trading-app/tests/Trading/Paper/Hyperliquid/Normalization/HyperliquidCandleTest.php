@@ -25,7 +25,7 @@ final class HyperliquidCandleTest extends TestCase
             'o' => '29295.0',
             's' => 'BTC',
             't' => 1_681_923_600_000,
-            'v' => '0.9863900',
+            'v' => '0.98639',
         ], 'BTC', '15m');
 
         self::assertSame('BTC', $candle->coin);
