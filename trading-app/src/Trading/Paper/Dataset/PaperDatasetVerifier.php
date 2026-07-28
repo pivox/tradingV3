@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Dataset;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
@@ -147,6 +148,11 @@ final class PaperDatasetVerifier
         $manifest = $this->verify($datasetDirectory, $eventLimit);
         if (!$manifest->hasCertifiableNetworkProvenance()) {
             throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
+        }
+        if ($manifest->quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+            && ($manifest->modelName !== 'hl_candle_atr_top_v1' || $manifest->modelVersion !== '1.0.0')
+        ) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_model_invalid');
         }
 
         return $manifest;

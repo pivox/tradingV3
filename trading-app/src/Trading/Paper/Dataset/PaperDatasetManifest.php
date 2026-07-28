@@ -88,6 +88,7 @@ final readonly class PaperDatasetManifest
         $normalizedChannels = self::normalizeChannels($channels);
         $normalizedGaps = self::normalizeSequenceGaps($sequenceGaps);
         self::assertModel($quality, $modelName, $modelVersion);
+        self::assertVenueQuality($venue, $quality);
         self::assertChecksum($eventsFileSha256, $state);
 
         if ($state === PaperDatasetState::COMPLETE) {
@@ -314,6 +315,13 @@ final readonly class PaperDatasetManifest
         ?string $modelName,
         ?string $modelVersion,
     ): void {
+        if ($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK) {
+            if ($modelName !== 'hl_candle_atr_top_v1' || $modelVersion !== '1.0.0') {
+                throw new \InvalidArgumentException('paper_dataset_hyperliquid_model_invalid');
+            }
+
+            return;
+        }
         if ($quality !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES) {
             return;
         }
@@ -322,6 +330,19 @@ final readonly class PaperDatasetManifest
             || trim($modelName) !== $modelName || trim($modelVersion) !== $modelVersion
         ) {
             throw new \InvalidArgumentException('paper_dataset_model_required');
+        }
+    }
+
+    private static function assertVenueQuality(
+        PaperMarketDataVenue $venue,
+        PaperMarketDataQuality $quality,
+    ): void {
+        if (($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+                && $venue !== PaperMarketDataVenue::HYPERLIQUID)
+            || ($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES
+                && $venue !== PaperMarketDataVenue::OKX)
+        ) {
+            throw new \InvalidArgumentException('paper_dataset_quality_venue_invalid');
         }
     }
 
