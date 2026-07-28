@@ -193,7 +193,8 @@ final class HyperliquidCandleTest extends TestCase
             'blank' => '',
             'whitespace' => ' 100',
             'explicit plus' => '+100',
-            'negative sign' => '-100',
+            'negative zero' => '-0',
+            'negative decimal zero' => '-0.0',
             'leading zero' => '0100',
             'leading decimal point' => '.5',
             'trailing decimal point' => '1.',
@@ -233,11 +234,15 @@ final class HyperliquidCandleTest extends TestCase
                 self::validRow([$field => '0']),
                 'hyperliquid_candle_price_invalid',
             ];
+            yield $field . ' negative' => [
+                self::validRow([$field => '-0.1']),
+                'hyperliquid_candle_price_invalid',
+            ];
         }
 
         yield 'negative volume' => [
             self::validRow(['v' => '-0.1']),
-            'hyperliquid_candle_decimal_invalid',
+            'hyperliquid_candle_volume_invalid',
         ];
     }
 
@@ -289,6 +294,17 @@ final class HyperliquidCandleTest extends TestCase
             't' => \PHP_INT_MAX - 59_998,
             'T' => \PHP_INT_MAX,
         ]), 'BTC', '1m');
+    }
+
+    public function testAcceptsTheLargestStartWhoseOneMinuteCloseFitsInAnInteger(): void
+    {
+        $candle = HyperliquidCandle::fromApiRow($this->row([
+            't' => \PHP_INT_MAX - 59_999,
+            'T' => \PHP_INT_MAX,
+        ]), 'BTC', '1m');
+
+        self::assertSame(\PHP_INT_MAX - 59_999, $candle->startTime);
+        self::assertSame(\PHP_INT_MAX, $candle->closeTime);
     }
 
     public function testComputesRangeAndTrueRangeAcrossAHistoryGap(): void

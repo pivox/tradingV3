@@ -68,8 +68,9 @@ final readonly class HyperliquidCandle
         $startTime = $row['t'];
         $closeTime = $row['T'];
         $tradeCount = $row['n'];
-        if ($startTime > \PHP_INT_MAX - ($intervalMilliseconds - 1)
-            || $closeTime !== $startTime + $intervalMilliseconds - 1
+        $durationMinusOne = $intervalMilliseconds - 1;
+        if ($startTime > \PHP_INT_MAX - $durationMinusOne
+            || $closeTime !== $startTime + $durationMinusOne
         ) {
             throw new \InvalidArgumentException('hyperliquid_candle_close_time_invalid');
         }
@@ -141,12 +142,17 @@ final readonly class HyperliquidCandle
     {
         if (!\is_string($value)
             || strlen($value) > self::MAX_DECIMAL_LENGTH
-            || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
         ) {
             throw new \InvalidArgumentException('hyperliquid_candle_decimal_invalid');
         }
 
-        return BigDecimal::of($value)->stripTrailingZeros();
+        $decimal = BigDecimal::of($value);
+        if (str_starts_with($value, '-') && $decimal->isZero()) {
+            throw new \InvalidArgumentException('hyperliquid_candle_decimal_invalid');
+        }
+
+        return $decimal->stripTrailingZeros();
     }
 
     private static function maximum(BigDecimal $first, BigDecimal $second): BigDecimal

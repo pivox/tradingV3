@@ -122,8 +122,12 @@ final class HyperliquidPrudentBookModel
 
         $halfSpreadRatio = $spreadBps
             ->dividedBy(20_000, self::CALCULATION_SCALE, RoundingMode::HALF_EVEN);
-        $bid = $candle->close->multipliedBy(BigDecimal::one()->minus($halfSpreadRatio));
-        $ask = $candle->close->multipliedBy(BigDecimal::one()->plus($halfSpreadRatio));
+        $bid = $candle->close
+            ->multipliedBy(BigDecimal::one()->minus($halfSpreadRatio))
+            ->toScale(self::CALCULATION_SCALE, RoundingMode::HALF_EVEN);
+        $ask = $candle->close
+            ->multipliedBy(BigDecimal::one()->plus($halfSpreadRatio))
+            ->toScale(self::CALCULATION_SCALE, RoundingMode::HALF_EVEN);
         $size = $candle->volume
             ->dividedBy($candle->tradeCount, self::CALCULATION_SCALE, RoundingMode::HALF_EVEN);
 

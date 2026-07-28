@@ -154,6 +154,43 @@ final class HyperliquidPrudentBookModelTest extends TestCase
         self::assertSame('3.00075', $result['ask']);
     }
 
+    public function testRoundsHighPrecisionBidAndAskToAtMostEighteenFractionalDigits(): void
+    {
+        $result = (new HyperliquidPrudentBookModel())->push($this->candle(
+            start: 0,
+            open: '100',
+            high: '150',
+            low: '50',
+            close: '100.1234567890123456789',
+        ));
+
+        self::assertNotNull($result);
+        self::assertSame('50', $result['spread_bps']);
+        self::assertSame('99.873148147039814815', $result['bid']);
+        self::assertSame('100.373765430984876543', $result['ask']);
+        self::assertMatchesRegularExpression('/\A[0-9]+(?:\.[0-9]{1,18})?\z/D', $result['bid']);
+        self::assertMatchesRegularExpression('/\A[0-9]+(?:\.[0-9]{1,18})?\z/D', $result['ask']);
+    }
+
+    public function testUsesHalfEvenForExactBidAndAskTiesAtScaleEighteen(): void
+    {
+        $result = (new HyperliquidPrudentBookModel())->push($this->candle(
+            start: 0,
+            open: '1.000000000000005',
+            high: '1.000000000000006',
+            low: '1.000000000000004',
+            close: '1.000000000000005',
+        ));
+
+        self::assertNotNull($result);
+        self::assertSame('2', $result['spread_bps']);
+        // Bid's odd retained digit rounds up (unlike DOWN); ask's even digit stays (unlike HALF_UP).
+        self::assertSame('0.999900000000005', $result['bid']);
+        self::assertSame('1.000100000000005', $result['ask']);
+        self::assertMatchesRegularExpression('/\A[0-9]+(?:\.[0-9]{1,18})?\z/D', $result['bid']);
+        self::assertMatchesRegularExpression('/\A[0-9]+(?:\.[0-9]{1,18})?\z/D', $result['ask']);
+    }
+
     public function testZeroVolumeReturnsNoBookButStillAdvancesAtrAndPreviousClose(): void
     {
         $model = new HyperliquidPrudentBookModel();
