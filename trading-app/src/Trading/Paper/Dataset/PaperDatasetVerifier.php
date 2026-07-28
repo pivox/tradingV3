@@ -140,6 +140,18 @@ final class PaperDatasetVerifier
         }
     }
 
+    public function verifyForBaseline(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): PaperDatasetManifest {
+        $manifest = $this->verify($datasetDirectory, $eventLimit);
+        if (!$manifest->hasCertifiableNetworkProvenance()) {
+            throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
+        }
+
+        return $manifest;
+    }
+
     private function assertNoSymlinkComponents(#[\SensitiveParameter] string $path): void
     {
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
@@ -551,6 +563,9 @@ final class PaperDatasetVerifier
                 if ($event->sourceVenue !== $manifest->venue) {
                     throw new \RuntimeException('paper_dataset_event_venue_mismatch');
                 }
+                if ($event->sourceNetwork !== $manifest->network) {
+                    throw new \RuntimeException('paper_dataset_event_network_mismatch');
+                }
                 if (!array_key_exists($event->symbol, $manifest->symbols)) {
                     throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
                 }
@@ -559,7 +574,11 @@ final class PaperDatasetVerifier
                 }
                 $identities[$event->eventId] = true;
 
-                $sequenceKey = $event->sourceVenue->value . '/' . $event->symbol . '/' . $event->channel->value;
+                $sequenceParts = [$event->sourceVenue->value, $event->symbol, $event->channel->value];
+                if ($event->schemaVersion === PaperMarketEvent::SCHEMA_VERSION) {
+                    array_unshift($sequenceParts, $event->sourceNetwork->value);
+                }
+                $sequenceKey = implode('/', $sequenceParts);
                 if ($event->sequence !== null) {
                     $sequence = BigInteger::of($event->sequence);
                     if (isset($lastSequences[$sequenceKey])) {

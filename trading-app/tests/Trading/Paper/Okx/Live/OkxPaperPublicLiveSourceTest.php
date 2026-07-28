@@ -2145,10 +2145,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     public function testCaptureRecordsOneVisibleGapAndLeavesManifestIncompleteOnUnresolvedResync(): void
     {
         $manifest = new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: self::DATASET_ID,
             venue: \App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',
@@ -2235,7 +2236,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
         self::assertSame(PaperDatasetState::INCOMPLETE, $recorder->manifest()->state);
         self::assertSame(
-            ['okx/BTCUSDT/top_of_book' => 1],
+            ['mainnet/okx/BTCUSDT/top_of_book' => 1],
             $recorder->manifest()->sequenceGaps,
         );
         self::assertFalse($source->isComplete());
@@ -2244,10 +2245,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     public function testCaptureLeavesManifestIncompleteOnBusinessBackpressure(): void
     {
         $manifest = new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: self::DATASET_ID,
             venue: \App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',
@@ -2355,10 +2357,11 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     public function testCaptureLeavesManifestIncompleteWhenSavedReconnectBudgetExhausts(): void
     {
         $manifest = new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: self::DATASET_ID,
             venue: \App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: [
                 'BTCUSDT' => 'BTC-USDT-SWAP',
                 'ETHUSDT' => 'ETH-USDT-SWAP',

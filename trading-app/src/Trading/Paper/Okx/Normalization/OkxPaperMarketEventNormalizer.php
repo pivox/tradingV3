@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Okx\Normalization;
 
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
@@ -361,6 +362,7 @@ final class OkxPaperMarketEventNormalizer
         }
 
         $event = PaperMarketEvent::create(
+            network: PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: $channel,

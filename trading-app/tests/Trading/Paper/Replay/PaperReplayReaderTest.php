@@ -140,13 +140,25 @@ final class PaperReplayReaderTest extends TestCase
         $dataset = $this->completeDataset([$event]);
         $cases = [
             'paper_replay_checkpoint_dataset_mismatch' => new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 'dataset-other-001', 'paper.worker-01', $event->eventId, 0, $event->exchangeTimestamp, $dataset['manifest']->eventsFileSha256 ?? ''
             ),
             'paper_replay_checkpoint_checksum_mismatch' => new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 $dataset['manifest']->datasetId, 'paper.worker-01', $event->eventId, 0, $event->exchangeTimestamp, str_repeat('f', 64)
             ),
             'paper_replay_checkpoint_consumer_mismatch' => new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 $dataset['manifest']->datasetId, 'paper.worker-02', $event->eventId, 0, $event->exchangeTimestamp, $dataset['manifest']->eventsFileSha256 ?? ''
+            ),
+            'paper_replay_checkpoint_network_mismatch' => new PaperReplayCheckpoint(
+                \App\Trading\Paper\MarketData\PaperMarketDataNetwork::TESTNET,
+                $dataset['manifest']->datasetId,
+                'paper.worker-01',
+                $event->eventId,
+                0,
+                $event->exchangeTimestamp,
+                $dataset['manifest']->eventsFileSha256 ?? '',
             ),
         ];
 
@@ -170,6 +182,7 @@ final class PaperReplayReaderTest extends TestCase
         ];
         $dataset = $this->completeDataset($events);
         $missing = new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             $dataset['manifest']->datasetId,
             'paper.worker-01',
             str_repeat('f', 64),
@@ -500,10 +513,11 @@ final class PaperReplayReaderTest extends TestCase
     private function manifest(): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: 'dataset-okx-001',
             venue: PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: ['BTCUSDT' => 'BTC-USDT-SWAP', 'ETHUSDT' => 'ETH-USDT-SWAP'],
             startExchangeTimestamp: null,
             endExchangeTimestamp: null,
@@ -529,6 +543,7 @@ final class PaperReplayReaderTest extends TestCase
         array $payload = ['price' => '30000.0'],
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             PaperMarketDataVenue::OKX,
             $symbol,
             $channel,
@@ -546,6 +561,7 @@ final class PaperReplayReaderTest extends TestCase
         int $index,
     ): PaperReplayCheckpoint {
         return new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             datasetId: $manifest->datasetId,
             consumerId: $consumerId,
             eventId: $event->eventId,

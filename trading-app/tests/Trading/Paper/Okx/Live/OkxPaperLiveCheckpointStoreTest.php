@@ -867,6 +867,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $checkpoint = $store->acknowledge($pendingSnapshot, $snapshot->eventId);
         $checkpoint = $store->saveTransition($checkpoint, 'reconnecting', $boundary);
         $boundaryEvent = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
@@ -6581,6 +6582,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
 
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: $channel,
@@ -6616,6 +6618,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
 
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::PUBLIC_TRADE,
@@ -6648,6 +6651,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
 
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -6673,6 +6677,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     private function ethBookEvent(): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'ETHUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -6698,6 +6703,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     private function connectionEvent(string $timestamp): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::CONNECTION_STATE,
@@ -6717,6 +6723,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
 
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::CONNECTION_STATE,
@@ -6739,6 +6746,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         $nativeSymbol = $symbol === 'BTCUSDT' ? 'BTC-USDT-SWAP' : 'ETH-USDT-SWAP';
 
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
@@ -6757,6 +6765,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     private function sequenceGapBoundaryEvent(string $sourceSequence = '9001'): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
@@ -6779,6 +6788,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
     ): PaperMarketEvent
     {
         return PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::SNAPSHOT_BOUNDARY,

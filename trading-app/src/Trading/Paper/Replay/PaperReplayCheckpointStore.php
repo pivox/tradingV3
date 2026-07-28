@@ -66,7 +66,9 @@ final class PaperReplayCheckpointStore
                 throw new \RuntimeException('paper_replay_checkpoint_regression');
             }
             if ($previous !== null
-                && (!hash_equals($previous->datasetId, $checkpoint->datasetId)
+                && ($previous->schemaVersion !== $checkpoint->schemaVersion
+                    || $previous->network !== $checkpoint->network
+                    || !hash_equals($previous->datasetId, $checkpoint->datasetId)
                     || !hash_equals($previous->eventsFileSha256, $checkpoint->eventsFileSha256))
             ) {
                 throw new \RuntimeException('paper_replay_checkpoint_mismatch');

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Okx\Normalization;
 
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
@@ -31,6 +32,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         $event = $normalizer->historyCandle('BTC-USDT-SWAP', '1m', $fixture['data'][0]);
 
         self::assertInstanceOf(PaperMarketEvent::class, $event);
+        self::assertSame(PaperMarketDataNetwork::MAINNET, $event->sourceNetwork);
         self::assertSame(PaperMarketDataVenue::OKX, $event->sourceVenue);
         self::assertSame('BTCUSDT', $event->symbol);
         self::assertSame(PaperMarketDataChannel::CANDLE_1M, $event->channel);
@@ -517,6 +519,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
     {
         $timestamp = new \DateTimeImmutable('2026-07-21T01:01:40.123000Z');
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::PUBLIC_TRADE,

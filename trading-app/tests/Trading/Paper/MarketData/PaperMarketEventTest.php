@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\MarketData;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -23,6 +24,10 @@ final class PaperMarketEventTest extends TestCase
     public function testContractEnumsExposeOnlyTheApprovedValues(): void
     {
         self::assertSame(['okx', 'hyperliquid'], array_column(PaperMarketDataVenue::cases(), 'value'));
+        self::assertSame(
+            ['mainnet', 'testnet', 'legacy_unknown'],
+            array_column(PaperMarketDataNetwork::cases(), 'value'),
+        );
         self::assertSame([
             'candle_1m',
             'candle_5m',
@@ -68,15 +73,16 @@ final class PaperMarketEventTest extends TestCase
         $event = self::event();
         $expectedEventId = hash(
             'sha256',
-            '1|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|42',
+            '2|mainnet|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|42',
         );
         $expectedPayloadHash = hash(
             'sha256',
             '{"ask":"30001.0","bid":"29999.0"}',
         );
 
-        self::assertSame(1, $event->schemaVersion);
+        self::assertSame(2, $event->schemaVersion);
         self::assertSame($expectedEventId, $event->eventId);
+        self::assertSame(PaperMarketDataNetwork::MAINNET, $event->sourceNetwork);
         self::assertSame(PaperMarketDataVenue::OKX, $event->sourceVenue);
         self::assertSame('BTCUSDT', $event->symbol);
         self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $event->channel);
@@ -86,8 +92,9 @@ final class PaperMarketEventTest extends TestCase
         self::assertSame(['ask' => '30001.0', 'bid' => '29999.0'], $event->payload);
         self::assertSame($expectedPayloadHash, $event->payloadHash);
         self::assertSame([
-            'schema_version' => 1,
+            'schema_version' => 2,
             'event_id' => $expectedEventId,
+            'source_network' => 'mainnet',
             'source_venue' => 'okx',
             'symbol' => 'BTCUSDT',
             'channel' => 'top_of_book',
@@ -105,6 +112,48 @@ final class PaperMarketEventTest extends TestCase
         self::assertSame($event->toArray(), $restored->toArray());
         self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->isReadOnly());
         self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->getConstructor()?->isPrivate());
+    }
+
+    public function testReadsLegacyV1EventAsUnknownNetworkWithoutChangingCanonicalBytes(): void
+    {
+        $legacy = [
+            'schema_version' => 1,
+            'event_id' => hash(
+                'sha256',
+                '1|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|42',
+            ),
+            'source_venue' => 'okx',
+            'symbol' => 'BTCUSDT',
+            'channel' => 'top_of_book',
+            'exchange_timestamp' => '2026-07-19T10:00:00.123456Z',
+            'received_timestamp' => '2026-07-19T10:00:00.223456Z',
+            'sequence' => '42',
+            'payload' => ['ask' => '30001.0', 'bid' => '29999.0'],
+            'payload_hash' => hash('sha256', '{"ask":"30001.0","bid":"29999.0"}'),
+        ];
+
+        $event = PaperMarketEvent::fromArray($legacy);
+
+        self::assertSame(1, $event->schemaVersion);
+        self::assertSame(PaperMarketDataNetwork::LEGACY_UNKNOWN, $event->sourceNetwork);
+        self::assertSame($legacy, $event->toArray());
+    }
+
+    public function testNetworkParticipatesInDeterministicEventIdentity(): void
+    {
+        $mainnet = self::event(network: PaperMarketDataNetwork::MAINNET);
+        $testnet = self::event(network: PaperMarketDataNetwork::TESTNET);
+
+        self::assertNotSame($mainnet->eventId, $testnet->eventId);
+        self::assertSame($mainnet->payloadHash, $testnet->payloadHash);
+    }
+
+    public function testNewEventsCannotClaimLegacyUnknownNetwork(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_network_legacy_forbidden');
+
+        self::event(network: PaperMarketDataNetwork::LEGACY_UNKNOWN);
     }
 
     public function testCreateDetachesSharedAcyclicExternalReferencesFromThePayload(): void
@@ -180,6 +229,7 @@ for ($level = 1; $level <= 20; ++$level) {
 
 try {
     \App\Trading\Paper\MarketData\PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         \App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
         'BTCUSDT',
         \App\Trading\Paper\MarketData\PaperMarketDataChannel::TOP_OF_BOOK,
@@ -222,6 +272,7 @@ PHP,
     public function testTimestampsNormalizeToUtcWithMicroseconds(): void
     {
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::HYPERLIQUID,
             symbol: 'ethusdt',
             channel: PaperMarketDataChannel::PUBLIC_TRADE,
@@ -243,6 +294,7 @@ PHP,
         string $utcTimestamp,
     ): void {
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -261,6 +313,7 @@ PHP,
         string $utcTimestamp,
     ): void {
         $eventWithOffset = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -270,6 +323,7 @@ PHP,
             payload: ['ask' => '30001.0', 'bid' => '29999.0'],
         );
         $eventInUtc = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -307,6 +361,7 @@ PHP,
             }
         };
         $baseEvent = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -316,6 +371,7 @@ PHP,
             payload: ['ask' => '30001.0', 'bid' => '29999.0'],
         );
         $subclassEvent = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -367,6 +423,7 @@ PHP,
         };
 
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -399,6 +456,7 @@ PHP,
 
         try {
             PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 venue: PaperMarketDataVenue::OKX,
                 symbol: 'BTCUSDT',
                 channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -435,6 +493,7 @@ use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 $sentinel = implode('', ['synthetic', '-trace-', 'sentinel']);
 $payload = ['raw' => '{"public\\q_' . $sentinel . '":"price"}'];
 $wireData = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
     PaperMarketDataVenue::OKX,
     'BTCUSDT',
     PaperMarketDataChannel::TOP_OF_BOOK,
@@ -449,6 +508,7 @@ $wireData['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
 $operations = [
     static fn () => PaperMarketEventRedactor::assertSafe($payload),
     static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         PaperMarketDataVenue::OKX,
         'BTCUSDT',
         PaperMarketDataChannel::TOP_OF_BOOK,
@@ -487,6 +547,7 @@ $wireData['payload_hash'] = hash('sha256', CanonicalJson::encode($payload));
 $operations = [
     static fn () => PaperMarketEventRedactor::assertSafe($payload),
     static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         PaperMarketDataVenue::OKX,
         'BTCUSDT',
         PaperMarketDataChannel::TOP_OF_BOOK,
@@ -593,6 +654,7 @@ foreach ($additionalPayloads as $fixtureIndex => [$payload, $prohibitedFragments
     $operations = [
         static fn () => PaperMarketEventRedactor::assertSafe($payload),
         static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             PaperMarketDataVenue::OKX,
             'BTCUSDT',
             PaperMarketDataChannel::TOP_OF_BOOK,
@@ -636,6 +698,7 @@ $payload = ['note' => $sentinel, 'unsupported' => $resource];
 $wireData['payload'] = $payload;
 $operations = [
     static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
         PaperMarketDataVenue::OKX,
         'BTCUSDT',
         PaperMarketDataChannel::TOP_OF_BOOK,
@@ -743,6 +806,7 @@ PHP,
         $this->expectExceptionMessage('paper_market_timestamp_invalid');
 
         PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -767,6 +831,7 @@ PHP,
     {
         $timestamp = (new \DateTimeImmutable('2026-01-01T00:00:00.123456Z'))->setDate($year, 1, 1);
         $event = PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             venue: PaperMarketDataVenue::OKX,
             symbol: 'BTCUSDT',
             channel: PaperMarketDataChannel::TOP_OF_BOOK,
@@ -1072,6 +1137,7 @@ PHP,
     {
         $sequence = '42';
         $reservedBytes = PaperMarketEvent::CANONICAL_ENVELOPE_FIXED_BYTES
+            + strlen(PaperMarketDataNetwork::MAINNET->value)
             + strlen(PaperMarketDataVenue::OKX->value)
             + strlen('BTCUSDT')
             + strlen(PaperMarketDataChannel::TOP_OF_BOOK->value)
@@ -1276,7 +1342,7 @@ PHP,
         self::assertSame(
             hash(
                 'sha256',
-                '1|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|' . $event->payloadHash,
+                '2|mainnet|okx|BTCUSDT|top_of_book|2026-07-19T10:00:00.123456Z|' . $event->payloadHash,
             ),
             $event->eventId,
         );
@@ -1444,8 +1510,11 @@ PHP,
     public static function invalidStrictFieldProvider(): iterable
     {
         yield 'schema version string' => ['schema_version', '1', 'paper_market_schema_version_unsupported'];
-        yield 'future schema version' => ['schema_version', 2, 'paper_market_schema_version_unsupported'];
+        yield 'future schema version' => ['schema_version', 3, 'paper_market_schema_version_unsupported'];
         yield 'event id not a string' => ['event_id', 123, 'paper_market_event_shape_invalid'];
+        yield 'network not a string' => ['source_network', ['mainnet'], 'paper_market_event_shape_invalid'];
+        yield 'unsupported network' => ['source_network', 'devnet', 'paper_market_network_unsupported'];
+        yield 'legacy network in v2' => ['source_network', 'legacy_unknown', 'paper_market_network_unsupported'];
         yield 'venue not a string' => ['source_venue', ['okx'], 'paper_market_event_shape_invalid'];
         yield 'symbol not a string' => ['symbol', 123, 'paper_market_event_shape_invalid'];
         yield 'channel not a string' => ['channel', true, 'paper_market_event_shape_invalid'];
@@ -1502,6 +1571,7 @@ PHP,
         $sentinel = 'synthetic-create-boundary-trace-sentinel';
         $operations = [
             'paper_market_symbol_not_allowed' => static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 PaperMarketDataVenue::OKX,
                 'SOLUSDT-' . $sentinel,
                 PaperMarketDataChannel::TOP_OF_BOOK,
@@ -1511,6 +1581,7 @@ PHP,
                 ['price' => '29999.0'],
             ),
             'paper_market_sequence_invalid' => static fn () => PaperMarketEvent::create(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
                 PaperMarketDataVenue::OKX,
                 'BTCUSDT',
                 PaperMarketDataChannel::TOP_OF_BOOK,
@@ -2651,8 +2722,10 @@ PHP,
         string $symbol = 'btcusdt',
         ?string $sequence = '42',
         #[\SensitiveParameter] array $payload = ['ask' => '30001.0', 'bid' => '29999.0'],
+        PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
     ): PaperMarketEvent {
         return PaperMarketEvent::create(
+            network: $network,
             venue: PaperMarketDataVenue::OKX,
             symbol: $symbol,
             channel: PaperMarketDataChannel::TOP_OF_BOOK,

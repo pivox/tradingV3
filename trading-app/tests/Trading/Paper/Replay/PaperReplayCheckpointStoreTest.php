@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Paper\Replay;
 
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\Replay\PaperReplayCheckpoint;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -42,6 +43,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
     public function testCheckpointIsImmutableStrictAndRoundTripsInUtc(): void
     {
         $checkpoint = new PaperReplayCheckpoint(
+            network: PaperMarketDataNetwork::MAINNET,
             datasetId: 'dataset-okx-001',
             consumerId: 'paper.worker-01',
             eventId: str_repeat('a', 64),
@@ -53,6 +55,19 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         self::assertSame(self::checkpointData(), $checkpoint->toArray());
         self::assertEquals($checkpoint, PaperReplayCheckpoint::fromArray($checkpoint->toArray()));
         self::assertTrue((new \ReflectionClass(PaperReplayCheckpoint::class))->isReadOnly());
+    }
+
+    public function testReadsLegacyCheckpointAsUnknownNetworkWithoutChangingCanonicalBytes(): void
+    {
+        $legacy = self::checkpointData();
+        $legacy['schema_version'] = 1;
+        unset($legacy['source_network']);
+
+        $checkpoint = PaperReplayCheckpoint::fromArray($legacy);
+
+        self::assertSame(1, $checkpoint->schemaVersion);
+        self::assertSame(PaperMarketDataNetwork::LEGACY_UNKNOWN, $checkpoint->network);
+        self::assertSame($legacy, $checkpoint->toArray());
     }
 
     /** @param array<string, mixed> $data */
@@ -75,7 +90,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         yield 'missing field' => [$missing, 'paper_replay_checkpoint_shape_invalid'];
         yield 'extra field' => [$valid + ['payload' => 'private'], 'paper_replay_checkpoint_shape_invalid'];
         yield 'schema type' => [array_replace($valid, ['schema_version' => '1']), 'paper_replay_checkpoint_shape_invalid'];
-        yield 'schema value' => [array_replace($valid, ['schema_version' => 2]), 'paper_replay_checkpoint_schema_version_unsupported'];
+        yield 'schema value' => [array_replace($valid, ['schema_version' => 3]), 'paper_replay_checkpoint_schema_version_unsupported'];
         yield 'dataset id' => [array_replace($valid, ['dataset_id' => '../dataset']), 'paper_replay_checkpoint_dataset_id_invalid'];
         yield 'consumer id' => [array_replace($valid, ['consumer_id' => 'UPPER']), 'paper_replay_consumer_id_invalid'];
         yield 'event id' => [array_replace($valid, ['event_id' => str_repeat('A', 64)]), 'paper_replay_checkpoint_event_id_invalid'];
@@ -92,6 +107,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
     {
         $values = array_replace([
             'datasetId' => 'dataset-okx-001',
+            'network' => PaperMarketDataNetwork::MAINNET,
             'consumerId' => 'paper.worker-01',
             'eventId' => str_repeat('a', 64),
             'eventIndex' => 17,
@@ -320,6 +336,59 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         yield 'events checksum' => [['events_file_sha256' => str_repeat('d', 64)]];
     }
 
+    public function testRejectsNetworkChangeWithoutReplacingTheOriginalCheckpoint(): void
+    {
+        $original = self::checkpoint();
+        $replacement = new PaperReplayCheckpoint(
+            network: PaperMarketDataNetwork::TESTNET,
+            datasetId: $original->datasetId,
+            consumerId: $original->consumerId,
+            eventId: str_repeat('c', 64),
+            eventIndex: 18,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:01.123456Z'),
+            eventsFileSha256: $original->eventsFileSha256,
+        );
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $original);
+
+        try {
+            $store->save($this->datasetDirectory, $replacement);
+            self::fail('A checkpoint from another network must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_mismatch', $exception->getMessage());
+        }
+
+        self::assertEquals($original, $store->load($this->datasetDirectory, $original->consumerId));
+    }
+
+    public function testRejectsSchemaProvenanceChangeWithoutReplacingTheOriginalCheckpoint(): void
+    {
+        $legacyData = self::checkpointData();
+        $legacyData['schema_version'] = PaperReplayCheckpoint::LEGACY_SCHEMA_VERSION;
+        unset($legacyData['source_network']);
+        $original = PaperReplayCheckpoint::fromArray($legacyData);
+        $replacement = new PaperReplayCheckpoint(
+            network: PaperMarketDataNetwork::MAINNET,
+            datasetId: $original->datasetId,
+            consumerId: $original->consumerId,
+            eventId: str_repeat('c', 64),
+            eventIndex: 18,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:01.123456Z'),
+            eventsFileSha256: $original->eventsFileSha256,
+        );
+        $store = new PaperReplayCheckpointStore();
+        $store->save($this->datasetDirectory, $original);
+
+        try {
+            $store->save($this->datasetDirectory, $replacement);
+            self::fail('A checkpoint from another schema provenance must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_replay_checkpoint_mismatch', $exception->getMessage());
+        }
+
+        self::assertEquals($original, $store->load($this->datasetDirectory, $original->consumerId));
+    }
+
     public function testExactSameIndexCheckpointSaveIsIdempotent(): void
     {
         $checkpoint = self::checkpoint();
@@ -412,6 +481,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
     #[DataProvider('sameIndexConflictProvider')]
     public function testRejectsConflictingSameIndexCheckpointWithoutReplacingTheOriginal(
         array $contentOverride,
+        string $expectedError,
     ): void {
         $original = self::checkpoint();
         $replacement = PaperReplayCheckpoint::fromArray(array_replace(
@@ -425,19 +495,20 @@ final class PaperReplayCheckpointStoreTest extends TestCase
             $store->save($this->datasetDirectory, $replacement);
             self::fail('Conflicting content at the same event index must be rejected.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_replay_checkpoint_regression', $exception->getMessage());
+            self::assertSame($expectedError, $exception->getMessage());
         }
 
         self::assertEquals($original, $store->load($this->datasetDirectory, $original->consumerId));
     }
 
-    /** @return iterable<string, array{array<string, mixed>}> */
+    /** @return iterable<string, array{array<string, mixed>, string}> */
     public static function sameIndexConflictProvider(): iterable
     {
-        yield 'event id' => [['event_id' => str_repeat('c', 64)]];
+        yield 'event id' => [['event_id' => str_repeat('c', 64)], 'paper_replay_checkpoint_regression'];
+        yield 'network' => [['source_network' => 'testnet'], 'paper_replay_checkpoint_mismatch'];
         yield 'exchange timestamp' => [[
             'exchange_timestamp' => '2026-07-19T10:00:01.123456Z',
-        ]];
+        ], 'paper_replay_checkpoint_regression'];
     }
 
     public function testRejectsConsumerLockSymlinkWithoutFollowingOrRemovingIt(): void
@@ -523,6 +594,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         $original = self::checkpoint();
         (new PaperReplayCheckpointStore())->save($this->datasetDirectory, $original);
         $replacement = new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             datasetId: $original->datasetId,
             consumerId: $original->consumerId,
             eventId: str_repeat('c', 64),
@@ -551,6 +623,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
         $original = self::checkpoint();
         (new PaperReplayCheckpointStore())->save($this->datasetDirectory, $original);
         $replacement = new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             datasetId: $original->datasetId,
             consumerId: $original->consumerId,
             eventId: str_repeat('c', 64),
@@ -892,7 +965,8 @@ final class PaperReplayCheckpointStoreTest extends TestCase
     private static function checkpointData(): array
     {
         return [
-            'schema_version' => 1,
+            'schema_version' => 2,
+            'source_network' => 'mainnet',
             'dataset_id' => 'dataset-okx-001',
             'consumer_id' => 'paper.worker-01',
             'event_id' => str_repeat('a', 64),
@@ -910,6 +984,7 @@ final class PaperReplayCheckpointStoreTest extends TestCase
     private static function checkpointAt(int $index, string $eventIdCharacter, string $timestamp): PaperReplayCheckpoint
     {
         return new PaperReplayCheckpoint(
+            \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             datasetId: 'dataset-okx-001',
             consumerId: 'paper.worker-01',
             eventId: str_repeat($eventIdCharacter, 64),

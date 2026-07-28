@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Dataset;
 
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 
 final readonly class PaperDatasetManifest
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
+    public const LEGACY_SCHEMA_VERSION = 1;
 
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
@@ -21,6 +23,7 @@ final readonly class PaperDatasetManifest
     public string $recorderVersion;
     public string $datasetId;
     public PaperMarketDataVenue $venue;
+    public PaperMarketDataNetwork $network;
 
     /** @var array<string, string> */
     public array $symbols;
@@ -53,6 +56,7 @@ final readonly class PaperDatasetManifest
         string $recorderVersion,
         string $datasetId,
         PaperMarketDataVenue $venue,
+        PaperMarketDataNetwork $network,
         array $symbols,
         ?\DateTimeImmutable $startExchangeTimestamp,
         ?\DateTimeImmutable $endExchangeTimestamp,
@@ -66,8 +70,11 @@ final readonly class PaperDatasetManifest
         PaperDatasetState $state,
         ?string $lastEventId,
     ) {
-        if ($schemaVersion !== self::SCHEMA_VERSION) {
+        if (!\in_array($schemaVersion, [self::LEGACY_SCHEMA_VERSION, self::SCHEMA_VERSION], true)) {
             throw new \InvalidArgumentException('paper_dataset_schema_version_unsupported');
+        }
+        if (($schemaVersion === self::LEGACY_SCHEMA_VERSION) !== ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN)) {
+            throw new \InvalidArgumentException('paper_dataset_network_provenance_invalid');
         }
         if ($recorderVersion === '' || trim($recorderVersion) !== $recorderVersion) {
             throw new \InvalidArgumentException('paper_dataset_recorder_version_invalid');
@@ -104,6 +111,7 @@ final readonly class PaperDatasetManifest
         $this->recorderVersion = $recorderVersion;
         $this->datasetId = $datasetId;
         $this->venue = $venue;
+        $this->network = $network;
         $this->symbols = $normalizedSymbols;
         $this->startExchangeTimestamp = self::normalizeTimestamp($startExchangeTimestamp);
         $this->endExchangeTimestamp = self::normalizeTimestamp($endExchangeTimestamp);
@@ -141,6 +149,7 @@ final readonly class PaperDatasetManifest
             recorderVersion: $this->recorderVersion,
             datasetId: $this->datasetId,
             venue: $this->venue,
+            network: $this->network,
             symbols: $this->symbols,
             startExchangeTimestamp: $startExchangeTimestamp,
             endExchangeTimestamp: null,
@@ -171,6 +180,7 @@ final readonly class PaperDatasetManifest
             recorderVersion: $this->recorderVersion,
             datasetId: $this->datasetId,
             venue: $this->venue,
+            network: $this->network,
             symbols: $this->symbols,
             startExchangeTimestamp: $this->startExchangeTimestamp,
             endExchangeTimestamp: $endExchangeTimestamp,
@@ -191,6 +201,7 @@ final readonly class PaperDatasetManifest
      *   schema_version: int,
      *   recorder_version: string,
      *   dataset_id: string,
+     *   source_network?: string,
      *   source_venue: string,
      *   symbols: array<string, string>,
      *   start_exchange_timestamp: string|null,
@@ -208,10 +219,15 @@ final readonly class PaperDatasetManifest
      */
     public function toArray(): array
     {
-        return [
+        $data = [
             'schema_version' => $this->schemaVersion,
             'recorder_version' => $this->recorderVersion,
             'dataset_id' => $this->datasetId,
+        ];
+        if ($this->schemaVersion === self::SCHEMA_VERSION) {
+            $data['source_network'] = $this->network->value;
+        }
+        $data += [
             'source_venue' => $this->venue->value,
             'symbols' => $this->symbols,
             'start_exchange_timestamp' => $this->startExchangeTimestamp?->format(self::TIMESTAMP_FORMAT),
@@ -226,6 +242,13 @@ final readonly class PaperDatasetManifest
             'state' => $this->state->value,
             'last_event_id' => $this->lastEventId,
         ];
+
+        return $data;
+    }
+
+    public function hasCertifiableNetworkProvenance(): bool
+    {
+        return $this->schemaVersion === self::SCHEMA_VERSION && $this->network->isCertifiable();
     }
 
     /**

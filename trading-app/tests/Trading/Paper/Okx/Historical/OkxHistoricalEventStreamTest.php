@@ -1522,10 +1522,11 @@ final class OkxHistoricalEventStreamTest extends TestCase
         }
 
         return new PaperDatasetRecorder($root ?? $this->testRoot, new PaperDatasetManifest(
-            schemaVersion: 1,
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
             datasetId: $request->datasetId,
             venue: PaperMarketDataVenue::OKX,
+            network: \App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
             symbols: $symbols,
             startExchangeTimestamp: null,
             endExchangeTimestamp: null,
