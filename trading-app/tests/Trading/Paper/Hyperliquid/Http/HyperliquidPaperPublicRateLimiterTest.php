@@ -14,7 +14,7 @@ use Symfony\Component\RateLimiter\Reservation;
 #[CoversClass(HyperliquidPaperPublicRateLimiter::class)]
 final class HyperliquidPaperPublicRateLimiterTest extends TestCase
 {
-    public function testReservesOneRequestTokenAndCeilingOfSixtyRowsWithABoundedWait(): void
+    public function testReservesTwentyRequestTokensAndCeilingOfSixtyRowsWithABoundedWait(): void
     {
         $limiter = new HyperliquidRecordingLimiter(0.005);
         $rateLimiter = new HyperliquidPaperPublicRateLimiter($limiter);
@@ -26,7 +26,7 @@ final class HyperliquidPaperPublicRateLimiterTest extends TestCase
         $rateLimiter->acquireResponseRows(60);
         $rateLimiter->acquireResponseRows(61);
 
-        self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0], [2, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 2.0], [1, 2.0], [1, 2.0], [2, 2.0]], $limiter->reservations);
         self::assertGreaterThanOrEqual(0.015, microtime(true) - $startedAt);
     }
 
@@ -44,6 +44,36 @@ final class HyperliquidPaperPublicRateLimiterTest extends TestCase
             self::assertSame([], $limiter->reservations);
         }
     }
+
+    public function testNormalizesLimiterFailuresWithoutLeakingTheirMessage(): void
+    {
+        foreach ([new \RuntimeException('api-key=secret'), new \LogicException('/tmp/wallet=secret')] as $failure) {
+            $rateLimiter = new HyperliquidPaperPublicRateLimiter(new HyperliquidThrowingLimiter($failure));
+            try {
+                $rateLimiter->acquireRequest();
+                self::fail('Expected limiter failure.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('hyperliquid_paper_public_rate_limit_failed', $exception->getMessage());
+                self::assertNull($exception->getPrevious());
+                self::assertStringNotContainsString('secret', $exception->getMessage());
+            }
+        }
+    }
+}
+
+final class HyperliquidThrowingLimiter implements LimiterInterface
+{
+    public function __construct(private readonly \Throwable $failure)
+    {
+    }
+
+    public function reserve(int $tokens = 1, ?float $maxTime = null): Reservation
+    {
+        throw $this->failure;
+    }
+
+    public function consume(int $tokens = 1): RateLimit { throw $this->failure; }
+    public function reset(): void {}
 }
 
 final class HyperliquidRecordingLimiter implements LimiterInterface

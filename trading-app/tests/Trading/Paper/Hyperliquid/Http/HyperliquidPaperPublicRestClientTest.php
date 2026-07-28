@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Hyperliquid\Http;
 
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicHttpTransportInterface;
+use App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
@@ -56,10 +58,28 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
         $constructor = (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->getConstructor();
         self::assertNotNull($constructor);
-        self::assertSame(['httpClient', 'config', 'rateLimiter', 'clock'], array_map(
+        self::assertSame(['transport', 'config', 'rateLimiter', 'clock'], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $constructor->getParameters(),
         ));
+        $transportType = $constructor->getParameters()[0]->getType();
+        self::assertInstanceOf(\ReflectionNamedType::class, $transportType);
+        self::assertSame(HyperliquidPaperPublicHttpTransportInterface::class, $transportType->getName());
+
+        $native = new \ReflectionClass(NativeHyperliquidPaperPublicHttpTransport::class);
+        self::assertSame([], $native->getConstructor()?->getParameters() ?? []);
+        self::assertSame(['postCandleSnapshot', 'stream'], array_values(array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            array_filter($native->getMethods(), static fn (\ReflectionMethod $method): bool => !$method->isConstructor()),
+        )));
+
+        $this->expectException(\TypeError::class);
+        (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->newInstanceArgs([
+            new MockHttpClient([], 'https://credential=secret.example'),
+            new HyperliquidPaperPublicConfig(PaperMarketDataNetwork::MAINNET, false, HyperliquidPaperPublicConfig::MAINNET_INFO_URI, '/tmp'),
+            new HyperliquidPaperPublicRateLimiter(new HyperliquidRecordingLimiter()),
+            new HyperliquidRecordingClock(),
+        ]);
     }
 
     /** @return iterable<string, array{string, string, int, int, int, int, string}> */
@@ -105,7 +125,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         try {
             $client->candleSnapshot('BTC', '1m', 0, 1);
         } finally {
-            self::assertSame([[1, 2.0]], $limiter->reservations);
+            self::assertSame([[20, 2.0]], $limiter->reservations);
         }
     }
 
@@ -160,7 +180,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         $client = $this->client(new MockHttpClient(new MockResponse('[{"s":"BTC","i":"1m"},{"s":"BTC","i":"1m"}]')), $limiter);
 
         self::assertCount(2, $client->candleSnapshot('BTC', '1m', 0, 1));
-        self::assertSame([[1, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 2.0], [1, 2.0]], $limiter->reservations);
     }
 
     public function testRetriesHttp429AndFiveHundredResponsesAndCancelsEachBeforeSleeping(): void
@@ -181,7 +201,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
         self::assertCount(1, $client->candleSnapshot('BTC', '1m', 0, 1));
         self::assertSame([0.25, 0.5], $clock->sleeps);
-        self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0], [1, 2.0]], $limiter->reservations);
         self::assertTrue($http->responses[0]->getInfo('canceled'));
         self::assertTrue($http->responses[1]->getInfo('canceled'));
     }
@@ -203,7 +223,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         } finally {
             self::assertSame(6, $requests);
             self::assertSame([0.25, 0.5, 1.0, 2.0, 4.0], $clock->sleeps);
-            self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+            self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0]], $limiter->reservations);
         }
     }
 
@@ -226,7 +246,34 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         }
         self::assertSame(3, $requests);
         self::assertSame([0.25, 0.5], $clock->sleeps);
-        self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0]], $limiter->reservations);
+    }
+
+    public function testRetriesTransportExceptionsFromStatusStreamAndChunkWithoutLeakingThem(): void
+    {
+        $chunk = (static function (): \Generator {
+            yield new TransportException('wallet=chunk-secret');
+        })();
+        $transports = [
+            new HyperliquidStatusThrowingTransport(),
+            new HyperliquidStreamThrowingTransport(),
+            new HyperliquidRecordingTransport(new MockHttpClient(new MockResponse($chunk))),
+        ];
+
+        foreach ($transports as $transport) {
+            $clock = new HyperliquidRecordingClock();
+            $limiter = new HyperliquidRecordingLimiter();
+            $client = $this->client($transport, $limiter, $clock);
+            try {
+                $client->candleSnapshot('BTC', '1m', 0, 1, maximumRetries: 1);
+                self::fail('Expected retry exhaustion.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('hyperliquid_paper_public_retry_exhausted', $exception->getMessage());
+                self::assertStringNotContainsString('secret', $exception->getMessage());
+            }
+            self::assertSame([0.25], $clock->sleeps);
+            self::assertSame([[20, 2.0], [20, 2.0]], $limiter->reservations);
+        }
     }
 
     /** @return iterable<string, array{int}> */
@@ -245,20 +292,25 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
             yield from [];
             throw new \LogicException('non_2xx_body_was_read');
         })();
-        $client = $this->client(new MockHttpClient(new MockResponse($body, ['http_code' => $status])));
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('hyperliquid_paper_public_http_error_' . $status);
-        $client->candleSnapshot('BTC', '1m', 0, 1);
+        $http = new HyperliquidRecordingHttpClient(new MockHttpClient(new MockResponse($body, ['http_code' => $status])));
+        $client = $this->client($http);
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1);
+            self::fail('Expected non-retryable status rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_paper_public_http_error_' . $status, $exception->getMessage());
+        }
+        self::assertTrue($http->responses[0]->getInfo('canceled'));
     }
 
     private function client(
-        HttpClientInterface $http,
+        HttpClientInterface|HyperliquidPaperPublicHttpTransportInterface $http,
         ?HyperliquidRecordingLimiter $limiter = null,
         ?HyperliquidRecordingClock $clock = null,
         PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
     ): HyperliquidPaperPublicRestClient {
         return new HyperliquidPaperPublicRestClient(
-            $http,
+            $http instanceof HyperliquidPaperPublicHttpTransportInterface ? $http : new HyperliquidRecordingTransport($http),
             new HyperliquidPaperPublicConfig(
                 $network,
                 false,
@@ -271,6 +323,57 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
             $clock ?? new HyperliquidRecordingClock(),
         );
     }
+}
+
+final class HyperliquidRecordingTransport implements HyperliquidPaperPublicHttpTransportInterface
+{
+    public function __construct(private readonly HttpClientInterface $http)
+    {
+    }
+
+    public function postCandleSnapshot(string $uri, array $payload): ResponseInterface
+    {
+        return $this->http->request('POST', $uri, [
+            'json' => $payload,
+            'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/json'],
+            'timeout' => 10.0,
+            'max_duration' => 10.0,
+            'max_redirects' => 0,
+            'buffer' => false,
+        ]);
+    }
+
+    public function stream(ResponseInterface $response): ResponseStreamInterface
+    {
+        return $this->http->stream($response);
+    }
+}
+
+final class HyperliquidStatusThrowingTransport implements HyperliquidPaperPublicHttpTransportInterface
+{
+    public function postCandleSnapshot(string $uri, array $payload): ResponseInterface
+    {
+        return new HyperliquidThrowingStatusResponse(new TransportException('wallet=status-secret'));
+    }
+    public function stream(ResponseInterface $response): ResponseStreamInterface { throw new \LogicException('stream_not_expected'); }
+}
+
+final class HyperliquidStreamThrowingTransport implements HyperliquidPaperPublicHttpTransportInterface
+{
+    public function postCandleSnapshot(string $uri, array $payload): ResponseInterface { return new MockResponse('[]'); }
+    public function stream(ResponseInterface $response): ResponseStreamInterface { throw new TransportException('wallet=stream-secret'); }
+}
+
+final class HyperliquidThrowingStatusResponse implements ResponseInterface
+{
+    public function __construct(private readonly TransportException $exception) {}
+    public function getStatusCode(): int { throw $this->exception; }
+    public function getHeaders(bool $throw = true): array { throw new \LogicException('headers_not_expected'); }
+    public function getContent(bool $throw = true): string { throw new \LogicException('content_not_expected'); }
+    /** @return array<string, mixed> */
+    public function toArray(bool $throw = true): array { throw new \LogicException('array_not_expected'); }
+    public function cancel(): void {}
+    public function getInfo(?string $type = null): mixed { return null; }
 }
 
 final class HyperliquidRecordingClock implements ClockInterface

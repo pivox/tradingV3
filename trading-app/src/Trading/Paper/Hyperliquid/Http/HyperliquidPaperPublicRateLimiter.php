@@ -16,7 +16,7 @@ final class HyperliquidPaperPublicRateLimiter
 
     public function acquireRequest(): void
     {
-        $this->acquire(1);
+        $this->acquire(20);
     }
 
     public function acquireResponseRows(int $rows): void
@@ -33,6 +33,10 @@ final class HyperliquidPaperPublicRateLimiter
 
     private function acquire(int $tokens): void
     {
-        $this->limiter->reserve($tokens, self::MAX_WAIT_SECONDS)->wait();
+        try {
+            $this->limiter->reserve($tokens, self::MAX_WAIT_SECONDS)->wait();
+        } catch (\Throwable) {
+            throw new \RuntimeException('hyperliquid_paper_public_rate_limit_failed');
+        }
     }
 }
