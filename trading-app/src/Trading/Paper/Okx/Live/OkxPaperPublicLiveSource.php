@@ -506,7 +506,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->ordinals->snapshot(),
                 null,
             );
-            yield $boundary;
+            yield $this->checkpoint->pendingEvent
+                ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
     }
@@ -924,7 +925,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->continuationTransition = $index < $last && $transition !== []
                 ? $transition
                 : null;
-            yield $event;
+            yield $this->checkpoint->pendingEvent
+                ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
     }
@@ -1220,7 +1222,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 $this->ordinals->snapshot(),
                 null,
             );
-            yield $event;
+            yield $this->checkpoint->pendingEvent
+                ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
             $this->assertPendingWasAcknowledged();
         }
         if (!$this->resumedHealthyStop && !$this->healthyStopRuntimeRemainsValid()) {
@@ -1880,7 +1883,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ordinals->snapshot(),
             null,
         );
-        yield $event;
+        yield $this->checkpoint->pendingEvent
+            ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
         $this->assertPendingWasAcknowledged();
     }
 
@@ -2604,6 +2608,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->requiresOverlap[$stream] = true;
         }
         $state = $this->checkpoint->toArray();
+        $state['overlap_pagination_by_stream'][$stream] = null;
         $state['resync_by_symbol'][$symbol] = null;
         $next = null;
         $transitions = $this->reconnectRecoveryTransitions($symbol);
@@ -2625,6 +2630,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                 'stage' => 'reconnect',
             ];
         }
+        $state['pending_transition'] = $next;
         $this->checkpoint = $this->checkpointStore->saveTransition(
             OkxPaperLiveCheckpoint::fromArray($state),
             'reconnecting',
@@ -2721,7 +2727,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ordinals->snapshot(),
             null,
         );
-        yield $event;
+        yield $this->checkpoint->pendingEvent
+            ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
         $this->assertPendingWasAcknowledged();
     }
 
@@ -3807,7 +3814,8 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
             $this->ordinals->snapshot(),
             null,
         );
-        yield $event;
+        yield $this->checkpoint->pendingEvent
+            ?? throw new OkxPaperLiveIntegrityException('okx_paper_live_checkpoint_invalid');
         $this->assertPendingWasAcknowledged();
     }
 

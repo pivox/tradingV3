@@ -661,7 +661,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(\Generator::class, $resumedEvents);
         $replayed = $resumedEvents->current();
         self::assertNotNull($replayed);
-        self::assertEquals($pending->toArray(), $replayed->toArray());
+        self::assertSame(
+            $pending->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'),
+            $replayed->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'),
+        );
+        self::assertSame($pending->payloadHash, $replayed->payloadHash);
+        self::assertSame($pending->eventId, $replayed->eventId);
+        self::assertSame($pending->toArray(), $replayed->toArray());
         self::assertSame([], $resumedRest->calls);
 
         $resumed->acknowledge($replayed->eventId);

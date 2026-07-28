@@ -495,7 +495,16 @@ final class OkxPaperLiveCheckpointStore
         $this->assertOrdinalAdvancesExactly($checkpoint, $event, $ordinalState);
         $state = $checkpoint->toArray();
         $state['ordinal_state'] = $ordinalState;
-        $state['pending_event'] = $event->toArray();
+        $canonicalEvent = json_decode(
+            CanonicalJson::encode($event->toArray()),
+            true,
+            512,
+            \JSON_THROW_ON_ERROR | \JSON_BIGINT_AS_STRING,
+        );
+        if (!\is_array($canonicalEvent) || array_is_list($canonicalEvent)) {
+            throw self::invalidCheckpoint();
+        }
+        $state['pending_event'] = $canonicalEvent;
         $state['pending_frontier'] = $pendingFrontier;
         $state['pending_transition'] = null;
         $next = $this->validatedCheckpoint($state);
