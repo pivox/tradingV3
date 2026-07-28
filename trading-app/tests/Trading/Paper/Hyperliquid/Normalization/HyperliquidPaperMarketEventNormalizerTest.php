@@ -195,22 +195,22 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
                 'bid_size' => '0.5',
                 'ask_price' => '100.15',
                 'ask_size' => '0.5',
-                'spread_bps' => '30',
-                'atr' => '2',
                 'model_name' => 'hl_candle_atr_top_v1',
                 'model_version' => '1.0.0',
                 'origin' => 'historical_candle_model',
                 'source_candle_start' => '1681923600000',
-                'source_candle_close' => '1681924499999',
-                'source_interval' => '15m',
                 'synthetic' => true,
             ],
-            'payload_hash' => '94c6f2f8148587dfc478b65afb3694f15d8ee04ee4ec50173bf7ad771078b6c0',
+            'payload_hash' => 'e32e9b5920e7404f3d8903f5105f2798e524a48be51399a1e49c2ad1079e268a',
         ], $event->toArray());
         self::assertArrayNotHasKey('bids', $event->payload);
         self::assertArrayNotHasKey('asks', $event->payload);
         self::assertArrayNotHasKey('depth', $event->payload);
         self::assertArrayNotHasKey('native_symbol', $event->payload);
+        self::assertArrayNotHasKey('spread_bps', $event->payload);
+        self::assertArrayNotHasKey('atr', $event->payload);
+        self::assertArrayNotHasKey('source_candle_close', $event->payload);
+        self::assertArrayNotHasKey('source_interval', $event->payload);
     }
 
     public function testNullModelOutputDoesNotConsumeAnOrdinal(): void
@@ -425,7 +425,25 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         self::assertTrue($parameters[1]->isOptional());
         self::assertNull($parameters[1]->getDefaultValue());
 
-        foreach (['trade', 'historyTrade', 'fills', 'l2Book', 'order', 'wallet', 'action'] as $method) {
+        foreach ([
+            'trade',
+            'historyTrade',
+            'fills',
+            'l2Book',
+            'order',
+            'wallet',
+            'action',
+            'account',
+            'accountState',
+            'private',
+            'privateRead',
+            'privateRequest',
+            'positions',
+            'openOrders',
+            'userFills',
+            'orderStatus',
+            'clearinghouseState',
+        ] as $method) {
             self::assertFalse(method_exists(HyperliquidPaperMarketEventNormalizer::class, $method));
         }
 

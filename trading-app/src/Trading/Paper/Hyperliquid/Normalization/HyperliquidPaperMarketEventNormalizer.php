@@ -91,14 +91,10 @@ final class HyperliquidPaperMarketEventNormalizer
             'bid_size' => $book['size'],
             'ask_price' => $book['ask'],
             'ask_size' => $book['size'],
-            'spread_bps' => $book['spread_bps'],
-            'atr' => $book['atr'],
             'model_name' => HyperliquidPrudentBookModel::NAME,
             'model_version' => HyperliquidPrudentBookModel::VERSION,
             'origin' => 'historical_candle_model',
             'source_candle_start' => (string) $candle->startTime,
-            'source_candle_close' => (string) $candle->closeTime,
-            'source_interval' => $candle->interval,
             'synthetic' => true,
         ];
 

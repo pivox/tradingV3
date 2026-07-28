@@ -524,6 +524,104 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
         self::assertSame('1', $event->sequence);
     }
 
+    public function testCommitAndRestoreRejectRehashedNonCanonicalEventsAtomically(): void
+    {
+        $identity = 'BTC|1m|0|59999';
+        $canonicalTimestamp = new \DateTimeImmutable('1970-01-01T00:00:59.999000Z');
+        $canonicalPayload = $this->candlePayload(0, 59_999);
+
+        $alteredOrigin = $canonicalPayload;
+        $alteredOrigin['origin'] = 'rest_history';
+        $extraPayload = $canonicalPayload;
+        $extraPayload['fabricated'] = 'public-looking-but-noncanonical';
+
+        $cases = [
+            'received timestamp differs from close T' => [
+                $canonicalTimestamp,
+                new \DateTimeImmutable('1970-01-01T00:01:00.000000Z'),
+                $canonicalPayload,
+            ],
+            'exchange timestamp is unrelated to close T' => [
+                new \DateTimeImmutable('1970-01-01T00:01:00.000000Z'),
+                new \DateTimeImmutable('1970-01-01T00:01:00.000000Z'),
+                $canonicalPayload,
+            ],
+            'origin is altered' => [
+                $canonicalTimestamp,
+                $canonicalTimestamp,
+                $alteredOrigin,
+            ],
+            'payload has an extra fabricated field' => [
+                $canonicalTimestamp,
+                $canonicalTimestamp,
+                $extraPayload,
+            ],
+        ];
+
+        foreach ($cases as $label => [$exchangeTimestamp, $receivedTimestamp, $payload]) {
+            $event = PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::CANDLE_1M,
+                $exchangeTimestamp,
+                $receivedTimestamp,
+                '1',
+                $payload,
+            );
+            $digest = HyperliquidPaperSourceOrdinal::assignmentDigest(
+                $identity,
+                $event->exchangeTimestamp,
+                $event->payload,
+            );
+            $state = [
+                'schema_version' => 1,
+                'scopes' => [
+                    self::MAINNET_CANDLE_SCOPE => [
+                        'last_sequence' => '1',
+                        'latest' => [
+                            'natural_identity' => $identity,
+                            'assignment_digest' => $digest,
+                            'event' => $event->toArray(),
+                        ],
+                    ],
+                ],
+            ];
+
+            try {
+                HyperliquidPaperSourceOrdinal::restore($state);
+                self::fail('Expected noncanonical restored event rejection for ' . $label);
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame(
+                    'hyperliquid_paper_source_ordinal_state_invalid',
+                    $exception->getMessage(),
+                    $label,
+                );
+            }
+
+            $ordinals = new HyperliquidPaperSourceOrdinal();
+            self::assertSame(
+                '1',
+                $ordinals->preview(self::MAINNET_CANDLE_SCOPE, $identity, $digest)['sequence'],
+            );
+            try {
+                $ordinals->commit(self::MAINNET_CANDLE_SCOPE, $identity, $digest, $event);
+                self::fail('Expected noncanonical commit rejection for ' . $label);
+            } catch (\LogicException $exception) {
+                self::assertSame(
+                    'hyperliquid_paper_source_ordinal_transaction_invalid',
+                    $exception->getMessage(),
+                    $label,
+                );
+            }
+            self::assertSame(
+                ['schema_version' => 1, 'scopes' => []],
+                $ordinals->snapshot(),
+                $label,
+            );
+        }
+    }
+
     private function commitCandle(
         HyperliquidPaperSourceOrdinal $ordinals,
         PaperMarketDataNetwork $network,

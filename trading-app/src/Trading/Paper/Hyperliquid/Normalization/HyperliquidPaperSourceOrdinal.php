@@ -10,13 +10,44 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
 
 final class HyperliquidPaperSourceOrdinal
 {
     private const SCHEMA_VERSION = 1;
     private const MAX_NATURAL_IDENTITY_BYTES = 1_024;
+    private const MAX_DECIMAL_LENGTH = 128;
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
+
+    /** @var list<string> */
+    private const CANDLE_PAYLOAD_KEYS = [
+        'close',
+        'close_time',
+        'confirmed',
+        'high',
+        'interval',
+        'low',
+        'native_symbol',
+        'open',
+        'origin',
+        'start_time',
+        'trade_count',
+        'volume',
+    ];
+
+    /** @var list<string> */
+    private const MODELLED_BOOK_PAYLOAD_KEYS = [
+        'ask_price',
+        'ask_size',
+        'bid_price',
+        'bid_size',
+        'model_name',
+        'model_version',
+        'origin',
+        'source_candle_start',
+        'synthetic',
+    ];
 
     /** @var list<PaperMarketDataChannel> */
     private const ALLOWED_CHANNELS = [
@@ -80,7 +111,7 @@ final class HyperliquidPaperSourceOrdinal
         PaperMarketEvent $event,
     ): void {
         $this->assertEventScope($scope, $event);
-        $this->assertEventNaturalIdentity($naturalIdentity, $event);
+        $this->assertCanonicalEvent($naturalIdentity, $event);
         if (!hash_equals(
             self::assignmentDigest($naturalIdentity, $event->exchangeTimestamp, $event->payload),
             $assignmentDigest,
@@ -184,7 +215,7 @@ final class HyperliquidPaperSourceOrdinal
                 $eventState = $latest['event'];
                 $event = PaperMarketEvent::fromArray($eventState);
                 $instance->assertEventScope($scope, $event);
-                $instance->assertEventNaturalIdentity($latest['natural_identity'], $event);
+                $instance->assertCanonicalEvent($latest['natural_identity'], $event);
                 if ($event->sequence === null) {
                     throw new \InvalidArgumentException();
                 }
@@ -299,92 +330,185 @@ final class HyperliquidPaperSourceOrdinal
         }
     }
 
-    private function assertEventNaturalIdentity(
+    private function assertCanonicalEvent(
         string $naturalIdentity,
         PaperMarketEvent $event,
     ): void {
-        $payload = $event->payload;
-        $expected = match ($event->channel) {
-            PaperMarketDataChannel::CANDLE_1M,
-            PaperMarketDataChannel::CANDLE_5M,
-            PaperMarketDataChannel::CANDLE_15M,
-            PaperMarketDataChannel::CANDLE_1H => $this->candleNaturalIdentity($event, $payload),
-            PaperMarketDataChannel::TOP_OF_BOOK => $this->bookNaturalIdentity($event, $payload),
-            default => null,
-        };
+        try {
+            $expected = match ($event->channel) {
+                PaperMarketDataChannel::CANDLE_1M,
+                PaperMarketDataChannel::CANDLE_5M,
+                PaperMarketDataChannel::CANDLE_15M,
+                PaperMarketDataChannel::CANDLE_1H => $this->canonicalCandleIdentity($event),
+                PaperMarketDataChannel::TOP_OF_BOOK => $this->canonicalBookIdentity(
+                    $naturalIdentity,
+                    $event,
+                ),
+                default => throw new \InvalidArgumentException(),
+            };
 
-        if ($expected === null || !hash_equals($expected, $naturalIdentity)) {
+            if (!hash_equals($expected, $naturalIdentity)) {
+                throw new \InvalidArgumentException();
+            }
+        } catch (\Throwable) {
             throw new \LogicException(
                 'hyperliquid_paper_source_ordinal_transaction_invalid',
             );
         }
     }
 
-    /** @param array<array-key, mixed> $payload */
-    private function candleNaturalIdentity(PaperMarketEvent $event, array $payload): ?string
+    private function canonicalCandleIdentity(PaperMarketEvent $event): string
     {
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::CANDLE_PAYLOAD_KEYS);
         $coin = $payload['native_symbol'] ?? null;
         $interval = $payload['interval'] ?? null;
         $startTime = $payload['start_time'] ?? null;
         $closeTime = $payload['close_time'] ?? null;
+        $tradeCount = $payload['trade_count'] ?? null;
         if (!\is_string($coin)
             || !\is_string($interval)
             || !\is_string($startTime)
             || !\is_string($closeTime)
+            || !\is_string($tradeCount)
             || !$this->unsignedInteger($startTime)
             || !$this->unsignedInteger($closeTime)
+            || !$this->unsignedInteger($tradeCount)
             || $this->channelForInterval($interval) !== $event->channel
+            || ($payload['confirmed'] ?? null) !== true
+            || ($payload['origin'] ?? null) !== 'rest_candle_snapshot'
         ) {
-            return null;
+            throw new \InvalidArgumentException();
         }
 
-        try {
-            if ((new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin) !== $event->symbol) {
-                return null;
-            }
-        } catch (\InvalidArgumentException) {
-            return null;
+        $instruments = new HyperliquidPaperInstrumentMap();
+        if ($instruments->normalizedSymbol($coin) !== $event->symbol) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertCandleBoundary($interval, $startTime, $closeTime);
+        $this->assertEventTimestamps($event, $closeTime);
+
+        $open = $this->canonicalDecimal($payload['open'] ?? null, positive: true);
+        $high = $this->canonicalDecimal($payload['high'] ?? null, positive: true);
+        $low = $this->canonicalDecimal($payload['low'] ?? null, positive: true);
+        $close = $this->canonicalDecimal($payload['close'] ?? null, positive: true);
+        $this->canonicalDecimal($payload['volume'] ?? null, positive: false);
+        if ($high->isLessThan($open)
+            || $high->isLessThan($close)
+            || $high->isLessThan($low)
+            || $low->isGreaterThan($open)
+            || $low->isGreaterThan($close)
+            || $low->isGreaterThan($high)
+        ) {
+            throw new \InvalidArgumentException();
         }
 
         return implode('|', [$coin, $interval, $startTime, $closeTime]);
     }
 
-    /** @param array<array-key, mixed> $payload */
-    private function bookNaturalIdentity(PaperMarketEvent $event, array $payload): ?string
+    private function canonicalBookIdentity(
+        string $naturalIdentity,
+        PaperMarketEvent $event,
+    ): string
     {
-        $interval = $payload['source_interval'] ?? null;
-        $startTime = $payload['source_candle_start'] ?? null;
-        $closeTime = $payload['source_candle_close'] ?? null;
-        $modelName = $payload['model_name'] ?? null;
-        $modelVersion = $payload['model_version'] ?? null;
-        if (!\is_string($interval)
-            || !\is_string($startTime)
-            || !\is_string($closeTime)
-            || !\is_string($modelName)
-            || !\is_string($modelVersion)
-            || !$this->unsignedInteger($startTime)
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::MODELLED_BOOK_PAYLOAD_KEYS);
+        $identityParts = explode('|', $naturalIdentity);
+        if (\count($identityParts) !== 6) {
+            throw new \InvalidArgumentException();
+        }
+        [$coin, $interval, $startTime, $closeTime, $modelName, $modelVersion]
+            = $identityParts;
+        if (!$this->unsignedInteger($startTime)
             || !$this->unsignedInteger($closeTime)
             || $this->channelForInterval($interval) === null
+            || ($payload['source_candle_start'] ?? null) !== $startTime
+            || ($payload['model_name'] ?? null) !== $modelName
+            || ($payload['model_version'] ?? null) !== $modelVersion
+            || ($payload['origin'] ?? null) !== 'historical_candle_model'
+            || ($payload['synthetic'] ?? null) !== true
             || $modelName !== HyperliquidPrudentBookModel::NAME
             || $modelVersion !== HyperliquidPrudentBookModel::VERSION
         ) {
-            return null;
+            throw new \InvalidArgumentException();
         }
 
-        try {
-            $coin = (new HyperliquidPaperInstrumentMap())->nativeCoin($event->symbol);
-        } catch (\InvalidArgumentException) {
-            return null;
+        $instruments = new HyperliquidPaperInstrumentMap();
+        if ($instruments->normalizedSymbol($coin) !== $event->symbol) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertCandleBoundary($interval, $startTime, $closeTime);
+        $this->assertEventTimestamps($event, $closeTime);
+
+        $bid = $this->canonicalDecimal($payload['bid_price'] ?? null, positive: true);
+        $ask = $this->canonicalDecimal($payload['ask_price'] ?? null, positive: true);
+        $bidSize = $this->canonicalDecimal($payload['bid_size'] ?? null, positive: true);
+        $askSize = $this->canonicalDecimal($payload['ask_size'] ?? null, positive: true);
+        if (!$bid->isLessThan($ask) || !$bidSize->isEqualTo($askSize)) {
+            throw new \InvalidArgumentException();
         }
 
-        return implode('|', [
-            $coin,
-            $interval,
-            $startTime,
-            $closeTime,
-            $modelName,
-            $modelVersion,
-        ]);
+        return implode('|', $identityParts);
+    }
+
+    private function assertCandleBoundary(
+        string $interval,
+        string $startTime,
+        string $closeTime,
+    ): void {
+        $intervalMilliseconds = (new HyperliquidPaperInstrumentMap())
+            ->intervalMilliseconds($interval);
+        if (!BigInteger::of($startTime)
+            ->plus($intervalMilliseconds - 1)
+            ->isEqualTo(BigInteger::of($closeTime))
+        ) {
+            throw new \InvalidArgumentException();
+        }
+    }
+
+    private function assertEventTimestamps(PaperMarketEvent $event, string $closeTime): void
+    {
+        if ($event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT)
+                !== $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT)
+            || $this->epochMilliseconds($event->exchangeTimestamp) !== $closeTime
+        ) {
+            throw new \InvalidArgumentException();
+        }
+    }
+
+    private function epochMilliseconds(\DateTimeImmutable $timestamp): string
+    {
+        $seconds = $timestamp->format('U');
+        $microseconds = $timestamp->format('u');
+        if (!$this->unsignedInteger($seconds)
+            || preg_match('/\A[0-9]{6}\z/D', $microseconds) !== 1
+            || !str_ends_with($microseconds, '000')
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return (string) BigInteger::of($seconds)
+            ->multipliedBy(1_000)
+            ->plus((int) substr($microseconds, 0, 3));
+    }
+
+    private function canonicalDecimal(mixed $value, bool $positive): BigDecimal
+    {
+        if (!\is_string($value)
+            || \strlen($value) > self::MAX_DECIMAL_LENGTH
+            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        $decimal = BigDecimal::of($value);
+        if ((string) $decimal->stripTrailingZeros() !== $value
+            || ($positive ? !$decimal->isGreaterThan(0) : $decimal->isLessThan(0))
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $decimal;
     }
 
     private function channelForInterval(string $interval): ?PaperMarketDataChannel
