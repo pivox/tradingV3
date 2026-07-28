@@ -97,6 +97,9 @@ services:
             - '../src/Provider/'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenario.php'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenarioFixtures.php'
+            - '../src/Trading/Paper/Okx/Live/OkxPaperPublicLiveSource.php'
+            - '../src/Trading/Paper/Okx/Live/OkxPaperLiveCheckpointStore.php'
+            - '../src/Trading/Paper/Okx/Live/PawlOkxPaperPublicWebSocketTransport.php'
 
     App\Exchange\Fake\FakeDailyLossCapPolicy:
         arguments:
@@ -374,6 +377,15 @@ services:
     App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface:
         alias: App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient
         public: true
+
+    okx.paper_public.ws_transport_factory:
+        class: App\Trading\Paper\Okx\Live\PawlOkxPaperPublicWebSocketTransportFactory
+
+    App\Trading\Paper\Okx\Live\OkxPaperPublicWebSocketTransportFactoryInterface:
+        alias: okx.paper_public.ws_transport_factory
+        public: true
+
+    App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory: ~
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:
         abstract: true

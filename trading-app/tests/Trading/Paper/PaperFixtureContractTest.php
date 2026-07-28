@@ -24,6 +24,11 @@ final class PaperFixtureContractTest extends TestCase
     /** @var list<string> */
     private const FORBIDDEN_FRAGMENTS = [
         'authorization',
+        'authentication',
+        'authenticator',
+        'auth_header',
+        'auth-header',
+        'header',
         'api_key',
         'apikey',
         'api_secret',
@@ -34,8 +39,25 @@ final class PaperFixtureContractTest extends TestCase
         'wallet',
         'mnemonic',
         'seed_phrase',
+        'login',
+        '/private',
+        'account_id',
+        'accountid',
+        'accid',
+        '/api/v5/trade',
+        '/api/v5/account',
+        '/api/v5/asset',
+        'place-order',
+        'cancel-order',
+        'amend-order',
         'Bearer ',
         'OK-ACCESS-',
+    ];
+
+    /** @var list<string> */
+    private const ALLOWED_PUBLIC_WEB_SOCKET_URIS = [
+        'wss://ws.okx.com:8443/ws/v5/public',
+        'wss://ws.okx.com:8443/ws/v5/business',
     ];
 
     /** @var list<string> */
@@ -64,7 +86,7 @@ final class PaperFixtureContractTest extends TestCase
 
     private const CUSTOM_HEADER_KEY_PATTERN = '/\A[xX](?:(?:[-_][A-Za-z0-9]+)+|[A-Za-z0-9]{2,})\z/D';
 
-    private const RAW_HEADER_LINE_PATTERN = '/(?:\A|\R)(?!(?i:https?|ftp):\/\/)(?!(?i:urn|mailto):)(?![0-9]{4}-[0-9]{2}-[0-9]{2}T)[!#$%&\'*+.^_`|~0-9A-Za-z-]+:[\t ]*[^\r\n]*(?:\R|\z)/D';
+    private const RAW_HEADER_LINE_PATTERN = '/(?:\A|\R)(?!(?i:https?|ftp|wss):\/\/)(?!(?i:urn|mailto):)(?![0-9]{4}-[0-9]{2}-[0-9]{2}T)[!#$%&\'*+.^_`|~0-9A-Za-z-]+:[\t ]*[^\r\n]*(?:\R|\z)/D';
 
     public function testCheckedInPaperMarketDataFixturesAreNormalizedVerifiedAndPublic(): void
     {
@@ -77,15 +99,21 @@ final class PaperFixtureContractTest extends TestCase
             $datasetDirectory . '/manifest.json',
             $datasetDirectory . '/events.ndjson',
         ];
+        $okxPublicFixtureRoot = dirname($fixtureRoot) . '/OkxPaperPublic';
+        $okxPublicFixtureFiles = array_values(array_filter(
+            $this->fixtureFiles($okxPublicFixtureRoot),
+            static fn (string $fixture): bool => str_ends_with($fixture, '.json'),
+        ));
+        self::assertNotEmpty($okxPublicFixtureFiles);
 
         $expectedFiles = [...$standaloneEvents, ...$datasetFiles];
         $fixtureFiles = $this->fixtureFiles($fixtureRoot);
         sort($expectedFiles, SORT_STRING);
         self::assertSame($expectedFiles, $fixtureFiles);
 
-        foreach ($fixtureFiles as $path) {
+        foreach ([...$fixtureFiles, ...$okxPublicFixtureFiles] as $path) {
             self::assertFileExists($path);
-            self::assertLessThan(self::MAX_FIXTURE_BYTES, filesize($path));
+            self::assertLessThanOrEqual(self::MAX_FIXTURE_BYTES, filesize($path));
             $this->assertPublicFixtureContents($path, (string) file_get_contents($path));
         }
 
@@ -225,6 +253,38 @@ final class PaperFixtureContractTest extends TestCase
         yield 'API secret' => ['api-secret'];
         yield 'secret key' => ['secret-key'];
         yield 'private key' => ['private-key'];
+        yield 'authentication helper' => ['authentication'];
+        yield 'authenticator helper' => ['authenticator'];
+        yield 'underscored auth header' => ['auth_header'];
+        yield 'hyphenated auth header' => ['auth-header'];
+        yield 'singular header' => ['header'];
+        yield 'login payload' => ['login'];
+        yield 'private path' => ['/private'];
+        yield 'account id' => ['account-id'];
+        yield 'OKX account id' => ['accId'];
+        yield 'trade mutation path' => ['/api/v5/trade/order'];
+        yield 'account path' => ['/api/v5/account/balance'];
+        yield 'asset path' => ['/api/v5/asset/balances'];
+        yield 'place order' => ['place-order'];
+        yield 'cancel order' => ['cancel-order'];
+        yield 'amend order' => ['amend-order'];
+    }
+
+    #[DataProvider('forbiddenWebSocketEndpointProvider')]
+    public function testPublicFixtureContractRejectsNonCanonicalWebSocketEndpoints(string $value): void
+    {
+        $this->expectException(AssertionFailedError::class);
+
+        $this->assertPublicValue($value);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function forbiddenWebSocketEndpointProvider(): iterable
+    {
+        yield 'private endpoint' => ['wss://ws.okx.com:8443/ws/v5/private'];
+        yield 'wrong host' => ['wss://example.test:8443/ws/v5/public'];
+        yield 'public query' => ['wss://ws.okx.com:8443/ws/v5/public?channel=books'];
+        yield 'business suffix' => ['wss://ws.okx.com:8443/ws/v5/business/'];
     }
 
     public function testFixtureDiscoveryIncludesEverySupportedFileRecursively(): void
@@ -261,6 +321,8 @@ final class PaperFixtureContractTest extends TestCase
             'url' => 'https://example.test/public-market-data',
             'urn' => 'urn:example:public-market-data',
             'email' => 'mailto:paper@example.test',
+            'public_socket' => 'wss://ws.okx.com:8443/ws/v5/public',
+            'business_socket' => 'wss://ws.okx.com:8443/ws/v5/business',
         ]);
     }
 
@@ -330,6 +392,14 @@ final class PaperFixtureContractTest extends TestCase
 
         if (is_string($value)) {
             $this->assertNoForbiddenValue($value);
+            preg_match_all('/wss:\/\/[^\s"\'<>]+/i', $value, $matches);
+            foreach ($matches[0] as $webSocketUri) {
+                self::assertContains(
+                    $webSocketUri,
+                    self::ALLOWED_PUBLIC_WEB_SOCKET_URIS,
+                    'Fixture contains a non-canonical WebSocket endpoint.',
+                );
+            }
             self::assertDoesNotMatchRegularExpression(
                 self::RAW_HEADER_LINE_PATTERN,
                 $value,
