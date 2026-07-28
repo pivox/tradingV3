@@ -1,0 +1,320 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Trading\Paper\Hyperliquid\Http;
+
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Clock\ClockInterface;
+use Symfony\Component\HttpClient\Exception\TransportException;
+use Symfony\Component\HttpClient\MockHttpClient;
+use Symfony\Component\HttpClient\Response\MockResponse;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\ResponseInterface;
+use Symfony\Contracts\HttpClient\ResponseStreamInterface;
+
+#[CoversClass(HyperliquidPaperPublicRestClient::class)]
+final class HyperliquidPaperPublicRestClientTest extends TestCase
+{
+    public function testPostsTheExactCredentialFreeSnapshotRequestForBothApprovedNetworks(): void
+    {
+        foreach ([
+            [PaperMarketDataNetwork::MAINNET, HyperliquidPaperPublicConfig::MAINNET_INFO_URI],
+            [PaperMarketDataNetwork::TESTNET, HyperliquidPaperPublicConfig::TESTNET_INFO_URI],
+        ] as [$network, $uri]) {
+            $requests = [];
+            $client = $this->client(new MockHttpClient(function (string $method, string $url, array $options) use (&$requests): MockResponse {
+                $requests[] = [$method, $url, $options];
+                return new MockResponse('[{"s":"BTC","i":"1m"}]');
+            }), network: $network);
+
+            self::assertSame([['s' => 'BTC', 'i' => '1m']], $client->candleSnapshot('BTC', '1m', 0, 60_000));
+            self::assertSame('POST', $requests[0][0]);
+            self::assertSame($uri, $requests[0][1]);
+            self::assertSame('{"type":"candleSnapshot","req":{"coin":"BTC","interval":"1m","startTime":0,"endTime":60000}}', $requests[0][2]['body']);
+            self::assertSame(['Accept: application/json', 'Content-Type: application/json', 'Content-Length: 92'], $requests[0][2]['headers']);
+            self::assertSame(10.0, $requests[0][2]['timeout']);
+            self::assertSame(10.0, $requests[0][2]['max_duration']);
+            self::assertSame(0, $requests[0][2]['max_redirects']);
+            self::assertFalse($requests[0][2]['buffer']);
+            self::assertStringNotContainsString('authorization', strtolower(json_encode($requests[0][2], JSON_THROW_ON_ERROR)));
+            self::assertInstanceOf(HyperliquidPaperPublicRestClientInterface::class, $client);
+        }
+    }
+
+    public function testInterfaceAndConstructorHaveOnlyTheCredentialFreeSnapshotSurface(): void
+    {
+        $methods = (new \ReflectionClass(HyperliquidPaperPublicRestClientInterface::class))->getMethods();
+        self::assertSame(['candleSnapshot'], array_map(static fn (\ReflectionMethod $method): string => $method->getName(), $methods));
+
+        $constructor = (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->getConstructor();
+        self::assertNotNull($constructor);
+        self::assertSame(['httpClient', 'config', 'rateLimiter', 'clock'], array_map(
+            static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
+            $constructor->getParameters(),
+        ));
+    }
+
+    /** @return iterable<string, array{string, string, int, int, int, int, string}> */
+    public static function invalidInputs(): iterable
+    {
+        yield 'coin' => ['SOL', '1m', 0, 1, 1, 0, 'hyperliquid_paper_public_coin_invalid'];
+        yield 'interval' => ['BTC', '3m', 0, 1, 1, 0, 'hyperliquid_paper_public_interval_invalid'];
+        yield 'negative start' => ['BTC', '1m', -1, 1, 1, 0, 'hyperliquid_paper_public_time_range_invalid'];
+        yield 'end before start' => ['BTC', '1m', 2, 1, 1, 0, 'hyperliquid_paper_public_time_range_invalid'];
+        yield 'zero bytes' => ['BTC', '1m', 0, 1, 0, 0, 'hyperliquid_paper_public_maximum_response_bytes_invalid'];
+        yield 'too many bytes' => ['BTC', '1m', 0, 1, 1_048_577, 0, 'hyperliquid_paper_public_maximum_response_bytes_invalid'];
+        yield 'negative retries' => ['BTC', '1m', 0, 1, 1, -1, 'hyperliquid_paper_public_maximum_retries_invalid'];
+        yield 'too many retries' => ['BTC', '1m', 0, 1, 1, 6, 'hyperliquid_paper_public_maximum_retries_invalid'];
+    }
+
+    #[DataProvider('invalidInputs')]
+    public function testRejectsInputBoundsBeforeMakingARequest(
+        string $coin, string $interval, int $start, int $end, int $bytes, int $retries, string $reason,
+    ): void {
+        $requests = 0;
+        $client = $this->client(new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+            return new MockResponse('[]');
+        }));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($reason);
+        try {
+            $client->candleSnapshot($coin, $interval, $start, $end, $bytes, $retries);
+        } finally {
+            self::assertSame(0, $requests);
+        }
+    }
+
+    public function testRejectsMoreThanFiveHundredRowsAndChargesNoRowTokens(): void
+    {
+        $rows = array_fill(0, 501, ['s' => 'BTC', 'i' => '1m']);
+        $limiter = new HyperliquidRecordingLimiter();
+        $client = $this->client(new MockHttpClient(new MockResponse(json_encode($rows, JSON_THROW_ON_ERROR))), $limiter);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_public_response_invalid');
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1);
+        } finally {
+            self::assertSame([[1, 2.0]], $limiter->reservations);
+        }
+    }
+
+    public function testStopsReadingAndRedactsAnOversizedChunkedResponse(): void
+    {
+        $body = (static function (): \Generator {
+            yield str_repeat('x', 10);
+            yield str_repeat('y', 11);
+            throw new \LogicException('unread_sentinel_was_read');
+        })();
+        $http = new HyperliquidRecordingHttpClient(new MockHttpClient(new MockResponse($body)));
+        $client = $this->client($http);
+
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1, 20);
+            self::fail('Expected size bound rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_paper_public_response_too_large', $exception->getMessage());
+            self::assertStringNotContainsString('wallet', $exception->getMessage());
+        }
+        self::assertTrue($http->responses[0]->getInfo('canceled'));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidPayloads(): iterable
+    {
+        yield 'json' => ['{'];
+        yield 'object root' => ['{}'];
+        yield 'scalar row' => ['["wallet=secret"]'];
+        yield 'list row' => ['[["BTC", "1m"]]'];
+        yield 'missing coin' => ['[{"i":"1m"}]'];
+        yield 'coin mismatch' => ['[{"s":"ETH","i":"1m"}]'];
+        yield 'interval mismatch' => ['[{"s":"BTC","i":"5m"}]'];
+    }
+
+    #[DataProvider('invalidPayloads')]
+    public function testRejectsInvalidOrMismatchedResponseRowsWithoutLeakingThem(string $body): void
+    {
+        $client = $this->client(new MockHttpClient(new MockResponse($body)));
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1);
+            self::fail('Expected response validation rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_paper_public_response_invalid', $exception->getMessage());
+            self::assertStringNotContainsString('wallet', $exception->getMessage());
+        }
+    }
+
+    public function testChargesResponseRowsAfterSuccessfulValidation(): void
+    {
+        $limiter = new HyperliquidRecordingLimiter();
+        $client = $this->client(new MockHttpClient(new MockResponse('[{"s":"BTC","i":"1m"},{"s":"BTC","i":"1m"}]')), $limiter);
+
+        self::assertCount(2, $client->candleSnapshot('BTC', '1m', 0, 1));
+        self::assertSame([[1, 2.0], [1, 2.0]], $limiter->reservations);
+    }
+
+    public function testRetriesHttp429AndFiveHundredResponsesAndCancelsEachBeforeSleeping(): void
+    {
+        $responses = [
+            new MockResponse('wallet=one', ['http_code' => 429]),
+            new MockResponse('wallet=two', ['http_code' => 503]),
+            new MockResponse('[{"s":"BTC","i":"1m"}]'),
+        ];
+        $http = new HyperliquidRecordingHttpClient(new MockHttpClient($responses));
+        $retry = 0;
+        $clock = new HyperliquidRecordingClock(static function () use ($http, &$retry): void {
+            self::assertTrue($http->responses[$retry]->getInfo('canceled'));
+            ++$retry;
+        });
+        $limiter = new HyperliquidRecordingLimiter();
+        $client = $this->client($http, $limiter, $clock);
+
+        self::assertCount(1, $client->candleSnapshot('BTC', '1m', 0, 1));
+        self::assertSame([0.25, 0.5], $clock->sleeps);
+        self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertTrue($http->responses[0]->getInfo('canceled'));
+        self::assertTrue($http->responses[1]->getInfo('canceled'));
+    }
+
+    public function testDefaultRetryBudgetIsBoundedToSixAttempts(): void
+    {
+        $requests = 0;
+        $limiter = new HyperliquidRecordingLimiter();
+        $clock = new HyperliquidRecordingClock();
+        $client = $this->client(new MockHttpClient(function () use (&$requests): MockResponse {
+            ++$requests;
+            return new MockResponse('wallet=unread', ['http_code' => 429]);
+        }), $limiter, $clock);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_public_retry_exhausted');
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1);
+        } finally {
+            self::assertSame(6, $requests);
+            self::assertSame([0.25, 0.5, 1.0, 2.0, 4.0], $clock->sleeps);
+            self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+        }
+    }
+
+    public function testRetriesTransportExceptionsAndStopsAfterTheRequestedRetryBudget(): void
+    {
+        $requests = 0;
+        $clock = new HyperliquidRecordingClock();
+        $limiter = new HyperliquidRecordingLimiter();
+        $client = $this->client(new MockHttpClient(function () use (&$requests): never {
+            ++$requests;
+            throw new TransportException('https://secret.example/wallet=secret');
+        }), $limiter, $clock);
+
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1, maximumRetries: 2);
+            self::fail('Expected retry exhaustion.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_paper_public_retry_exhausted', $exception->getMessage());
+            self::assertStringNotContainsString('secret', $exception->getMessage());
+        }
+        self::assertSame(3, $requests);
+        self::assertSame([0.25, 0.5], $clock->sleeps);
+        self::assertSame([[1, 2.0], [1, 2.0], [1, 2.0]], $limiter->reservations);
+    }
+
+    /** @return iterable<string, array{int}> */
+    public static function nonRetryableStatuses(): iterable
+    {
+        yield 'redirect' => [302];
+        yield 'bad request' => [400];
+        yield 'unauthorized' => [401];
+        yield 'not found' => [404];
+    }
+
+    #[DataProvider('nonRetryableStatuses')]
+    public function testRejectsNonRetryableHttpStatusesWithoutReadingTheirBody(int $status): void
+    {
+        $body = (static function (): \Generator {
+            yield from [];
+            throw new \LogicException('non_2xx_body_was_read');
+        })();
+        $client = $this->client(new MockHttpClient(new MockResponse($body, ['http_code' => $status])));
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_public_http_error_' . $status);
+        $client->candleSnapshot('BTC', '1m', 0, 1);
+    }
+
+    private function client(
+        HttpClientInterface $http,
+        ?HyperliquidRecordingLimiter $limiter = null,
+        ?HyperliquidRecordingClock $clock = null,
+        PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
+    ): HyperliquidPaperPublicRestClient {
+        return new HyperliquidPaperPublicRestClient(
+            $http,
+            new HyperliquidPaperPublicConfig(
+                $network,
+                false,
+                $network === PaperMarketDataNetwork::MAINNET
+                    ? HyperliquidPaperPublicConfig::MAINNET_INFO_URI
+                    : HyperliquidPaperPublicConfig::TESTNET_INFO_URI,
+                '/srv/app/var/paper-market-data',
+            ),
+            new HyperliquidPaperPublicRateLimiter($limiter ?? new HyperliquidRecordingLimiter()),
+            $clock ?? new HyperliquidRecordingClock(),
+        );
+    }
+}
+
+final class HyperliquidRecordingClock implements ClockInterface
+{
+    /** @var list<float> */
+    public array $sleeps = [];
+    public function __construct(private readonly ?\Closure $onSleep = null)
+    {
+    }
+    public function now(): \DateTimeImmutable { return new \DateTimeImmutable('2026-07-28T00:00:00+00:00'); }
+    public function sleep(float|int $seconds): void
+    {
+        ($this->onSleep ?? static function (): void {})();
+        $this->sleeps[] = (float) $seconds;
+    }
+    public function withTimeZone(\DateTimeZone|string $timezone): static { return clone $this; }
+}
+
+final class HyperliquidRecordingHttpClient implements HttpClientInterface
+{
+    /** @var list<ResponseInterface> */
+    public array $responses = [];
+
+    public function __construct(private HttpClientInterface $inner)
+    {
+    }
+
+    /** @param array<string, mixed> $options */
+    public function request(string $method, string $url, array $options = []): ResponseInterface
+    {
+        return $this->responses[] = $this->inner->request($method, $url, $options);
+    }
+
+    public function stream(ResponseInterface|iterable $responses, ?float $timeout = null): ResponseStreamInterface
+    {
+        return $this->inner->stream($responses, $timeout);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function withOptions(array $options): static
+    {
+        $clone = clone $this;
+        $clone->inner = $this->inner->withOptions($options);
+
+        return $clone;
+    }
+}
