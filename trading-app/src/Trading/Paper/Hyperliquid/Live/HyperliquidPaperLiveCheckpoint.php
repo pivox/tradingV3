@@ -399,6 +399,45 @@ final readonly class HyperliquidPaperLiveCheckpoint
         ]);
     }
 
+    public function beginReconnect(string $reason): self
+    {
+        $reason = self::failureReason($reason)
+            ?? throw self::invalid();
+        if ($this->reconnectAttempt >= \count(
+            HyperliquidPaperLivePolicy::RECONNECT_DELAYS_SECONDS,
+        )) {
+            return $this->fail('hyperliquid_paper_public_reconnect_exhausted');
+        }
+
+        return $this->with([
+            'phase' => 'reconnecting',
+            'failure_reason' => $reason,
+            'continuity' => false,
+            'connection_epoch' => $this->connectionEpoch + 1,
+            'source_epoch' => $this->sourceEpoch + 1,
+            'reconnect_attempt' => $this->reconnectAttempt + 1,
+            'heartbeat' => [
+                'last_received_at' => null,
+                'last_ping_at' => null,
+                'pong_deadline_at' => null,
+            ],
+        ]);
+    }
+
+    public function withHeartbeat(
+        ?string $lastReceivedAt,
+        ?string $lastPingAt,
+        ?string $pongDeadlineAt,
+    ): self {
+        return $this->with([
+            'heartbeat' => [
+                'last_received_at' => $lastReceivedAt,
+                'last_ping_at' => $lastPingAt,
+                'pong_deadline_at' => $pongDeadlineAt,
+            ],
+        ]);
+    }
+
     /** @param array<string, mixed> $changes */
     private function with(array $changes): self
     {

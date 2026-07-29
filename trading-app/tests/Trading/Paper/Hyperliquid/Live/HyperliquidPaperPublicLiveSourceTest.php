@@ -15,7 +15,10 @@ use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use React\EventLoop\LoopInterface;
 use React\EventLoop\StreamSelectLoop;
+use React\EventLoop\Timer\Timer;
+use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(HyperliquidPaperPublicLiveSource::class)]
@@ -167,9 +170,212 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         );
     }
 
+    public function testRestartReyieldsExactPendingEventBeforeConnecting(): void
+    {
+        $firstTransport = new DeterministicHyperliquidTransport([]);
+        $first = $this->source($firstTransport);
+        $firstEvents = self::generator($first->events());
+        $firstEvents->rewind();
+        $pending = $firstEvents->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+
+        $resumedTransport = new DeterministicHyperliquidTransport([]);
+        $resumed = $this->source($resumedTransport);
+        $resumedEvents = self::generator($resumed->events());
+        $resumedEvents->rewind();
+
+        self::assertSame($pending->toArray(), $resumedEvents->current()->toArray());
+        self::assertSame(0, $resumedTransport->connectCount);
+        $resumed->acknowledge($pending->eventId);
+    }
+
+    public function testUnhealthyStopAfterStreamingPersistsContinuityLoss(): void
+    {
+        $source = $this->source(new DeterministicHyperliquidTransport([]));
+        $events = self::generator($source->events());
+        $events->rewind();
+        $event = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $event);
+        $source->acknowledge($event->eventId);
+
+        $source->stop();
+
+        $checkpoint = (new HyperliquidPaperLiveCheckpointStore($this->directory))
+            ->loadOrCreate(
+                'paper-hyperliquid-live-mainnet',
+                PaperMarketDataNetwork::MAINNET,
+                str_repeat('a', 64),
+            );
+        self::assertFalse($checkpoint->continuity);
+        self::assertSame(
+            'hyperliquid_public_trade_gap_unrecoverable',
+            $checkpoint->failureReason,
+        );
+        self::assertFalse($source->isComplete());
+    }
+
+    public function testHeartbeatSendsExactPingAndPongRefreshesDeadline(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport, loop: $loop);
+        $events = self::generator($source->events());
+        $events->rewind();
+
+        self::assertSame([45.0], $loop->intervals());
+        self::assertSame(45.0, $loop->fire(45.0));
+        self::assertSame(['method' => 'ping'], $transport->sent[12]);
+        self::assertSame([10.0], $loop->intervals());
+
+        $transport->push(CanonicalJson::encode(['channel' => 'pong']));
+        $transport->push(self::tradeFrame());
+        $first = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $first);
+        $source->acknowledge($first->eventId);
+        $events->next();
+        $second = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $second);
+        $source->acknowledge($second->eventId);
+        $events->next();
+
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $events->current()->channel);
+        self::assertSame([45.0], $loop->intervals());
+    }
+
+    public function testPongTimeoutPersistsContinuityLossBeforeReconnectDelay(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([]),
+            loop: $loop,
+        );
+        self::generator($source->events())->rewind();
+
+        $loop->fire(45.0);
+        $loop->fire(10.0);
+
+        $checkpoint = $this->checkpoint();
+        self::assertFalse($checkpoint->continuity);
+        self::assertSame('reconnecting', $checkpoint->phase);
+        self::assertSame(1, $checkpoint->reconnectAttempt);
+        self::assertSame([1.0], $loop->intervals());
+    }
+
+    public function testReconnectUsesBoundedDelaysAndThenFailsTerminally(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport, loop: $loop);
+        self::generator($source->events())->rewind();
+        $loop->fire(45.0);
+        $loop->fire(10.0);
+
+        foreach ([1.0, 2.0, 4.0, 8.0, 15.0, 30.0] as $delay) {
+            self::assertSame($delay, $loop->fire($delay));
+            $transport->serverClose();
+        }
+
+        $checkpoint = $this->checkpoint();
+        self::assertSame('failed', $checkpoint->phase);
+        self::assertSame(
+            'hyperliquid_paper_public_reconnect_exhausted',
+            $checkpoint->failureReason,
+        );
+        self::assertSame([], $loop->intervals());
+    }
+
+    public function testReconnectBoundariesPrecedeQueuedBookAndCannotCertify(): void
+    {
+        $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport, loop: $loop);
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index === 0) {
+                $events->next();
+            }
+        }
+
+        $loop->fire(45.0);
+        $loop->fire(10.0);
+        $loop->fire(1.0);
+        $transport->push(CanonicalJson::encode([
+            'channel' => 'l2Book',
+            'data' => [
+                'coin' => 'BTC',
+                'levels' => [
+                    [['px' => '1', 'sz' => '1', 'n' => 1]],
+                    [['px' => '2', 'sz' => '1', 'n' => 1]],
+                ],
+                'time' => 2_000,
+            ],
+        ]));
+
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
+        self::assertSame('reconnect', $events->current()->payload['reason']);
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::TOP_OF_BOOK, $events->current()->channel);
+        self::assertFalse($source->isComplete());
+        try {
+            $source->requestHealthyOperatorStop();
+            self::fail('Continuity-lost capture cannot complete.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'hyperliquid_paper_public_healthy_stop_invalid',
+                $exception->getMessage(),
+            );
+        }
+    }
+
+    public function testBackpressureFailsWithStableReason(): void
+    {
+        $frames = array_fill(0, 257, self::tradeFrame());
+        $source = $this->source(new DeterministicHyperliquidTransport($frames));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('market_data_backpressure_exhausted');
+        self::generator($source->events())->rewind();
+    }
+
+    public function testConflictingTradeIdentityFailsWithStableReason(): void
+    {
+        $conflicting = json_decode(self::tradeFrame(), true, 512, \JSON_THROW_ON_ERROR);
+        $conflicting['data'][] = array_replace(
+            $conflicting['data'][0],
+            ['px' => '65001'],
+        );
+        $source = $this->source(new DeterministicHyperliquidTransport([
+            CanonicalJson::encode($conflicting),
+        ]));
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index === 0) {
+                $events->next();
+            }
+        }
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('market_event_identity_conflict');
+        $events->next();
+    }
+
     private function source(
         DeterministicHyperliquidTransport $transport,
         bool $enabled = true,
+        ?LoopInterface $loop = null,
     ): HyperliquidPaperPublicLiveSource {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -191,8 +397,18 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             new MockClock('2026-07-29T10:00:00Z'),
             $store,
             $checkpoint,
-            new StreamSelectLoop(),
+            $loop ?? new StreamSelectLoop(),
         );
+    }
+
+    private function checkpoint(): \App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint
+    {
+        return (new HyperliquidPaperLiveCheckpointStore($this->directory))
+            ->loadOrCreate(
+                'paper-hyperliquid-live-mainnet',
+                PaperMarketDataNetwork::MAINNET,
+                str_repeat('a', 64),
+            );
     }
 
     /** @return list<string> */
@@ -282,6 +498,8 @@ final class DeterministicHyperliquidTransport implements
 
     /** @var callable(string): void|null */
     private $onMessage = null;
+    /** @var callable(?int): void|null */
+    private $onClose = null;
 
     /**
      * @param list<string> $marketFrames
@@ -300,12 +518,16 @@ final class DeterministicHyperliquidTransport implements
     ): void {
         ++$this->connectCount;
         $this->onMessage = $onMessage;
+        $this->onClose = $onClose;
         $onOpen();
     }
 
     public function send(array $message): void
     {
         $this->sent[] = $message;
+        if ($message === ['method' => 'ping']) {
+            return;
+        }
         $onMessage = $this->onMessage ?? throw new \LogicException();
         $onMessage(CanonicalJson::encode([
             'channel' => 'subscriptionResponse',
@@ -324,5 +546,106 @@ final class DeterministicHyperliquidTransport implements
     public function close(): void
     {
         $this->closed = true;
+    }
+
+    public function push(string $frame): void
+    {
+        ($this->onMessage ?? throw new \LogicException())($frame);
+    }
+
+    public function serverClose(): void
+    {
+        ($this->onClose ?? throw new \LogicException())(1006);
+    }
+}
+
+final class HyperliquidDeterministicLoop implements LoopInterface
+{
+    /** @var list<TimerInterface> */
+    private array $timers = [];
+
+    public function addReadStream($stream, $listener): void
+    {
+    }
+
+    public function addWriteStream($stream, $listener): void
+    {
+    }
+
+    public function removeReadStream($stream): void
+    {
+    }
+
+    public function removeWriteStream($stream): void
+    {
+    }
+
+    public function addTimer($interval, $callback): TimerInterface
+    {
+        $timer = new Timer((float) $interval, $callback);
+        $this->timers[] = $timer;
+
+        return $timer;
+    }
+
+    public function addPeriodicTimer($interval, $callback): TimerInterface
+    {
+        $timer = new Timer((float) $interval, $callback, true);
+        $this->timers[] = $timer;
+
+        return $timer;
+    }
+
+    public function cancelTimer(TimerInterface $timer): void
+    {
+        $this->timers = array_values(array_filter(
+            $this->timers,
+            static fn (TimerInterface $candidate): bool => $candidate !== $timer,
+        ));
+    }
+
+    public function futureTick($listener): void
+    {
+        $listener();
+    }
+
+    public function addSignal($signal, $listener): void
+    {
+    }
+
+    public function removeSignal($signal, $listener): void
+    {
+    }
+
+    public function run(): void
+    {
+    }
+
+    public function stop(): void
+    {
+    }
+
+    /** @return list<float> */
+    public function intervals(): array
+    {
+        return array_map(
+            static fn (TimerInterface $timer): float => $timer->getInterval(),
+            $this->timers,
+        );
+    }
+
+    public function fire(float $interval): float
+    {
+        foreach ($this->timers as $index => $timer) {
+            if ($timer->getInterval() !== $interval) {
+                continue;
+            }
+            array_splice($this->timers, $index, 1);
+            ($timer->getCallback())();
+
+            return $interval;
+        }
+
+        throw new \LogicException('timer_not_found');
     }
 }

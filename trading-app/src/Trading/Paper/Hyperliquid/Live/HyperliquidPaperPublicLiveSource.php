@@ -12,6 +12,7 @@ use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use React\EventLoop\LoopInterface;
+use React\EventLoop\TimerInterface;
 use Symfony\Component\Clock\ClockInterface;
 
 final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
@@ -24,11 +25,15 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
 
     private ?\Throwable $transportFailure = null;
     private bool $stopped = false;
+    private int $activeGeneration = 0;
+    private ?TimerInterface $heartbeatTimer = null;
+    private ?TimerInterface $pongTimer = null;
+    private ?TimerInterface $reconnectTimer = null;
 
     public function __construct(
         private readonly HyperliquidPaperPublicWebSocketTransportInterface $transport,
         private readonly HyperliquidPaperPublicConfig $config,
-        ClockInterface $clock,
+        private readonly ClockInterface $clock,
         private readonly HyperliquidPaperLiveCheckpointStore $checkpointStore,
         private HyperliquidPaperLiveCheckpoint $checkpoint,
         private readonly LoopInterface $loop,
@@ -64,16 +69,21 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         try {
             yield from $this->eventFlow();
         } catch (\Throwable $exception) {
+            $reason = $this->publicReason($exception);
             if ($exception->getMessage() !== 'hyperliquid_paper_public_acquisition_disabled'
                 && !\in_array($this->checkpoint->phase, ['complete', 'failed'], true)
             ) {
                 try {
                     $this->checkpoint = $this->checkpointStore->save(
-                        $this->checkpoint->fail($this->publicReason($exception)),
+                        $this->checkpoint->fail($reason),
                     );
                 } catch (\Throwable) {
                     // The original stable public failure remains authoritative.
                 }
+            }
+
+            if ($reason !== $exception->getMessage()) {
+                throw new HyperliquidPaperLiveIntegrityException($reason);
             }
 
             throw $exception;
@@ -102,9 +112,11 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($this->checkpoint->phase === 'fresh') {
             $this->connectAndSubscribe();
             $this->awaitSubscriptions();
+            $this->throwPendingTransportFailure();
             $this->checkpoint = $this->checkpointStore->save(
                 $this->checkpoint->withPhase('streaming'),
             );
+            $this->scheduleHeartbeat();
             yield from $this->yieldCandidates([
                 $this->normalizer->snapshotBoundary(
                     'BTC',
@@ -117,6 +129,21 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                     $this->checkpoint->sourceEpoch,
                 ),
             ]);
+        } elseif ($this->checkpoint->phase === 'streaming') {
+            $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+        } elseif (\in_array($this->checkpoint->phase, ['connecting', 'subscribing'], true)) {
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->withPhase('fresh'),
+            );
+            $this->connectAndSubscribe();
+            $this->awaitSubscriptions();
+            $this->throwPendingTransportFailure();
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->withPhase('streaming'),
+            );
+            $this->scheduleHeartbeat();
+        } elseif ($this->checkpoint->phase === 'reconnecting') {
+            $this->scheduleReconnect();
         }
 
         while (!$this->stopped) {
@@ -126,6 +153,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                         'hyperliquid_acquisition_pending_event_not_acknowledged',
                     );
                 }
+                $this->cancelTimers();
                 $this->transport->close();
                 $this->stopped = true;
                 $this->checkpoint = $this->checkpointStore->save(
@@ -148,30 +176,63 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->withPhase('connecting'),
         );
+        $this->openTransport(reconnecting: false);
+    }
+
+    private function openTransport(bool $reconnecting): void
+    {
+        $generation = ++$this->activeGeneration;
         $this->transport->connect(
-            function (): void {
-                $this->checkpoint = $this->checkpointStore->save(
-                    $this->checkpoint->withPhase('subscribing'),
-                );
+            function () use ($generation, $reconnecting): void {
+                if ($generation !== $this->activeGeneration || $this->stopped) {
+                    return;
+                }
+                if (!$reconnecting) {
+                    $this->checkpoint = $this->checkpointStore->save(
+                        $this->checkpoint->withPhase('subscribing'),
+                    );
+                }
                 foreach ($this->subscriptions->subscriptions() as $subscription) {
                     $this->transport->send($subscription);
                 }
                 $this->loop->stop();
             },
-            function (string $frame): void {
-                $this->queue->enqueue($frame);
+            function (string $frame) use ($generation): void {
+                if ($generation !== $this->activeGeneration || $this->stopped) {
+                    return;
+                }
+                try {
+                    $this->queue->enqueue($frame);
+                } catch (\Throwable $failure) {
+                    $this->transportFailure = $failure;
+                    $this->transport->close();
+                }
                 $this->loop->stop();
             },
-            function (?int $code): void {
-                $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
-                    'hyperliquid_paper_public_connection_closed',
-                );
+            function (?int $code) use ($generation): void {
+                if ($generation !== $this->activeGeneration || $this->stopped) {
+                    return;
+                }
+                if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
+                    $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                } else {
+                    $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                        'hyperliquid_paper_public_connection_closed',
+                    );
+                }
                 $this->loop->stop();
             },
-            function (\Throwable $failure): void {
-                $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
-                    'hyperliquid_paper_public_protocol_error',
-                );
+            function (\Throwable $failure) use ($generation): void {
+                if ($generation !== $this->activeGeneration || $this->stopped) {
+                    return;
+                }
+                if (\in_array($this->checkpoint->phase, ['streaming', 'reconnecting'], true)) {
+                    $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                } else {
+                    $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                        'hyperliquid_paper_public_protocol_error',
+                    );
+                }
                 $this->loop->stop();
             },
         );
@@ -223,14 +284,55 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         return $this->transportFailure;
     }
 
+    private function throwPendingTransportFailure(): void
+    {
+        $failure = $this->pendingTransportFailure();
+        if ($failure !== null) {
+            throw $failure;
+        }
+    }
+
     /**
      * @param array{kind: string, data?: mixed} $decoded
      * @return \Generator<int, PaperMarketEvent>
      */
     private function processDecoded(array $decoded): \Generator
     {
-        if ($decoded['kind'] === 'subscription' || $decoded['kind'] === 'pong') {
+        if ($decoded['kind'] === 'subscription') {
+            if ($this->checkpoint->phase === 'reconnecting'
+                && $this->subscriptions->isReady()
+            ) {
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('streaming'),
+                );
+                $this->scheduleHeartbeat();
+                yield from $this->yieldCandidates([
+                    $this->normalizer->snapshotBoundary(
+                        'BTC',
+                        'reconnect',
+                        $this->checkpoint->sourceEpoch,
+                    ),
+                    $this->normalizer->snapshotBoundary(
+                        'ETH',
+                        'reconnect',
+                        $this->checkpoint->sourceEpoch,
+                    ),
+                ]);
+            }
+
             return;
+        }
+        if ($decoded['kind'] === 'pong') {
+            $this->acceptPong();
+
+            return;
+        }
+        if ($this->checkpoint->phase === 'reconnecting'
+            && !$this->subscriptions->isReady()
+        ) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_message_before_ready',
+            );
         }
         if ($decoded['kind'] === 'trades') {
             if (!\is_array($decoded['data'] ?? null)) {
@@ -402,7 +504,18 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($this->stopped) {
             return;
         }
+        if (\in_array($this->checkpoint->phase, ['streaming', 'stopping'], true)
+            && $this->checkpoint->continuity
+        ) {
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->loseContinuity(
+                    'hyperliquid_public_trade_gap_unrecoverable',
+                ),
+            );
+        }
         $this->stopped = true;
+        ++$this->activeGeneration;
+        $this->cancelTimers();
         $this->transport->close();
         $this->queue->clear();
         $this->loop->stop();
@@ -429,6 +542,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->requestHealthyStop(),
         );
+        $this->cancelTimers();
         $this->loop->stop();
     }
 
@@ -439,6 +553,9 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
 
     private function publicReason(\Throwable $exception): string
     {
+        if ($exception->getMessage() === 'hyperliquid_paper_natural_identity_conflict') {
+            return 'market_event_identity_conflict';
+        }
         if ($exception instanceof HyperliquidPaperLiveIntegrityException
             && preg_match('/\A[a-z][a-z0-9_]{2,127}\z/D', $exception->getMessage()) === 1
         ) {
@@ -446,5 +563,147 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         }
 
         return 'hyperliquid_paper_public_protocol_error';
+    }
+
+    private function scheduleHeartbeat(): void
+    {
+        if ($this->heartbeatTimer instanceof TimerInterface) {
+            $this->loop->cancelTimer($this->heartbeatTimer);
+        }
+        $generation = $this->activeGeneration;
+        $this->heartbeatTimer = $this->loop->addTimer(
+            HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS,
+            function () use ($generation): void {
+                if ($generation !== $this->activeGeneration
+                    || $this->stopped
+                    || $this->checkpoint->phase !== 'streaming'
+                ) {
+                    return;
+                }
+                try {
+                    $this->transport->send(['method' => 'ping']);
+                    $now = $this->timestamp($this->clock->now());
+                    $deadline = $this->timestamp(
+                        $this->clock->now()->modify(
+                            '+' . (string) HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS
+                                . ' seconds',
+                        ),
+                    );
+                    $this->checkpoint = $this->checkpointStore->save(
+                        $this->checkpoint->withHeartbeat(
+                            $this->checkpoint->heartbeat['last_received_at'],
+                            $now,
+                            $deadline,
+                        ),
+                    );
+                    $this->schedulePongTimeout($generation);
+                } catch (\Throwable $failure) {
+                    $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                        'hyperliquid_paper_public_protocol_error',
+                    );
+                    $this->loop->stop();
+                }
+            },
+        );
+    }
+
+    private function schedulePongTimeout(int $generation): void
+    {
+        if ($this->pongTimer instanceof TimerInterface) {
+            $this->loop->cancelTimer($this->pongTimer);
+        }
+        $this->pongTimer = $this->loop->addTimer(
+            HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS,
+            function () use ($generation): void {
+                if ($generation !== $this->activeGeneration
+                    || $this->stopped
+                    || $this->checkpoint->phase !== 'streaming'
+                ) {
+                    return;
+                }
+                $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
+                $this->loop->stop();
+            },
+        );
+    }
+
+    private function acceptPong(): void
+    {
+        if (!$this->pongTimer instanceof TimerInterface
+            || $this->checkpoint->heartbeat['pong_deadline_at'] === null
+        ) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_message_invalid',
+            );
+        }
+        $this->loop->cancelTimer($this->pongTimer);
+        $this->pongTimer = null;
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint->withHeartbeat(
+                $this->timestamp($this->clock->now()),
+                $this->checkpoint->heartbeat['last_ping_at'],
+                null,
+            ),
+        );
+        $this->scheduleHeartbeat();
+    }
+
+    private function beginReconnect(string $reason): void
+    {
+        $this->cancelTimers();
+        $this->subscriptions->reset();
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint->beginReconnect($reason),
+        );
+        if ($this->checkpoint->phase === 'failed') {
+            $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_reconnect_exhausted',
+            );
+
+            return;
+        }
+        $this->scheduleReconnect();
+    }
+
+    private function scheduleReconnect(): void
+    {
+        if ($this->reconnectTimer instanceof TimerInterface) {
+            return;
+        }
+        $attempt = $this->checkpoint->reconnectAttempt;
+        $delay = HyperliquidPaperLivePolicy::RECONNECT_DELAYS_SECONDS[$attempt - 1]
+            ?? throw new \LogicException();
+        $generation = $this->activeGeneration;
+        $this->reconnectTimer = $this->loop->addTimer(
+            $delay,
+            function () use ($generation): void {
+                if ($generation !== $this->activeGeneration
+                    || $this->stopped
+                    || $this->checkpoint->phase !== 'reconnecting'
+                ) {
+                    return;
+                }
+                $this->reconnectTimer = null;
+                $this->openTransport(reconnecting: true);
+            },
+        );
+    }
+
+    private function cancelTimers(): void
+    {
+        foreach (['heartbeatTimer', 'pongTimer', 'reconnectTimer'] as $property) {
+            $timer = $this->{$property};
+            if ($timer instanceof TimerInterface) {
+                $this->loop->cancelTimer($timer);
+                $this->{$property} = null;
+            }
+        }
+    }
+
+    private function timestamp(\DateTimeInterface $timestamp): string
+    {
+        return \DateTimeImmutable::createFromInterface($timestamp)
+            ->setTimezone(new \DateTimeZone('UTC'))
+            ->format('Y-m-d\TH:i:s.u\Z');
     }
 }
