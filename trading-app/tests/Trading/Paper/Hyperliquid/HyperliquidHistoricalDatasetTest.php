@@ -464,6 +464,86 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
         }
     }
 
+    public function testBaselineRejectsRehashedModelledBookWithTamperedPrices(): void
+    {
+        [, $events, $directory] = $this->buildDataset(
+            'hyperliquid-book-tampered-price',
+            PaperMarketDataNetwork::MAINNET,
+        );
+        $bookIndex = array_find_key(
+            $events,
+            static fn (PaperMarketEvent $event): bool => $event->channel
+                === PaperMarketDataChannel::TOP_OF_BOOK,
+        );
+        self::assertIsInt($bookIndex);
+        $book = $events[$bookIndex];
+        $payload = $book->payload;
+        $payload['bid_price'] = '1';
+        $events[$bookIndex] = $this->eventWithPayload($book, $payload);
+        $this->replaceDatasetEvents($directory, array_values($events));
+
+        $this->expectRuntimeReason('paper_dataset_hyperliquid_model_event_invalid');
+        (new PaperDatasetVerifier())->verifyForBaseline($directory);
+    }
+
+    public function testBaselineRejectsMissingBookExpectedByPrudentModel(): void
+    {
+        [, $events, $directory] = $this->buildDataset(
+            'hyperliquid-book-missing-expected',
+            PaperMarketDataNetwork::MAINNET,
+        );
+        $removed = false;
+        $events = array_values(array_filter(
+            $events,
+            static function (PaperMarketEvent $event) use (&$removed): bool {
+                if (!$removed && $event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
+                    $removed = true;
+
+                    return false;
+                }
+
+                return true;
+            },
+        ));
+        self::assertTrue($removed);
+        $this->replaceDatasetEvents($directory, $events);
+
+        $this->expectRuntimeReason('paper_dataset_hyperliquid_model_event_invalid');
+        (new PaperDatasetVerifier())->verifyForBaseline($directory);
+    }
+
+    public function testBaselineRejectsBookWhenPrudentModelReturnsNull(): void
+    {
+        [, $events, $directory] = $this->buildDataset(
+            'hyperliquid-book-unexpected-for-zero-volume',
+            PaperMarketDataNetwork::MAINNET,
+        );
+        $book = array_find(
+            $events,
+            static fn (PaperMarketEvent $event): bool => $event->channel
+                === PaperMarketDataChannel::TOP_OF_BOOK,
+        );
+        self::assertInstanceOf(PaperMarketEvent::class, $book);
+        $candleIndex = array_find_key(
+            $events,
+            static fn (PaperMarketEvent $event): bool => $event->symbol === $book->symbol
+                && $event->channel !== PaperMarketDataChannel::TOP_OF_BOOK
+                && ($event->payload['start_time'] ?? null)
+                    === ($book->payload['source_candle_start'] ?? null)
+                && $event->exchangeTimestamp == $book->exchangeTimestamp,
+        );
+        self::assertIsInt($candleIndex);
+        $candle = $events[$candleIndex];
+        $payload = $candle->payload;
+        $payload['volume'] = '0';
+        $payload['trade_count'] = '0';
+        $events[$candleIndex] = $this->eventWithPayload($candle, $payload);
+        $this->replaceDatasetEvents($directory, array_values($events));
+
+        $this->expectRuntimeReason('paper_dataset_hyperliquid_model_event_invalid');
+        (new PaperDatasetVerifier())->verifyForBaseline($directory);
+    }
+
     /**
      * @return iterable<string, array{array<string, mixed>, string}>
      */
@@ -723,7 +803,13 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
         return $this->event(
             channel: PaperMarketDataChannel::CANDLE_1M,
             payload: [
+                'native_symbol' => 'BTC',
+                'open' => '100',
+                'high' => '100',
+                'low' => '100',
                 'close' => '100',
+                'volume' => '0',
+                'trade_count' => '0',
                 'interval' => '1m',
                 'start_time' => '1704067200000',
                 'close_time' => '1704067259999',
@@ -779,6 +865,21 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
         }
 
         return $payload;
+    }
+
+    /** @param array<array-key, mixed> $payload */
+    private function eventWithPayload(PaperMarketEvent $event, array $payload): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            network: $event->sourceNetwork,
+            venue: $event->sourceVenue,
+            symbol: $event->symbol,
+            channel: $event->channel,
+            exchangeTimestamp: $event->exchangeTimestamp,
+            receivedTimestamp: $event->receivedTimestamp,
+            sequence: $event->sequence,
+            payload: $payload,
+        );
     }
 
     private function replaceDatasetEvent(string $directory, PaperMarketEvent $event): void
