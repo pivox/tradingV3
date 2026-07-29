@@ -11,3 +11,7 @@ framework:
             policy: sliding_window
             limit: 32
             interval: '2 seconds'
+        hyperliquid_paper_history:
+            policy: sliding_window
+            limit: 1200
+            interval: '1 minute'

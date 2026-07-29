@@ -68,6 +68,8 @@ parameters:
     env(OKX_PAPER_PUBLIC_REST_BASE_URI): 'https://www.okx.com'
     env(OKX_PAPER_PUBLIC_WS_URI): 'wss://ws.okx.com:8443/ws/v5/public'
     env(OKX_PAPER_PUBLIC_BUSINESS_WS_URI): 'wss://ws.okx.com:8443/ws/v5/business'
+    env(HYPERLIQUID_PAPER_PUBLIC_NETWORK): 'mainnet'
+    env(HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED): '0'
     env(PAPER_MARKET_DATA_ROOT): '%kernel.project_dir%/var/paper-market-data'
     env(REDIS_HOST): '127.0.0.1'
     env(REDIS_PORT): '6379'
@@ -386,6 +388,39 @@ services:
         public: true
 
     App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory: ~
+
+    App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory:
+        arguments:
+            $acquisitionEnabled: '%env(bool:HYPERLIQUID_PAPER_PUBLIC_ACQUISITION_ENABLED)%'
+            $dataRoot: '%env(resolve:PAPER_MARKET_DATA_ROOT)%'
+        public: true
+
+    App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig:
+        factory: ['@App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory', 'create']
+        arguments:
+            $network: '%env(string:HYPERLIQUID_PAPER_PUBLIC_NETWORK)%'
+
+    hyperliquid.paper_public.history_limiter:
+        class: Symfony\Component\RateLimiter\LimiterInterface
+        factory: ['@limiter.hyperliquid_paper_history', 'create']
+        arguments: ['public']
+
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter:
+        arguments:
+            $limiter: '@hyperliquid.paper_public.history_limiter'
+
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicHttpTransportInterface:
+        alias: App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport
+
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient:
+        arguments:
+            $transport: '@App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport'
+            $config: '@App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig'
+            $rateLimiter: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter'
+
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface:
+        alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
+        public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:
         abstract: true
