@@ -104,6 +104,10 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
         }
+        $this->validateEmittingCheckpoint();
+        if ($this->wasStopped()) {
+            return;
+        }
 
         $pending = $this->checkpoint['pending_event'] ?? null;
         if ($pending !== null) {
@@ -120,6 +124,11 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
                     'hyperliquid_acquisition_pending_event_not_acknowledged',
                 );
             }
+            // Generator consumers may call stop() while execution is suspended at yield.
+            // @phpstan-ignore-next-line
+            if ($this->wasStopped()) {
+                return;
+            }
         }
 
         $skip = $this->checkpoint['emit_index'] ?? null;
@@ -134,38 +143,15 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
             $this->ordinals,
         );
         foreach ($this->mergedModelInputs() as $input) {
-            if ($this->stopped) {
-                return;
-            }
             if ($index++ < $skip) {
                 continue;
             }
+            $eventState = $this->normalizedEventState(
+                $normalizer,
+                $input,
+                'hyperliquid_acquisition_page_invalid',
+            );
             try {
-                $event = $input['channel'] === PaperMarketDataChannel::TOP_OF_BOOK
-                    ? $normalizer->modelledTopOfBook($input['candle'], $input['book'])
-                    : $normalizer->candle($input['candle']);
-            } catch (\Throwable $exception) {
-                throw new HyperliquidHistoricalIntegrityException(
-                    'hyperliquid_acquisition_page_invalid',
-                    0,
-                    $exception,
-                );
-            }
-            if (!$event instanceof PaperMarketEvent) {
-                throw new HyperliquidHistoricalIntegrityException(
-                    'hyperliquid_acquisition_page_invalid',
-                );
-            }
-            try {
-                $eventState = json_decode(
-                    CanonicalJson::encode($event->toArray()),
-                    true,
-                    512,
-                    \JSON_THROW_ON_ERROR,
-                );
-                if (!\is_array($eventState) || array_is_list($eventState)) {
-                    throw new \JsonException();
-                }
                 $durableEvent = PaperMarketEvent::fromArray($eventState);
             } catch (\Throwable $exception) {
                 throw new HyperliquidHistoricalIntegrityException(
@@ -176,8 +162,8 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
             }
             $this->checkpoint['ordinal_state'] = $this->ordinals->snapshot();
             $this->checkpoint['pending_event'] = [
-                'natural_identity' => $input['natural_identity'],
                 'event' => $eventState,
+                'natural_identity' => $input['natural_identity'],
             ];
             $this->store->save($this->checkpoint);
             $this->observeDurability('after_pending_save:' . $this->checkpoint['emit_index']);
@@ -187,13 +173,146 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
                     'hyperliquid_acquisition_pending_event_not_acknowledged',
                 );
             }
-            if ($this->stopped) {
+            if ($this->wasStopped()) {
                 return;
             }
         }
 
         $this->checkpoint['phase'] = 'complete';
         $this->store->save($this->checkpoint);
+    }
+
+    private function validateEmittingCheckpoint(): void
+    {
+        $emitIndex = $this->checkpoint['emit_index'] ?? null;
+        $eventCount = $this->checkpoint['event_count'] ?? null;
+        $pending = $this->checkpoint['pending_event'] ?? null;
+        $ordinalState = $this->checkpoint['ordinal_state'] ?? null;
+        if (!\is_int($emitIndex)
+            || $emitIndex < 0
+            || !\is_int($eventCount)
+            || $eventCount < 0
+            || !\is_array($ordinalState)
+            || array_is_list($ordinalState)
+        ) {
+            $this->checkpointInvalid();
+        }
+
+        $validationOrdinals = new HyperliquidPaperSourceOrdinal();
+        $normalizer = new HyperliquidPaperMarketEventNormalizer(
+            $this->request->network,
+            $validationOrdinals,
+        );
+        $expectedOrdinalState = $emitIndex === 0 && $pending === null
+            ? $this->canonicalMap($validationOrdinals->snapshot())
+            : null;
+        $pendingMatched = false;
+        $actualCount = 0;
+        foreach ($this->mergedModelInputs() as $input) {
+            $eventState = $this->normalizedEventState(
+                $normalizer,
+                $input,
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+            if ($pending !== null && $actualCount === $emitIndex) {
+                $expectedPending = [
+                    'event' => $eventState,
+                    'natural_identity' => $input['natural_identity'],
+                ];
+                if (!\is_array($pending)
+                    || array_is_list($pending)
+                    || $pending !== $expectedPending
+                ) {
+                    $this->checkpointInvalid();
+                }
+                $expectedOrdinalState = $this->canonicalMap(
+                    $validationOrdinals->snapshot(),
+                );
+                $pendingMatched = true;
+            } elseif ($pending === null && $actualCount + 1 === $emitIndex) {
+                $expectedOrdinalState = $this->canonicalMap(
+                    $validationOrdinals->snapshot(),
+                );
+            }
+            ++$actualCount;
+        }
+
+        if ($actualCount !== $eventCount
+            || $emitIndex > $actualCount
+            || ($pending !== null
+                && ($emitIndex >= $actualCount || !$pendingMatched))
+            || $expectedOrdinalState === null
+            || $this->canonicalMap($ordinalState) !== $expectedOrdinalState
+        ) {
+            $this->checkpointInvalid();
+        }
+    }
+
+    /**
+     * @param array{
+     *     candle: HyperliquidCandle,
+     *     book: array<string, string>|null,
+     *     channel: PaperMarketDataChannel,
+     *     interval: string,
+     *     natural_identity: string
+     * } $input
+     *
+     * @return array<string, mixed>
+     */
+    private function normalizedEventState(
+        HyperliquidPaperMarketEventNormalizer $normalizer,
+        array $input,
+        string $failureReason,
+    ): array {
+        try {
+            $event = $input['channel'] === PaperMarketDataChannel::TOP_OF_BOOK
+                ? $normalizer->modelledTopOfBook($input['candle'], $input['book'])
+                : $normalizer->candle($input['candle']);
+            if (!$event instanceof PaperMarketEvent) {
+                throw new \LogicException();
+            }
+
+            return $this->canonicalMap($event->toArray());
+        } catch (\Throwable $exception) {
+            throw new HyperliquidHistoricalIntegrityException(
+                $failureReason,
+                0,
+                $exception,
+            );
+        }
+    }
+
+    /** @param array<string, mixed> $value
+     *  @return array<string, mixed>
+     */
+    private function canonicalMap(array $value): array
+    {
+        try {
+            $canonical = json_decode(
+                CanonicalJson::encode($value),
+                true,
+                512,
+                \JSON_THROW_ON_ERROR,
+            );
+            if (!\is_array($canonical) || array_is_list($canonical)) {
+                throw new \JsonException();
+            }
+
+            return $canonical;
+        } catch (\Throwable $exception) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
+    private function checkpointInvalid(): never
+    {
+        throw new HyperliquidHistoricalIntegrityException(
+            'hyperliquid_acquisition_checkpoint_invalid',
+        );
     }
 
     public function acknowledge(string $eventId): void
@@ -227,6 +346,11 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         $this->stopped = true;
     }
 
+    private function wasStopped(): bool
+    {
+        return $this->stopped;
+    }
+
     public function isComplete(): bool
     {
         return ($this->checkpoint['phase'] ?? null) === 'complete';
@@ -237,14 +361,14 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         foreach ($this->request->symbols as $symbol) {
             $coin = $this->instruments->nativeCoin($symbol);
             foreach ($this->request->intervals as $interval) {
-                if ($this->stopped) {
+                if ($this->wasStopped()) {
                     return false;
                 }
                 $this->fetchStream($coin, $interval);
             }
         }
 
-        return !$this->stopped;
+        return !$this->wasStopped();
     }
 
     private function fetchStream(string $coin, string $interval): void
@@ -280,7 +404,7 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         }
 
         while ($expectedCursor < $to) {
-            if ($this->stopped) {
+            if ($this->wasStopped()) {
                 return;
             }
             $this->assertPageAvailable();
@@ -713,15 +837,46 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
     {
         $microseconds = $this->epochMicroseconds($this->request->from);
         $stepMicroseconds = $step * 1_000;
+        if ($microseconds > \PHP_INT_MAX - ($stepMicroseconds - 1)) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_history_candle_cursor_not_progressing',
+            );
+        }
+        $quotient = $this->ceilingQuotient($microseconds, $stepMicroseconds);
+        if ($quotient > intdiv(\PHP_INT_MAX, $step)) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_history_candle_cursor_not_progressing',
+            );
+        }
 
-        return intdiv($microseconds + $stepMicroseconds - 1, $stepMicroseconds) * $step;
+        return $quotient * $step;
     }
 
     private function exclusiveToMilliseconds(): int
     {
         $microseconds = $this->epochMicroseconds($this->request->to);
+        if ($microseconds > \PHP_INT_MAX - 999) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_history_candle_cursor_not_progressing',
+            );
+        }
 
-        return intdiv($microseconds + 999, 1_000);
+        return $this->ceilingQuotient($microseconds, 1_000);
+    }
+
+    private function ceilingQuotient(int $value, int $divisor): int
+    {
+        $quotient = intdiv($value, $divisor);
+        if ($value % $divisor === 0) {
+            return $quotient;
+        }
+        if ($quotient === \PHP_INT_MAX) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_history_candle_cursor_not_progressing',
+            );
+        }
+
+        return $quotient + 1;
     }
 
     private function epochMicroseconds(\DateTimeImmutable $timestamp): int

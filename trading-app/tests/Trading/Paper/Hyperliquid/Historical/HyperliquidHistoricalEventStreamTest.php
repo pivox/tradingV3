@@ -399,6 +399,124 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
         self::assertFalse($restarted->isComplete());
     }
 
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function checkpointSequenceTamperingProvider(): iterable
+    {
+        yield 'emit index advanced without ordinal' => ['emit_index'];
+        yield 'event count altered within store bounds' => ['event_count'];
+        yield 'ordinal behind acknowledged prefix' => ['ordinal_behind'];
+        yield 'ordinal advanced beyond acknowledged prefix' => ['ordinal_advanced'];
+        yield 'foreign but allowed ordinal scope' => ['ordinal_foreign'];
+        yield 'pending replaced by later self-consistent event' => ['pending_later'];
+        yield 'pending removed while ordinal includes it' => ['pending_absent'];
+    }
+
+    #[DataProvider('checkpointSequenceTamperingProvider')]
+    public function testEmittingRestartRejectsSelfConsistentSequenceTamperingBeforeYield(
+        string $mode,
+    ): void {
+        [$directory, $request, $state] = $this->tamperedCheckpointFixture($mode);
+        $this->writeCheckpoint($directory, $state);
+        $stream = new HyperliquidHistoricalEventStream(
+            new NoCallHyperliquidHistoricalClient(),
+            $request,
+            $directory,
+        );
+
+        $this->expectIntegrityFailure(
+            $stream,
+            'hyperliquid_acquisition_checkpoint_invalid',
+        );
+        $failed = $this->checkpointAt($directory);
+        self::assertSame('failed', $failed['phase']);
+        self::assertSame(
+            'hyperliquid_acquisition_checkpoint_invalid',
+            $failed['failure_reason'],
+        );
+        self::assertNull($failed['pending_event']);
+    }
+
+    public function testStoppedSourceDoesNotYieldExistingPendingAndRestartStillReplaysIt(): void
+    {
+        $request = $this->smallRequest('stopped-pending');
+        $stream = new HyperliquidHistoricalEventStream(
+            new ScriptedHyperliquidHistoricalClient($request->to),
+            $request,
+            $this->testRoot,
+        );
+        $events = $this->eventGenerator($stream);
+        $events->rewind();
+        $pending = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        $pendingState = $pending->toArray();
+        unset($events);
+
+        $stream->stop();
+        $stopped = $this->eventGenerator($stream);
+        $stopped->rewind();
+        self::assertFalse($stopped->valid());
+        self::assertNotNull($this->checkpoint()['pending_event']);
+        unset($stopped, $stream);
+        gc_collect_cycles();
+
+        $restart = new HyperliquidHistoricalEventStream(
+            new NoCallHyperliquidHistoricalClient(),
+            $request,
+            $this->testRoot,
+        );
+        $replay = $this->eventGenerator($restart);
+        $replay->rewind();
+        self::assertInstanceOf(PaperMarketEvent::class, $replay->current());
+        self::assertSame($pendingState, $replay->current()->toArray());
+    }
+
+    public function testFirstGridCeilingOverflowFailsDurablyWithoutTypeError(): void
+    {
+        $from = $this->extremeTimestamp(775_000);
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'first-grid-overflow',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT'],
+            from: $from,
+            to: $from->modify('+1 second'),
+        );
+        $stream = new HyperliquidHistoricalEventStream(
+            new NoCallHyperliquidHistoricalClient(),
+            $request,
+            $this->testRoot,
+        );
+
+        $this->expectIntegrityFailure(
+            $stream,
+            'hyperliquid_history_candle_cursor_not_progressing',
+        );
+        self::assertSame('failed', $this->checkpoint()['phase']);
+    }
+
+    public function testExclusiveToCeilingOverflowFailsDurablyWithoutTypeError(): void
+    {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'exclusive-to-overflow',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT'],
+            from: new \DateTimeImmutable('2024-01-01T00:00:00.000000Z'),
+            to: $this->extremeTimestamp(775_807),
+        );
+        $stream = new HyperliquidHistoricalEventStream(
+            new NoCallHyperliquidHistoricalClient(),
+            $request,
+            $this->testRoot,
+        );
+
+        $this->expectIntegrityFailure(
+            $stream,
+            'hyperliquid_history_candle_cursor_not_progressing',
+        );
+        self::assertSame('failed', $this->checkpoint()['phase']);
+    }
+
     public function testStopBeforeIterationDoesNotFetchOrFalselyComplete(): void
     {
         $client = new ScriptedHyperliquidHistoricalClient(
@@ -578,6 +696,171 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
         self::assertSame($pid, pcntl_waitpid($pid, $status));
         self::assertTrue(pcntl_wifexited($status));
         self::assertSame(86, pcntl_wexitstatus($status), $boundary);
+    }
+
+    /**
+     * @return array{string, HyperliquidHistoricalRequest, array<string, mixed>}
+     */
+    private function tamperedCheckpointFixture(string $mode): array
+    {
+        $name = 'sequence-tamper-' . str_replace('_', '-', $mode);
+        $directory = $this->datasetDirectory($name);
+        $request = $this->smallRequestForDirectory($name);
+        if (\in_array($mode, ['emit_index', 'event_count', 'ordinal_foreign'], true)) {
+            $this->crashAtBoundary(
+                $request,
+                $directory,
+                'after_emitting_save',
+            );
+            $state = $this->checkpointAt($directory);
+        } elseif ($mode === 'pending_later' || $mode === 'pending_absent') {
+            $state = $this->seedEmissionCheckpoint($directory, $request, 0, true);
+        } else {
+            $state = $this->seedEmissionCheckpoint($directory, $request, 1, false);
+        }
+
+        if ($mode === 'emit_index') {
+            $state['emit_index'] = 1;
+        } elseif ($mode === 'event_count') {
+            --$state['event_count'];
+        } elseif ($mode === 'ordinal_behind') {
+            $state['ordinal_state'] = (new \App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal())
+                ->snapshot();
+        } elseif ($mode === 'ordinal_advanced') {
+            [$donorDirectory, $donorRequest] = $this->donorFixture($name . '-advanced');
+            $donor = $this->seedEmissionCheckpoint(
+                $donorDirectory,
+                $donorRequest,
+                2,
+                false,
+            );
+            $state['ordinal_state'] = $donor['ordinal_state'];
+        } elseif ($mode === 'ordinal_foreign') {
+            $state['ordinal_state'] = $this->foreignAllowedOrdinalState();
+        } elseif ($mode === 'pending_later') {
+            [$donorDirectory, $donorRequest] = $this->donorFixture($name . '-later');
+            $donor = $this->seedEmissionCheckpoint(
+                $donorDirectory,
+                $donorRequest,
+                1,
+                true,
+            );
+            $state['pending_event'] = $donor['pending_event'];
+            $state['ordinal_state'] = $donor['ordinal_state'];
+        } elseif ($mode === 'pending_absent') {
+            $state['pending_event'] = null;
+        } else {
+            throw new \LogicException('test_tampering_mode_invalid');
+        }
+
+        return [$directory, $request, $state];
+    }
+
+    /**
+     * @return array{string, HyperliquidHistoricalRequest}
+     */
+    private function donorFixture(string $name): array
+    {
+        $directory = $this->datasetDirectory($name);
+
+        return [$directory, $this->smallRequestForDirectory($name)];
+    }
+
+    /** @return array<string, mixed> */
+    private function seedEmissionCheckpoint(
+        string $directory,
+        HyperliquidHistoricalRequest $request,
+        int $acknowledged,
+        bool $pending,
+    ): array {
+        $stream = new HyperliquidHistoricalEventStream(
+            new ScriptedHyperliquidHistoricalClient($request->to),
+            $request,
+            $directory,
+        );
+        $events = $this->eventGenerator($stream);
+        $events->rewind();
+        for ($index = 0; $index < $acknowledged; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $stream->acknowledge($event->eventId);
+            if ($index + 1 < $acknowledged || $pending) {
+                $events->next();
+            }
+        }
+        if ($pending) {
+            self::assertInstanceOf(PaperMarketEvent::class, $events->current());
+        }
+        $state = $this->checkpointAt($directory);
+        unset($events, $stream);
+        gc_collect_cycles();
+
+        return $state;
+    }
+
+    /** @return array<string, mixed> */
+    private function foreignAllowedOrdinalState(): array
+    {
+        $row = ScriptedHyperliquidHistoricalClient::row(
+            'ETH',
+            '1m',
+            1_704_067_200_000,
+            60_000,
+        );
+        $candle = \App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle::fromApiRow(
+            $row,
+            'ETH',
+            '1m',
+        );
+        $ordinals = new \App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal();
+        $normalizer = new \App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer(
+            PaperMarketDataNetwork::MAINNET,
+            $ordinals,
+        );
+        $normalizer->candle($candle);
+
+        return $ordinals->snapshot();
+    }
+
+    /** @param array<string, mixed> $state */
+    private function writeCheckpoint(string $directory, array $state): void
+    {
+        $path = $directory
+            . '/checkpoints/hyperliquid-acquisition/mainnet/checkpoint.json';
+        self::assertNotFalse(file_put_contents(
+            $path,
+            \App\Trading\Paper\MarketData\CanonicalJson::encode($state) . "\n",
+        ));
+        chmod($path, 0600);
+    }
+
+    /** @return array<string, mixed> */
+    private function checkpointAt(string $directory): array
+    {
+        $path = $directory
+            . '/checkpoints/hyperliquid-acquisition/mainnet/checkpoint.json';
+        $decoded = json_decode(
+            (string) file_get_contents($path),
+            true,
+            512,
+            \JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($decoded);
+
+        return $decoded;
+    }
+
+    private function extremeTimestamp(int $microseconds): \DateTimeImmutable
+    {
+        $seconds = intdiv(\PHP_INT_MAX, 1_000_000);
+        $timestamp = \DateTimeImmutable::createFromFormat(
+            '!U.u',
+            $seconds . '.' . str_pad((string) $microseconds, 6, '0', \STR_PAD_LEFT),
+            new \DateTimeZone('UTC'),
+        );
+        self::assertInstanceOf(\DateTimeImmutable::class, $timestamp);
+
+        return $timestamp;
     }
 
     /**
