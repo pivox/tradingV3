@@ -23,6 +23,7 @@ nav:
       - Modules backend: technical/backend-modules.md
       - Interfaces et commandes: technical/interfaces.md
       - Donnees et persistance: technical/data.md
+      - Datasets Paper market data: technical/paper-market-data-datasets.md
       - Configuration: technical/configuration.md
       - Effective trading config resolver: technical/effective-trading-config-resolver.md
       - Runner extraction: technical/runner-extraction.md

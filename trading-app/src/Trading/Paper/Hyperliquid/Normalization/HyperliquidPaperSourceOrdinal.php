@@ -55,6 +55,48 @@ final class HyperliquidPaperSourceOrdinal
     ];
 
     /** @var list<string> */
+    private const LIVE_TRADE_PAYLOAD_KEYS = [
+        'block_time',
+        'native_symbol',
+        'origin',
+        'price',
+        'side',
+        'size',
+        'trade_id',
+        'transaction_hash',
+    ];
+
+    /** @var list<string> */
+    private const LIVE_BOOK_PAYLOAD_KEYS = [
+        'ask_level_count',
+        'ask_price',
+        'ask_size',
+        'bid_level_count',
+        'bid_price',
+        'bid_size',
+        'native_symbol',
+        'origin',
+        'source_book_hash',
+        'source_epoch',
+        'source_time',
+        'synthetic',
+    ];
+
+    /** @var list<string> */
+    private const CONNECTION_STATE_PAYLOAD_KEYS = [
+        'connection_epoch',
+        'native_symbol',
+        'state',
+    ];
+
+    /** @var list<string> */
+    private const SNAPSHOT_BOUNDARY_PAYLOAD_KEYS = [
+        'native_symbol',
+        'reason',
+        'source_epoch',
+    ];
+
+    /** @var list<string> */
     private const MODEL_INPUT_KEYS = [
         'ask',
         'atr',
@@ -93,6 +135,9 @@ final class HyperliquidPaperSourceOrdinal
         PaperMarketDataChannel::CANDLE_15M,
         PaperMarketDataChannel::CANDLE_1H,
         PaperMarketDataChannel::TOP_OF_BOOK,
+        PaperMarketDataChannel::PUBLIC_TRADE,
+        PaperMarketDataChannel::CONNECTION_STATE,
+        PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
     ];
 
     /**
@@ -516,7 +561,18 @@ final class HyperliquidPaperSourceOrdinal
                     $event,
                     $validationWitness,
                 ),
-                default => throw new \InvalidArgumentException(),
+                PaperMarketDataChannel::PUBLIC_TRADE => $this->canonicalLiveTradeIdentity(
+                    $event,
+                    $validationWitness,
+                ),
+                PaperMarketDataChannel::CONNECTION_STATE => $this->canonicalConnectionIdentity(
+                    $event,
+                    $validationWitness,
+                ),
+                PaperMarketDataChannel::SNAPSHOT_BOUNDARY => $this->canonicalSnapshotIdentity(
+                    $event,
+                    $validationWitness,
+                ),
             };
 
             if (!hash_equals($expected, $naturalIdentity)) {
@@ -555,7 +611,11 @@ final class HyperliquidPaperSourceOrdinal
             || !$this->unsignedInteger($tradeCount)
             || $this->channelForInterval($interval) !== $event->channel
             || ($payload['confirmed'] ?? null) !== true
-            || ($payload['origin'] ?? null) !== 'rest_candle_snapshot'
+            || !\in_array(
+                $payload['origin'] ?? null,
+                ['rest_candle_snapshot', 'ws_candle'],
+                true,
+            )
         ) {
             throw new \InvalidArgumentException();
         }
@@ -565,7 +625,8 @@ final class HyperliquidPaperSourceOrdinal
             throw new \InvalidArgumentException();
         }
         $this->assertCandleBoundary($interval, $startTime, $closeTime);
-        $this->assertEventTimestamps($event, $closeTime);
+        $live = $payload['origin'] === 'ws_candle';
+        $this->assertEventTimestamps($event, $closeTime, sameReceipt: !$live);
 
         $open = self::canonicalDecimal($payload['open'] ?? null, positive: true);
         $high = self::canonicalDecimal($payload['high'] ?? null, positive: true);
@@ -582,7 +643,13 @@ final class HyperliquidPaperSourceOrdinal
             throw new \InvalidArgumentException();
         }
 
-        return implode('|', [$coin, $interval, $startTime, $closeTime]);
+        return implode('|', [
+            ...($live ? [$event->sourceNetwork->value] : []),
+            $coin,
+            $interval,
+            $startTime,
+            $closeTime,
+        ]);
     }
 
     /** @param array<array-key, mixed>|null $validationWitness */
@@ -592,6 +659,10 @@ final class HyperliquidPaperSourceOrdinal
         ?array $validationWitness,
     ): string
     {
+        if (($event->payload['origin'] ?? null) === 'ws_l2_book') {
+            return $this->canonicalLiveBookIdentity($event, $validationWitness);
+        }
+
         if ($validationWitness === null || array_is_list($validationWitness)) {
             throw new \InvalidArgumentException();
         }
@@ -665,6 +736,177 @@ final class HyperliquidPaperSourceOrdinal
         return implode('|', $identityParts);
     }
 
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalLiveTradeIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::LIVE_TRADE_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $blockTime = $this->canonicalUnsignedString($payload['block_time'] ?? null);
+        $tradeId = $this->canonicalUnsignedString($payload['trade_id'] ?? null);
+        self::canonicalDecimal($payload['price'] ?? null, positive: true);
+        self::canonicalDecimal($payload['size'] ?? null, positive: true);
+        if (!\in_array($payload['side'] ?? null, ['buy', 'sell'], true)
+            || ($payload['origin'] ?? null) !== 'ws_trades'
+            || !\is_string($payload['transaction_hash'] ?? null)
+            || preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $payload['transaction_hash']) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEventTimestamps($event, $blockTime, sameReceipt: false);
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            $blockTime,
+            $tradeId,
+        ]);
+    }
+
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalLiveBookIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::LIVE_BOOK_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $sourceTime = $this->canonicalUnsignedString($payload['source_time'] ?? null);
+        $sourceEpoch = $this->canonicalPositiveIntegerString(
+            $payload['source_epoch'] ?? null,
+        );
+        $bidLevelCount = $this->canonicalPositiveIntegerString(
+            $payload['bid_level_count'] ?? null,
+        );
+        $askLevelCount = $this->canonicalPositiveIntegerString(
+            $payload['ask_level_count'] ?? null,
+        );
+        $bid = self::canonicalDecimal($payload['bid_price'] ?? null, positive: true);
+        $ask = self::canonicalDecimal($payload['ask_price'] ?? null, positive: true);
+        self::canonicalDecimal($payload['bid_size'] ?? null, positive: true);
+        self::canonicalDecimal($payload['ask_size'] ?? null, positive: true);
+        $sourceBookHash = $payload['source_book_hash'] ?? null;
+        if ($sourceEpoch === '' || $bidLevelCount === '' || $askLevelCount === ''
+            || !$bid->isLessThan($ask)
+            || ($payload['origin'] ?? null) !== 'ws_l2_book'
+            || ($payload['synthetic'] ?? null) !== false
+            || !\is_string($sourceBookHash)
+            || preg_match('/\A[0-9a-f]{64}\z/D', $sourceBookHash) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEventTimestamps($event, $sourceTime, sameReceipt: false);
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'book',
+            $sourceTime,
+            $sourceBookHash,
+        ]);
+    }
+
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalConnectionIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::CONNECTION_STATE_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $state = $payload['state'] ?? null;
+        $epoch = $payload['connection_epoch'] ?? null;
+        if (!\is_string($state)
+            || !\in_array($state, ['connected', 'subscribed', 'reconnecting', 'stopped'], true)
+            || !\is_int($epoch)
+            || $epoch < 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEqualEventTimestamps($event);
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'connection',
+            (string) $epoch,
+            $state,
+        ]);
+    }
+
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalSnapshotIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::SNAPSHOT_BOUNDARY_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $reason = $payload['reason'] ?? null;
+        $epoch = $payload['source_epoch'] ?? null;
+        if (!\is_string($reason)
+            || !\in_array($reason, ['initial', 'reconnect'], true)
+            || !\is_int($epoch)
+            || $epoch < 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEqualEventTimestamps($event);
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'snapshot',
+            (string) $epoch,
+            $reason,
+        ]);
+    }
+
+    private function canonicalLiveCoin(PaperMarketEvent $event, mixed $coin): string
+    {
+        if (!\is_string($coin)
+            || (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin) !== $event->symbol
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $coin;
+    }
+
+    private function canonicalUnsignedString(mixed $value): string
+    {
+        if (!\is_string($value) || !$this->unsignedInteger($value)) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
+    }
+
+    private function canonicalPositiveIntegerString(mixed $value): string
+    {
+        if (!\is_string($value)
+            || preg_match('/\A[1-9][0-9]*\z/D', $value) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
+    }
+
     private function nonnegativeInt(mixed $value): int
     {
         if (!\is_string($value)
@@ -692,11 +934,26 @@ final class HyperliquidPaperSourceOrdinal
         }
     }
 
-    private function assertEventTimestamps(PaperMarketEvent $event, string $closeTime): void
+    private function assertEventTimestamps(
+        PaperMarketEvent $event,
+        string $sourceTime,
+        bool $sameReceipt = true,
+    ): void
+    {
+        if (($sameReceipt
+                && $event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT)
+                    !== $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT))
+            || (!$sameReceipt && $event->receivedTimestamp < $event->exchangeTimestamp)
+            || $this->epochMilliseconds($event->exchangeTimestamp) !== $sourceTime
+        ) {
+            throw new \InvalidArgumentException();
+        }
+    }
+
+    private function assertEqualEventTimestamps(PaperMarketEvent $event): void
     {
         if ($event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT)
-                !== $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT)
-            || $this->epochMilliseconds($event->exchangeTimestamp) !== $closeTime
+            !== $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT)
         ) {
             throw new \InvalidArgumentException();
         }
