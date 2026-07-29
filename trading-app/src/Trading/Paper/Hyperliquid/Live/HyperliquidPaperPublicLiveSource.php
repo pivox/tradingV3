@@ -109,7 +109,27 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         if ($this->checkpoint->phase === 'complete') {
             return;
         }
-        if ($this->checkpoint->phase === 'fresh') {
+        if ($this->checkpoint->phase === 'stopping') {
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->loseContinuity(
+                    'hyperliquid_public_trade_gap_unrecoverable',
+                ),
+            );
+
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_public_trade_gap_unrecoverable',
+            );
+        }
+        if (\in_array(
+            $this->checkpoint->phase,
+            ['fresh', 'connecting', 'subscribing'],
+            true,
+        )) {
+            if ($this->checkpoint->phase !== 'fresh') {
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('fresh'),
+                );
+            }
             $this->connectAndSubscribe();
             $this->awaitSubscriptions();
             $this->throwPendingTransportFailure();
@@ -131,17 +151,6 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             ]);
         } elseif ($this->checkpoint->phase === 'streaming') {
             $this->beginReconnect('hyperliquid_public_trade_gap_unrecoverable');
-        } elseif (\in_array($this->checkpoint->phase, ['connecting', 'subscribing'], true)) {
-            $this->checkpoint = $this->checkpointStore->save(
-                $this->checkpoint->withPhase('fresh'),
-            );
-            $this->connectAndSubscribe();
-            $this->awaitSubscriptions();
-            $this->throwPendingTransportFailure();
-            $this->checkpoint = $this->checkpointStore->save(
-                $this->checkpoint->withPhase('streaming'),
-            );
-            $this->scheduleHeartbeat();
         } elseif ($this->checkpoint->phase === 'reconnecting') {
             $this->scheduleReconnect();
         }
@@ -416,6 +425,19 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
      */
     private function yieldCandidates(array $events): \Generator
     {
+        $known = array_fill_keys(
+            $this->checkpoint->acknowledgedIdentities,
+            true,
+        );
+        $unique = [];
+        foreach ($events as $event) {
+            if (isset($known[$event->eventId])) {
+                continue;
+            }
+            $known[$event->eventId] = true;
+            $unique[] = $event;
+        }
+        $events = $unique;
         if ($events === []) {
             return;
         }

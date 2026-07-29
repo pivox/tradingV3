@@ -14,6 +14,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use React\EventLoop\LoopInterface;
 use React\EventLoop\StreamSelectLoop;
@@ -187,6 +188,98 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame($pending->toArray(), $resumedEvents->current()->toArray());
         self::assertSame(0, $resumedTransport->connectCount);
         $resumed->acknowledge($pending->eventId);
+    }
+
+    #[DataProvider('unfinishedSetupPhases')]
+    public function testRestartFromUnfinishedSetupEmitsInitialBoundaries(
+        string $phase,
+    ): void {
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $store->save($checkpoint->withPhase($phase));
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source(
+            $transport,
+            loop: new HyperliquidDeterministicLoop(),
+        );
+        $events = self::generator($source->events());
+
+        $events->rewind();
+
+        self::assertSame(1, $transport->connectCount);
+        self::assertSame(
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            $events->current()->channel,
+        );
+        self::assertSame('initial', $events->current()->payload['reason']);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function unfinishedSetupPhases(): iterable
+    {
+        yield 'connecting' => ['connecting'];
+        yield 'subscribing' => ['subscribing'];
+    }
+
+    public function testRestartFromStoppingFailsContinuityInsteadOfCompleting(): void
+    {
+        $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
+        $checkpoint = $store->loadOrCreate(
+            'paper-hyperliquid-live-mainnet',
+            PaperMarketDataNetwork::MAINNET,
+            str_repeat('a', 64),
+        );
+        $store->save(
+            $checkpoint->withPhase('streaming')->requestHealthyStop(),
+        );
+        $transport = new DeterministicHyperliquidTransport([]);
+        $source = $this->source($transport);
+
+        try {
+            self::generator($source->events())->rewind();
+            self::fail('A restarted drain cannot prove queued frames were preserved.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'hyperliquid_public_trade_gap_unrecoverable',
+                $exception->getMessage(),
+            );
+        }
+
+        $persisted = $this->checkpoint();
+        self::assertSame('failed', $persisted->phase);
+        self::assertFalse($persisted->continuity);
+        self::assertFalse($source->isComplete());
+        self::assertSame(0, $transport->connectCount);
+    }
+
+    public function testExactTradeRedeliveryIsIgnoredWhileDrainingHealthyStop(): void
+    {
+        $trade = self::tradeFrame();
+        $source = $this->source(
+            new DeterministicHyperliquidTransport([$trade, $trade]),
+        );
+        $events = self::generator($source->events());
+        $events->rewind();
+
+        for ($index = 0; $index < 3; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index < 2) {
+                $events->next();
+            }
+        }
+        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $event->channel);
+
+        $source->requestHealthyOperatorStop();
+        $events->next();
+
+        self::assertFalse($events->valid());
+        self::assertTrue($source->isComplete());
     }
 
     public function testUnhealthyStopAfterStreamingPersistsContinuityLoss(): void

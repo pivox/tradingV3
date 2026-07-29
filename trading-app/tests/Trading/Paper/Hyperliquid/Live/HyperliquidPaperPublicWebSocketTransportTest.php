@@ -113,6 +113,31 @@ final class HyperliquidPaperPublicWebSocketTransportTest extends TestCase
         self::assertStringNotContainsString('secret', $errors[0]->getMessage());
     }
 
+    public function testSocketErrorInvalidatesConnectionBeforeReportingIt(): void
+    {
+        $connection = new HyperliquidFakePawlConnection();
+        $messages = [];
+        $errors = [];
+        self::connectedTransport(
+            $connection,
+            static function (string $frame) use (&$messages): void {
+                $messages[] = $frame;
+            },
+            static function (\Throwable $error) use (&$errors): void {
+                $errors[] = $error;
+            },
+        );
+        $failure = new \RuntimeException('transport_failure');
+
+        $connection->emit('error', $failure);
+        $connection->emit('message', '{"channel":"pong"}');
+        $connection->emit('error', $failure);
+
+        self::assertSame(1, $connection->closeCount);
+        self::assertSame([], $messages);
+        self::assertSame([$failure], $errors);
+    }
+
     public function testFactoryCreatesFreshNetworkBoundTransports(): void
     {
         $factory = new PawlHyperliquidPaperPublicWebSocketTransportFactory();

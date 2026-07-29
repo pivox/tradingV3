@@ -113,6 +113,7 @@ final class PawlHyperliquidPaperPublicWebSocketTransport implements
                         if ($generation === $this->generation
                             && $connection === $this->connection
                         ) {
+                            $this->close();
                             $onError($error);
                         }
                     },
