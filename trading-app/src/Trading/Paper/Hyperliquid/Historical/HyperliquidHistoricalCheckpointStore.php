@@ -12,15 +12,33 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final class HyperliquidHistoricalCheckpointStore
 {
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
+
+    /** @var list<string> */
+    public const ALLOWED_FAILURE_REASONS = [
+        'hyperliquid_acquisition_checkpoint_invalid',
+        'hyperliquid_acquisition_checkpoint_request_mismatch',
+        'hyperliquid_acquisition_page_chain_mismatch',
+        'hyperliquid_acquisition_page_hash_mismatch',
+        'hyperliquid_acquisition_page_invalid',
+        'hyperliquid_acquisition_page_oversized',
+        'hyperliquid_acquisition_page_unreadable',
+        'hyperliquid_history_candle_response_inconsistent',
+        'hyperliquid_history_candle_cursor_not_progressing',
+        'hyperliquid_history_candle_grid_gap',
+        'hyperliquid_history_retention_incomplete',
+        'hyperliquid_history_candle_response_limit_exceeded',
+        'hyperliquid_history_page_bound_exceeded',
+        'hyperliquid_history_event_bound_exceeded',
+        'hyperliquid_history_repeated_page',
+    ];
+
     private const REGULAR_FILE_TYPE = 0100000;
     private const DIRECTORY_FILE_TYPE = 0040000;
     private const SYMLINK_FILE_TYPE = 0120000;
     private const FILE_TYPE_MASK = 0170000;
     private const PAGE_FILENAME_PATTERN = '/\A(?:BTC|ETH)-candle_(?:1m|5m|15m|1h)-[0-9]{6}\.ndjson\z/D';
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
-    private const FAILURE_REASON_PATTERN = '/\Ahyperliquid_[a-z0-9]+(?:_[a-z0-9]+)*\z/D';
-    private const MAX_FAILURE_REASON_BYTES = 128;
     private const WRITER_LOCK_FILENAME = '.writer.lock';
     private const CHECKPOINT_BYTES_PER_PAGE = 512;
     private const SERIALIZE_PRECISION_SETTING = 'serialize_precision';
@@ -305,6 +323,7 @@ final class HyperliquidHistoricalCheckpointStore
     /** @param array<string, mixed> $state */
     private function validateState(array $state): void
     {
+        $this->assertSupportedSchema($state);
         $phase = $state['phase'] ?? null;
         $expectedKeys = [
             'schema_version',
@@ -324,8 +343,7 @@ final class HyperliquidHistoricalCheckpointStore
             $expectedKeys[] = 'failure_reason';
         }
         $this->assertExactKeys($state, $expectedKeys);
-        if ($state['schema_version'] !== self::SCHEMA_VERSION
-            || !\is_string($state['network'])
+        if (!\is_string($state['network'])
             || !\is_string($state['dataset_id'])
             || !\is_string($state['request_sha256'])
         ) {
@@ -366,8 +384,11 @@ final class HyperliquidHistoricalCheckpointStore
         }
         if ($phase === 'failed'
             && (!\is_string($state['failure_reason'])
-                || strlen($state['failure_reason']) > self::MAX_FAILURE_REASON_BYTES
-                || preg_match(self::FAILURE_REASON_PATTERN, $state['failure_reason']) !== 1)
+                || !\in_array(
+                    $state['failure_reason'],
+                    self::ALLOWED_FAILURE_REASONS,
+                    true,
+                ))
         ) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
@@ -443,6 +464,16 @@ final class HyperliquidHistoricalCheckpointStore
         }
         if (\in_array($phase, ['emitting', 'complete'], true)) {
             $this->assertCompletedRequestedGrid($state['streams']);
+        }
+    }
+
+    /** @param array<string, mixed> $state */
+    private function assertSupportedSchema(array $state): void
+    {
+        if (($state['schema_version'] ?? null) !== self::SCHEMA_VERSION) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_schema_unsupported',
+            );
         }
     }
 
@@ -746,6 +777,7 @@ final class HyperliquidHistoricalCheckpointStore
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
         }
+        $this->assertSupportedSchema($state);
         try {
             if (!hash_equals($this->encodeState($state) . "\n", $contents)) {
                 throw new HyperliquidHistoricalIntegrityException(

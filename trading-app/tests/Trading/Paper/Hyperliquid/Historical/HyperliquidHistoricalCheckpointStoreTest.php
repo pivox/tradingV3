@@ -21,6 +21,25 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(HyperliquidHistoricalCheckpointStore::class)]
 final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
 {
+    /** @var list<string> */
+    private const APPROVED_FAILURE_REASONS = [
+        'hyperliquid_acquisition_checkpoint_invalid',
+        'hyperliquid_acquisition_checkpoint_request_mismatch',
+        'hyperliquid_acquisition_page_chain_mismatch',
+        'hyperliquid_acquisition_page_hash_mismatch',
+        'hyperliquid_acquisition_page_invalid',
+        'hyperliquid_acquisition_page_oversized',
+        'hyperliquid_acquisition_page_unreadable',
+        'hyperliquid_history_candle_response_inconsistent',
+        'hyperliquid_history_candle_cursor_not_progressing',
+        'hyperliquid_history_candle_grid_gap',
+        'hyperliquid_history_retention_incomplete',
+        'hyperliquid_history_candle_response_limit_exceeded',
+        'hyperliquid_history_page_bound_exceeded',
+        'hyperliquid_history_event_bound_exceeded',
+        'hyperliquid_history_repeated_page',
+    ];
+
     private string $testRoot;
 
     protected function setUp(): void
@@ -56,7 +75,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
             'pending_event' => null,
             'phase' => 'fetching',
             'request_sha256' => $request->requestSha256(),
-            'schema_version' => 1,
+            'schema_version' => 2,
             'staged_row_count' => 0,
             'streams' => [],
         ];
@@ -95,6 +114,63 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
 
         $this->expectException(HyperliquidHistoricalIntegrityException::class);
         $this->expectExceptionMessage('hyperliquid_acquisition_checkpoint_invalid');
+
+        (new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request))->loadOrCreate();
+    }
+
+    public function testLoadRejectsRepresentativePreStagedTopLevelV1BeforeLayoutInterpretation(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-schema-v1');
+        $datasetDirectory = $this->datasetDirectory('schema-v1');
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $store->loadOrCreate();
+        $legacy = [
+            'dataset_id' => $request->datasetId,
+            'emit_index' => 0,
+            'event_count' => 0,
+            'network' => 'mainnet',
+            'ordinal_state' => ['schema_version' => 2, 'scopes' => []],
+            'page_count' => 0,
+            'pending_event' => null,
+            'phase' => 'fetching',
+            'request_sha256' => $request->requestSha256(),
+            'schema_version' => 1,
+            'streams' => [],
+        ];
+        $checkpointPath = $this->checkpointDirectory($datasetDirectory) . '/checkpoint.json';
+        self::assertNotFalse(file_put_contents(
+            $checkpointPath,
+            CanonicalJson::encode($legacy) . "\n",
+        ));
+        $store->__destruct();
+
+        $this->expectException(HyperliquidHistoricalIntegrityException::class);
+        $this->expectExceptionMessage(
+            'hyperliquid_acquisition_checkpoint_schema_unsupported',
+        );
+
+        (new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request))->loadOrCreate();
+    }
+
+    public function testLoadRejectsUnknownTopLevelSchemaBeforeStateValidation(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-schema-unknown');
+        $datasetDirectory = $this->datasetDirectory('schema-unknown');
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $state = $store->loadOrCreate();
+        $state['schema_version'] = 99;
+        $state['unexpected_layout'] = 0.123456789;
+        $checkpointPath = $this->checkpointDirectory($datasetDirectory) . '/checkpoint.json';
+        self::assertNotFalse(file_put_contents(
+            $checkpointPath,
+            CanonicalJson::encode($state) . "\n",
+        ));
+        $store->__destruct();
+
+        $this->expectException(HyperliquidHistoricalIntegrityException::class);
+        $this->expectExceptionMessage(
+            'hyperliquid_acquisition_checkpoint_schema_unsupported',
+        );
 
         (new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request))->loadOrCreate();
     }
@@ -1192,7 +1268,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         $state = $store->loadOrCreate();
         $state['staged_row_count'] = 0;
         $state['phase'] = 'failed';
-        $state['failure_reason'] = 'hyperliquid_historical_transport_failed';
+        $state['failure_reason'] = 'hyperliquid_history_retention_incomplete';
         $state['streams']['BTC/candle_1m'] = $this->emptyStream();
 
         $store->save($state);
@@ -1203,6 +1279,38 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         );
     }
 
+    public function testFailureReasonAllowlistIsExactAndAuditable(): void
+    {
+        self::assertSame(
+            self::APPROVED_FAILURE_REASONS,
+            HyperliquidHistoricalCheckpointStore::ALLOWED_FAILURE_REASONS,
+        );
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function allowedFailureReasonProvider(): iterable
+    {
+        foreach (self::APPROVED_FAILURE_REASONS as $reason) {
+            yield $reason => [$reason];
+        }
+    }
+
+    #[DataProvider('allowedFailureReasonProvider')]
+    public function testEveryAllowlistedFailureReasonPersists(string $reason): void
+    {
+        $suffix = substr(hash('sha256', $reason), 0, 12);
+        $request = $this->request('hyperliquid-checkpoint-reason-' . $suffix);
+        $datasetDirectory = $this->datasetDirectory('reason-' . $suffix);
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $state = $store->loadOrCreate();
+        $state['phase'] = 'failed';
+        $state['failure_reason'] = $reason;
+
+        $store->save($state);
+
+        self::assertSame($reason, $store->loadOrCreate()['failure_reason']);
+    }
+
     public function testFailureReasonIsForbiddenOutsideFailedPhase(): void
     {
         $request = $this->request('hyperliquid-checkpoint-nonfailed-reason');
@@ -1210,7 +1318,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
         $state = $store->loadOrCreate();
         $state['staged_row_count'] = 0;
-        $state['failure_reason'] = 'hyperliquid_historical_transport_failed';
+        $state['failure_reason'] = 'hyperliquid_history_retention_incomplete';
         $before = file_get_contents($this->checkpointDirectory($datasetDirectory) . '/checkpoint.json');
 
         try {
@@ -1240,6 +1348,8 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
             'uppercase' => 'hyperliquid_Historical_Failed',
             'oversized' => 'hyperliquid_' . str_repeat('a', 129),
             'non-string' => 7,
+            'code-shaped secret' => 'hyperliquid_secret_token_deadbeef',
+            'unknown plausible code' => 'hyperliquid_history_candle_fetch_failed',
         ];
 
         foreach ($cases as $label => $reason) {
