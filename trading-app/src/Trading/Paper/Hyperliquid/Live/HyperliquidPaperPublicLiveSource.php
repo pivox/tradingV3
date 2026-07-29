@@ -1,0 +1,450 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Trading\Paper\Hyperliquid\Live;
+
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
+use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
+use React\EventLoop\LoopInterface;
+use Symfony\Component\Clock\ClockInterface;
+
+final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourceInterface
+{
+    private readonly HyperliquidPaperPublicSubscriptionSet $subscriptions;
+    private readonly HyperliquidPaperPublicFrameDecoder $decoder;
+    private readonly HyperliquidPaperPublicFrameQueue $queue;
+    private readonly HyperliquidPaperSourceOrdinal $ordinals;
+    private readonly HyperliquidPaperMarketEventNormalizer $normalizer;
+
+    private ?\Throwable $transportFailure = null;
+    private bool $stopped = false;
+
+    public function __construct(
+        private readonly HyperliquidPaperPublicWebSocketTransportInterface $transport,
+        private readonly HyperliquidPaperPublicConfig $config,
+        ClockInterface $clock,
+        private readonly HyperliquidPaperLiveCheckpointStore $checkpointStore,
+        private HyperliquidPaperLiveCheckpoint $checkpoint,
+        private readonly LoopInterface $loop,
+        ?HyperliquidPaperPublicSubscriptionSet $subscriptions = null,
+        ?HyperliquidPaperPublicFrameDecoder $decoder = null,
+        ?HyperliquidPaperPublicFrameQueue $queue = null,
+    ) {
+        if ($config->network !== $checkpoint->network) {
+            throw new \InvalidArgumentException('hyperliquid_paper_live_checkpoint_mismatch');
+        }
+        $this->subscriptions = $subscriptions ?? new HyperliquidPaperPublicSubscriptionSet();
+        $this->decoder = $decoder ?? new HyperliquidPaperPublicFrameDecoder(
+            $this->subscriptions,
+        );
+        $this->queue = $queue ?? new HyperliquidPaperPublicFrameQueue();
+        $this->ordinals = HyperliquidPaperSourceOrdinal::restore(
+            $checkpoint->ordinalState,
+        );
+        $this->normalizer = new HyperliquidPaperMarketEventNormalizer(
+            $config->network,
+            $this->ordinals,
+            $clock,
+        );
+    }
+
+    public function venue(): PaperMarketDataVenue
+    {
+        return PaperMarketDataVenue::HYPERLIQUID;
+    }
+
+    public function events(): iterable
+    {
+        try {
+            yield from $this->eventFlow();
+        } catch (\Throwable $exception) {
+            if ($exception->getMessage() !== 'hyperliquid_paper_public_acquisition_disabled'
+                && !\in_array($this->checkpoint->phase, ['complete', 'failed'], true)
+            ) {
+                try {
+                    $this->checkpoint = $this->checkpointStore->save(
+                        $this->checkpoint->fail($this->publicReason($exception)),
+                    );
+                } catch (\Throwable) {
+                    // The original stable public failure remains authoritative.
+                }
+            }
+
+            throw $exception;
+        }
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function eventFlow(): \Generator
+    {
+        if (!$this->config->acquisitionEnabled) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_acquisition_disabled',
+            );
+        }
+
+        yield from $this->resumePendingEvents();
+        if ($this->checkpoint->phase === 'failed') {
+            throw new HyperliquidPaperLiveIntegrityException(
+                $this->checkpoint->failureReason
+                    ?? 'hyperliquid_paper_public_protocol_error',
+            );
+        }
+        if ($this->checkpoint->phase === 'complete') {
+            return;
+        }
+        if ($this->checkpoint->phase === 'fresh') {
+            $this->connectAndSubscribe();
+            $this->awaitSubscriptions();
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->withPhase('streaming'),
+            );
+            yield from $this->yieldCandidates([
+                $this->normalizer->snapshotBoundary(
+                    'BTC',
+                    'initial',
+                    $this->checkpoint->sourceEpoch,
+                ),
+                $this->normalizer->snapshotBoundary(
+                    'ETH',
+                    'initial',
+                    $this->checkpoint->sourceEpoch,
+                ),
+            ]);
+        }
+
+        while (!$this->stopped) {
+            if ($this->checkpoint->phase === 'stopping' && $this->queue->count() === 0) {
+                if ($this->checkpoint->pendingEvent !== null) {
+                    throw new HyperliquidPaperLiveIntegrityException(
+                        'hyperliquid_acquisition_pending_event_not_acknowledged',
+                    );
+                }
+                $this->transport->close();
+                $this->stopped = true;
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->completeHealthyStop(),
+                );
+
+                return;
+            }
+
+            $decoded = $this->nextDecodedFrame();
+            if ($decoded === null) {
+                continue;
+            }
+            yield from $this->processDecoded($decoded);
+        }
+    }
+
+    private function connectAndSubscribe(): void
+    {
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint->withPhase('connecting'),
+        );
+        $this->transport->connect(
+            function (): void {
+                $this->checkpoint = $this->checkpointStore->save(
+                    $this->checkpoint->withPhase('subscribing'),
+                );
+                foreach ($this->subscriptions->subscriptions() as $subscription) {
+                    $this->transport->send($subscription);
+                }
+                $this->loop->stop();
+            },
+            function (string $frame): void {
+                $this->queue->enqueue($frame);
+                $this->loop->stop();
+            },
+            function (?int $code): void {
+                $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_paper_public_connection_closed',
+                );
+                $this->loop->stop();
+            },
+            function (\Throwable $failure): void {
+                $this->transportFailure = new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_paper_public_protocol_error',
+                );
+                $this->loop->stop();
+            },
+        );
+    }
+
+    private function awaitSubscriptions(): void
+    {
+        while (!$this->subscriptions->isReady()) {
+            $decoded = $this->nextDecodedFrame();
+            if ($decoded === null) {
+                continue;
+            }
+            if ($decoded['kind'] !== 'subscription') {
+                throw new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_paper_public_message_before_ready',
+                );
+            }
+        }
+    }
+
+    /** @return array{kind: string, data?: mixed}|null */
+    private function nextDecodedFrame(): ?array
+    {
+        while ($this->queue->count() === 0) {
+            if ($this->transportFailure !== null) {
+                throw $this->transportFailure;
+            }
+            $this->loop->run();
+            $failure = $this->pendingTransportFailure();
+            if ($failure !== null) {
+                throw $failure;
+            }
+            if ($this->queue->count() === 0) {
+                throw new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_paper_public_no_progress',
+                );
+            }
+        }
+        $frame = $this->queue->dequeue();
+        if ($frame === null) {
+            return null;
+        }
+
+        return $this->decoder->decode($frame);
+    }
+
+    private function pendingTransportFailure(): ?\Throwable
+    {
+        return $this->transportFailure;
+    }
+
+    /**
+     * @param array{kind: string, data?: mixed} $decoded
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    private function processDecoded(array $decoded): \Generator
+    {
+        if ($decoded['kind'] === 'subscription' || $decoded['kind'] === 'pong') {
+            return;
+        }
+        if ($decoded['kind'] === 'trades') {
+            if (!\is_array($decoded['data'] ?? null)) {
+                throw new \LogicException();
+            }
+            $events = [];
+            foreach ($decoded['data'] as $row) {
+                if (!\is_array($row)) {
+                    throw new \LogicException();
+                }
+                $events[] = $this->normalizer->liveTrade($row);
+            }
+            yield from $this->yieldCandidates($events);
+
+            return;
+        }
+        if ($decoded['kind'] === 'book') {
+            if (!\is_array($decoded['data'] ?? null)) {
+                throw new \LogicException();
+            }
+            yield from $this->yieldCandidates([
+                $this->normalizer->liveTopOfBook(
+                    $decoded['data'],
+                    $this->checkpoint->sourceEpoch,
+                ),
+            ]);
+
+            return;
+        }
+        if ($decoded['kind'] !== 'candle' || !\is_array($decoded['data'] ?? null)) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_message_invalid',
+            );
+        }
+        /** @var array<string, mixed> $row */
+        $row = $decoded['data'];
+        $coin = $row['s'];
+        $interval = $row['i'];
+        if (!\is_string($coin) || !\is_string($interval)) {
+            throw new \LogicException();
+        }
+        $stream = $coin . '/' . $interval;
+        $next = HyperliquidCandle::fromApiRow($row, $coin, $interval);
+        $currentRow = $this->checkpoint->currentCandles[$stream] ?? null;
+        if ($currentRow === null) {
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->withCurrentCandle($stream, $row),
+            );
+
+            return;
+        }
+        $current = HyperliquidCandle::fromApiRow($currentRow, $coin, $interval);
+        if ($next->startTime <= $current->startTime) {
+            $this->checkpoint = $this->checkpointStore->save(
+                $this->checkpoint->withCurrentCandle($stream, $row),
+            );
+
+            return;
+        }
+        $event = $this->normalizer->closedLiveCandle($current);
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint
+                ->withOrdinalState($this->ordinals->snapshot())
+                ->withCurrentCandle($stream, $row)
+                ->withPending($event, [
+                    'remaining_events' => [],
+                    'after_ack' => [
+                        'finalize_candle' => [
+                            'stream' => $stream,
+                            'start_time' => $current->startTime,
+                        ],
+                    ],
+                ]),
+        );
+        yield from $this->resumePendingEvents();
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    private function yieldCandidates(array $events): \Generator
+    {
+        if ($events === []) {
+            return;
+        }
+        $first = array_shift($events);
+        if (!$first instanceof PaperMarketEvent) {
+            throw new \LogicException();
+        }
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint
+                ->withOrdinalState($this->ordinals->snapshot())
+                ->withPending($first, [
+                    'remaining_events' => array_map(
+                        static fn (PaperMarketEvent $event): array => $event->toArray(),
+                        $events,
+                    ),
+                    'after_ack' => null,
+                ]),
+        );
+        yield from $this->resumePendingEvents();
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function resumePendingEvents(): \Generator
+    {
+        while ($this->checkpoint->pendingEvent !== null) {
+            $event = $this->checkpoint->pendingEvent;
+            yield $event;
+            if (!\in_array(
+                $event->eventId,
+                $this->checkpoint->acknowledgedIdentities,
+                true,
+            )) {
+                throw new HyperliquidPaperLiveIntegrityException(
+                    'hyperliquid_acquisition_pending_event_not_acknowledged',
+                );
+            }
+        }
+    }
+
+    public function acknowledge(string $eventId): void
+    {
+        $continuation = $this->checkpoint->pendingContinuation;
+        if ($continuation === null) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_acquisition_pending_event_not_acknowledged',
+            );
+        }
+        $next = $this->checkpoint->acknowledge($eventId);
+        $afterAck = $continuation['after_ack'] ?? null;
+        if (\is_array($afterAck)
+            && \is_array($afterAck['finalize_candle'] ?? null)
+        ) {
+            $finalize = $afterAck['finalize_candle'];
+            if (!\is_string($finalize['stream'] ?? null)
+                || !\is_int($finalize['start_time'] ?? null)
+            ) {
+                throw new \LogicException();
+            }
+            $next = $next->finalizeCandle(
+                $finalize['stream'],
+                $finalize['start_time'],
+            );
+        }
+        $remaining = $continuation['remaining_events'] ?? null;
+        if (!\is_array($remaining) || !array_is_list($remaining)) {
+            throw new \LogicException();
+        }
+        $nextEventState = array_shift($remaining);
+        if ($nextEventState !== null) {
+            if (!\is_array($nextEventState) || array_is_list($nextEventState)) {
+                throw new \LogicException();
+            }
+            $next = $next->withPending(
+                PaperMarketEvent::fromArray($nextEventState),
+                [
+                    'remaining_events' => $remaining,
+                    'after_ack' => null,
+                ],
+            );
+        }
+        $this->checkpoint = $this->checkpointStore->save($next);
+    }
+
+    public function stop(): void
+    {
+        if ($this->stopped) {
+            return;
+        }
+        $this->stopped = true;
+        $this->transport->close();
+        $this->queue->clear();
+        $this->loop->stop();
+    }
+
+    public function isComplete(): bool
+    {
+        return $this->checkpoint->phase === 'complete'
+            && $this->checkpoint->continuity;
+    }
+
+    public function requestHealthyOperatorStop(): void
+    {
+        if ($this->checkpoint->phase === 'stopping') {
+            return;
+        }
+        if ($this->checkpoint->phase !== 'streaming'
+            || !$this->checkpoint->continuity
+        ) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_healthy_stop_invalid',
+            );
+        }
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint->requestHealthyStop(),
+        );
+        $this->loop->stop();
+    }
+
+    public function failureReason(): ?string
+    {
+        return $this->checkpoint->failureReason;
+    }
+
+    private function publicReason(\Throwable $exception): string
+    {
+        if ($exception instanceof HyperliquidPaperLiveIntegrityException
+            && preg_match('/\A[a-z][a-z0-9_]{2,127}\z/D', $exception->getMessage()) === 1
+        ) {
+            return $exception->getMessage();
+        }
+
+        return 'hyperliquid_paper_public_protocol_error';
+    }
+}

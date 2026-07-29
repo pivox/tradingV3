@@ -308,10 +308,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         $current = $this->currentCandles[$stream] ?? null;
         if ($current !== null) {
             $previous = HyperliquidCandle::fromApiRow($current, $coin, $interval);
-            if ($parsed->startTime < $previous->startTime
-                || ($parsed->startTime === $previous->startTime
-                    && CanonicalJson::encode($candle) !== CanonicalJson::encode($current))
-            ) {
+            if ($parsed->startTime < $previous->startTime) {
                 throw self::invalid();
             }
         }
@@ -361,6 +358,45 @@ final readonly class HyperliquidPaperLiveCheckpoint
     public function withOrdinalState(array $ordinalState): self
     {
         return $this->with(['ordinal_state' => $ordinalState]);
+    }
+
+    public function withPhase(string $phase): self
+    {
+        return $this->with([
+            'phase' => $phase,
+            'failure_reason' => $phase === 'failed'
+                ? ($this->failureReason ?? 'hyperliquid_paper_public_protocol_error')
+                : $this->failureReason,
+        ]);
+    }
+
+    public function fail(string $reason): self
+    {
+        $reason = self::failureReason($reason)
+            ?? throw self::invalid();
+
+        return $this->with([
+            'phase' => 'failed',
+            'failure_reason' => $reason,
+            'pending_event' => null,
+            'pending_continuation' => null,
+        ]);
+    }
+
+    public function requestHealthyStop(): self
+    {
+        return $this->with([
+            'phase' => 'stopping',
+            'healthy_stop' => ['requested' => true],
+        ]);
+    }
+
+    public function completeHealthyStop(): self
+    {
+        return $this->with([
+            'phase' => 'complete',
+            'current_candles' => [],
+        ]);
     }
 
     /** @param array<string, mixed> $changes */
