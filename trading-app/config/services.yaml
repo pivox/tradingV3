@@ -102,6 +102,9 @@ services:
             - '../src/Trading/Paper/Okx/Live/OkxPaperPublicLiveSource.php'
             - '../src/Trading/Paper/Okx/Live/OkxPaperLiveCheckpointStore.php'
             - '../src/Trading/Paper/Okx/Live/PawlOkxPaperPublicWebSocketTransport.php'
+            - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSource.php'
+            - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperLiveCheckpointStore.php'
+            - '../src/Trading/Paper/Hyperliquid/Live/PawlHyperliquidPaperPublicWebSocketTransport.php'
 
     App\Exchange\Fake\FakeDailyLossCapPolicy:
         arguments:
@@ -420,6 +423,16 @@ services:
 
     App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClientInterface:
         alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
+        public: true
+
+    hyperliquid.paper_public.ws_transport_factory:
+        class: App\Trading\Paper\Hyperliquid\Live\PawlHyperliquidPaperPublicWebSocketTransportFactory
+
+    App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportFactoryInterface:
+        alias: hyperliquid.paper_public.ws_transport_factory
+        public: true
+
+    App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory:
         public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:
