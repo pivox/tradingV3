@@ -940,6 +940,9 @@ final class HyperliquidHistoricalCheckpointStore
                 'hyperliquid_acquisition_lock_invalid',
             );
         }
+        $expectedIdentity = $statistics === false
+            ? null
+            : $this->lockIdentity($statistics);
 
         $created = $statistics === false;
         $handle = $created
@@ -949,6 +952,7 @@ final class HyperliquidHistoricalCheckpointStore
             $statistics = $this->pathStatistics($path, 'hyperliquid_acquisition_lock_validation');
             if ($statistics !== false && $this->isPrivateRegularFile($statistics)) {
                 $created = false;
+                $expectedIdentity = $this->lockIdentity($statistics);
                 $handle = @fopen($path, 'r+b');
             }
         }
@@ -963,6 +967,7 @@ final class HyperliquidHistoricalCheckpointStore
             $identity = $this->assertHandleMatchesPath(
                 $handle,
                 $path,
+                $expectedIdentity,
                 error: 'hyperliquid_acquisition_lock_invalid',
                 operation: 'hyperliquid_acquisition_lock_validation',
             );
@@ -994,6 +999,25 @@ final class HyperliquidHistoricalCheckpointStore
 
             throw $failure;
         }
+    }
+
+    /**
+     * @param array<string, mixed> $statistics
+     *
+     * @return array{dev: int, ino: int}
+     */
+    private function lockIdentity(array $statistics): array
+    {
+        if (!isset($statistics['dev'], $statistics['ino'])
+            || !\is_int($statistics['dev'])
+            || !\is_int($statistics['ino'])
+        ) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_lock_invalid',
+            );
+        }
+
+        return ['dev' => $statistics['dev'], 'ino' => $statistics['ino']];
     }
 
     private function assertWriterLock(): void

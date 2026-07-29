@@ -436,6 +436,123 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         self::assertSame($before, file_get_contents($checkpointPath));
     }
 
+    public function testWriterLockReplacementBetweenMetadataAndOpenCannotOwnSecondLock(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-lock-open-race');
+        $datasetDirectory = $this->datasetDirectory('lock-open-race');
+        $writerA = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $writerA->loadOrCreate();
+        $checkpointDirectory = $this->checkpointDirectory($datasetDirectory);
+        $checkpointPath = $checkpointDirectory . '/checkpoint.json';
+        $before = file_get_contents($checkpointPath);
+        $lockPath = $checkpointDirectory . '/.writer.lock';
+        $raced = false;
+        $filesystem = new FaultInjectingHyperliquidCheckpointFilesystem();
+        $filesystem->afterPathStatHook = static function (
+            string $path,
+            string $operation,
+        ) use ($lockPath, &$raced): void {
+            if ($raced
+                || $path !== $lockPath
+                || $operation !== 'hyperliquid_acquisition_lock_validation'
+            ) {
+                return;
+            }
+            $raced = true;
+            self::assertTrue(rename($path, $path . '.writer-a'));
+            self::assertSame(0, file_put_contents($path, ''));
+            self::assertTrue(chmod($path, 0600));
+        };
+
+        try {
+            $writerB = new HyperliquidHistoricalCheckpointStore(
+                $datasetDirectory,
+                $request,
+                $filesystem,
+            );
+            $writerB->loadOrCreate();
+            $writerB->__destruct();
+            self::fail('Writer B must not lock a replacement inode.');
+        } catch (HyperliquidHistoricalIntegrityException $exception) {
+            self::assertSame('hyperliquid_acquisition_lock_invalid', $exception->getMessage());
+        }
+
+        $replacement = fopen($lockPath, 'r+b');
+        self::assertIsResource($replacement);
+        self::assertTrue(flock($replacement, \LOCK_EX | \LOCK_NB));
+        self::assertTrue(flock($replacement, \LOCK_UN));
+        fclose($replacement);
+        self::assertSame($before, file_get_contents($checkpointPath));
+        $writerA->__destruct();
+    }
+
+    public function testExclusiveCreateCollisionFallbackPinsMetadataBeforeOpen(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-lock-collision-race');
+        $datasetDirectory = $this->datasetDirectory('lock-collision-race');
+        $checkpointDirectory = $this->checkpointDirectory($datasetDirectory);
+        $lockPath = $checkpointDirectory . '/.writer.lock';
+        $collisionOwner = null;
+        $raced = false;
+        $filesystem = new FaultInjectingHyperliquidCheckpointFilesystem();
+        $filesystem->createPrivateFileHook = static function (
+            string $path,
+            string $operation,
+        ) use ($lockPath, &$collisionOwner): void {
+            if ($path !== $lockPath
+                || $operation !== 'hyperliquid_acquisition_lock_create'
+                || \is_resource($collisionOwner)
+            ) {
+                return;
+            }
+            $collisionOwner = fopen($path, 'x+b');
+            self::assertIsResource($collisionOwner);
+            self::assertTrue(chmod($path, 0600));
+            self::assertTrue(flock($collisionOwner, \LOCK_EX | \LOCK_NB));
+        };
+        $filesystem->afterPathStatHook = static function (
+            string $path,
+            string $operation,
+            array|false $statistics,
+        ) use ($lockPath, &$collisionOwner, &$raced): void {
+            if ($raced
+                || !\is_resource($collisionOwner)
+                || $statistics === false
+                || $path !== $lockPath
+                || $operation !== 'hyperliquid_acquisition_lock_validation'
+            ) {
+                return;
+            }
+            $raced = true;
+            self::assertTrue(rename($path, $path . '.collision-owner'));
+            self::assertSame(0, file_put_contents($path, ''));
+            self::assertTrue(chmod($path, 0600));
+        };
+
+        try {
+            $writerB = new HyperliquidHistoricalCheckpointStore(
+                $datasetDirectory,
+                $request,
+                $filesystem,
+            );
+            $writerB->loadOrCreate();
+            $writerB->__destruct();
+            self::fail('Collision fallback must not lock a post-metadata replacement.');
+        } catch (HyperliquidHistoricalIntegrityException $exception) {
+            self::assertSame('hyperliquid_acquisition_lock_invalid', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($checkpointDirectory . '/checkpoint.json');
+        $replacement = fopen($lockPath, 'r+b');
+        self::assertIsResource($replacement);
+        self::assertTrue(flock($replacement, \LOCK_EX | \LOCK_NB));
+        self::assertTrue(flock($replacement, \LOCK_UN));
+        fclose($replacement);
+        self::assertIsResource($collisionOwner);
+        self::assertTrue(flock($collisionOwner, \LOCK_UN));
+        fclose($collisionOwner);
+    }
+
     /** @return iterable<string, array{string}> */
     public static function preRenameFailureOperationProvider(): iterable
     {
@@ -1244,6 +1361,7 @@ final class FaultInjectingHyperliquidCheckpointFilesystem extends PaperDatasetRe
     public ?\Closure $afterMoveHook = null;
     public ?\Closure $readHook = null;
     public ?\Closure $removeFileHook = null;
+    public ?\Closure $createPrivateFileHook = null;
 
     /** @var list<string> */
     public array $operations = [];
@@ -1327,5 +1445,15 @@ final class FaultInjectingHyperliquidCheckpointFilesystem extends PaperDatasetRe
         }
 
         return parent::removeFile($path, $expectedStatistics, $operation);
+    }
+
+    /** @return resource|false */
+    public function createPrivateFile(string $path, string $operation)
+    {
+        if ($this->createPrivateFileHook !== null) {
+            ($this->createPrivateFileHook)($path, $operation);
+        }
+
+        return parent::createPrivateFile($path, $operation);
     }
 }
