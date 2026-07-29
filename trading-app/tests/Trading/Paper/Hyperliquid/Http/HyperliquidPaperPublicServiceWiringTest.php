@@ -226,6 +226,12 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
     {
         yield 'wallet signer' => [new Task9ForbiddenWalletSigner()];
         yield 'generic application exchange client' => [new Task9ForbiddenExchangeRestClient()];
+        yield 'neutral adapter implementing wallet signer contract' => [new Task9NeutralAdapter()];
+
+        $exchangeUri = 'https://api.hyperliquid.xyz/exchange';
+        yield 'App-owned closure capturing exchange URI' => [
+            static fn (): string => $exchangeUri,
+        ];
     }
 
     #[DataProvider('forbiddenRuntimeDependencies')]
@@ -401,7 +407,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
                     $boundObject,
                     $path . '::{boundObject}',
                     $depth + 1,
-                    false,
+                    $inspectAppOwnedIdentifier,
                     $seen,
                     $reachableClasses,
                     $nodeCount,
@@ -411,7 +417,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
                 $closure->getStaticVariables(),
                 $path . '::{staticCaptures}',
                 $depth + 1,
-                false,
+                $inspectAppOwnedIdentifier,
                 $seen,
                 $reachableClasses,
                 $nodeCount,
@@ -460,7 +466,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
                     $item,
                     $path . '{' . (is_int($key) ? (string) $key : 'key') . '}',
                     $depth + 1,
-                    $appOwned,
+                    $inspectAppOwnedIdentifier || $appOwned,
                     $seen,
                     $reachableClasses,
                     $nodeCount,
@@ -472,13 +478,21 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
     /** @param class-string $class */
     private static function assertSafeRuntimeDependencyClass(string $class, string $path): void
     {
-        if (
-            str_starts_with($class, 'App\\Exchange\\')
-            || preg_match(self::FORBIDDEN_RUNTIME_DEPENDENCY_PATTERN, $class) === 1
-        ) {
-            throw new \LogicException(
-                'hyperliquid_paper_forbidden_runtime_dependency:' . $path . ':' . $class,
-            );
+        $reflection = new \ReflectionClass($class);
+        $identities = [$class, ...$reflection->getInterfaceNames()];
+        for ($parent = $reflection->getParentClass(); $parent !== false; $parent = $parent->getParentClass()) {
+            $identities[] = $parent->getName();
+        }
+
+        foreach (array_unique($identities) as $identity) {
+            if (
+                str_starts_with($identity, 'App\\Exchange\\')
+                || preg_match(self::FORBIDDEN_RUNTIME_DEPENDENCY_PATTERN, $identity) === 1
+            ) {
+                throw new \LogicException(
+                    'hyperliquid_paper_forbidden_runtime_dependency:' . $path . ':' . $identity,
+                );
+            }
         }
     }
 
@@ -523,5 +537,13 @@ final class Task9ForbiddenWalletSigner
 }
 
 final class Task9ForbiddenExchangeRestClient
+{
+}
+
+interface Task9WalletSignerContract
+{
+}
+
+final class Task9NeutralAdapter implements Task9WalletSignerContract
 {
 }
