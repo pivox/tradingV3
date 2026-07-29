@@ -10,7 +10,11 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
 use Brick\Math\BigInteger;
 
 final class PaperReplayReader
@@ -82,7 +86,14 @@ final class PaperReplayReader
                 $datasetPin,
                 'paper_replay_dataset_after_events_load',
             );
-            usort($events, self::compare(...));
+            if ($manifest->venue === PaperMarketDataVenue::HYPERLIQUID
+                && $manifest->quality
+                    === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+            ) {
+                $events = self::sortHyperliquidHistorical($events);
+            } else {
+                usort($events, self::compare(...));
+            }
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_sort',
@@ -357,6 +368,80 @@ final class PaperReplayReader
             if ($comparison !== 0) {
                 return $comparison;
             }
+        }
+
+        $comparison = strcmp($leftEvent->eventId, $rightEvent->eventId);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        return $left['input_index'] <=> $right['input_index'];
+    }
+
+    /**
+     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
+     *
+     * @return list<array{event: PaperMarketEvent, input_index: int}>
+     */
+    private static function sortHyperliquidHistorical(
+        #[\SensitiveParameter] array $events,
+    ): array {
+        try {
+            /** @var array<string, int> $intervals */
+            $intervals = [];
+            foreach ($events as $entry) {
+                $event = $entry['event'];
+                $intervals[$event->eventId] = HyperliquidHistoricalEventCoverage::parse(
+                    $event,
+                )->intervalMilliseconds;
+            }
+            usort(
+                $events,
+                static fn (array $left, array $right): int => self::compareHyperliquidHistorical(
+                    $left,
+                    $right,
+                    $intervals,
+                ),
+            );
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+
+        return $events;
+    }
+
+    /**
+     * @param array{event: PaperMarketEvent, input_index: int} $left
+     * @param array{event: PaperMarketEvent, input_index: int} $right
+     * @param array<string, int>                                $intervals
+     */
+    private static function compareHyperliquidHistorical(
+        #[\SensitiveParameter] array $left,
+        #[\SensitiveParameter] array $right,
+        #[\SensitiveParameter] array $intervals,
+    ): int {
+        $leftEvent = $left['event'];
+        $rightEvent = $right['event'];
+
+        $comparison = $leftEvent->exchangeTimestamp <=> $rightEvent->exchangeTimestamp;
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = strcmp($leftEvent->symbol, $rightEvent->symbol);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = $intervals[$leftEvent->eventId]
+            <=> $intervals[$rightEvent->eventId];
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = strcmp($leftEvent->channel->value, $rightEvent->channel->value);
+        if ($comparison !== 0) {
+            return $comparison;
         }
 
         $comparison = strcmp($leftEvent->eventId, $rightEvent->eventId);

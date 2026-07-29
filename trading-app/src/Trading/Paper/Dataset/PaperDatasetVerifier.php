@@ -5,7 +5,16 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Dataset;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequestIdentity;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalTimeGrid;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPrudentBookModel;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
@@ -87,6 +96,7 @@ final class PaperDatasetVerifier
             if ($manifest->state !== PaperDatasetState::COMPLETE) {
                 throw new \RuntimeException('paper_dataset_not_complete');
             }
+            $this->assertHyperliquidHistoricalCoverageIdentity($manifest, false);
 
             $facts = $this->scan($eventsPath, $manifest, $eventLimit);
             $assertDirectories();
@@ -148,8 +158,48 @@ final class PaperDatasetVerifier
         if (!$manifest->hasCertifiableNetworkProvenance()) {
             throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
         }
+        if ($manifest->quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+            && ($manifest->modelName !== 'hl_candle_atr_top_v1' || $manifest->modelVersion !== '1.0.0')
+        ) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_model_invalid');
+        }
+        $this->assertHyperliquidHistoricalCoverageIdentity($manifest, true);
 
         return $manifest;
+    }
+
+    private function assertHyperliquidHistoricalCoverageIdentity(
+        PaperDatasetManifest $manifest,
+        bool $required,
+    ): void {
+        if ($manifest->quality
+            !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+        ) {
+            return;
+        }
+        $coverage = $manifest->historicalCoverage;
+        if ($coverage === null) {
+            if ($required) {
+                throw new \RuntimeException('paper_dataset_hyperliquid_coverage_invalid');
+            }
+
+            return;
+        }
+        $expectedRequestSha256 = HyperliquidHistoricalRequestIdentity::sha256(
+            $manifest->datasetId,
+            $manifest->network,
+            array_keys($manifest->symbols),
+            $coverage->intervals,
+            $coverage->from,
+            $coverage->to,
+            $coverage->maximumEvents,
+            $coverage->maximumPages,
+            $coverage->maximumResponseBytes,
+            $coverage->maximumRetries,
+        );
+        if (!hash_equals($expectedRequestSha256, $coverage->requestSha256)) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_coverage_invalid');
+        }
     }
 
     private function assertNoSymlinkComponents(#[\SensitiveParameter] string $path): void
@@ -509,7 +559,7 @@ final class PaperDatasetVerifier
      */
     private function scan(
         #[\SensitiveParameter] string $eventsPath,
-        PaperDatasetManifest $manifest,
+        #[\SensitiveParameter] PaperDatasetManifest $manifest,
         ?int $eventLimit,
     ): array {
         /** @var array<string, true> $identities */
@@ -525,6 +575,12 @@ final class PaperDatasetVerifier
         $start = null;
         $end = null;
         $checksumContext = hash_init('sha256');
+        /** @var array<string, array<string, array<int, int>>> $historicalCandles */
+        $historicalCandles = [];
+        /** @var array<string, array<string, array<int, PaperMarketEvent>>> $historicalCandleEvents */
+        $historicalCandleEvents = [];
+        /** @var list<array{symbol: string, coverage: HyperliquidHistoricalEventCoverage, event: PaperMarketEvent}> $historicalBooks */
+        $historicalBooks = [];
 
         $handle = $this->openRegularFile(
             $eventsPath,
@@ -568,6 +624,29 @@ final class PaperDatasetVerifier
                 }
                 if (!array_key_exists($event->symbol, $manifest->symbols)) {
                     throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
+                }
+                $historicalCoverage = $this->assertHyperliquidHistoricalEvent($event, $manifest);
+                if ($historicalCoverage !== null) {
+                    if ($historicalCoverage->modelledBook) {
+                        $historicalBooks[] = [
+                            'symbol' => $event->symbol,
+                            'coverage' => $historicalCoverage,
+                            'event' => $event,
+                        ];
+                    } else {
+                        $starts = &$historicalCandles[$event->symbol][$historicalCoverage->interval];
+                        if (isset($starts[$historicalCoverage->startMilliseconds])) {
+                            throw new \RuntimeException(
+                                'paper_dataset_hyperliquid_coverage_incomplete',
+                            );
+                        }
+                        $starts[$historicalCoverage->startMilliseconds]
+                            = $historicalCoverage->closeMilliseconds;
+                        unset($starts);
+                        $historicalCandleEvents[$event->symbol][$historicalCoverage->interval][
+                            $historicalCoverage->startMilliseconds
+                        ] = $event;
+                    }
                 }
                 if (isset($identities[$event->eventId])) {
                     throw new \RuntimeException('paper_dataset_duplicate_identity');
@@ -634,6 +713,12 @@ final class PaperDatasetVerifier
         $channels = array_values(array_unique($channels));
         sort($channels, SORT_STRING);
         ksort($sequenceGaps, SORT_STRING);
+        $this->assertHyperliquidHistoricalCoverage(
+            $manifest,
+            $historicalCandles,
+            $historicalCandleEvents,
+            $historicalBooks,
+        );
 
         return [
             'event_count' => $count,
@@ -649,6 +734,248 @@ final class PaperDatasetVerifier
                 'ino' => $statistics['ino'],
             ],
         ];
+    }
+
+    private function assertHyperliquidHistoricalEvent(
+        #[\SensitiveParameter] PaperMarketEvent $event,
+        #[\SensitiveParameter] PaperDatasetManifest $manifest,
+    ): ?HyperliquidHistoricalEventCoverage {
+        if ($manifest->venue !== PaperMarketDataVenue::HYPERLIQUID
+            || $manifest->quality
+                !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+        ) {
+            return null;
+        }
+        if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_historical_trade_forbidden');
+        }
+        if (!\in_array($event->channel, [
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+            PaperMarketDataChannel::CANDLE_15M,
+            PaperMarketDataChannel::CANDLE_1H,
+            PaperMarketDataChannel::TOP_OF_BOOK,
+        ], true)) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_channel_invalid');
+        }
+        try {
+            return HyperliquidHistoricalEventCoverage::parse($event);
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
+        }
+    }
+
+    /**
+     * @param array<string, array<string, array<int, int>>> $candles
+     * @param array<string, array<string, array<int, PaperMarketEvent>>> $candleEvents
+     * @param list<array{symbol: string, coverage: HyperliquidHistoricalEventCoverage, event: PaperMarketEvent}> $books
+     */
+    private function assertHyperliquidHistoricalCoverage(
+        PaperDatasetManifest $manifest,
+        #[\SensitiveParameter] array $candles,
+        #[\SensitiveParameter] array $candleEvents,
+        #[\SensitiveParameter] array $books,
+    ): void {
+        if ($manifest->venue !== PaperMarketDataVenue::HYPERLIQUID
+            || $manifest->quality
+                !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+        ) {
+            return;
+        }
+
+        foreach ($books as $book) {
+            $coverage = $book['coverage'];
+            if (($candles[$book['symbol']][$coverage->interval][$coverage->startMilliseconds] ?? null)
+                !== $coverage->closeMilliseconds
+            ) {
+                throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
+            }
+        }
+        if ($manifest->historicalCoverage === null) {
+            $this->assertHyperliquidHistoricalBooksMatchModel($candleEvents, $books);
+
+            return;
+        }
+
+        $durations = [
+            '1m' => 60_000,
+            '5m' => 300_000,
+            '15m' => 900_000,
+            '1h' => 3_600_000,
+        ];
+        foreach (array_keys($manifest->symbols) as $symbol) {
+            foreach ($durations as $interval => $duration) {
+                try {
+                    $first = HyperliquidHistoricalTimeGrid::firstGridStartMilliseconds(
+                        $manifest->historicalCoverage->fromTimestamp(),
+                        $duration,
+                    );
+                    $exclusiveTo = HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds(
+                        $manifest->historicalCoverage->toTimestamp(),
+                    );
+                    $exclusiveStartLimit =
+                        HyperliquidHistoricalTimeGrid::exclusiveStartLimitMilliseconds(
+                            $manifest->historicalCoverage->toTimestamp(),
+                            $duration,
+                        );
+                    $expectedCount = HyperliquidHistoricalTimeGrid::expectedCount(
+                        $first,
+                        $exclusiveTo,
+                        $duration,
+                    );
+                } catch (\Throwable) {
+                    throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
+                }
+                $starts = $candles[$symbol][$interval] ?? [];
+                if (\count($starts) !== $expectedCount) {
+                    throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
+                }
+                foreach ($starts as $start => $close) {
+                    if ($start < $first
+                        || $start >= $exclusiveStartLimit
+                        || ($start - $first) % $duration !== 0
+                        || $start > \PHP_INT_MAX - ($duration - 1)
+                        || $start + $duration - 1 !== $close
+                    ) {
+                        throw new \RuntimeException(
+                            'paper_dataset_hyperliquid_coverage_incomplete',
+                        );
+                    }
+                }
+            }
+        }
+
+        foreach ($candles as $symbol => $intervals) {
+            if (!array_key_exists($symbol, $manifest->symbols)) {
+                throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
+            }
+            foreach (array_keys($intervals) as $interval) {
+                if (!isset($durations[$interval])) {
+                    throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
+                }
+            }
+        }
+        $this->assertHyperliquidHistoricalBooksMatchModel($candleEvents, $books);
+    }
+
+    /**
+     * @param array<string, array<string, array<int, PaperMarketEvent>>> $candleEvents
+     * @param list<array{symbol: string, coverage: HyperliquidHistoricalEventCoverage, event: PaperMarketEvent}> $books
+     */
+    private function assertHyperliquidHistoricalBooksMatchModel(
+        #[\SensitiveParameter] array $candleEvents,
+        #[\SensitiveParameter] array $books,
+    ): void {
+        /** @var array<string, array<string, array<int, PaperMarketEvent>>> $actualBooks */
+        $actualBooks = [];
+        foreach ($books as $book) {
+            $coverage = $book['coverage'];
+            if (isset($actualBooks[$book['symbol']][$coverage->interval][
+                $coverage->startMilliseconds
+            ])) {
+                throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
+            }
+            $actualBooks[$book['symbol']][$coverage->interval][
+                $coverage->startMilliseconds
+            ] = $book['event'];
+        }
+
+        foreach ($candleEvents as $symbol => $intervals) {
+            foreach ($intervals as $interval => $eventsByStart) {
+                ksort($eventsByStart, \SORT_NUMERIC);
+                $model = new HyperliquidPrudentBookModel();
+                foreach ($eventsByStart as $start => $event) {
+                    try {
+                        $candle = $this->hyperliquidCandleFromEvent($event, $interval);
+                        $expected = $model->push($candle);
+                    } catch (\Throwable) {
+                        throw new \RuntimeException(
+                            'paper_dataset_hyperliquid_model_event_invalid',
+                        );
+                    }
+                    $actual = $actualBooks[$symbol][$interval][$start] ?? null;
+                    if ($expected === null) {
+                        if ($actual !== null) {
+                            throw new \RuntimeException(
+                                'paper_dataset_hyperliquid_model_event_invalid',
+                            );
+                        }
+
+                        continue;
+                    }
+                    $expectedPayload = [
+                            'bid_price' => $expected['bid'],
+                            'bid_size' => $expected['size'],
+                            'ask_price' => $expected['ask'],
+                            'ask_size' => $expected['size'],
+                            'model_name' => HyperliquidPrudentBookModel::NAME,
+                            'model_version' => HyperliquidPrudentBookModel::VERSION,
+                            'origin' => 'historical_candle_model',
+                            'source_candle_start' => (string) $start,
+                            'synthetic' => true,
+                        ];
+                    if ($actual === null
+                        || CanonicalJson::encode($actual->payload)
+                            !== CanonicalJson::encode($expectedPayload)
+                    ) {
+                        throw new \RuntimeException(
+                            'paper_dataset_hyperliquid_model_event_invalid',
+                        );
+                    }
+                    unset($actualBooks[$symbol][$interval][$start]);
+                }
+            }
+        }
+        foreach ($actualBooks as $intervals) {
+            foreach ($intervals as $eventsByStart) {
+                if ($eventsByStart !== []) {
+                    throw new \RuntimeException(
+                        'paper_dataset_hyperliquid_model_event_invalid',
+                    );
+                }
+            }
+        }
+    }
+
+    private function hyperliquidCandleFromEvent(
+        #[\SensitiveParameter] PaperMarketEvent $event,
+        string $interval,
+    ): HyperliquidCandle {
+        $payload = $event->payload;
+        $nativeSymbol = $payload['native_symbol'] ?? null;
+        if (!\is_string($nativeSymbol)
+            || (new HyperliquidPaperInstrumentMap())->normalizedSymbol($nativeSymbol)
+                !== $event->symbol
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return HyperliquidCandle::fromApiRow([
+            'T' => $this->hyperliquidUnsignedInteger($payload['close_time'] ?? null),
+            'c' => $payload['close'] ?? null,
+            'h' => $payload['high'] ?? null,
+            'i' => $interval,
+            'l' => $payload['low'] ?? null,
+            'n' => $this->hyperliquidUnsignedInteger($payload['trade_count'] ?? null),
+            'o' => $payload['open'] ?? null,
+            's' => $nativeSymbol,
+            't' => $this->hyperliquidUnsignedInteger($payload['start_time'] ?? null),
+            'v' => $payload['volume'] ?? null,
+        ], $nativeSymbol, $interval);
+    }
+
+    private function hyperliquidUnsignedInteger(mixed $value): int
+    {
+        $maximum = (string) \PHP_INT_MAX;
+        if (!\is_string($value)
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) !== 1
+            || strlen($value) > strlen($maximum)
+            || (strlen($value) === strlen($maximum) && strcmp($value, $maximum) > 0)
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return (int) $value;
     }
 
     private function decodeEvent(#[\SensitiveParameter] string $raw): PaperMarketEvent

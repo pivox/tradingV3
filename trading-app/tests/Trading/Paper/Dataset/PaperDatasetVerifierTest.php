@@ -11,8 +11,10 @@ use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequest;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
@@ -53,6 +55,54 @@ final class PaperDatasetVerifierTest extends TestCase
         file_put_contents($this->eventsPath(), '{"payload":{"bid":"private-sentinel"}');
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', ['private-sentinel']);
+    }
+
+    public function testBaselineAcceptsCertifiableHyperliquidModelledBookDataset(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->hyperliquidModelledBookManifest());
+        foreach ([
+            [PaperMarketDataChannel::CANDLE_1M, '1m', 60_000],
+        ] as $index => [$channel, $interval, $duration]) {
+            $start = 1_752_919_200_000;
+            $close = $start + $duration - 1;
+            $timestamp = \DateTimeImmutable::createFromFormat(
+                '!U.u',
+                sprintf('%d.%03d000', intdiv($close, 1_000), $close % 1_000),
+                new \DateTimeZone('UTC'),
+            );
+            self::assertInstanceOf(\DateTimeImmutable::class, $timestamp);
+            $recorder->append(PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                venue: PaperMarketDataVenue::HYPERLIQUID,
+                symbol: 'BTCUSDT',
+                channel: $channel,
+                exchangeTimestamp: $timestamp,
+                receivedTimestamp: $timestamp,
+                sequence: (string) ($index + 1),
+                payload: [
+                    'native_symbol' => 'BTC',
+                    'open' => '30000',
+                    'high' => '30000',
+                    'low' => '30000',
+                    'close' => '30000.0',
+                    'volume' => '0',
+                    'trade_count' => '0',
+                    'close_time' => (string) $close,
+                    'confirmed' => true,
+                    'interval' => $interval,
+                    'origin' => 'rest_candle_snapshot',
+                    'start_time' => (string) $start,
+                ],
+            ));
+        }
+        $recorder->complete();
+
+        $manifest = (new PaperDatasetVerifier())->verifyForBaseline($recorder->datasetDirectory());
+
+        self::assertSame(PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK, $manifest->quality);
+        self::assertSame('hl_candle_atr_top_v1', $manifest->modelName);
+        self::assertSame('1.0.0', $manifest->modelVersion);
+        self::assertSame(PaperMarketDataNetwork::MAINNET, $manifest->network);
     }
 
     public function testBoundedLineReaderAcceptsTerminatedValidJsonExactlyAtEventLineLimit(): void
@@ -589,6 +639,38 @@ final class PaperDatasetVerifierTest extends TestCase
             eventsFileSha256: null,
             state: PaperDatasetState::RECORDING,
             lastEventId: null,
+        );
+    }
+
+    private function hyperliquidModelledBookManifest(): PaperDatasetManifest
+    {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'dataset-okx-001',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT'],
+            from: new \DateTimeImmutable('2025-07-19T10:00:00.000000Z'),
+            to: new \DateTimeImmutable('2025-07-19T10:01:00.000000Z'),
+        );
+
+        return new PaperDatasetManifest(
+            schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
+            recorderVersion: '1.0.0',
+            datasetId: $request->datasetId,
+            venue: PaperMarketDataVenue::HYPERLIQUID,
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT' => 'BTC'],
+            startExchangeTimestamp: null,
+            endExchangeTimestamp: null,
+            channels: [],
+            eventCount: 0,
+            sequenceGaps: [],
+            quality: PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK,
+            modelName: 'hl_candle_atr_top_v1',
+            modelVersion: '1.0.0',
+            eventsFileSha256: null,
+            state: PaperDatasetState::RECORDING,
+            lastEventId: null,
+            historicalCoverage: $request->historicalCoverage(),
         );
     }
 

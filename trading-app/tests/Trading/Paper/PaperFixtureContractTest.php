@@ -8,6 +8,7 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
@@ -108,14 +109,42 @@ final class PaperFixtureContractTest extends TestCase
             $this->fixtureFiles($okxPublicFixtureRoot),
             static fn (string $fixture): bool => str_ends_with($fixture, '.json'),
         ));
-        self::assertNotEmpty($okxPublicFixtureFiles);
+        $hyperliquidPublicFixtureRoot = dirname($fixtureRoot) . '/HyperliquidPaperPublic';
+        $hyperliquidPublicFixtureFiles = array_values(array_filter(
+            $this->fixtureFiles($hyperliquidPublicFixtureRoot),
+            static fn (string $fixture): bool => str_ends_with($fixture, '.json'),
+        ));
+        self::assertSame([
+            $okxPublicFixtureRoot . '/current-candles.json',
+            $okxPublicFixtureRoot . '/history-candles.json',
+            $okxPublicFixtureRoot . '/history-trades.json',
+            $okxPublicFixtureRoot . '/materialized-after-update.json',
+            $okxPublicFixtureRoot . '/order-book.json',
+            $okxPublicFixtureRoot . '/recent-trades.json',
+            $okxPublicFixtureRoot . '/ws-books-gap.json',
+            $okxPublicFixtureRoot . '/ws-books-snapshot.json',
+            $okxPublicFixtureRoot . '/ws-books-update.json',
+            $okxPublicFixtureRoot . '/ws-candle-15m.json',
+            $okxPublicFixtureRoot . '/ws-candle-1H.json',
+            $okxPublicFixtureRoot . '/ws-candle-1m.json',
+            $okxPublicFixtureRoot . '/ws-candle-5m.json',
+            $okxPublicFixtureRoot . '/ws-trades.json',
+        ], $okxPublicFixtureFiles);
+        self::assertSame([
+            $hyperliquidPublicFixtureRoot . '/candles-btc-two-pages.json',
+            $hyperliquidPublicFixtureRoot . '/candles-eth-two-pages.json',
+        ], $hyperliquidPublicFixtureFiles);
 
         $expectedFiles = [...$standaloneEvents, ...$datasetFiles];
         $fixtureFiles = $this->fixtureFiles($fixtureRoot);
         sort($expectedFiles, SORT_STRING);
         self::assertSame($expectedFiles, $fixtureFiles);
 
-        foreach ([...$fixtureFiles, ...$okxPublicFixtureFiles] as $path) {
+        foreach ([
+            ...$fixtureFiles,
+            ...$okxPublicFixtureFiles,
+            ...$hyperliquidPublicFixtureFiles,
+        ] as $path) {
             self::assertFileExists($path);
             self::assertLessThanOrEqual(self::MAX_FIXTURE_BYTES, filesize($path));
             $this->assertPublicFixtureContents($path, (string) file_get_contents($path));
@@ -161,7 +190,14 @@ final class PaperFixtureContractTest extends TestCase
         );
         self::assertInstanceOf(PaperDatasetManifest::class, $manifest);
         self::assertSame(count($events), $manifest->eventCount);
-        self::assertNotSame('fake', $manifest->venue->value);
+        self::assertSame(PaperMarketDataVenue::OKX, $manifest->venue);
+        self::assertSame(
+            PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+            $manifest->quality,
+        );
+        self::assertSame(['top_of_book'], $manifest->channels);
+        self::assertNull($manifest->modelName);
+        self::assertNull($manifest->modelVersion);
         foreach (array_keys($manifest->symbols) as $symbol) {
             self::assertContains($symbol, ['BTCUSDT', 'ETHUSDT']);
         }

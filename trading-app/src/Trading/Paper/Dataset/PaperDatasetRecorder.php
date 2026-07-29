@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Dataset;
 
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetRecorder
@@ -962,6 +965,35 @@ final class PaperDatasetRecorder
         }
         if (!array_key_exists($event->symbol, $this->currentManifest->symbols)) {
             throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
+        }
+        $this->assertHyperliquidHistoricalEvent($event);
+    }
+
+    private function assertHyperliquidHistoricalEvent(
+        #[\SensitiveParameter] PaperMarketEvent $event,
+    ): void {
+        if ($this->currentManifest->venue !== PaperMarketDataVenue::HYPERLIQUID
+            || $this->currentManifest->quality
+                !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+        ) {
+            return;
+        }
+        if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_historical_trade_forbidden');
+        }
+        if (!\in_array($event->channel, [
+            PaperMarketDataChannel::CANDLE_1M,
+            PaperMarketDataChannel::CANDLE_5M,
+            PaperMarketDataChannel::CANDLE_15M,
+            PaperMarketDataChannel::CANDLE_1H,
+            PaperMarketDataChannel::TOP_OF_BOOK,
+        ], true)) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_channel_invalid');
+        }
+        try {
+            HyperliquidHistoricalEventCoverage::parse($event);
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
         }
     }
 

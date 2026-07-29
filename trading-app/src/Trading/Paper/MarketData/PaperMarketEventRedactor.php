@@ -313,6 +313,21 @@ REGEX;
             $decodedByteCount,
         );
 
+        // This exact ASCII numeric grammar is terminal only after the direct scans above. Base64
+        // recovery may yield NFKC-compatible fragments, but tested numeric-only composition cannot
+        // form a complete member of the finite sensitive-token set.
+        $numericScalarMatch = preg_match(
+            '/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D',
+            $value,
+        );
+        if ($numericScalarMatch === false) {
+            throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');
+        }
+
+        if ($numericScalarMatch === 1) {
+            return;
+        }
+
         $firstByte = $canonical[0];
         if ($firstByte === '{' || $firstByte === '[' || $firstByte === '"') {
             try {

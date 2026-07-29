@@ -45,6 +45,7 @@ final readonly class PaperDatasetManifest
     public ?string $eventsFileSha256;
     public PaperDatasetState $state;
     public ?string $lastEventId;
+    public ?HyperliquidHistoricalCoverage $historicalCoverage;
 
     /**
      * @param array<string, string> $symbols
@@ -69,6 +70,7 @@ final readonly class PaperDatasetManifest
         ?string $eventsFileSha256,
         PaperDatasetState $state,
         ?string $lastEventId,
+        ?HyperliquidHistoricalCoverage $historicalCoverage = null,
     ) {
         if (!\in_array($schemaVersion, [self::LEGACY_SCHEMA_VERSION, self::SCHEMA_VERSION], true)) {
             throw new \InvalidArgumentException('paper_dataset_schema_version_unsupported');
@@ -88,6 +90,15 @@ final readonly class PaperDatasetManifest
         $normalizedChannels = self::normalizeChannels($channels);
         $normalizedGaps = self::normalizeSequenceGaps($sequenceGaps);
         self::assertModel($quality, $modelName, $modelVersion);
+        self::assertVenueQuality($venue, $quality);
+        if ($historicalCoverage !== null
+            && !\in_array($quality, [
+                PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK,
+                PaperMarketDataQuality::INCOMPLETE,
+            ], true)
+        ) {
+            throw new \InvalidArgumentException('paper_dataset_hyperliquid_coverage_invalid');
+        }
         self::assertChecksum($eventsFileSha256, $state);
 
         if ($state === PaperDatasetState::COMPLETE) {
@@ -124,6 +135,7 @@ final readonly class PaperDatasetManifest
         $this->eventsFileSha256 = $eventsFileSha256;
         $this->state = $state;
         $this->lastEventId = $lastEventId;
+        $this->historicalCoverage = $historicalCoverage;
     }
 
     public static function assertDatasetId(string $datasetId): void
@@ -162,6 +174,7 @@ final readonly class PaperDatasetManifest
             eventsFileSha256: null,
             state: PaperDatasetState::RECORDING,
             lastEventId: $lastEventId,
+            historicalCoverage: $this->historicalCoverage,
         );
     }
 
@@ -193,6 +206,7 @@ final readonly class PaperDatasetManifest
             eventsFileSha256: $eventsFileSha256,
             state: $state,
             lastEventId: $this->lastEventId,
+            historicalCoverage: $this->historicalCoverage,
         );
     }
 
@@ -214,7 +228,18 @@ final readonly class PaperDatasetManifest
      *   model_version: string|null,
      *   events_file_sha256: string|null,
      *   state: string,
-     *   last_event_id: string|null
+     *   last_event_id: string|null,
+     *   historical_coverage?: array{
+     *     schema_version: 1,
+     *     request_sha256: string,
+     *     from: string,
+     *     to: string,
+     *     intervals: list<string>,
+     *     maximum_events: int,
+     *     maximum_pages: int,
+     *     maximum_response_bytes: int,
+     *     maximum_retries: int
+     *   }
      * }
      */
     public function toArray(): array
@@ -242,6 +267,11 @@ final readonly class PaperDatasetManifest
             'state' => $this->state->value,
             'last_event_id' => $this->lastEventId,
         ];
+        if ($this->quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+            && $this->historicalCoverage !== null
+        ) {
+            $data['historical_coverage'] = $this->historicalCoverage->toArray();
+        }
 
         return $data;
     }
@@ -314,6 +344,13 @@ final readonly class PaperDatasetManifest
         ?string $modelName,
         ?string $modelVersion,
     ): void {
+        if ($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK) {
+            if ($modelName !== 'hl_candle_atr_top_v1' || $modelVersion !== '1.0.0') {
+                throw new \InvalidArgumentException('paper_dataset_hyperliquid_model_invalid');
+            }
+
+            return;
+        }
         if ($quality !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES) {
             return;
         }
@@ -322,6 +359,19 @@ final readonly class PaperDatasetManifest
             || trim($modelName) !== $modelName || trim($modelVersion) !== $modelVersion
         ) {
             throw new \InvalidArgumentException('paper_dataset_model_required');
+        }
+    }
+
+    private static function assertVenueQuality(
+        PaperMarketDataVenue $venue,
+        PaperMarketDataQuality $quality,
+    ): void {
+        if (($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+                && $venue !== PaperMarketDataVenue::HYPERLIQUID)
+            || ($quality === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES
+                && $venue !== PaperMarketDataVenue::OKX)
+        ) {
+            throw new \InvalidArgumentException('paper_dataset_quality_venue_invalid');
         }
     }
 
