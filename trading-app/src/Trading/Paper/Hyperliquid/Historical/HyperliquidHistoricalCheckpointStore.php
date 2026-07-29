@@ -19,6 +19,8 @@ final class HyperliquidHistoricalCheckpointStore
     private const FILE_TYPE_MASK = 0170000;
     private const PAGE_FILENAME_PATTERN = '/\A(?:BTC|ETH)-candle_(?:1m|5m|15m|1h)-[0-9]{6}\.ndjson\z/D';
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
+    private const FAILURE_REASON_PATTERN = '/\Ahyperliquid_[a-z0-9]+(?:_[a-z0-9]+)*\z/D';
+    private const MAX_FAILURE_REASON_BYTES = 128;
     private const WRITER_LOCK_FILENAME = '.writer.lock';
     private const CHECKPOINT_BYTES_PER_PAGE = 512;
     private const SERIALIZE_PRECISION_SETTING = 'serialize_precision';
@@ -134,6 +136,7 @@ final class HyperliquidHistoricalCheckpointStore
                 'phase' => 'fetching',
                 'request_sha256' => $this->request->requestSha256(),
                 'schema_version' => self::SCHEMA_VERSION,
+                'staged_row_count' => 0,
                 'streams' => [],
             ];
             $this->save($state);
@@ -229,7 +232,7 @@ final class HyperliquidHistoricalCheckpointStore
     {
         $this->validateState($state);
         $this->assertManagedDirectories();
-        $eventCount = 0;
+        $stagedRowCount = 0;
         foreach ($state['streams'] as $stream) {
             foreach ($stream['pages'] as $page) {
                 $this->assertPageFilename($page['file']);
@@ -252,10 +255,10 @@ final class HyperliquidHistoricalCheckpointStore
                         'hyperliquid_acquisition_checkpoint_invalid',
                     );
                 }
-                $eventCount += \count($records);
+                $stagedRowCount += \count($records);
             }
         }
-        if ($eventCount !== $state['event_count']) {
+        if ($stagedRowCount !== $state['staged_row_count']) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
@@ -302,7 +305,8 @@ final class HyperliquidHistoricalCheckpointStore
     /** @param array<string, mixed> $state */
     private function validateState(array $state): void
     {
-        $this->assertExactKeys($state, [
+        $phase = $state['phase'] ?? null;
+        $expectedKeys = [
             'schema_version',
             'network',
             'dataset_id',
@@ -310,11 +314,16 @@ final class HyperliquidHistoricalCheckpointStore
             'phase',
             'streams',
             'page_count',
+            'staged_row_count',
             'event_count',
             'emit_index',
             'ordinal_state',
             'pending_event',
-        ]);
+        ];
+        if ($phase === 'failed') {
+            $expectedKeys[] = 'failure_reason';
+        }
+        $this->assertExactKeys($state, $expectedKeys);
         if ($state['schema_version'] !== self::SCHEMA_VERSION
             || !\is_string($state['network'])
             || !\is_string($state['dataset_id'])
@@ -332,13 +341,16 @@ final class HyperliquidHistoricalCheckpointStore
                 'hyperliquid_acquisition_checkpoint_request_mismatch',
             );
         }
-        if (!\is_string($state['phase'])
-            || !\in_array($state['phase'], ['fetching', 'emitting', 'complete'], true)
+        if (!\is_string($phase)
+            || !\in_array($phase, ['fetching', 'emitting', 'complete', 'failed'], true)
             || !\is_array($state['streams'])
             || (array_is_list($state['streams']) && $state['streams'] !== [])
             || !\is_int($state['page_count'])
             || $state['page_count'] < 0
             || $state['page_count'] > $this->request->maximumPages
+            || !\is_int($state['staged_row_count'])
+            || $state['staged_row_count'] < 0
+            || $state['staged_row_count'] > $this->maximumStagedRows()
             || !\is_int($state['event_count'])
             || $state['event_count'] < 0
             || $state['event_count'] > $this->request->maximumEvents
@@ -352,9 +364,18 @@ final class HyperliquidHistoricalCheckpointStore
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
         }
+        if ($phase === 'failed'
+            && (!\is_string($state['failure_reason'])
+                || strlen($state['failure_reason']) > self::MAX_FAILURE_REASON_BYTES
+                || preg_match(self::FAILURE_REASON_PATTERN, $state['failure_reason']) !== 1)
+        ) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
 
         $pageCount = 0;
-        $eventCount = 0;
+        $stagedRowCount = 0;
         foreach ($state['streams'] as $key => $stream) {
             if (!\is_string($key) || !\is_array($stream) || array_is_list($stream)) {
                 throw new HyperliquidHistoricalIntegrityException(
@@ -364,17 +385,22 @@ final class HyperliquidHistoricalCheckpointStore
             $this->validateStream($key, $stream);
             $pageCount += \count($stream['pages']);
             foreach ($stream['pages'] as $page) {
-                if ($page['row_count'] > $this->request->maximumEvents
-                    || $eventCount > $this->request->maximumEvents - $page['row_count']
+                if ($page['row_count'] > $this->maximumStagedRows()
+                    || $stagedRowCount > $this->maximumStagedRows() - $page['row_count']
                 ) {
                     throw new HyperliquidHistoricalIntegrityException(
                         'hyperliquid_acquisition_checkpoint_invalid',
                     );
                 }
-                $eventCount += $page['row_count'];
+                $stagedRowCount += $page['row_count'];
             }
         }
-        if ($pageCount !== $state['page_count'] || $eventCount !== $state['event_count']) {
+        if ($pageCount !== $state['page_count']
+            || $stagedRowCount !== $state['staged_row_count']
+            || $state['event_count'] < $state['staged_row_count']
+            || $state['event_count'] - $state['staged_row_count']
+                > $state['staged_row_count']
+        ) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
@@ -401,22 +427,29 @@ final class HyperliquidHistoricalCheckpointStore
                 $ordinalState['scopes'],
             );
         }
-        if (($state['phase'] === 'fetching'
+        if (($phase === 'fetching'
                 && ($state['emit_index'] !== 0 || $state['pending_event'] !== null))
-            || ($state['phase'] === 'complete'
+            || ($phase === 'complete'
                 && ($state['emit_index'] !== $state['event_count']
                     || $state['pending_event'] !== null))
+            || ($phase === 'failed' && $state['pending_event'] !== null)
             || ($state['pending_event'] !== null
-                && ($state['phase'] !== 'emitting'
+                && ($phase !== 'emitting'
                     || $state['emit_index'] >= $state['event_count']))
         ) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
         }
-        if (\in_array($state['phase'], ['emitting', 'complete'], true)) {
+        if (\in_array($phase, ['emitting', 'complete'], true)) {
             $this->assertCompletedRequestedGrid($state['streams']);
         }
+    }
+
+    private function maximumStagedRows(): int
+    {
+        // Every staged candle yields at least one PaperMarketEvent.
+        return $this->request->maximumEvents;
     }
 
     /** @param array<string, mixed> $stream */

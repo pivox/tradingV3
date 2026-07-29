@@ -57,6 +57,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
             'phase' => 'fetching',
             'request_sha256' => $request->requestSha256(),
             'schema_version' => 1,
+            'staged_row_count' => 0,
             'streams' => [],
         ];
 
@@ -127,6 +128,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
             'pages' => [$page],
         ];
         $state['page_count'] = 1;
+        $state['staged_row_count'] = 2;
         $state['event_count'] = 2;
 
         $store->save($state);
@@ -910,6 +912,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         ];
         $overflow['streams']['BTC/candle_1m']['pages'] = [$first, $second];
         $overflow['page_count'] = 2;
+        $overflow['staged_row_count'] = 0;
         try {
             $store->save($overflow);
             self::fail('Counter addition must reject integer overflow.');
@@ -1181,6 +1184,153 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         self::assertSame('attacker', file_get_contents($replacement[0]));
     }
 
+    public function testFailedStateWithStableReasonPersistsAndReloadsPartialGrid(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-failed');
+        $datasetDirectory = $this->datasetDirectory('failed');
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $state = $store->loadOrCreate();
+        $state['staged_row_count'] = 0;
+        $state['phase'] = 'failed';
+        $state['failure_reason'] = 'hyperliquid_historical_transport_failed';
+        $state['streams']['BTC/candle_1m'] = $this->emptyStream();
+
+        $store->save($state);
+
+        self::assertSame(
+            json_decode(CanonicalJson::encode($state), true, 512, \JSON_THROW_ON_ERROR),
+            $store->loadOrCreate(),
+        );
+    }
+
+    public function testFailureReasonIsForbiddenOutsideFailedPhase(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-nonfailed-reason');
+        $datasetDirectory = $this->datasetDirectory('nonfailed-reason');
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $state = $store->loadOrCreate();
+        $state['staged_row_count'] = 0;
+        $state['failure_reason'] = 'hyperliquid_historical_transport_failed';
+        $before = file_get_contents($this->checkpointDirectory($datasetDirectory) . '/checkpoint.json');
+
+        try {
+            $store->save($state);
+            self::fail('Non-failed phases must reject failure_reason.');
+        } catch (HyperliquidHistoricalIntegrityException $exception) {
+            self::assertSame('hyperliquid_acquisition_checkpoint_invalid', $exception->getMessage());
+        }
+        self::assertSame(
+            $before,
+            file_get_contents($this->checkpointDirectory($datasetDirectory) . '/checkpoint.json'),
+        );
+    }
+
+    public function testFailedStateRejectsMissingAndUnsafeFailureReasons(): void
+    {
+        $request = $this->request('hyperliquid-checkpoint-failed-reason');
+        $datasetDirectory = $this->datasetDirectory('failed-reason');
+        $store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
+        $base = $store->loadOrCreate();
+        $base['staged_row_count'] = 0;
+        $base['phase'] = 'failed';
+        $cases = [
+            'missing' => null,
+            'arbitrary text' => 'request failed with response body',
+            'path' => 'hyperliquid_failed_/tmp/private',
+            'uppercase' => 'hyperliquid_Historical_Failed',
+            'oversized' => 'hyperliquid_' . str_repeat('a', 129),
+            'non-string' => 7,
+        ];
+
+        foreach ($cases as $label => $reason) {
+            $state = $base;
+            if ($reason !== null) {
+                $state['failure_reason'] = $reason;
+            }
+            try {
+                $store->save($state);
+                self::fail('Failed state must reject ' . $label . ' reason.');
+            } catch (HyperliquidHistoricalIntegrityException $exception) {
+                self::assertSame(
+                    'hyperliquid_acquisition_checkpoint_invalid',
+                    $exception->getMessage(),
+                    $label,
+                );
+            }
+        }
+    }
+
+    public function testOneStagedCandleCanRepresentTwoPaperEvents(): void
+    {
+        [$store, $state] = $this->storedPageFixture('two-events');
+        $state['staged_row_count'] = 1;
+        $state['event_count'] = 2;
+
+        $store->save($state);
+        $store->verifyPages($state);
+
+        self::assertSame(
+            json_decode(CanonicalJson::encode($state), true, 512, \JSON_THROW_ON_ERROR),
+            $store->loadOrCreate(),
+        );
+    }
+
+    public function testCompletionAcceptsTwoFinalizedEventsForOneStagedCandle(): void
+    {
+        [$store, $state] = $this->storedPageFixture('complete-two-events');
+        $state = $this->completedGrid($state);
+        $state['staged_row_count'] = 1;
+        $state['event_count'] = 2;
+        $state['emit_index'] = 2;
+        $state['phase'] = 'complete';
+
+        $store->save($state);
+
+        self::assertSame(
+            json_decode(CanonicalJson::encode($state), true, 512, \JSON_THROW_ON_ERROR),
+            $store->loadOrCreate(),
+        );
+    }
+
+    public function testStagedAndEventCountInconsistenciesAreRejected(): void
+    {
+        [$store, $base] = $this->storedPageFixture('count-invariants');
+        $cases = [];
+        $wrongSum = $base;
+        $wrongSum['staged_row_count'] = 0;
+        $cases['staged count differs from pages'] = $wrongSum;
+        $fewerEvents = $base;
+        $fewerEvents['event_count'] = 0;
+        $cases['fewer events than candles'] = $fewerEvents;
+        $tooManyEvents = $base;
+        $tooManyEvents['event_count'] = 3;
+        $cases['more than two events per candle'] = $tooManyEvents;
+        $negative = $base;
+        $negative['staged_row_count'] = -1;
+        $cases['negative staged count'] = $negative;
+        $wrongType = $base;
+        $wrongType['staged_row_count'] = '1';
+        $cases['non-integer staged count'] = $wrongType;
+        $overBound = $base;
+        $overBound['streams']['BTC/candle_1m']['pages'][0]['row_count'] = 5;
+        $overBound['staged_row_count'] = 5;
+        $overBound['event_count'] = 5;
+        $cases['raw count exceeds event acquisition bound'] = $overBound;
+
+        foreach ($cases as $label => $state) {
+            try {
+                $store->save($state);
+                self::fail('Count validation must reject ' . $label . '.');
+            } catch (HyperliquidHistoricalIntegrityException $exception) {
+                self::assertSame(
+                    'hyperliquid_acquisition_checkpoint_invalid',
+                    $exception->getMessage(),
+                    $label,
+                );
+            }
+        }
+    }
+
     public function testSchemaV1OrdinalSnapshotAndInvalidStateAreRejected(): void
     {
         $request = $this->request('hyperliquid-checkpoint-invalid-state');
@@ -1218,6 +1368,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
         $state['streams']['BTC/candle_1m'] = $this->emptyStream();
         $state['streams']['BTC/candle_1m']['pages'] = [$page];
         $state['page_count'] = 1;
+        $state['staged_row_count'] = 1;
         $state['event_count'] = 1;
         $store->save($state);
 
