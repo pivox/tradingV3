@@ -19,14 +19,22 @@ use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
+use Symfony\Component\Clock\Clock;
 use Symfony\Component\Clock\ClockInterface;
 use Symfony\Component\RateLimiter\LimiterInterface;
 use Symfony\Component\RateLimiter\Policy\SlidingWindowLimiter;
+use Symfony\Component\RateLimiter\Storage\CacheStorage;
+use Symfony\Component\RateLimiter\Storage\StorageInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 #[CoversNothing]
 final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
 {
+    private const MAX_RUNTIME_GRAPH_DEPTH = 24;
+    private const MAX_RUNTIME_GRAPH_NODES = 2_048;
+    private const MAX_RUNTIME_ITERABLE_ITEMS = 512;
+    private const FORBIDDEN_RUNTIME_DEPENDENCY_PATTERN = '/(?:Account|Execution|Wallet|Signer|PrivateKey|Credential|SignedAction|Action(?:Transport|Request)|Exchange[A-Za-z0-9_\\\\]*(?:Write|Mutation|Order|Endpoint|Client|Gateway|Transport|Service))/i';
+
     protected static function getKernelClass(): string
     {
         return Kernel::class;
@@ -188,6 +196,55 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
         }
     }
 
+    public function testResolvedPublicClientHasARealBoundedPublicOnlyRuntimeGraph(): void
+    {
+        self::bootKernel();
+        $client = static::getContainer()->get(HyperliquidPaperPublicRestClientInterface::class);
+        self::assertInstanceOf(HyperliquidPaperPublicRestClient::class, $client);
+
+        $reachableClasses = self::auditRuntimeDependencyGraph($client);
+
+        foreach ([
+            HyperliquidPaperPublicRestClient::class,
+            NativeHyperliquidPaperPublicHttpTransport::class,
+            HyperliquidPaperPublicConfig::class,
+            HyperliquidPaperPublicRateLimiter::class,
+            SlidingWindowLimiter::class,
+            CacheStorage::class,
+            Clock::class,
+        ] as $expectedClass) {
+            self::assertArrayHasKey($expectedClass, $reachableClasses);
+        }
+        self::assertNotSame([], array_values(array_filter(
+            array_keys($reachableClasses),
+            static fn (string $class): bool => is_a($class, StorageInterface::class, true),
+        )), 'The actual dedicated Symfony limiter storage must be reachable.');
+    }
+
+    /** @return iterable<string, array{object}> */
+    public static function forbiddenRuntimeDependencies(): iterable
+    {
+        yield 'wallet signer' => [new Task9ForbiddenWalletSigner()];
+        yield 'generic application exchange client' => [new Task9ForbiddenExchangeRestClient()];
+    }
+
+    #[DataProvider('forbiddenRuntimeDependencies')]
+    public function testRuntimeGraphAuditRejectsARecursivelyReachableForbiddenDependency(
+        object $forbiddenDependency,
+    ): void
+    {
+        $root = new Task9RuntimeGraphRoot([
+            'iterable' => new \ArrayIterator([
+                $forbiddenDependency,
+            ]),
+        ]);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_forbidden_runtime_dependency');
+
+        self::auditRuntimeDependencyGraph($root);
+    }
+
     public function testPublicSourceAndConfigurationExposeOnlyTheCandleInfoBoundary(): void
     {
         $projectDirectory = (string) static::getContainer()->getParameter('kernel.project_dir');
@@ -255,4 +312,216 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
     {
         return (new \ReflectionProperty($object::class, $name))->getValue($object);
     }
+
+    /** @return array<class-string, int> */
+    private static function auditRuntimeDependencyGraph(object $root): array
+    {
+        $seen = new \SplObjectStorage();
+        $reachableClasses = [];
+        $nodeCount = 0;
+
+        self::walkRuntimeDependencyValue(
+            $root,
+            '$root',
+            0,
+            false,
+            $seen,
+            $reachableClasses,
+            $nodeCount,
+        );
+        ksort($reachableClasses);
+
+        return $reachableClasses;
+    }
+
+    /**
+     * @param \SplObjectStorage<object, null> $seen
+     * @param array<class-string, int>        $reachableClasses
+     */
+    private static function walkRuntimeDependencyValue(
+        mixed $value,
+        string $path,
+        int $depth,
+        bool $inspectAppOwnedIdentifier,
+        \SplObjectStorage $seen,
+        array &$reachableClasses,
+        int &$nodeCount,
+    ): void {
+        if (++$nodeCount > self::MAX_RUNTIME_GRAPH_NODES) {
+            throw new \LogicException('hyperliquid_paper_runtime_dependency_node_bound_exceeded');
+        }
+        if ($depth > self::MAX_RUNTIME_GRAPH_DEPTH) {
+            throw new \LogicException('hyperliquid_paper_runtime_dependency_depth_exceeded');
+        }
+
+        if (is_string($value) && $inspectAppOwnedIdentifier) {
+            self::assertSafeRuntimeIdentifier($value, $path);
+
+            return;
+        }
+        if (is_scalar($value) || $value === null || is_resource($value)) {
+            return;
+        }
+        if (is_array($value)) {
+            foreach ($value as $key => $item) {
+                if (is_string($key) && $inspectAppOwnedIdentifier) {
+                    self::assertSafeRuntimeIdentifier($key, $path . '[key]');
+                }
+                self::walkRuntimeDependencyValue(
+                    $item,
+                    $path . '[' . (is_int($key) ? (string) $key : 'key') . ']',
+                    $depth + 1,
+                    $inspectAppOwnedIdentifier,
+                    $seen,
+                    $reachableClasses,
+                    $nodeCount,
+                );
+            }
+
+            return;
+        }
+        if (!is_object($value)) {
+            throw new \LogicException('hyperliquid_paper_runtime_dependency_value_invalid');
+        }
+        if ($seen->contains($value)) {
+            return;
+        }
+        $seen->attach($value);
+
+        $class = $value::class;
+        self::assertSafeRuntimeDependencyClass($class, $path);
+        self::assertNotAContainerOrServiceLocator($value, $path);
+        $reachableClasses[$class] = ($reachableClasses[$class] ?? 0) + 1;
+
+        if ($value instanceof \Closure) {
+            $closure = new \ReflectionFunction($value);
+            $boundObject = $closure->getClosureThis();
+            if ($boundObject !== null) {
+                self::walkRuntimeDependencyValue(
+                    $boundObject,
+                    $path . '::{boundObject}',
+                    $depth + 1,
+                    false,
+                    $seen,
+                    $reachableClasses,
+                    $nodeCount,
+                );
+            }
+            self::walkRuntimeDependencyValue(
+                $closure->getStaticVariables(),
+                $path . '::{staticCaptures}',
+                $depth + 1,
+                false,
+                $seen,
+                $reachableClasses,
+                $nodeCount,
+            );
+
+            return;
+        }
+
+        $reflection = new \ReflectionObject($value);
+        $appOwned = str_starts_with($class, 'App\\');
+        for ($current = $reflection; $current !== false; $current = $current->getParentClass()) {
+            foreach ($current->getProperties() as $property) {
+                if ($property->isStatic() || $property->getDeclaringClass()->getName() !== $current->getName()) {
+                    continue;
+                }
+                $propertyPath = $path . '->' . $current->getName() . '::$' . $property->getName();
+                if ($appOwned) {
+                    self::assertSafeRuntimeIdentifier($property->getName(), $propertyPath);
+                    $type = $property->getType();
+                    if ($type !== null) {
+                        self::assertSafeRuntimeIdentifier((string) $type, $propertyPath . ':type');
+                    }
+                }
+                if (!$property->isInitialized($value)) {
+                    continue;
+                }
+                self::walkRuntimeDependencyValue(
+                    $property->getValue($value),
+                    $propertyPath,
+                    $depth + 1,
+                    $appOwned,
+                    $seen,
+                    $reachableClasses,
+                    $nodeCount,
+                );
+            }
+        }
+
+        if ($value instanceof \Traversable) {
+            $itemCount = 0;
+            foreach ($value as $key => $item) {
+                if (++$itemCount > self::MAX_RUNTIME_ITERABLE_ITEMS) {
+                    throw new \LogicException('hyperliquid_paper_runtime_dependency_iterable_bound_exceeded');
+                }
+                self::walkRuntimeDependencyValue(
+                    $item,
+                    $path . '{' . (is_int($key) ? (string) $key : 'key') . '}',
+                    $depth + 1,
+                    $appOwned,
+                    $seen,
+                    $reachableClasses,
+                    $nodeCount,
+                );
+            }
+        }
+    }
+
+    /** @param class-string $class */
+    private static function assertSafeRuntimeDependencyClass(string $class, string $path): void
+    {
+        if (
+            str_starts_with($class, 'App\\Exchange\\')
+            || preg_match(self::FORBIDDEN_RUNTIME_DEPENDENCY_PATTERN, $class) === 1
+        ) {
+            throw new \LogicException(
+                'hyperliquid_paper_forbidden_runtime_dependency:' . $path . ':' . $class,
+            );
+        }
+    }
+
+    private static function assertSafeRuntimeIdentifier(string $identifier, string $path): void
+    {
+        if (
+            preg_match(self::FORBIDDEN_RUNTIME_DEPENDENCY_PATTERN, $identifier) === 1
+            || preg_match('~/exchange(?:[/?#]|$)|/action(?:[/?#]|$)|["\']type["\']\s*(?:=>|:)\s*["\']action["\']~i', $identifier) === 1
+        ) {
+            throw new \LogicException(
+                'hyperliquid_paper_forbidden_runtime_dependency:' . $path,
+            );
+        }
+    }
+
+    private static function assertNotAContainerOrServiceLocator(object $value, string $path): void
+    {
+        foreach ([
+            \Psr\Container\ContainerInterface::class,
+            \Symfony\Component\DependencyInjection\ContainerInterface::class,
+            \Symfony\Contracts\Service\ServiceProviderInterface::class,
+        ] as $forbiddenType) {
+            if ($value instanceof $forbiddenType) {
+                throw new \LogicException(
+                    'hyperliquid_paper_runtime_dependency_container_reachable:' . $path . ':' . $value::class,
+                );
+            }
+        }
+    }
+}
+
+final readonly class Task9RuntimeGraphRoot
+{
+    /** @param array<string, mixed> $dependencies */
+    public function __construct(public array $dependencies)
+    {
+    }
+}
+
+final class Task9ForbiddenWalletSigner
+{
+}
+
+final class Task9ForbiddenExchangeRestClient
+{
 }
