@@ -1243,6 +1243,9 @@ final class PaperMarketEventRedactorTest extends TestCase
         yield 'canonical Base64 with invalid UTF-8 prefix' => [
             base64_encode("\xFF" . $json),
         ];
+        yield 'canonical Base64 with invalid UTF-8 suffix' => [
+            base64_encode($json . "\xFF"),
+        ];
         yield 'canonical Base64 with invalid UTF-8 and percent-encoded form' => [
             base64_encode("\xFF" . rawurlencode('api_key=synthetic-redaction-sentinel')),
         ];
@@ -1745,6 +1748,26 @@ PHP,
         PaperMarketEventRedactor::assertSafe($payload);
 
         self::addToAssertionCount(1);
+    }
+
+    #[DataProvider('canonicalNumericMarketValueProvider')]
+    public function testAllowsCanonicalNumericMarketValues(string $field, string $value): void
+    {
+        PaperMarketEventRedactor::assertSafe([$field => $value]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function canonicalNumericMarketValueProvider(): iterable
+    {
+        yield 'Hyperliquid close time regression' => ['close_time', '1704068939999'];
+        yield 'zero integer' => ['sequence', '0'];
+        yield 'positive integer' => ['trade_count', '42'];
+        yield 'negative integer' => ['funding_ticks', '-42'];
+        yield 'positive decimal' => ['price', '29999.0'];
+        yield 'fractional decimal' => ['size', '0.000001'];
+        yield 'negative decimal' => ['funding_rate', '-0.125'];
     }
 
     public function testSensitiveWordsInValuesAreNotMistakenForPrivateFields(): void
