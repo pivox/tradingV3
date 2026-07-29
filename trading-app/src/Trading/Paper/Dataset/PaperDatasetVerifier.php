@@ -767,7 +767,6 @@ final class PaperDatasetVerifier
         if ($manifest->venue !== PaperMarketDataVenue::HYPERLIQUID
             || $manifest->quality
                 !== PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
-            || $manifest->historicalCoverage === null
         ) {
             return;
         }
@@ -779,6 +778,9 @@ final class PaperDatasetVerifier
             ) {
                 throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
             }
+        }
+        if ($manifest->historicalCoverage === null) {
+            return;
         }
 
         $durations = [

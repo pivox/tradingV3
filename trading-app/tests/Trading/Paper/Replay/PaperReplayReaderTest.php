@@ -307,6 +307,90 @@ final class PaperReplayReaderTest extends TestCase
         ));
     }
 
+    public function testNoCoverageOrphanBookIsRejectedByVerifierAndReplayBeforeYield(): void
+    {
+        $close = '2024-01-01T00:59:59.999000Z';
+        $book = $this->hyperliquidHistoricalEvent(
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            '1',
+            $close,
+            $this->hyperliquidBookPayload($close, 3_600_000),
+        );
+        $dataset = $this->tamperedHyperliquidDataset([$book]);
+
+        foreach ([
+            'verifier' => static fn (): PaperDatasetManifest => (
+                new PaperDatasetVerifier()
+            )->verify($dataset['directory']),
+            'replay' => fn (): array => iterator_to_array(
+                $this->reader(new PaperReplayClock($book->exchangeTimestamp))
+                    ->read($dataset['directory'], 'hyperliquid.no-coverage-orphan'),
+                false,
+            ),
+        ] as $consumer => $operation) {
+            $failure = null;
+            try {
+                $operation();
+            } catch (\RuntimeException $exception) {
+                $failure = $exception;
+            }
+            self::assertNotNull($failure, $consumer);
+            self::assertSame(
+                'paper_dataset_hyperliquid_model_event_invalid',
+                $failure->getMessage(),
+                $consumer,
+            );
+        }
+    }
+
+    public function testNoCoverageMatchingCandleAndBookRemainGenericallyReplayableButNotBaselineCertifiable(): void
+    {
+        $close = '2024-01-01T00:59:59.999000Z';
+        $events = [
+            $this->hyperliquidHistoricalEvent(
+                'BTCUSDT',
+                PaperMarketDataChannel::CANDLE_1H,
+                '1',
+                $close,
+                ['interval' => '1h'],
+            ),
+            $this->hyperliquidHistoricalEvent(
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                '1',
+                $close,
+                $this->hyperliquidBookPayload($close, 3_600_000),
+            ),
+        ];
+        $dataset = $this->completeHyperliquidDataset($events);
+
+        self::assertNull(
+            (new PaperDatasetVerifier())->verify($dataset['directory'])->historicalCoverage,
+        );
+        self::assertSame(
+            array_map(static fn (PaperMarketEvent $event): array => $event->toArray(), $events),
+            array_map(
+                static fn (PaperMarketEvent $event): array => $event->toArray(),
+                iterator_to_array(
+                    $this->reader(new PaperReplayClock($events[0]->exchangeTimestamp))
+                        ->read($dataset['directory'], 'hyperliquid.no-coverage-matched'),
+                    false,
+                ),
+            ),
+        );
+
+        try {
+            (new PaperDatasetVerifier())->verifyForBaseline($dataset['directory']);
+            self::fail('Missing historical coverage must not baseline certify.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(
+                'paper_dataset_hyperliquid_coverage_invalid',
+                $exception->getMessage(),
+            );
+        }
+    }
+
     #[DataProvider('invalidHyperliquidBookIntervalProvider')]
     public function testHyperliquidHistoricalReplayRejectsInvalidBookIntervalWithStableReason(
         mixed $sourceStart,
