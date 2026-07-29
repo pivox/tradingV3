@@ -10,6 +10,9 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use Brick\Math\BigInteger;
 
@@ -82,7 +85,14 @@ final class PaperReplayReader
                 $datasetPin,
                 'paper_replay_dataset_after_events_load',
             );
-            usort($events, self::compare(...));
+            if ($manifest->venue === PaperMarketDataVenue::HYPERLIQUID
+                && $manifest->quality
+                    === PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK
+            ) {
+                $events = self::sortHyperliquidHistorical($events);
+            } else {
+                usort($events, self::compare(...));
+            }
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_sort',
@@ -365,6 +375,126 @@ final class PaperReplayReader
         }
 
         return $left['input_index'] <=> $right['input_index'];
+    }
+
+    /**
+     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
+     *
+     * @return list<array{event: PaperMarketEvent, input_index: int}>
+     */
+    private static function sortHyperliquidHistorical(
+        #[\SensitiveParameter] array $events,
+    ): array {
+        try {
+            usort($events, self::compareHyperliquidHistorical(...));
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+
+        return $events;
+    }
+
+    /**
+     * @param array{event: PaperMarketEvent, input_index: int} $left
+     * @param array{event: PaperMarketEvent, input_index: int} $right
+     */
+    private static function compareHyperliquidHistorical(
+        #[\SensitiveParameter] array $left,
+        #[\SensitiveParameter] array $right,
+    ): int {
+        $leftEvent = $left['event'];
+        $rightEvent = $right['event'];
+
+        $comparison = $leftEvent->exchangeTimestamp <=> $rightEvent->exchangeTimestamp;
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = strcmp($leftEvent->symbol, $rightEvent->symbol);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = self::hyperliquidHistoricalInterval($leftEvent)
+            <=> self::hyperliquidHistoricalInterval($rightEvent);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = strcmp($leftEvent->channel->value, $rightEvent->channel->value);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        $comparison = strcmp($leftEvent->eventId, $rightEvent->eventId);
+        if ($comparison !== 0) {
+            return $comparison;
+        }
+
+        return $left['input_index'] <=> $right['input_index'];
+    }
+
+    private static function hyperliquidHistoricalInterval(
+        #[\SensitiveParameter] PaperMarketEvent $event,
+    ): int {
+        $candleDuration = match ($event->channel) {
+            PaperMarketDataChannel::CANDLE_1M => 60_000,
+            PaperMarketDataChannel::CANDLE_5M => 300_000,
+            PaperMarketDataChannel::CANDLE_15M => 900_000,
+            PaperMarketDataChannel::CANDLE_1H => 3_600_000,
+            PaperMarketDataChannel::TOP_OF_BOOK => null,
+            default => throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid'),
+        };
+        if ($candleDuration !== null) {
+            return $candleDuration;
+        }
+
+        $sourceStart = $event->payload['source_candle_start'] ?? null;
+        $microseconds = $event->exchangeTimestamp->format('u');
+        $seconds = $event->exchangeTimestamp->format('U');
+        if (!\is_string($sourceStart)
+            || preg_match('/\A[0-9]{6}\z/D', $microseconds) !== 1
+            || ((int) $microseconds) % 1_000 !== 0
+        ) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+
+        $secondsInteger = self::hyperliquidHistoricalInteger($seconds);
+        $sourceStartInteger = self::hyperliquidHistoricalInteger($sourceStart);
+        if ($secondsInteger > intdiv(\PHP_INT_MAX - 999, 1_000)) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+        $closeMilliseconds = ($secondsInteger * 1_000) + intdiv((int) $microseconds, 1_000);
+        if ($sourceStartInteger > $closeMilliseconds) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+        $difference = $closeMilliseconds - $sourceStartInteger;
+        if ($difference === \PHP_INT_MAX) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+        $duration = $difference + 1;
+
+        foreach ([60_000, 300_000, 900_000, 3_600_000] as $allowedDuration) {
+            if ($duration === $allowedDuration) {
+                return $allowedDuration;
+            }
+        }
+
+        throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+    }
+
+    private static function hyperliquidHistoricalInteger(
+        #[\SensitiveParameter] string $value,
+    ): int {
+        $maximum = (string) \PHP_INT_MAX;
+        if (preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) !== 1
+            || strlen($value) > strlen($maximum)
+            || (strlen($value) === strlen($maximum) && strcmp($value, $maximum) > 0)
+        ) {
+            throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+        }
+
+        return (int) $value;
     }
 
     /**
