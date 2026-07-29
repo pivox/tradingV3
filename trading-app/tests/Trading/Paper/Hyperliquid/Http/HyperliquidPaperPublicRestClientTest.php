@@ -18,6 +18,9 @@ use Symfony\Component\Clock\ClockInterface;
 use Symfony\Component\HttpClient\Exception\TransportException;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
+use Symfony\Component\RateLimiter\LimiterInterface;
+use Symfony\Component\RateLimiter\RateLimit;
+use Symfony\Component\RateLimiter\Reservation;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 use Symfony\Contracts\HttpClient\ResponseStreamInterface;
@@ -110,7 +113,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->newInstanceArgs([
             new MockHttpClient([], 'https://credential=secret.example'),
             new HyperliquidPaperPublicConfig(PaperMarketDataNetwork::MAINNET, false, HyperliquidPaperPublicConfig::MAINNET_INFO_URI, '/tmp'),
-            new HyperliquidPaperPublicRateLimiter(new HyperliquidRecordingLimiter()),
+            new HyperliquidPaperPublicRateLimiter(new HyperliquidRestClientRecordingLimiter()),
             new HyperliquidRecordingClock(),
         ]);
     }
@@ -147,10 +150,58 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         }
     }
 
+    public function testDisabledAcquisitionRejectsBeforeRateLimitingOrHttp(): void
+    {
+        $requests = 0;
+        $limiter = new HyperliquidRestClientRecordingLimiter();
+        $client = $this->client(
+            new MockHttpClient(function () use (&$requests): MockResponse {
+                ++$requests;
+                return new MockResponse('[]');
+            }),
+            limiter: $limiter,
+            acquisitionEnabled: false,
+        );
+
+        try {
+            $client->candleSnapshot('BTC', '1m', 0, 1);
+            self::fail('Expected disabled acquisition rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('hyperliquid_paper_public_acquisition_disabled', $exception->getMessage());
+        }
+        self::assertSame([], $limiter->reservations);
+        self::assertSame(0, $requests);
+    }
+
+    public function testRejectsAStillFormingCandleBeforeRateLimitingOrHttp(): void
+    {
+        $requests = 0;
+        $limiter = new HyperliquidRestClientRecordingLimiter();
+        $client = $this->client(
+            new MockHttpClient(function () use (&$requests): MockResponse {
+                ++$requests;
+                return new MockResponse('[]');
+            }),
+            limiter: $limiter,
+            clock: new HyperliquidRecordingClock(
+                now: '1970-01-01T00:01:30.000000+00:00',
+            ),
+        );
+
+        try {
+            $client->candleSnapshot('BTC', '1m', 60_000, 60_000);
+            self::fail('Expected mutable candle rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('hyperliquid_paper_public_candle_range_not_closed', $exception->getMessage());
+        }
+        self::assertSame([], $limiter->reservations);
+        self::assertSame(0, $requests);
+    }
+
     public function testRejectsMoreThanFiveHundredRowsAndChargesNoRowTokens(): void
     {
         $rows = array_fill(0, 501, ['s' => 'BTC', 'i' => '1m']);
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $client = $this->client(new MockHttpClient(new MockResponse(json_encode($rows, JSON_THROW_ON_ERROR))), $limiter);
 
         $this->expectException(\RuntimeException::class);
@@ -209,7 +260,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
     public function testChargesResponseRowsAfterSuccessfulValidation(): void
     {
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $client = $this->client(new MockHttpClient(new MockResponse('[{"s":"BTC","i":"1m"},{"s":"BTC","i":"1m"}]')), $limiter);
 
         self::assertCount(2, $client->candleSnapshot('BTC', '1m', 0, 1));
@@ -229,7 +280,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
             self::assertTrue($http->responses[$retry]->getInfo('canceled'));
             ++$retry;
         });
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $client = $this->client($http, $limiter, $clock);
 
         self::assertCount(1, $client->candleSnapshot('BTC', '1m', 0, 1));
@@ -242,7 +293,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
     public function testDefaultRetryBudgetIsBoundedToSixAttempts(): void
     {
         $requests = 0;
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $clock = new HyperliquidRecordingClock();
         $client = $this->client(new MockHttpClient(function () use (&$requests): MockResponse {
             ++$requests;
@@ -264,7 +315,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
     {
         $requests = 0;
         $clock = new HyperliquidRecordingClock();
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $client = $this->client(new MockHttpClient(function () use (&$requests): never {
             ++$requests;
             throw new TransportException('https://secret.example/wallet=secret');
@@ -332,21 +383,22 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
     private function client(
         HttpClientInterface|HyperliquidPaperPublicHttpTransportInterface $http,
-        ?HyperliquidRecordingLimiter $limiter = null,
+        ?HyperliquidRestClientRecordingLimiter $limiter = null,
         ?HyperliquidRecordingClock $clock = null,
         PaperMarketDataNetwork $network = PaperMarketDataNetwork::MAINNET,
+        bool $acquisitionEnabled = true,
     ): HyperliquidPaperPublicRestClient {
         return new HyperliquidPaperPublicRestClient(
             $http instanceof HyperliquidPaperPublicHttpTransportInterface ? $http : new HyperliquidRecordingTransport($http),
             new HyperliquidPaperPublicConfig(
                 $network,
-                false,
+                $acquisitionEnabled,
                 $network === PaperMarketDataNetwork::MAINNET
                     ? HyperliquidPaperPublicConfig::MAINNET_INFO_URI
                     : HyperliquidPaperPublicConfig::TESTNET_INFO_URI,
                 '/srv/app/var/paper-market-data',
             ),
-            new HyperliquidPaperPublicRateLimiter($limiter ?? new HyperliquidRecordingLimiter()),
+            new HyperliquidPaperPublicRateLimiter($limiter ?? new HyperliquidRestClientRecordingLimiter()),
             $clock ?? new HyperliquidRecordingClock(),
         );
     }
@@ -356,7 +408,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         \Closure $assertCanceled,
     ): void {
         $clock = new HyperliquidRecordingClock($assertCanceled);
-        $limiter = new HyperliquidRecordingLimiter();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
         $client = $this->client($transport, $limiter, $clock);
         try {
             $client->candleSnapshot('BTC', '1m', 0, 1, maximumRetries: 1);
@@ -427,14 +479,43 @@ final class HyperliquidThrowingStatusResponse implements ResponseInterface
     public function getInfo(?string $type = null): mixed { return null; }
 }
 
+final class HyperliquidRestClientRecordingLimiter implements LimiterInterface
+{
+    /** @var list<array{int, float|null}> */
+    public array $reservations = [];
+
+    public function reserve(int $tokens = 1, ?float $maxTime = null): Reservation
+    {
+        $this->reservations[] = [$tokens, $maxTime];
+
+        return new Reservation(
+            microtime(true),
+            new RateLimit(100, new \DateTimeImmutable(), true, 100),
+        );
+    }
+
+    public function consume(int $tokens = 1): RateLimit
+    {
+        throw new \LogicException('consume_not_expected');
+    }
+
+    public function reset(): void
+    {
+        $this->reservations = [];
+    }
+}
+
 final class HyperliquidRecordingClock implements ClockInterface
 {
     /** @var list<float> */
     public array $sleeps = [];
-    public function __construct(private readonly ?\Closure $onSleep = null)
+    public function __construct(
+        private readonly ?\Closure $onSleep = null,
+        private readonly string $now = '2026-07-28T00:00:00+00:00',
+    )
     {
     }
-    public function now(): \DateTimeImmutable { return new \DateTimeImmutable('2026-07-28T00:00:00+00:00'); }
+    public function now(): \DateTimeImmutable { return new \DateTimeImmutable($this->now); }
     public function sleep(float|int $seconds): void
     {
         ($this->onSleep ?? static function (): void {})();

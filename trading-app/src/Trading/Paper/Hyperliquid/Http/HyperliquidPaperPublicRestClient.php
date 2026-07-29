@@ -39,6 +39,9 @@ final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPape
         int $maximumResponseBytes = self::MAXIMUM_RESPONSE_BYTES,
         int $maximumRetries = 5,
     ): array {
+        if (!$this->config->acquisitionEnabled) {
+            throw new \RuntimeException('hyperliquid_paper_public_acquisition_disabled');
+        }
         $this->assertRequest($coin, $interval, $startTime, $endTime, $maximumResponseBytes, $maximumRetries);
 
         for ($attempt = 0; ; ++$attempt) {
@@ -94,12 +97,20 @@ final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPape
             throw new \InvalidArgumentException('hyperliquid_paper_public_coin_invalid');
         }
         try {
-            $map->intervalMilliseconds($interval);
+            $intervalMilliseconds = $map->intervalMilliseconds($interval);
         } catch (\InvalidArgumentException) {
             throw new \InvalidArgumentException('hyperliquid_paper_public_interval_invalid');
         }
         if ($startTime < 0 || $endTime < $startTime) {
             throw new \InvalidArgumentException('hyperliquid_paper_public_time_range_invalid');
+        }
+        $nowMilliseconds = $this->nowMilliseconds();
+        if ($nowMilliseconds < $intervalMilliseconds
+            || $endTime > $nowMilliseconds - $intervalMilliseconds
+        ) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_paper_public_candle_range_not_closed',
+            );
         }
         if ($maximumResponseBytes < 1 || $maximumResponseBytes > self::MAXIMUM_RESPONSE_BYTES) {
             throw new \InvalidArgumentException('hyperliquid_paper_public_maximum_response_bytes_invalid');
@@ -107,6 +118,20 @@ final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPape
         if ($maximumRetries < 0 || $maximumRetries > count(self::RETRY_DELAYS_SECONDS)) {
             throw new \InvalidArgumentException('hyperliquid_paper_public_maximum_retries_invalid');
         }
+    }
+
+    private function nowMilliseconds(): int
+    {
+        $now = $this->clock->now();
+        $seconds = (int) $now->format('U');
+        $milliseconds = (int) $now->format('v');
+        if ($seconds < 0 || $seconds > intdiv(\PHP_INT_MAX - $milliseconds, 1_000)) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_paper_public_candle_range_not_closed',
+            );
+        }
+
+        return $seconds * 1_000 + $milliseconds;
     }
 
     private function retryOrFail(int $attempt, int $maximumRetries): void
