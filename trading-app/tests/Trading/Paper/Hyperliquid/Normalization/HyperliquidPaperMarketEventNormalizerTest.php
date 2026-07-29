@@ -528,7 +528,7 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         );
         $parameters = $constructor->getParameters();
 
-        self::assertSame(['network', 'ordinals'], array_map(
+        self::assertSame(['network', 'ordinals', 'clock'], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $parameters,
         ));
@@ -540,6 +540,12 @@ final class HyperliquidPaperMarketEventNormalizerTest extends TestCase
         );
         self::assertTrue($parameters[1]->isOptional());
         self::assertNull($parameters[1]->getDefaultValue());
+        self::assertSame(
+            '?' . \Symfony\Component\Clock\ClockInterface::class,
+            (string) $parameters[2]->getType(),
+        );
+        self::assertTrue($parameters[2]->isOptional());
+        self::assertNull($parameters[2]->getDefaultValue());
 
         foreach ([
             'trade',

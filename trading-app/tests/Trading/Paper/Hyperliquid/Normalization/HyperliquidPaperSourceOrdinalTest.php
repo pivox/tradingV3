@@ -439,7 +439,7 @@ final class HyperliquidPaperSourceOrdinalTest extends TestCase
     {
         $ordinals = new HyperliquidPaperSourceOrdinal();
         foreach ([
-            'mainnet/hyperliquid/BTCUSDT/public_trade',
+            'mainnet/hyperliquid/BTCUSDT/private_trade',
             'legacy_unknown/hyperliquid/BTCUSDT/candle_1m',
             'mainnet/okx/BTCUSDT/candle_1m',
             'mainnet/hyperliquid/DOGEUSDT/candle_1m',
