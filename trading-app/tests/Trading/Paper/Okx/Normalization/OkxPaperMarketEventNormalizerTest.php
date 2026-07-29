@@ -564,7 +564,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             $normalizer->historyTrade($row);
             self::fail('An event exceeding the immutable envelope budget must fail construction.');
         } catch (\InvalidArgumentException $exception) {
-            self::assertSame('paper_market_sensitive_decode_bytes_exceeded', $exception->getMessage());
+            self::assertSame('paper_canonical_json_bytes_exceeded', $exception->getMessage());
         }
 
         self::assertSame(['schema_version' => 1, 'scopes' => []], $ordinals->snapshot());
