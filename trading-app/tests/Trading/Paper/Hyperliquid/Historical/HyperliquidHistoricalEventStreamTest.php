@@ -290,7 +290,7 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
             $client->calls[0]['end_time'] + 60_000,
             $client->calls[1]['start_time'],
         );
-        self::assertSame((int) $to->format('Uv') - 1, $client->calls[1]['end_time']);
+        self::assertSame((int) $to->format('Uv') - 60_000, $client->calls[1]['end_time']);
     }
 
     /**
@@ -565,7 +565,11 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
         $events->rewind();
         self::assertInstanceOf(PaperMarketEvent::class, $events->current());
         $checkpoint = $this->checkpoint();
-        $firstStream = reset($checkpoint['streams']);
+        $firstStream = array_find(
+            $checkpoint['streams'],
+            static fn (mixed $candidate): bool => \is_array($candidate)
+                && ($candidate['pages'] ?? []) !== [],
+        );
         self::assertIsArray($firstStream);
         $file = $firstStream['pages'][0]['file'];
         unset($events, $stream);
@@ -648,7 +652,7 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
             $expected[] = $event->toArray();
             $baseline->acknowledge($event->eventId);
         }
-        self::assertCount(16, $expected);
+        self::assertCount(4, $expected);
 
         $boundaries = [['after_emitting_save', 0]];
         foreach (array_keys($expected) as $emitIndex) {

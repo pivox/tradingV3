@@ -54,6 +54,18 @@ final readonly class HyperliquidHistoricalRequest
         if ($from >= $to) {
             throw new \InvalidArgumentException('hyperliquid_historical_range_invalid');
         }
+        try {
+            $hasEligibleCandle = HyperliquidHistoricalTimeGrid::expectedCount(
+                HyperliquidHistoricalTimeGrid::firstGridStartMilliseconds($from, 60_000),
+                HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds($to),
+                60_000,
+            ) > 0;
+        } catch (\Throwable) {
+            $hasEligibleCandle = true;
+        }
+        if (!$hasEligibleCandle) {
+            throw new \InvalidArgumentException('hyperliquid_historical_range_empty');
+        }
 
         $this->symbols = $symbols;
         $this->intervals = ['1m', '5m', '15m', '1h'];

@@ -813,6 +813,11 @@ final class PaperDatasetVerifier
                     $exclusiveTo = HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds(
                         $manifest->historicalCoverage->toTimestamp(),
                     );
+                    $exclusiveStartLimit =
+                        HyperliquidHistoricalTimeGrid::exclusiveStartLimitMilliseconds(
+                            $manifest->historicalCoverage->toTimestamp(),
+                            $duration,
+                        );
                     $expectedCount = HyperliquidHistoricalTimeGrid::expectedCount(
                         $first,
                         $exclusiveTo,
@@ -827,7 +832,7 @@ final class PaperDatasetVerifier
                 }
                 foreach ($starts as $start => $close) {
                     if ($start < $first
-                        || $start >= $exclusiveTo
+                        || $start >= $exclusiveStartLimit
                         || ($start - $first) % $duration !== 0
                         || $start > \PHP_INT_MAX - ($duration - 1)
                         || $start + $duration - 1 !== $close

@@ -381,7 +381,7 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         $key = $coin . '/candle_' . $interval;
         $step = $this->instruments->intervalMilliseconds($interval);
         $first = $this->firstGridTime($step);
-        $to = $this->exclusiveToMilliseconds();
+        $to = $this->exclusiveStartLimitMilliseconds($step);
         $streams = $this->streams();
         if (!isset($streams[$key])) {
             $streams[$key] = [
@@ -588,7 +588,7 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
                         $cursor = $this->nextCursor($cursor, $step);
                     }
                 }
-                if ($cursor < $this->exclusiveToMilliseconds()) {
+                if ($cursor < $this->exclusiveStartLimitMilliseconds($step)) {
                     throw new HyperliquidHistoricalIntegrityException(
                         'hyperliquid_history_candle_grid_gap',
                     );
@@ -854,11 +854,12 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         }
     }
 
-    private function exclusiveToMilliseconds(): int
+    private function exclusiveStartLimitMilliseconds(int $step): int
     {
         try {
-            return HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds(
+            return HyperliquidHistoricalTimeGrid::exclusiveStartLimitMilliseconds(
                 $this->request->to,
+                $step,
             );
         } catch (\Throwable $failure) {
             throw new HyperliquidHistoricalIntegrityException(

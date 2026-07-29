@@ -26,7 +26,7 @@ final class HyperliquidHistoricalTimeGridTest extends TestCase
             HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds($to),
         );
         self::assertSame(
-            2,
+            1,
             HyperliquidHistoricalTimeGrid::expectedCount(
                 1_704_067_260_000,
                 1_704_067_320_655,
@@ -46,7 +46,7 @@ final class HyperliquidHistoricalTimeGridTest extends TestCase
         );
     }
 
-    public function testSubMillisecondExclusiveToIncludesFinalGridStart(): void
+    public function testSubMillisecondExclusiveToExcludesCandleClosingAfterBoundary(): void
     {
         $first = HyperliquidHistoricalTimeGrid::firstGridStartMilliseconds(
             new \DateTimeImmutable('2024-01-01T00:00:00.000000Z'),
@@ -57,7 +57,7 @@ final class HyperliquidHistoricalTimeGridTest extends TestCase
         );
 
         self::assertSame(1_704_067_260_001, $exclusive);
-        self::assertSame(2, HyperliquidHistoricalTimeGrid::expectedCount(
+        self::assertSame(1, HyperliquidHistoricalTimeGrid::expectedCount(
             $first,
             $exclusive,
             60_000,

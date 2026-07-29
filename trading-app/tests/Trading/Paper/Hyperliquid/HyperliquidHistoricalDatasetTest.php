@@ -129,7 +129,7 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
             $manifest->historicalCoverage->to,
         );
         self::assertNotEmpty($events);
-        self::assertContains('1704067620000', array_map(
+        self::assertNotContains('1704067620000', array_map(
             static fn (PaperMarketEvent $event): mixed => $event->payload['start_time']
                 ?? $event->payload['source_candle_start']
                 ?? null,
@@ -324,7 +324,7 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
                     $candles,
                     static fn (PaperMarketEvent $event): bool => !(
                         $event->symbol === 'ETHUSDT'
-                        && $event->channel === PaperMarketDataChannel::CANDLE_5M
+                        && $event->channel === PaperMarketDataChannel::CANDLE_1M
                     ),
                 )),
                 'first' => $this->withoutCandleStart($candles, 'BTCUSDT', '1m', '1704067200000'),
@@ -354,6 +354,53 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
                 );
             }
         }
+    }
+
+    public function testBaselineRejectsSameCountCandleThatClosesAfterExclusiveTo(): void
+    {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'hyperliquid-coverage-close-after-to',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT', 'ETHUSDT'],
+            from: new \DateTimeImmutable('2024-01-01T00:00:00.000000Z'),
+            to: new \DateTimeImmutable('2024-01-01T00:02:00.654321Z'),
+            maximumEvents: 100,
+            maximumPages: 16,
+            maximumResponseBytes: 123_456,
+            maximumRetries: 3,
+        );
+        [, $events, $directory] = $this->buildDatasetFromRequest($request);
+        $events = array_values(array_filter(
+            $events,
+            static fn (PaperMarketEvent $event): bool => $event->channel
+                !== PaperMarketDataChannel::TOP_OF_BOOK,
+        ));
+        $candleIndex = array_find_key(
+            $events,
+            static fn (PaperMarketEvent $event): bool => $event->symbol === 'BTCUSDT'
+                && $event->channel === PaperMarketDataChannel::CANDLE_1M
+                && ($event->payload['start_time'] ?? null) === '1704067260000',
+        );
+        self::assertIsInt($candleIndex);
+        $candle = $events[$candleIndex];
+        $payload = $candle->payload;
+        $payload['start_time'] = '1704067320000';
+        $payload['close_time'] = '1704067379999';
+        $timestamp = new \DateTimeImmutable('2024-01-01T00:02:59.999000Z');
+        $events[$candleIndex] = PaperMarketEvent::create(
+            network: $candle->sourceNetwork,
+            venue: $candle->sourceVenue,
+            symbol: $candle->symbol,
+            channel: $candle->channel,
+            exchangeTimestamp: $timestamp,
+            receivedTimestamp: $timestamp,
+            sequence: $candle->sequence,
+            payload: $payload,
+        );
+        $this->replaceDatasetEvents($directory, array_values($events));
+
+        $this->expectRuntimeReason('paper_dataset_hyperliquid_coverage_incomplete');
+        (new PaperDatasetVerifier())->verifyForBaseline($directory);
     }
 
     public function testBaselineRejectsEveryHistoricalRequestIdentityMismatch(): void
@@ -404,7 +451,7 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
                     === PaperMarketDataChannel::TOP_OF_BOOK
                     && $event->symbol === 'BTCUSDT'
                     && ($event->payload['source_candle_start'] ?? null) === '1704067200000'
-                    && $event->exchangeTimestamp->format('H:i:s') === '00:59:59',
+                    && $event->exchangeTimestamp->format('H:i:s') === '00:00:59',
             );
             self::assertIsInt($bookIndex);
             $book = $events[$bookIndex];
@@ -418,9 +465,9 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
                     $events,
                     static fn (PaperMarketEvent $event): bool => !(
                         $event->symbol === 'ETHUSDT'
-                        && ($event->channel === PaperMarketDataChannel::CANDLE_1H
+                        && ($event->channel === PaperMarketDataChannel::CANDLE_1M
                             || ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK
-                                && $event->exchangeTimestamp->format('H:i:s') === '00:59:59'))
+                                && $event->exchangeTimestamp->format('H:i:s') === '00:00:59'))
                     ),
                 ));
                 $bookIndex = array_find_key(

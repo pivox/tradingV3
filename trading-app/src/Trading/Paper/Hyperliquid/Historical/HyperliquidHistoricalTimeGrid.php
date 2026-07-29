@@ -69,17 +69,45 @@ final class HyperliquidHistoricalTimeGrid
         ) {
             throw new \InvalidArgumentException(self::INVALID);
         }
-        if ($firstGridStartMilliseconds >= $exclusiveToMilliseconds) {
+        $exclusiveStartLimit = self::exclusiveStartLimitFromMilliseconds(
+            $exclusiveToMilliseconds,
+            $intervalMilliseconds,
+        );
+        if ($firstGridStartMilliseconds >= $exclusiveStartLimit) {
             return 0;
         }
 
-        $lastOffset = ($exclusiveToMilliseconds - 1) - $firstGridStartMilliseconds;
+        $lastOffset = ($exclusiveStartLimit - 1) - $firstGridStartMilliseconds;
         $quotient = intdiv($lastOffset, $intervalMilliseconds);
         if ($quotient === \PHP_INT_MAX) {
             throw new \InvalidArgumentException(self::INVALID);
         }
 
         return $quotient + 1;
+    }
+
+    public static function exclusiveStartLimitMilliseconds(
+        \DateTimeImmutable $to,
+        int $intervalMilliseconds,
+    ): int {
+        return self::exclusiveStartLimitFromMilliseconds(
+            self::exclusiveToMilliseconds($to),
+            $intervalMilliseconds,
+        );
+    }
+
+    private static function exclusiveStartLimitFromMilliseconds(
+        int $exclusiveToMilliseconds,
+        int $intervalMilliseconds,
+    ): int {
+        if ($exclusiveToMilliseconds < 0 || $intervalMilliseconds <= 0) {
+            throw new \InvalidArgumentException(self::INVALID);
+        }
+        if ($exclusiveToMilliseconds < $intervalMilliseconds) {
+            return 0;
+        }
+
+        return $exclusiveToMilliseconds - ($intervalMilliseconds - 1);
     }
 
     private static function ceilingQuotient(int $value, int $divisor): int

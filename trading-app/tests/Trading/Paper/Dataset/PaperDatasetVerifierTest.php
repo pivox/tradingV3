@@ -62,9 +62,6 @@ final class PaperDatasetVerifierTest extends TestCase
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->hyperliquidModelledBookManifest());
         foreach ([
             [PaperMarketDataChannel::CANDLE_1M, '1m', 60_000],
-            [PaperMarketDataChannel::CANDLE_5M, '5m', 300_000],
-            [PaperMarketDataChannel::CANDLE_15M, '15m', 900_000],
-            [PaperMarketDataChannel::CANDLE_1H, '1h', 3_600_000],
         ] as $index => [$channel, $interval, $duration]) {
             $start = 1_752_919_200_000;
             $close = $start + $duration - 1;

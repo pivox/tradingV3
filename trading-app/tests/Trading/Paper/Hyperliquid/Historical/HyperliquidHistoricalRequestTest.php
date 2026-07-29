@@ -117,6 +117,17 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         );
     }
 
+    public function testRejectsRangeWithoutAnyFullyClosedOneMinuteCandle(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_historical_range_empty');
+
+        $this->request(
+            from: new \DateTimeImmutable('2026-07-21T10:00:10.000000Z'),
+            to: new \DateTimeImmutable('2026-07-21T10:00:20.000000Z'),
+        );
+    }
+
     /** @return iterable<string, array{int, int, int, int}> */
     public static function invalidBounds(): iterable
     {
