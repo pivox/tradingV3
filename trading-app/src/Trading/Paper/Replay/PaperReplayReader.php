@@ -386,7 +386,20 @@ final class PaperReplayReader
         #[\SensitiveParameter] array $events,
     ): array {
         try {
-            usort($events, self::compareHyperliquidHistorical(...));
+            /** @var array<string, int> $intervals */
+            $intervals = [];
+            foreach ($events as $entry) {
+                $event = $entry['event'];
+                $intervals[$event->eventId] = self::hyperliquidHistoricalInterval($event);
+            }
+            usort(
+                $events,
+                static fn (array $left, array $right): int => self::compareHyperliquidHistorical(
+                    $left,
+                    $right,
+                    $intervals,
+                ),
+            );
         } catch (\Throwable) {
             throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
         }
@@ -397,10 +410,12 @@ final class PaperReplayReader
     /**
      * @param array{event: PaperMarketEvent, input_index: int} $left
      * @param array{event: PaperMarketEvent, input_index: int} $right
+     * @param array<string, int>                                $intervals
      */
     private static function compareHyperliquidHistorical(
         #[\SensitiveParameter] array $left,
         #[\SensitiveParameter] array $right,
+        #[\SensitiveParameter] array $intervals,
     ): int {
         $leftEvent = $left['event'];
         $rightEvent = $right['event'];
@@ -415,8 +430,8 @@ final class PaperReplayReader
             return $comparison;
         }
 
-        $comparison = self::hyperliquidHistoricalInterval($leftEvent)
-            <=> self::hyperliquidHistoricalInterval($rightEvent);
+        $comparison = $intervals[$leftEvent->eventId]
+            <=> $intervals[$rightEvent->eventId];
         if ($comparison !== 0) {
             return $comparison;
         }
@@ -476,6 +491,13 @@ final class PaperReplayReader
 
         foreach ([60_000, 300_000, 900_000, 3_600_000] as $allowedDuration) {
             if ($duration === $allowedDuration) {
+                if ($sourceStartInteger % $allowedDuration !== 0
+                    || $sourceStartInteger > \PHP_INT_MAX - ($allowedDuration - 1)
+                    || $sourceStartInteger + $allowedDuration - 1 !== $closeMilliseconds
+                ) {
+                    throw new \RuntimeException('paper_replay_hyperliquid_interval_invalid');
+                }
+
                 return $allowedDuration;
             }
         }

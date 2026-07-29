@@ -170,6 +170,136 @@ final class PaperReplayReaderTest extends TestCase
         yield 'non millisecond close' => ['1704070740000', '2024-01-01T00:59:59.999001Z'];
     }
 
+    /** @return iterable<string, array{mixed}> */
+    public static function invalidSingletonHyperliquidBookStartProvider(): iterable
+    {
+        yield 'missing start' => [null];
+        yield 'non scalar start' => [['invalid']];
+        yield 'invalid string start' => ['not-an-integer'];
+    }
+
+    #[DataProvider('invalidSingletonHyperliquidBookStartProvider')]
+    public function testHyperliquidHistoricalReplayValidatesSingletonBookBeforeYield(
+        mixed $sourceStart,
+    ): void {
+        $close = '2024-01-01T00:59:59.999000Z';
+        $payload = $this->hyperliquidBookPayload($close, 60_000);
+        if ($sourceStart === null) {
+            unset($payload['source_candle_start']);
+        } else {
+            $payload['source_candle_start'] = $sourceStart;
+        }
+        $this->assertHyperliquidReplayIntervalFailure([
+            $this->hyperliquidHistoricalEvent(
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                '1',
+                $close,
+                $payload,
+            ),
+        ], 'hl_candle_atr_top_v1');
+    }
+
+    public function testHyperliquidHistoricalReplayValidatesEveryEventBeforeComparatorEarlyReturn(): void
+    {
+        $cases = [
+            'different timestamps' => [
+                $this->hyperliquidHistoricalEvent(
+                    'BTCUSDT',
+                    PaperMarketDataChannel::CANDLE_1M,
+                    '1',
+                    '2024-01-01T00:00:59.999000Z',
+                    ['interval' => '1m'],
+                ),
+                $this->invalidHyperliquidBook(
+                    'BTCUSDT',
+                    '2024-01-01T00:01:59.999000Z',
+                ),
+            ],
+            'different symbols' => [
+                $this->hyperliquidHistoricalEvent(
+                    'BTCUSDT',
+                    PaperMarketDataChannel::CANDLE_1M,
+                    '1',
+                    '2024-01-01T00:59:59.999000Z',
+                    ['interval' => '1m'],
+                ),
+                $this->invalidHyperliquidBook(
+                    'ETHUSDT',
+                    '2024-01-01T00:59:59.999000Z',
+                ),
+            ],
+        ];
+
+        foreach ($cases as $case => $events) {
+            try {
+                $this->assertHyperliquidReplayIntervalFailure(
+                    $events,
+                    'hl_candle_atr_top_v1',
+                );
+            } catch (\PHPUnit\Framework\AssertionFailedError $failure) {
+                self::fail($case . ': ' . $failure->getMessage());
+            }
+        }
+    }
+
+    public function testSingletonHyperliquidHistoricalIntervalFailureRedactsInvalidModelPayload(): void
+    {
+        $sentinel = 'HYPERLIQUID_SINGLETON_INTERVAL_SENTINEL_63f0ea';
+        $close = '2024-01-01T00:59:59.999000Z';
+        $payload = $this->hyperliquidBookPayload($close, 60_000);
+        $payload['source_candle_start'] = $sentinel;
+
+        $this->assertHyperliquidReplayIntervalFailure([
+            $this->hyperliquidHistoricalEvent(
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                '1',
+                $close,
+                $payload,
+            ),
+        ], $sentinel);
+    }
+
+    public function testHyperliquidHistoricalReplayRejectsDurationValidButShiftedBookGrid(): void
+    {
+        $close = '2024-01-01T01:00:00.000000Z';
+
+        $this->assertHyperliquidReplayIntervalFailure([
+            $this->hyperliquidHistoricalEvent(
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                '1',
+                $close,
+                $this->hyperliquidBookPayload($close, 60_000),
+            ),
+        ]);
+    }
+
+    public function testHyperliquidHistoricalReplayAcceptsAlignedZeroEpochBoundary(): void
+    {
+        $close = '1970-01-01T00:00:59.999000Z';
+        $event = $this->hyperliquidHistoricalEvent(
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            '1',
+            $close,
+            $this->hyperliquidBookPayload($close, 60_000),
+        );
+        $dataset = $this->completeHyperliquidDataset([$event]);
+
+        $replayed = iterator_to_array(
+            $this->reader(new PaperReplayClock($event->exchangeTimestamp))
+                ->read($dataset['directory'], 'hyperliquid.zero-grid-boundary'),
+            false,
+        );
+
+        self::assertSame([$event->toArray()], array_map(
+            static fn (PaperMarketEvent $replayedEvent): array => $replayedEvent->toArray(),
+            $replayed,
+        ));
+    }
+
     #[DataProvider('invalidHyperliquidBookIntervalProvider')]
     public function testHyperliquidHistoricalReplayRejectsInvalidBookIntervalWithStableReason(
         mixed $sourceStart,
@@ -620,7 +750,19 @@ final class PaperReplayReaderTest extends TestCase
      */
     private function completeHyperliquidDataset(array $events): array
     {
-        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->hyperliquidManifest());
+        $eventIds = array_map(
+            static fn (PaperMarketEvent $event): string => $event->eventId,
+            $events,
+        );
+        $datasetId = 'dataset-hyperliquid-history-' . substr(
+            hash('sha256', implode('|', $eventIds)),
+            0,
+            16,
+        );
+        $recorder = new PaperDatasetRecorder(
+            $this->datasetRoot(),
+            $this->hyperliquidManifest($datasetId),
+        );
         foreach ($events as $event) {
             $recorder->append($event);
         }
@@ -664,6 +806,57 @@ final class PaperReplayReaderTest extends TestCase
         return [$events, $this->completeHyperliquidDataset($events)];
     }
 
+    private function invalidHyperliquidBook(
+        string $symbol,
+        string $close,
+    ): PaperMarketEvent {
+        $payload = $this->hyperliquidBookPayload($close, 60_000);
+        unset($payload['source_candle_start']);
+
+        return $this->hyperliquidHistoricalEvent(
+            $symbol,
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            '1',
+            $close,
+            $payload,
+        );
+    }
+
+    /** @param list<PaperMarketEvent> $events */
+    private function assertHyperliquidReplayIntervalFailure(
+        #[\SensitiveParameter] array $events,
+        #[\SensitiveParameter] ?string $forbiddenTraceValue = null,
+    ): void {
+        $dataset = $this->completeHyperliquidDataset($events);
+        $previous = ini_set('zend.exception_ignore_args', '0');
+        self::assertNotFalse($previous);
+        $yielded = 0;
+        $failure = null;
+
+        try {
+            foreach ($this->reader(new PaperReplayClock($events[0]->exchangeTimestamp))
+                ->read($dataset['directory'], 'hyperliquid.pre-sort-validation') as $_event
+            ) {
+                ++$yielded;
+            }
+        } catch (\RuntimeException $exception) {
+            $failure = $exception;
+        } finally {
+            ini_set('zend.exception_ignore_args', $previous);
+        }
+
+        self::assertNotNull(
+            $failure,
+            'Every invalid Hyperliquid interval must fail before replay sorting or yield.',
+        );
+        self::assertSame('paper_replay_hyperliquid_interval_invalid', $failure->getMessage());
+        self::assertSame(0, $yielded);
+        if ($forbiddenTraceValue !== null) {
+            $trace = (string) $failure . "\n" . print_r($failure->getTrace(), true);
+            self::assertStringNotContainsString($forbiddenTraceValue, $trace);
+        }
+    }
+
     private function manifest(): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
@@ -687,12 +880,14 @@ final class PaperReplayReaderTest extends TestCase
         );
     }
 
-    private function hyperliquidManifest(): PaperDatasetManifest
+    private function hyperliquidManifest(
+        string $datasetId = 'dataset-hyperliquid-history-001',
+    ): PaperDatasetManifest
     {
         return new PaperDatasetManifest(
             schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
-            datasetId: 'dataset-hyperliquid-history-001',
+            datasetId: $datasetId,
             venue: PaperMarketDataVenue::HYPERLIQUID,
             network: PaperMarketDataNetwork::MAINNET,
             symbols: ['BTCUSDT' => 'BTC', 'ETHUSDT' => 'ETH'],
