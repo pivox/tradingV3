@@ -122,7 +122,13 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
     {
         $constructors = [
             HyperliquidPaperPublicConfigFactory::class => ['acquisitionEnabled', 'dataRoot'],
-            HyperliquidPaperPublicConfig::class => ['network', 'acquisitionEnabled', 'infoUri', 'dataRoot'],
+            HyperliquidPaperPublicConfig::class => [
+                'network',
+                'acquisitionEnabled',
+                'infoUri',
+                'webSocketUri',
+                'dataRoot',
+            ],
             HyperliquidPaperPublicRestClient::class => ['transport', 'config', 'rateLimiter', 'clock'],
             HyperliquidPaperPublicRateLimiter::class => ['limiter'],
             NativeHyperliquidPaperPublicHttpTransport::class => [],
@@ -132,6 +138,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             HyperliquidPaperPublicConfig::class => [
                 PaperMarketDataNetwork::class,
                 'bool',
+                'string',
                 'string',
                 'string',
             ],

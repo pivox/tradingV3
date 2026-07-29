@@ -112,7 +112,13 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         $this->expectException(\TypeError::class);
         (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->newInstanceArgs([
             new MockHttpClient([], 'https://credential=secret.example'),
-            new HyperliquidPaperPublicConfig(PaperMarketDataNetwork::MAINNET, false, HyperliquidPaperPublicConfig::MAINNET_INFO_URI, '/tmp'),
+            new HyperliquidPaperPublicConfig(
+                PaperMarketDataNetwork::MAINNET,
+                false,
+                HyperliquidPaperPublicConfig::MAINNET_INFO_URI,
+                HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI,
+                '/tmp',
+            ),
             new HyperliquidPaperPublicRateLimiter(new HyperliquidRestClientRecordingLimiter()),
             new HyperliquidRecordingClock(),
         ]);
@@ -396,6 +402,9 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
                 $network === PaperMarketDataNetwork::MAINNET
                     ? HyperliquidPaperPublicConfig::MAINNET_INFO_URI
                     : HyperliquidPaperPublicConfig::TESTNET_INFO_URI,
+                $network === PaperMarketDataNetwork::MAINNET
+                    ? HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI
+                    : HyperliquidPaperPublicConfig::TESTNET_WEBSOCKET_URI,
                 '/srv/app/var/paper-market-data',
             ),
             new HyperliquidPaperPublicRateLimiter($limiter ?? new HyperliquidRestClientRecordingLimiter()),

@@ -16,14 +16,16 @@ final readonly class HyperliquidPaperPublicConfigFactory
 
     public function create(string $network): HyperliquidPaperPublicConfig
     {
-        [$paperNetwork, $infoUri] = match ($network) {
+        [$paperNetwork, $infoUri, $webSocketUri] = match ($network) {
             'mainnet' => [
                 PaperMarketDataNetwork::MAINNET,
                 HyperliquidPaperPublicConfig::MAINNET_INFO_URI,
+                HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI,
             ],
             'testnet' => [
                 PaperMarketDataNetwork::TESTNET,
                 HyperliquidPaperPublicConfig::TESTNET_INFO_URI,
+                HyperliquidPaperPublicConfig::TESTNET_WEBSOCKET_URI,
             ],
             default => throw new \InvalidArgumentException('hyperliquid_paper_network_invalid'),
         };
@@ -32,6 +34,7 @@ final readonly class HyperliquidPaperPublicConfigFactory
             network: $paperNetwork,
             acquisitionEnabled: $this->acquisitionEnabled,
             infoUri: $infoUri,
+            webSocketUri: $webSocketUri,
             dataRoot: $this->dataRoot,
         );
     }

@@ -5,35 +5,72 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Hyperliquid;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(HyperliquidPaperPublicConfig::class)]
+#[CoversClass(HyperliquidPaperPublicConfigFactory::class)]
 final class HyperliquidPaperPublicConfigTest extends TestCase
 {
+    public function testFactoryBindsTheCanonicalWebSocketEndpointToEachNetwork(): void
+    {
+        $factory = new HyperliquidPaperPublicConfigFactory(
+            acquisitionEnabled: false,
+            dataRoot: '/srv/app/var/paper-market-data',
+        );
+
+        self::assertSame(
+            'wss://api.hyperliquid.xyz/ws',
+            $factory->create('mainnet')->webSocketUri,
+        );
+        self::assertSame(
+            'wss://api.hyperliquid-testnet.xyz/ws',
+            $factory->create('testnet')->webSocketUri,
+        );
+    }
+
+    public function testRejectsACrossNetworkWebSocketEndpoint(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_websocket_uri_not_allowed');
+
+        new HyperliquidPaperPublicConfig(
+            network: PaperMarketDataNetwork::MAINNET,
+            acquisitionEnabled: true,
+            infoUri: HyperliquidPaperPublicConfig::MAINNET_INFO_URI,
+            webSocketUri: HyperliquidPaperPublicConfig::TESTNET_WEBSOCKET_URI,
+            dataRoot: '/srv/app/var/paper-market-data',
+        );
+    }
+
     public function testAcceptsOnlyTheCanonicalNetworkAndInfoUriPairs(): void
     {
         $mainnet = new HyperliquidPaperPublicConfig(
             network: PaperMarketDataNetwork::MAINNET,
             acquisitionEnabled: true,
             infoUri: HyperliquidPaperPublicConfig::MAINNET_INFO_URI,
+            webSocketUri: HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI,
             dataRoot: '/srv/app/var/paper-market-data',
         );
         $testnet = new HyperliquidPaperPublicConfig(
             network: PaperMarketDataNetwork::TESTNET,
             acquisitionEnabled: false,
             infoUri: HyperliquidPaperPublicConfig::TESTNET_INFO_URI,
+            webSocketUri: HyperliquidPaperPublicConfig::TESTNET_WEBSOCKET_URI,
             dataRoot: '/srv/app/var/paper-market-data',
         );
 
         self::assertSame(PaperMarketDataNetwork::MAINNET, $mainnet->network);
         self::assertTrue($mainnet->acquisitionEnabled);
         self::assertSame('https://api.hyperliquid.xyz/info', $mainnet->infoUri);
+        self::assertSame('wss://api.hyperliquid.xyz/ws', $mainnet->webSocketUri);
         self::assertSame(PaperMarketDataNetwork::TESTNET, $testnet->network);
         self::assertFalse($testnet->acquisitionEnabled);
         self::assertSame('https://api.hyperliquid-testnet.xyz/info', $testnet->infoUri);
+        self::assertSame('wss://api.hyperliquid-testnet.xyz/ws', $testnet->webSocketUri);
     }
 
     public function testRejectsTheLegacyUnknownNetwork(): void
@@ -45,6 +82,7 @@ final class HyperliquidPaperPublicConfigTest extends TestCase
             network: PaperMarketDataNetwork::LEGACY_UNKNOWN,
             acquisitionEnabled: false,
             infoUri: HyperliquidPaperPublicConfig::MAINNET_INFO_URI,
+            webSocketUri: HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI,
             dataRoot: '/srv/app/var/paper-market-data',
         );
     }
@@ -77,6 +115,9 @@ final class HyperliquidPaperPublicConfigTest extends TestCase
             network: $network,
             acquisitionEnabled: false,
             infoUri: $infoUri,
+            webSocketUri: $network === PaperMarketDataNetwork::MAINNET
+                ? HyperliquidPaperPublicConfig::MAINNET_WEBSOCKET_URI
+                : HyperliquidPaperPublicConfig::TESTNET_WEBSOCKET_URI,
             dataRoot: '/srv/app/var/paper-market-data',
         );
     }
@@ -91,7 +132,10 @@ final class HyperliquidPaperPublicConfigTest extends TestCase
             $constructor->getParameters(),
         );
 
-        self::assertSame(['network', 'acquisitionenabled', 'infouri', 'dataroot'], $parameterNames);
+        self::assertSame(
+            ['network', 'acquisitionenabled', 'infouri', 'websocketuri', 'dataroot'],
+            $parameterNames,
+        );
         self::assertSame([], array_values(array_filter(
             $parameterNames,
             static fn (string $name): bool => preg_match(
