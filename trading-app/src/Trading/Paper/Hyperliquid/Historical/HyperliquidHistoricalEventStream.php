@@ -835,61 +835,33 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
 
     private function firstGridTime(int $step): int
     {
-        $microseconds = $this->epochMicroseconds($this->request->from);
-        $stepMicroseconds = $step * 1_000;
-        if ($microseconds > \PHP_INT_MAX - ($stepMicroseconds - 1)) {
+        try {
+            return HyperliquidHistoricalTimeGrid::firstGridStartMilliseconds(
+                $this->request->from,
+                $step,
+            );
+        } catch (\Throwable $failure) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_history_candle_cursor_not_progressing',
+                0,
+                $failure,
             );
         }
-        $quotient = $this->ceilingQuotient($microseconds, $stepMicroseconds);
-        if ($quotient > intdiv(\PHP_INT_MAX, $step)) {
-            throw new HyperliquidHistoricalIntegrityException(
-                'hyperliquid_history_candle_cursor_not_progressing',
-            );
-        }
-
-        return $quotient * $step;
     }
 
     private function exclusiveToMilliseconds(): int
     {
-        $microseconds = $this->epochMicroseconds($this->request->to);
-        if ($microseconds > \PHP_INT_MAX - 999) {
+        try {
+            return HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds(
+                $this->request->to,
+            );
+        } catch (\Throwable $failure) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_history_candle_cursor_not_progressing',
+                0,
+                $failure,
             );
         }
-
-        return $this->ceilingQuotient($microseconds, 1_000);
-    }
-
-    private function ceilingQuotient(int $value, int $divisor): int
-    {
-        $quotient = intdiv($value, $divisor);
-        if ($value % $divisor === 0) {
-            return $quotient;
-        }
-        if ($quotient === \PHP_INT_MAX) {
-            throw new HyperliquidHistoricalIntegrityException(
-                'hyperliquid_history_candle_cursor_not_progressing',
-            );
-        }
-
-        return $quotient + 1;
-    }
-
-    private function epochMicroseconds(\DateTimeImmutable $timestamp): int
-    {
-        $seconds = (int) $timestamp->format('U');
-        $microseconds = (int) $timestamp->format('u');
-        if ($seconds < 0 || $seconds > intdiv(\PHP_INT_MAX - $microseconds, 1_000_000)) {
-            throw new HyperliquidHistoricalIntegrityException(
-                'hyperliquid_history_candle_cursor_not_progressing',
-            );
-        }
-
-        return ($seconds * 1_000_000) + $microseconds;
     }
 
     private function candleChannel(string $interval): PaperMarketDataChannel

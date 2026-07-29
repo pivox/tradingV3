@@ -11,6 +11,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequestIdentity;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalTimeGrid;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
@@ -780,13 +781,6 @@ final class PaperDatasetVerifier
             }
         }
 
-        try {
-            $from = self::coverageTimestampMilliseconds($manifest->historicalCoverage->from);
-            $to = self::coverageTimestampMilliseconds($manifest->historicalCoverage->to);
-        } catch (\Throwable) {
-            throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
-        }
-
         $durations = [
             '1m' => 60_000,
             '5m' => 300_000,
@@ -795,21 +789,30 @@ final class PaperDatasetVerifier
         ];
         foreach (array_keys($manifest->symbols) as $symbol) {
             foreach ($durations as $interval => $duration) {
-                $span = $to - $from;
-                if ($from % $duration !== 0
-                    || $span <= 0
-                ) {
+                try {
+                    $first = HyperliquidHistoricalTimeGrid::firstGridStartMilliseconds(
+                        $manifest->historicalCoverage->fromTimestamp(),
+                        $duration,
+                    );
+                    $exclusiveTo = HyperliquidHistoricalTimeGrid::exclusiveToMilliseconds(
+                        $manifest->historicalCoverage->toTimestamp(),
+                    );
+                    $expectedCount = HyperliquidHistoricalTimeGrid::expectedCount(
+                        $first,
+                        $exclusiveTo,
+                        $duration,
+                    );
+                } catch (\Throwable) {
                     throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
                 }
                 $starts = $candles[$symbol][$interval] ?? [];
-                $expectedCount = intdiv($span - 1, $duration) + 1;
                 if (\count($starts) !== $expectedCount) {
                     throw new \RuntimeException('paper_dataset_hyperliquid_coverage_incomplete');
                 }
                 foreach ($starts as $start => $close) {
-                    if ($start < $from
-                        || $start >= $to
-                        || ($start - $from) % $duration !== 0
+                    if ($start < $first
+                        || $start >= $exclusiveTo
+                        || ($start - $first) % $duration !== 0
                         || $start > \PHP_INT_MAX - ($duration - 1)
                         || $start + $duration - 1 !== $close
                     ) {
@@ -831,35 +834,6 @@ final class PaperDatasetVerifier
                 }
             }
         }
-    }
-
-    private static function coverageTimestampMilliseconds(
-        #[\SensitiveParameter] string $value,
-    ): int {
-        $timestamp = \DateTimeImmutable::createFromFormat(
-            '!Y-m-d\TH:i:s.u\Z',
-            $value,
-            new \DateTimeZone('UTC'),
-        );
-        if ($timestamp === false) {
-            throw new \InvalidArgumentException();
-        }
-        $microseconds = (int) $timestamp->format('u');
-        $seconds = $timestamp->format('U');
-        if ($microseconds % 1_000 !== 0
-            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $seconds) !== 1
-            || strlen($seconds) > strlen((string) \PHP_INT_MAX)
-            || (strlen($seconds) === strlen((string) \PHP_INT_MAX)
-                && strcmp($seconds, (string) \PHP_INT_MAX) > 0)
-        ) {
-            throw new \InvalidArgumentException();
-        }
-        $secondsInteger = (int) $seconds;
-        if ($secondsInteger > intdiv(\PHP_INT_MAX - 999, 1_000)) {
-            throw new \InvalidArgumentException();
-        }
-
-        return ($secondsInteger * 1_000) + intdiv($microseconds, 1_000);
     }
 
     private function decodeEvent(#[\SensitiveParameter] string $raw): PaperMarketEvent

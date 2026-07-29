@@ -104,6 +104,87 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
         $recorder->append($testnetEvents[0]);
     }
 
+    public function testBuildsCertifiesAndReplaysNonalignedMicrosecondCoverage(): void
+    {
+        [$manifest, $events] = $this->buildDatasetFromRequest(
+            new HyperliquidHistoricalRequest(
+                datasetId: 'hyperliquid-history-nonaligned-microseconds',
+                network: PaperMarketDataNetwork::MAINNET,
+                symbols: ['BTCUSDT', 'ETHUSDT'],
+                from: new \DateTimeImmutable('2024-01-01T00:00:00.123456Z'),
+                to: new \DateTimeImmutable('2024-01-01T00:07:00.654321Z'),
+                maximumEvents: 100,
+                maximumPages: 16,
+                maximumResponseBytes: 123_456,
+                maximumRetries: 3,
+            ),
+        );
+
+        self::assertSame(
+            '2024-01-01T00:00:00.123456Z',
+            $manifest->historicalCoverage?->from,
+        );
+        self::assertSame(
+            '2024-01-01T00:07:00.654321Z',
+            $manifest->historicalCoverage->to,
+        );
+        self::assertNotEmpty($events);
+        self::assertContains('1704067620000', array_map(
+            static fn (PaperMarketEvent $event): mixed => $event->payload['start_time']
+                ?? $event->payload['source_candle_start']
+                ?? null,
+            $events,
+        ));
+    }
+
+    public function testBuildsCertifiesMillisecondButIntervalUnalignedCoverage(): void
+    {
+        [, $events] = $this->buildDatasetFromRequest(
+            new HyperliquidHistoricalRequest(
+                datasetId: 'hyperliquid-history-unaligned-millisecond',
+                network: PaperMarketDataNetwork::MAINNET,
+                symbols: ['BTCUSDT', 'ETHUSDT'],
+                from: new \DateTimeImmutable('2024-01-01T00:00:00.001000Z'),
+                to: new \DateTimeImmutable('2024-01-01T00:06:00.000000Z'),
+                maximumEvents: 100,
+                maximumPages: 16,
+                maximumResponseBytes: 123_456,
+                maximumRetries: 3,
+            ),
+        );
+
+        self::assertNotEmpty($events);
+        foreach ($events as $event) {
+            self::assertNotSame(
+                '1704067200000',
+                $event->payload['start_time']
+                    ?? $event->payload['source_candle_start']
+                    ?? null,
+            );
+        }
+    }
+
+    public function testBaselineRejectsGridGeneratedFromOldAlignedFromAssumption(): void
+    {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'hyperliquid-history-old-aligned-assumption',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT', 'ETHUSDT'],
+            from: new \DateTimeImmutable('2024-01-01T00:00:00.123456Z'),
+            to: new \DateTimeImmutable('2024-01-01T00:07:00.654321Z'),
+            maximumEvents: 100,
+            maximumPages: 16,
+            maximumResponseBytes: 123_456,
+            maximumRetries: 3,
+        );
+        [, $events, $directory] = $this->buildDatasetFromRequest($request);
+        $events[] = $this->oldAlignedOneMinuteCandle();
+        $this->replaceDatasetEvents($directory, $events);
+
+        $this->expectRuntimeReason('paper_dataset_hyperliquid_coverage_incomplete');
+        (new PaperDatasetVerifier())->verifyForBaseline($directory);
+    }
+
     public function testCorruptStagedPageMakesBuilderPublishIncompleteDataset(): void
     {
         $manifest = $this->recordingManifest(
@@ -807,6 +888,27 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
                 'interval' => '1m',
                 'start_time' => '1704067380000',
                 'close_time' => '1704067439999',
+                'origin' => 'rest_candle_snapshot',
+                'confirmed' => true,
+                'close' => '100',
+            ],
+        );
+    }
+
+    private function oldAlignedOneMinuteCandle(): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            network: PaperMarketDataNetwork::MAINNET,
+            venue: PaperMarketDataVenue::HYPERLIQUID,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::CANDLE_1M,
+            exchangeTimestamp: new \DateTimeImmutable('2024-01-01T00:00:59.999000Z'),
+            receivedTimestamp: new \DateTimeImmutable('2024-01-01T00:00:59.999000Z'),
+            sequence: '999',
+            payload: [
+                'interval' => '1m',
+                'start_time' => '1704067200000',
+                'close_time' => '1704067259999',
                 'origin' => 'rest_candle_snapshot',
                 'confirmed' => true,
                 'close' => '100',

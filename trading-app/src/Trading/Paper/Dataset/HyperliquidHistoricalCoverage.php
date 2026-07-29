@@ -122,6 +122,16 @@ final readonly class HyperliquidHistoricalCoverage
         ];
     }
 
+    public function fromTimestamp(): \DateTimeImmutable
+    {
+        return self::parseTimestamp($this->from);
+    }
+
+    public function toTimestamp(): \DateTimeImmutable
+    {
+        return self::parseTimestamp($this->to);
+    }
+
     private static function parseTimestamp(#[\SensitiveParameter] string $value): \DateTimeImmutable
     {
         try {
