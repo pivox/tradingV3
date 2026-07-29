@@ -41,8 +41,10 @@ inclut le réseau, le coin, le block time et `tid`.
 Le checkpoint autoritatif est
 `checkpoints/hyperliquid-live.json`. Il lie le dataset, le réseau, la
 configuration, les ordinals, l'événement pending, les bougies courantes, les
-frontières finalisées et les acquittements. Sa publication est atomique et
-protégée par un checksum SHA-256.
+frontières finalisées, les acquittements et un historique borné des identités
+naturelles de trades. Son schéma v2 empêche notamment qu'un chevauchement de
+batches réattribue de nouveaux ordinals aux mêmes trades. Sa publication est
+atomique et protégée par un checksum SHA-256.
 
 La capture applique :
 

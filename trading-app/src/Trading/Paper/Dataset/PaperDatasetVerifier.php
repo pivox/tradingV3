@@ -593,6 +593,8 @@ final class PaperDatasetVerifier
         $liveCandleFrontiers = [];
         /** @var list<string> $liveEventIds */
         $liveEventIds = [];
+        /** @var list<array{identity_hash: string, assignment_digest: string}> $liveTradeIdentityHistory */
+        $liveTradeIdentityHistory = [];
 
         $handle = $this->openRegularFile(
             $eventsPath,
@@ -644,6 +646,7 @@ final class PaperDatasetVerifier
                         $liveOrdinals,
                         $liveSnapshotEpochs,
                         $liveCandleFrontiers,
+                        $liveTradeIdentityHistory,
                     );
                     $liveEventIds[] = $event->eventId;
                 }
@@ -748,6 +751,7 @@ final class PaperDatasetVerifier
                 $liveSnapshotEpochs,
                 $liveCandleFrontiers,
                 $liveEventIds,
+                $liveTradeIdentityHistory,
             );
         }
 
@@ -777,12 +781,14 @@ final class PaperDatasetVerifier
     /**
      * @param array<string, int> $snapshotEpochs
      * @param array<string, int> $candleFrontiers
+     * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      */
     private function assertHyperliquidLiveEvent(
         PaperMarketEvent $event,
         HyperliquidPaperSourceOrdinal $ordinals,
         array &$snapshotEpochs,
         array &$candleFrontiers,
+        array &$tradeIdentityHistory,
     ): void {
         try {
             if (!\in_array($event->channel, [
@@ -862,6 +868,23 @@ final class PaperDatasetVerifier
                 $event->exchangeTimestamp,
                 $event->payload,
             );
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $identityHash = hash('sha256', $naturalIdentity);
+                foreach ($tradeIdentityHistory as $entry) {
+                    if (hash_equals($entry['identity_hash'], $identityHash)) {
+                        throw new \InvalidArgumentException();
+                    }
+                }
+                $tradeIdentityHistory[] = [
+                    'identity_hash' => $identityHash,
+                    'assignment_digest' => $digest,
+                ];
+                if (\count($tradeIdentityHistory)
+                    > HyperliquidPaperLiveCheckpoint::MAXIMUM_TRADE_IDENTITIES
+                ) {
+                    array_shift($tradeIdentityHistory);
+                }
+            }
             $ordinals->commit($scope, $naturalIdentity, $digest, $event);
         } catch (\Throwable) {
             throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
@@ -971,6 +994,7 @@ final class PaperDatasetVerifier
      * @param array<string, int> $snapshotEpochs
      * @param array<string, int> $candleFrontiers
      * @param list<string> $eventIds
+     * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      */
     private function assertHyperliquidLiveCheckpoint(
         string $datasetDirectory,
@@ -979,6 +1003,7 @@ final class PaperDatasetVerifier
         array $snapshotEpochs,
         array $candleFrontiers,
         array $eventIds,
+        array $tradeIdentityHistory,
     ): void {
         try {
             if (array_keys($snapshotEpochs) !== ['BTCUSDT', 'ETHUSDT']) {
@@ -1037,6 +1062,7 @@ final class PaperDatasetVerifier
                     !== CanonicalJson::encode($ordinals->snapshot())
                 || $checkpoint->finalizedCandleFrontiers !== $candleFrontiers
                 || $checkpoint->acknowledgedIdentities !== $expectedAcknowledged
+                || $checkpoint->tradeIdentityHistory !== $tradeIdentityHistory
                 || $checkpoint->sourceEpoch !== max($snapshotEpochs)
             ) {
                 throw new \InvalidArgumentException();

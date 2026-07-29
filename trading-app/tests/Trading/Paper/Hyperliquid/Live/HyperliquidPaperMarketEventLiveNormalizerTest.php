@@ -42,6 +42,29 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
         self::assertSame('2026-07-29T10:00:00.123456Z', self::receivedTime($mainnet));
     }
 
+    public function testWireDecimalsAreCanonicalizedBeforeEventConstruction(): void
+    {
+        $trade = self::trade();
+        $trade['px'] = '65000.0';
+        $trade['sz'] = '0.0100';
+        $tradeEvent = self::normalizer()->liveTrade($trade);
+        $bookEvent = self::normalizer()->liveTopOfBook([
+            'coin' => 'BTC',
+            'levels' => [
+                [['px' => '64999.0', 'sz' => '1.00', 'n' => 1]],
+                [['px' => '65001.00', 'sz' => '2.000', 'n' => 1]],
+            ],
+            'time' => 1_001,
+        ], sourceEpoch: 1);
+
+        self::assertSame('65000', $tradeEvent->payload['price']);
+        self::assertSame('0.01', $tradeEvent->payload['size']);
+        self::assertSame('64999', $bookEvent->payload['bid_price']);
+        self::assertSame('1', $bookEvent->payload['bid_size']);
+        self::assertSame('65001', $bookEvent->payload['ask_price']);
+        self::assertSame('2', $bookEvent->payload['ask_size']);
+    }
+
     public function testRealBookSelectsBestPricesWithoutTrustingLevelOrder(): void
     {
         $event = self::normalizer()->liveTopOfBook([

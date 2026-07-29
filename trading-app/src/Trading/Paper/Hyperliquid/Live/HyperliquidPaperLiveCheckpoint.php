@@ -13,10 +13,11 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final readonly class HyperliquidPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
     public const POLICY_VERSION = 1;
     public const MAXIMUM_BYTES = 1_048_576;
     public const MAXIMUM_ACKNOWLEDGED_IDENTITIES = 4_096;
+    public const MAXIMUM_TRADE_IDENTITIES = 4_096;
 
     /** @var list<string> */
     private const PHASES = [
@@ -37,6 +38,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
      * @param array<string, array<string, mixed>> $currentCandles
      * @param array<string, int> $finalizedCandleFrontiers
      * @param list<string> $acknowledgedIdentities
+     * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      * @param array{last_received_at: string|null, last_ping_at: string|null, pong_deadline_at: string|null} $heartbeat
      * @param array{requested: bool} $healthyStop
      */
@@ -58,6 +60,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
         public array $currentCandles,
         public array $finalizedCandleFrontiers,
         public array $acknowledgedIdentities,
+        public array $tradeIdentityHistory,
         public int $reconnectAttempt,
         public array $heartbeat,
         public array $healthyStop,
@@ -87,6 +90,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'current_candles' => [],
             'finalized_candle_frontiers' => [],
             'acknowledged_identities' => [],
+            'trade_identity_history' => [],
             'reconnect_attempt' => 0,
             'heartbeat' => [
                 'last_received_at' => null,
@@ -119,6 +123,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 'current_candles',
                 'finalized_candle_frontiers',
                 'acknowledged_identities',
+                'trade_identity_history',
                 'reconnect_attempt',
                 'heartbeat',
                 'healthy_stop',
@@ -141,6 +146,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 || !\is_array($state['current_candles'])
                 || !\is_array($state['finalized_candle_frontiers'])
                 || !\is_array($state['acknowledged_identities'])
+                || !\is_array($state['trade_identity_history'])
                 || !\is_int($state['reconnect_attempt'])
                 || $state['reconnect_attempt'] < 0
                 || $state['reconnect_attempt'] > 6
@@ -177,6 +183,9 @@ final readonly class HyperliquidPaperLiveCheckpoint
             $currentCandles = self::currentCandles($state['current_candles']);
             $frontiers = self::frontiers($state['finalized_candle_frontiers']);
             $acknowledged = self::acknowledged($state['acknowledged_identities']);
+            $tradeIdentityHistory = self::tradeIdentityHistory(
+                $state['trade_identity_history'],
+            );
             if ($pendingEvent !== null
                 && \in_array($pendingEvent->eventId, $acknowledged, true)
             ) {
@@ -211,6 +220,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
                 currentCandles: $currentCandles,
                 finalizedCandleFrontiers: $frontiers,
                 acknowledgedIdentities: $acknowledged,
+                tradeIdentityHistory: $tradeIdentityHistory,
                 reconnectAttempt: $state['reconnect_attempt'],
                 heartbeat: $heartbeat,
                 healthyStop: $healthyStop,
@@ -246,6 +256,7 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'current_candles' => $this->currentCandles,
             'finalized_candle_frontiers' => $this->finalizedCandleFrontiers,
             'acknowledged_identities' => $this->acknowledgedIdentities,
+            'trade_identity_history' => $this->tradeIdentityHistory,
             'reconnect_attempt' => $this->reconnectAttempt,
             'heartbeat' => $this->heartbeat,
             'healthy_stop' => $this->healthyStop,
@@ -296,6 +307,36 @@ final readonly class HyperliquidPaperLiveCheckpoint
             'pending_continuation' => null,
             'acknowledged_identities' => $acknowledged,
         ]);
+    }
+
+    public function rememberTradeIdentity(
+        string $identityHash,
+        string $assignmentDigest,
+    ): self {
+        self::assertSha256($identityHash);
+        self::assertSha256($assignmentDigest);
+        $history = $this->tradeIdentityHistory;
+        foreach ($history as $entry) {
+            if (!hash_equals($entry['identity_hash'], $identityHash)) {
+                continue;
+            }
+            if (!hash_equals($entry['assignment_digest'], $assignmentDigest)) {
+                throw new \RuntimeException(
+                    'hyperliquid_paper_natural_identity_conflict',
+                );
+            }
+
+            return $this;
+        }
+        $history[] = [
+            'identity_hash' => $identityHash,
+            'assignment_digest' => $assignmentDigest,
+        ];
+        if (\count($history) > self::MAXIMUM_TRADE_IDENTITIES) {
+            array_shift($history);
+        }
+
+        return $this->with(['trade_identity_history' => $history]);
     }
 
     /** @param array<string, mixed> $candle */
@@ -551,6 +592,47 @@ final readonly class HyperliquidPaperLiveCheckpoint
         return array_keys($unique);
     }
 
+    /** @return list<array{identity_hash: string, assignment_digest: string}> */
+    private static function tradeIdentityHistory(mixed $value): array
+    {
+        if (!\is_array($value)
+            || !array_is_list($value)
+            || \count($value) > self::MAXIMUM_TRADE_IDENTITIES
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $history = [];
+        $identities = [];
+        foreach ($value as $entry) {
+            if (!\is_array($entry) || array_is_list($entry)) {
+                throw new \InvalidArgumentException();
+            }
+            self::assertExactKeys($entry, [
+                'identity_hash',
+                'assignment_digest',
+            ]);
+            $identityHash = $entry['identity_hash'] ?? null;
+            $assignmentDigest = $entry['assignment_digest'] ?? null;
+            if (!\is_string($identityHash)
+                || !\is_string($assignmentDigest)
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            self::assertSha256($identityHash);
+            self::assertSha256($assignmentDigest);
+            if (isset($identities[$identityHash])) {
+                throw new \InvalidArgumentException();
+            }
+            $identities[$identityHash] = true;
+            $history[] = [
+                'identity_hash' => $identityHash,
+                'assignment_digest' => $assignmentDigest,
+            ];
+        }
+
+        return $history;
+    }
+
     /** @return array{last_received_at: string|null, last_ping_at: string|null, pong_deadline_at: string|null} */
     private static function heartbeat(mixed $value): array
     {
@@ -626,6 +708,13 @@ final readonly class HyperliquidPaperLiveCheckpoint
         sort($actual, \SORT_STRING);
         sort($keys, \SORT_STRING);
         if ($actual !== $keys) {
+            throw new \InvalidArgumentException();
+        }
+    }
+
+    private static function assertSha256(string $value): void
+    {
+        if (preg_match('/\A[a-f0-9]{64}\z/D', $value) !== 1) {
             throw new \InvalidArgumentException();
         }
     }

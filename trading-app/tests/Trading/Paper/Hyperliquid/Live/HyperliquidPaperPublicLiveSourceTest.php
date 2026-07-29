@@ -256,24 +256,28 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame(0, $transport->connectCount);
     }
 
-    public function testExactTradeRedeliveryIsIgnoredWhileDrainingHealthyStop(): void
+    public function testOverlappingTradeBatchRedeliveryIsIgnoredBeforeNewOrdinals(): void
     {
-        $trade = self::tradeFrame();
+        $trade = self::tradeFrame(twoRows: true);
         $source = $this->source(
             new DeterministicHyperliquidTransport([$trade, $trade]),
         );
         $events = self::generator($source->events());
         $events->rewind();
 
-        for ($index = 0; $index < 3; ++$index) {
+        $tradeIds = [];
+        for ($index = 0; $index < 4; ++$index) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $tradeIds[] = $event->payload['trade_id'];
+            }
             $source->acknowledge($event->eventId);
-            if ($index < 2) {
+            if ($index < 3) {
                 $events->next();
             }
         }
-        self::assertSame(PaperMarketDataChannel::PUBLIC_TRADE, $event->channel);
+        self::assertSame(['42', '43'], $tradeIds);
 
         $source->requestHealthyOperatorStop();
         $events->next();
@@ -338,20 +342,24 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
     public function testPongTimeoutPersistsContinuityLossBeforeReconnectDelay(): void
     {
         $loop = new HyperliquidDeterministicLoop();
+        $transport = new DeterministicHyperliquidTransport([]);
         $source = $this->source(
-            new DeterministicHyperliquidTransport([]),
+            $transport,
             loop: $loop,
         );
         self::generator($source->events())->rewind();
 
         $loop->fire(45.0);
         $loop->fire(10.0);
+        $transport->push(CanonicalJson::encode(['channel' => 'pong']));
+        $transport->push(self::tradeFrame());
 
         $checkpoint = $this->checkpoint();
         self::assertFalse($checkpoint->continuity);
         self::assertSame('reconnecting', $checkpoint->phase);
         self::assertSame(1, $checkpoint->reconnectAttempt);
         self::assertSame([1.0], $loop->intervals());
+        self::assertTrue($transport->closed);
     }
 
     public function testReconnectUsesBoundedDelaysAndThenFailsTerminally(): void
@@ -463,6 +471,31 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('market_event_identity_conflict');
         $events->next();
+    }
+
+    public function testTerminalFrameFailureClosesTransportAndInvalidatesCallbacks(): void
+    {
+        $transport = new DeterministicHyperliquidTransport([
+            '{"channel":"trades","data":"invalid"}',
+        ]);
+        $source = $this->source($transport);
+        $events = self::generator($source->events());
+        $events->rewind();
+        for ($index = 0; $index < 2; ++$index) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $source->acknowledge($event->eventId);
+            if ($index === 0) {
+                $events->next();
+            }
+        }
+
+        try {
+            $events->next();
+            self::fail('Invalid market data must fail the capture.');
+        } catch (\RuntimeException) {
+            self::assertTrue($transport->closed);
+        }
     }
 
     private function source(

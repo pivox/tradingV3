@@ -57,7 +57,8 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
             'connection_epoch', 'source_epoch', 'subscriptions',
             'ordinal_state', 'pending_event', 'pending_continuation',
             'current_candles', 'finalized_candle_frontiers',
-            'acknowledged_identities', 'reconnect_attempt',
+            'acknowledged_identities', 'trade_identity_history',
+            'reconnect_attempt',
             'heartbeat', 'healthy_stop',
         ], array_keys($checkpoint->toArray()));
         self::assertSame(
@@ -101,6 +102,31 @@ final class HyperliquidPaperLiveCheckpointStoreTest extends TestCase
         $acknowledged = $finalized->acknowledge($event->eventId);
         self::assertNull($acknowledged->pendingEvent);
         self::assertContains($event->eventId, $acknowledged->acknowledgedIdentities);
+    }
+
+    public function testTradeIdentityHistoryIsDurableBoundedAndConflictSensitive(): void
+    {
+        $identity = hash('sha256', 'mainnet|BTC|1000|42');
+        $digest = hash('sha256', 'canonical-trade');
+        $checkpoint = self::fresh()->rememberTradeIdentity($identity, $digest);
+
+        self::assertSame([
+            [
+                'identity_hash' => $identity,
+                'assignment_digest' => $digest,
+            ],
+        ], $checkpoint->tradeIdentityHistory);
+        self::assertSame(
+            $checkpoint->toArray(),
+            $checkpoint->rememberTradeIdentity($identity, $digest)->toArray(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('hyperliquid_paper_natural_identity_conflict');
+        $checkpoint->rememberTradeIdentity(
+            $identity,
+            hash('sha256', 'conflicting-trade'),
+        );
     }
 
     public function testStorePublishesCanonicalChecksummedStateAndReloads(): void

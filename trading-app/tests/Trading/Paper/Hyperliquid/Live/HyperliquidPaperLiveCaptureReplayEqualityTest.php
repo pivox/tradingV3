@@ -14,6 +14,7 @@ use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -271,6 +272,22 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         }
         $checkpoint = $checkpoint->withOrdinalState($ordinals->snapshot());
         foreach ($events as $event) {
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $naturalIdentity = implode('|', [
+                    $network->value,
+                    $event->payload['native_symbol'],
+                    $event->payload['block_time'],
+                    $event->payload['trade_id'],
+                ]);
+                $checkpoint = $checkpoint->rememberTradeIdentity(
+                    hash('sha256', $naturalIdentity),
+                    HyperliquidPaperSourceOrdinal::assignmentDigest(
+                        $naturalIdentity,
+                        $event->exchangeTimestamp,
+                        $event->payload,
+                    ),
+                );
+            }
             $checkpoint = $checkpoint
                 ->withPending($event, ['kind' => 'certification'])
                 ->acknowledge($event->eventId);

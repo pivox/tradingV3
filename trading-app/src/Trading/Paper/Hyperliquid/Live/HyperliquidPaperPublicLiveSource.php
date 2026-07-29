@@ -69,6 +69,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         try {
             yield from $this->eventFlow();
         } catch (\Throwable $exception) {
+            $this->shutdownAfterFailure();
             $reason = $this->publicReason($exception);
             if ($exception->getMessage() !== 'hyperliquid_paper_public_acquisition_disabled'
                 && !\in_array($this->checkpoint->phase, ['complete', 'failed'], true)
@@ -347,14 +348,38 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             if (!\is_array($decoded['data'] ?? null)) {
                 throw new \LogicException();
             }
-            $events = [];
+            $known = [];
+            foreach ($this->checkpoint->tradeIdentityHistory as $entry) {
+                $known[$entry['identity_hash']] = $entry['assignment_digest'];
+            }
+            $candidates = [];
             foreach ($decoded['data'] as $row) {
                 if (!\is_array($row)) {
                     throw new \LogicException();
                 }
-                $events[] = $this->normalizer->liveTrade($row);
+                $fingerprint = $this->normalizer->liveTradeFingerprint($row);
+                $knownDigest = $known[$fingerprint['identity_hash']] ?? null;
+                if ($knownDigest !== null) {
+                    if (!hash_equals(
+                        $knownDigest,
+                        $fingerprint['assignment_digest'],
+                    )) {
+                        throw new \RuntimeException(
+                            'hyperliquid_paper_natural_identity_conflict',
+                        );
+                    }
+
+                    continue;
+                }
+                $known[$fingerprint['identity_hash']]
+                    = $fingerprint['assignment_digest'];
+                $candidates[] = [
+                    'event' => $this->normalizer->liveTrade($row),
+                    'identity_hash' => $fingerprint['identity_hash'],
+                    'assignment_digest' => $fingerprint['assignment_digest'],
+                ];
             }
-            yield from $this->yieldCandidates($events);
+            yield from $this->yieldTradeCandidates($candidates);
 
             return;
         }
@@ -459,6 +484,50 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         yield from $this->resumePendingEvents();
     }
 
+    /**
+     * @param list<array{
+     *     event: PaperMarketEvent,
+     *     identity_hash: string,
+     *     assignment_digest: string
+     * }> $candidates
+     * @return \Generator<int, PaperMarketEvent>
+     */
+    private function yieldTradeCandidates(array $candidates): \Generator
+    {
+        if ($candidates === []) {
+            return;
+        }
+        $first = array_shift($candidates);
+        if (!\is_array($first)) {
+            throw new \LogicException();
+        }
+        $this->checkpoint = $this->checkpointStore->save(
+            $this->checkpoint
+                ->withOrdinalState($this->ordinals->snapshot())
+                ->withPending($first['event'], [
+                    'remaining_events' => array_map(
+                        static fn (array $candidate): array => [
+                            'event' => $candidate['event']->toArray(),
+                            'after_ack' => [
+                                'remember_trade_identity' => [
+                                    'identity_hash' => $candidate['identity_hash'],
+                                    'assignment_digest' => $candidate['assignment_digest'],
+                                ],
+                            ],
+                        ],
+                        $candidates,
+                    ),
+                    'after_ack' => [
+                        'remember_trade_identity' => [
+                            'identity_hash' => $first['identity_hash'],
+                            'assignment_digest' => $first['assignment_digest'],
+                        ],
+                    ],
+                ]),
+        );
+        yield from $this->resumePendingEvents();
+    }
+
     /** @return \Generator<int, PaperMarketEvent> */
     private function resumePendingEvents(): \Generator
     {
@@ -501,6 +570,20 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $finalize['start_time'],
             );
         }
+        if (\is_array($afterAck)
+            && \is_array($afterAck['remember_trade_identity'] ?? null)
+        ) {
+            $identity = $afterAck['remember_trade_identity'];
+            if (!\is_string($identity['identity_hash'] ?? null)
+                || !\is_string($identity['assignment_digest'] ?? null)
+            ) {
+                throw new \LogicException();
+            }
+            $next = $next->rememberTradeIdentity(
+                $identity['identity_hash'],
+                $identity['assignment_digest'],
+            );
+        }
         $remaining = $continuation['remaining_events'] ?? null;
         if (!\is_array($remaining) || !array_is_list($remaining)) {
             throw new \LogicException();
@@ -510,11 +593,23 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             if (!\is_array($nextEventState) || array_is_list($nextEventState)) {
                 throw new \LogicException();
             }
+            $nextAfterAck = null;
+            if (isset($nextEventState['event'], $nextEventState['after_ack'])) {
+                if (!\is_array($nextEventState['event'])
+                    || array_is_list($nextEventState['event'])
+                    || !\is_array($nextEventState['after_ack'])
+                    || array_is_list($nextEventState['after_ack'])
+                ) {
+                    throw new \LogicException();
+                }
+                $nextAfterAck = $nextEventState['after_ack'];
+                $nextEventState = $nextEventState['event'];
+            }
             $next = $next->withPending(
                 PaperMarketEvent::fromArray($nextEventState),
                 [
                     'remaining_events' => $remaining,
-                    'after_ack' => null,
+                    'after_ack' => $nextAfterAck,
                 ],
             );
         }
@@ -673,6 +768,10 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
     private function beginReconnect(string $reason): void
     {
         $this->cancelTimers();
+        ++$this->activeGeneration;
+        $this->transport->close();
+        $this->queue->clear();
+        $this->transportFailure = null;
         $this->subscriptions->reset();
         $this->checkpoint = $this->checkpointStore->save(
             $this->checkpoint->beginReconnect($reason),
@@ -719,6 +818,20 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 $this->loop->cancelTimer($timer);
                 $this->{$property} = null;
             }
+        }
+    }
+
+    private function shutdownAfterFailure(): void
+    {
+        $this->stopped = true;
+        ++$this->activeGeneration;
+        try {
+            $this->cancelTimers();
+            $this->transport->close();
+            $this->queue->clear();
+            $this->loop->stop();
+        } catch (\Throwable) {
+            // The original stable public failure remains authoritative.
         }
     }
 

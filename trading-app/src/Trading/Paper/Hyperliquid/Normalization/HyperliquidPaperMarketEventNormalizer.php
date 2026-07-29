@@ -98,6 +98,44 @@ final class HyperliquidPaperMarketEventNormalizer
     /** @param array<array-key, mixed> $row */
     public function liveTrade(#[\SensitiveParameter] array $row): PaperMarketEvent
     {
+        [$symbol, $exchangeTimestamp, $naturalIdentity, $payload]
+            = $this->liveTradeData($row);
+
+        return $this->event(
+            symbol: $symbol,
+            channel: PaperMarketDataChannel::PUBLIC_TRADE,
+            exchangeTimestamp: $exchangeTimestamp,
+            naturalIdentity: $naturalIdentity,
+            payload: $payload,
+            receivedTimestamp: $this->receiptTimestamp(),
+        );
+    }
+
+    /**
+     * @param array<array-key, mixed> $row
+     * @return array{identity_hash: string, assignment_digest: string}
+     */
+    public function liveTradeFingerprint(#[\SensitiveParameter] array $row): array
+    {
+        [, $exchangeTimestamp, $naturalIdentity, $payload]
+            = $this->liveTradeData($row);
+
+        return [
+            'identity_hash' => hash('sha256', $naturalIdentity),
+            'assignment_digest' => HyperliquidPaperSourceOrdinal::assignmentDigest(
+                $naturalIdentity,
+                $exchangeTimestamp,
+                $payload,
+            ),
+        ];
+    }
+
+    /**
+     * @param array<array-key, mixed> $row
+     * @return array{string, \DateTimeImmutable, string, array<string, mixed>}
+     */
+    private function liveTradeData(#[\SensitiveParameter] array $row): array
+    {
         self::assertExactKeys(
             $row,
             ['coin', 'side', 'px', 'sz', 'hash', 'time', 'tid', 'users'],
@@ -125,35 +163,30 @@ final class HyperliquidPaperMarketEventNormalizer
             throw new \InvalidArgumentException('hyperliquid_paper_live_trade_invalid');
         }
         $symbol = (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin);
-        self::canonicalPositiveDecimal($price);
-        self::canonicalPositiveDecimal($size);
+        $price = self::canonicalPositiveDecimal($price);
+        $size = self::canonicalPositiveDecimal($size);
         if (preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $hash) !== 1) {
             throw new \InvalidArgumentException('hyperliquid_paper_live_trade_invalid');
         }
         $exchangeTimestamp = $this->timestamp($time);
+        $naturalIdentity = implode('|', [
+            $this->network->value,
+            $coin,
+            (string) $time,
+            (string) $tid,
+        ]);
+        $payload = [
+            'native_symbol' => $coin,
+            'side' => $side === 'B' ? 'buy' : 'sell',
+            'price' => $price,
+            'size' => $size,
+            'transaction_hash' => $hash,
+            'block_time' => (string) $time,
+            'trade_id' => (string) $tid,
+            'origin' => 'ws_trades',
+        ];
 
-        return $this->event(
-            symbol: $symbol,
-            channel: PaperMarketDataChannel::PUBLIC_TRADE,
-            exchangeTimestamp: $exchangeTimestamp,
-            naturalIdentity: implode('|', [
-                $this->network->value,
-                $coin,
-                (string) $time,
-                (string) $tid,
-            ]),
-            payload: [
-                'native_symbol' => $coin,
-                'side' => $side === 'B' ? 'buy' : 'sell',
-                'price' => $price,
-                'size' => $size,
-                'transaction_hash' => $hash,
-                'block_time' => (string) $time,
-                'trade_id' => (string) $tid,
-                'origin' => 'ws_trades',
-            ],
-            receivedTimestamp: $this->receiptTimestamp(),
-        );
+        return [$symbol, $exchangeTimestamp, $naturalIdentity, $payload];
     }
 
     /** @param array<array-key, mixed> $book */
@@ -478,8 +511,8 @@ final class HyperliquidPaperMarketEventNormalizer
             ) {
                 throw new \InvalidArgumentException('hyperliquid_paper_live_book_invalid');
             }
-            self::canonicalPositiveDecimal($price);
-            self::canonicalPositiveDecimal($size);
+            $price = self::canonicalPositiveDecimal($price);
+            $size = self::canonicalPositiveDecimal($size);
             if ($bestPrice === null
                 || ($bids
                     ? BigDecimal::of($price)->isGreaterThan($bestPrice)
@@ -496,15 +529,16 @@ final class HyperliquidPaperMarketEventNormalizer
         ];
     }
 
-    private static function canonicalPositiveDecimal(string $value): void
+    private static function canonicalPositiveDecimal(string $value): string
     {
         if (\strlen($value) > 128
             || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
             || !BigDecimal::of($value)->isGreaterThan(0)
-            || (string) BigDecimal::of($value)->stripTrailingZeros() !== $value
         ) {
             throw new \InvalidArgumentException('hyperliquid_paper_decimal_invalid');
         }
+
+        return (string) BigDecimal::of($value)->stripTrailingZeros();
     }
 
     /**
