@@ -83,7 +83,13 @@ final class PaperDatasetVerifierTest extends TestCase
                 receivedTimestamp: $timestamp,
                 sequence: (string) ($index + 1),
                 payload: [
+                    'native_symbol' => 'BTC',
+                    'open' => '30000',
+                    'high' => '30000',
+                    'low' => '30000',
                     'close' => '30000.0',
+                    'volume' => '0',
+                    'trade_count' => '0',
                     'close_time' => (string) $close,
                     'confirmed' => true,
                     'interval' => $interval,

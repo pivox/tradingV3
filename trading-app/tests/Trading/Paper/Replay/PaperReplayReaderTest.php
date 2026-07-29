@@ -1035,6 +1035,13 @@ final class PaperReplayReaderTest extends TestCase
         if ($duration !== null) {
             $closeMilliseconds = (int) (new \DateTimeImmutable($exchangeTimestamp))->format('Uv');
             $payload += [
+                'native_symbol' => $symbol === 'BTCUSDT' ? 'BTC' : 'ETH',
+                'open' => '100',
+                'high' => '100',
+                'low' => '100',
+                'close' => '100',
+                'volume' => '1',
+                'trade_count' => '1',
                 'start_time' => (string) ($closeMilliseconds - $duration + 1),
                 'close_time' => (string) $closeMilliseconds,
                 'origin' => 'rest_candle_snapshot',
@@ -1076,16 +1083,9 @@ final class PaperReplayReaderTest extends TestCase
             PaperMarketDataChannel::CANDLE_1H,
             $seed,
             $close,
-            ['interval' => '1h'],
+            ['interval' => '1h', 'volume' => '0', 'trade_count' => '0'],
         );
-        $validBook = $this->hyperliquidHistoricalEvent(
-            'BTCUSDT',
-            PaperMarketDataChannel::TOP_OF_BOOK,
-            $seed,
-            $close,
-            $this->hyperliquidBookPayload($close, 3_600_000),
-        );
-        $dataset = $this->completeHyperliquidDataset([$validCandle, $validBook]);
+        $dataset = $this->completeHyperliquidDataset([$validCandle]);
         $contents = implode('', array_map(
             static fn (PaperMarketEvent $event): string => CanonicalJson::encode(
                 $event->toArray(),
@@ -1141,9 +1141,9 @@ final class PaperReplayReaderTest extends TestCase
         $closeMilliseconds = (int) (new \DateTimeImmutable($close))->format('Uv');
 
         return [
-            'ask_price' => '101',
+            'ask_price' => '100.01',
             'ask_size' => '1',
-            'bid_price' => '99',
+            'bid_price' => '99.99',
             'bid_size' => '1',
             'model_name' => 'hl_candle_atr_top_v1',
             'model_version' => '1.0.0',
