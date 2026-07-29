@@ -44,6 +44,22 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         ], $first->historicalCoverage()->toArray());
     }
 
+    public function testPhysicalDatasetIdentityIsAlwaysScopedByNetwork(): void
+    {
+        $mainnet = $this->request(
+            network: PaperMarketDataNetwork::MAINNET,
+            datasetId: 'same-caller-dataset',
+        );
+        $testnet = $this->request(
+            network: PaperMarketDataNetwork::TESTNET,
+            datasetId: 'same-caller-dataset',
+        );
+
+        self::assertSame('same-caller-dataset--mainnet', $mainnet->datasetId);
+        self::assertSame('same-caller-dataset--testnet', $testnet->datasetId);
+        self::assertNotSame($mainnet->datasetId, $testnet->datasetId);
+    }
+
     public function testConstructorHasTheRequiredImmutablePublicSurface(): void
     {
         $reflection = new \ReflectionClass(HyperliquidHistoricalRequest::class);
@@ -137,7 +153,7 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         $base = $this->request();
 
         self::assertSame(
-            'faf0c7be555beeddf13d3c8227f3c1f73175aaeabe3525fd5976006359812440',
+            'defcf8ba6a68a8c89d9ae6c909417ba882b7c69d2bd16494e5bc3bb9fc6feab4',
             $base->requestSha256(),
         );
 

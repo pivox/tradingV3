@@ -39,6 +39,28 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
         parent::tearDown();
     }
 
+    public function testConstructorRejectsClientConfiguredForAnotherNetworkBeforeFetching(): void
+    {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'hyperliquid-network-binding',
+            network: PaperMarketDataNetwork::TESTNET,
+            symbols: ['BTCUSDT'],
+            from: new \DateTimeImmutable('2024-01-01T00:00:00.000000Z'),
+            to: new \DateTimeImmutable('2024-01-01T00:01:00.000000Z'),
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('hyperliquid_historical_client_network_mismatch');
+
+        new HyperliquidHistoricalEventStream(
+            new NetworkTaggedNoCallHyperliquidHistoricalClient(
+                PaperMarketDataNetwork::MAINNET,
+            ),
+            $request,
+            $this->testRoot,
+        );
+    }
+
     public function testFetchesTwoForwardPagesForEveryStreamBeforeDeterministicAcknowledgedEmission(): void
     {
         $from = new \DateTimeImmutable('2024-01-01T00:00:00.000000Z');
@@ -1068,8 +1090,18 @@ final class HyperliquidHistoricalEventStreamTest extends TestCase
     }
 }
 
+trait MainnetHyperliquidHistoricalClientNetwork
+{
+    public function network(): PaperMarketDataNetwork
+    {
+        return PaperMarketDataNetwork::MAINNET;
+    }
+}
+
 final class ScriptedHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
     /** @var list<array{
      *     coin: string,
      *     interval: string,
@@ -1169,6 +1201,8 @@ final class ScriptedHyperliquidHistoricalClient implements HyperliquidPaperPubli
 
 final class FaultingHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
     private int $calls = 0;
 
     public function __construct(private readonly string $fault)
@@ -1238,6 +1272,31 @@ final class FaultingHyperliquidHistoricalClient implements HyperliquidPaperPubli
 
 final class NoCallHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
+    public function candleSnapshot(
+        string $coin,
+        string $interval,
+        int $startTime,
+        int $endTime,
+        int $maximumResponseBytes = 1_048_576,
+        int $maximumRetries = 5,
+    ): array {
+        throw new \LogicException('historical_client_must_not_be_called');
+    }
+}
+
+final readonly class NetworkTaggedNoCallHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
+{
+    public function __construct(private PaperMarketDataNetwork $configuredNetwork)
+    {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return $this->configuredNetwork;
+    }
+
     public function candleSnapshot(
         string $coin,
         string $interval,
@@ -1252,6 +1311,8 @@ final class NoCallHyperliquidHistoricalClient implements HyperliquidPaperPublicR
 
 final class RepeatedPageHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
     /** @var array<string, mixed>|null */
     private ?array $first = null;
 
@@ -1277,6 +1338,8 @@ final class RepeatedPageHyperliquidHistoricalClient implements HyperliquidPaperP
 
 final class FullWindowHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
     /** @var list<array{start_time: int, end_time: int, row_count: int}> */
     public array $calls = [];
 
@@ -1310,6 +1373,8 @@ final class FullWindowHyperliquidHistoricalClient implements HyperliquidPaperPub
 
 final class InterruptingHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    use MainnetHyperliquidHistoricalClientNetwork;
+
     private int $calls = 0;
 
     public function __construct(private readonly int $throwOnCall)

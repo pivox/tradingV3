@@ -26,7 +26,7 @@ final class HyperliquidPaperPublicRateLimiterTest extends TestCase
         $rateLimiter->acquireResponseRows(60);
         $rateLimiter->acquireResponseRows(61);
 
-        self::assertSame([[20, 2.0], [1, 2.0], [1, 2.0], [2, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 65.0], [1, 65.0], [1, 65.0], [2, 65.0]], $limiter->reservations);
         self::assertGreaterThanOrEqual(0.015, microtime(true) - $startedAt);
     }
 

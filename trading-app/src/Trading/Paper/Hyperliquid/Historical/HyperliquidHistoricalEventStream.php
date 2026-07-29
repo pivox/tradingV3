@@ -33,6 +33,11 @@ final class HyperliquidHistoricalEventStream implements AcknowledgedPaperMarketD
         #[\SensitiveParameter] string $datasetDirectory,
         private readonly ?\Closure $durabilityObserver = null,
     ) {
+        if ($this->restClient->network() !== $this->request->network) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_historical_client_network_mismatch',
+            );
+        }
         $this->instruments = new HyperliquidPaperInstrumentMap();
         $this->store = new HyperliquidHistoricalCheckpointStore($datasetDirectory, $request);
         $this->checkpoint = $this->store->loadOrCreate();

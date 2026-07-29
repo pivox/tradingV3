@@ -174,7 +174,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
         }
 
         self::assertSame(
-            ['candleSnapshot'],
+            ['network', 'candleSnapshot'],
             self::declaredPublicMethodNames(HyperliquidPaperPublicRestClientInterface::class),
         );
         self::assertSame(

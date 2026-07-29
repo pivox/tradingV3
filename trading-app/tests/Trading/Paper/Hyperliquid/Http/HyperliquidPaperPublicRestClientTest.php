@@ -87,7 +87,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
     public function testInterfaceAndConstructorHaveOnlyTheCredentialFreeSnapshotSurface(): void
     {
         $methods = (new \ReflectionClass(HyperliquidPaperPublicRestClientInterface::class))->getMethods();
-        self::assertSame(['candleSnapshot'], array_map(static fn (\ReflectionMethod $method): string => $method->getName(), $methods));
+        self::assertSame(['network', 'candleSnapshot'], array_map(static fn (\ReflectionMethod $method): string => $method->getName(), $methods));
 
         $constructor = (new \ReflectionClass(HyperliquidPaperPublicRestClient::class))->getConstructor();
         self::assertNotNull($constructor);
@@ -158,7 +158,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         try {
             $client->candleSnapshot('BTC', '1m', 0, 1);
         } finally {
-            self::assertSame([[20, 2.0]], $limiter->reservations);
+            self::assertSame([[20, 65.0]], $limiter->reservations);
         }
     }
 
@@ -213,7 +213,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         $client = $this->client(new MockHttpClient(new MockResponse('[{"s":"BTC","i":"1m"},{"s":"BTC","i":"1m"}]')), $limiter);
 
         self::assertCount(2, $client->candleSnapshot('BTC', '1m', 0, 1));
-        self::assertSame([[20, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 65.0], [1, 65.0]], $limiter->reservations);
     }
 
     public function testRetriesHttp429AndFiveHundredResponsesAndCancelsEachBeforeSleeping(): void
@@ -234,7 +234,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
         self::assertCount(1, $client->candleSnapshot('BTC', '1m', 0, 1));
         self::assertSame([0.25, 0.5], $clock->sleeps);
-        self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0], [1, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 65.0], [20, 65.0], [20, 65.0], [1, 65.0]], $limiter->reservations);
         self::assertTrue($http->responses[0]->getInfo('canceled'));
         self::assertTrue($http->responses[1]->getInfo('canceled'));
     }
@@ -256,7 +256,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         } finally {
             self::assertSame(6, $requests);
             self::assertSame([0.25, 0.5, 1.0, 2.0, 4.0], $clock->sleeps);
-            self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0], [20, 2.0]], $limiter->reservations);
+            self::assertSame([[20, 65.0], [20, 65.0], [20, 65.0], [20, 65.0], [20, 65.0], [20, 65.0]], $limiter->reservations);
         }
     }
 
@@ -279,7 +279,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
         }
         self::assertSame(3, $requests);
         self::assertSame([0.25, 0.5], $clock->sleeps);
-        self::assertSame([[20, 2.0], [20, 2.0], [20, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 65.0], [20, 65.0], [20, 65.0]], $limiter->reservations);
     }
 
     public function testRetriesTransportExceptionsFromStatusStreamAndChunkWithoutLeakingThem(): void
@@ -366,7 +366,7 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
             self::assertStringNotContainsString('secret', $exception->getMessage());
         }
         self::assertSame([0.25], $clock->sleeps);
-        self::assertSame([[20, 2.0], [20, 2.0]], $limiter->reservations);
+        self::assertSame([[20, 65.0], [20, 65.0]], $limiter->reservations);
     }
 }
 

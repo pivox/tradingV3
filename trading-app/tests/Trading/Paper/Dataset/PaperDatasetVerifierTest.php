@@ -100,7 +100,7 @@ final class PaperDatasetVerifierTest extends TestCase
         }
         $recorder->complete();
 
-        $manifest = (new PaperDatasetVerifier())->verifyForBaseline($this->datasetDirectory());
+        $manifest = (new PaperDatasetVerifier())->verifyForBaseline($recorder->datasetDirectory());
 
         self::assertSame(PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK, $manifest->quality);
         self::assertSame('hl_candle_atr_top_v1', $manifest->modelName);
@@ -658,7 +658,7 @@ final class PaperDatasetVerifierTest extends TestCase
         return new PaperDatasetManifest(
             schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
-            datasetId: 'dataset-okx-001',
+            datasetId: $request->datasetId,
             venue: PaperMarketDataVenue::HYPERLIQUID,
             network: PaperMarketDataNetwork::MAINNET,
             symbols: ['BTCUSDT' => 'BTC'],

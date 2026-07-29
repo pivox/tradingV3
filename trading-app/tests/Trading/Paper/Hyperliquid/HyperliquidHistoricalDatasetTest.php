@@ -194,7 +194,7 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
         $recorder = new PaperDatasetRecorder($this->testRoot, $manifest);
         $corrupted = false;
         $source = new HyperliquidHistoricalEventStream(
-            new FixtureHyperliquidHistoricalClient(),
+            new FixtureHyperliquidHistoricalClient($manifest->network),
             $this->request($manifest->datasetId, $manifest->network),
             $recorder->datasetDirectory(),
             static function (string $boundary) use (&$corrupted, $recorder): void {
@@ -716,7 +716,7 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
             $this->recordingManifest($request->datasetId, $request->network, request: $request),
         );
         $source = new HyperliquidHistoricalEventStream(
-            new FixtureHyperliquidHistoricalClient(),
+            new FixtureHyperliquidHistoricalClient($request->network),
             $request,
             $recorder->datasetDirectory(),
         );
@@ -1099,8 +1099,17 @@ final class HyperliquidHistoricalDatasetTest extends TestCase
     }
 }
 
-final class FixtureHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
+final readonly class FixtureHyperliquidHistoricalClient implements HyperliquidPaperPublicRestClientInterface
 {
+    public function __construct(private PaperMarketDataNetwork $configuredNetwork)
+    {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return $this->configuredNetwork;
+    }
+
     public function candleSnapshot(
         string $coin,
         string $interval,

@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Hyperliquid\Http;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use Symfony\Component\Clock\ClockInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
@@ -23,6 +24,11 @@ final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPape
         private HyperliquidPaperPublicRateLimiter $rateLimiter,
         private ClockInterface $clock,
     ) {
+    }
+
+    public function network(): PaperMarketDataNetwork
+    {
+        return $this->config->network;
     }
 
     public function candleSnapshot(

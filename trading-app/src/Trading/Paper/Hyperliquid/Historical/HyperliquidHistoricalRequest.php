@@ -11,6 +11,8 @@ use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 
 final readonly class HyperliquidHistoricalRequest
 {
+    public string $datasetId;
+
     /** @var list<string> */
     public array $symbols;
 
@@ -22,7 +24,7 @@ final readonly class HyperliquidHistoricalRequest
 
     /** @param list<string> $symbols */
     public function __construct(
-        public string $datasetId,
+        string $datasetId,
         public PaperMarketDataNetwork $network,
         array $symbols,
         \DateTimeImmutable $from,
@@ -32,10 +34,11 @@ final readonly class HyperliquidHistoricalRequest
         public int $maximumResponseBytes = 1_048_576,
         public int $maximumRetries = 5,
     ) {
-        PaperDatasetManifest::assertDatasetId($this->datasetId);
+        PaperDatasetManifest::assertDatasetId($datasetId);
         if ($this->network === PaperMarketDataNetwork::LEGACY_UNKNOWN) {
             throw new \InvalidArgumentException('hyperliquid_historical_network_invalid');
         }
+        $this->datasetId = self::networkScopedDatasetId($datasetId, $this->network);
         if ($this->maximumEvents < 1 || $this->maximumEvents > 1_000_000
             || $this->maximumPages < 1 || $this->maximumPages > 100_000
             || $this->maximumResponseBytes < 1 || $this->maximumResponseBytes > 1_048_576
@@ -56,6 +59,29 @@ final readonly class HyperliquidHistoricalRequest
         $this->intervals = ['1m', '5m', '15m', '1h'];
         $this->from = $from;
         $this->to = $to;
+    }
+
+    private static function networkScopedDatasetId(
+        string $datasetId,
+        PaperMarketDataNetwork $network,
+    ): string {
+        $suffix = '--' . $network->value;
+        if (str_ends_with($datasetId, $suffix)) {
+            return $datasetId;
+        }
+        $maximumBaseBytes = 128 - strlen($suffix);
+        if (strlen($datasetId) > $maximumBaseBytes) {
+            $digest = substr(hash('sha256', $datasetId), 0, 16);
+            $datasetId = substr(
+                $datasetId,
+                0,
+                $maximumBaseBytes - strlen($digest) - 1,
+            ) . '-' . $digest;
+        }
+        $scoped = $datasetId . $suffix;
+        PaperDatasetManifest::assertDatasetId($scoped);
+
+        return $scoped;
     }
 
     public function requestSha256(): string

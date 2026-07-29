@@ -8,7 +8,7 @@ use Symfony\Component\RateLimiter\LimiterInterface;
 
 final class HyperliquidPaperPublicRateLimiter
 {
-    private const MAX_WAIT_SECONDS = 2.0;
+    private const MAX_WAIT_SECONDS = 65.0;
 
     public function __construct(private readonly LimiterInterface $limiter)
     {

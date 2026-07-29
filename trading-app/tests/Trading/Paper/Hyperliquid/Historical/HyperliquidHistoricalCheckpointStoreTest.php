@@ -66,7 +66,7 @@ final class HyperliquidHistoricalCheckpointStoreTest extends TestCase
 
         $state = $store->loadOrCreate();
         $expected = [
-            'dataset_id' => 'hyperliquid-checkpoint-create',
+            'dataset_id' => $request->datasetId,
             'emit_index' => 0,
             'event_count' => 0,
             'network' => 'mainnet',
