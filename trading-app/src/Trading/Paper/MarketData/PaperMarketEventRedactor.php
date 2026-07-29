@@ -313,12 +313,12 @@ REGEX;
             $decodedByteCount,
         );
 
-        // Canonical numeric scalars are terminal values, not encoded containers. In digit-only
-        // Base64-looking runs (optionally led by "-"), every quantum starts with a non-ASCII byte,
-        // so it cannot contain the four contiguous ASCII bytes of the shortest sensitive key.
+        // This exact ASCII numeric grammar is terminal only after the direct scans above. Base64
+        // recovery may yield NFKC-compatible fragments, but tested numeric-only composition cannot
+        // form a complete member of the finite sensitive-token set.
         $numericScalarMatch = preg_match(
             '/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D',
-            $canonical,
+            $value,
         );
         if ($numericScalarMatch === false) {
             throw new \InvalidArgumentException('paper_market_sensitive_scan_failed');

@@ -1770,6 +1770,48 @@ PHP,
         yield 'negative decimal' => ['funding_rate', '-0.125'];
     }
 
+    #[DataProvider('ordinaryNonCanonicalNumericValueProvider')]
+    public function testAllowsOrdinaryValuesOutsideTheCanonicalNumericContract(string $value): void
+    {
+        PaperMarketEventRedactor::assertSafe(['value' => $value]);
+
+        self::addToAssertionCount(1);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function ordinaryNonCanonicalNumericValueProvider(): iterable
+    {
+        yield 'leading whitespace' => [' 42'];
+        yield 'trailing whitespace' => ['42 '];
+        yield 'leading zero' => ['042'];
+        yield 'explicit plus' => ['+42'];
+        yield 'exponent' => ['4.2e1'];
+        yield 'leading decimal point' => ['.42'];
+        yield 'trailing decimal point' => ['42.'];
+        yield 'Unicode digits' => ['４２'];
+    }
+
+    #[DataProvider('directSensitiveValueWithNumericContentProvider')]
+    public function testRejectsDirectSensitiveValuesWithNumericContent(string $value): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_sensitive_field_rejected');
+
+        PaperMarketEventRedactor::assertSafe(['raw' => $value]);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function directSensitiveValueWithNumericContentProvider(): iterable
+    {
+        yield 'API key assignment' => ['api_key=123'];
+        yield 'Basic credentials' => [
+            'Basic ' . base64_encode('synthetic-user:123'),
+        ];
+        yield 'private key envelope' => [
+            "-----BEGIN PRIVATE KEY-----\n123\n-----END PRIVATE KEY-----",
+        ];
+    }
+
     public function testSensitiveWordsInValuesAreNotMistakenForPrivateFields(): void
     {
         PaperMarketEventRedactor::assertSafe([
