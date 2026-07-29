@@ -10,7 +10,6 @@ use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
-use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use React\EventLoop\Loop;
@@ -44,24 +43,9 @@ final readonly class HyperliquidPaperPublicLiveSourceFactory
         try {
             $config = $this->configFactory->create($manifest->network->value);
             $subscriptions = new HyperliquidPaperPublicSubscriptionSet();
-            $configurationSha256 = hash('sha256', CanonicalJson::encode([
-                'schema_version' => HyperliquidPaperLiveCheckpoint::SCHEMA_VERSION,
-                'policy_version' => HyperliquidPaperLiveCheckpoint::POLICY_VERSION,
-                'network' => $config->network->value,
-                'info_uri' => $config->infoUri,
-                'websocket_uri' => $config->webSocketUri,
-                'subscriptions' => $subscriptions->subscriptions(),
-                'symbols' => ['BTCUSDT' => 'BTC', 'ETHUSDT' => 'ETH'],
-                'limits' => [
-                    'frame_bytes' => HyperliquidPaperLivePolicy::MAX_FRAME_BYTES,
-                    'queue_frames' => HyperliquidPaperLivePolicy::MAX_QUEUED_FRAMES,
-                    'queue_bytes' => HyperliquidPaperLivePolicy::MAX_QUEUED_BYTES,
-                    'book_levels_per_side' => HyperliquidPaperLivePolicy::MAX_BOOK_LEVELS_PER_SIDE,
-                    'heartbeat_idle_seconds' => HyperliquidPaperLivePolicy::HEARTBEAT_IDLE_SECONDS,
-                    'pong_timeout_seconds' => HyperliquidPaperLivePolicy::PONG_TIMEOUT_SECONDS,
-                    'reconnect_delays_seconds' => HyperliquidPaperLivePolicy::RECONNECT_DELAYS_SECONDS,
-                ],
-            ]));
+            $configurationSha256 = HyperliquidPaperLivePolicy::configurationSha256(
+                $config->network,
+            );
             $checkpointStore = new HyperliquidPaperLiveCheckpointStore(
                 $resolved,
                 $this->filesystem,

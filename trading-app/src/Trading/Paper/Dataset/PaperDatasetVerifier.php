@@ -15,6 +15,9 @@ use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalTimeGrid;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPrudentBookModel;
+use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
+use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
@@ -581,6 +584,15 @@ final class PaperDatasetVerifier
         $historicalCandleEvents = [];
         /** @var list<array{symbol: string, coverage: HyperliquidHistoricalEventCoverage, event: PaperMarketEvent}> $historicalBooks */
         $historicalBooks = [];
+        $liveOrdinals = $this->isHyperliquidLive($manifest)
+            ? new HyperliquidPaperSourceOrdinal()
+            : null;
+        /** @var array<string, int> $liveSnapshotEpochs */
+        $liveSnapshotEpochs = [];
+        /** @var array<string, int> $liveCandleFrontiers */
+        $liveCandleFrontiers = [];
+        /** @var list<string> $liveEventIds */
+        $liveEventIds = [];
 
         $handle = $this->openRegularFile(
             $eventsPath,
@@ -626,6 +638,15 @@ final class PaperDatasetVerifier
                     throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
                 }
                 $historicalCoverage = $this->assertHyperliquidHistoricalEvent($event, $manifest);
+                if ($liveOrdinals instanceof HyperliquidPaperSourceOrdinal) {
+                    $this->assertHyperliquidLiveEvent(
+                        $event,
+                        $liveOrdinals,
+                        $liveSnapshotEpochs,
+                        $liveCandleFrontiers,
+                    );
+                    $liveEventIds[] = $event->eventId;
+                }
                 if ($historicalCoverage !== null) {
                     if ($historicalCoverage->modelledBook) {
                         $historicalBooks[] = [
@@ -719,6 +740,16 @@ final class PaperDatasetVerifier
             $historicalCandleEvents,
             $historicalBooks,
         );
+        if ($liveOrdinals instanceof HyperliquidPaperSourceOrdinal) {
+            $this->assertHyperliquidLiveCheckpoint(
+                dirname($eventsPath),
+                $manifest,
+                $liveOrdinals,
+                $liveSnapshotEpochs,
+                $liveCandleFrontiers,
+                $liveEventIds,
+            );
+        }
 
         return [
             'event_count' => $count,
@@ -734,6 +765,336 @@ final class PaperDatasetVerifier
                 'ino' => $statistics['ino'],
             ],
         ];
+    }
+
+    private function isHyperliquidLive(PaperDatasetManifest $manifest): bool
+    {
+        return $manifest->venue === PaperMarketDataVenue::HYPERLIQUID
+            && $manifest->quality
+                === PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES;
+    }
+
+    /**
+     * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $candleFrontiers
+     */
+    private function assertHyperliquidLiveEvent(
+        PaperMarketEvent $event,
+        HyperliquidPaperSourceOrdinal $ordinals,
+        array &$snapshotEpochs,
+        array &$candleFrontiers,
+    ): void {
+        try {
+            if (!\in_array($event->channel, [
+                PaperMarketDataChannel::PUBLIC_TRADE,
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                PaperMarketDataChannel::CANDLE_1M,
+                PaperMarketDataChannel::CANDLE_5M,
+                PaperMarketDataChannel::CANDLE_15M,
+                PaperMarketDataChannel::CANDLE_1H,
+                PaperMarketDataChannel::CONNECTION_STATE,
+                PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            ], true)) {
+                throw new \InvalidArgumentException();
+            }
+            $payload = $event->payload;
+            $coin = $payload['native_symbol'] ?? null;
+            if (!\is_string($coin)
+                || (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin)
+                    !== $event->symbol
+            ) {
+                throw new \InvalidArgumentException();
+            }
+
+            $naturalIdentity = match ($event->channel) {
+                PaperMarketDataChannel::PUBLIC_TRADE => implode('|', [
+                    $event->sourceNetwork->value,
+                    $coin,
+                    $this->liveUnsignedString($payload['block_time'] ?? null),
+                    $this->liveUnsignedString($payload['trade_id'] ?? null),
+                ]),
+                PaperMarketDataChannel::TOP_OF_BOOK => $this->liveBookIdentity(
+                    $event,
+                    $coin,
+                    $payload,
+                    $snapshotEpochs,
+                ),
+                PaperMarketDataChannel::CANDLE_1M,
+                PaperMarketDataChannel::CANDLE_5M,
+                PaperMarketDataChannel::CANDLE_15M,
+                PaperMarketDataChannel::CANDLE_1H => $this->liveCandleIdentity(
+                    $event,
+                    $coin,
+                    $payload,
+                    $snapshotEpochs,
+                    $candleFrontiers,
+                ),
+                PaperMarketDataChannel::CONNECTION_STATE => implode('|', [
+                    $event->sourceNetwork->value,
+                    $coin,
+                    'connection',
+                    (string) $this->livePositiveInt(
+                        $payload['connection_epoch'] ?? null,
+                    ),
+                    $this->liveString($payload['state'] ?? null),
+                ]),
+                PaperMarketDataChannel::SNAPSHOT_BOUNDARY => $this->liveSnapshotIdentity(
+                    $event,
+                    $coin,
+                    $payload,
+                    $snapshotEpochs,
+                ),
+            };
+            if ($event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+                && $event->channel !== PaperMarketDataChannel::CONNECTION_STATE
+                && !isset($snapshotEpochs[$event->symbol])
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $scope = implode('/', [
+                $event->sourceNetwork->value,
+                $event->sourceVenue->value,
+                $event->symbol,
+                $event->channel->value,
+            ]);
+            $digest = HyperliquidPaperSourceOrdinal::assignmentDigest(
+                $naturalIdentity,
+                $event->exchangeTimestamp,
+                $event->payload,
+            );
+            $ordinals->commit($scope, $naturalIdentity, $digest, $event);
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
+        }
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param array<string, int> $snapshotEpochs
+     */
+    private function liveBookIdentity(
+        PaperMarketEvent $event,
+        string $coin,
+        array $payload,
+        array $snapshotEpochs,
+    ): string {
+        if (($payload['synthetic'] ?? null) !== false
+            || ($payload['origin'] ?? null) !== 'ws_l2_book'
+            || !isset($snapshotEpochs[$event->symbol])
+            || $this->liveUnsignedString($payload['source_epoch'] ?? null)
+                !== (string) $snapshotEpochs[$event->symbol]
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'book',
+            $this->liveUnsignedString($payload['source_time'] ?? null),
+            $this->liveSha256($payload['source_book_hash'] ?? null),
+        ]);
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $candleFrontiers
+     */
+    private function liveCandleIdentity(
+        PaperMarketEvent $event,
+        string $coin,
+        array $payload,
+        array $snapshotEpochs,
+        array &$candleFrontiers,
+    ): string {
+        if (($payload['confirmed'] ?? null) !== true
+            || ($payload['origin'] ?? null) !== 'ws_candle'
+            || !isset($snapshotEpochs[$event->symbol])
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $interval = $this->liveString($payload['interval'] ?? null);
+        $start = $this->liveUnsignedString($payload['start_time'] ?? null);
+        $close = $this->liveUnsignedString($payload['close_time'] ?? null);
+        $stream = $coin . '/' . $interval;
+        if (isset($candleFrontiers[$stream])
+            && BigInteger::of($start)->isLessThanOrEqualTo($candleFrontiers[$stream])
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        if (BigInteger::of($start)->isGreaterThan(\PHP_INT_MAX)) {
+            throw new \InvalidArgumentException();
+        }
+        $candleFrontiers[$stream] = (int) $start;
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            $interval,
+            $start,
+            $close,
+        ]);
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param array<string, int> $snapshotEpochs
+     */
+    private function liveSnapshotIdentity(
+        PaperMarketEvent $event,
+        string $coin,
+        array $payload,
+        array &$snapshotEpochs,
+    ): string {
+        $reason = $this->liveString($payload['reason'] ?? null);
+        $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
+        $previous = $snapshotEpochs[$event->symbol] ?? null;
+        if (($previous === null && ($reason !== 'initial' || $epoch !== 1))
+            || ($previous !== null
+                && ($reason !== 'reconnect' || $epoch <= $previous))
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $snapshotEpochs[$event->symbol] = $epoch;
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'snapshot',
+            (string) $epoch,
+            $reason,
+        ]);
+    }
+
+    /**
+     * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $candleFrontiers
+     * @param list<string> $eventIds
+     */
+    private function assertHyperliquidLiveCheckpoint(
+        string $datasetDirectory,
+        PaperDatasetManifest $manifest,
+        HyperliquidPaperSourceOrdinal $ordinals,
+        array $snapshotEpochs,
+        array $candleFrontiers,
+        array $eventIds,
+    ): void {
+        try {
+            if (array_keys($snapshotEpochs) !== ['BTCUSDT', 'ETHUSDT']) {
+                $ordered = array_keys($snapshotEpochs);
+                sort($ordered, \SORT_STRING);
+                if ($ordered !== ['BTCUSDT', 'ETHUSDT']) {
+                    throw new \InvalidArgumentException();
+                }
+            }
+            $path = $datasetDirectory . '/checkpoints/hyperliquid-live.json';
+            $snapshot = $this->readRegularFile(
+                $path,
+                'paper_dataset_hyperliquid_live_checkpoint_invalid',
+                'paper_dataset_hyperliquid_live_checkpoint_validation',
+                HyperliquidPaperLiveCheckpoint::MAXIMUM_BYTES + 256,
+            );
+            $document = json_decode(
+                $snapshot['contents'],
+                true,
+                512,
+                \JSON_THROW_ON_ERROR,
+            );
+            if (!\is_array($document)
+                || array_is_list($document)
+                || array_keys($document) !== ['sha256', 'state']
+                || !\is_string($document['sha256'] ?? null)
+                || !\is_array($document['state'] ?? null)
+                || array_is_list($document['state'])
+                || !hash_equals(
+                    hash('sha256', CanonicalJson::encode($document['state'])),
+                    $document['sha256'],
+                )
+                || CanonicalJson::encode($document) . "\n" !== $snapshot['contents']
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $checkpoint = HyperliquidPaperLiveCheckpoint::fromArray($document['state']);
+            $expectedAcknowledged = array_slice(
+                $eventIds,
+                -HyperliquidPaperLiveCheckpoint::MAXIMUM_ACKNOWLEDGED_IDENTITIES,
+            );
+            if (!hash_equals($manifest->datasetId, $checkpoint->datasetId)
+                || $manifest->network !== $checkpoint->network
+                || !hash_equals(
+                    HyperliquidPaperLivePolicy::configurationSha256($manifest->network),
+                    $checkpoint->configurationSha256,
+                )
+                || $checkpoint->phase !== 'complete'
+                || !$checkpoint->continuity
+                || $checkpoint->failureReason !== null
+                || $checkpoint->pendingEvent !== null
+                || $checkpoint->pendingContinuation !== null
+                || $checkpoint->currentCandles !== []
+                || !$checkpoint->healthyStop['requested']
+                || CanonicalJson::encode($checkpoint->ordinalState)
+                    !== CanonicalJson::encode($ordinals->snapshot())
+                || $checkpoint->finalizedCandleFrontiers !== $candleFrontiers
+                || $checkpoint->acknowledgedIdentities !== $expectedAcknowledged
+                || $checkpoint->sourceEpoch !== max($snapshotEpochs)
+            ) {
+                throw new \InvalidArgumentException();
+            }
+        } catch (\Throwable $exception) {
+            if ($exception instanceof \RuntimeException
+                && $exception->getMessage()
+                    === 'paper_dataset_hyperliquid_live_checkpoint_invalid'
+            ) {
+                throw $exception;
+            }
+
+            throw new \RuntimeException(
+                'paper_dataset_hyperliquid_live_checkpoint_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
+    private function liveUnsignedString(mixed $value): string
+    {
+        if (!\is_string($value)
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
+    }
+
+    private function livePositiveInt(mixed $value): int
+    {
+        if (!\is_int($value) || $value < 1) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
+    }
+
+    private function liveString(mixed $value): string
+    {
+        if (!\is_string($value) || $value === '') {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
+    }
+
+    private function liveSha256(mixed $value): string
+    {
+        if (!\is_string($value)
+            || preg_match('/\A[a-f0-9]{64}\z/D', $value) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $value;
     }
 
     private function assertHyperliquidHistoricalEvent(
