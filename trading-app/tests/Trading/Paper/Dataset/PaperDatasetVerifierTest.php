@@ -11,6 +11,7 @@ use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequest;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -59,16 +60,38 @@ final class PaperDatasetVerifierTest extends TestCase
     public function testBaselineAcceptsCertifiableHyperliquidModelledBookDataset(): void
     {
         $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->hyperliquidModelledBookManifest());
-        $recorder->append(PaperMarketEvent::create(
-            PaperMarketDataNetwork::MAINNET,
-            venue: PaperMarketDataVenue::HYPERLIQUID,
-            symbol: 'BTCUSDT',
-            channel: PaperMarketDataChannel::CANDLE_1M,
-            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.000001Z'),
-            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:00:01.000001Z'),
-            sequence: '1',
-            payload: ['close' => '30000.0'],
-        ));
+        foreach ([
+            [PaperMarketDataChannel::CANDLE_1M, '1m', 60_000],
+            [PaperMarketDataChannel::CANDLE_5M, '5m', 300_000],
+            [PaperMarketDataChannel::CANDLE_15M, '15m', 900_000],
+            [PaperMarketDataChannel::CANDLE_1H, '1h', 3_600_000],
+        ] as $index => [$channel, $interval, $duration]) {
+            $start = 1_752_919_200_000;
+            $close = $start + $duration - 1;
+            $timestamp = \DateTimeImmutable::createFromFormat(
+                '!U.u',
+                sprintf('%d.%03d000', intdiv($close, 1_000), $close % 1_000),
+                new \DateTimeZone('UTC'),
+            );
+            self::assertInstanceOf(\DateTimeImmutable::class, $timestamp);
+            $recorder->append(PaperMarketEvent::create(
+                PaperMarketDataNetwork::MAINNET,
+                venue: PaperMarketDataVenue::HYPERLIQUID,
+                symbol: 'BTCUSDT',
+                channel: $channel,
+                exchangeTimestamp: $timestamp,
+                receivedTimestamp: $timestamp,
+                sequence: (string) ($index + 1),
+                payload: [
+                    'close' => '30000.0',
+                    'close_time' => (string) $close,
+                    'confirmed' => true,
+                    'interval' => $interval,
+                    'origin' => 'rest_candle_snapshot',
+                    'start_time' => (string) $start,
+                ],
+            ));
+        }
         $recorder->complete();
 
         $manifest = (new PaperDatasetVerifier())->verifyForBaseline($this->datasetDirectory());
@@ -618,6 +641,14 @@ final class PaperDatasetVerifierTest extends TestCase
 
     private function hyperliquidModelledBookManifest(): PaperDatasetManifest
     {
+        $request = new HyperliquidHistoricalRequest(
+            datasetId: 'dataset-okx-001',
+            network: PaperMarketDataNetwork::MAINNET,
+            symbols: ['BTCUSDT'],
+            from: new \DateTimeImmutable('2025-07-19T10:00:00.000000Z'),
+            to: new \DateTimeImmutable('2025-07-19T10:01:00.000000Z'),
+        );
+
         return new PaperDatasetManifest(
             schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
             recorderVersion: '1.0.0',
@@ -636,6 +667,7 @@ final class PaperDatasetVerifierTest extends TestCase
             eventsFileSha256: null,
             state: PaperDatasetState::RECORDING,
             lastEventId: null,
+            historicalCoverage: $request->historicalCoverage(),
         );
     }
 

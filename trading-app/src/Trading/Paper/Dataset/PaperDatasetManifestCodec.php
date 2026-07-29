@@ -83,6 +83,11 @@ final class PaperDatasetManifestCodec
         $expectedKeys = $schemaVersion === PaperDatasetManifest::SCHEMA_VERSION
             ? self::KEYS_V2
             : self::KEYS_V1;
+        if ($schemaVersion === PaperDatasetManifest::SCHEMA_VERSION
+            && array_key_exists('historical_coverage', $data)
+        ) {
+            $expectedKeys[] = 'historical_coverage';
+        }
         sort($actualKeys, SORT_STRING);
         sort($expectedKeys, SORT_STRING);
         if ($actualKeys !== $expectedKeys) {
@@ -107,6 +112,9 @@ final class PaperDatasetManifestCodec
             || ($data['events_file_sha256'] !== null && !\is_string($data['events_file_sha256']))
             || !\is_string($data['state'])
             || ($data['last_event_id'] !== null && !\is_string($data['last_event_id']))
+            || (array_key_exists('historical_coverage', $data)
+                && (!\is_array($data['historical_coverage'])
+                    || array_is_list($data['historical_coverage'])))
         ) {
             throw new \RuntimeException('paper_dataset_manifest_shape_invalid');
         }
@@ -128,6 +136,12 @@ final class PaperDatasetManifestCodec
             $channels = $data['channels'];
             /** @var array<string, int> $sequenceGaps */
             $sequenceGaps = $data['sequence_gaps'];
+            $historicalCoverage = null;
+            if (isset($data['historical_coverage'])) {
+                /** @var array<string, mixed> $coverageData */
+                $coverageData = $data['historical_coverage'];
+                $historicalCoverage = HyperliquidHistoricalCoverage::fromArray($coverageData);
+            }
 
             return new PaperDatasetManifest(
                 schemaVersion: $data['schema_version'],
@@ -147,8 +161,12 @@ final class PaperDatasetManifestCodec
                 eventsFileSha256: $data['events_file_sha256'],
                 state: $state,
                 lastEventId: $data['last_event_id'],
+                historicalCoverage: $historicalCoverage,
             );
-        } catch (\InvalidArgumentException) {
+        } catch (\InvalidArgumentException $failure) {
+            if ($failure->getMessage() === 'paper_dataset_hyperliquid_coverage_invalid') {
+                throw new \RuntimeException('paper_dataset_hyperliquid_coverage_invalid');
+            }
             throw new \RuntimeException('paper_dataset_manifest_value_invalid');
         }
     }

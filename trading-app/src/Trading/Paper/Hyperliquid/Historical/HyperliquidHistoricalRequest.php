@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Hyperliquid\Historical;
 
+use App\Trading\Paper\Dataset\HyperliquidHistoricalCoverage;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
-use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 
 final readonly class HyperliquidHistoricalRequest
@@ -60,20 +60,33 @@ final readonly class HyperliquidHistoricalRequest
 
     public function requestSha256(): string
     {
-        return hash('sha256', CanonicalJson::encode([
-            'schema_version' => 1,
-            'dataset_id' => $this->datasetId,
-            'network' => $this->network->value,
-            'venue' => 'hyperliquid',
-            'symbols' => $this->symbols,
-            'intervals' => $this->intervals,
-            'from' => $this->from->format('Y-m-d\TH:i:s.u\Z'),
-            'to' => $this->to->format('Y-m-d\TH:i:s.u\Z'),
-            'maximum_events' => $this->maximumEvents,
-            'maximum_pages' => $this->maximumPages,
-            'maximum_response_bytes' => $this->maximumResponseBytes,
-            'maximum_retries' => $this->maximumRetries,
-        ]));
+        return HyperliquidHistoricalRequestIdentity::sha256(
+            $this->datasetId,
+            $this->network,
+            $this->symbols,
+            $this->intervals,
+            $this->from->format('Y-m-d\TH:i:s.u\Z'),
+            $this->to->format('Y-m-d\TH:i:s.u\Z'),
+            $this->maximumEvents,
+            $this->maximumPages,
+            $this->maximumResponseBytes,
+            $this->maximumRetries,
+        );
+    }
+
+    public function historicalCoverage(): HyperliquidHistoricalCoverage
+    {
+        return new HyperliquidHistoricalCoverage(
+            schemaVersion: 1,
+            requestSha256: $this->requestSha256(),
+            from: $this->from->format('Y-m-d\TH:i:s.u\Z'),
+            to: $this->to->format('Y-m-d\TH:i:s.u\Z'),
+            intervals: $this->intervals,
+            maximumEvents: $this->maximumEvents,
+            maximumPages: $this->maximumPages,
+            maximumResponseBytes: $this->maximumResponseBytes,
+            maximumRetries: $this->maximumRetries,
+        );
     }
 
     /** @param array<mixed> $symbols

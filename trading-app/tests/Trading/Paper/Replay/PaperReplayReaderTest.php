@@ -279,6 +279,13 @@ final class PaperReplayReaderTest extends TestCase
     public function testHyperliquidHistoricalReplayAcceptsAlignedZeroEpochBoundary(): void
     {
         $close = '1970-01-01T00:00:59.999000Z';
+        $candle = $this->hyperliquidHistoricalEvent(
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1M,
+            '1',
+            $close,
+            ['interval' => '1m'],
+        );
         $event = $this->hyperliquidHistoricalEvent(
             'BTCUSDT',
             PaperMarketDataChannel::TOP_OF_BOOK,
@@ -286,7 +293,7 @@ final class PaperReplayReaderTest extends TestCase
             $close,
             $this->hyperliquidBookPayload($close, 60_000),
         );
-        $dataset = $this->completeHyperliquidDataset([$event]);
+        $dataset = $this->completeHyperliquidDataset([$candle, $event]);
 
         $replayed = iterator_to_array(
             $this->reader(new PaperReplayClock($event->exchangeTimestamp))
@@ -294,7 +301,7 @@ final class PaperReplayReaderTest extends TestCase
             false,
         );
 
-        self::assertSame([$event->toArray()], array_map(
+        self::assertSame([$candle->toArray(), $event->toArray()], array_map(
             static fn (PaperMarketEvent $replayedEvent): array => $replayedEvent->toArray(),
             $replayed,
         ));
@@ -315,7 +322,7 @@ final class PaperReplayReaderTest extends TestCase
             );
             self::fail('Invalid modelled-book interval metadata must fail replay ordering.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_replay_hyperliquid_interval_invalid', $exception->getMessage());
+            self::assertSame('paper_dataset_hyperliquid_model_event_invalid', $exception->getMessage());
         }
     }
 
@@ -337,7 +344,7 @@ final class PaperReplayReaderTest extends TestCase
             );
             self::fail('Invalid modelled-book interval metadata must fail replay ordering.');
         } catch (\RuntimeException $exception) {
-            self::assertSame('paper_replay_hyperliquid_interval_invalid', $exception->getMessage());
+            self::assertSame('paper_dataset_hyperliquid_model_event_invalid', $exception->getMessage());
             $trace = (string) $exception . "\n" . print_r($exception->getTrace(), true);
             self::assertStringNotContainsString($sentinel, $trace);
         } finally {
@@ -803,7 +810,7 @@ final class PaperReplayReaderTest extends TestCase
             ),
         ];
 
-        return [$events, $this->completeHyperliquidDataset($events)];
+        return [$events, $this->tamperedHyperliquidDataset($events)];
     }
 
     private function invalidHyperliquidBook(
@@ -827,7 +834,7 @@ final class PaperReplayReaderTest extends TestCase
         #[\SensitiveParameter] array $events,
         #[\SensitiveParameter] ?string $forbiddenTraceValue = null,
     ): void {
-        $dataset = $this->completeHyperliquidDataset($events);
+        $dataset = $this->tamperedHyperliquidDataset($events);
         $previous = ini_set('zend.exception_ignore_args', '0');
         self::assertNotFalse($previous);
         $yielded = 0;
@@ -849,7 +856,7 @@ final class PaperReplayReaderTest extends TestCase
             $failure,
             'Every invalid Hyperliquid interval must fail before replay sorting or yield.',
         );
-        self::assertSame('paper_replay_hyperliquid_interval_invalid', $failure->getMessage());
+        self::assertSame('paper_dataset_hyperliquid_model_event_invalid', $failure->getMessage());
         self::assertSame(0, $yielded);
         if ($forbiddenTraceValue !== null) {
             $trace = (string) $failure . "\n" . print_r($failure->getTrace(), true);
@@ -934,6 +941,24 @@ final class PaperReplayReaderTest extends TestCase
         string $exchangeTimestamp,
         array $payload,
     ): PaperMarketEvent {
+        $duration = match ($channel) {
+            PaperMarketDataChannel::CANDLE_1M => 60_000,
+            PaperMarketDataChannel::CANDLE_5M => 300_000,
+            PaperMarketDataChannel::CANDLE_15M => 900_000,
+            PaperMarketDataChannel::CANDLE_1H => 3_600_000,
+            default => null,
+        };
+        if ($duration !== null) {
+            $closeMilliseconds = (int) (new \DateTimeImmutable($exchangeTimestamp))->format('Uv');
+            $payload += [
+                'start_time' => (string) ($closeMilliseconds - $duration + 1),
+                'close_time' => (string) $closeMilliseconds,
+                'origin' => 'rest_candle_snapshot',
+                'confirmed' => true,
+            ];
+        }
+        ksort($payload, SORT_STRING);
+
         return PaperMarketEvent::create(
             PaperMarketDataNetwork::MAINNET,
             PaperMarketDataVenue::HYPERLIQUID,
@@ -944,6 +969,86 @@ final class PaperReplayReaderTest extends TestCase
             $sequence,
             $payload,
         );
+    }
+
+    /**
+     * @param list<PaperMarketEvent> $events
+     *
+     * @return array{directory: string, manifest: PaperDatasetManifest}
+     */
+    private function tamperedHyperliquidDataset(
+        #[\SensitiveParameter] array $events,
+    ): array {
+        $close = '2024-01-01T00:59:59.999000Z';
+        $seed = (string) hexdec(substr(hash(
+            'sha256',
+            implode('|', array_map(
+                static fn (PaperMarketEvent $event): string => $event->eventId,
+                $events,
+            )),
+        ), 0, 7));
+        $validCandle = $this->hyperliquidHistoricalEvent(
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1H,
+            $seed,
+            $close,
+            ['interval' => '1h'],
+        );
+        $validBook = $this->hyperliquidHistoricalEvent(
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $seed,
+            $close,
+            $this->hyperliquidBookPayload($close, 3_600_000),
+        );
+        $dataset = $this->completeHyperliquidDataset([$validCandle, $validBook]);
+        $contents = implode('', array_map(
+            static fn (PaperMarketEvent $event): string => CanonicalJson::encode(
+                $event->toArray(),
+            ) . "\n",
+            $events,
+        ));
+        self::assertSame(
+            strlen($contents),
+            file_put_contents($dataset['directory'] . '/events.ndjson', $contents),
+        );
+        $channels = array_values(array_unique(array_map(
+            static fn (PaperMarketEvent $event): string => $event->channel->value,
+            $events,
+        )));
+        sort($channels, SORT_STRING);
+        $start = min(array_map(
+            static fn (PaperMarketEvent $event): \DateTimeImmutable => $event->exchangeTimestamp,
+            $events,
+        ));
+        $end = max(array_map(
+            static fn (PaperMarketEvent $event): \DateTimeImmutable => $event->exchangeTimestamp,
+            $events,
+        ));
+        $manifestPath = $dataset['directory'] . '/manifest.json';
+        $manifest = json_decode(
+            (string) file_get_contents($manifestPath),
+            true,
+            512,
+            JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
+        self::assertIsArray($manifest);
+        $manifest = array_replace($manifest, [
+            'channels' => $channels,
+            'event_count' => \count($events),
+            'events_file_sha256' => hash('sha256', $contents),
+            'last_event_id' => $events[array_key_last($events)]->eventId,
+            'sequence_gaps' => [],
+            'start_exchange_timestamp' => $start->format('Y-m-d\TH:i:s.u\Z'),
+            'end_exchange_timestamp' => $end->format('Y-m-d\TH:i:s.u\Z'),
+        ]);
+        $manifestContents = CanonicalJson::encode($manifest) . "\n";
+        self::assertSame(
+            strlen($manifestContents),
+            file_put_contents($manifestPath, $manifestContents),
+        );
+
+        return $dataset;
     }
 
     /** @return array<string, mixed> */

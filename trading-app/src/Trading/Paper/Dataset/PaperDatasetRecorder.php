@@ -9,6 +9,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalEventCoverage;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetRecorder
@@ -980,14 +981,6 @@ final class PaperDatasetRecorder
         if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
             throw new \RuntimeException('paper_dataset_hyperliquid_historical_trade_forbidden');
         }
-        if ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK
-            && (($event->payload['model_name'] ?? null) !== 'hl_candle_atr_top_v1'
-                || ($event->payload['model_version'] ?? null) !== '1.0.0'
-                || ($event->payload['origin'] ?? null) !== 'historical_candle_model'
-                || ($event->payload['synthetic'] ?? null) !== true)
-        ) {
-            throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
-        }
         if (!\in_array($event->channel, [
             PaperMarketDataChannel::CANDLE_1M,
             PaperMarketDataChannel::CANDLE_5M,
@@ -996,6 +989,11 @@ final class PaperDatasetRecorder
             PaperMarketDataChannel::TOP_OF_BOOK,
         ], true)) {
             throw new \RuntimeException('paper_dataset_hyperliquid_channel_invalid');
+        }
+        try {
+            HyperliquidHistoricalEventCoverage::parse($event);
+        } catch (\Throwable) {
+            throw new \RuntimeException('paper_dataset_hyperliquid_model_event_invalid');
         }
     }
 

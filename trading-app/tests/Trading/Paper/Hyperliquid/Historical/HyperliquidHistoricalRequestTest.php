@@ -31,6 +31,17 @@ final class HyperliquidHistoricalRequestTest extends TestCase
         self::assertSame('2026-07-21T10:05:00.123456Z', $first->from->format('Y-m-d\\TH:i:s.u\\Z'));
         self::assertSame('2026-07-21T11:00:00.654321Z', $first->to->format('Y-m-d\\TH:i:s.u\\Z'));
         self::assertSame($first->requestSha256(), $second->requestSha256());
+        self::assertSame([
+            'schema_version' => 1,
+            'request_sha256' => $first->requestSha256(),
+            'from' => '2026-07-21T10:05:00.123456Z',
+            'to' => '2026-07-21T11:00:00.654321Z',
+            'intervals' => ['1m', '5m', '15m', '1h'],
+            'maximum_events' => 1_000_000,
+            'maximum_pages' => 100_000,
+            'maximum_response_bytes' => 1_048_576,
+            'maximum_retries' => 5,
+        ], $first->historicalCoverage()->toArray());
     }
 
     public function testConstructorHasTheRequiredImmutablePublicSurface(): void
