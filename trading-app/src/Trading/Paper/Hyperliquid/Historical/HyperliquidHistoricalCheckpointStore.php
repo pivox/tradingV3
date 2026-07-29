@@ -21,6 +21,8 @@ final class HyperliquidHistoricalCheckpointStore
     private const SHA256_PATTERN = '/\A[a-f0-9]{64}\z/D';
     private const WRITER_LOCK_FILENAME = '.writer.lock';
     private const CHECKPOINT_BYTES_PER_PAGE = 512;
+    private const SERIALIZE_PRECISION_SETTING = 'serialize_precision';
+    private const CANONICAL_SERIALIZE_PRECISION = '-1';
     private const JSON_FLAGS = \JSON_THROW_ON_ERROR
         | \JSON_UNESCAPED_SLASHES
         | \JSON_UNESCAPED_UNICODE
@@ -362,6 +364,13 @@ final class HyperliquidHistoricalCheckpointStore
             $this->validateStream($key, $stream);
             $pageCount += \count($stream['pages']);
             foreach ($stream['pages'] as $page) {
+                if ($page['row_count'] > $this->request->maximumEvents
+                    || $eventCount > $this->request->maximumEvents - $page['row_count']
+                ) {
+                    throw new HyperliquidHistoricalIntegrityException(
+                        'hyperliquid_acquisition_checkpoint_invalid',
+                    );
+                }
                 $eventCount += $page['row_count'];
             }
         }
@@ -372,7 +381,7 @@ final class HyperliquidHistoricalCheckpointStore
         }
 
         try {
-            HyperliquidPaperSourceOrdinal::restore($state['ordinal_state']);
+            $ordinals = HyperliquidPaperSourceOrdinal::restore($state['ordinal_state']);
         } catch (\InvalidArgumentException $exception) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
@@ -380,9 +389,17 @@ final class HyperliquidHistoricalCheckpointStore
                 $exception,
             );
         }
+        $ordinalState = $ordinals->snapshot();
+        $this->validateOrdinalScopes($ordinalState['scopes']);
 
+        $pendingEvent = null;
         if ($state['pending_event'] !== null) {
-            $this->validatePendingEvent($state['pending_event']);
+            $pendingEvent = $this->validatePendingEvent($state['pending_event']);
+            $this->validatePendingAssignment(
+                $state['pending_event'],
+                $pendingEvent,
+                $ordinalState['scopes'],
+            );
         }
         if (($state['phase'] === 'fetching'
                 && ($state['emit_index'] !== 0 || $state['pending_event'] !== null))
@@ -396,6 +413,9 @@ final class HyperliquidHistoricalCheckpointStore
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
             );
+        }
+        if (\in_array($state['phase'], ['emitting', 'complete'], true)) {
+            $this->assertCompletedRequestedGrid($state['streams']);
         }
     }
 
@@ -457,7 +477,7 @@ final class HyperliquidHistoricalCheckpointStore
         }
     }
 
-    private function validatePendingEvent(mixed $pending): void
+    private function validatePendingEvent(mixed $pending): PaperMarketEvent
     {
         if (!\is_array($pending) || array_is_list($pending)) {
             throw new HyperliquidHistoricalIntegrityException(
@@ -482,6 +502,12 @@ final class HyperliquidHistoricalCheckpointStore
             ) {
                 throw new \InvalidArgumentException();
             }
+            if (!hash_equals(
+                CanonicalJson::encode($event->toArray()),
+                CanonicalJson::encode($pending['event']),
+            )) {
+                throw new \InvalidArgumentException();
+            }
         } catch (\Throwable $exception) {
             throw new HyperliquidHistoricalIntegrityException(
                 'hyperliquid_acquisition_checkpoint_invalid',
@@ -489,11 +515,90 @@ final class HyperliquidHistoricalCheckpointStore
                 $exception,
             );
         }
+
+        return $event;
+    }
+
+    /** @param array<string, mixed> $scopes */
+    private function validateOrdinalScopes(array $scopes): void
+    {
+        $allowedChannels = ['candle_1m', 'candle_5m', 'candle_15m', 'candle_1h', 'top_of_book'];
+        foreach (array_keys($scopes) as $scope) {
+            $parts = explode('/', $scope);
+            if (\count($parts) !== 4
+                || $parts[0] !== $this->request->network->value
+                || $parts[1] !== 'hyperliquid'
+                || !\in_array($parts[2], $this->request->symbols, true)
+                || !\in_array($parts[3], $allowedChannels, true)
+            ) {
+                throw new HyperliquidHistoricalIntegrityException(
+                    'hyperliquid_acquisition_checkpoint_invalid',
+                );
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $pending
+     * @param array<string, mixed> $scopes
+     */
+    private function validatePendingAssignment(
+        array $pending,
+        PaperMarketEvent $event,
+        array $scopes,
+    ): void {
+        $scope = implode('/', [
+            $event->sourceNetwork->value,
+            $event->sourceVenue->value,
+            $event->symbol,
+            $event->channel->value,
+        ]);
+        $latest = $scopes[$scope]['latest'] ?? null;
+        if (!\is_array($latest)
+            || !\is_string($latest['natural_identity'] ?? null)
+            || !hash_equals($latest['natural_identity'], $pending['natural_identity'])
+            || !\is_array($latest['event'] ?? null)
+            || !hash_equals(
+                CanonicalJson::encode($latest['event']),
+                CanonicalJson::encode($pending['event']),
+            )
+        ) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
+    }
+
+    /** @param array<string, mixed> $streams */
+    private function assertCompletedRequestedGrid(array $streams): void
+    {
+        $expected = [];
+        foreach ($this->coins as $coin) {
+            foreach ($this->request->intervals as $interval) {
+                $expected[] = $coin . '/candle_' . $interval;
+            }
+        }
+        sort($expected, \SORT_STRING);
+        $actual = array_keys($streams);
+        sort($actual, \SORT_STRING);
+        if ($actual !== $expected) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
+        foreach ($streams as $stream) {
+            if ($stream['complete'] !== true) {
+                throw new HyperliquidHistoricalIntegrityException(
+                    'hyperliquid_acquisition_checkpoint_invalid',
+                );
+            }
+        }
     }
 
     /** @param array<string, mixed> $state */
     private function encodeState(#[\SensitiveParameter] array $state): string
     {
+        $previousPrecision = $this->configureCanonicalSerializePrecision();
         try {
             $normalized = $this->normalizeForJson($state);
             $encoded = json_encode($normalized, self::JSON_FLAGS);
@@ -503,6 +608,8 @@ final class HyperliquidHistoricalCheckpointStore
                 0,
                 $exception,
             );
+        } finally {
+            $this->restoreSerializePrecision($previousPrecision);
         }
         if (strlen($encoded) + 1 > $this->maximumCheckpointBytes()) {
             throw new HyperliquidHistoricalIntegrityException(
@@ -513,12 +620,51 @@ final class HyperliquidHistoricalCheckpointStore
         return $encoded;
     }
 
+    private function configureCanonicalSerializePrecision(): string
+    {
+        $previous = ini_get(self::SERIALIZE_PRECISION_SETTING);
+        if (!\is_string($previous)) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
+        if ($previous !== self::CANONICAL_SERIALIZE_PRECISION
+            && (\ini_set(
+                self::SERIALIZE_PRECISION_SETTING,
+                self::CANONICAL_SERIALIZE_PRECISION,
+            ) === false
+                || ini_get(self::SERIALIZE_PRECISION_SETTING)
+                    !== self::CANONICAL_SERIALIZE_PRECISION)
+        ) {
+            $this->restoreSerializePrecision($previous);
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
+
+        return $previous;
+    }
+
+    private function restoreSerializePrecision(string $precision): void
+    {
+        if (ini_get(self::SERIALIZE_PRECISION_SETTING) === $precision) {
+            return;
+        }
+        if (\ini_set(self::SERIALIZE_PRECISION_SETTING, $precision) === false
+            || ini_get(self::SERIALIZE_PRECISION_SETTING) !== $precision
+        ) {
+            throw new HyperliquidHistoricalIntegrityException(
+                'hyperliquid_acquisition_checkpoint_invalid',
+            );
+        }
+    }
+
     private function normalizeForJson(mixed $value): mixed
     {
         if (!\is_array($value)) {
             if (\is_object($value)
                 || \is_resource($value)
-                || (\is_float($value) && !is_finite($value))
+                || \is_float($value)
             ) {
                 throw new \InvalidArgumentException();
             }
@@ -1003,13 +1149,13 @@ final class HyperliquidHistoricalCheckpointStore
             $this->assertHandleMatchesPath($handle, $path, $temporaryIdentity);
         } catch (HyperliquidHistoricalIntegrityException $failure) {
             if (!$renamed) {
-                $this->removeTemporaryPath($temporaryPath);
+                $this->removeTemporaryPath($temporaryPath, $handle);
             }
 
             throw $failure;
         } catch (\Throwable $failure) {
             if (!$renamed) {
-                $this->removeTemporaryPath($temporaryPath);
+                $this->removeTemporaryPath($temporaryPath, $handle);
             }
 
             throw new \RuntimeException('hyperliquid_acquisition_write_failed', 0, $failure);
@@ -1084,22 +1230,18 @@ final class HyperliquidHistoricalCheckpointStore
         return ['dev' => $opened['dev'], 'ino' => $opened['ino']];
     }
 
-    private function removeTemporaryPath(string $path): void
+    /** @param resource $handle */
+    private function removeTemporaryPath(string $path, $handle): void
     {
-        $statistics = $this->pathStatistics($path, 'hyperliquid_acquisition_cleanup');
-        if ($statistics === false) {
+        $statistics = $this->filesystem->stat($handle, 'hyperliquid_acquisition_cleanup');
+        if ($statistics === false || !$this->isPrivateRegularFile($statistics)) {
             return;
         }
-        if (isset($statistics['mode'])
-            && \is_int($statistics['mode'])
-            && \in_array(
-                $statistics['mode'] & self::FILE_TYPE_MASK,
-                [self::REGULAR_FILE_TYPE, self::SYMLINK_FILE_TYPE],
-                true,
-            )
-        ) {
-            @unlink($path);
-        }
+        $this->filesystem->removeFile(
+            $path,
+            $statistics,
+            'hyperliquid_acquisition_cleanup',
+        );
     }
 
     /** @return array<string, mixed>|false */
