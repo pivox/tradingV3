@@ -77,7 +77,7 @@ final class PaperExecutionMigrationTest extends TestCase
         $dsn = $_ENV['DATABASE_URL'] ?? $_SERVER['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '';
         $database = is_string($dsn) ? ltrim((string) parse_url($dsn, PHP_URL_PATH), '/') : '';
         if (!str_ends_with($database, '_paper_test')) {
-            throw new \LogicException('Paper execution integration tests require a database ending in _paper_test.');
+            self::markTestSkipped('Paper execution integration tests require a database ending in _paper_test.');
         }
 
         return DriverManager::getConnection(['url' => $dsn]);

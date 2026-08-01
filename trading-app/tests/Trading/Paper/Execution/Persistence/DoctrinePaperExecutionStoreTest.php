@@ -39,7 +39,7 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $dsn = $_ENV['DATABASE_URL'] ?? $_SERVER['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '';
         $database = is_string($dsn) ? ltrim((string) parse_url($dsn, PHP_URL_PATH), '/') : '';
         if (!str_ends_with($database, '_paper_test')) {
-            throw new \LogicException('Paper execution integration tests require a database ending in _paper_test.');
+            self::markTestSkipped('Paper execution integration tests require a database ending in _paper_test.');
         }
 
         $this->connection = DriverManager::getConnection(['url' => $dsn]);
@@ -70,6 +70,10 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
 
     protected function tearDown(): void
     {
+        if (!isset($this->connection)) {
+            return;
+        }
+
         $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
         $this->connection->executeStatement('SET search_path TO public');
         $this->connection->executeStatement('DROP SCHEMA IF EXISTS ' . $quoted . ' CASCADE');

@@ -80,6 +80,14 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Create isolated Paper test database
+        env:
+          PGPASSWORD: trading
+        run: >-
+          psql --host=127.0.0.1 --username=trading --dbname=postgres
+          --set=ON_ERROR_STOP=1
+          --command='CREATE DATABASE trading_app_paper_test'
+
       - name: Lint container
         run: php bin/console lint:container
 
@@ -92,6 +100,14 @@ jobs:
       # et lisent DATABASE_URL depuis les variables d'environnement du job.
       - name: PHPUnit — Trading + MtfRunner
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Trading tests/MtfRunner
+
+      - name: PHPUnit — Paper execution PostgreSQL (isolated database)
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+        run: >-
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
+          tests/Trading/Paper/Execution/Persistence/DoctrinePaperExecutionStoreTest.php
+          tests/Trading/Paper/Persistence/PaperExecutionMigrationTest.php
 
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
