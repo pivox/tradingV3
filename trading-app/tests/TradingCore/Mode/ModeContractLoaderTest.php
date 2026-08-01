@@ -180,6 +180,43 @@ final class ModeContractLoaderTest extends TestCase
         (new ModeContractValidator())->validate($document);
     }
 
+    public function testRejectsUnitOwnedByAnotherContractField(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['session_policy']['unit'] = 'positions';
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage('session_policy.unit must be "session_policy"');
+
+        (new ModeContractValidator())->validate($document);
+    }
+
+    public function testRejectsUnsupportedTimeframeInsideDataContract(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['data_contract']['required_inputs'][0]['timeframes'][] = '99m';
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage('Unsupported timeframe "99m" in data_contract.required_inputs[].timeframes');
+
+        (new ModeContractValidator())->validate($document);
+    }
+
+    public function testContractsExposeExactAuditedProvenancePaths(): void
+    {
+        $scalping = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.0.0')->toArray();
+        $micro = (new ModeContractLoader($this->contractRoot))->load('micro_scalping', '1.0.0')->toArray();
+
+        self::assertStringContainsString(
+            'src/TradeEntry/Builder/TradeEntryRequestBuilder.php:80',
+            $scalping['risk']['trade_budget']['source'],
+        );
+        self::assertSame(
+            'src/MtfValidator/config/validations.scalper_micro.yaml:109-125',
+            $micro['provenance'][4]['source'],
+        );
+    }
+
     public function testFactoryRejectsUnvalidatedLegacyDocument(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.0.0')->toArray();

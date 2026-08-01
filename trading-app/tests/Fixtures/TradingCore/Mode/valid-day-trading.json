@@ -4,7 +4,7 @@
   "mode_version": "1.0.0",
   "lifecycle": { "status": "draft", "executable": false, "rationale": "Evidence gates remain open." },
   "horizon": { "state": "unresolved", "value": null, "unit": "holding_horizon_policy", "source": "pending evidence", "justification": "Timeframes do not define maximum holding time." },
-  "session_policy": { "state": "unresolved", "value": null, "unit": "policy", "source": "pending evidence", "justification": "No source fact." },
+  "session_policy": { "state": "unresolved", "value": null, "unit": "session_policy", "source": "pending evidence", "justification": "No source fact." },
   "timeframes": { "regime": ["4h"], "context": ["1h"], "trigger": ["15m"], "execution": ["15m", "5m", "1m"] },
   "cadence": {
     "evaluation": { "state": "unresolved", "value": null, "unit": "duration", "source": "pending evidence", "justification": "No source fact." },

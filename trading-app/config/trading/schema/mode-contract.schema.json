@@ -19,8 +19,8 @@
       },
       "allOf": [{ "if": { "properties": { "status": { "enum": ["draft", "retired"] } }, "required": ["status"] }, "then": { "properties": { "executable": { "const": false } } } }]
     },
-    "horizon": { "$ref": "#/$defs/stringDecision" },
-    "session_policy": { "$ref": "#/$defs/stringDecision" },
+    "horizon": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "holding_horizon_policy" } } }] },
+    "session_policy": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "session_policy" } } }] },
     "timeframes": {
       "type": "object", "additionalProperties": false,
       "required": ["regime", "context", "trigger", "execution"],
@@ -34,20 +34,23 @@
     "cadence": {
       "type": "object", "additionalProperties": false,
       "required": ["evaluation", "validity_window"],
-      "properties": { "evaluation": { "$ref": "#/$defs/durationDecision" }, "validity_window": { "$ref": "#/$defs/durationDecision" } }
+      "properties": {
+        "evaluation": { "allOf": [{ "$ref": "#/$defs/durationDecision" }, { "properties": { "unit": { "const": "duration" } } }] },
+        "validity_window": { "allOf": [{ "$ref": "#/$defs/durationDecision" }, { "properties": { "unit": { "const": "duration" } } }] }
+      }
     },
     "risk": {
       "type": "object", "additionalProperties": false,
       "required": ["trade_budget", "daily_loss_cap", "max_concurrent_positions", "mode_exposure_cap"],
       "properties": {
-        "trade_budget": { "$ref": "#/$defs/positiveNumberDecision" },
-        "daily_loss_cap": { "$ref": "#/$defs/dailyCapDecision" },
-        "max_concurrent_positions": { "$ref": "#/$defs/positiveIntegerDecision" },
-        "mode_exposure_cap": { "$ref": "#/$defs/positiveNumberDecision" }
+        "trade_budget": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_per_trade" } } }] },
+        "daily_loss_cap": { "allOf": [{ "$ref": "#/$defs/dailyCapDecision" }, { "properties": { "unit": { "const": "compound_percent_equity_and_quote_per_day" } } }] },
+        "max_concurrent_positions": { "allOf": [{ "$ref": "#/$defs/positiveIntegerDecision" }, { "properties": { "unit": { "const": "positions" } } }] },
+        "mode_exposure_cap": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_notional" } } }] }
       }
     },
-    "leverage": { "$ref": "#/$defs/positiveNumberDecision" },
-    "order_policy": { "$ref": "#/$defs/orderDecision" },
+    "leverage": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "leverage_multiple" } } }] },
+    "order_policy": { "allOf": [{ "$ref": "#/$defs/orderDecision" }, { "properties": { "unit": { "const": "policy" } } }] },
     "compatible_setup_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^(day_trading|scalping|micro_scalping)\\.[a-z0-9_]+\\.(long|short)$" } },
     "data_contract": {
       "type": "object", "additionalProperties": false,
@@ -83,7 +86,7 @@
       "properties": {
         "state": { "enum": ["defined", "unresolved"] },
         "value": {},
-        "unit": { "enum": ["holding_horizon_policy", "session_policy", "duration", "percent_equity_per_trade", "compound_percent_equity_and_quote_per_day", "positions", "percent_equity_notional", "leverage_multiple", "policy"] },
+        "unit": { "$ref": "#/$defs/nonEmptyString" },
         "source": { "$ref": "#/$defs/nonEmptyString" },
         "justification": { "$ref": "#/$defs/nonEmptyString" }
       },

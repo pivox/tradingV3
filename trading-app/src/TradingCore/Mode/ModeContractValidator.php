@@ -11,11 +11,6 @@ final class ModeContractValidator
     public const MODE_IDS = ['day_trading', 'scalping', 'micro_scalping'];
     public const LIFECYCLE_STATUSES = ['draft', 'shadow', 'paper', 'candidate', 'active', 'retired'];
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
-    private const UNITS = [
-        'holding_horizon_policy', 'session_policy', 'duration', 'percent_equity_per_trade',
-        'compound_percent_equity_and_quote_per_day', 'positions', 'percent_equity_notional',
-        'leverage_multiple', 'policy',
-    ];
 
     private const SETUP_IDS = [
         'day_trading' => [
@@ -71,6 +66,8 @@ final class ModeContractValidator
 
         $this->assertDecision($this->mapping($document, 'horizon'), 'horizon');
         $this->assertDecision($this->mapping($document, 'session_policy'), 'session_policy');
+        $this->assertUnit($this->mapping($document, 'horizon'), 'horizon', 'holding_horizon_policy');
+        $this->assertUnit($this->mapping($document, 'session_policy'), 'session_policy', 'session_policy');
         $this->assertDefinedString($this->mapping($document, 'horizon'), 'horizon');
         $this->assertDefinedString($this->mapping($document, 'session_policy'), 'session_policy');
         $this->assertTimeframes($this->mapping($document, 'timeframes'));
@@ -81,21 +78,29 @@ final class ModeContractValidator
         $this->assertDecision($this->mapping($cadence, 'validity_window'), 'cadence.validity_window');
         $this->assertDefinedDuration($this->mapping($cadence, 'evaluation'), 'cadence.evaluation');
         $this->assertDefinedDuration($this->mapping($cadence, 'validity_window'), 'cadence.validity_window');
+        $this->assertUnit($this->mapping($cadence, 'evaluation'), 'cadence.evaluation', 'duration');
+        $this->assertUnit($this->mapping($cadence, 'validity_window'), 'cadence.validity_window', 'duration');
 
         $risk = $this->mapping($document, 'risk');
         $this->assertExactKeys($risk, ['trade_budget', 'daily_loss_cap', 'max_concurrent_positions', 'mode_exposure_cap'], 'risk');
         foreach (array_keys($risk) as $key) {
             $this->assertDecision($this->mapping($risk, $key), 'risk.' . $key);
         }
+        $this->assertUnit($this->mapping($risk, 'trade_budget'), 'risk.trade_budget', 'percent_equity_per_trade');
+        $this->assertUnit($this->mapping($risk, 'daily_loss_cap'), 'risk.daily_loss_cap', 'compound_percent_equity_and_quote_per_day');
+        $this->assertUnit($this->mapping($risk, 'max_concurrent_positions'), 'risk.max_concurrent_positions', 'positions');
+        $this->assertUnit($this->mapping($risk, 'mode_exposure_cap'), 'risk.mode_exposure_cap', 'percent_equity_notional');
         $this->assertDefinedPositiveNumber($this->mapping($risk, 'trade_budget'), 'risk.trade_budget');
         $this->assertDefinedDailyCap($this->mapping($risk, 'daily_loss_cap'));
         $this->assertDefinedPositiveInteger($this->mapping($risk, 'max_concurrent_positions'), 'risk.max_concurrent_positions');
         $this->assertDefinedPositiveNumber($this->mapping($risk, 'mode_exposure_cap'), 'risk.mode_exposure_cap');
         $leverage = $this->mapping($document, 'leverage');
         $this->assertDecision($leverage, 'leverage');
+        $this->assertUnit($leverage, 'leverage', 'leverage_multiple');
         $this->assertDefinedPositiveNumber($leverage, 'leverage');
         $orderPolicy = $this->mapping($document, 'order_policy');
         $this->assertDecision($orderPolicy, 'order_policy');
+        $this->assertUnit($orderPolicy, 'order_policy', 'policy');
         $this->assertDefinedOrderPolicy($orderPolicy);
 
         $setupIds = $this->stringList($document, 'compatible_setup_ids', false);
@@ -122,7 +127,11 @@ final class ModeContractValidator
             if (!in_array($input['kind'], ['candles', 'order_book'], true)) {
                 throw new ModeContractException('data_contract required input kind is invalid.');
             }
-            $this->stringList($input, 'timeframes', false);
+            foreach ($this->stringList($input, 'timeframes', false) as $timeframe) {
+                if (!in_array($timeframe, self::TIMEFRAMES, true)) {
+                    throw new ModeContractException(sprintf('Unsupported timeframe "%s" in data_contract.required_inputs[].timeframes.', $timeframe));
+                }
+            }
             $this->stringList($input, 'fields', false);
         }
         if ($data['missing_data_policy'] !== 'reject') {
@@ -169,14 +178,19 @@ final class ModeContractValidator
         foreach (['unit', 'source', 'justification'] as $field) {
             $this->assertString($decision, $field);
         }
-        if (!in_array($decision['unit'], self::UNITS, true)) {
-            throw new ModeContractException(sprintf('%s.unit is unknown.', $path));
-        }
         if ($decision['state'] === 'unresolved' && $decision['value'] !== null) {
             throw new ModeContractException(sprintf('%s unresolved value must be null.', $path));
         }
         if ($decision['state'] === 'defined' && $decision['value'] === null) {
             throw new ModeContractException(sprintf('%s defined value cannot be null.', $path));
+        }
+    }
+
+    /** @param array<string, mixed> $decision */
+    private function assertUnit(array $decision, string $path, string $expected): void
+    {
+        if ($decision['unit'] !== $expected) {
+            throw new ModeContractException(sprintf('%s.unit must be "%s".', $path, $expected));
         }
     }
 

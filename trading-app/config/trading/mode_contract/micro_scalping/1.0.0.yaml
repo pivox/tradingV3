@@ -42,5 +42,5 @@ provenance:
   - { path: timeframes.context, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '5m is the only active context; commented 15m is deliberately ignored.' }
   - { path: timeframes.trigger, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '1m contains timing and OFI trigger rules.' }
   - { path: timeframes.execution, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '1m is the sole active execution timeframe and default.' }
-  - { path: data_contract.required_inputs, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:76-104', unit: OHLCV_and_order_book_fields_by_timeframe, justification: 'The active 5m/1m rules require candle indicators plus 1m spread and order-flow imbalance.' }
+  - { path: data_contract.required_inputs, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:109-125', unit: OHLCV_and_order_book_fields_by_timeframe, justification: 'The active 1m rules require candle indicators plus spread and order-flow imbalance; commented 15m rules are excluded.' }
   - { path: compatible_setup_ids, source: 'GitHub issue #300 catalog for #301', unit: setup_id, justification: 'Stable IDs only; setup definitions remain owned by #301.' }
