@@ -196,6 +196,15 @@ final class EffectiveTradingConfigComposer
             && $decision['value'] === null
             && $topLevelHash === null
             && $conditionCatalogHash === null) {
+            $blockers = $setup['blockers'] ?? null;
+            if ($setup['executable'] !== false
+                || $setup['publishable'] !== false
+                || !is_array($blockers)
+                || !array_is_list($blockers)
+                || !in_array('condition_catalog_hash_unresolved', $blockers, true)) {
+                throw new TradingConfigException('An unresolved condition catalog requires non-executable and non-publishable setup metadata with a condition_catalog_hash_unresolved blocker.');
+            }
+
             return;
         }
 

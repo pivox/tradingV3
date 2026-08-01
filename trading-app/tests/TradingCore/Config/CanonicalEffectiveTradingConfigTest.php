@@ -102,6 +102,26 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
         (new EffectiveTradingConfigComposer())->compose($request, $layers, null);
     }
 
+    public function testUnresolvedConditionCatalogCannotLookExecutableOrOmitItsBlocker(): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $layers = $this->layers($request);
+        $config = $layers[2]->config;
+        $config['setup']['condition_catalog_hash'] = null;
+        $config['setup']['data_condition_contract']['condition_catalog_hash'] = [
+            'state' => 'unresolved', 'value' => null, 'unit' => 'sha256',
+            'source' => 'synthetic unresolved catalog', 'justification' => 'Fail closed.',
+        ];
+        $config['setup']['executable'] = true;
+        $config['setup']['publishable'] = true;
+        $config['setup']['blockers'] = [];
+        $layers[2] = new TradingConfigLayer('setup', 'scalping.pullback.long@1.0.0', '/setup.yaml', true, $config);
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('unresolved condition catalog requires non-executable');
+        (new EffectiveTradingConfigComposer())->compose($request, $layers, null);
+    }
+
     public function testConflictingNestedAndTopLevelConditionCatalogHashesReject(): void
     {
         $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
