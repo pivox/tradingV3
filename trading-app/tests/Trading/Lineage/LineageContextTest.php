@@ -15,6 +15,39 @@ final class LineageContextTest extends TestCase
     private const CONFIG_HASH = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     private const CATALOG_HASH = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
+    /** @dataProvider invalidModernIdentityProvider */
+    public function testRejectsInvalidModernCanonicalFields(string $field, mixed $value, string $reason): void
+    {
+        $payload = $this->canonicalPayload();
+        $payload[$field] = $value;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage($reason);
+
+        LineageContext::fromOrchestratorPayload($payload);
+    }
+
+    /** @return iterable<string, array{string,mixed,string}> */
+    public static function invalidModernIdentityProvider(): iterable
+    {
+        yield 'legacy mode alias' => ['mode_id', 'scalper', 'canonical_identity_invalid:mode_id'];
+        yield 'unknown setup' => ['setup_id', 'scalping.unknown.long', 'canonical_identity_invalid:setup_id'];
+        yield 'mode setup mismatch' => ['mode_id', 'day_trading', 'canonical_identity_mismatch:mode_id'];
+        yield 'side setup mismatch' => ['side', 'SHORT', 'canonical_identity_mismatch:side'];
+        yield 'latest mode version' => ['mode_version', 'latest', 'canonical_identity_invalid:mode_version'];
+        yield 'range setup version' => ['setup_version', '^1.0', 'canonical_identity_invalid:setup_version'];
+        yield 'unpublished setup version' => ['setup_version', '1.0.1', 'canonical_identity_invalid:setup_version'];
+        yield 'uppercase config hash' => ['config_hash', 'sha256:' . str_repeat('A', 64), 'canonical_identity_invalid:config_hash'];
+        yield 'bare catalog digest' => ['condition_catalog_hash', str_repeat('b', 64), 'canonical_identity_invalid:condition_catalog_hash'];
+        yield 'legacy exchange' => ['exchange', 'bitmart', 'canonical_identity_invalid:exchange'];
+        yield 'market alias' => ['market_type', 'perp', 'canonical_identity_invalid:market_type'];
+        yield 'unsafe symbol' => ['symbol', 'BTC/USDT', 'canonical_identity_invalid:symbol'];
+        yield 'unsafe run id' => ['orchestration_run_id', '../run', 'canonical_identity_invalid:orchestration_run_id'];
+        yield 'unsafe set id' => ['orchestration_set_id', 'set id', 'canonical_identity_invalid:orchestration_set_id'];
+        yield 'non uuid decision id' => ['decision_id', 'decision-1', 'canonical_identity_invalid:decision_id'];
+        yield 'unsafe decision key' => ['decision_key', "decision\nkey", 'canonical_identity_invalid:decision_key'];
+    }
+
     public function testCanonicalModernIdentityRoundTripsWithoutMutableAliases(): void
     {
         $identity = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
@@ -40,6 +73,29 @@ final class LineageContextTest extends TestCase
         LineageContext::fromOrchestratorPayload($payload);
     }
 
+    public function testDirectModernConstructionUsedByMessagesIsAlsoStrict(): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:mode_id');
+
+        new LineageContext(
+            origin: 'orchestrator',
+            orchestrationRunId: 'run-1',
+            orchestrationSetId: 'set-1',
+            exchange: 'fake',
+            marketType: 'perpetual',
+            symbol: 'BTCUSDT',
+            configHash: self::CONFIG_HASH,
+            modeId: 'scalper',
+            modeVersion: '1.0.0',
+            setupId: 'scalping.pullback.long',
+            setupVersion: '1.0.0',
+            conditionCatalogHash: self::CATALOG_HASH,
+            side: 'LONG',
+            effectiveConfigReference: 'effective-config:cfg-1',
+        );
+    }
+
     public function testModernIdentityRejectsContradictorySideAndHash(): void
     {
         $payload = $this->canonicalPayload();
@@ -54,12 +110,12 @@ final class LineageContextTest extends TestCase
     public function testStageIdsAreAddedWithoutChangingCanonicalIdentity(): void
     {
         $base = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
-        $decision = $base->withDecision('decision-1', 'decision-key-1');
+        $decision = $base->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key-1');
         $intent = $decision->withIntent('intent-1');
         $executed = $intent->withExecution('order-1', 'position-1', 'trade-1');
 
         self::assertNull($base->decisionId);
-        self::assertSame('decision-1', $executed->decisionId);
+        self::assertSame('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', $executed->decisionId);
         self::assertSame('decision-key-1', $executed->decisionKey);
         self::assertSame('intent-1', $executed->intentId);
         self::assertSame('order-1', $executed->orderId);
@@ -73,12 +129,12 @@ final class LineageContextTest extends TestCase
     public function testStageIdCannotBeReplacedAfterCreation(): void
     {
         $decision = LineageContext::fromOrchestratorPayload($this->canonicalPayload())
-            ->withDecision('decision-1', 'decision-key-1');
+            ->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key-1');
 
         $this->expectException(LineageContextException::class);
         $this->expectExceptionMessage('canonical_identity_mismatch:decisionId');
 
-        $decision->withDecision('decision-2', 'decision-key-1');
+        $decision->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb22c', 'decision-key-1');
     }
 
     public function testBuildsOrchestratorContextFromValidatedPayload(): void

@@ -18,6 +18,17 @@ final readonly class LineageContext
     public const ORIGIN_MANUAL = 'manual';
     public const ORIGIN_REPLAY = 'replay';
 
+    /** @var array<string, array{mode:string,side:string,version:string}> */
+    private const MODERN_SETUPS = [
+        'day_trading.trend_continuation.long' => ['mode' => 'day_trading', 'side' => 'LONG', 'version' => '1.0.0'],
+        'day_trading.trend_continuation.short' => ['mode' => 'day_trading', 'side' => 'SHORT', 'version' => '1.0.0'],
+        'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'version' => '1.0.0'],
+        'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'version' => '1.0.0'],
+        'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
+        'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'version' => '1.0.0'],
+        'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
+    ];
+
     public function __construct(
         public string $origin,
         public ?string $orchestrationRunId = null,
@@ -68,6 +79,32 @@ final readonly class LineageContext
         if ($side !== null && !\in_array($side, ['LONG', 'SHORT'], true)) {
             throw new LineageContextException('canonical_identity_invalid:side');
         }
+        if ($modeId !== null || $setupId !== null) {
+            self::assertCanonicalPayload([
+                'orchestration_run_id' => $orchestrationRunId,
+                'correlation_run_id' => $correlationRunId,
+                'orchestration_set_id' => $orchestrationSetId,
+                'orchestration_dashboard_id' => $orchestrationDashboardId,
+                'mode_id' => $modeId,
+                'mode_version' => $modeVersion,
+                'setup_id' => $setupId,
+                'setup_version' => $setupVersion,
+                'config_hash' => $configHash,
+                'condition_catalog_hash' => $conditionCatalogHash,
+                'side' => $side,
+                'exchange' => $exchange,
+                'market_type' => $marketType,
+                'symbol' => $symbol,
+                'decision_id' => $decisionId ?? $tradingDecisionId,
+                'decision_key' => $decisionKey,
+                'intent_id' => $intentId ?? $orderIntentId,
+                'order_id' => $orderId ?? $exchangeOrderId,
+                'position_id' => $positionId ?? $exchangePositionId,
+                'trade_id' => $tradeId ?? $internalTradeId,
+                'effective_config_reference' => $effectiveConfigReference,
+                'effective_config_snapshot' => $effectiveConfigSnapshot,
+            ]);
+        }
     }
 
     /**
@@ -75,7 +112,10 @@ final readonly class LineageContext
      */
     public static function fromOrchestratorPayload(array $payload): self
     {
-        $runId = self::firstString($payload, ['run_id', 'original_run_id', 'orchestration_run_id']);
+        $canonical = self::hasCanonicalIdentity($payload);
+        $runId = $canonical
+            ? self::string($payload['orchestration_run_id'] ?? null)
+            : self::firstString($payload, ['run_id', 'original_run_id', 'orchestration_run_id']);
         $correlationRunId = self::string($payload['correlation_run_id'] ?? null) ?? $runId;
         $setId = self::sameAlias($payload, 'set_id', 'orchestration_set_id');
         $dashboardId = self::sameAlias($payload, 'dashboard_id', 'orchestration_dashboard_id');
@@ -83,7 +123,6 @@ final readonly class LineageContext
         $exchange = self::normalizeExchange(self::firstString($payload, ['exchange', 'cex']));
         $marketType = self::normalizeMarketType(self::firstString($payload, ['market_type', 'type_contract']));
         $origin = self::string($payload['origin'] ?? null) ?? self::ORIGIN_ORCHESTRATOR;
-        $canonical = self::hasCanonicalIdentity($payload);
         if ($canonical) {
             self::assertCanonicalPayload($payload);
         }
@@ -330,6 +369,55 @@ final readonly class LineageContext
             throw new LineageContextException('canonical_identity_missing:effective_config');
         }
 
+        $modeId = self::string($payload['mode_id'] ?? null);
+        if (!\in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+            throw new LineageContextException('canonical_identity_invalid:mode_id');
+        }
+        $setupId = self::string($payload['setup_id'] ?? null);
+        if ($setupId === null || !isset(self::MODERN_SETUPS[$setupId])) {
+            throw new LineageContextException('canonical_identity_invalid:setup_id');
+        }
+        $setup = self::MODERN_SETUPS[$setupId];
+        if ($modeId !== $setup['mode']) {
+            throw new LineageContextException('canonical_identity_mismatch:mode_id');
+        }
+        if (self::normalizeSide(self::string($payload['side'] ?? null)) !== $setup['side']) {
+            throw new LineageContextException('canonical_identity_mismatch:side');
+        }
+        if (($payload['mode_version'] ?? null) !== '1.0.0') {
+            throw new LineageContextException('canonical_identity_invalid:mode_version');
+        }
+        if (($payload['setup_version'] ?? null) !== $setup['version']) {
+            throw new LineageContextException('canonical_identity_invalid:setup_version');
+        }
+        foreach (['config_hash', 'condition_catalog_hash'] as $hashField) {
+            if (!\is_string($payload[$hashField] ?? null) || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $payload[$hashField]) !== 1) {
+                throw new LineageContextException('canonical_identity_invalid:' . $hashField);
+            }
+        }
+        if (!\in_array($payload['exchange'] ?? null, ['fake', 'okx', 'hyperliquid'], true)) {
+            throw new LineageContextException('canonical_identity_invalid:exchange');
+        }
+        if (!\in_array($payload['market_type'] ?? null, ['perpetual', 'spot'], true)) {
+            throw new LineageContextException('canonical_identity_invalid:market_type');
+        }
+        if (!\is_string($payload['symbol'] ?? null) || preg_match('/\A[A-Z0-9]{2,32}\z/D', $payload['symbol']) !== 1) {
+            throw new LineageContextException('canonical_identity_invalid:symbol');
+        }
+        foreach (['orchestration_run_id' => 255, 'correlation_run_id' => 96, 'orchestration_set_id' => 96, 'orchestration_dashboard_id' => 96] as $idField => $max) {
+            if (isset($payload[$idField]) && $payload[$idField] !== null && !self::isSafeId($payload[$idField], $max)) {
+                throw new LineageContextException('canonical_identity_invalid:' . $idField);
+            }
+        }
+        if (isset($payload['decision_id']) && $payload['decision_id'] !== null && (!\is_string($payload['decision_id']) || preg_match('/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/D', $payload['decision_id']) !== 1)) {
+            throw new LineageContextException('canonical_identity_invalid:decision_id');
+        }
+        foreach (['decision_key' => 160, 'intent_id' => 96, 'order_id' => 96, 'position_id' => 96, 'trade_id' => 96] as $idField => $max) {
+            if (isset($payload[$idField]) && $payload[$idField] !== null && !self::isSafeId($payload[$idField], $max)) {
+                throw new LineageContextException('canonical_identity_invalid:' . $idField);
+            }
+        }
+
         self::assertSameValues($payload, 'side', ['context_side', 'execution_side'], true);
         self::assertSameValues($payload, 'mode_id', ['requested_mode_id', 'resolved_mode_id', 'validated_mode_id', 'planned_mode_id', 'executed_mode_id', 'analyzed_mode_id']);
         self::assertSameValues($payload, 'mode_version', ['requested_mode_version', 'resolved_mode_version', 'validated_mode_version']);
@@ -370,6 +458,13 @@ final readonly class LineageContext
         }
 
         return $value;
+    }
+
+    private static function isSafeId(mixed $value, int $maxLength): bool
+    {
+        return \is_string($value)
+            && strlen($value) <= $maxLength
+            && preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]*\z/D', $value) === 1;
     }
 
     private static function normalizeSide(?string $side): ?string

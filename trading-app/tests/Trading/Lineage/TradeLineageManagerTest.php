@@ -11,6 +11,7 @@ use App\Entity\TradeLineage;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Lineage\LineageContext;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -89,18 +90,17 @@ final class TradeLineageManagerTest extends KernelTestCase
 
     public function testPersistsExplicitLineageContextColumnsForAuditAndReplay(): void
     {
-        $intent = $this->persistIntent('cid-lineage', 'BTCUSDT', Exchange::BITMART, MarketType::PERPETUAL);
+        $intent = $this->persistIntent('cid-lineage', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
         $longOriginalRunId = 'run-original-' . str_repeat('x', 140);
         $longReplayRunId = 'run-source-' . str_repeat('y', 140);
 
-        $lineage = $this->manager->ensureForIntent($intent, [
-            'internal_trade_id' => 'itd-lineage',
+        $lineage = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload([
+            'trade_id' => 'itd-lineage',
             'run_id' => 'corr-run',
             'correlation_run_id' => 'corr-run',
             'orchestration_run_id' => $longOriginalRunId,
             'orchestration_set_id' => 'set-a',
             'orchestration_dashboard_id' => 'dash-a',
-            'profile' => 'scalper_micro',
             'origin' => 'replay',
             'replay_of_run_id' => $longReplayRunId,
             'replay_of_correlation_id' => 'source-corr',
@@ -111,10 +111,14 @@ final class TradeLineageManagerTest extends KernelTestCase
             'mode_version' => '1.0.0',
             'setup_id' => 'scalping.pullback.long',
             'setup_version' => '1.0.0',
-            'decision_id' => 'decision-1',
+            'decision_id' => '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b',
             'decision_key' => 'decision-key-1',
             'effective_config_reference' => 'effective-config:cfg-1',
-        ]);
+            'side' => 'LONG',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+        ]));
         $this->em->clear();
 
         /** @var TradeLineage $reloaded */
@@ -132,9 +136,35 @@ final class TradeLineageManagerTest extends KernelTestCase
         self::assertSame('1.0.0', $reloaded->getModeVersion());
         self::assertSame('scalping.pullback.long', $reloaded->getSetupId());
         self::assertSame('1.0.0', $reloaded->getSetupVersion());
-        self::assertSame('decision-1', $reloaded->getDecisionId());
+        self::assertSame('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', $reloaded->getDecisionId());
         self::assertSame('decision-key-1', $reloaded->getDecisionKey());
         self::assertSame('effective-config:cfg-1', $reloaded->getEffectiveConfigReference());
+    }
+
+    public function testRejectsRawModernContextInsteadOfPersistingUncheckedDictionary(): void
+    {
+        $intent = $this->persistIntent('cid-raw-modern', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('canonical_identity_typed_context_required');
+
+        $this->manager->ensureForIntent($intent, ['mode_id' => 'scalping']);
+    }
+
+    public function testIdempotentRetryRejectsCanonicalIdentityMismatch(): void
+    {
+        $intent = $this->persistIntent('cid-retry-modern', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+        $payload = $this->canonicalLineagePayload('cid-retry-modern');
+        $first = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+        $same = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+        self::assertSame($first->getId(), $same->getId());
+
+        $payload['config_hash'] = 'sha256:' . str_repeat('c', 64);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:config_hash');
+
+        $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
     }
 
     public function testResolvesOnlyByExactPersistedIdentifiersWithinVenue(): void
@@ -245,5 +275,30 @@ final class TradeLineageManagerTest extends KernelTestCase
         $this->em->flush();
 
         return $intent;
+    }
+
+    /** @return array<string,mixed> */
+    private function canonicalLineagePayload(string $tradeId): array
+    {
+        return [
+            'origin' => 'orchestrator',
+            'orchestration_run_id' => 'run-retry',
+            'correlation_run_id' => 'run-retry',
+            'orchestration_set_id' => 'set-retry',
+            'mode_id' => 'scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'scalping.pullback.long',
+            'setup_version' => '1.0.0',
+            'config_hash' => 'sha256:' . str_repeat('a', 64),
+            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'side' => 'LONG',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'decision_id' => '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b',
+            'decision_key' => 'decision-key-retry',
+            'trade_id' => $tradeId,
+            'effective_config_reference' => 'effective-config:cfg-retry',
+        ];
     }
 }

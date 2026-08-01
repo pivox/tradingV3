@@ -37,6 +37,57 @@ def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
         )
 
 
+@pytest.mark.parametrize("version", ["latest", "^1.0", "1", "1.0", "01.0.0", "1.0.0-rc1"])
+def test_canonical_trading_identity_rejects_non_exact_published_versions(version):
+    payload = _canonical_identity_payload()
+    payload["mode_version"] = version
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+    payload = _canonical_identity_payload()
+    payload["setup_version"] = version
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+@pytest.mark.parametrize("field", ["config_hash", "condition_catalog_hash"])
+@pytest.mark.parametrize("value", ["a" * 64, "sha256:" + "A" * 64, "sha256:" + "a" * 63, "md5:" + "a" * 64])
+def test_canonical_trading_identity_rejects_malformed_hashes(field, value):
+    payload = _canonical_identity_payload()
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"mode_id": "scalper"},
+        {"setup_id": "scalping.unknown.long"},
+        {"mode_id": "day_trading"},
+        {"side": "SHORT"},
+        {"setup_version": "1.0.1"},
+    ],
+)
+def test_canonical_trading_identity_rejects_unknown_or_catalog_mismatched_identity(override):
+    payload = {**_canonical_identity_payload(), **override}
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+def _canonical_identity_payload():
+    return {
+        "mode_id": "scalping",
+        "mode_version": "1.0.0",
+        "setup_id": "scalping.pullback.long",
+        "setup_version": "1.0.0",
+        "config_hash": "sha256:" + "a" * 64,
+        "condition_catalog_hash": "sha256:" + "b" * 64,
+        "side": "LONG",
+        "effective_config_reference": "effective-config:cfg-1",
+    }
+
+
 def test_okx_live_is_forbidden():
     with pytest.raises(ValidationError):
         OrchestratorSet(set_id="x", exchange="okx", dry_run=False)

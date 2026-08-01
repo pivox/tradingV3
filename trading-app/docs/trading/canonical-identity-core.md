@@ -17,6 +17,13 @@ side, config hash, setup version, and condition-catalog hash must equal their ca
 value when present. No canonical mode is derived from `profile`, `mtf_profile`, an
 enabled mode, or `app.trade_entry_default_mode`.
 
+The modern catalog is pinned rather than ranged: the three modern mode IDs and their
+seven compatible setup IDs currently accept only published version `1.0.0`. `latest`,
+version ranges, prereleases, legacy profile IDs, unknown setups, and mode/setup/side
+contradictions are rejected. Hashes are exactly lowercase `sha256:` plus 64 hexadecimal
+characters. Modern exchanges, market types, symbols, correlation identifiers, UUID
+decision IDs, and stage IDs are validated before a request or Messenger identity exists.
+
 `withDecision()`, `withIntent()`, and `withExecution()` create a new context while
 preserving all prior values and hashes. `toArray()`/`fromArray()` are symmetric and do
 not emit mutable profile aliases for modern identities. Messenger logs use the
@@ -24,9 +31,12 @@ redacted representation only.
 
 `trade_lineage` stores the canonical configuration and decision fields in structured
 columns. The migration deliberately keeps them nullable for legacy rows and performs
-no backfill from symbol, time, profile, or JSON metadata. New modern writes are checked
-before persistence. The partial unique decision index prevents two durable modern
-lineages from claiming one decision.
+no backfill from symbol, time, profile, or JSON metadata. New modern writes require a
+typed `LineageContext`; raw dictionaries carrying modern fields are rejected. Creation
+checks the intent venue, market, symbol, and side, while an idempotent retry compares
+every stored canonical contract, hash, run/set, decision, and effective-config field
+before returning an existing row. Non-null stage IDs must also match. The partial unique
+decision index prevents two durable modern lineages from claiming one decision.
 
 ## Migration and rollback
 

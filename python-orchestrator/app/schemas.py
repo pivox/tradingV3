@@ -72,9 +72,17 @@ class CanonicalTradingIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode_id: Literal["day_trading", "scalping", "micro_scalping"]
-    mode_version: str = Field(min_length=1)
-    setup_id: str = Field(min_length=1)
-    setup_version: str = Field(min_length=1)
+    mode_version: Literal["1.0.0"]
+    setup_id: Literal[
+        "day_trading.trend_continuation.long",
+        "day_trading.trend_continuation.short",
+        "scalping.trend_continuation.long",
+        "scalping.pullback.long",
+        "scalping.trend_momentum.short",
+        "micro_scalping.momentum_ofi.long",
+        "micro_scalping.momentum_ofi.short",
+    ]
+    setup_version: Literal["1.0.0"]
     config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     side: Literal["LONG", "SHORT"]
@@ -88,6 +96,17 @@ class CanonicalTradingIdentity(BaseModel):
 
     @model_validator(mode="after")
     def _reject_contradictory_resolution(self) -> "CanonicalTradingIdentity":
+        expected_mode, expected_side = {
+            "day_trading.trend_continuation.long": ("day_trading", "LONG"),
+            "day_trading.trend_continuation.short": ("day_trading", "SHORT"),
+            "scalping.trend_continuation.long": ("scalping", "LONG"),
+            "scalping.pullback.long": ("scalping", "LONG"),
+            "scalping.trend_momentum.short": ("scalping", "SHORT"),
+            "micro_scalping.momentum_ofi.long": ("micro_scalping", "LONG"),
+            "micro_scalping.momentum_ofi.short": ("micro_scalping", "SHORT"),
+        }[self.setup_id]
+        if self.mode_id != expected_mode or self.side != expected_side:
+            raise ValueError("setup_mode_side_mismatch")
         for value in (
             self.requested_mode_id,
             self.resolved_mode_id,
