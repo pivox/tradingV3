@@ -71,6 +71,50 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
         self::assertSame('changed_condition', $changed->payload()['setup']['ast']['confirmations']['nodes'][0]['condition']);
     }
 
+    public function testResolvedConditionCatalogDecisionMatchesCanonicalTopLevelHash(): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $setup = (new EffectiveTradingConfigComposer())->compose($request, $this->layers($request), str_repeat('a', 64))->payload()['setup'];
+
+        self::assertSame(str_repeat('a', 64), $setup['condition_catalog_hash']);
+        self::assertSame('defined', $setup['data_condition_contract']['condition_catalog_hash']['state']);
+        self::assertSame('sha256', $setup['data_condition_contract']['condition_catalog_hash']['unit']);
+        self::assertSame($setup['condition_catalog_hash'], $setup['data_condition_contract']['condition_catalog_hash']['value']);
+    }
+
+    public function testCoherentUnresolvedConditionCatalogReachesNonExecutableRejection(): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $layers = $this->layers($request);
+        $config = $layers[2]->config;
+        $config['setup']['condition_catalog_hash'] = null;
+        $config['setup']['data_condition_contract']['condition_catalog_hash'] = [
+            'state' => 'unresolved', 'value' => null, 'unit' => 'sha256',
+            'source' => 'synthetic unresolved catalog', 'justification' => 'Fail closed.',
+        ];
+        $config['setup']['executable'] = false;
+        $config['setup']['publishable'] = false;
+        $config['setup']['blockers'] = ['condition_catalog_hash_unresolved'];
+        $layers[2] = new TradingConfigLayer('setup', 'scalping.pullback.long@1.0.0', '/setup.yaml', true, $config);
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('blocker-free canonical compiler snapshot');
+        (new EffectiveTradingConfigComposer())->compose($request, $layers, null);
+    }
+
+    public function testConflictingNestedAndTopLevelConditionCatalogHashesReject(): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $layers = $this->layers($request);
+        $config = $layers[2]->config;
+        $config['setup']['data_condition_contract']['condition_catalog_hash']['value'] = str_repeat('b', 64);
+        $layers[2] = new TradingConfigLayer('setup', 'scalping.pullback.long@1.0.0', '/setup.yaml', true, $config);
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('condition catalog hash conflict');
+        (new EffectiveTradingConfigComposer())->compose($request, $layers, str_repeat('a', 64));
+    }
+
     /** @dataProvider supportedTargetProvider */
     public function testEverySupportedTargetRemainsWriteDisabledWithStopLossRequired(string $exchange, string $environment): void
     {
@@ -163,7 +207,7 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
                     'execution' => ['side' => 'long', 'entry_zone' => [], 'invalidation' => [], 'stop' => [], 'targets' => [], 'minimum_net_r' => [], 'time_stop' => [], 'cost_contract' => []],
                 ],
                 'missing_data_policy' => ['absent' => 'reject', 'stale' => 'reject', 'critical' => 'reject'],
-                'data_condition_contract' => ['required_data' => ['ohlcv'], 'missing_conditions' => [], 'external_dependencies' => [], 'condition_catalog_hash' => ['state' => 'defined', 'value' => str_repeat('a', 64)], 'unknown_condition_policy' => 'reject'],
+                'data_condition_contract' => ['required_data' => ['ohlcv'], 'missing_conditions' => [], 'external_dependencies' => [], 'condition_catalog_hash' => ['state' => 'defined', 'value' => str_repeat('a', 64), 'unit' => 'sha256', 'source' => 'synthetic catalog', 'justification' => 'Exact synthetic catalog hash.'], 'unknown_condition_policy' => 'reject'],
                 'validity_window' => ['state' => 'defined'], 'governance' => ['activation_requires_trace' => true],
                 'known_defects' => [], 'ownership_model' => 'setup-contract-ownership-v1',
                 'source_origins' => [['file' => 'synthetic.yaml', 'line_range' => '1-10', 'content_sha256' => str_repeat('e', 64), 'commit' => str_repeat('f', 40)]],

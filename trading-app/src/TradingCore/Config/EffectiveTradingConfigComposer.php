@@ -24,9 +24,6 @@ final class EffectiveTradingConfigComposer
     /** @param list<TradingConfigLayer> $layers */
     public function compose(EffectiveTradingConfigRequest $request, array $layers, ?string $conditionCatalogHash): EffectiveTradingConfigSnapshot
     {
-        if ($conditionCatalogHash === null || preg_match('/^[a-f0-9]{64}$/', $conditionCatalogHash) !== 1) {
-            throw new TradingConfigException('Executable composition requires an exact lowercase SHA-256 condition catalog hash.');
-        }
         if (count($layers) !== count(self::ORDER)) {
             throw new TradingConfigException('Effective runtime resolution requires all six required layers; optional layers and fallback are forbidden.');
         }
@@ -129,7 +126,7 @@ final class EffectiveTradingConfigComposer
         }
     }
 
-    private function assertCompiledSetup(EffectiveTradingConfigRequest $request, TradingConfigLayer $layer, string $conditionCatalogHash): void
+    private function assertCompiledSetup(EffectiveTradingConfigRequest $request, TradingConfigLayer $layer, ?string $conditionCatalogHash): void
     {
         $setup = $this->mapping($layer->config['setup'], 'setup');
         $this->assertExactKeys($setup, [
@@ -139,11 +136,11 @@ final class EffectiveTradingConfigComposer
             'known_defects', 'ownership_model', 'source_origins', 'contract_provenance',
             'contract_hash', 'condition_catalog_hash', 'blockers',
         ], 'Canonical compiled setup payload is incomplete or contains an unknown key');
+        $this->assertConditionCatalogConsistency($setup, $conditionCatalogHash);
         if ($setup['schema_version'] !== 'compiled-setup.v1'
             || $setup['executable'] !== true
             || $setup['publishable'] !== true
             || $setup['blockers'] !== []
-            || $setup['condition_catalog_hash'] !== $conditionCatalogHash
             || !is_string($setup['contract_hash'])
             || preg_match('/^[a-f0-9]{64}$/', $setup['contract_hash']) !== 1) {
             throw new TradingConfigException('Setup layer must be an executable, publishable, blocker-free canonical compiler snapshot with exact hashes.');
@@ -170,6 +167,39 @@ final class EffectiveTradingConfigComposer
                 throw new TradingConfigException(sprintf('Canonical compiled setup execution is missing "%s".', $requiredDecision));
             }
         }
+    }
+
+    /** @param array<string,mixed> $setup */
+    private function assertConditionCatalogConsistency(array $setup, ?string $conditionCatalogHash): void
+    {
+        $dataContract = $this->mapping($setup['data_condition_contract'], 'setup.data_condition_contract');
+        $decision = $this->mapping($dataContract['condition_catalog_hash'] ?? null, 'setup.data_condition_contract.condition_catalog_hash');
+        $this->assertExactKeys($decision, ['state', 'value', 'unit', 'source', 'justification'], 'Compiled condition catalog decision is incomplete or contains an unknown key');
+        $topLevelHash = $setup['condition_catalog_hash'];
+
+        if (($decision['state'] ?? null) === 'defined') {
+            $validHash = static fn (mixed $value): bool => is_string($value) && preg_match('/^[a-f0-9]{64}$/', $value) === 1;
+            if ($decision['unit'] !== 'sha256'
+                || !$validHash($decision['value'])
+                || !$validHash($topLevelHash)
+                || !$validHash($conditionCatalogHash)
+                || $decision['value'] !== $topLevelHash
+                || $topLevelHash !== $conditionCatalogHash) {
+                throw new TradingConfigException('Compiled setup condition catalog hash conflict between nested decision, top-level payload, and effective request.');
+            }
+
+            return;
+        }
+
+        if (($decision['state'] ?? null) === 'unresolved'
+            && $decision['unit'] === 'sha256'
+            && $decision['value'] === null
+            && $topLevelHash === null
+            && $conditionCatalogHash === null) {
+            return;
+        }
+
+        throw new TradingConfigException('Compiled setup condition catalog hash conflict: unresolved state must remain null in every representation.');
     }
 
     /** @param array<string,mixed> $document */
