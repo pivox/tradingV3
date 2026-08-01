@@ -11,6 +11,7 @@ use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContex
 use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Trading\Lineage\LineageContext;
 
 final class EntryZoneCalculator
 {
@@ -40,10 +41,22 @@ final class EntryZoneCalculator
         ?string $decisionKey = null,
         ?string $mode = null,
         ?ExchangeContext $context = null,
+        ?LineageContext $lineageContext = null,
     ): EntryZone
     {
+        if ($lineageContext !== null) {
+            $lineageContext->assertTradeBoundary(
+                $symbol,
+                $side?->value ?? '',
+                $context?->exchange->value,
+                $context?->marketType->value,
+            );
+            if ($decisionKey !== $lineageContext->decisionKey) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+            }
+        }
         // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode);
+        $config = $this->getConfigForMode($mode, $lineageContext?->modeId !== null);
         $post = $config?->getPostValidation() ?? [];
         $postEntryZone = (array)($post['entry_zone'] ?? []);
         $execTf = $post['execution_timeframe']['default'] ?? null;
@@ -185,7 +198,7 @@ final class EntryZoneCalculator
                 min: PHP_FLOAT_MIN,
                 max: PHP_FLOAT_MAX,
                 rationale: 'open zone (invalid width)',
-                metadata: ['timeframe' => $tf, 'pivot' => $pivot, 'k_atr' => $kAtr]
+                metadata: ['timeframe' => $pivotTf, 'pivot' => $pivot, 'k_atr' => $kAtr]
             );
         }
 
@@ -262,7 +275,7 @@ final class EntryZoneCalculator
      * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
      * @return TradeEntryConfig|null
      */
-    private function getConfigForMode(?string $mode): ?TradeEntryConfig
+    private function getConfigForMode(?string $mode, bool $strict = false): ?TradeEntryConfig
     {
         if ($this->configProvider === null) {
             return $this->defaultConfig;
@@ -276,6 +289,9 @@ final class EntryZoneCalculator
         try {
             return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
+            if ($strict) {
+                throw $e;
+            }
             $this->positionsLogger?->warning('entry_zone_calculator.mode_not_found', [
                 'mode' => $resolvedMode,
                 'error' => $e->getMessage(),

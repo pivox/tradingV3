@@ -19,6 +19,8 @@ use App\Logging\LifecycleContextFactory;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\Trading\Lineage\LineageContext;
+use Ramsey\Uuid\Uuid;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -48,7 +50,7 @@ final class TradingDecisionHandler
         private readonly ?DecisionKeyFactory $decisionKeyFactory = null,
     ) {}
 
-    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId): SymbolResultDto
+    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId, ?LineageContext $lineageContext = null): SymbolResultDto
     {
         if ($symbolResult->isError() || $symbolResult->isSkipped()) {
             return $symbolResult;
@@ -58,15 +60,54 @@ final class TradingDecisionHandler
             return $symbolResult;
         }
 
+        $lineageContext ??= $mtfRunDto->lineageContext;
         $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
-        $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
-        $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
+        if ($lineageContext?->modeId !== null) {
+            $lineageContext->assertTradeBoundary(
+                $symbolResult->symbol,
+                (string) $symbolResult->signalSide,
+                $exchangeContext->exchange->value,
+                $exchangeContext->marketType->value,
+                false,
+            )->assertExecutableTradeContract();
+            $resolvedMode = $lineageContext->modeId;
+            $tradeEntryConfig = $this->tradeEntryConfigResolver->resolveExact($resolvedMode);
+        } else {
+            $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
+            $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
+        }
         $decisionKey = $this->generateDecisionKey(
             symbolResult: $symbolResult,
             exchangeContext: $exchangeContext,
             strategyProfile: $resolvedMode,
-            strategyVersion: $tradeEntryConfig->getVersion(),
+            strategyVersion: $lineageContext?->modeId !== null
+                ? (string) $lineageContext->modeVersion
+                : $tradeEntryConfig->getVersion(),
         );
+        if ($lineageContext?->modeId !== null) {
+            $decisionId = $lineageContext->decisionId ?? Uuid::uuid5(
+                Uuid::NAMESPACE_URL,
+                implode('|', [
+                    $lineageContext->orchestrationRunId,
+                    $lineageContext->orchestrationSetId,
+                    $lineageContext->setupId,
+                    $symbolResult->symbol,
+                    $symbolResult->executionTf,
+                    $symbolResult->signalSide,
+                ]),
+            )->toString();
+            $lineageContext = $lineageContext->withDecision(
+                $decisionId,
+                $lineageContext->decisionKey ?? $decisionKey,
+            );
+            $decisionKey = $lineageContext->decisionKey ?? $decisionKey;
+            $lineageContext->assertTradeBoundary(
+                $symbolResult->symbol,
+                (string) $symbolResult->signalSide,
+                $exchangeContext->exchange->value,
+                $exchangeContext->marketType->value,
+            )->assertExecutableTradeContract();
+        }
         // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
         $tradeId = $this->createTradeId($symbolResult->symbol, $decisionKey, $mtfRunDto->options);
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
@@ -153,6 +194,7 @@ final class TradingDecisionHandler
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
             $resolvedMode, // Passer le mode (même mécanisme que validations.{mode}.yaml)
             exchangeContext: $exchangeContext,
+            lineageContext: $lineageContext,
         );
 
         if ($tradeRequest === null) {

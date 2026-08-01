@@ -41,6 +41,21 @@ final class ExecuteOrderPlan
         ?string $executionTf = null
     ): ExecutionResult
     {
+        $identity = $plan->lineageContext;
+        if ($identity !== null) {
+            $identity->assertTradeBoundary(
+                $plan->symbol,
+                $plan->side->value,
+                $plan->exchangeContext?->exchange->value,
+                $plan->exchangeContext?->marketType->value,
+            );
+            if ($decisionKey !== $identity->decisionKey) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+            }
+            if ($mode !== $identity->modeId) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:mode_id');
+            }
+        }
         $this->positionsLogger->info('execute_order_plan.start', [
             'symbol' => $plan->symbol,
             'side' => $plan->side->value,
@@ -56,6 +71,9 @@ final class ExecuteOrderPlan
 
         $intent = null;
         $clientOrderId = null;
+        $intentIdentity = $identity?->withIntent(
+            $identity->intentId ?? 'int:' . substr(hash('sha256', (string) $identity->decisionKey), 0, 48),
+        );
 
         try {
             $useApiFirstExecution = $this->shouldUseApiFirstExecution($plan);
@@ -74,7 +92,9 @@ final class ExecuteOrderPlan
                         'mode' => $mode,
                         'execution_tf' => $executionTf,
                         'plan' => $this->intentPlanPayload($executionPlan),
+                        'canonical_identity' => $executionPlan->canonicalSnapshot(),
                     ],
+                    lineageContext: $intentIdentity,
                 );
 
                 if ($reservation->blocked) {
@@ -119,15 +139,29 @@ final class ExecuteOrderPlan
                 }
 
                 $this->orderIntentManager->markReadyToSend($intent);
-                $this->syncLineageBeforeExecution($intent, $contextBuilder);
+                $this->syncLineageBeforeExecution($intent, $contextBuilder, $intentIdentity);
             }
 
             $result = $useApiFirstExecution
                 ? $this->exchangeExecution->execute($executionPlan, $decisionKey, $mode, $executionTf, $clientOrderId, $intent?->getId(), true)
                 : $this->execution->execute($executionPlan, $decisionKey, $contextBuilder, $mode, $executionTf, $clientOrderId, $intent?->getId(), true);
 
+            if ($intentIdentity !== null && $result->exchangeOrderId !== null) {
+                $submittedIdentity = $intentIdentity->withExecution(
+                    $result->exchangeOrderId,
+                    null,
+                    $intentIdentity->tradeId,
+                );
+                $result = new ExecutionResult(
+                    $result->clientOrderId,
+                    $result->exchangeOrderId,
+                    $result->status,
+                    $result->raw + ['canonical_identity' => $submittedIdentity->toArray()],
+                );
+            }
+
             if ($intent instanceof OrderIntent && $this->orderIntentManager !== null) {
-                $this->syncIntentAfterExecution($intent, $result);
+                $this->syncIntentAfterExecution($intent, $result, $intentIdentity);
             }
 
             $context = [
@@ -231,6 +265,7 @@ final class ExecuteOrderPlan
             'take_profit' => $plan->takeProfit,
             'size' => $plan->size,
             'leverage' => $plan->leverage,
+            'canonical_identity' => $plan->canonicalSnapshot(),
         ];
     }
 
@@ -241,14 +276,14 @@ final class ExecuteOrderPlan
         return $parts[$index] ?? null;
     }
 
-    private function syncIntentAfterExecution(OrderIntent $intent, ExecutionResult $result): void
+    private function syncIntentAfterExecution(OrderIntent $intent, ExecutionResult $result, ?\App\Trading\Lineage\LineageContext $identity = null): void
     {
         if ($this->orderIntentManager === null) {
             return;
         }
 
         try {
-            $this->syncLineageAfterExecution($intent, $result);
+            $this->syncLineageAfterExecution($intent, $result, $identity);
 
             if ($result->exchangeOrderId !== null && $this->shouldMarkIntentSent($result)) {
                 $this->orderIntentManager->markAsSent($intent, $result->exchangeOrderId);
@@ -276,14 +311,14 @@ final class ExecuteOrderPlan
         }
     }
 
-    private function syncLineageBeforeExecution(OrderIntent $intent, ?LifecycleContextBuilder $contextBuilder): void
+    private function syncLineageBeforeExecution(OrderIntent $intent, ?LifecycleContextBuilder $contextBuilder, ?\App\Trading\Lineage\LineageContext $identity = null): void
     {
         if ($this->tradeLineageManager === null) {
             return;
         }
 
         try {
-            $lineage = $this->tradeLineageManager->ensureForIntent($intent, $contextBuilder?->toArray() ?? []);
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent, $identity ?? ($contextBuilder?->toArray() ?? []));
             $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('execute_order_plan.lineage_pre_submit_sync_failed', [
@@ -294,14 +329,14 @@ final class ExecuteOrderPlan
         }
     }
 
-    private function syncLineageAfterExecution(OrderIntent $intent, ExecutionResult $result): void
+    private function syncLineageAfterExecution(OrderIntent $intent, ExecutionResult $result, ?\App\Trading\Lineage\LineageContext $identity = null): void
     {
         if ($this->tradeLineageManager === null) {
             return;
         }
 
         try {
-            $lineage = $this->tradeLineageManager->ensureForIntent($intent);
+            $lineage = $this->tradeLineageManager->ensureForIntent($intent, $identity ?? []);
             $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('execute_order_plan.lineage_sync_failed', [

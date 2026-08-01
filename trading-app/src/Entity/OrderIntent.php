@@ -12,6 +12,7 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
+use App\Trading\Lineage\LineageContext;
 
 #[ORM\Entity(repositoryClass: OrderIntentRepository::class)]
 #[ORM\Table(name: 'order_intent')]
@@ -157,6 +158,43 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
 
     #[ORM\Column(name: 'config_hash', type: Types::STRING, length: 128, nullable: true)]
     private ?string $configHash = null;
+
+    #[ORM\Column(name: 'mode_id', length: 64, nullable: true)]
+    private ?string $modeId = null;
+
+    #[ORM\Column(name: 'mode_version', length: 32, nullable: true)]
+    private ?string $modeVersion = null;
+
+    #[ORM\Column(name: 'setup_id', length: 128, nullable: true)]
+    private ?string $setupId = null;
+
+    #[ORM\Column(name: 'setup_version', length: 32, nullable: true)]
+    private ?string $setupVersion = null;
+
+    #[ORM\Column(name: 'condition_catalog_hash', length: 128, nullable: true)]
+    private ?string $conditionCatalogHash = null;
+
+    #[ORM\Column(name: 'canonical_side', length: 8, nullable: true)]
+    private ?string $canonicalSide = null;
+
+    #[ORM\Column(name: 'decision_id', length: 36, nullable: true)]
+    private ?string $decisionId = null;
+
+    #[ORM\Column(name: 'intent_id', length: 96, nullable: true)]
+    private ?string $intentId = null;
+
+    #[ORM\Column(name: 'canonical_position_id', length: 96, nullable: true)]
+    private ?string $canonicalPositionId = null;
+
+    #[ORM\Column(name: 'trade_id', length: 96, nullable: true)]
+    private ?string $tradeId = null;
+
+    #[ORM\Column(name: 'effective_config_reference', length: 255, nullable: true)]
+    private ?string $effectiveConfigReference = null;
+
+    /** @var array<string,mixed>|null */
+    #[ORM\Column(name: 'effective_config_snapshot', type: Types::JSON, nullable: true, options: ['jsonb' => true])]
+    private ?array $effectiveConfigSnapshot = null;
 
     #[ORM\Column(type: Types::STRING, length: 500, nullable: true)]
     private ?string $failureReason = null; // Raison de l'échec
@@ -618,6 +656,60 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
     {
         return $this->configHash;
     }
+
+    public function applyLineageContext(LineageContext $context): self
+    {
+        $context->assertTradeBoundary($context->symbol ?? '', $context->side ?? '');
+        $this->modeId = $context->modeId;
+        $this->modeVersion = $context->modeVersion;
+        $this->setupId = $context->setupId;
+        $this->setupVersion = $context->setupVersion;
+        $this->configHash = $context->configHash;
+        $this->conditionCatalogHash = $context->conditionCatalogHash;
+        $this->canonicalSide = $context->side;
+        $this->decisionId = $context->decisionId;
+        $this->decisionKey = $context->decisionKey;
+        $this->intentId = $context->intentId;
+        $this->canonicalPositionId = $context->positionId;
+        $this->tradeId = $context->tradeId;
+        $this->effectiveConfigReference = $context->effectiveConfigReference;
+        $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot;
+        $this->exchange = $context->exchange ?? $this->exchange;
+        $this->marketType = $context->marketType ?? $this->marketType;
+        $this->symbol = $context->symbol ?? $this->symbol;
+        $this->orchestrationRunId = $context->orchestrationRunId;
+        $this->correlationRunId = $context->correlationRunId;
+        $this->orchestrationSetId = $context->orchestrationSetId;
+        $this->orchestrationDashboardId = $context->orchestrationDashboardId;
+        $this->origin = $context->origin;
+        $this->attemptNumber = $context->attemptNumber;
+
+        return $this->touch();
+    }
+
+    public function hasCompleteCanonicalIdentity(): bool
+    {
+        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->configHash, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->decisionKey] as $value) {
+            if ($value === null || $value === '') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public function getModeId(): ?string { return $this->modeId; }
+    public function getModeVersion(): ?string { return $this->modeVersion; }
+    public function getSetupId(): ?string { return $this->setupId; }
+    public function getSetupVersion(): ?string { return $this->setupVersion; }
+    public function getConditionCatalogHash(): ?string { return $this->conditionCatalogHash; }
+    public function getCanonicalSide(): ?string { return $this->canonicalSide; }
+    public function getDecisionId(): ?string { return $this->decisionId; }
+    public function getIntentId(): ?string { return $this->intentId; }
+    public function getCanonicalPositionId(): ?string { return $this->canonicalPositionId; }
+    public function getTradeId(): ?string { return $this->tradeId; }
+    public function getEffectiveConfigReference(): ?string { return $this->effectiveConfigReference; }
+    /** @return array<string,mixed>|null */
+    public function getEffectiveConfigSnapshot(): ?array { return $this->effectiveConfigSnapshot; }
 
     public function setConfigHash(?string $configHash): self
     {

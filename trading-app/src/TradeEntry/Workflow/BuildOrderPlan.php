@@ -25,6 +25,10 @@ final class BuildOrderPlan
 
     public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
     {
+        $identity = $req->lineageContext?->modeId !== null ? $req->canonicalIdentity() : null;
+        if ($identity !== null && $decisionKey !== $identity->decisionKey) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+        }
         $this->positionsLogger->info('build_order_plan.start', [
             'symbol' => $req->symbol,
             'side' => $req->side->value,
@@ -40,7 +44,9 @@ final class BuildOrderPlan
             side: $req->side,
             pricePrecision: $pre->pricePrecision,
             decisionKey: $decisionKey,
+            mode: $identity?->modeId,
             context: $req->exchangeContext,
+            lineageContext: $identity,
         );
         $plan = $this->box->create($req, $pre, $decisionKey, $zone);
         $candidate = $plan->entry > 0.0 ? $plan->entry : ($req->side === Side::Long ? $pre->bestAsk : $pre->bestBid);

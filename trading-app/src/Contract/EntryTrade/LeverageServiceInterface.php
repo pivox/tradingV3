@@ -16,6 +16,7 @@ interface LeverageServiceInterface
         int $maxLeverage,
         ?float $stopPct = null,
         ?float $atr5mValue = null,
-        ?string $executionTf = null
+        ?string $executionTf = null,
+        ?string $mode = null,
     ): int;
 }

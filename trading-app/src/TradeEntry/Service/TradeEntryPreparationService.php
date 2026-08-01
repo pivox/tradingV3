@@ -38,6 +38,15 @@ final readonly class TradeEntryPreparationService
         ?string $paperCellId = null,
         ?string $sourceEventId = null,
     ): PreparedTradeEntry {
+        if ($request->lineageContext?->modeId !== null) {
+            $identity = $request->canonicalIdentity();
+            if ($decisionKey !== $identity->decisionKey) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+            }
+            if ($mode !== $identity->modeId) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:mode_id');
+            }
+        }
         $tradeId = $this->tradeId($request->symbol, $decisionKey, $internalTradeId, $paperCellId, $sourceEventId);
         $lifecycle->withDecisionKey($decisionKey)->withProfile($mode)->withInternalTradeId($tradeId)->withTradeId($tradeId);
 
@@ -52,7 +61,9 @@ final readonly class TradeEntryPreparationService
             }
         }
 
-        $config = $this->configResolver->resolve($mode);
+        $config = $request->lineageContext?->modeId !== null
+            ? $this->configResolver->resolveExact($mode)
+            : $this->configResolver->resolve($mode);
         $preflight = ($this->preflight)($request, $decisionKey);
         try {
             $plan = ($this->planner)($request, $preflight, $decisionKey);

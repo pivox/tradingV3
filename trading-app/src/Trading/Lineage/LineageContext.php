@@ -285,6 +285,72 @@ final readonly class LineageContext
         return $this->copy(orderId: $orderId, positionId: $positionId, tradeId: $tradeId);
     }
 
+    public function assertTradeBoundary(
+        string $symbol,
+        string $side,
+        ?string $exchange = null,
+        ?string $marketType = null,
+        bool $requireDecision = true,
+    ): self {
+        if ($this->modeId === null || $this->setupId === null) {
+            throw new LineageContextException('canonical_identity_missing:modern_contract');
+        }
+        $checks = [
+            'symbol' => [self::normalizeSymbol($symbol), $this->symbol],
+            'side' => [self::normalizeSide($side), $this->side],
+            'exchange' => [$exchange === null ? null : self::normalizeExchange($exchange), $this->exchange],
+            'market_type' => [$marketType === null ? null : self::normalizeMarketType($marketType), $this->marketType],
+        ];
+        foreach ($checks as $field => [$actual, $expected]) {
+            if ($actual !== null && $actual !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+        if ($requireDecision) {
+            foreach (['decisionId' => $this->decisionId, 'decisionKey' => $this->decisionKey] as $field => $value) {
+                if ($value === null) {
+                    throw new LineageContextException('canonical_identity_missing:' . $field);
+                }
+            }
+        }
+
+        return $this;
+    }
+
+    public function assertExecutableTradeContract(): self
+    {
+        $snapshot = $this->effectiveConfigSnapshot;
+        if ($snapshot === null) {
+            throw new LineageContextException('canonical_identity_missing:effective_config_snapshot');
+        }
+        if (($snapshot['executable'] ?? false) !== true) {
+            throw new LineageContextException('canonical_contract_not_executable');
+        }
+        foreach (['config_hash' => $this->configHash, 'condition_catalog_hash' => $this->conditionCatalogHash] as $field => $expected) {
+            if (($snapshot[$field] ?? null) !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+        $request = $snapshot['request'] ?? null;
+        if (!\is_array($request)) {
+            throw new LineageContextException('canonical_identity_missing:effective_config_request');
+        }
+        foreach ([
+            'mode_id' => $this->modeId,
+            'mode_version' => $this->modeVersion,
+            'setup_id' => $this->setupId,
+            'setup_version' => $this->setupVersion,
+            'exchange' => $this->exchange,
+            'side' => strtolower((string) $this->side),
+        ] as $field => $expected) {
+            if (($request[$field] ?? null) !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+
+        return $this;
+    }
+
     /**
      * @return array<string,mixed>
      */

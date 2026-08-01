@@ -78,6 +78,7 @@ final class TradeEntryService
         ?string $runId = null,
         ?string $tradeId = null,
     ): ExecutionResult {
+        $this->assertCanonicalRequest($request, $decisionKey, $mode);
         // Correlation key for logs across steps (allow external propagation)
         if ($decisionKey === null) {
             try {
@@ -144,7 +145,9 @@ final class TradeEntryService
             ]);
         }
 
-        $entryConfig = $this->tradeEntryConfigResolver->resolve($mode);
+        $entryConfig = $request->lineageContext?->modeId !== null
+            ? $this->tradeEntryConfigResolver->resolveExact((string) $mode)
+            : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
 
         $this->positionsLogger->info('order_journey.trade_entry.preflight_start', [
@@ -368,6 +371,7 @@ final class TradeEntryService
         ?string $runId = null,
         ?string $tradeId = null,
     ): ExecutionResult {
+        $this->assertCanonicalRequest($request, $decisionKey, $mode);
         if ($decisionKey === null) {
             try {
                 $decisionKey = sprintf('te:%s:%s', $request->symbol, bin2hex(random_bytes(6)));
@@ -382,7 +386,9 @@ final class TradeEntryService
             'reason' => 'simulate_trade_entry',
         ]);
 
-        $entryConfig = $this->tradeEntryConfigResolver->resolve($mode);
+        $entryConfig = $request->lineageContext?->modeId !== null
+            ? $this->tradeEntryConfigResolver->resolveExact((string) $mode)
+            : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
 
         // Run preflight and planning only (no execution)
@@ -503,6 +509,20 @@ final class TradeEntryService
         return $result;
     }
 
+    private function assertCanonicalRequest(TradeEntryRequest $request, ?string $decisionKey, ?string $mode): void
+    {
+        if ($request->lineageContext?->modeId === null) {
+            return;
+        }
+        $identity = $request->canonicalIdentity();
+        if ($decisionKey !== $identity->decisionKey) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+        }
+        if ($mode !== $identity->modeId) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:mode_id');
+        }
+    }
+
     /**
      * @param array<string,mixed>|null $extra
      */
@@ -535,6 +555,7 @@ final class TradeEntryService
                 extra: $payload,
                 exchange: ExchangeContext::exchangeValue($request->exchangeContext),
                 marketType: ExchangeContext::marketTypeValue($request->exchangeContext),
+                lineageContext: $request->lineageContext,
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_lifecycle.skip_log_failed', [
@@ -756,6 +777,17 @@ final class TradeEntryService
                 ]);
             }
 
+            $submittedIdentity = $request->lineageContext;
+            if ($submittedIdentity?->modeId !== null) {
+                $submittedIdentity = $submittedIdentity->withIntent(
+                    $submittedIdentity->intentId ?? 'int:' . substr(hash('sha256', (string) $submittedIdentity->decisionKey), 0, 48),
+                )->withExecution(
+                    (string) $result->exchangeOrderId,
+                    null,
+                    $submittedIdentity->tradeId,
+                );
+            }
+
             $this->tradeLifecycleLogger->logOrderSubmitted(
                 symbol: $plan->symbol,
                 orderId: (string) $result->exchangeOrderId,
@@ -770,6 +802,7 @@ final class TradeEntryService
                 timeframe: $request->executionTf,
                 configProfile: $mode,
                 marketType: ExchangeContext::marketTypeValue($request->exchangeContext),
+                lineageContext: $submittedIdentity,
             );
         } catch (\Throwable $e) {
             $this->positionsLogger->warning('trade_lifecycle.submit_log_failed', [

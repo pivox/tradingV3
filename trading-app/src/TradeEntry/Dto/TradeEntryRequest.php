@@ -5,6 +5,8 @@ namespace App\TradeEntry\Dto;
 
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Types\Side;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 
 final class TradeEntryRequest
 {
@@ -41,5 +43,21 @@ final class TradeEntryRequest
         public readonly ?ExchangeContext $exchangeContext = null,
         public readonly float $makerRate = 0.0,
         public readonly float $takerRate = 0.0,
+        public readonly ?LineageContext $lineageContext = null,
     ) {}
+
+    public function canonicalIdentity(bool $requireDecision = true): LineageContext
+    {
+        if (!$this->lineageContext instanceof LineageContext) {
+            throw new LineageContextException('canonical_identity_missing:lineage_context');
+        }
+
+        return $this->lineageContext->assertTradeBoundary(
+            $this->symbol,
+            $this->side->value,
+            $this->exchangeContext?->exchange->value,
+            $this->exchangeContext?->marketType->value,
+            $requireDecision,
+        )->assertExecutableTradeContract();
+    }
 }

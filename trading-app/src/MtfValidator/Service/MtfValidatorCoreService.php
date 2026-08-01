@@ -13,6 +13,7 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
 use App\Provider\Context\ExchangeContext;
+use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -140,6 +141,10 @@ class MtfValidatorCoreService
             indicatorsByTimeframe: $indicatorsByTimeframe,
             contextDecision: $contextDecision,
             exchangeContext: $exchangeContext,
+            lineageContext: $input->lineageContext,
+            selectorMetrics: $input->lineageContext?->modeId !== null
+                ? new ExecutionSelectorMetrics($input->lineageContext, $indicatorsByTimeframe)
+                : null,
         );
 
         $result = $this->buildResultExecution(

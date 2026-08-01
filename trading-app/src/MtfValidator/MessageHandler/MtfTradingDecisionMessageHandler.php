@@ -69,7 +69,7 @@ final class MtfTradingDecisionMessageHandler
             tradeEntryModeUsed: null
         );
 
-        $decisionResult = $this->tradingDecisionHandler->handleTradingDecision($symbolResult, $mtfRunDto, $message->runId);
+        $decisionResult = $this->tradingDecisionHandler->handleTradingDecision($symbolResult, $mtfRunDto, $message->runId, $identity);
 
         $this->mtfLogger->info('[MTF Messenger] Trading decision processed', [
             'run_id' => $message->runId,

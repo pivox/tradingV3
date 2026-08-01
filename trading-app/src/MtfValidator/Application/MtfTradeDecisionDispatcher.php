@@ -120,6 +120,7 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 'config_hash' => $request->lineageContext->configHash,
                 'lineage_context' => $request->lineageContext->toArray(),
             ],
+            lineageContext: $request->lineageContext,
         );
     }
 }

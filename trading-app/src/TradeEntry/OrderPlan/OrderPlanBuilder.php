@@ -630,6 +630,7 @@ final class OrderPlanBuilder
             $stopPct,
             $atr15m,
             $req->executionTf,
+            $req->lineageContext?->modeId,
         );
 
         $leverageMultiplier = $req->leverageMultiplier ?? 1.0;
@@ -791,6 +792,7 @@ final class OrderPlanBuilder
             stopPivot: $stopPivot,
             stopFinalSource: $stopFinalSource,
             exchangeContext: $req->exchangeContext,
+            lineageContext: $req->lineageContext,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

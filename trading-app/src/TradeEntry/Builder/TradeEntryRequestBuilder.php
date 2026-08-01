@@ -7,6 +7,7 @@ use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContex
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
+use App\Trading\Lineage\LineageContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -36,6 +37,7 @@ final class TradeEntryRequestBuilder
      * @param string|null $mode         Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return TradeEntryRequest|null
      */
+    /** @param array<string,mixed>|null $metrics */
     public function fromMtfSignal(
         string $symbol,
         string $signalSide,
@@ -45,17 +47,28 @@ final class TradeEntryRequestBuilder
         ?string $mode = null,
         ?array $metrics = null,
         ?ExchangeContext $exchangeContext = null,
+        ?LineageContext $lineageContext = null,
     ): ?TradeEntryRequest {
         $side = strtoupper((string)$signalSide);
         if (!in_array($side, ['LONG', 'SHORT'], true)) {
             return null;
         }
 
+        if ($lineageContext?->modeId !== null) {
+            $lineageContext->assertTradeBoundary(
+                $symbol,
+                $side,
+                $exchangeContext?->exchange->value,
+                $exchangeContext?->marketType->value,
+            )->assertExecutableTradeContract();
+            $mode = $lineageContext->modeId;
+        }
+
         $price = $price ?? null;
         $atr = $atr ?? null;
 
         // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode);
+        $config = $this->getConfigForMode($mode, $lineageContext?->modeId !== null);
         if (!is_string($executionTf) || $executionTf === '') {
             throw new \InvalidArgumentException(
                 sprintf(
@@ -253,6 +266,7 @@ final class TradeEntryRequestBuilder
             exchangeContext: $exchangeContext,
             makerRate: $makerRate,
             takerRate: $takerRate,
+            lineageContext: $lineageContext,
         );
     }
 
@@ -261,13 +275,16 @@ final class TradeEntryRequestBuilder
      * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping')
      * @return TradeEntryConfig
      */
-    private function getConfigForMode(?string $mode): TradeEntryConfig
+    private function getConfigForMode(?string $mode, bool $strict = false): TradeEntryConfig
     {
         $resolvedMode = $this->modeContext->resolve($mode);
 
         try {
             return $this->configProvider->getConfigForMode($resolvedMode);
         } catch (\RuntimeException $e) {
+            if ($strict) {
+                throw $e;
+            }
             $this->positionsLogger->warning('trade_entry_request_builder.mode_not_found', [
                 'mode' => $resolvedMode,
                 'error' => $e->getMessage(),
