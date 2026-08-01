@@ -64,6 +64,7 @@ final class PaperExecutionReplayCommand extends Command
             }
             $eligibility = (new PaperProfileRegistry())->require($profile);
             $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
+            $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
             $this->store->registerSnapshot($snapshot);
             $this->store->registerCell($cell, $eligibility);
             if ($manifest->eventsFileSha256 === null) {

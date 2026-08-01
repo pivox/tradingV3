@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Execution\Fake;
 use App\Common\Enum\Exchange;
 use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
+use App\TradeEntry\Dto\PreparedTradeEntry;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedDecision;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
@@ -19,10 +20,38 @@ final readonly class PaperFakeEffectDispatcher
     ) {
     }
 
+    public function prepare(PreparedTradeEntry $prepared): PreparedTradeEntry
+    {
+        if ($prepared->plan === null) {
+            return $prepared;
+        }
+        $plan = $this->execution->preparePlan(
+            $prepared->plan,
+            $prepared->mode,
+            $prepared->executionTimeframe,
+            $prepared->decisionKey,
+        );
+        $prepared->lifecycle->merge(['paper_standard_plan_prepared' => true]);
+
+        return new PreparedTradeEntry(
+            $plan,
+            null,
+            $prepared->decisionKey,
+            $prepared->internalTradeId,
+            $prepared->lifecycle,
+            $prepared->mode,
+            $prepared->executionTimeframe,
+            $prepared->preflight,
+        );
+    }
+
     public function dispatch(PaperFakeRuntime $runtime, PaperPreparedDecision $decision): PaperFakeDispatchResult
     {
         if ($runtime->adapter->exchange() !== Exchange::FAKE || $decision->prepared->plan === null) {
             throw new \InvalidArgumentException('paper_execution_exchange_must_be_fake');
+        }
+        if (($decision->prepared->lifecycle->toArray()['paper_standard_plan_prepared'] ?? null) !== true) {
+            throw new \LogicException('paper_standard_plan_preparation_required');
         }
         $cursor = $runtime->eventCursor();
         $result = $this->execution->executeOnAdapter(

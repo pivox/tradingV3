@@ -15,6 +15,8 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 {
+    public int $registrationWrites = 0;
+
     /** @var array<int, PaperMarketEvent> */
     private array $sources = [];
     /** @var array<string, PaperPendingEffect> */
@@ -31,10 +33,11 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     /** @var array{dataset_id: string, events_file_sha256: string}|null */
     private ?array $datasetIdentity = null;
 
-    public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void {}
-    public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void {}
+    public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void { ++$this->registrationWrites; }
+    public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void { ++$this->registrationWrites; }
     public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void
     {
+        ++$this->registrationWrites;
         $identity = ['dataset_id' => $datasetId, 'events_file_sha256' => $eventsFileSha256];
         if ($this->datasetIdentity !== null && $this->datasetIdentity !== $identity) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');

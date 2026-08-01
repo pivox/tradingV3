@@ -23,8 +23,6 @@ final class PaperMtfStrategyBridge implements PaperStrategyPreparationInterface
     /** @var \Closure(MtfRunResponseDto, PaperExecutionCell, PaperMarketEvent): ?PreparedTradeEntry */
     private readonly \Closure $preparationResolver;
 
-    private ?string $cacheCellId = null;
-
     /** @param callable(MtfRunResponseDto, PaperExecutionCell, PaperMarketEvent): ?PreparedTradeEntry $preparationResolver */
     public function __construct(
         private readonly MtfValidatorInterface $validator,
@@ -45,10 +43,7 @@ final class PaperMtfStrategyBridge implements PaperStrategyPreparationInterface
             return null;
         }
 
-        if ($this->cacheCellId !== $cell->id) {
-            $this->indicators?->clearCaches();
-            $this->cacheCellId = $cell->id;
-        }
+        $this->indicators?->clearCaches();
 
         foreach ($this->validator->getListTimeframe($cell->strategyProfile) as $timeframeValue) {
             if (!is_string($timeframeValue)) {

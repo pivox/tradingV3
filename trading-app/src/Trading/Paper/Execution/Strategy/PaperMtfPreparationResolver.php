@@ -9,24 +9,17 @@ use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
-use App\Logging\LifecycleContextFactory;
+use App\Logging\Dto\LifecycleContextBuilder;
 use App\Provider\Context\ExchangeContext;
-use App\TradeEntry\Builder\TradeEntryRequestBuilder;
 use App\TradeEntry\Dto\PreparedTradeEntry;
-use App\TradeEntry\Service\TradeEntryPreparationService;
+use App\TradeEntry\OrderPlan\OrderPlanModel;
+use App\TradeEntry\Types\Side;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
-use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final readonly class PaperMtfPreparationResolver
 {
-    public function __construct(
-        private TradeEntryRequestBuilder $requests,
-        private TradeEntryPreparationService $tradeEntry,
-        private LifecycleContextFactory $lifecycleContexts,
-        private PaperKlineProvider $klines,
-    ) {
-    }
+    public const MODEL_VERSION = 'paper-prudent-plan-v1';
 
     public function __invoke(MtfRunResponseDto $response, PaperExecutionCell $cell, PaperMarketEvent $event): ?PreparedTradeEntry
     {
@@ -45,40 +38,83 @@ final readonly class PaperMtfPreparationResolver
             return null;
         }
 
-        $timeframe = Timeframe::tryFrom($tradable->executionTimeframe);
-        if ($timeframe === null) {
+        if (Timeframe::tryFrom($tradable->executionTimeframe) === null) {
             throw new \LogicException('paper_mtf_timeframe_invalid');
         }
-        $last = $this->klines->getLastKline($event->symbol, $timeframe);
-        $atr = $last === null ? null : (float) (string) $last->high->minus($last->low);
-        $close = $event->payload['close'] ?? null;
-        $price = is_string($close) && is_numeric($close) ? (float) $close : null;
-        $request = $this->requests->fromMtfSignal(
-            $event->symbol,
-            $tradable->side,
-            $tradable->executionTimeframe,
-            $price,
-            $atr !== null && $atr > 0.0 ? $atr : null,
-            $cell->strategyProfile,
-            exchangeContext: new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
-        );
-        if ($request === null) {
+        $side = Side::tryFrom(strtolower($tradable->side));
+        if ($side === null) {
+            throw new \LogicException('paper_mtf_side_invalid');
+        }
+        $entry = $this->positivePrice($event->payload['close'] ?? null);
+        $high = $this->positivePrice($event->payload['high'] ?? null);
+        $low = $this->positivePrice($event->payload['low'] ?? null);
+        if ($low > $entry || $high < $entry || $low > $high) {
+            throw new \LogicException('paper_prudent_plan_candle_invalid');
+        }
+        $risk = max($high - $low, $entry * 0.005);
+        $stop = $side === Side::Long ? $entry - $risk : $entry + $risk;
+        $takeProfit = $side === Side::Long ? $entry + $risk : $entry - $risk;
+        if ($stop <= 0.0 || $takeProfit <= 0.0) {
             return null;
         }
         $decisionKey = 'paper:' . hash('sha256', $cell->id . '|' . $event->eventId . '|' . strtolower($tradable->side));
-        $lifecycle = $this->lifecycleContexts->create($event->symbol)->merge([
+        $tradeId = 'ptrd:' . hash('sha256', $cell->id . '|' . $event->eventId . '|' . $decisionKey);
+        $lifecycle = (new LifecycleContextBuilder($event->symbol))->merge([
             'run_id' => $cell->runId,
             'config_hash' => $cell->configurationSnapshotId,
             'origin' => 'replay',
+            'decision_key' => $decisionKey,
+            'trade_id' => $tradeId,
+            'internal_trade_id' => $tradeId,
+            'profile' => $cell->strategyProfile,
+            'paper_plan_model' => self::MODEL_VERSION,
         ]);
 
-        return $this->tradeEntry->prepare(
-            $request,
+        return new PreparedTradeEntry(
+            new OrderPlanModel(
+                symbol: $event->symbol,
+                side: $side,
+                orderType: 'market',
+                openType: 'isolated',
+                orderMode: 1,
+                entry: $entry,
+                stop: $stop,
+                takeProfit: $takeProfit,
+                size: 1,
+                leverage: 1,
+                pricePrecision: 8,
+                contractSize: 1.0,
+                entryZoneLow: $entry,
+                entryZoneHigh: $entry,
+                zoneExpiresAt: $event->exchangeTimestamp->modify('+180 seconds'),
+                entryZoneMeta: [
+                    'model_version' => self::MODEL_VERSION,
+                    'cell_id' => $cell->id,
+                    'source_event_id' => $event->eventId,
+                ],
+                stopRisk: $risk,
+                stopFinalSource: self::MODEL_VERSION,
+                exchangeContext: new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL),
+            ),
+            null,
             $decisionKey,
-            $cell->strategyProfile,
+            $tradeId,
             $lifecycle,
-            paperCellId: $cell->id,
-            sourceEventId: $event->eventId,
+            $cell->strategyProfile,
+            $tradable->executionTimeframe,
         );
+    }
+
+    private function positivePrice(mixed $value): float
+    {
+        if (!is_string($value) || !is_numeric($value)) {
+            throw new \LogicException('paper_prudent_plan_candle_invalid');
+        }
+        $price = (float) $value;
+        if (!is_finite($price) || $price <= 0.0) {
+            throw new \LogicException('paper_prudent_plan_candle_invalid');
+        }
+
+        return $price;
     }
 }

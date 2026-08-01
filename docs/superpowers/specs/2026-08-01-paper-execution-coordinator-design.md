@@ -100,6 +100,22 @@ verified Paper event
 No network client belongs to this graph. Market acquisition remains upstream
 of the coordinator, and the execution adapter is always Fake.
 
+### Deterministic prudent plan model
+
+Reference-only Paper decisions use the versioned `paper-prudent-plan-v1`
+preparation model. It has no account, credential, HTTP, lock or exchange-state
+dependency: its only price inputs are the normalized decision candle and the
+explicit execution cell. Entry is the candle close; risk is the greater of the
+full candle range and 0.5% of entry; stop and take profit are symmetric at one
+risk unit; and base size and leverage are both one.
+
+The standard order-mode and execution-timeframe plan preparation is then
+applied exactly once before Phase 1 persists the prepared intent. Phase 2
+dispatches those exact durable plan bytes to the Fake adapter and rejects any
+effect that did not pass that preparation marker. This model remains
+`reference_only`; it validates coordinator mechanics and does not define or
+tune a modern baseline strategy.
+
 ## Immutable configuration snapshots
 
 ### Canonical envelope

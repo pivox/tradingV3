@@ -162,15 +162,6 @@ services:
             $core: '@paper.execution.mtf_validator_core'
             $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
 
-    paper.execution.trade_entry_preparation:
-        class: App\TradeEntry\Service\TradeEntryPreparationService
-        arguments:
-            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
-
-    App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver:
-        arguments:
-            $tradeEntry: '@paper.execution.trade_entry_preparation'
-
     App\Indicator\Provider\IndicatorProviderService:
         arguments:
             $fakeKlineProvider: '@App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter'

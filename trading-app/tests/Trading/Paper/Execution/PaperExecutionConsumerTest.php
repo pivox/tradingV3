@@ -25,6 +25,7 @@ final class PaperExecutionConsumerTest extends TestCase
         $coordinator = new class($store) implements PaperEventCoordinatorInterface {
             /** @var list<int> */ public array $positions = [];
             public function __construct(private InMemoryPaperExecutionStore $store) {}
+            public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void {}
             public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
             {
                 $this->positions[] = $sourcePosition;

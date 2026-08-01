@@ -10,6 +10,9 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 interface PaperEventCoordinatorInterface
 {
+    /** @param list<string> $symbols */
+    public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void;
+
     public function consumeAt(
         PaperExecutionCell $cell,
         PaperProfileEligibility $eligibility,

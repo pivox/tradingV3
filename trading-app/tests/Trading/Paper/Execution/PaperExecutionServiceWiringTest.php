@@ -18,7 +18,6 @@ use App\MtfValidator\Service\TimeframeValidationService;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
-use App\TradeEntry\Service\TradeEntryPreparationService;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -47,10 +46,7 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         self::assertInstanceOf(PaperReplayClock::class, $runtimeClock);
         self::assertSame($readerClock, $runtimeClock, 'Replay reader and Fake matching must share dataset time.');
         $resolver = $container->get(PaperMtfPreparationResolver::class);
-        $preparation = (new \ReflectionProperty(PaperMtfPreparationResolver::class, 'tradeEntry'))->getValue($resolver);
-        self::assertInstanceOf(TradeEntryPreparationService::class, $preparation);
-        $preparationClock = (new \ReflectionProperty(TradeEntryPreparationService::class, 'clock'))->getValue($preparation);
-        self::assertSame($readerClock, $preparationClock, 'Paper fallback TTL must use dataset time.');
+        self::assertSame(0, (new \ReflectionClass($resolver))->getConstructor()?->getNumberOfParameters() ?? 0, 'Paper preparation must have no ambient account, HTTP, lock, or exchange dependency.');
         $strategy = $container->get(\App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge::class);
         $validator = (new \ReflectionProperty($strategy, 'validator'))->getValue($strategy);
         self::assertInstanceOf(MtfValidatorService::class, $validator);

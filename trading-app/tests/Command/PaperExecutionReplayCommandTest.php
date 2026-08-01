@@ -110,6 +110,44 @@ final class PaperExecutionReplayCommandTest extends TestCase
         self::assertSame($first->eventId, $checkpoint->eventId);
     }
 
+    public function testSafetyGuardRunsBeforeAnyPaperStateRegistration(): void
+    {
+        $root = (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()) . '/paper_command_guard_' . bin2hex(random_bytes(5));
+        $dataset = $root . '/dataset';
+        try {
+            mkdir($dataset, 0700, true);
+            foreach (['manifest.json', 'events.ndjson'] as $file) {
+                copy(__DIR__ . '/../Fixtures/PaperExecution/okx-mainnet-cell/' . $file, $dataset . '/' . $file);
+                chmod($dataset . '/' . $file, 0600);
+            }
+            $configuration = $root . '/configuration.json';
+            file_put_contents($configuration, '{"strategy":{}}');
+            chmod($configuration, 0600);
+            $store = new InMemoryPaperExecutionStore();
+            $coordinator = new class implements PaperEventCoordinatorInterface {
+                public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void { throw new \LogicException('paper_execution_disabled'); }
+                public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void { throw new \LogicException('consume_at_must_not_be_reached'); }
+            };
+            $verifier = new PaperDatasetVerifier();
+            $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), new PaperReplayClock());
+            $tester = new CommandTester($this->command($verifier, $reader, $store, $coordinator));
+
+            self::assertSame(Command::INVALID, $tester->execute([
+                '--dataset' => $dataset,
+                '--configuration' => $configuration,
+                '--profile' => 'scalper_micro',
+                '--run-id' => 'paper-run-guard',
+            ]));
+            self::assertStringContainsString('paper_execution_disabled', $tester->getDisplay());
+            self::assertSame(0, $store->registrationWrites);
+        } finally {
+            foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
+            @rmdir($dataset);
+            @unlink($root . '/configuration.json');
+            @rmdir($root);
+        }
+    }
+
     private function event(int $second): PaperMarketEvent
     {
         $timestamp = new \DateTimeImmutable(sprintf('2026-08-01T10:00:%02dZ', $second));
@@ -126,9 +164,10 @@ final class PaperExecutionReplayCommandTest extends TestCase
         );
     }
 
-    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null, ?PaperExecutionStoreInterface $store = null): PaperExecutionReplayCommand
+    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null, ?PaperExecutionStoreInterface $store = null, ?PaperEventCoordinatorInterface $coordinator = null): PaperExecutionReplayCommand
     {
-        $coordinator = new class implements PaperEventCoordinatorInterface {
+        $coordinator ??= new class implements PaperEventCoordinatorInterface {
+            public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void {}
             public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void { throw new \LogicException('not_called'); }
         };
         $store ??= new InMemoryPaperExecutionStore();

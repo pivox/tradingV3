@@ -62,13 +62,13 @@ final class PaperMtfStrategyBridgeTest extends TestCase
         self::assertSame([], $validator->requests);
     }
 
-    public function testIndicatorCachesAreClearedWhenExecutionCellChanges(): void
+    public function testIndicatorCachesAreClearedBeforeEveryValidationEvent(): void
     {
         $validator = new RecordingValidator(['1m']);
         $provider = new PaperKlineProvider();
         $provider->put($this->kline(Timeframe::TF_1M));
         $indicators = $this->createMock(IndicatorProviderInterface::class);
-        $indicators->expects(self::exactly(2))->method('clearCaches');
+        $indicators->expects(self::exactly(3))->method('clearCaches');
         $bridge = new PaperMtfStrategyBridge(
             $validator,
             $provider,

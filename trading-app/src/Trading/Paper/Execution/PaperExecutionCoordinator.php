@@ -59,6 +59,13 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $this->marketCodec = $marketCodec ?? new PaperMarketEffectCodec();
     }
 
+    public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
+    {
+        $cell->provenance($eligibility);
+        $this->databaseGuard->assertReady($this->environment);
+        $this->runtimeGuard->assertSafe(new PaperRuntimeContext('paper', Exchange::FAKE, $this->enabled, false, false, $symbols, $cell));
+    }
+
     public function consumeAt(
         PaperExecutionCell $cell,
         PaperProfileEligibility $eligibility,
@@ -86,6 +93,9 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         try {
             $this->market->apply($event);
             $prepared = $this->strategy->prepareFor($cell, $event);
+            if ($prepared !== null) {
+                $prepared = $this->dispatcher->prepare($prepared);
+            }
         } finally {
             $this->market->restore($snapshot);
         }
@@ -248,10 +258,8 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         if (!preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/D', $datasetId)) {
             throw new \InvalidArgumentException('paper_execution_dataset_id_invalid');
         }
-        $cell->provenance($eligibility);
-        $this->databaseGuard->assertReady($this->environment);
+        $this->assertReady($cell, $eligibility, [$event->symbol]);
         $context = new PaperRuntimeContext('paper', Exchange::FAKE, $this->enabled, false, false, [$event->symbol], $cell);
-        $this->runtimeGuard->assertSafe($context);
         $this->runtimeGuard->assertEventProvenance($context, $event);
     }
 

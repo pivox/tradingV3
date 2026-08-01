@@ -41,8 +41,14 @@ final class PaperFakeEffectDispatcherTest extends TestCase
         try {
             $cell = PaperExecutionCell::create(PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID, 'sha256:' . str_repeat('c', 64), 'scalper_micro', 'run-1');
             $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-01T10:00:00Z')))->forCell($cell);
-            $dispatcher = new PaperFakeEffectDispatcher($this->executionService(), new FakeExchangeEventNormalizer());
+            $policy = new RecordingPaperOrderModePolicy();
+            $dispatcher = new PaperFakeEffectDispatcher($this->executionService($policy), new FakeExchangeEventNormalizer());
             $decision = $this->decision($cell);
+            $decision = new PaperPreparedDecision(
+                $dispatcher->prepare($decision->prepared),
+                $decision->orderIntentIdentity,
+                $decision->provenance,
+            );
 
             $first = $dispatcher->dispatch($runtime, $decision);
             $balanceAfterFirst = $runtime->stateStore->totalBalanceUsdt();
@@ -57,6 +63,7 @@ final class PaperFakeEffectDispatcherTest extends TestCase
             self::assertSame([], $second->events);
             self::assertTrue($second->idempotentReplay);
             self::assertSame($balanceAfterFirst, $runtime->stateStore->totalBalanceUsdt());
+            self::assertSame(1, $policy->calls, 'The durable plan must pass through standard preparation exactly once.');
         } finally {
             if (is_dir($root)) {
                 foreach (glob($root . '/*') ?: [] as $file) {
@@ -89,7 +96,7 @@ final class PaperFakeEffectDispatcherTest extends TestCase
         );
     }
 
-    private function executionService(): ExchangeExecutionService
+    private function executionService(?OrderModePolicyInterface $policy = null): ExchangeExecutionService
     {
         $metrics = new TradeEntryMetricsService();
         $logger = new NullLogger();
@@ -99,7 +106,7 @@ final class PaperFakeEffectDispatcherTest extends TestCase
             new ExchangeAdapterRegistry([]),
             new ProtectionEnforcer(new EmergencyCloseService($metrics, $logger), $metrics, $logger),
             new IdempotencyPolicy(),
-            new class implements OrderModePolicyInterface {
+            $policy ?? new class implements OrderModePolicyInterface {
                 public function enforce(OrderPlanModel $plan): void
                 {
                 }
@@ -107,5 +114,15 @@ final class PaperFakeEffectDispatcherTest extends TestCase
             $resolver,
             $logger,
         );
+    }
+}
+
+final class RecordingPaperOrderModePolicy implements OrderModePolicyInterface
+{
+    public int $calls = 0;
+
+    public function enforce(OrderPlanModel $plan): void
+    {
+        ++$this->calls;
     }
 }
