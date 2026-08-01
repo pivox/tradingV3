@@ -7,6 +7,7 @@ namespace App\Tests\Trading\Paper\Execution\Strategy;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
@@ -61,6 +62,25 @@ final class PaperMtfStrategyBridgeTest extends TestCase
         self::assertSame([], $validator->requests);
     }
 
+    public function testIndicatorCachesAreClearedWhenExecutionCellChanges(): void
+    {
+        $validator = new RecordingValidator(['1m']);
+        $provider = new PaperKlineProvider();
+        $provider->put($this->kline(Timeframe::TF_1M));
+        $indicators = $this->createMock(IndicatorProviderInterface::class);
+        $indicators->expects(self::exactly(2))->method('clearCaches');
+        $bridge = new PaperMtfStrategyBridge(
+            $validator,
+            $provider,
+            static fn (): null => null,
+            $indicators,
+        );
+
+        self::assertNull($bridge->prepareFor($this->cell('run-001'), $this->closedCandle()));
+        self::assertNull($bridge->prepareFor($this->cell('run-001'), $this->closedCandle()));
+        self::assertNull($bridge->prepareFor($this->cell('run-002'), $this->closedCandle()));
+    }
+
     public function testPreparedEffectCodecRoundTripsAndRejectsTampering(): void
     {
         $prepared = $this->prepared();
@@ -95,9 +115,9 @@ final class PaperMtfStrategyBridgeTest extends TestCase
         return new KlineDto('BTCUSDT', $timeframe, new \DateTimeImmutable('2026-08-01T10:00:00+00:00'), BigDecimal::of('100'), BigDecimal::of('101'), BigDecimal::of('99'), BigDecimal::of('100'), BigDecimal::of('5'), 'paper');
     }
 
-    private function cell(): PaperExecutionCell
+    private function cell(string $runId = 'run-001'): PaperExecutionCell
     {
-        return PaperExecutionCell::create(PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID, 'sha256:' . str_repeat('a', 64), 'scalper_micro', 'run-001');
+        return PaperExecutionCell::create(PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID, 'sha256:' . str_repeat('a', 64), 'scalper_micro', $runId);
     }
 
     private function closedCandle(): PaperMarketEvent

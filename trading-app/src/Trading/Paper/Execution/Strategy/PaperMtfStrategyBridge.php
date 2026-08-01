@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Execution\Strategy;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\Timeframe;
+use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
@@ -17,16 +18,19 @@ use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
-final readonly class PaperMtfStrategyBridge implements PaperStrategyPreparationInterface
+final class PaperMtfStrategyBridge implements PaperStrategyPreparationInterface
 {
     /** @var \Closure(MtfRunResponseDto, PaperExecutionCell, PaperMarketEvent): ?PreparedTradeEntry */
-    private \Closure $preparationResolver;
+    private readonly \Closure $preparationResolver;
+
+    private ?string $cacheCellId = null;
 
     /** @param callable(MtfRunResponseDto, PaperExecutionCell, PaperMarketEvent): ?PreparedTradeEntry $preparationResolver */
     public function __construct(
-        private MtfValidatorInterface $validator,
-        private PaperKlineProvider $klineProvider,
+        private readonly MtfValidatorInterface $validator,
+        private readonly PaperKlineProvider $klineProvider,
         callable $preparationResolver,
+        private readonly ?IndicatorProviderInterface $indicators = null,
     ) {
         $this->preparationResolver = \Closure::fromCallable($preparationResolver);
     }
@@ -39,6 +43,11 @@ final readonly class PaperMtfStrategyBridge implements PaperStrategyPreparationI
             || $event->sourceVenue !== $cell->marketDataVenue
         ) {
             return null;
+        }
+
+        if ($this->cacheCellId !== $cell->id) {
+            $this->indicators?->clearCaches();
+            $this->cacheCellId = $cell->id;
         }
 
         foreach ($this->validator->getListTimeframe($cell->strategyProfile) as $timeframeValue) {

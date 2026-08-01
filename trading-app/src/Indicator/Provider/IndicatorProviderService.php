@@ -232,6 +232,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         ): void
         {
             $context = ExchangeContext::resolve($context);
+            if ($context->exchange === Exchange::FAKE) {
+                return;
+            }
+
             $this->logger?->debug('[IndicatorProvider] Preparing snapshot persistence', [
                 'symbol' => $snapshotDto->symbol,
                 'exchange' => $context->exchange->value,
@@ -727,6 +731,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
     ): ?IndicatorSnapshotDto
     {
         $context = ExchangeContext::resolve($context);
+        if ($context->exchange === Exchange::FAKE) {
+            return null;
+        }
+
         try {
             $tfEnum = Timeframe::from($timeframe);
         } catch (\ValueError $e) {

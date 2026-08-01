@@ -18,6 +18,9 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
 {
     private const EMPTY_JOURNAL_CHECKSUM = '0000000000000000000000000000000000000000000000000000000000000000';
 
+    /** @var array<string, string> */
+    private array $verifiedCheckpointFingerprints = [];
+
     public function __construct(private readonly Connection $connection)
     {
     }
@@ -184,6 +187,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
 
             $ordinal = $this->appendJournal($checkpoint, 'source_claimed', $event->toArray(), $position, $event->eventId, null);
             $this->connection->executeStatement('UPDATE paper_execution_checkpoint SET next_source_position = ?, updated_at = NOW() WHERE cell_id = ?', [$position + 1, $cell->id]);
+            $this->rememberCheckpoint($cell->id);
 
             return new PaperSourceClaim(PaperSourceClaim::ACCEPTED, $position, $ordinal);
         });
@@ -215,6 +219,7 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
             }
 
             $this->appendJournal($checkpoint, 'effect_requested', $payload, $position, null, $effectKey);
+            $this->rememberCheckpoint($cell->id);
         });
     }
 
@@ -272,6 +277,7 @@ SQL, [$cell->id]);
 
             $this->appendJournal($checkpoint, 'effect_acknowledged', $journalPayload, $position, null, $effectKey);
             $this->connection->executeStatement('UPDATE paper_execution_checkpoint SET fake_event_cursor = ?, updated_at = NOW() WHERE cell_id = ?', [$fakeEventCursor, $cell->id]);
+            $this->rememberCheckpoint($cell->id);
         });
     }
 
@@ -300,6 +306,7 @@ SQL, [$cell->id]);
                 throw new \LogicException('paper_execution_effect_not_pending');
             }
             $this->appendJournal($checkpoint, $eventType, $payload, $position, null, $effectKey);
+            $this->rememberCheckpoint($cell->id);
         });
     }
 
@@ -377,6 +384,7 @@ SQL, [$cell->id]);
                 [$killed, $cell->id],
                 [ParameterType::BOOLEAN, ParameterType::STRING],
             );
+            $this->rememberCheckpoint($cell->id);
         });
     }
 
@@ -434,6 +442,13 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
     /** @param array<string, mixed> $checkpoint */
     private function verifyCheckpoint(array $checkpoint): void
     {
+        $cellId = (string) ($checkpoint['cell_id'] ?? '');
+        $fingerprint = $this->checkpointFingerprint($checkpoint);
+        $verified = $this->verifiedCheckpointFingerprints[$cellId] ?? null;
+        if (is_string($verified) && hash_equals($verified, $fingerprint)) {
+            return;
+        }
+
         $checksum = self::EMPTY_JOURNAL_CHECKSUM;
         $expectedOrdinal = 0;
         $expectedNextSourcePosition = 0;
@@ -496,6 +511,32 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
         ) {
             throw new \LogicException('paper_execution_checkpoint_corrupt');
         }
+
+        $this->verifiedCheckpointFingerprints[$cellId] = $fingerprint;
+    }
+
+    private function rememberCheckpoint(string $cellId): void
+    {
+        $checkpoint = $this->connection->fetchAssociative('SELECT * FROM paper_execution_checkpoint WHERE cell_id = ?', [$cellId]);
+        if ($checkpoint === false) {
+            throw new \LogicException('paper_execution_cell_unknown');
+        }
+
+        $this->verifiedCheckpointFingerprints[$cellId] = $this->checkpointFingerprint($checkpoint);
+    }
+
+    /** @param array<string, mixed> $checkpoint */
+    private function checkpointFingerprint(array $checkpoint): string
+    {
+        return hash('sha256', CanonicalJson::encode([
+            'cell_id' => (string) ($checkpoint['cell_id'] ?? ''),
+            'next_source_position' => (int) ($checkpoint['next_source_position'] ?? -1),
+            'journal_ordinal' => (int) ($checkpoint['journal_ordinal'] ?? -1),
+            'journal_checksum' => (string) ($checkpoint['journal_checksum'] ?? ''),
+            'fake_event_cursor' => (int) ($checkpoint['fake_event_cursor'] ?? -1),
+            'killed' => $this->databaseBoolean($checkpoint['killed'] ?? false),
+            'lock_version' => (int) ($checkpoint['lock_version'] ?? -1),
+        ]));
     }
 
     /** @param array<string, mixed> $payload */

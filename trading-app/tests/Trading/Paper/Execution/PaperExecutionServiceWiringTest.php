@@ -12,6 +12,8 @@ use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter;
 use App\Indicator\Provider\IndicatorProviderService;
+use App\MtfValidator\Service\MtfValidatorCoreService;
+use App\MtfValidator\Service\MtfValidatorService;
 use App\MtfValidator\Service\TimeframeValidationService;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
@@ -49,6 +51,15 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         self::assertInstanceOf(TradeEntryPreparationService::class, $preparation);
         $preparationClock = (new \ReflectionProperty(TradeEntryPreparationService::class, 'clock'))->getValue($preparation);
         self::assertSame($readerClock, $preparationClock, 'Paper fallback TTL must use dataset time.');
+        $strategy = $container->get(\App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge::class);
+        $validator = (new \ReflectionProperty($strategy, 'validator'))->getValue($strategy);
+        self::assertInstanceOf(MtfValidatorService::class, $validator);
+        $validatorClock = (new \ReflectionProperty(MtfValidatorService::class, 'clock'))->getValue($validator);
+        self::assertSame($readerClock, $validatorClock, 'Paper MTF runs must be stamped with dataset time.');
+        $validatorCore = (new \ReflectionProperty(MtfValidatorService::class, 'core'))->getValue($validator);
+        self::assertInstanceOf(MtfValidatorCoreService::class, $validatorCore);
+        $validatorCoreClock = (new \ReflectionProperty(MtfValidatorCoreService::class, 'clock'))->getValue($validatorCore);
+        self::assertSame($readerClock, $validatorCoreClock, 'Paper MTF core fallbacks must use dataset time.');
 
         $constructor = (new \ReflectionClass(PaperExecutionCoordinator::class))->getConstructor();
         self::assertNotNull($constructor);

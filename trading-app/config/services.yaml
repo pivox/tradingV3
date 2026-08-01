@@ -146,7 +146,21 @@ services:
 
     App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge:
         arguments:
+            $validator: '@paper.execution.mtf_validator'
             $preparationResolver: '@App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver'
+            $indicators: '@App\Indicator\Provider\IndicatorProviderService'
+
+    paper.execution.mtf_validator_core:
+        class: App\MtfValidator\Service\MtfValidatorCoreService
+        arguments:
+            $indicatorProvider: '@App\Indicator\Provider\IndicatorProviderService'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.mtf_validator:
+        class: App\MtfValidator\Service\MtfValidatorService
+        arguments:
+            $core: '@paper.execution.mtf_validator_core'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
 
     paper.execution.trade_entry_preparation:
         class: App\TradeEntry\Service\TradeEntryPreparationService
