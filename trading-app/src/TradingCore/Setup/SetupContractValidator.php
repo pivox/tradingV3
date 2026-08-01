@@ -368,8 +368,12 @@ final class SetupContractValidator
         foreach (['unit', 'source', 'justification'] as $key) {
             $this->string($decision, $key, $path);
         }
-        if ($requiresUnknownPolicy && ($decision['unknown_policy'] ?? null) !== 'reject') {
-            throw new SetupContractException($path . '.unknown_policy must reject.');
+        if ($requiresUnknownPolicy && (
+            $decision['state'] !== 'unresolved'
+            || $decision['value'] !== null
+            || ($decision['unknown_policy'] ?? null) !== 'reject'
+        )) {
+            throw new SetupContractException($path . ' must remain unresolved with null value and reject unknown inputs.');
         }
         if (($decision['state'] === 'unresolved') !== ($decision['value'] === null)) {
             throw new SetupContractException($path . ' state/value mismatch.');

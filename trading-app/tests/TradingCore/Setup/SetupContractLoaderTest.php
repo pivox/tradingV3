@@ -215,6 +215,19 @@ final class SetupContractLoaderTest extends TestCase
         $this->assertPhpAndSchemaReject($repinnedTradeEntryOrigin, 'repinned trade entry source origin');
     }
 
+    public function testCrashFailClosedDecisionsCannotBecomeDefined(): void
+    {
+        $document = $this->yaml($this->root . '/crash_short/1.1.0.yaml');
+
+        foreach (['cost_contract', 'order_policy', 'risk_boundary'] as $decision) {
+            $defined = $document;
+            $defined['execution'][$decision]['state'] = 'defined';
+            $defined['execution'][$decision]['value'] = ['policy' => 'invented'];
+
+            $this->assertPhpAndSchemaReject($defined, $decision . ' defined/non-null attempt');
+        }
+    }
+
     public function testSourceOriginsPinExactCurrentContentHashes(): void
     {
         $expected = [
