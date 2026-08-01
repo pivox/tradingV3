@@ -19,6 +19,9 @@ final class PaperMarketStateProjector
     /** @var array<string, array{bid: string, ask: string}> */
     private array $books = [];
 
+    /** @var list<PaperMarketEvent> */
+    private array $eventLog = [];
+
     public function __construct(private readonly PaperKlineProvider $klines)
     {
     }
@@ -42,6 +45,7 @@ final class PaperMarketStateProjector
         }
 
         $this->appliedEvents[$event->eventId] = $event->payloadHash;
+        $this->eventLog[] = $event;
     }
 
     /** @param iterable<PaperMarketEvent> $events */
@@ -50,9 +54,16 @@ final class PaperMarketStateProjector
         $this->klines->clear();
         $this->books = [];
         $this->appliedEvents = [];
+        $this->eventLog = [];
         foreach ($events as $event) {
             $this->apply($event);
         }
+    }
+
+    /** @return list<PaperMarketEvent> */
+    public function events(): array
+    {
+        return $this->eventLog;
     }
 
     /** @return array{bid: string, ask: string}|null */

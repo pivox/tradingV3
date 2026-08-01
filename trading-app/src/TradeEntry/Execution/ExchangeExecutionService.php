@@ -69,6 +69,7 @@ final class ExchangeExecutionService
         );
     }
 
+    /** @param array<string, mixed> $executionMetadata */
     public function executeOnAdapter(
         OrderPlanModel $plan,
         ExchangeAdapterInterface $adapter,
@@ -78,6 +79,7 @@ final class ExchangeExecutionService
         ?string $clientOrderId = null,
         ?int $orderIntentId = null,
         bool $planPrepared = false,
+        array $executionMetadata = [],
     ): ExecutionResult {
         if (!$planPrepared) {
             $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
@@ -154,6 +156,7 @@ final class ExchangeExecutionService
                 attachTakeProfit: $attachedTakeProfitRequested,
                 decisionKey: $decisionKey,
                 orderIntentId: $orderIntentId,
+                executionMetadata: $executionMetadata,
             ));
         } catch (\Throwable $e) {
             $this->positionsLogger->error('exchange_execution.entry_submit_failed', [
@@ -315,6 +318,7 @@ final class ExchangeExecutionService
         );
     }
 
+    /** @param array<string, mixed> $executionMetadata */
     private function entryRequest(
         OrderPlanModel $plan,
         ExchangeContext $context,
@@ -323,6 +327,7 @@ final class ExchangeExecutionService
         bool $attachTakeProfit,
         ?string $decisionKey,
         ?int $orderIntentId,
+        array $executionMetadata = [],
     ): PlaceOrderRequest {
         $orderType = $plan->orderType === 'market' ? ExchangeOrderType::MARKET : ExchangeOrderType::LIMIT;
 
@@ -348,7 +353,7 @@ final class ExchangeExecutionService
                 'decision_key' => $decisionKey,
                 'order_intent_id' => $orderIntentId,
                 'source' => 'exchange_execution_service',
-            ],
+            ] + $executionMetadata,
         );
     }
 

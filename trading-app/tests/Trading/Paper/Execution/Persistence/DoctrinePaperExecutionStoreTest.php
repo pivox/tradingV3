@@ -139,8 +139,13 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
 
         $pending = $this->store->pendingEffects($this->cell);
         self::assertCount(2, $pending);
+        self::assertSame([], $this->store->acknowledgedSources($this->cell));
         self::assertContainsOnlyInstancesOf(PaperPendingEffect::class, $pending);
         self::assertSame([$key1, $key2], array_map(static fn (PaperPendingEffect $effect): string => $effect->effectKey, $pending));
+        $this->store->recordEffectRetry($this->cell, 0, $key1);
+        $this->store->recordEffectFailure($this->cell, 0, $key1, 'fake_effect_dispatch_failed');
+        self::assertSame(1, $this->store->journalEventCounts($this->cell)['effect_retried']);
+        self::assertSame(1, $this->store->journalEventCounts($this->cell)['effect_failed']);
 
         try {
             $this->store->claimSource($this->cell, 1, $this->event(1));
@@ -151,8 +156,10 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
 
         $this->store->acknowledge($this->cell, 0, $key1, ['order_id' => 'fake-1'], 1);
         self::assertSame([$key2], array_map(static fn (PaperPendingEffect $effect): string => $effect->effectKey, $this->store->pendingEffects($this->cell)));
+        self::assertSame([], $this->store->acknowledgedSources($this->cell));
         $this->store->acknowledge($this->cell, 0, $key2, ['order_id' => 'fake-2'], 2);
         self::assertSame([], $this->store->pendingEffects($this->cell));
+        self::assertSame([$this->event(0)->eventId], array_map(static fn (PaperMarketEvent $event): string => $event->eventId, $this->store->acknowledgedSources($this->cell)));
         self::assertSame(PaperSourceClaim::ACCEPTED, $this->store->claimSource($this->cell, 1, $this->event(1))->status);
         self::assertSame(2, $this->store->checkpoint($this->cell)->fakeEventCursor);
     }

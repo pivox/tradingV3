@@ -28,7 +28,17 @@ interface PaperExecutionStoreInterface
     /** @param array<string, mixed> $payload */
     public function acknowledge(PaperExecutionCell $cell, int $position, string $effectKey, array $payload, int $fakeEventCursor): void;
 
+    public function recordEffectRetry(PaperExecutionCell $cell, int $position, string $effectKey): void;
+
+    public function recordEffectFailure(PaperExecutionCell $cell, int $position, string $effectKey, string $reason): void;
+
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint;
+
+    /** @return list<PaperMarketEvent> */
+    public function acknowledgedSources(PaperExecutionCell $cell): array;
+
+    /** @return array<string, int> */
+    public function journalEventCounts(PaperExecutionCell $cell): array;
 
     public function kill(PaperExecutionCell $cell): void;
 

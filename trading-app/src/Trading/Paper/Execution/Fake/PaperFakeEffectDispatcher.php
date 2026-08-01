@@ -32,8 +32,23 @@ final readonly class PaperFakeEffectDispatcher
             $decision->prepared->executionTimeframe,
             $decision->orderIntentIdentity['client_order_id'],
             planPrepared: true,
+            executionMetadata: $decision->provenance + $decision->prepared->lifecycle->toArray() + [
+                'internal_trade_id' => $decision->prepared->internalTradeId,
+            ],
         );
 
+        $normalized = $this->normalizeSince($runtime, $cursor);
+
+        return new PaperFakeDispatchResult(
+            $result,
+            $normalized,
+            ($result->raw['order']['metadata']['idempotent_replay'] ?? false) === true,
+        );
+    }
+
+    /** @return list<ExchangeEventInterface> */
+    public function normalizeSince(PaperFakeRuntime $runtime, int $cursor): array
+    {
         $normalized = [];
         foreach ($runtime->eventsSince($cursor) as $event) {
             foreach ($this->normalizer->normalize($event) as $exchangeEvent) {
@@ -43,10 +58,6 @@ final readonly class PaperFakeEffectDispatcher
             }
         }
 
-        return new PaperFakeDispatchResult(
-            $result,
-            $normalized,
-            ($result->raw['order']['metadata']['idempotent_replay'] ?? false) === true,
-        );
+        return $normalized;
     }
 }

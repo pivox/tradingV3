@@ -17,7 +17,7 @@ use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
-final readonly class PaperMtfStrategyBridge
+final readonly class PaperMtfStrategyBridge implements PaperStrategyPreparationInterface
 {
     /** @var \Closure(MtfRunResponseDto, PaperExecutionCell, PaperMarketEvent): ?PreparedTradeEntry */
     private \Closure $preparationResolver;

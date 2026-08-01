@@ -237,6 +237,34 @@ SQL, [$cell->id]);
         });
     }
 
+    public function recordEffectRetry(PaperExecutionCell $cell, int $position, string $effectKey): void
+    {
+        $this->recordEffectOutcome($cell, $position, $effectKey, 'effect_retried', ['reason' => 'durable_recovery']);
+    }
+
+    public function recordEffectFailure(PaperExecutionCell $cell, int $position, string $effectKey, string $reason): void
+    {
+        if (!preg_match('/\A[a-z][a-z0-9_]{2,63}\z/D', $reason)) {
+            throw new \InvalidArgumentException('paper_execution_failure_reason_invalid');
+        }
+        $this->recordEffectOutcome($cell, $position, $effectKey, 'effect_failed', ['reason' => $reason]);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function recordEffectOutcome(PaperExecutionCell $cell, int $position, string $effectKey, string $eventType, array $payload): void
+    {
+        $this->assertEffectKey($effectKey);
+        $this->atomic(function () use ($cell, $position, $effectKey, $eventType, $payload): void {
+            $checkpoint = $this->lockCheckpoint($cell);
+            $this->verifyCheckpoint($checkpoint);
+            $requested = $this->connection->fetchOne("SELECT 1 FROM paper_execution_event WHERE cell_id = ? AND source_position = ? AND effect_key = ? AND event_type = 'effect_requested'", [$cell->id, $position, $effectKey]);
+            if ($requested === false) {
+                throw new \LogicException('paper_execution_effect_not_pending');
+            }
+            $this->appendJournal($checkpoint, $eventType, $payload, $position, null, $effectKey);
+        });
+    }
+
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint
     {
         $row = $this->connection->fetchAssociative('SELECT * FROM paper_execution_checkpoint WHERE cell_id = ?', [$cell->id]);
@@ -246,6 +274,45 @@ SQL, [$cell->id]);
         $this->verifyCheckpoint($row);
 
         return $this->checkpointFromRow($row);
+    }
+
+    public function acknowledgedSources(PaperExecutionCell $cell): array
+    {
+        $rows = $this->connection->fetchFirstColumn(<<<'SQL'
+SELECT claimed.payload::text
+FROM paper_execution_event claimed
+WHERE claimed.cell_id = ?
+  AND claimed.event_type = 'source_claimed'
+  AND NOT EXISTS (
+      SELECT 1 FROM paper_execution_event requested
+      WHERE requested.cell_id = claimed.cell_id
+        AND requested.source_position = claimed.source_position
+        AND requested.event_type = 'effect_requested'
+        AND NOT EXISTS (
+            SELECT 1 FROM paper_execution_event acknowledged
+            WHERE acknowledged.cell_id = requested.cell_id
+              AND acknowledged.effect_key = requested.effect_key
+              AND acknowledged.event_type = 'effect_acknowledged'
+        )
+  )
+ORDER BY claimed.source_position
+SQL, [$cell->id]);
+
+        return array_map(
+            fn (mixed $payload): PaperMarketEvent => PaperMarketEvent::fromArray($this->decodeJsonMap($payload)),
+            $rows,
+        );
+    }
+
+    public function journalEventCounts(PaperExecutionCell $cell): array
+    {
+        $rows = $this->connection->fetchAllAssociative('SELECT event_type, COUNT(*) AS total FROM paper_execution_event WHERE cell_id = ? GROUP BY event_type', [$cell->id]);
+        $counts = [];
+        foreach ($rows as $row) {
+            $counts[(string) $row['event_type']] = (int) $row['total'];
+        }
+
+        return $counts;
     }
 
     public function kill(PaperExecutionCell $cell): void
