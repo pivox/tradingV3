@@ -12,6 +12,7 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
@@ -162,15 +163,65 @@ final class TradeLineageManagerTest extends KernelTestCase
     {
         $intent = $this->persistIntent('cid-retry-modern', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
         $payload = $this->canonicalLineagePayload('cid-retry-modern');
-        $first = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
-        $same = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+        $payload['intent_id'] = 'intent-structured-retry';
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+        $intent->applyLineageContext($identity);
+        $this->em->flush();
+        $first = $this->manager->ensureForIntent($intent, $identity);
+        $same = $this->manager->ensureForIntent($intent, $identity);
         self::assertSame($first->getId(), $same->getId());
+        self::assertNotSame((string) $intent->getId(), $identity->intentId);
 
         $payload['config_hash'] = 'sha256:' . str_repeat('c', 64);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('canonical_identity_mismatch:config_hash');
 
+        $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+    }
+
+    public function testModernRetryRejectsMissingPersistedStructuredIntentId(): void
+    {
+        $intent = $this->persistIntent('cid-retry-missing-persisted', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+        $payload = $this->canonicalLineagePayload('trade-missing-persisted');
+        $payload['intent_id'] = 'intent-required';
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+        $this->manager->ensureForIntent($intent, $identity);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_incomplete:intent_id');
+        $this->manager->ensureForIntent($intent, $identity);
+    }
+
+    public function testModernRetryRejectsMissingRequestedStructuredIntentId(): void
+    {
+        $intent = $this->persistIntent('cid-retry-missing-requested', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+        $payload = $this->canonicalLineagePayload('trade-missing-requested');
+        $payload['intent_id'] = 'intent-persisted';
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+        $intent->applyLineageContext($identity);
+        $this->em->flush();
+        $this->manager->ensureForIntent($intent, $identity);
+        unset($payload['intent_id']);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_incomplete:intent_id');
+        $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+    }
+
+    public function testModernRetryRejectsMismatchedStructuredIntentId(): void
+    {
+        $intent = $this->persistIntent('cid-retry-intent-mismatch', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+        $payload = $this->canonicalLineagePayload('trade-intent-mismatch');
+        $payload['intent_id'] = 'intent-persisted';
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+        $intent->applyLineageContext($identity);
+        $this->em->flush();
+        $this->manager->ensureForIntent($intent, $identity);
+        $payload['intent_id'] = 'intent-other';
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:intent_id');
         $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
     }
 

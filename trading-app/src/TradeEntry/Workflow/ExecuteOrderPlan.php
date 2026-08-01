@@ -7,6 +7,7 @@ use App\Entity\OrderIntent;
 use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Lineage\LineageContextException;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -189,6 +190,14 @@ final class ExecuteOrderPlan
 
             return $result;
         } catch (\Throwable $e) {
+            if ($e instanceof LineageContextException) {
+                $this->positionsLogger->error('execute_order_plan.canonical_lineage_conflict', [
+                    'symbol' => $plan->symbol,
+                    'decision_key' => $decisionKey,
+                    'reason' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
             if ($intent instanceof OrderIntent && $this->orderIntentManager !== null) {
                 $this->markIntentFailedAfterException($intent, $e);
             }
@@ -302,6 +311,9 @@ final class ExecuteOrderPlan
                 );
             }
         } catch (\Throwable $e) {
+            if ($e instanceof LineageContextException) {
+                throw $e;
+            }
             $this->positionsLogger->warning('execute_order_plan.intent_status_sync_failed', [
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),
@@ -321,6 +333,9 @@ final class ExecuteOrderPlan
             $lineage = $this->tradeLineageManager->ensureForIntent($intent, $identity ?? ($contextBuilder?->toArray() ?? []));
             $contextBuilder?->merge($this->tradeLineageManager->lifecycleExtra($lineage));
         } catch (\Throwable $e) {
+            if ($e instanceof LineageContextException) {
+                throw $e;
+            }
             $this->positionsLogger->warning('execute_order_plan.lineage_pre_submit_sync_failed', [
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),
@@ -339,6 +354,9 @@ final class ExecuteOrderPlan
             $lineage = $this->tradeLineageManager->ensureForIntent($intent, $identity ?? []);
             $this->tradeLineageManager->attachExchangeOrderId($lineage, $result->exchangeOrderId);
         } catch (\Throwable $e) {
+            if ($e instanceof LineageContextException) {
+                throw $e;
+            }
             $this->positionsLogger->warning('execute_order_plan.lineage_sync_failed', [
                 'order_intent_id' => $intent->getId(),
                 'client_order_id' => $intent->getClientOrderId(),

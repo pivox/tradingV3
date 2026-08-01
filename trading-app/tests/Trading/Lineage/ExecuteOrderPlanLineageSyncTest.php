@@ -18,6 +18,9 @@ use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\TradeEntry\Workflow\ExecuteOrderPlan;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
+use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -148,6 +151,79 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         self::assertSame(140, strlen($lineage->getOrchestrationRunId() ?? ''));
         self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationSetId() ?? ''));
         self::assertLessThanOrEqual(96, strlen($lineage->getOrchestrationDashboardId() ?? ''));
+    }
+
+    public function testPreSubmitCanonicalIntentMismatchPropagatesBeforeExecution(): void
+    {
+        [$workflow, $intent, $mismatch] = $this->canonicalConflictFixture();
+        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'syncLineageBeforeExecution');
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:intent_id');
+        $method->invoke($workflow, $intent, null, $mismatch);
+    }
+
+    public function testPostExecutionCanonicalIntentMismatchPropagates(): void
+    {
+        [$workflow, $intent, $mismatch] = $this->canonicalConflictFixture();
+        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'syncLineageAfterExecution');
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:intent_id');
+        $method->invoke($workflow, $intent, new ExecutionResult('cid', 'exchange-order', ExecutionResult::STATUS_SUBMITTED), $mismatch);
+    }
+
+    public function testIntentStatusSyncDoesNotSwallowCanonicalIntentMismatch(): void
+    {
+        [$workflow, $intent, $mismatch] = $this->canonicalConflictFixture();
+        $method = new \ReflectionMethod(ExecuteOrderPlan::class, 'syncIntentAfterExecution');
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:intent_id');
+        $method->invoke($workflow, $intent, new ExecutionResult('cid', 'exchange-order', ExecutionResult::STATUS_SUBMITTED), $mismatch);
+    }
+
+    /** @return array{ExecuteOrderPlan,OrderIntent,LineageContext} */
+    private function canonicalConflictFixture(): array
+    {
+        $schemaTool = new SchemaTool($this->em);
+        $metadata = [
+            $this->em->getClassMetadata(OrderIntent::class),
+            $this->em->getClassMetadata(TradeLineage::class),
+        ];
+        $schemaTool->dropSchema($metadata);
+        $schemaTool->createSchema($metadata);
+
+        $baseIdentity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())
+            ->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key');
+        $identity = $baseIdentity->withIntent('intent-persisted');
+        $intent = (new OrderIntent())
+            ->setExchange(Exchange::FAKE)
+            ->setMarketType(MarketType::PERPETUAL)
+            ->setSymbol('BTCUSDT')
+            ->setSide(1)
+            ->setType(OrderIntent::TYPE_LIMIT)
+            ->setOpenType(OrderIntent::OPEN_TYPE_ISOLATED)
+            ->setPositionMode(OrderIntent::POSITION_MODE_ONE_WAY)
+            ->setSize(1)
+            ->setClientOrderId('cid-canonical-conflict')
+            ->setPresetMode(OrderIntent::PRESET_MODE_NONE)
+            ->setDecisionKey('decision-key')
+            ->applyLineageContext($identity)
+            ->markAsReadyToSend();
+        $this->em->persist($intent);
+        $this->em->flush();
+        $lineages = $this->tradeLineageManager();
+        $lineages->ensureForIntent($intent, $identity);
+
+        return [new ExecuteOrderPlan(
+            $this->uninitialized(ExecutionBox::class),
+            $this->uninitialized(ExchangeExecutionService::class),
+            new NullLogger(),
+            $this->orderIntentManager(),
+            null,
+            $lineages,
+        ), $intent, $baseIdentity->withIntent('intent-other')];
     }
 
     private function persistReadyIntent(): OrderIntent

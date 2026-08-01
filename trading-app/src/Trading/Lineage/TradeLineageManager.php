@@ -373,7 +373,7 @@ final class TradeLineageManager
         ];
         foreach ($expected as $field => $value) {
             if ($actual[$field] !== $value) {
-                throw new \InvalidArgumentException('canonical_identity_mismatch:' . $field);
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
             }
         }
     }
@@ -420,20 +420,25 @@ final class TradeLineageManager
         ];
         foreach ($expected as $field => $value) {
             if ($persisted[$field] !== $value) {
-                throw new \InvalidArgumentException('canonical_identity_mismatch:' . $field);
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
             }
         }
 
-        $persistedIntentId = $lineage->getOrderIntent()?->getId();
+        $persistedIntentId = $lineage->getOrderIntent()?->getIntentId();
+        if ($persistedIntentId === null || $persistedIntentId === '' || $identity->intentId === null || $identity->intentId === '') {
+            throw new LineageContextException('canonical_identity_incomplete:intent_id');
+        }
+        if ($persistedIntentId !== $identity->intentId) {
+            throw new LineageContextException('canonical_identity_mismatch:intent_id');
+        }
         $stageIds = [
             'trade_id' => [$lineage->getInternalTradeId(), $identity->tradeId],
-            'intent_id' => [$persistedIntentId !== null ? (string) $persistedIntentId : null, $identity->intentId],
             'order_id' => [$lineage->getExchangeOrderId(), $identity->orderId],
             'position_id' => [$lineage->getPositionId(), $identity->positionId],
         ];
         foreach ($stageIds as $field => [$actual, $requested]) {
             if ($requested !== null && $actual !== $requested) {
-                throw new \InvalidArgumentException('canonical_identity_mismatch:' . $field);
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
             }
         }
     }

@@ -71,6 +71,19 @@ final class MtfTradingDecisionMessageHandler
 
         $decisionResult = $this->tradingDecisionHandler->handleTradingDecision($symbolResult, $mtfRunDto, $message->runId, $identity);
 
+        if (($decisionResult->tradingDecision['status'] ?? null) === 'rejected'
+            && ($decisionResult->tradingDecision['retryable'] ?? null) === false
+            && str_starts_with((string) ($decisionResult->tradingDecision['reason'] ?? ''), 'canonical_')) {
+            $this->mtfLogger->warning('[MTF Messenger] Canonical policy rejection acknowledged', [
+                'run_id' => $message->runId,
+                'symbol' => $result->symbol,
+                'reason' => $decisionResult->tradingDecision['reason'],
+                'blockers' => $decisionResult->tradingDecision['blockers'] ?? [],
+                'retryable' => false,
+            ]);
+            return;
+        }
+
         $this->mtfLogger->info('[MTF Messenger] Trading decision processed', [
             'run_id' => $message->runId,
             'symbol' => $result->symbol,

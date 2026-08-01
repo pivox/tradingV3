@@ -21,6 +21,8 @@ use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
+use App\Trading\Lineage\CanonicalRuntimePolicyException;
 use Ramsey\Uuid\Uuid;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -73,6 +75,13 @@ final class TradingDecisionHandler
             )->assertExecutableTradeContract();
         }
         [$resolvedMode, $tradeEntryConfig] = $this->resolveTradeEntryConfig($lineageContext, $symbolResult->tradeEntryModeUsed);
+        if ($lineageContext?->isModern()) {
+            try {
+                CanonicalTradeRuntimePolicyValidator::assertReady($tradeEntryConfig);
+            } catch (CanonicalRuntimePolicyException $exception) {
+                return $this->canonicalPolicyRejection($symbolResult, $resolvedMode, $runId, $exception);
+            }
+        }
         $decisionKey = $this->generateDecisionKey(
             symbolResult: $symbolResult,
             exchangeContext: $exchangeContext,
@@ -347,6 +356,45 @@ final class TradingDecisionHandler
             $this->tradeEntryConfigResolver->resolveMode($legacyMode),
             $this->tradeEntryConfigResolver->resolve($legacyMode),
         ];
+    }
+
+    private function canonicalPolicyRejection(
+        SymbolResultDto $symbolResult,
+        string $resolvedMode,
+        string $runId,
+        CanonicalRuntimePolicyException $exception,
+    ): SymbolResultDto {
+        $reason = $exception->getMessage();
+        $decision = [
+            'status' => 'rejected',
+            'reason' => $reason,
+            'blockers' => $exception->blockers,
+            'retryable' => false,
+        ];
+        $context = [
+            'symbol' => $symbolResult->symbol,
+            'run_id' => $runId,
+            'reason' => $reason,
+            'blockers' => $exception->blockers,
+            'retryable' => false,
+        ];
+        $this->mtfLogger->warning('order_journey.canonical_policy_rejected', $context);
+        $this->auditLogger->logAction('CANONICAL_POLICY_REJECTED', 'TRADE_ENTRY', $symbolResult->symbol, $context);
+
+        return new SymbolResultDto(
+            symbol: $symbolResult->symbol,
+            status: $symbolResult->status,
+            executionTf: $symbolResult->executionTf,
+            blockingTf: $symbolResult->blockingTf,
+            signalSide: $symbolResult->signalSide,
+            tradingDecision: $decision,
+            error: $symbolResult->error,
+            context: $symbolResult->context,
+            currentPrice: $symbolResult->currentPrice,
+            atr: $symbolResult->atr,
+            validationModeUsed: $symbolResult->validationModeUsed,
+            tradeEntryModeUsed: $resolvedMode,
+        );
     }
 
     /** @param array<string, mixed> $options */
