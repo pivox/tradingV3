@@ -71,6 +71,7 @@ final class SetupCompiler
             $contract->setupId,
             $contract->setupVersion,
             $modeVersions,
+            $document['source_origins'] ?? [$document['source_origin']],
             $configHash,
             $catalogHash,
             $publishable,

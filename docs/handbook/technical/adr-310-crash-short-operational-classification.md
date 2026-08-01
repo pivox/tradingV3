@@ -63,6 +63,13 @@ Les empreintes des deux sources au moment de la décision sont :
   `6ff8ab88e1bb9465f92f39424ae64305ca20ee0d`, SHA-256
   `722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f`.
 
+Le contrat `crash_short@1.1.0` porte ces deux pins dans `source_origins`, avec
+leurs plages exactes respectives `5-16,136-137,164-167,169-305` et
+`7-12,19-205`. Le schéma, le validateur PHP et le snapshot compilé conservent
+la collection complète. Les contrats `1.0.0` gardent leur champ singulier
+`source_origin` ; le compilateur le normalise en collection d'un élément sans
+mutation du document historique.
+
 | Élément canonique | Source legacy | Décision |
 |---|---|---|
 | identité short, TF contexte/exécution, défaut 5m | `validations.crash.yaml:5-16` | une identité `crash_short`, variantes d'exécution tracées 5m/1m |

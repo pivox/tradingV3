@@ -65,6 +65,20 @@ final class SetupContractValidator
         'rsi_lt_70_threshold' => 'number', 'gt' => 'number', 'max_spread_bps' => 'number',
     ];
     private const STATUSES = ['draft', 'blocked', 'shadow', 'paper', 'candidate', 'active', 'retired'];
+    private const CRASH_DECISION_SOURCE_ORIGINS = [
+        [
+            'file' => 'src/MtfValidator/config/validations.crash.yaml',
+            'line_range' => '5-16,136-137,164-167,169-305',
+            'content_sha256' => '5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2',
+            'commit' => 'd1d9a174960660e88f84c54850ef61181d39a880',
+        ],
+        [
+            'file' => 'config/app/trade_entry.crash.yaml',
+            'line_range' => '7-12,19-205',
+            'content_sha256' => '722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f',
+            'commit' => '6ff8ab88e1bb9465f92f39424ae64305ca20ee0d',
+        ],
+    ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
         'source_origin', 'compatible_modes', 'mode_compatibility', 'hypothesis', 'context', 'filters',
@@ -85,11 +99,16 @@ final class SetupContractValidator
     /** @param array<string, mixed> $document */
     public function validate(array $document): void
     {
-        $this->exact($document, self::TOP_KEYS, 'contract');
+        $isCrashDecision = ($document['setup_id'] ?? null) === 'crash_short' && ($document['setup_version'] ?? null) === '1.1.0';
+        $topKeys = self::TOP_KEYS;
+        if ($isCrashDecision) {
+            $topKeys = array_values(array_diff($topKeys, ['source_origin']));
+            $topKeys[] = 'source_origins';
+        }
+        $this->exact($document, $topKeys, 'contract');
         foreach (['schema_version', 'setup_id', 'setup_version', 'status', 'family', 'side', 'thesis', 'hypothesis', 'ownership_model'] as $key) {
             $this->string($document, $key, 'contract');
         }
-        $isCrashDecision = $document['setup_id'] === 'crash_short' && $document['setup_version'] === '1.1.0';
         if ($document['schema_version'] !== '1.0.0'
             || (!($document['setup_id'] === 'crash_short' && in_array($document['setup_version'], ['1.0.0', '1.1.0'], true))
                 && $document['setup_version'] !== '1.0.0')) {
@@ -112,16 +131,22 @@ final class SetupContractValidator
             throw new SetupContractException('Unknown setup ownership model.');
         }
 
-        $origin = $this->map($document, 'source_origin', 'contract');
-        $this->exact($origin, ['file', 'line_range', 'content_sha256', 'commit'], 'source_origin');
-        foreach (['file', 'line_range', 'content_sha256', 'commit'] as $key) {
-            $this->string($origin, $key, 'source_origin');
+        $origins = $isCrashDecision
+            ? $this->list($document, 'source_origins', false, 'contract')
+            : [$this->map($document, 'source_origin', 'contract')];
+        $sourceFiles = [];
+        foreach ($origins as $index => $origin) {
+            if (!is_array($origin) || array_is_list($origin)) {
+                throw new SetupContractException(sprintf('source_origins[%d] must be a mapping.', $index));
+            }
+            $this->sourceOrigin($origin, $isCrashDecision ? sprintf('source_origins[%d]', $index) : 'source_origin');
+            if (isset($sourceFiles[$origin['file']])) {
+                throw new SetupContractException(sprintf('Duplicate source origin file "%s".', $origin['file']));
+            }
+            $sourceFiles[$origin['file']] = true;
         }
-        if (preg_match('/^[a-f0-9]{64}$/', $origin['content_sha256']) !== 1 || preg_match('/^[a-f0-9]{40}$/', $origin['commit']) !== 1) {
-            throw new SetupContractException('Source origin hashes must be exact immutable SHA values.');
-        }
-        if (preg_match('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']) !== 1) {
-            throw new SetupContractException('source_origin.line_range has invalid grammar.');
+        if ($isCrashDecision && $origins !== self::CRASH_DECISION_SOURCE_ORIGINS) {
+            throw new SetupContractException('crash_short 1.1.0 source origins must match the exact #310 source pins.');
         }
 
         $modes = $this->list($document, 'compatible_modes', true, 'contract');
@@ -348,6 +373,21 @@ final class SetupContractValidator
         }
         if (($decision['state'] === 'unresolved') !== ($decision['value'] === null)) {
             throw new SetupContractException($path . ' state/value mismatch.');
+        }
+    }
+
+    /** @param array<string, mixed> $origin */
+    private function sourceOrigin(array $origin, string $path): void
+    {
+        $this->exact($origin, ['file', 'line_range', 'content_sha256', 'commit'], $path);
+        foreach (['file', 'line_range', 'content_sha256', 'commit'] as $key) {
+            $this->string($origin, $key, $path);
+        }
+        if (preg_match('/^[a-f0-9]{64}$/', $origin['content_sha256']) !== 1 || preg_match('/^[a-f0-9]{40}$/', $origin['commit']) !== 1) {
+            throw new SetupContractException('Source origin hashes must be exact immutable SHA values.');
+        }
+        if (preg_match('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']) !== 1) {
+            throw new SetupContractException($path . '.line_range has invalid grammar.');
         }
     }
 

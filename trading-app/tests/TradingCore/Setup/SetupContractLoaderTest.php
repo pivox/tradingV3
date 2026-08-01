@@ -76,8 +76,17 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame([], $document['compatible_modes']);
         self::assertSame('distinct_operational_envelope', $document['mode_compatibility']['state']);
         self::assertSame('#310', $document['mode_compatibility']['issue']);
+        self::assertArrayNotHasKey('source_origin', $document);
+        self::assertSame(
+            [
+                'src/MtfValidator/config/validations.crash.yaml',
+                'config/app/trade_entry.crash.yaml',
+            ],
+            array_column($document['source_origins'], 'file'),
+        );
         self::assertFalse($decided->isExecutable());
         self::assertFalse((new SetupCompiler())->compile($decided)->publishable);
+        self::assertSame($document['source_origins'], (new SetupCompiler())->compile($decided)->sourceOrigins);
 
         $ids = array_map('basename', glob($this->root . '/*', GLOB_ONLYDIR) ?: []);
         self::assertCount(8, array_unique($ids));
@@ -196,27 +205,47 @@ final class SetupContractLoaderTest extends TestCase
         $legacyWithDecisionFields['execution']['order_policy'] = $document['execution']['order_policy'];
         $legacyWithDecisionFields['execution']['risk_boundary'] = $document['execution']['risk_boundary'];
         $this->assertPhpAndSchemaReject($legacyWithDecisionFields, '1.1.0 decision fields on crash_short 1.0.0');
+
+        $missingTradeEntryOrigin = $document;
+        array_pop($missingTradeEntryOrigin['source_origins']);
+        $this->assertPhpAndSchemaReject($missingTradeEntryOrigin, 'missing trade entry source origin');
+
+        $repinnedTradeEntryOrigin = $document;
+        $repinnedTradeEntryOrigin['source_origins'][1]['commit'] = str_repeat('a', 40);
+        $this->assertPhpAndSchemaReject($repinnedTradeEntryOrigin, 'repinned trade entry source origin');
     }
 
     public function testSourceOriginsPinExactCurrentContentHashes(): void
     {
         $expected = [
-            'validations.regular.yaml' => 'e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13',
-            'validations.scalper.yaml' => '5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2',
-            'validations.scalper_micro.yaml' => '47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2',
-            'validations.crash.yaml' => '5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2',
+            'validations.regular.yaml' => ['e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13', '719f70cd65b4e68d0ad11e0046af98ab5839ea4e'],
+            'validations.scalper.yaml' => ['5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2', '6c42d14d20798f6fee9d55b306ccaa0539af5e79'],
+            'validations.scalper_micro.yaml' => ['47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2', '75a4cef8852f99d6e8202422fdd0531cdfce60bb'],
+            'validations.crash.yaml' => ['5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2', 'd1d9a174960660e88f84c54850ef61181d39a880'],
+            'trade_entry.crash.yaml' => ['722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f', '6ff8ab88e1bb9465f92f39424ae64305ca20ee0d'],
+        ];
+        $expectedCrashDecisionRanges = [
+            'src/MtfValidator/config/validations.crash.yaml' => '5-16,136-137,164-167,169-305',
+            'config/app/trade_entry.crash.yaml' => '7-12,19-205',
         ];
 
-        foreach (glob($this->root . '/*/1.0.0.yaml') ?: [] as $path) {
+        foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
             $document = Yaml::parseFile($path);
             self::assertIsArray($document);
-            $origin = $document['source_origin'];
-            $basename = basename($origin['file']);
-            self::assertSame($expected[$basename], $origin['content_sha256'], $path);
-            $sourcePath = dirname(__DIR__, 3) . '/' . $origin['file'];
-            self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
-            self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
-            self::assertMatchesRegularExpression('/^[a-f0-9]{40}$/', $origin['commit']);
+            $origins = isset($document['source_origins']) ? $document['source_origins'] : [$document['source_origin']];
+            self::assertNotSame([], $origins, $path);
+            self::assertCount(count($origins), array_unique(array_column($origins, 'file')), $path);
+            foreach ($origins as $origin) {
+                $basename = basename($origin['file']);
+                self::assertSame($expected[$basename][0], $origin['content_sha256'], $path);
+                self::assertSame($expected[$basename][1], $origin['commit'], $path);
+                $sourcePath = dirname(__DIR__, 3) . '/' . $origin['file'];
+                self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
+                self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
+                if (($document['setup_version'] ?? null) === '1.1.0') {
+                    self::assertSame($expectedCrashDecisionRanges[$origin['file']], $origin['line_range']);
+                }
+            }
         }
     }
 
@@ -277,6 +306,7 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame('scalping.pullback.long', $first->setupId);
         self::assertSame('1.0.0', $first->setupVersion);
         self::assertSame(['scalping' => '1.0.0'], $first->modeVersions);
+        self::assertSame([$contract->toArray()['source_origin']], $first->sourceOrigins);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->configHash);
         self::assertNull($first->conditionCatalogHash);
         self::assertFalse($first->publishable);

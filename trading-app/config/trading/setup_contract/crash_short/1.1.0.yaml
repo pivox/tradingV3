@@ -6,7 +6,9 @@ executable: false
 family: crash_short
 side: short
 thesis: 'Strict bearish 4h/1h context plus 15m confirmation may precede continued downside on a sourced 5m-default or extreme-1m execution variant.'
-source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,164-167,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+source_origins:
+  - { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,164-167,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+  - { file: 'config/app/trade_entry.crash.yaml', line_range: '7-12,19-205', content_sha256: 722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f, commit: 6ff8ab88e1bb9465f92f39424ae64305ca20ee0d }
 compatible_modes: []
 mode_compatibility:
   state: distinct_operational_envelope

@@ -8,6 +8,7 @@ final readonly class CompiledSetupSnapshot
 {
     /**
      * @param array<string, string> $modeVersions
+     * @param list<array{file: string, line_range: string, content_sha256: string, commit: string}> $sourceOrigins
      * @param array<string, mixed> $ast
      * @param array<string, string> $provenanceByKey
      */
@@ -15,6 +16,7 @@ final readonly class CompiledSetupSnapshot
         public string $setupId,
         public string $setupVersion,
         public array $modeVersions,
+        public array $sourceOrigins,
         public string $configHash,
         public ?string $conditionCatalogHash,
         public bool $publishable,
