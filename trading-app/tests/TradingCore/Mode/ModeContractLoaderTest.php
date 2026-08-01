@@ -212,7 +212,7 @@ final class ModeContractLoaderTest extends TestCase
             $scalping['risk']['trade_budget']['source'],
         );
         self::assertSame(
-            'src/MtfValidator/config/validations.scalper_micro.yaml:109-125',
+            'src/MtfValidator/config/validations.scalper_micro.yaml:87-101,109-125',
             $micro['provenance'][4]['source'],
         );
     }
