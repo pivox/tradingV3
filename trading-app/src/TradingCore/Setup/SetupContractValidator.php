@@ -107,6 +107,9 @@ final class SetupContractValidator
         if (preg_match('/^[a-f0-9]{64}$/', $origin['content_sha256']) !== 1 || preg_match('/^[a-f0-9]{40}$/', $origin['commit']) !== 1) {
             throw new SetupContractException('Source origin hashes must be exact immutable SHA values.');
         }
+        if (preg_match('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']) !== 1) {
+            throw new SetupContractException('source_origin.line_range has invalid grammar.');
+        }
 
         $modes = $this->list($document, 'compatible_modes', true, 'contract');
         foreach ($modes as $row) {
@@ -157,8 +160,10 @@ final class SetupContractValidator
 
         $data = $this->map($document, 'data_condition_contract', 'contract');
         $this->exact($data, ['required_data', 'missing_conditions', 'external_dependencies', 'condition_catalog_hash', 'unknown_condition_policy'], 'data_condition_contract');
-        $this->strings($this->list($data, 'required_data', false, 'data_condition_contract'), 'required_data');
+        $requiredData = $this->strings($this->list($data, 'required_data', false, 'data_condition_contract'), 'required_data');
+        $this->assertUniqueStrings($requiredData, 'data_condition_contract.required_data');
         $missing = $this->strings($this->list($data, 'missing_conditions', true, 'data_condition_contract'), 'missing_conditions');
+        $this->assertUniqueStrings($missing, 'data_condition_contract.missing_conditions');
         foreach ($missing as $condition) {
             if (!in_array($condition, self::CONDITION_IDS, true)) {
                 throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
@@ -184,7 +189,14 @@ final class SetupContractValidator
                 throw new SetupContractException('External safety dependencies must remain mode_or_exchange-owned, unresolved, and fail closed.');
             }
         }
-        $this->decision($this->map($data, 'condition_catalog_hash', 'data_condition_contract'), 'data_condition_contract.condition_catalog_hash');
+        $conditionCatalogHash = $this->map($data, 'condition_catalog_hash', 'data_condition_contract');
+        $this->decision($conditionCatalogHash, 'data_condition_contract.condition_catalog_hash');
+        if ($conditionCatalogHash['unit'] !== 'sha256') {
+            throw new SetupContractException('data_condition_contract.condition_catalog_hash.unit must be sha256.');
+        }
+        if ($conditionCatalogHash['state'] === 'defined' && (!is_string($conditionCatalogHash['value']) || preg_match('/^[a-f0-9]{64}$/', $conditionCatalogHash['value']) !== 1)) {
+            throw new SetupContractException('Defined condition catalog hash must be a lowercase 64-character SHA-256 string.');
+        }
         if ($data['unknown_condition_policy'] !== 'reject') {
             throw new SetupContractException('Unknown conditions must reject.');
         }
@@ -200,8 +212,10 @@ final class SetupContractValidator
         if (($governance['activation_requires_trace'] ?? null) !== true || ($governance['activation_requires_certified_net_baseline'] ?? null) !== true) {
             throw new SetupContractException('Activation requires trace and a certified net baseline.');
         }
-        $this->strings($this->list($document, 'known_defects', true, 'contract'), 'known_defects');
+        $knownDefects = $this->strings($this->list($document, 'known_defects', true, 'contract'), 'known_defects');
+        $this->assertUniqueStrings($knownDefects, 'known_defects');
         $rows = $this->list($document, 'provenance', false, 'contract');
+        $provenancePaths = [];
         foreach ($rows as $row) {
             if (!is_array($row) || array_is_list($row)) {
                 throw new SetupContractException('Provenance entries must be mappings.');
@@ -210,6 +224,10 @@ final class SetupContractValidator
             foreach (['path', 'source', 'justification'] as $key) {
                 $this->string($row, $key, 'provenance[]');
             }
+            if (isset($provenancePaths[$row['path']])) {
+                throw new SetupContractException(sprintf('Duplicate provenance path "%s".', $row['path']));
+            }
+            $provenancePaths[$row['path']] = true;
         }
     }
 
@@ -273,12 +291,12 @@ final class SetupContractValidator
         foreach ($parameters as $key => $value) {
             $type = self::PARAMETER_TYPES[$key];
             $valid = match ($type) {
-                'number' => is_int($value) || is_float($value),
+                'number' => (is_int($value) || is_float($value)) && is_finite((float) $value),
                 'integer' => is_int($value),
                 'string' => is_string($value) && trim($value) !== '',
             };
             if (!$valid) {
-                throw new SetupContractException(sprintf('Parameter "%s" for condition "%s" must be %s.', $key, $condition, $type));
+                throw new SetupContractException(sprintf('Parameter "%s" for condition "%s" must be a finite %s.', $key, $condition, $type));
             }
         }
     }
@@ -364,5 +382,13 @@ final class SetupContractValidator
 
         /** @var list<string> $values */
         return $values;
+    }
+
+    /** @param list<string> $values */
+    private function assertUniqueStrings(array $values, string $path): void
+    {
+        if (count(array_unique($values)) !== count($values)) {
+            throw new SetupContractException($path . ' must contain unique items.');
+        }
     }
 }

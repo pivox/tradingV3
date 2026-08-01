@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Setup;
 
 use App\TradingCore\Setup\Exception\SetupContractException;
+use App\TradingCore\Setup\ConditionCatalog;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -18,6 +19,7 @@ use Symfony\Component\Yaml\Yaml;
 #[CoversClass(SetupContractLoader::class)]
 #[CoversClass(SetupContractValidator::class)]
 #[CoversClass(SetupCompiler::class)]
+#[CoversClass(ConditionCatalog::class)]
 #[CoversClass(SetupContractException::class)]
 final class SetupContractLoaderTest extends TestCase
 {
@@ -127,7 +129,7 @@ final class SetupContractLoaderTest extends TestCase
 
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Unknown condition "invented_condition"');
-        (new SetupCompiler())->compile($contract, ['invented_condition']);
+        (new SetupCompiler())->compile($contract, new ConditionCatalog(['invented_condition']));
     }
 
     public function testImmutableSnapshotHasStableHashesVersionsAndProvenanceByKey(): void
@@ -345,6 +347,96 @@ final class SetupContractLoaderTest extends TestCase
             $document['data_condition_contract']['external_dependencies'][0];
 
         $this->assertPhpAndSchemaReject($document, 'duplicate external dependency');
+    }
+
+    public function testConditionCatalogHashIsSpecializedAndVerifiedDuringCompilation(): void
+    {
+        $catalog = new ConditionCatalog(['rsi_lt_70', 'near_vwap']);
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $document['data_condition_contract']['condition_catalog_hash'] = [
+            'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
+            'source' => 'test catalog', 'justification' => 'Exact test catalog hash.',
+        ];
+        $snapshot = (new SetupCompiler())->compile(SetupContract::fromDocument($document), $catalog);
+        self::assertSame($catalog->stableHash(), $snapshot->conditionCatalogHash);
+
+        $mismatch = new ConditionCatalog(['rsi_lt_70']);
+        try {
+            (new SetupCompiler())->compile(SetupContract::fromDocument($document), $mismatch);
+            self::fail('Compiler accepted mismatched condition catalog hash.');
+        } catch (SetupContractException $exception) {
+            self::assertStringContainsString('Condition catalog hash mismatch', $exception->getMessage());
+        }
+
+        foreach ([['unit' => 'md5'], ['value' => ['not-a-string']]] as $mutation) {
+            $invalid = $document;
+            $invalid['data_condition_contract']['condition_catalog_hash'] = array_replace(
+                $invalid['data_condition_contract']['condition_catalog_hash'],
+                $mutation,
+            );
+            $this->assertPhpAndSchemaReject($invalid, 'invalid specialized catalog hash');
+        }
+    }
+
+    public function testCompilerCanonicalizesExecutionRecursivelyForStableSerializedSnapshot(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $reordered = $document;
+        $execution = $reordered['execution'];
+        $reordered['execution'] = array_reverse($execution, true);
+        $reordered['execution']['entry_zone'] = array_reverse($reordered['execution']['entry_zone'], true);
+
+        $compiler = new SetupCompiler();
+        $first = $compiler->compile(SetupContract::fromDocument($document))->toArray();
+        $second = $compiler->compile(SetupContract::fromDocument($reordered))->toArray();
+        self::assertSame($first['configHash'], $second['configHash']);
+        self::assertSame($first, $second);
+    }
+
+    public function testPhpAndSchemaRejectDuplicateProvenancePathsBeforeCompilation(): void
+    {
+        $document = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
+        $duplicate = $document['provenance'][0];
+        $duplicate['justification'] = 'Different row content with the same path must still reject.';
+        $document['provenance'][] = $duplicate;
+
+        $this->assertPhpAndSchemaReject($document, 'duplicate provenance path');
+    }
+
+    public function testPhpAndSchemaRejectInvalidSourceLineRangeGrammar(): void
+    {
+        $document = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
+        $document['source_origin']['line_range'] = '5-16, bad';
+
+        $this->assertPhpAndSchemaReject($document, 'invalid source line range');
+    }
+
+    public function testPhpRejectsNonFiniteNumericConditionParameterWithDomainException(): void
+    {
+        $document = $this->yaml($this->root . '/micro_scalping.momentum_ofi.long/1.0.0.yaml');
+        $document['context']['trigger']['nodes'][1]['parameters']['max_spread_bps'] = INF;
+
+        $this->expectException(SetupContractException::class);
+        $this->expectExceptionMessage('finite');
+        (new SetupContractValidator())->validate($document);
+    }
+
+    public function testPhpAndSchemaRejectDuplicateStringListItems(): void
+    {
+        $mutations = [];
+        $required = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $required['data_condition_contract']['required_data'][] = $required['data_condition_contract']['required_data'][0];
+        $mutations['required_data'] = $required;
+        $missing = $this->yaml($this->root . '/micro_scalping.momentum_ofi.long/1.0.0.yaml');
+        $missing['data_condition_contract']['missing_conditions'][] = $missing['data_condition_contract']['missing_conditions'][0];
+        $mutations['missing_conditions'] = $missing;
+        $defects = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
+        $defects['known_defects'][] = $defects['known_defects'][0];
+        $mutations['known_defects'] = $defects;
+
+        foreach ($mutations as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, 'duplicate ' . $label);
+        }
     }
 
     /** @param array<string, mixed> $mutation */

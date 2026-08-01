@@ -8,14 +8,8 @@ use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupCompiler
 {
-    /** @param list<string> $conditionNames */
-    public function compile(SetupContract $contract, array $conditionNames = []): CompiledSetupSnapshot
+    public function compile(SetupContract $contract, ?ConditionCatalog $conditionCatalog = null): CompiledSetupSnapshot
     {
-        foreach ($conditionNames as $condition) {
-            if (!in_array($condition, SetupContractValidator::CONDITION_IDS, true)) {
-                throw new SetupContractException(sprintf('Unknown condition "%s"; compilation is non-publishable and fails closed.', $condition));
-            }
-        }
         $document = $contract->toArray();
         $modeVersions = [];
         foreach ($document['compatible_modes'] as $mode) {
@@ -31,6 +25,14 @@ final class SetupCompiler
         $configHash = hash('sha256', json_encode($canonical, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION));
         $catalogDecision = $document['data_condition_contract']['condition_catalog_hash'];
         $catalogHash = $catalogDecision['state'] === 'defined' ? $catalogDecision['value'] : null;
+        if ($catalogHash !== null) {
+            if ($conditionCatalog === null) {
+                throw new SetupContractException('Defined condition catalog hash requires a supplied typed condition catalog.');
+            }
+            if (!hash_equals($catalogHash, $conditionCatalog->stableHash())) {
+                throw new SetupContractException('Condition catalog hash mismatch; compilation fails closed.');
+            }
+        }
         $ast = [
             'kind' => 'setup',
             'side' => $contract->side,
@@ -40,7 +42,7 @@ final class SetupCompiler
             'confirmations' => $this->canonicalize($document['context']['confirmations']),
             'filters' => $this->canonicalize(['op' => 'all_of', 'nodes' => $document['filters']]),
             'no_trade_rules' => $this->canonicalize(['op' => 'all_of', 'nodes' => $document['no_trade_rules']]),
-            'execution' => $document['execution'],
+            'execution' => $this->canonicalize($document['execution']),
         ];
         $publishable = $contract->isExecutable()
             && $catalogHash !== null
