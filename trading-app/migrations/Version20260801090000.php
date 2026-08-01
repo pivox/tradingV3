@@ -23,7 +23,7 @@ final class Version20260801090000 extends AbstractMigration
 
     public function isTransactional(): bool
     {
-        return false;
+        return true;
     }
 
     public function up(Schema $schema): void
@@ -40,8 +40,6 @@ final class Version20260801090000 extends AbstractMigration
         $this->addSql('ALTER TABLE trade_lineage ADD decision_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lineage ADD decision_key VARCHAR(160) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lineage ADD effective_config_reference VARCHAR(255) DEFAULT NULL');
-        $this->addSql('CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ux_trade_lineage_decision_id ON trade_lineage (decision_id) WHERE decision_id IS NOT NULL');
-        $this->addSql('CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_trade_lineage_canonical_contract ON trade_lineage (mode_id, mode_version, setup_id, setup_version)');
     }
 
     public function down(Schema $schema): void
@@ -50,8 +48,6 @@ final class Version20260801090000 extends AbstractMigration
             !($this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform),
             'This migration can only be executed safely on PostgreSQL.',
         );
-        $this->addSql('DROP INDEX CONCURRENTLY IF EXISTS ux_trade_lineage_decision_id');
-        $this->addSql('DROP INDEX CONCURRENTLY IF EXISTS idx_trade_lineage_canonical_contract');
         $this->addSql('ALTER TABLE trade_lineage DROP condition_catalog_hash');
         $this->addSql('ALTER TABLE trade_lineage DROP mode_id');
         $this->addSql('ALTER TABLE trade_lineage DROP mode_version');
