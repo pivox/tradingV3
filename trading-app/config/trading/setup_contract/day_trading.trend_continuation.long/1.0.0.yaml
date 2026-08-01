@@ -6,27 +6,114 @@ executable: false
 family: trend_continuation
 side: long
 thesis: 'A bullish 4h/1h regime followed by aligned 15m momentum may continue upward.'
-source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
+source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,84-88,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
 compatible_modes: [{ mode_id: day_trading, mode_version: '1.0.0' }]
 mode_compatibility: { state: defined, issue: null, justification: 'Matches the day_trading compatible_setup_ids catalog frozen by #300.' }
 hypothesis: 'If the sourced bullish regime, momentum, pullback filters, and lower-timeframe confirmations hold, the setup predicts continuation before its unresolved invalidation; this requires shadow falsification and makes no profitability claim.'
 context:
   side: long
   regime:
-    - { condition: price_regime_ok_long, timeframe: 4h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:248-254' }
+    op: all_of
+    provenance: 'validations.regular.yaml:248-254'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:251-253'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:252 evidence branch'
+            nodes:
+              - { condition: ema_50_gt_200, timeframe: 4h, provenance: 'validations.regular.yaml:252' }
+              - { condition: close_above_ema_200, timeframe: 4h, provenance: 'validations.regular.yaml:252' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:253 evidence branch'
+            nodes:
+              - { condition: ema_above_200_with_tolerance, timeframe: 4h, provenance: 'validations.regular.yaml:253' }
+              - { condition: ema_50_gt_200, timeframe: 4h, provenance: 'validations.regular.yaml:253' }
+      - { condition: price_regime_ok_long, timeframe: 4h, provenance: 'validations.regular.yaml:254' }
   context:
-    - { condition: price_regime_ok_long, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:262-273' }
-    - { condition: macd_hist_gt_eps, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:268-272 evidence variant 1 of one continuation hypothesis' }
+    op: all_of
+    provenance: 'validations.regular.yaml:262-273'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:265-267'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:266'
+            nodes:
+              - { condition: ema_above_200_with_tolerance, timeframe: 1h, provenance: 'validations.regular.yaml:266' }
+              - { condition: ema_50_gt_200, timeframe: 1h, provenance: 'validations.regular.yaml:266' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:267'
+            nodes:
+              - { condition: ema200_slope_pos, timeframe: 1h, provenance: 'validations.regular.yaml:267' }
+              - { condition: ema_50_gt_200, timeframe: 1h, provenance: 'validations.regular.yaml:267' }
+      - op: any_of
+        provenance: 'validations.regular.yaml:268-272 evidence variants'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1h, provenance: 'validations.regular.yaml:269' }
+          - { condition: macd_line_cross_up_with_hysteresis, timeframe: 1h, provenance: 'validations.regular.yaml:270-271' }
+          - { condition: macd_hist_slope_pos, timeframe: 1h, provenance: 'validations.regular.yaml:272' }
+      - { condition: price_regime_ok_long, timeframe: 1h, provenance: 'validations.regular.yaml:273' }
   trigger:
-    - { condition: ema20_over_50_with_tolerance, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:287-298; any_of branches are evidence variants' }
-    - { condition: close_above_vwap_or_ma9, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:287-298' }
-    - { condition: macd_hist_gt_eps, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:289-295 evidence variant' }
+    op: all_of
+    provenance: 'validations.regular.yaml:287-298'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:290-294 evidence variants'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:291'
+            nodes:
+              - { condition: macd_hist_gt_eps, timeframe: 15m, provenance: 'validations.regular.yaml:291' }
+              - { condition: ema20_over_50_with_tolerance, timeframe: 15m, provenance: 'validations.regular.yaml:291' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:292-294'
+            nodes:
+              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 15m, provenance: 'validations.regular.yaml:293' }
+              - { condition: close_above_vwap_or_ma9, timeframe: 15m, provenance: 'validations.regular.yaml:294' }
+      - { condition: ema20_over_50_with_tolerance, timeframe: 15m, provenance: 'validations.regular.yaml:295' }
+      - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:296' }
+      - { condition: close_above_vwap_or_ma9, timeframe: 15m, provenance: 'validations.regular.yaml:297' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.regular.yaml:298' }
   confirmations:
-    - { condition: close_above_vwap_or_ma9, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:310-321 common confirmation' }
-    - { condition: macd_hist_gt_eps, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:333-341 common confirmation' }
+    op: all_of
+    provenance: 'validations.regular.yaml:310-341 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.regular.yaml:310-321'
+        nodes:
+          - op: any_of
+            provenance: 'validations.regular.yaml:313-317'
+            nodes:
+              - op: all_of
+                provenance: 'validations.regular.yaml:314'
+                nodes:
+                  - { condition: macd_hist_gt_eps, timeframe: 5m, provenance: 'validations.regular.yaml:314' }
+                  - { condition: ema20_over_50_with_tolerance, timeframe: 5m, provenance: 'validations.regular.yaml:314' }
+              - op: all_of
+                provenance: 'validations.regular.yaml:315-317'
+                nodes:
+                  - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, provenance: 'validations.regular.yaml:316' }
+                  - { condition: close_above_vwap_or_ma9, timeframe: 5m, provenance: 'validations.regular.yaml:317' }
+          - { condition: ema20_over_50_with_tolerance, timeframe: 5m, provenance: 'validations.regular.yaml:318' }
+          - { condition: close_above_vwap_or_ma9, timeframe: 5m, provenance: 'validations.regular.yaml:319' }
+          - { condition: rsi_lt_70, timeframe: 5m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:320' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.regular.yaml:321' }
+      - op: all_of
+        provenance: 'validations.regular.yaml:333-341'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1m, provenance: 'validations.regular.yaml:336' }
+          - { condition: ema20_over_50_with_tolerance, timeframe: 1m, provenance: 'validations.regular.yaml:337' }
+          - { condition: close_above_vwap_or_ma9, timeframe: 1m, provenance: 'validations.regular.yaml:338' }
+          - { condition: rsi_lt_70, timeframe: 1m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:339' }
+          - { condition: macd_hist_slope_pos, timeframe: 1m, provenance: 'validations.regular.yaml:340' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.regular.yaml:341' }
 filters:
   - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243' }
-  - { condition: pullback_confirmed, timeframe: global, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:84-88,238-243' }
+  - { condition: adx_min_for_trend, timeframe: 1h, provenance: 'validations.regular.yaml:240' }
+  - { condition: pullback_confirmed_ma9_21, timeframe: global, provenance: 'validations.regular.yaml:241' }
+  - { condition: pullback_confirmed_vwap, timeframe: global, provenance: 'validations.regular.yaml:242' }
+  - { condition: price_lte_ma21_plus_k_atr, timeframe: global, provenance: 'validations.regular.yaml:243' }
 no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
 execution:

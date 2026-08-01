@@ -19,7 +19,7 @@ There is no swing setup. Regular `any_of` branches are retained as evidence vari
 
 ## Immutable sources
 
-Each setup pins the exact legacy file, active line ranges, the content SHA-256, and the last commit that changed the source file. Every extracted rule also carries its own line provenance. Tests recompute source content hashes, load exactly eight version directories, and validate the documents both with PHP and the Draft 2020-12 schema.
+Each setup pins the exact legacy file, every cited definition/invocation range, the content SHA-256, and the last commit that changed the source file. Every extracted rule and boolean group also carries its own line provenance. Tests recompute source content hashes, load exactly eight version directories, audit all eight origin ranges, and validate the documents both with PHP and the Draft 2020-12 schema.
 
 The pinned hashes are:
 
@@ -40,6 +40,6 @@ The pinned hashes are:
 
 ## Static safety and ownership
 
-The PHP loader rejects unknown IDs/versions and identity mismatches without aliases or fallback. The PHP validator and JSON schema reject missing, extra, mistyped and unknown fields/conditions. Critical absent or stale data rejects. Side equality is enforced as `setup.side = context.side = execution.side`. Setup documents cannot own risk budget, leverage caps, or exchange fees; those remain mode/exchange concerns.
+The PHP loader rejects unknown IDs/versions and identity mismatches without aliases or fallback. The PHP validator and JSON schema reject missing, extra, mistyped and unknown fields/conditions, unsupported timeframes, unknown condition parameters, and wrong parameter types. Parameter keys are condition-specific in PHP and constrained by equivalent conditional rules in the JSON schema. Critical absent or stale data rejects. Side equality is enforced as `setup.side = context.side = execution.side`. Setup documents cannot own risk budget, leverage caps, or exchange fees; those remain mode/exchange concerns.
 
-Compilation produces a canonical AST and readonly snapshot containing setup version, compatible mode versions, stable configuration hash, condition-catalog state, and provenance indexed by key. A source artifact outside `config/trading/setup_contract` cannot be loaded or compiled through the canonical loader. Publication also requires a complete condition catalog, executable lifecycle, full trace, and certified net baseline. All eight extracted versions intentionally fail those gates.
+Compilation preserves the source `all_of`/`any_of` expression tree in a canonical AST, including the three scalper scenario-A MACD alternatives and the redundant crash pullback subset. Its readonly snapshot contains setup version, compatible mode versions, stable configuration hash, condition-catalog state, and provenance indexed by key. A source artifact outside `config/trading/setup_contract` cannot be loaded or compiled through the canonical loader. Publication also requires a complete condition catalog, executable lifecycle, full trace, and certified net baseline. All eight extracted versions intentionally fail those gates.

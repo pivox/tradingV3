@@ -6,23 +6,55 @@ executable: false
 family: crash_short
 side: short
 thesis: 'Aligned bearish 4h/1h context and accelerating 15m/5m/1m selling may continue during a violent dump.'
-source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
 compatible_modes: []
 mode_compatibility: { state: unresolved, issue: '#310', justification: 'Crash is a setup, never a modern mode; compatible modern mode membership remains unresolved.' }
 hypothesis: 'During an aligned bearish crash context, sourced cascade patterns predict continued downside; compatible mode, costs and exits remain unresolved.'
 context:
   side: short
   regime:
-    - { condition: price_regime_ok_short, timeframe: 4h, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:259-264' }
+    op: all_of
+    provenance: 'validations.crash.yaml:259-264'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 4h, provenance: 'validations.crash.yaml:263' }
   context:
-    - { condition: crash_context_ok, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:169-176,265-269' }
+    op: all_of
+    provenance: 'validations.crash.yaml:169-176,265-269'
+    nodes:
+      - { condition: crash_context_ok, timeframe: 1h, provenance: 'validations.crash.yaml:269' }
   trigger:
-    - { condition: crash_short_pattern_15m, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:178-184,271-276' }
-    - { condition: crash_short_pattern_5m, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:186-194,278-285' }
+    op: all_of
+    provenance: 'validations.crash.yaml:271-285'
+    nodes:
+      - op: all_of
+        provenance: 'validations.crash.yaml:274-276'
+        nodes:
+          - { condition: crash_context_ok, timeframe: 15m, provenance: 'validations.crash.yaml:275' }
+          - { condition: crash_short_pattern_15m, timeframe: 15m, provenance: 'validations.crash.yaml:178-184,276' }
+      - op: any_of
+        provenance: 'validations.crash.yaml:281-285'
+        nodes:
+          - op: all_of
+            provenance: 'validations.crash.yaml:283-285'
+            nodes:
+              - { condition: crash_context_ok, timeframe: 5m, provenance: 'validations.crash.yaml:284' }
+              - { condition: crash_short_pattern_5m, timeframe: 5m, provenance: 'validations.crash.yaml:186-194,285' }
   confirmations:
-    - { condition: crash_short_pattern_1m, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:196-203,293-300' }
+    op: any_of
+    provenance: 'validations.crash.yaml:293-305; redundant subset retained in AST'
+    nodes:
+      - op: all_of
+        provenance: 'validations.crash.yaml:297-300 normal branch'
+        nodes:
+          - { condition: crash_context_ok, timeframe: 1m, provenance: 'validations.crash.yaml:299' }
+          - { condition: crash_short_pattern_1m, timeframe: 1m, provenance: 'validations.crash.yaml:196-203,300' }
+      - op: all_of
+        provenance: 'validations.crash.yaml:302-305 redundant pullback subset'
+        nodes:
+          - { condition: crash_context_ok, timeframe: 1m, provenance: 'validations.crash.yaml:304' }
+          - { condition: crash_short_entry_1m, timeframe: 1m, provenance: 'validations.crash.yaml:205-214,305' }
 filters:
-  - { condition: rsi_lt_70, timeframe: global, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:247-249' }
+  - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
 no_trade_rules:
   - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 anti-last-tick guard' }
 missing_data_policy: { absent: reject, stale: reject, critical: reject }

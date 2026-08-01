@@ -13,17 +13,35 @@ hypothesis: 'Negative local momentum plus executable spread and OFI could predic
 context:
   side: short
   regime:
-    - { condition: close_below_vwap_or_ma9, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.scalper_micro.yaml:95-101' }
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101'
+    nodes:
+      - { condition: close_below_vwap_or_ma9, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:97' }
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
+      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
+      - { condition: rsi_gt_30, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:100' }
+      - { condition: atr_volatility_ok, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:101' }
   context:
-    - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:96-101' }
-    - { condition: rsi_bearish, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.scalper_micro.yaml:99' }
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101'
+    nodes:
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
+      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
   trigger:
-    - { condition: spread_bps_lte, timeframe: 1m, parameters: { max_spread_bps: 8 }, provenance: 'validations.scalper_micro.yaml:120; condition implementation absent' }
-    - { condition: order_flow_imbalance_lte, timeframe: 1m, parameters: { max_ofi: -0.15 }, provenance: 'validations.scalper_micro.yaml:121; condition/data implementation absent' }
-    - { condition: near_vwap, timeframe: 1m, parameters: { near_vwap_tolerance: 0.0012 }, provenance: 'validations.scalper_micro.yaml:119' }
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:117-125'
+    nodes:
+      - { condition: near_vwap, timeframe: 1m, parameters: { near_vwap_tolerance: 0.0012 }, provenance: 'validations.scalper_micro.yaml:119' }
+      - { condition: spread_bps_lte, timeframe: 1m, parameters: { max_spread_bps: 8 }, provenance: 'validations.scalper_micro.yaml:120; condition implementation absent' }
+      - { condition: order_flow_imbalance_lte, timeframe: 1m, parameters: { max_ofi: -0.15 }, provenance: 'validations.scalper_micro.yaml:121; condition/data implementation absent' }
+      - { condition: close_below_vwap_or_ma9, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:122' }
   confirmations:
-    - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { n: 1, eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:123' }
-    - { condition: rsi_bearish, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.scalper_micro.yaml:124' }
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:123-125'
+    nodes:
+      - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { n: 1, eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:123' }
+      - { condition: rsi_bearish, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:124' }
+      - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
 filters:
   - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
 no_trade_rules: []

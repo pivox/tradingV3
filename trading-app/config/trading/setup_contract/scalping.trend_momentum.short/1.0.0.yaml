@@ -13,18 +13,63 @@ hypothesis: 'Sourced bearish trend and momentum alignment predicts downside cont
 context:
   side: short
   regime:
-    - { condition: price_regime_ok_short, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:279-285' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:279-285'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 1h, provenance: 'validations.scalper.yaml:281' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:282-284'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 1h, provenance: 'validations.scalper.yaml:283' }
+          - { condition: macd_hist_slope_neg, timeframe: 1h, provenance: 'validations.scalper.yaml:284' }
+      - { condition: adx_min_for_trend, timeframe: 1h, provenance: 'validations.scalper.yaml:285' }
   context:
-    - { condition: price_regime_ok_short, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:306-318' }
-    - { condition: ema_20_lt_50, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:309-311 evidence variant' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:306-318'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 15m, provenance: 'validations.scalper.yaml:308' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:309-311'
+        nodes:
+          - { condition: ema_20_lt_50, timeframe: 15m, provenance: 'validations.scalper.yaml:310' }
+          - { condition: ema_50_lt_200, timeframe: 15m, provenance: 'validations.scalper.yaml:311' }
   trigger:
-    - { condition: macd_hist_decreasing_n, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:312-315 evidence variant' }
-    - { condition: close_below_vwap, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:316' }
-    - { condition: rsi_gt_softfloor, timeframe: 15m, parameters: { rsi_softfloor_threshold: 20 }, provenance: 'validations.scalper.yaml:317' }
-    - { condition: atr_rel_in_range_15m, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:318' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:306-318'
+    nodes:
+      - op: any_of
+        provenance: 'validations.scalper.yaml:312-315'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 15m, provenance: 'validations.scalper.yaml:313' }
+          - { condition: macd_hist_slope_neg, timeframe: 15m, provenance: 'validations.scalper.yaml:314' }
+          - { condition: macd_line_below_signal, timeframe: 15m, provenance: 'validations.scalper.yaml:315' }
+      - { condition: close_below_vwap, timeframe: 15m, provenance: 'validations.scalper.yaml:316' }
+      - { condition: rsi_gt_softfloor, timeframe: 15m, parameters: { rsi_softfloor_threshold: 20 }, provenance: 'validations.scalper.yaml:317' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.scalper.yaml:318' }
   confirmations:
-    - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:331-339 common confirmation variant' }
-    - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:350-356 common confirmation' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:331-356 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.scalper.yaml:331-339'
+        nodes:
+          - op: any_of
+            provenance: 'validations.scalper.yaml:333-335'
+            nodes:
+              - { condition: macd_hist_decreasing_n, timeframe: 5m, provenance: 'validations.scalper.yaml:334' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.scalper.yaml:335' }
+          - { condition: close_below_vwap, timeframe: 5m, provenance: 'validations.scalper.yaml:336' }
+          - { condition: rsi_gt_softfloor, timeframe: 5m, parameters: { rsi_softfloor_threshold: 18 }, provenance: 'validations.scalper.yaml:337' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:338' }
+          - { condition: volume_ratio_ok, timeframe: 5m, provenance: 'validations.scalper.yaml:339' }
+      - op: all_of
+        provenance: 'validations.scalper.yaml:350-356'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 1m, provenance: 'validations.scalper.yaml:352' }
+          - { condition: close_below_vwap, timeframe: 1m, provenance: 'validations.scalper.yaml:353' }
+          - { condition: rsi_gt_softfloor, timeframe: 1m, parameters: { rsi_softfloor_threshold: 22 }, provenance: 'validations.scalper.yaml:354' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.scalper.yaml:355' }
+          - { condition: volume_ratio_ok, timeframe: 1m, provenance: 'validations.scalper.yaml:356' }
 filters: []
 no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }

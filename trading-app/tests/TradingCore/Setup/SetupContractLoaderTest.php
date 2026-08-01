@@ -210,6 +210,9 @@ final class SetupContractLoaderTest extends TestCase
         $extra = $base;
         $extra['risk_budget'] = 0.01;
         $mutations['setup-owned risk'] = $extra;
+        $leverage = $base;
+        $leverage['leverage_cap'] = 12;
+        $mutations['setup-owned leverage cap'] = $leverage;
         $status = $base;
         $status['status'] = 'active';
         $mutations['premature activation'] = $status;
@@ -217,7 +220,7 @@ final class SetupContractLoaderTest extends TestCase
         $decision['execution']['stop']['value'] = ['atr_k' => 1.5];
         $mutations['unresolved decision with value'] = $decision;
         $condition = $base;
-        $condition['context']['trigger'][0]['condition'] = 'typo_condition';
+        $condition['context']['trigger']['nodes'][0]['condition'] = 'typo_condition';
         $mutations['unknown condition'] = $condition;
 
         $jsonValidator = new JsonSchemaValidator();
@@ -240,6 +243,75 @@ final class SetupContractLoaderTest extends TestCase
             foreach (['risk', 'risk_budget', 'leverage', 'leverage_cap', 'exchange_fees'] as $forbidden) {
                 self::assertArrayNotHasKey($forbidden, $document, $path);
             }
+        }
+    }
+
+    public function testPhpAndSchemaRejectUnsupportedTimeframeAndMistypedConditionParameter(): void
+    {
+        $base = $this->yaml($this->root . '/micro_scalping.momentum_ofi.long/1.0.0.yaml');
+        $badTimeframe = $base;
+        $badTimeframe['context']['trigger']['nodes'][1]['timeframe'] = '99m';
+        $badParameter = $base;
+        $badParameter['context']['trigger']['nodes'][1]['parameters'] = ['max_spred_bps' => 8];
+        $badParameterType = $base;
+        $badParameterType['context']['trigger']['nodes'][1]['parameters'] = ['max_spread_bps' => 'eight'];
+
+        foreach (['unsupported timeframe' => $badTimeframe, 'mistyped spread parameter' => $badParameter, 'mistyped spread parameter type' => $badParameterType] as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label);
+        }
+    }
+
+    public function testCompilerPreservesNestedBooleanEvidenceBranches(): void
+    {
+        $scalping = (new SetupCompiler())->compile(
+            (new SetupContractLoader($this->root))->load('scalping.trend_continuation.long', '1.0.0'),
+        )->ast;
+
+        self::assertSame('all_of', $scalping['trigger']['op']);
+        self::assertSame('any_of', $scalping['trigger']['nodes'][4]['op']);
+        self::assertSame(
+            ['macd_hist_gt_eps', 'macd_hist_slope_pos', 'macd_line_above_signal'],
+            array_column($scalping['trigger']['nodes'][4]['nodes'], 'condition'),
+        );
+        self::assertSame('any_of', $scalping['confirmations']['nodes'][0]['nodes'][0]['op']);
+
+        $crash = (new SetupCompiler())->compile(
+            (new SetupContractLoader($this->root))->load('crash_short', '1.0.0'),
+        )->ast;
+        self::assertSame('any_of', $crash['confirmations']['op']);
+        self::assertCount(2, $crash['confirmations']['nodes']);
+        self::assertSame('crash_short_entry_1m', $crash['confirmations']['nodes'][1]['nodes'][1]['condition']);
+    }
+
+    public function testSourceOriginRangesCoverEveryRuleProvenanceRange(): void
+    {
+        $expected = [
+            'day_trading.trend_continuation.long' => '7-12,84-88,238-349',
+            'day_trading.trend_continuation.short' => '7-12,84-88,238-349',
+            'scalping.trend_continuation.long' => '6-14,216-356',
+            'scalping.pullback.long' => '6-14,157-161,216-356',
+            'scalping.trend_momentum.short' => '6-14,216-356',
+            'micro_scalping.momentum_ofi.long' => '5-19,87-115',
+            'micro_scalping.momentum_ofi.short' => '5-19,95-125',
+            'crash_short' => '5-16,136-137,169-305',
+        ];
+        $loader = new SetupContractLoader($this->root);
+        foreach ($expected as $id => $range) {
+            self::assertSame($range, $loader->load($id, '1.0.0')->toArray()['source_origin']['line_range']);
+        }
+    }
+
+    /** @param array<string, mixed> $mutation */
+    private function assertPhpAndSchemaReject(array $mutation, string $label): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $object = json_decode(json_encode($mutation, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        self::assertFalse((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $label . ' JSON Schema');
+        try {
+            (new SetupContractValidator())->validate($mutation);
+            self::fail('PHP validator accepted ' . $label);
+        } catch (SetupContractException) {
+            self::addToAssertionCount(1);
         }
     }
 

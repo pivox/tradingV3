@@ -34,12 +34,12 @@ final class SetupCompiler
         $ast = [
             'kind' => 'setup',
             'side' => $contract->side,
-            'regime' => $document['context']['regime'],
-            'context' => $document['context']['context'],
-            'trigger' => $document['context']['trigger'],
-            'confirmations' => $document['context']['confirmations'],
-            'filters' => $document['filters'],
-            'no_trade_rules' => $document['no_trade_rules'],
+            'regime' => $this->canonicalize($document['context']['regime']),
+            'context' => $this->canonicalize($document['context']['context']),
+            'trigger' => $this->canonicalize($document['context']['trigger']),
+            'confirmations' => $this->canonicalize($document['context']['confirmations']),
+            'filters' => $this->canonicalize(['op' => 'all_of', 'nodes' => $document['filters']]),
+            'no_trade_rules' => $this->canonicalize(['op' => 'all_of', 'nodes' => $document['no_trade_rules']]),
             'execution' => $document['execution'],
         ];
         $publishable = $contract->isExecutable()

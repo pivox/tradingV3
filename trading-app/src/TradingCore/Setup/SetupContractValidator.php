@@ -26,6 +26,36 @@ final class SetupContractValidator
         'price_regime_ok_short', 'pullback_confirmed', 'rsi_bearish', 'rsi_bullish', 'rsi_gt_30',
         'rsi_gt_softfloor', 'rsi_lt_70', 'rsi_1m_lt_extreme', 'rsi_5m_gt_floor',
         'spread_bps_lte', 'volume_ratio_ok',
+        'ema_50_gt_200', 'ema_above_200_with_tolerance', 'ema_below_200_with_tolerance',
+        'close_above_ema_200', 'close_below_ema_200', 'ema200_slope_pos', 'ema200_slope_neg',
+        'pullback_confirmed_ma9_21', 'pullback_confirmed_vwap', 'price_lte_ma21_plus_k_atr',
+        'crash_short_entry_1m',
+    ];
+    private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m', 'global'];
+    /** @var array<string, list<string>> */
+    private const PARAMETER_KEYS = [
+        'adx_min_for_trend' => ['threshold'],
+        'atr_volatility_ok' => ['min_atr_pct', 'max_atr_pct'],
+        'macd_hist_decreasing_n' => ['n', 'eps'],
+        'macd_hist_gt_eps' => ['eps'],
+        'macd_hist_increasing_n' => ['macd_hist_increasing_n'],
+        'macd_hist_lt_eps' => ['eps'],
+        'near_vwap' => ['near_vwap_tolerance'],
+        'order_flow_imbalance_gte' => ['min_ofi'],
+        'order_flow_imbalance_lte' => ['max_ofi'],
+        'pullback_confirmed' => ['validity_bars', 'direction'],
+        'rsi_gt_softfloor' => ['rsi_softfloor_threshold'],
+        'rsi_lt_70' => ['rsi_lt_70_threshold'],
+        'rsi_5m_gt_floor' => ['gt'],
+        'spread_bps_lte' => ['max_spread_bps'],
+    ];
+    /** @var array<string, 'number'|'integer'|'string'> */
+    private const PARAMETER_TYPES = [
+        'threshold' => 'number', 'min_atr_pct' => 'number', 'max_atr_pct' => 'number',
+        'n' => 'integer', 'eps' => 'number', 'macd_hist_increasing_n' => 'integer',
+        'near_vwap_tolerance' => 'number', 'min_ofi' => 'number', 'max_ofi' => 'number',
+        'validity_bars' => 'integer', 'direction' => 'string', 'rsi_softfloor_threshold' => 'number',
+        'rsi_lt_70_threshold' => 'number', 'gt' => 'number', 'max_spread_bps' => 'number',
     ];
     private const STATUSES = ['draft', 'blocked', 'shadow', 'paper', 'candidate', 'active', 'retired'];
     private const TOP_KEYS = [
@@ -107,7 +137,7 @@ final class SetupContractValidator
             throw new SetupContractException('setup.side=context.side=execution.side invariant violated.');
         }
         foreach (['regime', 'context', 'trigger', 'confirmations'] as $key) {
-            $this->rules($this->list($context, $key, true, 'context'), 'context.' . $key);
+            $this->expression($this->map($context, $key, 'context'), 'context.' . $key);
         }
         $this->rules($this->list($document, 'filters', true, 'contract'), 'filters');
         $this->rules($this->list($document, 'no_trade_rules', true, 'contract'), 'no_trade_rules');
@@ -170,15 +200,65 @@ final class SetupContractValidator
             if (!is_array($rule) || array_is_list($rule)) {
                 throw new SetupContractException($path . ' rules must be mappings.');
             }
-            $this->exact($rule, ['condition', 'timeframe', 'parameters', 'provenance'], $path . '[]');
-            $this->string($rule, 'condition', $path . '[]');
-            $this->string($rule, 'timeframe', $path . '[]');
-            $this->string($rule, 'provenance', $path . '[]');
-            if (!in_array($rule['condition'], self::CONDITION_IDS, true)) {
-                throw new SetupContractException(sprintf('Unknown condition "%s".', $rule['condition']));
+            $this->expression($rule, $path . '[]');
+        }
+    }
+
+    /** @param array<string, mixed> $expression */
+    private function expression(array $expression, string $path): void
+    {
+        if (array_key_exists('op', $expression)) {
+            $this->exact($expression, ['op', 'nodes', 'provenance'], $path);
+            if (!in_array($expression['op'], ['all_of', 'any_of'], true)) {
+                throw new SetupContractException($path . '.op must be all_of or any_of.');
             }
-            if (!is_array($rule['parameters']) || array_is_list($rule['parameters'])) {
-                throw new SetupContractException($path . '[].parameters must be a mapping.');
+            $this->string($expression, 'provenance', $path);
+            $nodes = $this->list($expression, 'nodes', false, $path);
+            foreach ($nodes as $index => $node) {
+                if (!is_array($node) || array_is_list($node)) {
+                    throw new SetupContractException(sprintf('%s.nodes[%d] must be an expression mapping.', $path, $index));
+                }
+                $this->expression($node, sprintf('%s.nodes[%d]', $path, $index));
+            }
+
+            return;
+        }
+
+        $keys = array_key_exists('parameters', $expression)
+            ? ['condition', 'timeframe', 'parameters', 'provenance']
+            : ['condition', 'timeframe', 'provenance'];
+        $this->exact($expression, $keys, $path);
+        $this->string($expression, 'condition', $path);
+        $this->string($expression, 'timeframe', $path);
+        $this->string($expression, 'provenance', $path);
+        $condition = $expression['condition'];
+        if (!in_array($condition, self::CONDITION_IDS, true)) {
+            throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
+        }
+        if (!in_array($expression['timeframe'], self::TIMEFRAMES, true)) {
+            throw new SetupContractException(sprintf('Unsupported rule timeframe "%s".', $expression['timeframe']));
+        }
+        if (!array_key_exists('parameters', $expression)) {
+            return;
+        }
+        $parameters = $expression['parameters'];
+        if (!is_array($parameters) || array_is_list($parameters)) {
+            throw new SetupContractException($path . '.parameters must be a mapping.');
+        }
+        $allowed = self::PARAMETER_KEYS[$condition] ?? [];
+        $extra = array_diff(array_keys($parameters), $allowed);
+        if ($extra !== []) {
+            throw new SetupContractException(sprintf('Unknown parameter "%s" for condition "%s".', reset($extra), $condition));
+        }
+        foreach ($parameters as $key => $value) {
+            $type = self::PARAMETER_TYPES[$key];
+            $valid = match ($type) {
+                'number' => is_int($value) || is_float($value),
+                'integer' => is_int($value),
+                'string' => is_string($value) && trim($value) !== '',
+            };
+            if (!$valid) {
+                throw new SetupContractException(sprintf('Parameter "%s" for condition "%s" must be %s.', $key, $condition, $type));
             }
         }
     }

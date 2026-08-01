@@ -6,23 +6,60 @@ executable: false
 family: pullback
 side: long
 thesis: 'A bullish 1h regime followed by the distinct 15m scenario-B dynamic-support pullback may resume upward.'
-source_origin: { file: 'src/MtfValidator/config/validations.scalper.yaml', line_range: '6-14,216-356', content_sha256: 5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2, commit: 6c42d14d20798f6fee9d55b306ccaa0539af5e79 }
+source_origin: { file: 'src/MtfValidator/config/validations.scalper.yaml', line_range: '6-14,157-161,216-356', content_sha256: 5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2, commit: 6c42d14d20798f6fee9d55b306ccaa0539af5e79 }
 compatible_modes: [{ mode_id: scalping, mode_version: '1.0.0' }]
 mode_compatibility: { state: defined, issue: null, justification: 'Matches #300 scalping catalog.' }
 hypothesis: 'Scenario B predicts resumption after a sourced 15m pullback confirmation; it is not merged with scenario A and requires shadow falsification.'
 context:
   side: long
   regime:
-    - { condition: price_regime_ok_long, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:271-278' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:271-278'
+    nodes:
+      - { condition: price_regime_ok_long, timeframe: 1h, provenance: 'validations.scalper.yaml:274' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:275-277'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1h, provenance: 'validations.scalper.yaml:276' }
+          - { condition: macd_hist_slope_pos, timeframe: 1h, provenance: 'validations.scalper.yaml:277' }
+      - { condition: adx_min_for_trend, timeframe: 1h, parameters: { threshold: 18 }, provenance: 'validations.scalper.yaml:278' }
   context:
-    - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:299-304 scenario B' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:299-304 scenario B'
+    nodes:
+      - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, provenance: 'validations.scalper.yaml:302' }
   trigger:
-    - { condition: pullback_confirmed, timeframe: 15m, parameters: { validity_bars: 3 }, provenance: 'validations.scalper.yaml:157-161,299-304 scenario B' }
-    - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 70 }, provenance: 'validations.scalper.yaml:303 scenario B' }
-    - { condition: atr_rel_in_range_15m, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:304 scenario B' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:157-161,299-304 scenario B'
+    nodes:
+      - { condition: pullback_confirmed, timeframe: 15m, parameters: { validity_bars: 3 }, provenance: 'validations.scalper.yaml:157-161,301' }
+      - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, provenance: 'validations.scalper.yaml:302' }
+      - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 70 }, provenance: 'validations.scalper.yaml:303' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.scalper.yaml:304' }
   confirmations:
-    - { condition: close_above_vwap_or_ma9_relaxed, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:320-329 common confirmation' }
-    - { condition: close_above_vwap_and_ma9, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:341-348 common confirmation' }
+    op: all_of
+    provenance: 'validations.scalper.yaml:320-348 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.scalper.yaml:320-329'
+        nodes:
+          - op: any_of
+            provenance: 'validations.scalper.yaml:323-325'
+            nodes:
+              - { condition: macd_hist_gt_eps, timeframe: 5m, provenance: 'validations.scalper.yaml:324' }
+              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, provenance: 'validations.scalper.yaml:325' }
+          - { condition: close_above_vwap_or_ma9_relaxed, timeframe: 5m, provenance: 'validations.scalper.yaml:326' }
+          - { condition: rsi_lt_70, timeframe: 5m, parameters: { rsi_lt_70_threshold: 72 }, provenance: 'validations.scalper.yaml:327' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:328' }
+          - { condition: volume_ratio_ok, timeframe: 5m, provenance: 'validations.scalper.yaml:329' }
+      - op: all_of
+        provenance: 'validations.scalper.yaml:341-348'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1m, provenance: 'validations.scalper.yaml:344' }
+          - { condition: close_above_vwap_and_ma9, timeframe: 1m, provenance: 'validations.scalper.yaml:345' }
+          - { condition: rsi_lt_70, timeframe: 1m, parameters: { rsi_lt_70_threshold: 68 }, provenance: 'validations.scalper.yaml:346' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.scalper.yaml:347' }
+          - { condition: volume_ratio_ok, timeframe: 1m, provenance: 'validations.scalper.yaml:348' }
 filters: []
 no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
