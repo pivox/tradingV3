@@ -25,7 +25,7 @@ final readonly class ModeContractLoader
             throw new ModeContractException(sprintf('Invalid semantic mode version "%s".', $modeVersion));
         }
 
-        $path = $this->root() . '/' . $modeId . '/' . $modeVersion . '.yaml';
+        $path = $this->pathFor($modeId, $modeVersion);
         if (!is_file($path)) {
             throw new ModeContractException(sprintf('Unknown version "%s" for modern mode "%s"; no fallback is allowed.', $modeVersion, $modeId));
         }
@@ -49,6 +49,11 @@ final readonly class ModeContractLoader
             throw new ModeContractException('Contract identity does not match requested mode/version.');
         }
         return ModeContract::fromDocument($document, $this->validator);
+    }
+
+    public function pathFor(string $modeId, string $modeVersion): string
+    {
+        return $this->root() . '/' . $modeId . '/' . $modeVersion . '.yaml';
     }
 
     private function root(): string

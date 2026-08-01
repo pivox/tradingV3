@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Trading\Controller\Api;
 
 use App\TradingCore\Config\EffectiveTradingConfigReadService;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -14,56 +16,49 @@ use Symfony\Component\Routing\Attribute\Route;
 
 final class EffectiveTradingConfigApiController extends AbstractController
 {
-    public function __construct(
-        private readonly EffectiveTradingConfigReadService $readService,
-    ) {
+    private const FIELDS = ['mode_id', 'mode_version', 'setup_id', 'setup_version', 'exchange', 'environment', 'side'];
+
+    public function __construct(private readonly EffectiveTradingConfigReadService $readService)
+    {
     }
 
     #[Route('/api/trading/config/effective', name: 'api_trading_config_effective', methods: ['GET'])]
     public function effective(Request $request): JsonResponse
     {
-        $mode = $this->requiredQueryString($request, 'mode');
-        $exchange = $this->requiredQueryString($request, 'exchange');
-        $env = $this->requiredQueryString($request, 'env');
-
+        $values = [];
         $missing = [];
-        foreach (['mode' => $mode, 'exchange' => $exchange, 'env' => $env] as $name => $value) {
-            if ($value === null) {
-                $missing[] = $name;
+        foreach (self::FIELDS as $field) {
+            $value = $request->query->get($field);
+            if (!is_string($value) || trim($value) === '') {
+                $missing[] = $field;
+                continue;
             }
+            $values[$field] = trim($value);
         }
-
         if ($missing !== []) {
-            return $this->json([
-                'error' => [
-                    'code' => 'missing_query_parameter',
-                    'message' => 'Query parameters "mode", "exchange" and "env" are required.',
-                    'missing' => $missing,
-                ],
-            ], Response::HTTP_BAD_REQUEST);
+            return $this->json(['error' => ['code' => 'missing_query_parameter', 'message' => 'All canonical identity fields are required.', 'missing' => $missing]], Response::HTTP_BAD_REQUEST);
         }
 
         try {
-            return $this->json($this->readService->describe($mode, $exchange, $env));
-        } catch (TradingConfigException $exception) {
+            $identity = new EffectiveTradingConfigRequest(
+                $values['mode_id'], $values['mode_version'], $values['setup_id'], $values['setup_version'],
+                $values['exchange'], $values['environment'], $values['side'],
+            );
+            return $this->json($this->readService->describe($identity));
+        } catch (NonExecutableTradingConfigException $exception) {
             return $this->json([
-                'error' => [
-                    'code' => 'invalid_config_request',
-                    'message' => $exception->getMessage(),
-                ],
-            ], Response::HTTP_BAD_REQUEST);
+                'request' => $exception->request->toArray(),
+                'config_hash' => null,
+                'condition_catalog_hash' => null,
+                'ordered_layers' => [],
+                'ordered_files' => [],
+                'provenance' => [],
+                'executable' => false,
+                'blockers' => $exception->blockers,
+                'error' => ['code' => 'config_not_executable', 'message' => $exception->getMessage()],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (TradingConfigException $exception) {
+            return $this->json(['error' => ['code' => 'invalid_config_request', 'message' => $exception->getMessage()]], Response::HTTP_BAD_REQUEST);
         }
-    }
-
-    private function requiredQueryString(Request $request, string $name): ?string
-    {
-        $value = $request->query->get($name);
-        if (!is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-
-        return $value === '' ? null : $value;
     }
 }

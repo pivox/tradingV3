@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Config;
 
+use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Mode\ModeContractValidator;
 use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 
 /**
@@ -15,7 +17,7 @@ final class TradeEntryConfigProvider
     /** @var array<string, TradeEntryConfig> Cache des configs par mode */
     private array $configCache = [];
 
-    /** @var array<string, array{name: string, enabled: bool, priority: int}> Liste des modes activés triés par priority */
+    /** @var array<int, array{name: string, enabled: bool, priority: int}> Liste des modes activés triés par priority */
     private array $enabledModes = [];
 
     private readonly string $configDir;
@@ -34,7 +36,7 @@ final class TradeEntryConfigProvider
      * Charge les modes activés triés par priority
      * Le format YAML [name: 'x', enabled: true, priority: 1] est parsé comme:
      * [[['name' => 'x']], [['enabled' => true]], [['priority' => 1]]]
-     * @param array<int, array> $modes
+     * @param array<int, mixed> $modes
      * @return array<int, array{name: string, enabled: bool, priority: int}>
      */
     private function loadEnabledModes(array $modes): array
@@ -53,7 +55,7 @@ final class TradeEntryConfigProvider
             foreach ($mode as $item) {
                 if (is_array($item)) {
                     if (isset($item['name'])) {
-                        $name = $item['name'];
+                        $name = is_string($item['name']) ? $item['name'] : 'unknown';
                     } elseif (isset($item['enabled'])) {
                         $enabledFlag = (bool)$item['enabled'];
                     } elseif (isset($item['priority'])) {
@@ -72,7 +74,7 @@ final class TradeEntryConfigProvider
         }
         
         // Trier par priority (croissant)
-        usort($enabled, fn($a, $b) => ($a['priority'] ?? 999) <=> ($b['priority'] ?? 999));
+        usort($enabled, fn(array $a, array $b): int => $a['priority'] <=> $b['priority']);
         
         return $enabled;
     }
@@ -94,6 +96,9 @@ final class TradeEntryConfigProvider
      */
     public function getConfigForMode(string $modeName): TradeEntryConfig
     {
+        if (in_array($modeName, ModeContractValidator::MODE_IDS, true)) {
+            throw new TradingConfigException(sprintf('Modern mode "%s" must consume the canonical snapshot; legacy TradeEntry YAML is quarantined.', $modeName));
+        }
         // Vérifier le cache
         if (isset($this->configCache[$modeName])) {
             return $this->configCache[$modeName];
@@ -125,32 +130,6 @@ final class TradeEntryConfigProvider
      */
     private function getConfigFilename(string $modeName): string
     {
-        // Mapping des modes vers les noms de fichiers
-        $mapping = [
-            'regular' => 'trade_entry.regular.yaml',
-            'scalping' => 'trade_entry.scalper.yaml',
-        ];
-
-        // Si le mapping existe, l'utiliser
-        if (isset($mapping[$modeName])) {
-            $mappedFile = $mapping[$modeName];
-            $mappedPath = $this->configDir . '/' . $mappedFile;
-            
-            // Si le fichier mappé existe, l'utiliser
-            if (is_file($mappedPath)) {
-                return $mappedFile;
-            }
-        }
-
-        // Fallback : pour 'regular', essayer trade_entry.yaml
-        if ($modeName === 'regular') {
-            $fallbackPath = $this->configDir . '/trade_entry.yaml';
-            if (is_file($fallbackPath)) {
-                return 'trade_entry.yaml';
-            }
-        }
-
-        // Sinon, utiliser le pattern trade_entry.{mode}.yaml
         return sprintf('trade_entry.%s.yaml', $modeName);
     }
 
@@ -162,4 +141,3 @@ final class TradeEntryConfigProvider
         $this->configCache = [];
     }
 }
-

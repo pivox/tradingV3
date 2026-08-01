@@ -4,176 +4,119 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Config;
 
+use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
+use App\TradingCore\Mode\Exception\ModeContractException;
+use App\TradingCore\Mode\ModeContractLoader;
+use App\TradingCore\Setup\ConditionCatalog;
+use App\TradingCore\Setup\Exception\SetupContractException;
+use App\TradingCore\Setup\SetupCompiler;
+use App\TradingCore\Setup\SetupContractLoader;
 use Psr\Log\LoggerInterface;
 
-final readonly class EffectiveTradingConfigResolver
+final readonly class EffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
 {
     public function __construct(
         private ?TradingConfigLayerLoader $loader = null,
         private ?LoggerInterface $logger = null,
+        private ?ModeContractLoader $modeContracts = null,
+        private ?SetupContractLoader $setupContracts = null,
+        private ?SetupCompiler $setupCompiler = null,
+        private mixed $conditionCatalog = null,
+        private ?EffectiveTradingConfigComposer $composer = null,
     ) {
     }
 
-    /**
-     * Resolves trading configuration as:
-     * base < mode < exchange < mode_exchange < env.
-     *
-     * @return array{
-     *     config: array<string, mixed>,
-     *     config_hash: string,
-     *     layers: list<array{type: string, name: string, path: string, required: bool}>,
-     *     missing_optional_layers: list<array{type: string, name: string, path: string, required: bool}>,
-     *     provenance: array<string, array{type: string, name: string, path: string, required: bool}>
-     * }
-     */
-    public function resolve(string $mode, string $exchange, string $env): array
+    public function resolve(EffectiveTradingConfigRequest|string $request): EffectiveTradingConfigSnapshot
     {
-        $loader = $this->loader ?? new TradingConfigLayerLoader();
-
-        $candidates = [
-            ['layer' => $loader->loadBase(), 'missing' => null],
-            ['layer' => $loader->loadMode($mode), 'missing' => $loader->describeOptional('mode', $mode)],
-            ['layer' => $loader->loadExchange($exchange), 'missing' => $loader->describeOptional('exchange', $exchange)],
-            ['layer' => $loader->loadModeExchange($mode, $exchange), 'missing' => $loader->describeOptional('mode_exchange', sprintf('%s.%s', $mode, $exchange))],
-            ['layer' => $loader->loadEnv($env), 'missing' => $loader->describeOptional('env', $env)],
-        ];
-
-        $effectiveConfig = [];
-        $usedLayers = [];
-        $missingOptionalLayers = [];
-        $provenance = [];
-
-        foreach ($candidates as $candidate) {
-            $layer = $candidate['layer'];
-            if ($layer instanceof TradingConfigLayer) {
-                $layerContext = $layer->toLogContext();
-                $effectiveConfig = $this->mergeConfig($effectiveConfig, $layer->config, $provenance, $layerContext);
-                $usedLayers[] = $layerContext;
-                continue;
-            }
-
-            if (is_array($candidate['missing'])) {
-                $missingOptionalLayers[] = $candidate['missing'];
-            }
+        if (!$request instanceof EffectiveTradingConfigRequest) {
+            throw new TradingConfigException('Canonical resolution requires an EffectiveTradingConfigRequest; legacy positional profiles and fallback are forbidden.');
         }
 
-        $this->logger?->info('trading_config.effective_resolved', [
-            'mode' => $mode,
-            'exchange' => $exchange,
-            'env' => $env,
-            'layers' => $usedLayers,
-            'missing_optional_layers' => $missingOptionalLayers,
+        $modeLoader = $this->modeContracts ?? new ModeContractLoader();
+        $setupLoader = $this->setupContracts ?? new SetupContractLoader();
+        try {
+            $mode = $modeLoader->load($request->modeId, $request->modeVersion);
+            $setup = $setupLoader->load($request->setupId, $request->setupVersion);
+        } catch (ModeContractException|SetupContractException $exception) {
+            throw new TradingConfigException($exception->getMessage(), previous: $exception);
+        }
+
+        if (!in_array($setup->setupId, $mode->compatibleSetupIds(), true)) {
+            throw new TradingConfigException(sprintf('Setup "%s" is not listed by mode "%s@%s".', $setup->setupId, $mode->modeId, $mode->modeVersion));
+        }
+        if ($setup->side !== $request->side) {
+            throw new TradingConfigException(sprintf('Setup side "%s" does not match requested side "%s".', $setup->side, $request->side));
+        }
+        $setupDocument = $setup->toArray();
+        $compatible = false;
+        foreach ($setupDocument['compatible_modes'] as $candidate) {
+            if ($candidate['mode_id'] === $mode->modeId && $candidate['mode_version'] === $mode->modeVersion) {
+                $compatible = true;
+                break;
+            }
+        }
+        if (!$compatible) {
+            throw new TradingConfigException('Setup compatibility does not contain the exact requested mode identity and version.');
+        }
+
+        try {
+            if ($this->conditionCatalog !== null && !$this->conditionCatalog instanceof ConditionCatalog) {
+                throw new TradingConfigException('Configured condition catalog must be a typed ConditionCatalog.');
+            }
+            $compiled = ($this->setupCompiler ?? new SetupCompiler())->compile($setup, $this->conditionCatalog);
+        } catch (SetupContractException $exception) {
+            throw new TradingConfigException($exception->getMessage(), previous: $exception);
+        }
+        $blockers = [];
+        if (!$mode->isExecutable()) {
+            $blockers[] = sprintf('mode %s@%s is not executable (%s)', $mode->modeId, $mode->modeVersion, $mode->lifecycleStatus);
+        }
+        if (!$setup->isExecutable()) {
+            $blockers[] = sprintf('setup %s@%s is not executable (%s)', $setup->setupId, $setup->setupVersion, $setup->status);
+        }
+        if (!$compiled->publishable) {
+            $blockers[] = 'compiled setup snapshot is not publishable';
+        }
+        if ($compiled->conditionCatalogHash === null) {
+            $blockers[] = 'condition catalog hash is unresolved';
+        }
+        if ($blockers !== []) {
+            throw new NonExecutableTradingConfigException($request, $blockers);
+        }
+
+        $loader = $this->loader ?? new TradingConfigLayerLoader();
+        $modeDocument = $mode->toArray();
+        $execution = $setupDocument['execution'];
+        $setupPayload = [
+            'setup_id' => $setup->setupId,
+            'setup_version' => $setup->setupVersion,
+            'side' => $setup->side,
+            'hypothesis' => $setupDocument['hypothesis'],
+            'regime' => $setupDocument['context']['regime'],
+            'context' => $setupDocument['context']['context'],
+            'trigger' => $setupDocument['context']['trigger'],
+            'invalidation' => $execution['invalidation'],
+            'entry_zone' => $execution['entry_zone'],
+            'stop' => $execution['stop'],
+            'targets' => $execution['targets'],
+        ];
+        $layers = [
+            $loader->loadBase(),
+            new TradingConfigLayer('mode', $mode->modeId . '@' . $mode->modeVersion, $modeLoader->pathFor($mode->modeId, $mode->modeVersion), true, ['mode' => $modeDocument]),
+            new TradingConfigLayer('setup', $setup->setupId . '@' . $setup->setupVersion, $setupLoader->pathFor($setup->setupId, $setup->setupVersion), true, ['setup' => $setupPayload]),
+            $loader->requireExchange($request->exchange),
+            $loader->requireModeExchange($request->modeId, $request->modeVersion, $request->exchange),
+            $loader->requireEnvironment($request->environment),
+        ];
+
+        $snapshot = ($this->composer ?? new EffectiveTradingConfigComposer())->compose($request, $layers, $compiled->conditionCatalogHash);
+        $this->logger?->info('trading_config.canonical_effective_resolved', [
+            ...$request->toArray(),
+            'config_hash' => $snapshot->configHash,
+            'layers' => $snapshot->orderedLayers(),
         ]);
 
-        return [
-            'config' => $effectiveConfig,
-            'config_hash' => $this->hashConfig($effectiveConfig),
-            'layers' => $usedLayers,
-            'missing_optional_layers' => $missingOptionalLayers,
-            'provenance' => $provenance,
-        ];
-    }
-
-    /**
-     * @param array<string, mixed> $base
-     * @param array<string, mixed> $override
-     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
-     * @param array{type: string, name: string, path: string, required: bool} $layerContext
-     * @return array<string, mixed>
-     */
-    private function mergeConfig(array $base, array $override, array &$provenance, array $layerContext, string $prefix = ''): array
-    {
-        foreach ($override as $key => $value) {
-            $path = $prefix === '' ? $key : $prefix . '.' . $key;
-
-            if (
-                array_key_exists($key, $base)
-                && is_array($base[$key])
-                && is_array($value)
-                && $this->isAssociative($base[$key])
-                && $this->isAssociative($value)
-            ) {
-                /** @var array<string, mixed> $baseValue */
-                $baseValue = $base[$key];
-                /** @var array<string, mixed> $overrideValue */
-                $overrideValue = $value;
-                $base[$key] = $this->mergeConfig($baseValue, $overrideValue, $provenance, $layerContext, $path);
-                continue;
-            }
-
-            $base[$key] = $value;
-            $this->clearProvenanceForPath($provenance, $path);
-            $this->recordProvenance($provenance, $path, $value, $layerContext);
-        }
-
-        return $base;
-    }
-
-    /**
-     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
-     */
-    private function clearProvenanceForPath(array &$provenance, string $path): void
-    {
-        unset($provenance[$path]);
-        $prefix = $path . '.';
-        foreach (array_keys($provenance) as $existingPath) {
-            if (str_starts_with($existingPath, $prefix)) {
-                unset($provenance[$existingPath]);
-            }
-        }
-    }
-
-    /**
-     * @param array<string, array{type: string, name: string, path: string, required: bool}> $provenance
-     * @param array{type: string, name: string, path: string, required: bool} $layerContext
-     */
-    private function recordProvenance(array &$provenance, string $path, mixed $value, array $layerContext): void
-    {
-        if (is_array($value) && $this->isAssociative($value)) {
-            /** @var array<string, mixed> $value */
-            foreach ($value as $childKey => $childValue) {
-                $this->recordProvenance($provenance, $path . '.' . $childKey, $childValue, $layerContext);
-            }
-
-            return;
-        }
-
-        $provenance[$path] = $layerContext;
-    }
-
-    /**
-     * @param array<string, mixed> $config
-     */
-    private function hashConfig(array $config): string
-    {
-        $normalized = $this->sortRecursively($config);
-
-        return hash('sha256', json_encode($normalized, JSON_THROW_ON_ERROR));
-    }
-
-    private function sortRecursively(mixed $value): mixed
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-
-        if (!$this->isAssociative($value)) {
-            return array_map(fn (mixed $item): mixed => $this->sortRecursively($item), $value);
-        }
-
-        ksort($value);
-        foreach ($value as $key => $item) {
-            $value[$key] = $this->sortRecursively($item);
-        }
-
-        return $value;
-    }
-
-    /**
-     * @param array<mixed> $value
-     */
-    private function isAssociative(array $value): bool
-    {
-        return $value === [] || array_keys($value) !== range(0, count($value) - 1);
+        return $snapshot;
     }
 }

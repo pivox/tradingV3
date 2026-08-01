@@ -22,7 +22,7 @@ final readonly class SetupContractLoader
         if (preg_match('/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/', $setupVersion) !== 1) {
             throw new SetupContractException(sprintf('Invalid semantic setup version "%s".', $setupVersion));
         }
-        $path = $this->root() . '/' . $setupId . '/' . $setupVersion . '.yaml';
+        $path = $this->pathFor($setupId, $setupVersion);
         if (!is_file($path)) {
             throw new SetupContractException(sprintf('Unknown version "%s" for setup "%s"; no alias or fallback is allowed.', $setupVersion, $setupId));
         }
@@ -40,6 +40,11 @@ final readonly class SetupContractLoader
 
         /** @var array<string, mixed> $document */
         return SetupContract::fromDocument($document, $this->validator);
+    }
+
+    public function pathFor(string $setupId, string $setupVersion): string
+    {
+        return $this->root() . '/' . $setupId . '/' . $setupVersion . '.yaml';
     }
 
     private function root(): string
