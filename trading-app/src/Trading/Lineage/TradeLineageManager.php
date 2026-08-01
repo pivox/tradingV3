@@ -81,7 +81,15 @@ final class TradeLineageManager
             ->setReplayOfRunId($this->contextString($context, 'replay_of_run_id', 255))
             ->setReplayOfCorrelationId($this->contextString($context, 'replay_of_correlation_id', 96))
             ->setAttemptNumber($this->contextInt($context, 'attempt_number'))
-            ->setConfigHash($this->contextString($context, 'config_hash', 128));
+            ->setConfigHash($this->contextString($context, 'config_hash', 128))
+            ->setConditionCatalogHash($this->contextString($context, 'condition_catalog_hash', 128))
+            ->setModeId($this->contextString($context, 'mode_id', 80))
+            ->setModeVersion($this->contextString($context, 'mode_version', 32))
+            ->setSetupId($this->contextString($context, 'setup_id', 160))
+            ->setSetupVersion($this->contextString($context, 'setup_version', 32))
+            ->setDecisionId($this->contextString($context, 'decision_id', 96))
+            ->setDecisionKey($this->contextString($context, 'decision_key', 160))
+            ->setEffectiveConfigReference($this->contextString($context, 'effective_config_reference', 255));
 
         if ($paperProvenance !== null) {
             $lineage->applyPaperExecutionProvenance($paperProvenance);
@@ -198,6 +206,14 @@ final class TradeLineageManager
             'replay_of_correlation_id' => $lineage->getReplayOfCorrelationId(),
             'attempt_number' => $lineage->getAttemptNumber(),
             'config_hash' => $lineage->getConfigHash(),
+            'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
+            'mode_id' => $lineage->getModeId(),
+            'mode_version' => $lineage->getModeVersion(),
+            'setup_id' => $lineage->getSetupId(),
+            'setup_version' => $lineage->getSetupVersion(),
+            'decision_id' => $lineage->getDecisionId(),
+            'decision_key' => $lineage->getDecisionKey(),
+            'effective_config_reference' => $lineage->getEffectiveConfigReference(),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
 
         if ($lineage->getPaperExecutionCellId() === null) {

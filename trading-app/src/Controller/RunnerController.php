@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Config\TradeEntryModeContext;
 use App\Common\Enum\Exchange;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
@@ -22,7 +21,6 @@ class RunnerController extends AbstractController
 {
     public function __construct(
         private readonly LoggerInterface $logger,
-        private readonly TradeEntryModeContext $modeContext,
         private readonly OrchestrationContextValidator $orchestrationContextValidator,
         private readonly FakeOnlyExchangeCallAudit $fakeOnlyExchangeCallAudit = new FakeOnlyExchangeCallAudit(),
     ) {
@@ -95,20 +93,8 @@ class RunnerController extends AbstractController
                 $data,
             );
 
-            // Injection automatique du profile depuis la configuration si non fourni
-            // ROLLBACK: Si besoin de revenir en arrière, supprimer cette logique et remettre:
-            // 'profile' => $data['profile'] ?? $data['mtf_profile'] ?? null,
-            $defaultProfile = null;
-            if (!isset($data['profile']) && !isset($data['mtf_profile'])) {
-                $enabledModes = $this->modeContext->getEnabledModes();
-                if (!empty($enabledModes)) {
-                    $defaultProfile = $enabledModes[0]['name'] ?? null;
-                    $this->logger->debug('[Runner Controller] Auto-injecting profile from config', [
-                        'profile' => $defaultProfile,
-                        'enabled_modes' => array_column($enabledModes, 'name'),
-                    ]);
-                }
-            }
+            $tradingIdentity = \is_array($data['trading_identity'] ?? null) ? $data['trading_identity'] : null;
+            $explicitProfile = $tradingIdentity['mode_id'] ?? $data['profile'] ?? $data['mtf_profile'] ?? null;
 
             // Construire la requête Runner (le Runner gère tout : résolution, filtrage, switches, TP/SL, post-processing)
             $runnerRequest = MtfRunnerRequestDto::fromArray([
@@ -127,8 +113,9 @@ class RunnerController extends AbstractController
                 'workers' => $workers,
                 'sync_tables' => filter_var($data['sync_tables'] ?? true, FILTER_VALIDATE_BOOLEAN),
                 'process_tp_sl' => filter_var($data['process_tp_sl'] ?? true, FILTER_VALIDATE_BOOLEAN),
-                'profile' => $data['profile'] ?? $data['mtf_profile'] ?? $defaultProfile,
-                'mtf_profile' => $data['mtf_profile'] ?? $defaultProfile,
+                'profile' => $explicitProfile,
+                'trading_identity' => $tradingIdentity,
+                'mtf_profile' => $data['mtf_profile'] ?? null,
                 'validation_mode' => $data['validation_mode'] ?? null,
                 'context_mode' => $data['context_mode'] ?? null,
                 'mode' => $data['mode'] ?? null,

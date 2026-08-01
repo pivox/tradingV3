@@ -62,6 +62,49 @@ class Action(str, Enum):
     REPORTING = "reporting"
 
 
+class CanonicalTradingIdentity(BaseModel):
+    """Immutable configuration identity copied unchanged through retries/replay.
+
+    Runtime stage identifiers are added by the stage that creates them. This model
+    deliberately contains no profile aliases and performs no mode normalization.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode_id: Literal["day_trading", "scalping", "micro_scalping"]
+    mode_version: str = Field(min_length=1)
+    setup_id: str = Field(min_length=1)
+    setup_version: str = Field(min_length=1)
+    config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    side: Literal["LONG", "SHORT"]
+    effective_config_reference: str = Field(min_length=1)
+    requested_mode_id: Optional[str] = None
+    resolved_mode_id: Optional[str] = None
+    validated_mode_id: Optional[str] = None
+    requested_mode_version: Optional[str] = None
+    resolved_mode_version: Optional[str] = None
+    validated_mode_version: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _reject_contradictory_resolution(self) -> "CanonicalTradingIdentity":
+        for value in (
+            self.requested_mode_id,
+            self.resolved_mode_id,
+            self.validated_mode_id,
+        ):
+            if value is not None and value != self.mode_id:
+                raise ValueError("mode_id_mismatch")
+        for value in (
+            self.requested_mode_version,
+            self.resolved_mode_version,
+            self.validated_mode_version,
+        ):
+            if value is not None and value != self.mode_version:
+                raise ValueError("mode_version_mismatch")
+        return self
+
+
 def assert_recipe_fault_profile_allowed(
     *,
     mtf_profile: MtfProfile | str,
@@ -220,6 +263,10 @@ class OrchestratorSet(BaseModel):
     # pas la mutation d'une liste interne (ex. symbols.append(...)).
     symbols: Tuple[str, ...] = Field(default_factory=tuple, description="Liste optionnelle de symboles.")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
+    trading_identity: Optional[CanonicalTradingIdentity] = Field(
+        default=None,
+        description="Identité canonique moderne; absence réservée aux sets historiques.",
+    )
 
     @model_validator(mode="after")
     def _forbid_live_on_restricted_exchanges(self) -> "OrchestratorSet":

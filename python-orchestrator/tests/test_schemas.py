@@ -10,10 +10,31 @@ from app.schemas import (
     MarketType,
     MtfProfile,
     OrchestratorSet,
+    CanonicalTradingIdentity,
     SetCreate,
     SetRead,
     assert_set_persistable,
 )
+
+
+def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
+    identity = CanonicalTradingIdentity(
+        mode_id="scalping",
+        mode_version="1.0.0",
+        setup_id="scalping.pullback.long",
+        setup_version="1.0.0",
+        config_hash="sha256:" + "a" * 64,
+        condition_catalog_hash="sha256:" + "b" * 64,
+        side="LONG",
+        effective_config_reference="effective-config:cfg-1",
+    )
+    with pytest.raises(ValidationError):
+        identity.side = "SHORT"  # type: ignore[misc]
+
+    with pytest.raises(ValidationError, match="mode_version_mismatch"):
+        CanonicalTradingIdentity(
+            **identity.model_dump(exclude_none=True), requested_mode_version="2.0.0"
+        )
 
 
 def test_okx_live_is_forbidden():

@@ -9,8 +9,6 @@ use App\Application\Runner\OpenActivityFilter;
 use App\Application\Runner\PostRunProjectionDispatcher;
 use App\Application\Runner\RunResultAssembler;
 use App\Application\Runner\SymbolUniverseResolver;
-use App\Config\TradeEntryConfigProvider;
-use App\Config\TradeEntryModeContext;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
@@ -82,7 +80,6 @@ final class RunnerControllerTest extends TestCase
         ]);
         $controller = new RunnerController(
             new NullLogger(),
-            new TradeEntryModeContext(new TradeEntryConfigProvider($parameterBag)),
             new OrchestrationContextValidator(),
         );
         $container = $this->createMock(ContainerInterface::class);
@@ -289,7 +286,6 @@ final class RunnerControllerTest extends TestCase
         ]);
         $controller = new RunnerController(
             new NullLogger(),
-            new TradeEntryModeContext(new TradeEntryConfigProvider($parameterBag)),
             new OrchestrationContextValidator(),
         );
         $container = $this->createMock(ContainerInterface::class);

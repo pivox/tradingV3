@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.schemas import OrchestratorSet
+from app.schemas import CanonicalTradingIdentity, OrchestratorSet
 from app.services.correlation import canonical_correlation_id
 from app.services.symfony_client import (
     ContractsUnavailableError,
@@ -66,6 +66,27 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     assert payload["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert payload["exchange"] == "fake"
     assert payload["market_type"] == "perpetual"
+
+
+def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
+    identity = CanonicalTradingIdentity(
+        mode_id="scalping",
+        mode_version="1.0.0",
+        setup_id="scalping.pullback.long",
+        setup_version="1.0.0",
+        config_hash="sha256:" + "a" * 64,
+        condition_catalog_hash="sha256:" + "b" * 64,
+        side="LONG",
+        effective_config_reference="effective-config:cfg-1",
+    )
+    a_set = _make_set(symbols=("BTCUSDT",), trading_identity=identity)
+
+    first = build_mtf_payload(a_set, None)
+    retry = build_mtf_payload(a_set, None)
+
+    assert first["trading_identity"] == identity.model_dump(exclude_none=True)
+    assert retry["trading_identity"] == first["trading_identity"]
+    assert retry["config_hash"] == first["config_hash"]
 
 
 @pytest.mark.parametrize(

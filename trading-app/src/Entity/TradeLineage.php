@@ -95,6 +95,30 @@ final class TradeLineage implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(name: 'config_hash', type: Types::STRING, length: 128, nullable: true)]
     private ?string $configHash = null;
 
+    #[ORM\Column(name: 'condition_catalog_hash', type: Types::STRING, length: 128, nullable: true)]
+    private ?string $conditionCatalogHash = null;
+
+    #[ORM\Column(name: 'mode_id', type: Types::STRING, length: 80, nullable: true)]
+    private ?string $modeId = null;
+
+    #[ORM\Column(name: 'mode_version', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $modeVersion = null;
+
+    #[ORM\Column(name: 'setup_id', type: Types::STRING, length: 160, nullable: true)]
+    private ?string $setupId = null;
+
+    #[ORM\Column(name: 'setup_version', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $setupVersion = null;
+
+    #[ORM\Column(name: 'decision_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $decisionId = null;
+
+    #[ORM\Column(name: 'decision_key', type: Types::STRING, length: 160, nullable: true)]
+    private ?string $decisionKey = null;
+
+    #[ORM\Column(name: 'effective_config_reference', type: Types::STRING, length: 255, nullable: true)]
+    private ?string $effectiveConfigReference = null;
+
     #[ORM\Column(name: 'created_at', type: Types::DATETIMETZ_IMMUTABLE)]
     private \DateTimeImmutable $createdAt;
 
@@ -371,6 +395,23 @@ final class TradeLineage implements PaperExecutionProvenanceAwareInterface
 
         return $this->touch();
     }
+
+    public function getConditionCatalogHash(): ?string { return $this->conditionCatalogHash; }
+    public function setConditionCatalogHash(?string $value): self { $this->conditionCatalogHash = self::blankToNull($value); return $this->touch(); }
+    public function getModeId(): ?string { return $this->modeId; }
+    public function setModeId(?string $value): self { $this->modeId = self::blankToNull($value); return $this->touch(); }
+    public function getModeVersion(): ?string { return $this->modeVersion; }
+    public function setModeVersion(?string $value): self { $this->modeVersion = self::blankToNull($value); return $this->touch(); }
+    public function getSetupId(): ?string { return $this->setupId; }
+    public function setSetupId(?string $value): self { $this->setupId = self::blankToNull($value); return $this->touch(); }
+    public function getSetupVersion(): ?string { return $this->setupVersion; }
+    public function setSetupVersion(?string $value): self { $this->setupVersion = self::blankToNull($value); return $this->touch(); }
+    public function getDecisionId(): ?string { return $this->decisionId; }
+    public function setDecisionId(?string $value): self { $this->decisionId = self::blankToNull($value); return $this->touch(); }
+    public function getDecisionKey(): ?string { return $this->decisionKey; }
+    public function setDecisionKey(?string $value): self { $this->decisionKey = self::blankToNull($value); return $this->touch(); }
+    public function getEffectiveConfigReference(): ?string { return $this->effectiveConfigReference; }
+    public function setEffectiveConfigReference(?string $value): self { $this->effectiveConfigReference = self::blankToNull($value); return $this->touch(); }
 
     public function getCreatedAt(): \DateTimeImmutable
     {

@@ -23,9 +23,16 @@ final class MtfTradingDecisionMessageHandler
     {
         $mtfRunDto = $message->mtfRun;
         $result = $message->result;
+        $identity = $message->identity;
 
         if (!$result->isTradable || $result->executionTimeframe === null || $result->side === null) {
             return;
+        }
+        if ($identity->modeId !== null && (
+            $identity->symbol !== strtoupper($result->symbol)
+            || $identity->side !== strtoupper($result->side)
+        )) {
+            throw new \InvalidArgumentException('canonical_identity_mismatch:messenger_decision');
         }
 
         $this->mtfLogger->info('[MTF Messenger] Dispatching trading decision', [
@@ -34,6 +41,7 @@ final class MtfTradingDecisionMessageHandler
             'execution_tf' => $result->executionTimeframe,
             'side' => $result->side,
             'dry_run' => $mtfRunDto->dryRun,
+            'identity' => $identity->redacted(),
         ]);
 
         $signalSide = strtoupper($result->side);
@@ -53,6 +61,7 @@ final class MtfTradingDecisionMessageHandler
                 'context' => $result->context->toArray(),
                 'execution' => $result->execution->toArray(),
                 'extra' => $result->extra,
+                'canonical_identity' => $identity->toArray(),
             ],
             currentPrice: null,
             atr: null,

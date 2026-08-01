@@ -14,6 +14,34 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(MtfRunnerRequestDto::class)]
 final class MtfRunnerRequestDtoTest extends TestCase
 {
+    public function testBuildsCanonicalIdentityFromPythonTradingIdentityWithoutProfileFallback(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'run-1',
+            'correlation_run_id' => 'run-1',
+            'orchestration_set_id' => 'set-1',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'dry_run' => true,
+            'trading_identity' => [
+                'mode_id' => 'scalping',
+                'mode_version' => '1.0.0',
+                'setup_id' => 'scalping.pullback.long',
+                'setup_version' => '1.0.0',
+                'config_hash' => 'sha256:' . str_repeat('a', 64),
+                'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+                'side' => 'LONG',
+                'effective_config_reference' => 'effective-config:cfg-1',
+            ],
+        ]);
+
+        self::assertSame('scalping', $dto->lineageContext->modeId);
+        self::assertSame('scalping.pullback.long', $dto->lineageContext->setupId);
+        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+        self::assertSame('set-1', $dto->lineageContext->orchestrationSetId);
+        self::assertArrayNotHasKey('profile', $dto->lineageContext->toArray());
+    }
     /**
      * @return iterable<string, array{0: string, 1: Exchange}>
      */

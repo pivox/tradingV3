@@ -155,6 +155,21 @@ final class MtfRunnerRequestDto
             return LineageContext::fromArray($data['lineage_context']);
         }
 
+        if (isset($data['trading_identity']) && \is_array($data['trading_identity'])) {
+            $symbols = isset($data['symbols']) && \is_array($data['symbols']) ? $data['symbols'] : [];
+            return LineageContext::fromOrchestratorPayload($data['trading_identity'] + [
+                'origin' => LineageContext::ORIGIN_ORCHESTRATOR,
+                'orchestration_run_id' => $data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null,
+                'correlation_run_id' => $data['correlation_run_id'] ?? null,
+                'orchestration_set_id' => $data['set_id'] ?? $data['orchestration_set_id'] ?? null,
+                'orchestration_dashboard_id' => $data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null,
+                'exchange' => $exchange?->value,
+                'market_type' => $marketType?->value,
+                'symbol' => \is_string($symbols[0] ?? null) ? $symbols[0] : null,
+                'dry_run' => $data['dry_run'] ?? null,
+            ]);
+        }
+
         $hasOrchestratorLineage = self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null) !== null
             || self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null) !== null
             || self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null) !== null;

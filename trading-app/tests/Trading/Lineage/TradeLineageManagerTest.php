@@ -105,7 +105,15 @@ final class TradeLineageManagerTest extends KernelTestCase
             'replay_of_run_id' => $longReplayRunId,
             'replay_of_correlation_id' => 'source-corr',
             'attempt_number' => 2,
-            'config_hash' => 'cfg-123',
+            'config_hash' => 'sha256:' . str_repeat('a', 64),
+            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'mode_id' => 'scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'scalping.pullback.long',
+            'setup_version' => '1.0.0',
+            'decision_id' => 'decision-1',
+            'decision_key' => 'decision-key-1',
+            'effective_config_reference' => 'effective-config:cfg-1',
         ]);
         $this->em->clear();
 
@@ -118,7 +126,15 @@ final class TradeLineageManagerTest extends KernelTestCase
         self::assertSame($longReplayRunId, $reloaded->getReplayOfRunId());
         self::assertSame('source-corr', $reloaded->getReplayOfCorrelationId());
         self::assertSame(2, $reloaded->getAttemptNumber());
-        self::assertSame('cfg-123', $reloaded->getConfigHash());
+        self::assertSame('sha256:' . str_repeat('a', 64), $reloaded->getConfigHash());
+        self::assertSame('sha256:' . str_repeat('b', 64), $reloaded->getConditionCatalogHash());
+        self::assertSame('scalping', $reloaded->getModeId());
+        self::assertSame('1.0.0', $reloaded->getModeVersion());
+        self::assertSame('scalping.pullback.long', $reloaded->getSetupId());
+        self::assertSame('1.0.0', $reloaded->getSetupVersion());
+        self::assertSame('decision-1', $reloaded->getDecisionId());
+        self::assertSame('decision-key-1', $reloaded->getDecisionKey());
+        self::assertSame('effective-config:cfg-1', $reloaded->getEffectiveConfigReference());
     }
 
     public function testResolvesOnlyByExactPersistedIdentifiersWithinVenue(): void

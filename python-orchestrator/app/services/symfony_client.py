@@ -257,6 +257,7 @@ def _base_mtf_payload(
     market_type: str,
     mtf_profile: str,
     symbols: Any,
+    trading_identity: Any = None,
 ) -> Dict[str, Any]:
     """Cœur du payload ``/api/mtf/run``, source unique de sa forme.
 
@@ -280,6 +281,8 @@ def _base_mtf_payload(
     }
     if symbols:
         payload["symbols"] = list(symbols)
+    if trading_identity is not None:
+        payload["trading_identity"] = trading_identity.model_dump(exclude_none=True)
     return payload
 
 
@@ -319,6 +322,7 @@ def build_mtf_payload(
         market_type=a_set.market_type.value,
         mtf_profile=a_set.mtf_profile.value,
         symbols=a_set.symbols,
+        trading_identity=a_set.trading_identity,
     )
     if dry_run is not None:
         payload["dry_run"] = dry_run

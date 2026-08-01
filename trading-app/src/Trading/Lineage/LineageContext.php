@@ -40,6 +40,21 @@ final readonly class LineageContext
         public int $attemptNumber = 1,
         public ?string $configHash = null,
         public ?bool $dryRun = null,
+        public ?string $modeId = null,
+        public ?string $modeVersion = null,
+        public ?string $setupId = null,
+        public ?string $setupVersion = null,
+        public ?string $conditionCatalogHash = null,
+        public ?string $side = null,
+        public ?string $decisionId = null,
+        public ?string $decisionKey = null,
+        public ?string $intentId = null,
+        public ?string $orderId = null,
+        public ?string $positionId = null,
+        public ?string $tradeId = null,
+        public ?string $effectiveConfigReference = null,
+        /** @var array<string,mixed>|null */
+        public ?array $effectiveConfigSnapshot = null,
     ) {
         if (!\in_array($origin, [self::ORIGIN_ORCHESTRATOR, self::ORIGIN_LEGACY, self::ORIGIN_MANUAL, self::ORIGIN_REPLAY], true)) {
             throw new LineageContextException(sprintf('origin "%s" non supporte.', $origin));
@@ -49,6 +64,9 @@ final readonly class LineageContext
         }
         if ($origin === self::ORIGIN_REPLAY && $replayOfRunId === null && $replayOfCorrelationId === null) {
             throw new LineageContextException('Un replay doit référencer le run ou la correlation d origine.');
+        }
+        if ($side !== null && !\in_array($side, ['LONG', 'SHORT'], true)) {
+            throw new LineageContextException('canonical_identity_invalid:side');
         }
     }
 
@@ -65,6 +83,10 @@ final readonly class LineageContext
         $exchange = self::normalizeExchange(self::firstString($payload, ['exchange', 'cex']));
         $marketType = self::normalizeMarketType(self::firstString($payload, ['market_type', 'type_contract']));
         $origin = self::string($payload['origin'] ?? null) ?? self::ORIGIN_ORCHESTRATOR;
+        $canonical = self::hasCanonicalIdentity($payload);
+        if ($canonical) {
+            self::assertCanonicalPayload($payload);
+        }
 
         return new self(
             origin: strtolower($origin),
@@ -88,6 +110,20 @@ final readonly class LineageContext
             attemptNumber: self::positiveInt($payload['attempt_number'] ?? null),
             configHash: self::string($payload['config_hash'] ?? $payload['config_effective_version'] ?? null),
             dryRun: isset($payload['dry_run']) ? filter_var($payload['dry_run'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) : null,
+            modeId: self::string($payload['mode_id'] ?? null),
+            modeVersion: self::string($payload['mode_version'] ?? null),
+            setupId: self::string($payload['setup_id'] ?? null),
+            setupVersion: self::string($payload['setup_version'] ?? null),
+            conditionCatalogHash: self::string($payload['condition_catalog_hash'] ?? null),
+            side: self::normalizeSide(self::string($payload['side'] ?? null)),
+            decisionId: self::string($payload['decision_id'] ?? $payload['trading_decision_id'] ?? null),
+            decisionKey: self::string($payload['decision_key'] ?? null),
+            intentId: self::string($payload['intent_id'] ?? $payload['order_intent_id'] ?? null),
+            orderId: self::string($payload['order_id'] ?? $payload['exchange_order_id'] ?? null),
+            positionId: self::string($payload['position_id'] ?? $payload['exchange_position_id'] ?? null),
+            tradeId: self::string($payload['trade_id'] ?? $payload['internal_trade_id'] ?? null),
+            effectiveConfigReference: self::string($payload['effective_config_reference'] ?? null),
+            effectiveConfigSnapshot: self::stringKeyedArray($payload['effective_config_snapshot'] ?? null),
         );
     }
 
@@ -111,6 +147,10 @@ final readonly class LineageContext
      */
     public static function fromArray(array $data): self
     {
+        if (self::hasCanonicalIdentity($data)) {
+            self::assertCanonicalPayload($data);
+        }
+
         return new self(
             origin: self::string($data['origin'] ?? null) ?? self::ORIGIN_LEGACY,
             orchestrationRunId: self::string($data['orchestration_run_id'] ?? null),
@@ -133,6 +173,20 @@ final readonly class LineageContext
             attemptNumber: self::positiveInt($data['attempt_number'] ?? null),
             configHash: self::string($data['config_hash'] ?? null),
             dryRun: \array_key_exists('dry_run', $data) ? (bool) $data['dry_run'] : null,
+            modeId: self::string($data['mode_id'] ?? null),
+            modeVersion: self::string($data['mode_version'] ?? null),
+            setupId: self::string($data['setup_id'] ?? null),
+            setupVersion: self::string($data['setup_version'] ?? null),
+            conditionCatalogHash: self::string($data['condition_catalog_hash'] ?? null),
+            side: self::normalizeSide(self::string($data['side'] ?? null)),
+            decisionId: self::string($data['decision_id'] ?? null),
+            decisionKey: self::string($data['decision_key'] ?? null),
+            intentId: self::string($data['intent_id'] ?? null),
+            orderId: self::string($data['order_id'] ?? null),
+            positionId: self::string($data['position_id'] ?? null),
+            tradeId: self::string($data['trade_id'] ?? null),
+            effectiveConfigReference: self::string($data['effective_config_reference'] ?? null),
+            effectiveConfigSnapshot: self::stringKeyedArray($data['effective_config_snapshot'] ?? null),
         );
     }
 
@@ -160,7 +214,36 @@ final readonly class LineageContext
             attemptNumber: $attemptNumber,
             configHash: $this->configHash,
             dryRun: $this->dryRun,
+            modeId: $this->modeId,
+            modeVersion: $this->modeVersion,
+            setupId: $this->setupId,
+            setupVersion: $this->setupVersion,
+            conditionCatalogHash: $this->conditionCatalogHash,
+            side: $this->side,
+            decisionId: $this->decisionId,
+            decisionKey: $this->decisionKey,
+            intentId: $this->intentId,
+            orderId: $this->orderId,
+            positionId: $this->positionId,
+            tradeId: $this->tradeId,
+            effectiveConfigReference: $this->effectiveConfigReference,
+            effectiveConfigSnapshot: $this->effectiveConfigSnapshot,
         );
+    }
+
+    public function withDecision(string $decisionId, string $decisionKey): self
+    {
+        return $this->copy(decisionId: $decisionId, decisionKey: $decisionKey);
+    }
+
+    public function withIntent(string $intentId): self
+    {
+        return $this->copy(intentId: $intentId);
+    }
+
+    public function withExecution(string $orderId, ?string $positionId, ?string $tradeId): self
+    {
+        return $this->copy(orderId: $orderId, positionId: $positionId, tradeId: $tradeId);
     }
 
     /**
@@ -174,8 +257,7 @@ final readonly class LineageContext
             'correlation_run_id' => $this->correlationRunId,
             'orchestration_set_id' => $this->orchestrationSetId,
             'orchestration_dashboard_id' => $this->orchestrationDashboardId,
-            'mtf_profile' => $this->mtfProfile,
-            'profile' => $this->mtfProfile,
+            'mtf_profile' => $this->modeId === null ? $this->mtfProfile : null,
             'exchange' => $this->exchange,
             'market_type' => $this->marketType,
             'symbol' => $this->symbol,
@@ -191,7 +273,123 @@ final readonly class LineageContext
             'attempt_number' => $this->attemptNumber,
             'config_hash' => $this->configHash,
             'dry_run' => $this->dryRun,
+            'mode_id' => $this->modeId,
+            'mode_version' => $this->modeVersion,
+            'setup_id' => $this->setupId,
+            'setup_version' => $this->setupVersion,
+            'condition_catalog_hash' => $this->conditionCatalogHash,
+            'side' => $this->side,
+            'decision_id' => $this->decisionId,
+            'decision_key' => $this->decisionKey,
+            'intent_id' => $this->intentId,
+            'order_id' => $this->orderId,
+            'position_id' => $this->positionId,
+            'trade_id' => $this->tradeId,
+            'effective_config_reference' => $this->effectiveConfigReference,
+            'effective_config_snapshot' => $this->effectiveConfigSnapshot,
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    private function copy(
+        ?string $decisionId = null,
+        ?string $decisionKey = null,
+        ?string $intentId = null,
+        ?string $orderId = null,
+        ?string $positionId = null,
+        ?string $tradeId = null,
+    ): self {
+        $data = $this->toArray();
+        foreach (compact('decisionId', 'decisionKey', 'intentId', 'orderId', 'positionId', 'tradeId') as $property => $value) {
+            if ($value !== null) {
+                $value = self::requiredStageId($property, $value);
+                if ($this->{$property} !== null && $this->{$property} !== $value) {
+                    throw new LineageContextException('canonical_identity_mismatch:' . $property);
+                }
+                $data[strtolower((string) preg_replace('/(?<!^)[A-Z]/', '_$0', $property))] = $value;
+            }
+        }
+
+        return self::fromArray($data);
+    }
+
+    /** @param array<string,mixed> $payload */
+    private static function hasCanonicalIdentity(array $payload): bool
+    {
+        return self::string($payload['mode_id'] ?? null) !== null || self::string($payload['setup_id'] ?? null) !== null;
+    }
+
+    /** @param array<string,mixed> $payload */
+    private static function assertCanonicalPayload(array $payload): void
+    {
+        foreach (['orchestration_run_id', 'orchestration_set_id', 'mode_id', 'mode_version', 'setup_id', 'setup_version', 'config_hash', 'condition_catalog_hash', 'side', 'exchange', 'market_type', 'symbol'] as $field) {
+            if (self::string($payload[$field] ?? null) === null) {
+                throw new LineageContextException('canonical_identity_missing:' . $field);
+            }
+        }
+        if (self::string($payload['effective_config_reference'] ?? null) === null && !\is_array($payload['effective_config_snapshot'] ?? null)) {
+            throw new LineageContextException('canonical_identity_missing:effective_config');
+        }
+
+        self::assertSameValues($payload, 'side', ['context_side', 'execution_side'], true);
+        self::assertSameValues($payload, 'mode_id', ['requested_mode_id', 'resolved_mode_id', 'validated_mode_id', 'planned_mode_id', 'executed_mode_id', 'analyzed_mode_id']);
+        self::assertSameValues($payload, 'mode_version', ['requested_mode_version', 'resolved_mode_version', 'validated_mode_version']);
+        self::assertSameValues($payload, 'setup_version', ['validated_setup_version', 'planned_setup_version', 'executed_setup_version']);
+        self::assertSameValues($payload, 'config_hash', ['effective_config_hash', 'validated_config_hash', 'planned_config_hash', 'executed_config_hash']);
+        self::assertSameValues($payload, 'condition_catalog_hash', ['validated_condition_catalog_hash']);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param string[] $others
+     */
+    private static function assertSameValues(array $payload, string $canonical, array $others, bool $normalizeSide = false): void
+    {
+        $expected = self::string($payload[$canonical] ?? null);
+        if ($normalizeSide) {
+            $expected = self::normalizeSide($expected);
+        }
+        foreach ($others as $other) {
+            $actual = self::string($payload[$other] ?? null);
+            if ($actual === null) {
+                continue;
+            }
+            if ($normalizeSide) {
+                $actual = self::normalizeSide($actual);
+            }
+            if ($actual !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $canonical);
+            }
+        }
+    }
+
+    private static function requiredStageId(string $field, string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            throw new LineageContextException('canonical_identity_missing:' . $field);
+        }
+
+        return $value;
+    }
+
+    private static function normalizeSide(?string $side): ?string
+    {
+        return $side === null ? null : strtoupper($side);
+    }
+
+    /** @return array<string,mixed>|null */
+    private static function stringKeyedArray(mixed $value): ?array
+    {
+        if (!\is_array($value)) {
+            return null;
+        }
+        foreach (array_keys($value) as $key) {
+            if (!\is_string($key)) {
+                throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
+            }
+        }
+
+        return $value;
     }
 
     /**

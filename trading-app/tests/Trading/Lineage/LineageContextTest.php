@@ -12,6 +12,75 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(LineageContext::class)]
 final class LineageContextTest extends TestCase
 {
+    private const CONFIG_HASH = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    private const CATALOG_HASH = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    public function testCanonicalModernIdentityRoundTripsWithoutMutableAliases(): void
+    {
+        $identity = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+
+        self::assertEquals($identity, LineageContext::fromArray($identity->toArray()));
+        self::assertSame('scalping', $identity->modeId);
+        self::assertSame('scalping.pullback.long', $identity->setupId);
+        self::assertSame('LONG', $identity->side);
+        self::assertSame(self::CATALOG_HASH, $identity->conditionCatalogHash);
+        self::assertArrayNotHasKey('profile', $identity->toArray());
+        self::assertArrayNotHasKey('mtf_profile', $identity->toArray());
+        self::assertArrayNotHasKey('config_effective_version', $identity->toArray());
+    }
+
+    public function testModernIdentityFailsClosedWhenRequiredFieldIsMissing(): void
+    {
+        $payload = $this->canonicalPayload();
+        unset($payload['setup_version']);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:setup_version');
+
+        LineageContext::fromOrchestratorPayload($payload);
+    }
+
+    public function testModernIdentityRejectsContradictorySideAndHash(): void
+    {
+        $payload = $this->canonicalPayload();
+        $payload['context_side'] = 'SHORT';
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:side');
+
+        LineageContext::fromOrchestratorPayload($payload);
+    }
+
+    public function testStageIdsAreAddedWithoutChangingCanonicalIdentity(): void
+    {
+        $base = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+        $decision = $base->withDecision('decision-1', 'decision-key-1');
+        $intent = $decision->withIntent('intent-1');
+        $executed = $intent->withExecution('order-1', 'position-1', 'trade-1');
+
+        self::assertNull($base->decisionId);
+        self::assertSame('decision-1', $executed->decisionId);
+        self::assertSame('decision-key-1', $executed->decisionKey);
+        self::assertSame('intent-1', $executed->intentId);
+        self::assertSame('order-1', $executed->orderId);
+        self::assertSame('position-1', $executed->positionId);
+        self::assertSame('trade-1', $executed->tradeId);
+        self::assertSame($base->configHash, $executed->configHash);
+        self::assertSame($base->conditionCatalogHash, $executed->conditionCatalogHash);
+        self::assertSame($base->effectiveConfigReference, $executed->effectiveConfigReference);
+    }
+
+    public function testStageIdCannotBeReplacedAfterCreation(): void
+    {
+        $decision = LineageContext::fromOrchestratorPayload($this->canonicalPayload())
+            ->withDecision('decision-1', 'decision-key-1');
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:decisionId');
+
+        $decision->withDecision('decision-2', 'decision-key-1');
+    }
+
     public function testBuildsOrchestratorContextFromValidatedPayload(): void
     {
         $context = LineageContext::fromOrchestratorPayload([
@@ -109,5 +178,30 @@ final class LineageContextTest extends TestCase
         self::assertArrayNotHasKey('token', $context->redacted());
         self::assertArrayNotHasKey('api_key', $context->redacted());
         self::assertSame('run-a', $context->redacted()['orchestration_run_id']);
+    }
+
+    /** @return array<string, mixed> */
+    private function canonicalPayload(): array
+    {
+        return [
+            'origin' => 'orchestrator',
+            'orchestration_run_id' => 'run-1',
+            'correlation_run_id' => 'run-1',
+            'orchestration_set_id' => 'set-1',
+            'mode_id' => 'scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'scalping.pullback.long',
+            'setup_version' => '1.0.0',
+            'config_hash' => self::CONFIG_HASH,
+            'condition_catalog_hash' => self::CATALOG_HASH,
+            'side' => 'LONG',
+            'context_side' => 'LONG',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'effective_config_reference' => 'effective-config:cfg-1',
+            'effective_config_snapshot' => ['schema_version' => '1.0.0', 'snapshot_id' => 'cfg-1'],
+            'dry_run' => true,
+        ];
     }
 }
