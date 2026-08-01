@@ -27,7 +27,7 @@ final class Version20260801100000 extends AbstractMigration
         $this->addSql('ALTER TABLE order_intent ADD COLUMN IF NOT EXISTS canonical_position_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE order_intent ADD COLUMN IF NOT EXISTS trade_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE order_intent ADD COLUMN IF NOT EXISTS effective_config_reference VARCHAR(255) DEFAULT NULL');
-        $this->addSql('ALTER TABLE order_intent ADD COLUMN IF NOT EXISTS effective_config_snapshot JSON DEFAULT NULL');
+        $this->addSql('ALTER TABLE order_intent ADD COLUMN IF NOT EXISTS effective_config_snapshot JSONB DEFAULT NULL');
     }
 
     public function down(Schema $schema): void

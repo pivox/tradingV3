@@ -9,7 +9,10 @@ use App\Common\Enum\MarketType;
 use App\Entity\OrderIntent;
 use App\Entity\TradeLineage;
 use App\Provider\Context\ExchangeContext;
+use App\Repository\OrderIntentRepository;
 use App\Repository\TradeLineageRepository;
+use App\Service\OrderIntentManager;
+use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
@@ -178,6 +181,46 @@ final class TradeLineageManagerTest extends KernelTestCase
         $this->expectExceptionMessage('canonical_identity_mismatch:config_hash');
 
         $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
+    }
+
+    public function testLegacyLineageConfigHashDoesNotTurnExactDuplicateRetryIntoModernContract(): void
+    {
+        $intent = (new OrderIntent())
+            ->setExchange(Exchange::FAKE)
+            ->setMarketType(MarketType::PERPETUAL)
+            ->setSymbol('BTCUSDT')
+            ->setSide(1)
+            ->setType(OrderIntent::TYPE_LIMIT)
+            ->setOpenType(OrderIntent::OPEN_TYPE_ISOLATED)
+            ->setPositionMode(OrderIntent::POSITION_MODE_ONE_WAY)
+            ->setSize(1)
+            ->setClientOrderId('cid-legacy-lineage-retry')
+            ->setPresetMode(OrderIntent::PRESET_MODE_NONE);
+        $this->em->persist($intent);
+        $this->em->flush();
+        $this->manager->ensureForIntent($intent, ['config_hash' => 'legacy-config-v1']);
+
+        /** @var OrderIntentRepository $repository */
+        $repository = $this->em->getRepository(OrderIntent::class);
+        $intents = new OrderIntentManager($repository, $this->em, new NullLogger(), new DecisionKeyFactory());
+        $retry = $intents->reserveIntent([
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'side' => 1,
+            'type' => OrderIntent::TYPE_LIMIT,
+            'open_type' => OrderIntent::OPEN_TYPE_ISOLATED,
+            'position_mode' => OrderIntent::POSITION_MODE_ONE_WAY,
+            'size' => 1,
+            'client_order_id' => 'cid-legacy-lineage-retry',
+            'preset_mode' => OrderIntent::PRESET_MODE_NONE,
+        ]);
+
+        self::assertSame('legacy-config-v1', $intent->getConfigHash());
+        self::assertFalse($intent->hasAnyCanonicalIdentity());
+        self::assertTrue($retry->blocked);
+        self::assertSame('idempotent_client_order_id_replay', $retry->reason);
+        self::assertSame($intent->getId(), $retry->intent->getId());
     }
 
     public function testModernRetryRejectsMissingPersistedStructuredIntentId(): void

@@ -19,6 +19,8 @@ final class CanonicalIdentityMigrationTest extends TestCase
 {
     private const COLUMN_MIGRATION_FILE = __DIR__ . '/../../../migrations/Version20260801090000.php';
     private const INDEX_MIGRATION_FILE = __DIR__ . '/../../../migrations/Version20260801093000.php';
+    private const ORDER_INTENT_MIGRATION_FILE = __DIR__ . '/../../../migrations/Version20260801100000.php';
+    private const LIFECYCLE_MIGRATION_FILE = __DIR__ . '/../../../migrations/Version20260801101000.php';
 
     public function testColumnChangesRemainAtomicAndContainNoConcurrentIndexDdl(): void
     {
@@ -89,6 +91,24 @@ final class CanonicalIdentityMigrationTest extends TestCase
             );
         }
         self::assertStringNotContainsString('UPDATE trade_lineage', $source);
+    }
+
+    public function testEffectiveConfigSnapshotsUsePostgreSqlJsonbLikeTheirOrmMappings(): void
+    {
+        foreach (
+            [
+                self::ORDER_INTENT_MIGRATION_FILE => 'order_intent',
+                self::LIFECYCLE_MIGRATION_FILE => 'trade_lifecycle_event',
+            ] as $file => $table
+        ) {
+            $source = file_get_contents($file);
+
+            self::assertIsString($source);
+            self::assertStringContainsString(
+                sprintf('ALTER TABLE %s ADD COLUMN IF NOT EXISTS effective_config_snapshot JSONB DEFAULT NULL', $table),
+                $source,
+            );
+        }
     }
 
     public function testAbsentIndexesAreCreatedWithoutDrop(): void

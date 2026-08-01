@@ -701,7 +701,7 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
 
     public function hasAnyCanonicalIdentity(): bool
     {
-        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->configHash, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot] as $value) {
+        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot] as $value) {
             if ($value !== null && $value !== '' && $value !== []) {
                 return true;
             }

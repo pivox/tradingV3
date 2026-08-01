@@ -183,6 +183,38 @@ final class ExecuteOrderPlanLineageSyncTest extends KernelTestCase
         $method->invoke($workflow, $intent, new ExecutionResult('cid', 'exchange-order', ExecutionResult::STATUS_SUBMITTED), $mismatch);
     }
 
+    public function testSubmittedCanonicalIdentityOverridesConflictingProviderRawIdentity(): void
+    {
+        $workflow = new ExecuteOrderPlan(
+            $this->uninitialized(ExecutionBox::class),
+            $this->uninitialized(ExchangeExecutionService::class),
+            new NullLogger(),
+        );
+        $method = new \ReflectionMethod($workflow, 'withSubmittedIdentity');
+        $identity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())
+            ->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key')
+            ->withIntent('intent-typed');
+        $result = new ExecutionResult(
+            'cid',
+            'exchange-order-typed',
+            ExecutionResult::STATUS_SUBMITTED,
+            [
+                'provider' => 'preserved',
+                'canonical_identity' => [
+                    'intent_id' => 'intent-from-untrusted-raw',
+                    'order_id' => 'exchange-order-from-untrusted-raw',
+                ],
+            ],
+        );
+
+        /** @var ExecutionResult $submitted */
+        $submitted = $method->invoke($workflow, $result, $identity);
+
+        self::assertSame('preserved', $submitted->raw['provider'] ?? null);
+        self::assertSame('intent-typed', $submitted->raw['canonical_identity']['intent_id'] ?? null);
+        self::assertSame('exchange-order-typed', $submitted->raw['canonical_identity']['order_id'] ?? null);
+    }
+
     /** @return array{ExecuteOrderPlan,OrderIntent,LineageContext} */
     private function canonicalConflictFixture(): array
     {

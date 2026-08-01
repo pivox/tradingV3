@@ -26,7 +26,7 @@ final class Version20260801101000 extends AbstractMigration
         $this->addSql('ALTER TABLE trade_lifecycle_event ADD COLUMN IF NOT EXISTS intent_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lifecycle_event ADD COLUMN IF NOT EXISTS trade_id VARCHAR(96) DEFAULT NULL');
         $this->addSql('ALTER TABLE trade_lifecycle_event ADD COLUMN IF NOT EXISTS effective_config_reference VARCHAR(255) DEFAULT NULL');
-        $this->addSql('ALTER TABLE trade_lifecycle_event ADD COLUMN IF NOT EXISTS effective_config_snapshot JSON DEFAULT NULL');
+        $this->addSql('ALTER TABLE trade_lifecycle_event ADD COLUMN IF NOT EXISTS effective_config_snapshot JSONB DEFAULT NULL');
     }
 
     public function down(Schema $schema): void

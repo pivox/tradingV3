@@ -6,8 +6,9 @@ namespace App\TradeEntry\Workflow;
 use App\Entity\OrderIntent;
 use App\Exchange\Adapter\BitmartLegacyOrderMapper;
 use App\Service\OrderIntentManager;
-use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\TradeLineageManager;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -148,17 +149,7 @@ final class ExecuteOrderPlan
                 : $this->execution->execute($executionPlan, $decisionKey, $contextBuilder, $mode, $executionTf, $clientOrderId, $intent?->getId(), true);
 
             if ($intentIdentity !== null && $result->exchangeOrderId !== null) {
-                $submittedIdentity = $intentIdentity->withExecution(
-                    $result->exchangeOrderId,
-                    null,
-                    $intentIdentity->tradeId,
-                );
-                $result = new ExecutionResult(
-                    $result->clientOrderId,
-                    $result->exchangeOrderId,
-                    $result->status,
-                    $result->raw + ['canonical_identity' => $submittedIdentity->toArray()],
-                );
+                $result = $this->withSubmittedIdentity($result, $intentIdentity);
             }
 
             if ($intent instanceof OrderIntent && $this->orderIntentManager !== null) {
@@ -218,6 +209,22 @@ final class ExecuteOrderPlan
         $context = ExchangeContext::resolve($plan->exchangeContext);
 
         return $plan->exchangeContext !== null || !$context->isLegacyDefault();
+    }
+
+    private function withSubmittedIdentity(ExecutionResult $result, LineageContext $intentIdentity): ExecutionResult
+    {
+        $submittedIdentity = $intentIdentity->withExecution(
+            (string) $result->exchangeOrderId,
+            null,
+            $intentIdentity->tradeId,
+        );
+
+        return new ExecutionResult(
+            $result->clientOrderId,
+            $result->exchangeOrderId,
+            $result->status,
+            array_replace($result->raw, ['canonical_identity' => $submittedIdentity->toArray()]),
+        );
     }
 
     private function isSubmitSuccess(string $status): bool
