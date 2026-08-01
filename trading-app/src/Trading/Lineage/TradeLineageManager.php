@@ -8,6 +8,7 @@ use App\Entity\OrderIntent;
 use App\Entity\TradeLineage;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLineageRepository;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -25,10 +26,21 @@ final class TradeLineageManager
      */
     public function ensureForIntent(OrderIntent $intent, array $context = []): TradeLineage
     {
+        $paperProvenance = PaperExecutionProvenance::extract($context);
+        if ($intent->getPaperExecutionCellId() !== null && $paperProvenance === null) {
+            throw new \InvalidArgumentException('paper_execution_provenance_invalid');
+        }
+        if ($paperProvenance !== null) {
+            PaperExecutionProvenance::assertMatches($intent, $paperProvenance);
+        }
+
         $intentId = $intent->getId();
         if ($intentId !== null) {
             $existing = $this->repository->findOneByOrderIntentId($intentId);
             if ($existing instanceof TradeLineage) {
+                if ($paperProvenance !== null) {
+                    PaperExecutionProvenance::assertMatches($existing, $paperProvenance);
+                }
                 return $existing;
             }
         }
@@ -38,6 +50,9 @@ final class TradeLineageManager
             ExchangeContext::fromValues($intent->getExchange(), $intent->getMarketType()),
         );
         if ($existingByClient instanceof TradeLineage) {
+            if ($paperProvenance !== null) {
+                PaperExecutionProvenance::assertMatches($existingByClient, $paperProvenance);
+            }
             if ($existingByClient->getOrderIntent() === null) {
                 $existingByClient->setOrderIntent($intent);
                 $this->entityManager->flush();
@@ -67,6 +82,10 @@ final class TradeLineageManager
             ->setReplayOfCorrelationId($this->contextString($context, 'replay_of_correlation_id', 96))
             ->setAttemptNumber($this->contextInt($context, 'attempt_number'))
             ->setConfigHash($this->contextString($context, 'config_hash', 128));
+
+        if ($paperProvenance !== null) {
+            $lineage->applyPaperExecutionProvenance($paperProvenance);
+        }
 
         $this->syncIntentLineage($intent, $lineage);
 
@@ -164,7 +183,7 @@ final class TradeLineageManager
      */
     public function lifecycleExtra(TradeLineage $lineage): array
     {
-        return array_filter([
+        $extra = array_filter([
             'internal_trade_id' => $lineage->getInternalTradeId(),
             'trade_id' => $lineage->getInternalTradeId(),
             'run_id' => $lineage->getRunId(),
@@ -180,6 +199,23 @@ final class TradeLineageManager
             'attempt_number' => $lineage->getAttemptNumber(),
             'config_hash' => $lineage->getConfigHash(),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
+
+        if ($lineage->getPaperExecutionCellId() === null) {
+            return $extra;
+        }
+
+        $paperProvenance = PaperExecutionProvenance::validate([
+            'paper_network' => $lineage->getPaperNetwork(),
+            'market_data_venue' => $lineage->getMarketDataVenue(),
+            'paper_execution_cell_id' => $lineage->getPaperExecutionCellId(),
+            'configuration_snapshot_id' => $lineage->getConfigurationSnapshotId(),
+            'paper_eligibility' => $lineage->getPaperEligibility(),
+            'strategy_profile' => $lineage->getProfile(),
+            'run_id' => $lineage->getRunId(),
+            'exchange' => $lineage->getExchange(),
+        ]);
+
+        return $extra + $paperProvenance;
     }
 
     /**

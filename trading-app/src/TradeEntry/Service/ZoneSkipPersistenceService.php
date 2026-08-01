@@ -8,6 +8,7 @@ use App\Entity\TradeZoneEvent;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeZoneEventRepository;
 use App\TradeEntry\Dto\ZoneSkipEventDto;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 
 final class ZoneSkipPersistenceService
 {
@@ -47,6 +48,11 @@ final class ZoneSkipPersistenceService
             ->setMtfLevel($dto->mtfLevel)
             ->setProposedZoneMaxPct($proposedMax)
             ->setCategory($category);
+
+        $paperProvenance = PaperExecutionProvenance::extract($dto->mtfContext);
+        if ($paperProvenance !== null) {
+            $event->applyPaperExecutionProvenance($paperProvenance);
+        }
 
         $this->repository->save($event, true);
     }

@@ -240,7 +240,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 'order_status' => $order->status->value,
                 'pnl_source' => 'fake_paper_fill_ledger_v1',
                 'cost_completeness' => 'complete',
-                ...($event->type === 'liquidation.filled' ? $this->fillLineageMetadata($order) : []),
+                ...$this->fillLineageMetadata($order),
                 ...$this->fillCostMetadata($event),
             ],
         );
@@ -285,6 +285,12 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             'order_intent_id',
             'run_id',
             'decision_key',
+            'paper_network',
+            'market_data_venue',
+            'paper_execution_cell_id',
+            'configuration_snapshot_id',
+            'paper_eligibility',
+            'strategy_profile',
         ]));
     }
 

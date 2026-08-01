@@ -92,6 +92,27 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         );
     }
 
+    public function testEveryFillCarriesWhitelistedPaperCellLineage(): void
+    {
+        $paper = [
+            'paper_network' => 'testnet',
+            'market_data_venue' => 'hyperliquid',
+            'paper_execution_cell_id' => 'sha256:' . str_repeat('a', 64),
+            'configuration_snapshot_id' => 'sha256:' . str_repeat('b', 64),
+            'paper_eligibility' => 'reference_only',
+            'strategy_profile' => 'scalper_micro',
+            'run_id' => 'run-001',
+        ];
+        $placed = $this->scenarioAdapter()->placeOrder($this->request(metadata: $paper));
+        $this->scenario->fillOrder((string) $placed->exchangeOrderId, 1.0, 24950.0);
+        $normalized = $this->normalizer->normalize($this->scenario->events('order.filled')[0]);
+
+        self::assertInstanceOf(ExchangeFillReceived::class, $normalized[1]);
+        foreach ($paper as $key => $value) {
+            self::assertSame($value, $normalized[1]->fill()->metadata[$key] ?? null, $key);
+        }
+    }
+
     public function testNormalizesTakerFillWithExplicitSlippageCosts(): void
     {
         $this->scenarioAdapter()->placeOrder($this->request(

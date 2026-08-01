@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Execution\Identity;
 
+use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -67,5 +68,24 @@ final readonly class PaperExecutionCell
             strategyProfile: $strategyProfile,
             runId: $runId,
         );
+    }
+
+    /** @return array<string, string> */
+    public function provenance(PaperProfileEligibility $eligibility): array
+    {
+        if ((new PaperProfileRegistry())->require($this->strategyProfile) !== $eligibility) {
+            throw new \InvalidArgumentException('paper_execution_cell_eligibility_conflict');
+        }
+
+        return [
+            'paper_network' => $this->network->value,
+            'market_data_venue' => $this->marketDataVenue->value,
+            'paper_execution_cell_id' => $this->id,
+            'configuration_snapshot_id' => $this->configurationSnapshotId,
+            'paper_eligibility' => $eligibility->value,
+            'strategy_profile' => $this->strategyProfile,
+            'run_id' => $this->runId,
+            'exchange' => 'fake',
+        ];
     }
 }

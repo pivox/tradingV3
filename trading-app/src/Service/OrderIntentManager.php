@@ -9,6 +9,7 @@ use App\Entity\OrderProtection;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\OrderIntentRepository;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -272,6 +273,7 @@ final class OrderIntentManager
 
     /**
      * Valide un OrderIntent et le marque comme VALIDATED
+     * @param array<string,string>|null $errors
      */
     public function validateIntent(OrderIntent $intent, ?array $errors = null): bool
     {
@@ -429,6 +431,11 @@ final class OrderIntentManager
         $intent->setQuantization($quantization);
         $intent->setRawInputs($rawInputs);
         $intent->setStatus(OrderIntent::STATUS_DRAFT);
+
+        $paperProvenance = PaperExecutionProvenance::extract($orderParams);
+        if ($paperProvenance !== null) {
+            $intent->applyPaperExecutionProvenance($paperProvenance);
+        }
 
         if (isset($orderParams['preset_take_profit_price'])) {
             $tp = new OrderProtection();

@@ -21,7 +21,7 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_order_intent_status', columns: ['status'])]
 #[ORM\Index(name: 'idx_order_intent_client_order_id', columns: ['client_order_id'])]
 #[ORM\Index(name: 'idx_order_intent_exchange_market_decision_key', columns: ['exchange', 'market_type', 'decision_key'])]
-class OrderIntent
+class OrderIntent implements PaperExecutionProvenanceAwareInterface
 {
     use PaperExecutionProvenance;
 

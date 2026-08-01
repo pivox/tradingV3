@@ -19,7 +19,7 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_trade_lineage_venue_exchange_order', columns: ['exchange', 'market_type', 'exchange_order_id'])]
 #[ORM\Index(name: 'idx_trade_lineage_venue_position', columns: ['exchange', 'market_type', 'position_id'])]
 #[ORM\Index(name: 'idx_trade_lineage_run_set', columns: ['run_id', 'orchestration_set_id'])]
-final class TradeLineage
+final class TradeLineage implements PaperExecutionProvenanceAwareInterface
 {
     use PaperExecutionProvenance;
 
