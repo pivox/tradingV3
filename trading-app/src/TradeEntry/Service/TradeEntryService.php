@@ -94,9 +94,14 @@ final class TradeEntryService
                 ->withProfile($mode);
         }
 
+        $modern = $request->lineageContext?->isModern() === true;
+        $entryConfig = $modern
+            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
+            : $this->tradeEntryConfigResolver->resolve($mode);
+
         // Daily loss guard: block trading when limit is reached
         try {
-            $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
+            $state = $this->dailyLossGuard->checkAndMaybeLock($mode, $modern ? $entryConfig : null);
             if ($state['locked'] === true) {
                 $cid = sprintf('SKIP-DAILY-LOCK-%s', substr(sha1(($decisionKey ?? '') . microtime(true)), 0, 12));
                 $this->positionsLogger->warning('order_journey.trade_entry.blocked', [
@@ -138,6 +143,9 @@ final class TradeEntryService
                 );
             }
         } catch (\Throwable $e) {
+            if ($modern) {
+                throw $e;
+            }
             // If guard fails unexpectedly, do not block, just log and continue
             $this->positionsLogger->error('order_journey.trade_entry.guard_error', [
                 'symbol' => $request->symbol,
@@ -146,9 +154,6 @@ final class TradeEntryService
             ]);
         }
 
-        $entryConfig = $request->lineageContext?->isModern()
-            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
-            : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
 
         $this->positionsLogger->info('order_journey.trade_entry.preflight_start', [

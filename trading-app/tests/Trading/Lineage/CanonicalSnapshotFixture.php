@@ -21,7 +21,7 @@ final class CanonicalSnapshotFixture
                 'mode_id' => 'scalping', 'mode_version' => '1.0.0',
                 'timeframes' => ['regime' => ['15m'], 'context' => ['5m'], 'trigger' => ['1m'], 'execution' => ['1m', '5m']],
                 'risk' => [
-                    'trade_budget' => $defined(0.5, 'percent_equity_per_trade'),
+                    'trade_budget' => $defined(['amount' => 50.0, 'quote_currency' => 'USDT'], 'quote_notional'),
                     'daily_loss_cap' => $defined(['percent_equity' => 2.0, 'absolute_quote' => 20.0, 'quote_currency' => 'USDT'], 'compound_percent_equity_and_quote_per_day'),
                     'max_concurrent_positions' => $defined(3, 'positions'),
                     'mode_exposure_cap' => $defined(10.0, 'percent_equity_notional'),

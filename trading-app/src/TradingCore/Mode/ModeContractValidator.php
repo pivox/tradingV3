@@ -103,11 +103,18 @@ final class ModeContractValidator
         foreach (array_keys($risk) as $key) {
             $this->assertDecision($this->mapping($risk, $key), 'risk.' . $key);
         }
-        $this->assertUnit($this->mapping($risk, 'trade_budget'), 'risk.trade_budget', 'percent_equity_per_trade');
+        $tradeBudget = $this->mapping($risk, 'trade_budget');
+        if (!in_array($tradeBudget['unit'], ['percent_equity_per_trade', 'quote_notional'], true)) {
+            throw new ModeContractException('risk.trade_budget.unit must be "percent_equity_per_trade" or "quote_notional".');
+        }
         $this->assertUnit($this->mapping($risk, 'daily_loss_cap'), 'risk.daily_loss_cap', 'compound_percent_equity_and_quote_per_day');
         $this->assertUnit($this->mapping($risk, 'max_concurrent_positions'), 'risk.max_concurrent_positions', 'positions');
         $this->assertUnit($this->mapping($risk, 'mode_exposure_cap'), 'risk.mode_exposure_cap', 'percent_equity_notional');
-        $this->assertDefinedPositiveNumber($this->mapping($risk, 'trade_budget'), 'risk.trade_budget');
+        if ($tradeBudget['unit'] === 'quote_notional') {
+            $this->assertDefinedQuoteBudget($tradeBudget);
+        } else {
+            $this->assertDefinedPositiveNumber($tradeBudget, 'risk.trade_budget');
+        }
         $this->assertDefinedDailyCap($this->mapping($risk, 'daily_loss_cap'));
         $this->assertDefinedPositiveInteger($this->mapping($risk, 'max_concurrent_positions'), 'risk.max_concurrent_positions');
         $this->assertDefinedPositiveNumber($this->mapping($risk, 'mode_exposure_cap'), 'risk.mode_exposure_cap');
@@ -276,6 +283,23 @@ final class ModeContractValidator
         }
         if ((!is_int($value['absolute_quote']) && !is_float($value['absolute_quote'])) || $value['absolute_quote'] <= 0 || !is_finite((float) $value['absolute_quote']) || $value['quote_currency'] !== 'USDT') {
             throw new ModeContractException('risk.daily_loss_cap absolute_quote/currency are invalid.');
+        }
+    }
+
+    /** @param array<string, mixed> $decision */
+    private function assertDefinedQuoteBudget(array $decision): void
+    {
+        if ($decision['state'] !== 'defined') {
+            return;
+        }
+        $value = $decision['value'];
+        if (!is_array($value) || array_is_list($value)) {
+            throw new ModeContractException('risk.trade_budget defined quote value must be a budget mapping.');
+        }
+        $this->assertExactKeys($value, ['amount', 'quote_currency'], 'risk.trade_budget.value');
+        if ((!is_int($value['amount']) && !is_float($value['amount'])) || $value['amount'] <= 0
+            || !is_finite((float) $value['amount']) || $value['quote_currency'] !== 'USDT') {
+            throw new ModeContractException('risk.trade_budget quote amount/currency are invalid.');
         }
     }
 

@@ -9,6 +9,7 @@ use App\Trading\Lineage\LineageContextException;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpFoundation\JsonResponse;
 
 #[CoversClass(LineageContext::class)]
 final class LineageContextTest extends TestCase
@@ -261,6 +262,24 @@ final class LineageContextTest extends TestCase
         self::assertArrayNotHasKey('token', $context->redacted());
         self::assertArrayNotHasKey('api_key', $context->redacted());
         self::assertSame('run-a', $context->redacted()['orchestration_run_id']);
+    }
+
+    public function testCanonicalHashSurvivesNormalJsonRoundTripAcrossIntegralFloatUnicodeAndSlash(): void
+    {
+        $config = ['leverage' => 3.0, 'note' => 'café/path'];
+        $response = new JsonResponse(['config' => $config], json: false);
+        $roundTripped = json_decode((string) $response->getContent(), true, 512, JSON_THROW_ON_ERROR)['config'];
+
+        self::assertSame(3, $roundTripped['leverage']);
+        self::assertSame('café/path', $roundTripped['note']);
+        self::assertSame(
+            'sha256:1f55b0a0080a7c32b97ab8ff2907485ac3ebcb0dd4f1efb391b4c4b5f90c1418',
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($roundTripped, self::CATALOG_HASH),
+        );
+        self::assertSame(
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, self::CATALOG_HASH),
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($roundTripped, self::CATALOG_HASH),
+        );
     }
 
     /** @return array<string, mixed> */

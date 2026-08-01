@@ -50,6 +50,43 @@ def test_full_php_133_snapshot_shape_round_trips_unchanged_with_hash_parity():
     assert snapshot.model_dump(mode="json") == payload
 
 
+def test_effective_snapshot_hash_normalizes_integral_float_and_deep_freezes_metadata():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["config"]["environment"]["note"] = "café/path"
+    payload["config"]["environment"]["leverage"] = 3.0
+    normalized = json.loads(json.dumps(payload["config"], ensure_ascii=False))
+    assert normalized["environment"]["leverage"] == 3.0
+    normalized["environment"]["leverage"] = 3
+    canonical = json.dumps(
+        {"config": normalized, "condition_catalog_hash": payload["condition_catalog_hash"]},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+    before_hash = snapshot.config_hash
+    before_payload = snapshot.model_dump(mode="json")
+
+    with pytest.raises(TypeError):
+        snapshot.provenance["mode.mode_id"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError):
+        snapshot.provenance["mode.mode_id"]["path"] = "/mutated.yaml"  # type: ignore[index]
+
+    assert snapshot.config_hash == before_hash
+    assert snapshot.model_dump(mode="json") == before_payload
+
+
+def test_php_api_integral_number_unicode_slash_hash_fixture_matches_python():
+    config = {"leverage": 3, "note": "café/path"}
+    canonical = json.dumps(
+        {"config": config, "condition_catalog_hash": "sha256:" + "b" * 64},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    assert "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest() == (
+        "sha256:1f55b0a0080a7c32b97ab8ff2907485ac3ebcb0dd4f1efb391b4c4b5f90c1418"
+    )
+
+
 def test_full_php_133_snapshot_rejects_layer_file_order_mismatch():
     payload = _canonical_identity_payload()["effective_config_snapshot"]
     payload["ordered_files"] = list(reversed(payload["ordered_files"]))

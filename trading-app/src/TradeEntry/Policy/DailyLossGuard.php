@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
+use App\Config\TradeEntryConfig;
 use App\Config\TradeEntryConfigResolver;
 use App\Contract\Provider\MainProviderInterface;
 use Psr\Log\LoggerInterface;
@@ -39,16 +40,9 @@ final class DailyLossGuard
      * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return array{date:string, start_measure:float, measure:string, measure_value:float, pnl_today:float, limit_usdt:float, locked:bool, locked_at?:string}
      */
-    public function checkAndMaybeLock(?string $mode = null): array
+    public function checkAndMaybeLock(?string $mode = null, ?TradeEntryConfig $canonicalConfig = null): array
     {
-        $config = $this->configResolver->resolve($mode);
-        $modeUsed = $this->configResolver->resolveMode($mode);
-        $risk = $config->getRisk();
-        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
-        if ($limitUsdt <= 0.0) {
-            $limitUsdt = 0.0;
-        }
-        $countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
+        [$modeUsed, $limitUsdt, $countUnrealized] = $this->resolvePolicy($mode, $canonicalConfig);
 
         if ($limitUsdt <= 0.0) {
             return [
@@ -139,6 +133,29 @@ final class DailyLossGuard
         $this->saveState($state, $modeUsed);
 
         return $state;
+    }
+
+    /** @return array{string,float,bool} */
+    private function resolvePolicy(?string $mode, ?TradeEntryConfig $canonicalConfig): array
+    {
+        if ($canonicalConfig instanceof TradeEntryConfig) {
+            $dailyCap = $canonicalConfig->getRisk()['daily_loss_cap'] ?? null;
+            if (!\is_array($dailyCap) || array_is_list($dailyCap)
+                || !\is_numeric($dailyCap['absolute_quote'] ?? null)
+                || !\is_finite((float) $dailyCap['absolute_quote']) || (float) $dailyCap['absolute_quote'] <= 0.0
+                || ($dailyCap['quote_currency'] ?? null) !== 'USDT') {
+                throw new \RuntimeException('canonical_config_unresolved_or_unit_mismatch:mode.risk.daily_loss_cap');
+            }
+
+            return [(string) $mode, (float) $dailyCap['absolute_quote'], true];
+        }
+
+        $config = $this->configResolver->resolve($mode);
+        $modeUsed = $this->configResolver->resolveMode($mode);
+        $risk = $config->getRisk();
+        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? max(0.0, (float) $risk['daily_max_loss_usdt']) : 0.0;
+
+        return [$modeUsed, $limitUsdt, (bool) ($risk['daily_loss_count_unrealized'] ?? true)];
     }
 
     public function isLocked(?string $mode = null): bool

@@ -105,22 +105,27 @@ final readonly class CanonicalEffectiveConfigSnapshot
     public static function calculateConfigHash(array $config, string $conditionCatalogHash): string
     {
         return 'sha256:' . hash('sha256', json_encode(
-            self::canonicalize(['config' => $config, 'condition_catalog_hash' => $conditionCatalogHash]),
-            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            self::canonicalize(['config' => $config, 'condition_catalog_hash' => $conditionCatalogHash], true),
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
         ));
     }
 
-    private static function canonicalize(mixed $value): mixed
+    private static function canonicalize(mixed $value, bool $normalizeIntegralFloats = false): mixed
     {
         if (!\is_array($value)) {
-            if (\is_float($value) && !\is_finite($value)) {
-                throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
+            if (\is_float($value)) {
+                if (!\is_finite($value)) {
+                    throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
+                }
+                if ($normalizeIntegralFloats && floor($value) === $value && $value >= PHP_INT_MIN && $value <= PHP_INT_MAX) {
+                    return (int) $value;
+                }
             }
             if ($value === null || \is_scalar($value)) { return $value; }
             throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
         }
         if (!array_is_list($value)) { ksort($value, SORT_STRING); }
-        foreach ($value as $key => $item) { $value[$key] = self::canonicalize($item); }
+        foreach ($value as $key => $item) { $value[$key] = self::canonicalize($item, $normalizeIntegralFloats); }
         return $value;
     }
 }

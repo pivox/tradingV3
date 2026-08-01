@@ -20,7 +20,8 @@ final class CanonicalTradeEntryConfigFactoryTest extends TestCase
         $config = CanonicalSnapshotFixture::config();
         $view = CanonicalTradeEntryConfigFactory::fromLineage(CanonicalSnapshotFixture::lineage($config));
 
-        self::assertSame(0.5, $view->getDefault('risk_pct_percent'));
+        self::assertSame(50.0, $view->getDefault('initial_margin_usdt'));
+        self::assertArrayNotHasKey('risk_pct_percent', $view->getDefaults());
         self::assertSame('limit', $view->getDefault('order_type'));
         self::assertSame('isolated', $view->getDefault('open_type'));
         self::assertSame(3.0, $view->getLeverage()['canonical_cap']);
@@ -37,6 +38,24 @@ final class CanonicalTradeEntryConfigFactoryTest extends TestCase
         $this->expectException(LineageContextException::class);
         $this->expectExceptionMessage('canonical_config_unresolved:mode.leverage');
         CanonicalTradeEntryConfigFactory::fromLineage(CanonicalSnapshotFixture::lineage($config));
+    }
+
+    public function testRejectsPercentOrIncompatibleTradeBudgetInsteadOfInventingMargin(): void
+    {
+        foreach ([
+            ['state' => 'defined', 'value' => 0.5, 'unit' => 'percent_equity_per_trade'],
+            ['state' => 'unresolved', 'value' => null, 'unit' => 'quote_notional'],
+            ['state' => 'defined', 'value' => ['amount' => 50.0, 'quote_currency' => 'EUR'], 'unit' => 'quote_notional'],
+        ] as $decision) {
+            $config = CanonicalSnapshotFixture::config();
+            $config['mode']['risk']['trade_budget'] = $decision;
+            try {
+                CanonicalTradeEntryConfigFactory::fromLineage(CanonicalSnapshotFixture::lineage($config));
+                self::fail('An unresolved or incompatible canonical trade budget was accepted.');
+            } catch (LineageContextException $exception) {
+                self::assertSame('canonical_config_unresolved_or_unit_mismatch:mode.risk.trade_budget', $exception->getMessage());
+            }
+        }
     }
 
     public function testRejectsFictionalTradeEntryRoot(): void

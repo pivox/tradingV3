@@ -17,6 +17,10 @@ use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
 use App\MtfValidator\Service\TimeframeValidationService;
 use App\Contract\MtfValidator\Dto\ContextDecisionDto;
 use App\Provider\Context\ExchangeContext;
+use App\Config\TradeEntryConfigProvider;
+use App\Config\TradeEntryModeContext;
+use App\Config\ZoneDeviationOverrideStore;
+use Psr\Log\NullLogger;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -95,20 +99,30 @@ final class CanonicalTradeIdentityTest extends TestCase
         [$mode, $config] = $resolve->invoke($handler, $this->identity(), 'legacy-mode-must-not-be-read');
 
         self::assertSame('scalping', $mode);
-        self::assertSame(0.5, $config->getDefault('risk_pct_percent'));
+        self::assertSame(50.0, $config->getDefault('initial_margin_usdt'));
     }
 
-    public function testModernRequestFailsClosedAtUnownedInitialMarginBoundary(): void
+    public function testModernRequestUsesModeOwnedQuoteBudgetAsInitialMargin(): void
     {
-        /** @var TradeEntryRequestBuilder $builder */
-        $builder = (new \ReflectionClass(TradeEntryRequestBuilder::class))->newInstanceWithoutConstructor();
+        /** @var TradeEntryConfigProvider $provider */
+        $provider = (new \ReflectionClass(TradeEntryConfigProvider::class))->newInstanceWithoutConstructor();
+        /** @var TradeEntryModeContext $modeContext */
+        $modeContext = (new \ReflectionClass(TradeEntryModeContext::class))->newInstanceWithoutConstructor();
+        $builder = new TradeEntryRequestBuilder(
+            $provider,
+            $modeContext,
+            new ZoneDeviationOverrideStore(sys_get_temp_dir() . '/canonical-zone-overrides-' . bin2hex(random_bytes(4)) . '.json'),
+            new NullLogger(),
+        );
 
-        $this->expectExceptionMessage('canonical_config_unresolved:trade_entry.initial_margin_usdt');
-        $builder->fromMtfSignal(
+        $request = $builder->fromMtfSignal(
             'BTCUSDT', 'LONG', '1m', 100.0, 1.0, 'ignored',
             exchangeContext: ExchangeContext::fromValues('fake', 'perpetual'),
             lineageContext: $this->identity()->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key'),
         );
+
+        self::assertNotNull($request);
+        self::assertSame(50.0, $request->initialMarginUsdt);
     }
 
     private function identity(): LineageContext

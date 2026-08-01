@@ -146,6 +146,23 @@ final class ModeContractLoaderTest extends TestCase
         (new ModeContractValidator())->validate($document);
     }
 
+    public function testAcceptsExplicitUsdtQuoteTradeBudgetDecision(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.0.0')->toArray();
+        $document['risk']['trade_budget'] = [
+            'state' => 'defined',
+            'value' => ['amount' => 50.0, 'quote_currency' => 'USDT'],
+            'unit' => 'quote_notional',
+            'source' => 'synthetic-test',
+            'justification' => 'Explicit quote budget for canonical trade-path propagation.',
+        ];
+
+        (new ModeContractValidator())->validate($document);
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $jsonDocument = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue((new JsonSchemaValidator())->validate($jsonDocument, $schema)->isValid());
+    }
+
     public function testRejectsSetupOutsideFrozenCatalog(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.0.0')->toArray();

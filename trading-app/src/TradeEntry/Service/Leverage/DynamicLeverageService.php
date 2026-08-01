@@ -63,6 +63,14 @@ final class DynamicLeverageService implements LeverageServiceInterface
 
         $floorConfig    = (float)($levConfig['floor'] ?? 1.0);
         $exchangeCapCfg = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
+        $canonicalCap = isset($levConfig['canonical_cap']) ? (float) $levConfig['canonical_cap'] : null;
+        if ($canonicalCap !== null && (!\is_finite($canonicalCap) || $canonicalCap <= 0.0)) {
+            throw new \RuntimeException('canonical_config_invalid:mode.leverage');
+        }
+        $canonicalIntegerCap = $canonicalCap !== null ? (int) floor($canonicalCap) : null;
+        if ($canonicalIntegerCap !== null && $canonicalIntegerCap < max(1, $minLeverage)) {
+            throw new \RuntimeException('canonical_config_unenforceable:mode.leverage');
+        }
         // Multiplicateur par timeframe appliqué AU LEVIER (DynamicLeverageService) : configuré côté defaults.
         $defaultsTfMultipliers = (array)($defaults['timeframe_multipliers'] ?? []);
         $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
@@ -126,6 +134,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $leverageRounded = max(1, $leverageRounded);
         $leverageRounded = max($minLeverage, $leverageRounded);
         $leverageRounded = min($maxLeverage, $leverageRounded);
+        if ($canonicalIntegerCap !== null) {
+            $leverageRounded = min($leverageRounded, $canonicalIntegerCap);
+        }
 
         $this->positionsLogger->debug('order_plan.leverage.dynamic', [
             'symbol'            => $symbol,
@@ -146,6 +157,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
             'atr_value'         => $atr5mValue,
             'vol_mult'          => $volMult,
             'exchange_cap_cfg'  => $exchangeCapCfg,
+            'canonical_cap'     => $canonicalCap,
             'symbol_cap'        => $symbolCap,
             'dyn_cap'           => $dynCap,
             'floor_config'      => $floorConfig,

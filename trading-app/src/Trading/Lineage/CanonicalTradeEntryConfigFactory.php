@@ -46,7 +46,7 @@ final class CanonicalTradeEntryConfigFactory
         }
 
         $risk = self::mapping($mode, 'risk', 'mode.risk');
-        $tradeBudget = self::defined($risk, 'trade_budget', 'mode.risk.trade_budget', 'percent_equity_per_trade');
+        $tradeBudget = self::quoteTradeBudget($risk);
         $dailyLoss = self::defined($risk, 'daily_loss_cap', 'mode.risk.daily_loss_cap', 'compound_percent_equity_and_quote_per_day');
         $maxPositions = self::defined($risk, 'max_concurrent_positions', 'mode.risk.max_concurrent_positions', 'positions');
         $exposure = self::defined($risk, 'mode_exposure_cap', 'mode.risk.mode_exposure_cap', 'percent_equity_notional');
@@ -75,7 +75,7 @@ final class CanonicalTradeEntryConfigFactory
                 throw new LineageContextException('canonical_config_invalid:setup.ast.execution.' . $path);
             }
         }
-        if (!\is_numeric($tradeBudget) || !\is_numeric($leverage) || !\is_numeric($minimumNetR)
+        if (!\is_numeric($leverage) || !\is_finite((float) $leverage) || (float) $leverage < 1.0 || !\is_numeric($minimumNetR)
             || !\is_numeric($targets['r_multiple'] ?? null) || !\is_numeric($stop['atr_k'] ?? null)
             || !\is_string($stop['from'] ?? null) || !\is_numeric($cost['max_spread_rate'] ?? null)
             || !\is_string($timeStop)) {
@@ -89,7 +89,7 @@ final class CanonicalTradeEntryConfigFactory
         return new TradeEntryConfig(config: [
             'version' => $identity->setupVersion,
             'defaults' => [
-                'risk_pct_percent' => (float) $tradeBudget,
+                'initial_margin_usdt' => $tradeBudget,
                 'order_type' => $orderPolicy['preferred_type'],
                 'open_type' => $orderPolicy['margin_mode'],
                 'stop_from' => $stop['from'],
@@ -126,5 +126,20 @@ final class CanonicalTradeEntryConfigFactory
             throw new LineageContextException('canonical_config_unresolved:' . $path);
         }
         return $decision['value'];
+    }
+
+    /** @param array<string,mixed> $risk */
+    private static function quoteTradeBudget(array $risk): float
+    {
+        $decision = self::mapping($risk, 'trade_budget', 'mode.risk.trade_budget');
+        $value = $decision['value'] ?? null;
+        if (($decision['state'] ?? null) !== 'defined' || ($decision['unit'] ?? null) !== 'quote_notional'
+            || !\is_array($value) || array_is_list($value)
+            || !\is_numeric($value['amount'] ?? null) || !\is_finite((float) $value['amount']) || (float) $value['amount'] <= 0.0
+            || ($value['quote_currency'] ?? null) !== 'USDT') {
+            throw new LineageContextException('canonical_config_unresolved_or_unit_mismatch:mode.risk.trade_budget');
+        }
+
+        return (float) $value['amount'];
     }
 }

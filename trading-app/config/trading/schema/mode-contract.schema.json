@@ -43,7 +43,10 @@
       "type": "object", "additionalProperties": false,
       "required": ["trade_budget", "daily_loss_cap", "max_concurrent_positions", "mode_exposure_cap"],
       "properties": {
-        "trade_budget": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_per_trade" } } }] },
+        "trade_budget": { "oneOf": [
+          { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_per_trade" } } }] },
+          { "allOf": [{ "$ref": "#/$defs/quoteBudgetDecision" }, { "properties": { "unit": { "const": "quote_notional" } } }] }
+        ] },
         "daily_loss_cap": { "allOf": [{ "$ref": "#/$defs/dailyCapDecision" }, { "properties": { "unit": { "const": "compound_percent_equity_and_quote_per_day" } } }] },
         "max_concurrent_positions": { "allOf": [{ "$ref": "#/$defs/positiveIntegerDecision" }, { "properties": { "unit": { "const": "positions" } } }] },
         "mode_exposure_cap": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_notional" } } }] }
@@ -124,6 +127,20 @@
         { "$ref": "#/$defs/decision" },
         { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/dailyCap" } } } }
       ]
+    },
+    "quoteBudgetDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/quoteBudget" } } } }
+      ]
+    },
+    "quoteBudget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["amount", "quote_currency"],
+      "properties": {
+        "amount": { "type": "number", "exclusiveMinimum": 0 },
+        "quote_currency": { "const": "USDT" }
+      }
     },
     "dailyCap": {
       "type": "object", "additionalProperties": false,

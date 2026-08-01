@@ -51,20 +51,25 @@ final readonly class TradeEntryPreparationService
         $tradeId = $this->tradeId($request->symbol, $decisionKey, $internalTradeId, $paperCellId, $sourceEventId);
         $lifecycle->withDecisionKey($decisionKey)->withProfile($mode)->withInternalTradeId($tradeId)->withTradeId($tradeId);
 
-        if ($this->dailyLossGuard instanceof DailyLossGuard) {
-            try {
-                $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
-                if ($state['locked'] === true) {
-                    return $this->terminal($request, $decisionKey, $tradeId, $lifecycle, $mode, 'daily_loss_limit_reached', $state);
-                }
-            } catch (\Throwable) {
-                // Preserve the legacy guard's non-blocking failure policy.
-            }
-        }
-
-        $config = $request->lineageContext?->isModern()
+        $modern = $request->lineageContext?->isModern() === true;
+        $config = $modern
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->configResolver->resolve($mode);
+
+        if ($this->dailyLossGuard instanceof DailyLossGuard) {
+            if ($modern) {
+                $state = $this->dailyLossGuard->checkAndMaybeLock($mode, $config);
+            } else {
+                try {
+                    $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
+                } catch (\Throwable) {
+                    $state = null;
+                }
+            }
+            if ($state !== null && $state['locked'] === true) {
+                return $this->terminal($request, $decisionKey, $tradeId, $lifecycle, $mode, 'daily_loss_limit_reached', $state);
+            }
+        }
         $preflight = ($this->preflight)($request, $decisionKey);
         try {
             $plan = ($this->planner)($request, $preflight, $decisionKey);

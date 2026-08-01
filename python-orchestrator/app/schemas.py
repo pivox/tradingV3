@@ -73,6 +73,16 @@ def _thaw_snapshot(value: Any) -> Any:
     return value
 
 
+def _canonical_hash_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_hash_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_canonical_hash_value(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 class CanonicalEffectiveConfigRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     mode_id: Literal["day_trading", "scalping", "micro_scalping"]
@@ -100,7 +110,7 @@ class CanonicalEffectiveConfigSnapshot(BaseModel):
     condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     ordered_layers: Tuple[CanonicalEffectiveConfigLayer, ...]
     ordered_files: Tuple[str, ...]
-    provenance: Mapping[str, CanonicalEffectiveConfigLayer]
+    provenance: FrozenDict
     executable: bool
     blockers: Tuple[str, ...] = ()
 
@@ -113,6 +123,19 @@ class CanonicalEffectiveConfigSnapshot(BaseModel):
 
     @field_serializer("config")
     def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
+        return _thaw_snapshot(value)
+
+    @field_validator("provenance", mode="before")
+    @classmethod
+    def _freeze_provenance(cls, value: Any) -> FrozenDict:
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError("effective_config_snapshot_provenance_empty")
+        for layer in value.values():
+            CanonicalEffectiveConfigLayer.model_validate(layer)
+        return FrozenDict(value)
+
+    @field_serializer("provenance")
+    def _serialize_provenance(self, value: FrozenDict) -> dict[str, Any]:
         return _thaw_snapshot(value)
 
     @model_validator(mode="after")
@@ -141,7 +164,7 @@ class CanonicalEffectiveConfigSnapshot(BaseModel):
         ):
             raise ValueError("effective_config_snapshot_config_identity_mismatch")
         canonical = json.dumps(
-            {"config": config, "condition_catalog_hash": self.condition_catalog_hash},
+            _canonical_hash_value({"config": config, "condition_catalog_hash": self.condition_catalog_hash}),
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
