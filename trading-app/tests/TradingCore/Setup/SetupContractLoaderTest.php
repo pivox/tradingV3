@@ -338,6 +338,15 @@ final class SetupContractLoaderTest extends TestCase
         self::assertFalse((new SetupCompiler())->compile($contract)->publishable);
     }
 
+    public function testPhpAndSchemaRejectDuplicateExternalDependencies(): void
+    {
+        $document = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
+        $document['data_condition_contract']['external_dependencies'][] =
+            $document['data_condition_contract']['external_dependencies'][0];
+
+        $this->assertPhpAndSchemaReject($document, 'duplicate external dependency');
+    }
+
     /** @param array<string, mixed> $mutation */
     private function assertPhpAndSchemaReject(array $mutation, string $label): void
     {

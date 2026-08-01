@@ -164,10 +164,18 @@ final class SetupContractValidator
                 throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
             }
         }
+        $seenDependencies = [];
         foreach ($this->list($data, 'external_dependencies', true, 'data_condition_contract') as $index => $dependency) {
             if (!is_array($dependency) || array_is_list($dependency)) {
                 throw new SetupContractException(sprintf('data_condition_contract.external_dependencies[%d] must be a mapping.', $index));
             }
+            $identity = $dependency;
+            ksort($identity);
+            $identityHash = hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR));
+            if (isset($seenDependencies[$identityHash])) {
+                throw new SetupContractException('data_condition_contract.external_dependencies must contain unique items.');
+            }
+            $seenDependencies[$identityHash] = true;
             $this->exact($dependency, ['dependency_id', 'state', 'owner', 'source', 'justification', 'failure_policy'], 'data_condition_contract.external_dependencies[]');
             foreach (['dependency_id', 'state', 'owner', 'source', 'justification', 'failure_policy'] as $key) {
                 $this->string($dependency, $key, 'data_condition_contract.external_dependencies[]');
