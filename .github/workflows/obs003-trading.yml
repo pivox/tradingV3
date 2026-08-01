@@ -100,15 +100,26 @@ jobs:
       # Ces suites OBS-003 n'amorcent pas le kernel (readers stubés + connexion vue dédiée)
       # et lisent DATABASE_URL depuis les variables d'environnement du job.
       - name: PHPUnit — Trading + MtfRunner
-        run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Trading tests/MtfRunner
+        run: |
+          vendor/bin/phpunit --bootstrap vendor/autoload.php \
+            $(find tests/Trading -mindepth 1 -maxdepth 1 -type d ! -name Paper -print | sort) \
+            tests/MtfRunner
 
-      - name: PHPUnit — Paper execution PostgreSQL (isolated database)
+      # Keep Paper subprocess/crash tests isolated from tests that boot Symfony's kernel:
+      # forked children must not inherit the kernel's temporary XML cleanup handlers.
+      - name: PHPUnit — Paper market data and replay (isolated process)
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+        run: |
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped \
+            $(find tests/Trading/Paper -mindepth 1 -maxdepth 1 \( -type f -name '*Test.php' -o -type d ! -name Execution \) -print | sort)
+
+      - name: PHPUnit — Paper execution PostgreSQL (isolated process and database)
         env:
           DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
         run: >-
           vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
-          tests/Trading/Paper/Execution/Persistence/DoctrinePaperExecutionStoreTest.php
-          tests/Trading/Paper/Persistence/PaperExecutionMigrationTest.php
+          tests/Trading/Paper/Execution
 
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
