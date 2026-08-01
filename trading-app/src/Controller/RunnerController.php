@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
+use App\Trading\Lineage\LineageContextException;
 use App\Trading\Orchestration\OrchestrationContextException;
 use App\Trading\Orchestration\OrchestrationContextValidator;
 use Psr\Log\LoggerInterface;
@@ -150,10 +151,10 @@ class RunnerController extends AbstractController
             $result = $runMtfCycle->run($runnerRequest);
 
             // Le résultat est déjà enrichi par MtfRunnerService
-            $results = $result['results'] ?? [];
-            $errors = $result['errors'] ?? [];
-            $runSummary = $result['summary'] ?? [];
-            $performanceReport = $result['performance'] ?? [];
+            $results = $result['results'];
+            $errors = $result['errors'];
+            $runSummary = $result['summary'];
+            $performanceReport = $result['performance'];
 
             // Déterminer le statut
             $status = 'success';
@@ -180,14 +181,11 @@ class RunnerController extends AbstractController
                 'symbols' => $results,
                 'errors' => $errors,
                 'workers' => $workers,
-                'summary_by_tf' => $result['summary_by_tf'] ?? [],
-                'rejected_by' => $result['rejected_by'] ?? [],
-                'last_validated' => $result['last_validated'] ?? [],
+                'summary_by_tf' => $result['summary_by_tf'],
+                'rejected_by' => $result['rejected_by'],
+                'last_validated' => $result['last_validated'],
                 'performance' => $performanceReport,
-                'orders_placed' => $result['orders_placed'] ?? [
-                    'count' => ['total' => 0, 'submitted' => 0, 'simulated' => 0],
-                    'orders' => [],
-                ],
+                'orders_placed' => $result['orders_placed'],
             ];
             if ($safetyEvidenceRequested) {
                 $responseData['fake_only_safety_evidence'] = $this->fakeOnlyExchangeCallAudit->finish();
@@ -209,7 +207,27 @@ class RunnerController extends AbstractController
             $errorResponse = [
                 'status' => 'error',
                 'error_code' => $e->errorCode,
-                'message' => $e->getMessage(),
+                'message' => 'Orchestration context rejected.',
+            ];
+            if ($this->fakeOnlyExchangeCallAudit->isActive()) {
+                $errorResponse['data'] = [
+                    'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
+                ];
+            }
+            return $this->json($errorResponse, Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (LineageContextException $e) {
+            $errorCode = preg_match('/^canonical_identity_(?:missing|invalid|mismatch):[a-zA-Z0-9_]+$/D', $e->getMessage()) === 1
+                ? $e->getMessage()
+                : 'canonical_identity_invalid';
+            $this->logger->warning('[Runner Controller] Canonical trading identity rejected', [
+                'error_code' => $errorCode,
+                'exception_class' => $e::class,
+            ]);
+
+            $errorResponse = [
+                'status' => 'error',
+                'error_code' => $errorCode,
+                'message' => 'Canonical trading identity rejected.',
             ];
             if ($this->fakeOnlyExchangeCallAudit->isActive()) {
                 $errorResponse['data'] = [
@@ -221,11 +239,13 @@ class RunnerController extends AbstractController
         } catch (\Throwable $e) {
             $this->logger->error('[Runner Controller] Failed to run MTF cycle', [
                 'error' => $e->getMessage(),
+                'exception_class' => $e::class,
             ]);
 
             $errorResponse = [
                 'status' => 'error',
-                'message' => $e->getMessage(),
+                'error_code' => 'internal_error',
+                'message' => 'Unable to run MTF cycle.',
             ];
             if ($this->fakeOnlyExchangeCallAudit->isActive()) {
                 $errorResponse['data'] = [

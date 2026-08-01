@@ -89,6 +89,36 @@ def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
     assert retry["config_hash"] == first["config_hash"]
 
 
+def test_build_payload_refuses_bypassed_bitmart_canonical_set_before_http_serialization():
+    bypassed = OrchestratorSet.model_construct(
+        set_id="bypassed-modern-bitmart",
+        enabled=True,
+        action="mtf_run",
+        exchange=SimpleNamespace(value="bitmart"),
+        market_type=SimpleNamespace(value="perpetual"),
+        mtf_profile=SimpleNamespace(value="scalper"),
+        environment=SimpleNamespace(value="demo"),
+        dry_run=True,
+        workers=1,
+        sync_tables=False,
+        symbols=("BTCUSDT",),
+        priority=0,
+        trading_identity=CanonicalTradingIdentity(
+            mode_id="scalping",
+            mode_version="1.0.0",
+            setup_id="scalping.pullback.long",
+            setup_version="1.0.0",
+            config_hash="sha256:" + "a" * 64,
+            condition_catalog_hash="sha256:" + "b" * 64,
+            side="LONG",
+            effective_config_reference="effective-config:cfg-1",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="canonical_exchange_invalid"):
+        build_mtf_payload(bypassed, None)
+
+
 @pytest.mark.parametrize(
     "body,expected",
     [

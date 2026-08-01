@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app import __version__
 from app.services.live_guard import (
@@ -93,6 +93,14 @@ class CanonicalTradingIdentity(BaseModel):
     requested_mode_version: Optional[str] = None
     resolved_mode_version: Optional[str] = None
     validated_mode_version: Optional[str] = None
+
+    @field_validator("effective_config_reference")
+    @classmethod
+    def _normalize_effective_config_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("effective_config_reference_empty")
+        return normalized
 
     @model_validator(mode="after")
     def _reject_contradictory_resolution(self) -> "CanonicalTradingIdentity":
@@ -297,6 +305,12 @@ class OrchestratorSet(BaseModel):
             environment=self.environment,
             dry_run=self.dry_run,
         )
+        if self.trading_identity is not None and self.exchange not in {
+            Exchange.FAKE,
+            Exchange.OKX,
+            Exchange.HYPERLIQUID,
+        }:
+            raise ValueError("canonical_exchange_invalid")
         return self
 
 

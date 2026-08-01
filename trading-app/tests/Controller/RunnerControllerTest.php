@@ -36,6 +36,104 @@ use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 #[CoversClass(RunnerController::class)]
 final class RunnerControllerTest extends TestCase
 {
+    /**
+     * @param array<string, mixed> $tradingIdentity
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidCanonicalIdentityPayloads')]
+    public function testCanonicalIdentityFailuresReturnStableSanitized422(
+        array $tradingIdentity,
+        string $expectedErrorCode,
+        string $sensitiveInput,
+    ): void {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method('run');
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'run-canonical',
+                'HTTP_X_RUN_CORRELATION_ID' => 'run-canonical',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'set-canonical',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => $tradingIdentity,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame($expectedErrorCode, $body['error_code'] ?? null);
+        self::assertSame('Canonical trading identity rejected.', $body['message'] ?? null);
+        self::assertStringNotContainsString($sensitiveInput, (string) $response->getContent());
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, string, string}> */
+    public static function invalidCanonicalIdentityPayloads(): iterable
+    {
+        $base = self::canonicalTradingIdentity();
+        $missing = $base;
+        unset($missing['setup_version']);
+        yield 'missing field' => [$missing, 'canonical_identity_missing:setup_version', 'scalping.pullback.long'];
+
+        $malformed = $base;
+        $malformed['config_hash'] = 'sensitive-invalid-hash';
+        yield 'malformed field' => [$malformed, 'canonical_identity_invalid:config_hash', 'sensitive-invalid-hash'];
+
+        $mismatch = $base;
+        $mismatch['side'] = 'SHORT';
+        yield 'semantic mismatch' => [$mismatch, 'canonical_identity_mismatch:side', 'SHORT'];
+    }
+
+    public function testUnexpectedFailureReturnsSanitized500DistinctFromCanonicalInputErrors(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->method('getListTimeframe')->willReturn([]);
+        $validator->expects(self::once())->method('run')->willThrowException(
+            new \RuntimeException('sensitive-internal-detail'),
+        );
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mtf_profile' => 'regular',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_INTERNAL_SERVER_ERROR, $response->getStatusCode());
+        self::assertSame('internal_error', $body['error_code'] ?? null);
+        self::assertSame('Unable to run MTF cycle.', $body['message'] ?? null);
+        self::assertStringNotContainsString('sensitive-internal-detail', (string) $response->getContent());
+    }
+
     public function testPassesConfigHashFromOrchestratorPayloadToLineageContext(): void
     {
         $validator = new class implements MtfValidatorInterface {
@@ -311,6 +409,21 @@ final class RunnerControllerTest extends TestCase
             errors: [],
             timestamp: new \DateTimeImmutable('2026-07-18T00:00:00+00:00'),
         );
+    }
+
+    /** @return array<string, string> */
+    private static function canonicalTradingIdentity(): array
+    {
+        return [
+            'mode_id' => 'scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'scalping.pullback.long',
+            'setup_version' => '1.0.0',
+            'config_hash' => 'sha256:' . str_repeat('a', 64),
+            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'side' => 'LONG',
+            'effective_config_reference' => 'effective-config:cfg-1',
+        ];
     }
 
     private function runnerService(

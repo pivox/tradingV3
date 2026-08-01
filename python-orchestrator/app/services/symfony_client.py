@@ -315,6 +315,12 @@ def build_mtf_payload(
     résolue par l'appelant (override run-level) ; si ``None``, on retombe sur le
     ``dry_run`` du set. Le reste de la forme vient de ``_base_mtf_payload``.
     """
+    if a_set.trading_identity is not None and a_set.exchange.value not in {
+        "fake",
+        "okx",
+        "hyperliquid",
+    }:
+        raise ValueError("canonical_exchange_invalid")
     payload = _base_mtf_payload(
         dry_run=a_set.dry_run,
         workers=a_set.workers,

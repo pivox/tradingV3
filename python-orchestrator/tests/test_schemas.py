@@ -37,6 +37,32 @@ def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
         )
 
 
+def test_effective_config_reference_is_trimmed_and_blank_is_rejected():
+    identity = CanonicalTradingIdentity(
+        **{**_canonical_identity_payload(), "effective_config_reference": "  effective-config:cfg-1  "}
+    )
+    assert identity.effective_config_reference == "effective-config:cfg-1"
+
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(
+            **{**_canonical_identity_payload(), "effective_config_reference": "   "}
+        )
+
+
+def test_bitmart_remains_legacy_only_when_canonical_identity_is_present():
+    legacy = OrchestratorSet(set_id="legacy-bitmart", exchange="bitmart", dry_run=True)
+    assert legacy.trading_identity is None
+
+    with pytest.raises(ValidationError, match="canonical_exchange_invalid"):
+        OrchestratorSet(
+            set_id="modern-bitmart",
+            exchange="bitmart",
+            dry_run=True,
+            symbols=("BTCUSDT",),
+            trading_identity=CanonicalTradingIdentity(**_canonical_identity_payload()),
+        )
+
+
 @pytest.mark.parametrize("version", ["latest", "^1.0", "1", "1.0", "01.0.0", "1.0.0-rc1"])
 def test_canonical_trading_identity_rejects_non_exact_published_versions(version):
     payload = _canonical_identity_payload()
