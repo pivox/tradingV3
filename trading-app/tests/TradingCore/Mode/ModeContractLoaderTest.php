@@ -8,9 +8,11 @@ use App\TradingCore\Mode\Exception\ModeContractException;
 use App\TradingCore\Mode\ModeContract;
 use App\TradingCore\Mode\ModeContractLoader;
 use App\TradingCore\Mode\ModeContractValidator;
+use Opis\JsonSchema\Validator as JsonSchemaValidator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Yaml\Yaml;
 
 #[CoversClass(ModeContract::class)]
 #[CoversClass(ModeContractLoader::class)]
@@ -217,6 +219,113 @@ final class ModeContractLoaderTest extends TestCase
         );
     }
 
+    #[DataProvider('invalidDurations')]
+    public function testRejectsInvalidIsoDuration(string $duration): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['cadence']['evaluation']['state'] = 'defined';
+        $document['cadence']['evaluation']['value'] = $duration;
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage('ISO-8601 duration');
+        (new ModeContractValidator())->validate($document);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidDurations(): iterable
+    {
+        yield 'garbage after P' => ['Pgarbage'];
+        yield 'space after P' => ['P space'];
+    }
+
+    public function testAcceptsValidIsoDuration(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['cadence']['evaluation']['state'] = 'defined';
+        $document['cadence']['evaluation']['value'] = 'PT5M';
+
+        (new ModeContractValidator())->validate($document);
+        self::addToAssertionCount(1);
+    }
+
+    #[DataProvider('nonFiniteYamlValues')]
+    public function testYamlLoaderRejectsNonFiniteDailyCap(string $field, string $yamlValue): void
+    {
+        $root = sys_get_temp_dir() . '/mode-contract-' . bin2hex(random_bytes(6));
+        mkdir($root . '/day_trading', 0777, true);
+        $source = file_get_contents($this->contractRoot . '/day_trading/1.0.0.yaml');
+        self::assertIsString($source);
+        $needle = $field === 'percent_equity' ? 'percent_equity: 6.0' : 'absolute_quote: 30.0';
+        file_put_contents($root . '/day_trading/1.0.0.yaml', str_replace($needle, $field . ': ' . $yamlValue, $source));
+
+        try {
+            $this->expectException(ModeContractException::class);
+            (new ModeContractLoader($root))->load('day_trading', '1.0.0');
+        } finally {
+            unlink($root . '/day_trading/1.0.0.yaml');
+            rmdir($root . '/day_trading');
+            rmdir($root);
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function nonFiniteYamlValues(): iterable
+    {
+        yield 'infinite percent' => ['percent_equity', '.inf'];
+        yield 'NaN quote' => ['absolute_quote', '.nan'];
+    }
+
+    public function testFactoryRejectsUnpublishedSemanticVersion(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['mode_version'] = '9.9.9';
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage('Unsupported published version');
+        ModeContract::fromDocument($document);
+    }
+
+    #[DataProvider('nonListContractFields')]
+    public function testRejectsAssociativeArrayWhereListIsRequired(string $field): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        if ($field === 'required_inputs') {
+            $document['data_contract']['required_inputs'] = [1 => $document['data_contract']['required_inputs'][0]];
+        } else {
+            $document['provenance'] = [1 => $document['provenance'][0]];
+        }
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage('must be a non-empty list');
+        (new ModeContractValidator())->validate($document);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonListContractFields(): iterable
+    {
+        yield 'required inputs' => ['required_inputs'];
+        yield 'provenance' => ['provenance'];
+    }
+
+    #[DataProvider('invalidGovernanceTransitions')]
+    public function testRejectsInvalidGovernanceTransition(string $rule, string $target): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.0.0')->toArray();
+        $document['governance'][$rule]['target_status'] = $target;
+
+        $this->expectException(ModeContractException::class);
+        $this->expectExceptionMessage(sprintf('governance.%s.target_status must be', $rule));
+        (new ModeContractValidator())->validate($document);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function invalidGovernanceTransitions(): iterable
+    {
+        yield 'promotion cannot skip shadow' => ['promotion', 'active'];
+        yield 'suspension must return draft' => ['suspension', 'retired'];
+        yield 'rollback must retire version' => ['rollback', 'draft'];
+    }
+
     public function testFactoryRejectsUnvalidatedLegacyDocument(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.0.0')->toArray();
@@ -242,5 +351,65 @@ final class ModeContractLoaderTest extends TestCase
 
         $this->expectException(ModeContractException::class);
         (new ModeContractValidator())->validate($invalid);
+    }
+
+    public function testDraft202012SchemaAcceptsAllPublishedContractsAndValidFixture(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $validator = new JsonSchemaValidator();
+
+        foreach (glob($this->contractRoot . '/*/*.yaml') ?: [] as $path) {
+            $document = json_decode(json_encode(Yaml::parseFile($path), JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue($validator->validate($document, $schema)->isValid(), $path);
+        }
+
+        $valid = $this->jsonObject(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Mode/valid-day-trading.json');
+        self::assertTrue($validator->validate($valid, $schema)->isValid());
+        $invalid = $this->jsonObject(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Mode/invalid-legacy-alias.json');
+        self::assertFalse($validator->validate($invalid, $schema)->isValid());
+    }
+
+    public function testDraft202012SchemaRejectsParityMutationCorpus(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $schema = $this->jsonObject($root . '/config/trading/schema/mode-contract.schema.json');
+        $base = json_decode(json_encode(Yaml::parseFile($this->contractRoot . '/day_trading/1.0.0.yaml'), JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        $mutations = [];
+        foreach (['Pgarbage', 'P space'] as $duration) {
+            $copy = clone $base;
+            $copy->cadence = clone $base->cadence;
+            $copy->cadence->evaluation = clone $base->cadence->evaluation;
+            $copy->cadence->evaluation->state = 'defined';
+            $copy->cadence->evaluation->value = $duration;
+            $mutations['duration ' . $duration] = $copy;
+        }
+        $version = clone $base;
+        $version->mode_version = '9.9.9';
+        $mutations['unknown version'] = $version;
+        $transition = clone $base;
+        $transition->governance = clone $base->governance;
+        $transition->governance->promotion = clone $base->governance->promotion;
+        $transition->governance->promotion->target_status = 'active';
+        $mutations['invalid transition'] = $transition;
+        $whitespace = clone $base;
+        $whitespace->lifecycle = clone $base->lifecycle;
+        $whitespace->lifecycle->rationale = '   ';
+        $mutations['whitespace string'] = $whitespace;
+        $nonList = clone $base;
+        $nonList->provenance = (object) ['1' => $base->provenance[0]];
+        $mutations['non-list provenance'] = $nonList;
+
+        $validator = new JsonSchemaValidator();
+        foreach ($mutations as $label => $mutation) {
+            self::assertFalse($validator->validate($mutation, $schema)->isValid(), $label);
+        }
+    }
+
+    private function jsonObject(string $path): object
+    {
+        $decoded = json_decode((string) file_get_contents($path), false, 512, JSON_THROW_ON_ERROR);
+        self::assertIsObject($decoded);
+
+        return $decoded;
     }
 }

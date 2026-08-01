@@ -11,6 +11,16 @@ final class ModeContractValidator
     public const MODE_IDS = ['day_trading', 'scalping', 'micro_scalping'];
     public const LIFECYCLE_STATUSES = ['draft', 'shadow', 'paper', 'candidate', 'active', 'retired'];
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
+    private const PUBLISHED_VERSIONS = [
+        'day_trading' => ['1.0.0'],
+        'scalping' => ['1.0.0'],
+        'micro_scalping' => ['1.0.0'],
+    ];
+    private const GOVERNANCE_TARGETS = [
+        'promotion' => 'shadow',
+        'suspension' => 'draft',
+        'rollback' => 'retired',
+    ];
 
     private const SETUP_IDS = [
         'day_trading' => [
@@ -50,6 +60,13 @@ final class ModeContractValidator
         }
         if (preg_match('/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/', $document['mode_version']) !== 1) {
             throw new ModeContractException('mode_version must be a semantic version without aliases or ranges.');
+        }
+        if (!in_array($document['mode_version'], self::PUBLISHED_VERSIONS[$document['mode_id']], true)) {
+            throw new ModeContractException(sprintf(
+                'Unsupported published version "%s" for modern mode "%s".',
+                $document['mode_version'],
+                $document['mode_id'],
+            ));
         }
 
         $lifecycle = $this->mapping($document, 'lifecycle');
@@ -115,7 +132,7 @@ final class ModeContractValidator
 
         $data = $this->mapping($document, 'data_contract');
         $this->assertExactKeys($data, ['required_inputs', 'missing_data_policy'], 'data_contract');
-        if (!is_array($data['required_inputs']) || $data['required_inputs'] === []) {
+        if (!is_array($data['required_inputs']) || !array_is_list($data['required_inputs']) || $data['required_inputs'] === []) {
             throw new ModeContractException('data_contract.required_inputs must be a non-empty list.');
         }
         foreach ($data['required_inputs'] as $input) {
@@ -147,6 +164,13 @@ final class ModeContractValidator
             if (!in_array($value['target_status'], self::LIFECYCLE_STATUSES, true)) {
                 throw new ModeContractException(sprintf('governance.%s.target_status is invalid.', $rule));
             }
+            if ($value['target_status'] !== self::GOVERNANCE_TARGETS[$rule]) {
+                throw new ModeContractException(sprintf(
+                    'governance.%s.target_status must be "%s".',
+                    $rule,
+                    self::GOVERNANCE_TARGETS[$rule],
+                ));
+            }
             $this->stringList($value, 'conditions', false);
             $this->assertString($value, 'action');
         }
@@ -154,7 +178,7 @@ final class ModeContractValidator
         if ($document['ownership_model'] !== 'mode-contract-ownership-v1') {
             throw new ModeContractException('Unknown ownership_model.');
         }
-        if (!is_array($document['provenance']) || $document['provenance'] === []) {
+        if (!is_array($document['provenance']) || !array_is_list($document['provenance']) || $document['provenance'] === []) {
             throw new ModeContractException('provenance must be a non-empty list.');
         }
         foreach ($document['provenance'] as $row) {
@@ -205,7 +229,17 @@ final class ModeContractValidator
     /** @param array<string, mixed> $decision */
     private function assertDefinedDuration(array $decision, string $path): void
     {
-        if ($decision['state'] === 'defined' && (!is_string($decision['value']) || preg_match('/^P(?!$)/', $decision['value']) !== 1)) {
+        if ($decision['state'] !== 'defined') {
+            return;
+        }
+        $value = $decision['value'];
+        $pattern = '/^P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/';
+        if (!is_string($value) || preg_match($pattern, $value) !== 1) {
+            throw new ModeContractException(sprintf('%s defined value must be an ISO-8601 duration.', $path));
+        }
+        try {
+            new \DateInterval($value);
+        } catch (\Exception) {
             throw new ModeContractException(sprintf('%s defined value must be an ISO-8601 duration.', $path));
         }
     }
@@ -237,10 +271,10 @@ final class ModeContractValidator
             throw new ModeContractException('risk.daily_loss_cap defined value must be a cap mapping.');
         }
         $this->assertExactKeys($value, ['percent_equity', 'absolute_quote', 'quote_currency'], 'risk.daily_loss_cap.value');
-        if ((!is_int($value['percent_equity']) && !is_float($value['percent_equity'])) || $value['percent_equity'] <= 0) {
+        if ((!is_int($value['percent_equity']) && !is_float($value['percent_equity'])) || $value['percent_equity'] <= 0 || !is_finite((float) $value['percent_equity'])) {
             throw new ModeContractException('risk.daily_loss_cap percent_equity must be positive.');
         }
-        if ((!is_int($value['absolute_quote']) && !is_float($value['absolute_quote'])) || $value['absolute_quote'] <= 0 || $value['quote_currency'] !== 'USDT') {
+        if ((!is_int($value['absolute_quote']) && !is_float($value['absolute_quote'])) || $value['absolute_quote'] <= 0 || !is_finite((float) $value['absolute_quote']) || $value['quote_currency'] !== 'USDT') {
             throw new ModeContractException('risk.daily_loss_cap absolute_quote/currency are invalid.');
         }
     }

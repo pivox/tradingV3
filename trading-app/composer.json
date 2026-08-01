@@ -44,7 +44,8 @@
     "phpstan/phpstan": "^1.11",
     "phpunit/phpunit": "^11.3",
     "symfony/maker-bundle": "*",
-    "symfony/web-profiler-bundle": "^7.1"
+    "symfony/web-profiler-bundle": "^7.1",
+    "opis/json-schema": "^2.6"
   },
   "autoload": {
     "psr-4": {
