@@ -105,7 +105,7 @@ context:
           - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.regular.yaml:349' }
 filters:
   - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243 bullish global filter retained exactly' }
-  - { condition: adx_min_for_trend, timeframe: 1h, provenance: 'validations.regular.yaml:240' }
+  - { condition: adx_min_for_trend_1h, timeframe: 1h, provenance: 'validations.regular.yaml:240' }
   - { condition: pullback_confirmed_ma9_21, timeframe: global, provenance: 'validations.regular.yaml:241 contradictory bullish MA9 cross filter' }
   - { condition: pullback_confirmed_vwap, timeframe: global, provenance: 'validations.regular.yaml:242 contradictory bullish VWAP filter' }
   - { condition: price_lte_ma21_plus_k_atr, timeframe: global, provenance: 'validations.regular.yaml:243' }
@@ -123,6 +123,7 @@ execution:
 data_condition_contract:
   required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
   missing_conditions: []
+  external_dependencies: []
   condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Full setup duration absent.' }

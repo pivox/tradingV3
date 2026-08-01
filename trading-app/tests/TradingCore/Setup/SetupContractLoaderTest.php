@@ -293,12 +293,49 @@ final class SetupContractLoaderTest extends TestCase
             'scalping.trend_momentum.short' => '6-14,216-356',
             'micro_scalping.momentum_ofi.long' => '5-19,87-115',
             'micro_scalping.momentum_ofi.short' => '5-19,95-125',
-            'crash_short' => '5-16,136-137,169-305',
+            'crash_short' => '5-16,136-137,164-167,169-305',
         ];
         $loader = new SetupContractLoader($this->root);
         foreach ($expected as $id => $range) {
             self::assertSame($range, $loader->load($id, '1.0.0')->toArray()['source_origin']['line_range']);
         }
+    }
+
+    public function testSchemaAndPhpRejectWhitespaceOnlyDirectionParameter(): void
+    {
+        $document = $this->yaml($this->root . '/day_trading.trend_continuation.short/1.0.0.yaml');
+        $document['filters'][2]['condition'] = 'pullback_confirmed';
+        $document['filters'][2]['parameters'] = ['direction' => '   '];
+
+        $this->assertPhpAndSchemaReject($document, 'whitespace-only direction');
+    }
+
+    public function testRegularContractsPreserveExactOneHourAdxConditionIdentity(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        foreach (['day_trading.trend_continuation.long', 'day_trading.trend_continuation.short'] as $id) {
+            $conditions = array_column($loader->load($id, '1.0.0')->toArray()['filters'], 'condition');
+            self::assertContains('adx_min_for_trend_1h', $conditions, $id);
+            self::assertNotContains('adx_min_for_trend', $conditions, $id);
+        }
+    }
+
+    public function testCrashPreservesLeverageBoundsAsUnresolvedExternalSafetyDependency(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('crash_short', '1.0.0');
+        $document = $contract->toArray();
+
+        self::assertContains('lev_bounds', array_column($document['filters'], 'condition'));
+        self::assertSame([
+            'dependency_id' => 'lev_bounds',
+            'state' => 'unresolved',
+            'owner' => 'mode_or_exchange',
+            'source' => 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249',
+            'justification' => 'Legacy bounds cannot become setup-owned leverage policy; authoritative modern limits are unresolved.',
+            'failure_policy' => 'reject',
+        ], $document['data_condition_contract']['external_dependencies'][0]);
+        self::assertContains('data_condition_contract.external_dependencies.0', $contract->unresolvedPaths());
+        self::assertFalse((new SetupCompiler())->compile($contract)->publishable);
     }
 
     /** @param array<string, mixed> $mutation */

@@ -58,6 +58,7 @@ execution:
 data_condition_contract:
   required_data: [ohlcv_5m, ohlcv_1m, vwap, ma9, macd, rsi, atr, spread_bps, order_flow_imbalance]
   missing_conditions: [spread_bps_lte, order_flow_imbalance_lte]
+  external_dependencies: []
   condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper_micro.yaml', justification: 'Full duration absent.' }

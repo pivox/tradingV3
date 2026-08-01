@@ -41,7 +41,7 @@ final readonly class SetupContract
                 $paths[] = $prefix;
             }
             foreach ($node as $key => $value) {
-                if (is_array($value) && !array_is_list($value)) {
+                if (is_array($value)) {
                     $walk($value, $prefix === '' ? (string) $key : $prefix . '.' . $key);
                 }
             }

@@ -264,6 +264,7 @@
             "volume_ratio"
         ],
         "missing_conditions": [],
+        "external_dependencies": [],
         "condition_catalog_hash": {
             "state": "unresolved",
             "value": null,

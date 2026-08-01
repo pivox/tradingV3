@@ -6,7 +6,7 @@ executable: false
 family: crash_short
 side: short
 thesis: 'Aligned bearish 4h/1h context and accelerating 15m/5m/1m selling may continue during a violent dump.'
-source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,164-167,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
 compatible_modes: []
 mode_compatibility: { state: unresolved, issue: '#310', justification: 'Crash is a setup, never a modern mode; compatible modern mode membership remains unresolved.' }
 hypothesis: 'During an aligned bearish crash context, sourced cascade patterns predict continued downside; compatible mode, costs and exits remain unresolved.'
@@ -55,6 +55,7 @@ context:
           - { condition: crash_short_entry_1m, timeframe: 1m, provenance: 'validations.crash.yaml:205-214,305' }
 filters:
   - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
+  - { condition: lev_bounds, timeframe: global, provenance: 'validations.crash.yaml:164-167,247-249; values remain externally owned' }
 no_trade_rules:
   - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 anti-last-tick guard' }
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
@@ -70,6 +71,8 @@ execution:
 data_condition_contract:
   required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
   missing_conditions: []
+  external_dependencies:
+    - { dependency_id: lev_bounds, state: unresolved, owner: mode_or_exchange, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Legacy bounds cannot become setup-owned leverage policy; authoritative modern limits are unresolved.', failure_policy: reject }
   condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.crash.yaml', justification: 'Full duration absent.' }
@@ -90,4 +93,5 @@ provenance:
   - { path: context.context, source: 'src/MtfValidator/config/validations.crash.yaml:265-269', justification: '1h crash context.' }
   - { path: context.trigger, source: 'src/MtfValidator/config/validations.crash.yaml:271-285', justification: '15m/5m cascade patterns.' }
   - { path: context.confirmations, source: 'src/MtfValidator/config/validations.crash.yaml:293-305', justification: '1m standard branch retained; redundant subset documented.' }
+  - { path: filters.lev_bounds, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Mandatory safety condition retained as an unresolved mode/exchange-owned dependency.' }
 ownership_model: setup-contract-ownership-v1

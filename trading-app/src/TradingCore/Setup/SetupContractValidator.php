@@ -29,7 +29,7 @@ final class SetupContractValidator
         'ema_50_gt_200', 'ema_above_200_with_tolerance', 'ema_below_200_with_tolerance',
         'close_above_ema_200', 'close_below_ema_200', 'ema200_slope_pos', 'ema200_slope_neg',
         'pullback_confirmed_ma9_21', 'pullback_confirmed_vwap', 'price_lte_ma21_plus_k_atr',
-        'crash_short_entry_1m',
+        'crash_short_entry_1m', 'adx_min_for_trend_1h', 'lev_bounds',
     ];
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m', 'global'];
     /** @var array<string, list<string>> */
@@ -156,12 +156,24 @@ final class SetupContractValidator
         $this->decision($this->map($document, 'validity_window', 'contract'), 'validity_window');
 
         $data = $this->map($document, 'data_condition_contract', 'contract');
-        $this->exact($data, ['required_data', 'missing_conditions', 'condition_catalog_hash', 'unknown_condition_policy'], 'data_condition_contract');
+        $this->exact($data, ['required_data', 'missing_conditions', 'external_dependencies', 'condition_catalog_hash', 'unknown_condition_policy'], 'data_condition_contract');
         $this->strings($this->list($data, 'required_data', false, 'data_condition_contract'), 'required_data');
         $missing = $this->strings($this->list($data, 'missing_conditions', true, 'data_condition_contract'), 'missing_conditions');
         foreach ($missing as $condition) {
             if (!in_array($condition, self::CONDITION_IDS, true)) {
                 throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
+            }
+        }
+        foreach ($this->list($data, 'external_dependencies', true, 'data_condition_contract') as $index => $dependency) {
+            if (!is_array($dependency) || array_is_list($dependency)) {
+                throw new SetupContractException(sprintf('data_condition_contract.external_dependencies[%d] must be a mapping.', $index));
+            }
+            $this->exact($dependency, ['dependency_id', 'state', 'owner', 'source', 'justification', 'failure_policy'], 'data_condition_contract.external_dependencies[]');
+            foreach (['dependency_id', 'state', 'owner', 'source', 'justification', 'failure_policy'] as $key) {
+                $this->string($dependency, $key, 'data_condition_contract.external_dependencies[]');
+            }
+            if ($dependency['state'] !== 'unresolved' || $dependency['owner'] !== 'mode_or_exchange' || $dependency['failure_policy'] !== 'reject') {
+                throw new SetupContractException('External safety dependencies must remain mode_or_exchange-owned, unresolved, and fail closed.');
             }
         }
         $this->decision($this->map($data, 'condition_catalog_hash', 'data_condition_contract'), 'data_condition_contract.condition_catalog_hash');
