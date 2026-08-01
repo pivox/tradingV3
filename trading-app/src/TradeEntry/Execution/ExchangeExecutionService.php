@@ -7,6 +7,7 @@ namespace App\TradeEntry\Execution;
 use App\Common\Enum\Exchange;
 use App\Config\TradeEntryConfigResolver;
 use App\Exchange\Contract\ExchangeAdapterRegistryInterface;
+use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Dto\CancelOrderRequest;
 use App\Exchange\Dto\CancelOrderResult;
 use App\Exchange\Dto\ExchangeCapabilities;
@@ -53,6 +54,35 @@ final class ExchangeExecutionService
             $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
         }
 
+        $context = ExchangeContext::resolve($plan->exchangeContext);
+        $adapter = $this->adapters->get($context->exchange, $context->marketType);
+
+        return $this->executeOnAdapter(
+            $plan,
+            $adapter,
+            $decisionKey,
+            $mode,
+            $executionTf,
+            $clientOrderId,
+            $orderIntentId,
+            true,
+        );
+    }
+
+    public function executeOnAdapter(
+        OrderPlanModel $plan,
+        ExchangeAdapterInterface $adapter,
+        ?string $decisionKey = null,
+        ?string $mode = null,
+        ?string $executionTf = null,
+        ?string $clientOrderId = null,
+        ?int $orderIntentId = null,
+        bool $planPrepared = false,
+    ): ExecutionResult {
+        if (!$planPrepared) {
+            $plan = $this->preparePlan($plan, $mode, $executionTf, $decisionKey);
+        }
+
         if ($plan->size < 1) {
             return $this->skipBelowMinimum($plan, $decisionKey, 'size_below_min', 'size', $plan->size, 1, $clientOrderId);
         }
@@ -61,7 +91,9 @@ final class ExchangeExecutionService
         }
 
         $context = ExchangeContext::resolve($plan->exchangeContext);
-        $adapter = $this->adapters->get($context->exchange, $context->marketType);
+        if ($adapter->exchange() !== $context->exchange || $adapter->marketType() !== $context->marketType) {
+            throw new \InvalidArgumentException('exchange_execution_adapter_context_mismatch');
+        }
         $clientOrderId ??= $this->idempotency->newClientOrderId($decisionKey);
         $capabilities = $adapter->capabilities();
         if ($this->shouldRejectUnprotectableBitmartMarket($context, $plan, $capabilities)) {
@@ -109,7 +141,7 @@ final class ExchangeExecutionService
         ]);
 
         $leverageSet = null;
-        if ($plan->leverage > 0 && ($capabilities->requiresSeparateLeverageSubmit || $capabilities->supportsPerSymbolLeverage)) {
+        if ($capabilities->requiresSeparateLeverageSubmit || $capabilities->supportsPerSymbolLeverage) {
             $leverageSet = $adapter->setLeverage($plan->symbol, $plan->leverage, $plan->openType);
         }
 
