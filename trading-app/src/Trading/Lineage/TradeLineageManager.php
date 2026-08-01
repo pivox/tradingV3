@@ -14,6 +14,22 @@ use Psr\Log\LoggerInterface;
 
 final class TradeLineageManager
 {
+    /**
+     * Structured canonical columns introduced for modern lineage. Their presence in
+     * an untyped dictionary is never treated as legacy compatibility.
+     */
+    private const MODERN_RAW_FIELDS = [
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'condition_catalog_hash',
+        'decision_id',
+        'decision_key',
+        'effective_config_reference',
+        'effective_config_snapshot',
+    ];
+
     public function __construct(
         private readonly TradeLineageRepository $repository,
         private readonly EntityManagerInterface $entityManager,
@@ -332,7 +348,7 @@ final class TradeLineageManager
     /** @param array<string,mixed> $context */
     private function containsModernIdentity(array $context): bool
     {
-        foreach (['mode_id', 'mode_version', 'setup_id', 'setup_version', 'condition_catalog_hash', 'effective_config_reference', 'effective_config_snapshot'] as $field) {
+        foreach (self::MODERN_RAW_FIELDS as $field) {
             if (\array_key_exists($field, $context)) {
                 return true;
             }

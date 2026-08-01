@@ -141,14 +141,29 @@ final class TradeLineageManagerTest extends KernelTestCase
         self::assertSame('effective-config:cfg-1', $reloaded->getEffectiveConfigReference());
     }
 
-    public function testRejectsRawModernContextInsteadOfPersistingUncheckedDictionary(): void
+    /** @dataProvider rawModernFieldProvider */
+    public function testRejectsRawModernContextInsteadOfPersistingUncheckedDictionary(string $field, mixed $value): void
     {
-        $intent = $this->persistIntent('cid-raw-modern', 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
+        $intent = $this->persistIntent('cid-raw-modern-' . str_replace('_', '-', $field), 'BTCUSDT', Exchange::FAKE, MarketType::PERPETUAL);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('canonical_identity_typed_context_required');
 
-        $this->manager->ensureForIntent($intent, ['mode_id' => 'scalping']);
+        $this->manager->ensureForIntent($intent, [$field => $value]);
+    }
+
+    /** @return iterable<string, array{string,mixed}> */
+    public static function rawModernFieldProvider(): iterable
+    {
+        yield 'mode identity' => ['mode_id', 'scalping'];
+        yield 'mode version' => ['mode_version', '1.0.0'];
+        yield 'setup identity' => ['setup_id', 'scalping.pullback.long'];
+        yield 'setup version' => ['setup_version', '1.0.0'];
+        yield 'condition catalog hash' => ['condition_catalog_hash', 'sha256:' . str_repeat('b', 64)];
+        yield 'decision UUID' => ['decision_id', '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b'];
+        yield 'decision key' => ['decision_key', 'decision-key-raw'];
+        yield 'effective config reference' => ['effective_config_reference', 'effective-config:cfg-1'];
+        yield 'effective config snapshot' => ['effective_config_snapshot', ['snapshot_id' => 'cfg-1']];
     }
 
     public function testIdempotentRetryRejectsCanonicalIdentityMismatch(): void
