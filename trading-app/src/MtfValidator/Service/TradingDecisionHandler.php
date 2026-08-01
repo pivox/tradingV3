@@ -18,6 +18,7 @@ use App\Common\Enum\Timeframe;
 use App\Logging\LifecycleContextFactory;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -67,15 +68,7 @@ final class TradingDecisionHandler
             strategyVersion: $tradeEntryConfig->getVersion(),
         );
         // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
-        try {
-            $tradeId = sprintf(
-                'trd:%s:%s',
-                strtolower($symbolResult->symbol),
-                bin2hex(random_bytes(6))
-            );
-        } catch (\Throwable) {
-            $tradeId = uniqid('trd:' . strtolower($symbolResult->symbol) . ':', true);
-        }
+        $tradeId = $this->createTradeId($symbolResult->symbol, $decisionKey, $mtfRunDto->options);
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
         $forcedAtr5m = $this->indicatorProvider->getAtr(symbol: $symbolResult->symbol, tf: '5m', context: $exchangeContext);
 
@@ -148,6 +141,7 @@ final class TradingDecisionHandler
                 'replay_of_correlation_id' => $mtfRunDto->options['replay_of_correlation_id'] ?? null,
                 'attempt_number' => $mtfRunDto->options['attempt_number'] ?? null,
                 'config_hash' => $mtfRunDto->options['config_hash'] ?? null,
+                ...($this->paperLifecycleProvenance($mtfRunDto->options)),
             ]);
 
         // 3. Construction via Builder (délégation) avec champs minimaux
@@ -301,6 +295,44 @@ final class TradingDecisionHandler
                 tradeEntryModeUsed: $resolvedMode
             );
         }
+    }
+
+    /** @param array<string, mixed> $options */
+    private function createTradeId(string $symbol, string $decisionKey, array $options): string
+    {
+        $provenance = PaperExecutionProvenance::extract($options);
+        $sourceEventId = $options['paper_source_event_id'] ?? null;
+        if ($provenance !== null || $sourceEventId !== null) {
+            if ($provenance === null || !is_string($sourceEventId) || $sourceEventId === '') {
+                throw new \InvalidArgumentException('paper_trade_identity_incomplete');
+            }
+
+            return 'ptrd:' . hash('sha256', $provenance['paper_execution_cell_id'] . '|' . $sourceEventId . '|' . $decisionKey);
+        }
+
+        try {
+            return sprintf('trd:%s:%s', strtolower($symbol), bin2hex(random_bytes(6)));
+        } catch (\Throwable) {
+            return uniqid('trd:' . strtolower($symbol) . ':', true);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @return array<string, string>
+     */
+    private function paperLifecycleProvenance(array $options): array
+    {
+        $provenance = PaperExecutionProvenance::extract($options);
+        if ($provenance === null) {
+            return [];
+        }
+        $sourceEventId = $options['paper_source_event_id'] ?? null;
+        if (!is_string($sourceEventId) || $sourceEventId === '') {
+            throw new \InvalidArgumentException('paper_trade_identity_incomplete');
+        }
+
+        return $provenance + ['paper_source_event_id' => $sourceEventId];
     }
 
     /**

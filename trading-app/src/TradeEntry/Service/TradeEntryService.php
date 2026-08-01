@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Service;
 
-use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult, ZoneSkipEventDto, PreflightReport};
+use App\TradeEntry\Dto\{TradeEntryRequest, ExecutionResult, PreparedTradeEntry, ZoneSkipEventDto, PreflightReport};
 use App\TradeEntry\Dto\EntryZone;
 use App\TradeEntry\Dto\FallbackEndOfZoneConfig;
 use App\TradeEntry\Execution\ExecutionBox;
@@ -41,7 +41,33 @@ final class TradeEntryService
         private readonly IndicatorSnapshotRepository $indicatorSnapshotRepository,
         private readonly MessageBusInterface $messageBus,
         #[Autowire(service: 'monolog.logger.positions')] private readonly LoggerInterface $positionsLogger,
+        private readonly TradeEntryPreparationService $preparationService,
     ) {}
+
+    /**
+     * Side-effect-free seam used by Paper. Legacy execution and simulation keep
+     * their existing observability paths until their persisted output contract
+     * can be migrated independently.
+     */
+    public function prepare(
+        TradeEntryRequest $request,
+        string $decisionKey,
+        string $mode,
+        LifecycleContextBuilder $lifecycleContext,
+        ?string $tradeId = null,
+        ?string $paperCellId = null,
+        ?string $sourceEventId = null,
+    ): PreparedTradeEntry {
+        return $this->preparationService->prepare(
+            $request,
+            $decisionKey,
+            $mode,
+            $lifecycleContext,
+            $tradeId,
+            $paperCellId,
+            $sourceEventId,
+        );
+    }
 
     public function buildAndExecute(
         TradeEntryRequest $request,
