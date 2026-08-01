@@ -223,7 +223,11 @@ SQL, [$cell->id]);
                 throw new \LogicException('paper_execution_effect_not_pending');
             }
             $existing = $this->connection->fetchAssociative("SELECT payload_checksum FROM paper_execution_event WHERE cell_id = ? AND effect_key = ? AND event_type = 'effect_acknowledged'", [$cell->id, $effectKey]);
-            $payloadChecksum = hash('sha256', CanonicalJson::encode($payload));
+            $journalPayload = [
+                'acknowledgement' => $payload,
+                'fake_event_cursor' => $fakeEventCursor,
+            ];
+            $payloadChecksum = hash('sha256', CanonicalJson::encode($journalPayload));
             if ($existing !== false) {
                 if (!hash_equals($payloadChecksum, (string) $existing['payload_checksum'])) {
                     throw new \LogicException('paper_execution_effect_acknowledgement_conflict');
@@ -232,7 +236,7 @@ SQL, [$cell->id]);
                 return;
             }
 
-            $this->appendJournal($checkpoint, 'effect_acknowledged', $payload, $position, null, $effectKey);
+            $this->appendJournal($checkpoint, 'effect_acknowledged', $journalPayload, $position, null, $effectKey);
             $this->connection->executeStatement('UPDATE paper_execution_checkpoint SET fake_event_cursor = ?, updated_at = NOW() WHERE cell_id = ?', [$fakeEventCursor, $cell->id]);
         });
     }
@@ -398,6 +402,9 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
     {
         $checksum = self::EMPTY_JOURNAL_CHECKSUM;
         $expectedOrdinal = 0;
+        $expectedNextSourcePosition = 0;
+        $expectedFakeEventCursor = 0;
+        $expectedKilled = false;
         $rows = $this->connection->fetchAllAssociative('SELECT cell_id, journal_ordinal, event_type, source_position, source_event_id, effect_key, payload::text AS payload, payload_checksum FROM paper_execution_event WHERE cell_id = ? ORDER BY journal_ordinal', [$checkpoint['cell_id']]);
         foreach ($rows as $row) {
             ++$expectedOrdinal;
@@ -420,11 +427,38 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
                 $payload,
                 $payloadChecksum,
             );
+            $eventType = (string) $row['event_type'];
+            if ($eventType === 'source_claimed') {
+                $sourcePosition = $row['source_position'] === null ? null : (int) $row['source_position'];
+                if ($sourcePosition !== $expectedNextSourcePosition) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                ++$expectedNextSourcePosition;
+            } elseif ($eventType === 'effect_acknowledged') {
+                $cursor = $payload['fake_event_cursor'] ?? null;
+                if (!is_int($cursor) || $cursor < $expectedFakeEventCursor) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                $expectedFakeEventCursor = $cursor;
+            } elseif ($eventType === 'cell_killed') {
+                if (($payload['killed'] ?? null) !== true) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                $expectedKilled = true;
+            } elseif ($eventType === 'cell_resumed') {
+                if (($payload['killed'] ?? null) !== false) {
+                    throw new \LogicException('paper_execution_checkpoint_corrupt');
+                }
+                $expectedKilled = false;
+            }
         }
 
         if ((int) $checkpoint['journal_ordinal'] !== $expectedOrdinal
             || !hash_equals($checksum, (string) $checkpoint['journal_checksum'])
             || (int) $checkpoint['lock_version'] !== $expectedOrdinal
+            || (int) $checkpoint['next_source_position'] !== $expectedNextSourcePosition
+            || (int) $checkpoint['fake_event_cursor'] !== $expectedFakeEventCursor
+            || $this->databaseBoolean($checkpoint['killed'] ?? false) !== $expectedKilled
         ) {
             throw new \LogicException('paper_execution_checkpoint_corrupt');
         }

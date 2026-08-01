@@ -83,13 +83,15 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
             $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-01T10:00:00Z')))->forCell($cell);
             self::assertCount(1, array_filter($runtime->stateStore->getOrders('BTCUSDT'), static fn ($order): bool => !$order->reduceOnly));
             self::assertSame([], $store->pendingEffects($cell));
-            self::assertSame(1, $restarted->counters($cell)->requested);
-            self::assertSame(1, $restarted->counters($cell)->acknowledged);
-            $expectedRetries = in_array($target, [
+            self::assertSame(2, $restarted->counters($cell)->requested);
+            self::assertSame(2, $restarted->counters($cell)->acknowledged);
+            $expectedRetries = match ($target) {
                 PaperCrashPoint::AFTER_PHASE_1_COMMIT,
                 PaperCrashPoint::AFTER_FAKE_EFFECT,
-                PaperCrashPoint::BEFORE_PHASE_3_COMMIT,
-            ], true) ? 1 : 0;
+                PaperCrashPoint::BEFORE_PHASE_3_COMMIT => 2,
+                PaperCrashPoint::AFTER_PHASE_3_COMMIT => 1,
+                default => 0,
+            };
             self::assertSame($expectedRetries, $restarted->counters($cell)->retried);
         } finally {
             if (is_dir($root)) {

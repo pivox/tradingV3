@@ -6,6 +6,8 @@ namespace App\Tests\Trading\Paper\Execution\Market;
 
 use App\Common\Enum\Timeframe;
 use App\Trading\Paper\Execution\Market\PaperKlineProvider;
+use App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter;
+use App\Trading\Paper\Execution\Market\PaperMarketEffectCodec;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -15,6 +17,8 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperMarketStateProjector::class)]
+#[CoversClass(PaperKlineProviderAdapter::class)]
+#[CoversClass(PaperMarketEffectCodec::class)]
 final class PaperMarketStateProjectorTest extends TestCase
 {
     public function testEquivalentOkxAndHyperliquidCandlesProduceTheSameKline(): void
@@ -83,6 +87,37 @@ final class PaperMarketStateProjectorTest extends TestCase
             $payload,
             '1',
         ));
+    }
+
+    public function testPaperKlineAdapterFeedsTheFakeMtfPortWithoutWrites(): void
+    {
+        $provider = new PaperKlineProvider();
+        (new PaperMarketStateProjector($provider))->apply($this->candle(
+            PaperMarketDataVenue::HYPERLIQUID,
+            PaperMarketDataNetwork::TESTNET,
+            $this->payload('1m', '1785578400000'),
+            '1',
+        ));
+        $adapter = new PaperKlineProviderAdapter($provider);
+
+        self::assertCount(1, $adapter->getKlines('BTCUSDT', Timeframe::TF_1M));
+        self::assertNotNull($adapter->getLastKline('BTCUSDT', Timeframe::TF_1M));
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_kline_provider_read_only');
+        $adapter->saveKline($provider->getLastKline('BTCUSDT', Timeframe::TF_1M));
+    }
+
+    public function testMarketEffectCodecRoundTripsAndAuthenticatesTheSourceEvent(): void
+    {
+        $event = $this->book('99.5', '100.5', '10');
+        $codec = new PaperMarketEffectCodec();
+        $encoded = $codec->encode($event);
+        self::assertSame($event->eventId, $codec->decode($encoded)->eventId);
+
+        $encoded['payload']['sequence'] = '11';
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_market_effect_payload_invalid');
+        $codec->decode($encoded);
     }
 
     /** @return array<string, mixed> */

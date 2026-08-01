@@ -81,7 +81,7 @@ final class PaperExecutionEndToEndTest extends TestCase
             self::assertSame($cell->id, $orders[0]->metadata['paper_execution_cell_id']);
             self::assertSame('reference_only', $orders[0]->metadata['paper_eligibility']);
             self::assertSame(4, $store->checkpoint($cell)->nextSourcePosition);
-            self::assertSame(1, $coordinator->counters($cell)->acknowledged);
+            self::assertSame(5, $coordinator->counters($cell)->acknowledged);
             $fills = array_values(array_filter(
                 $projection->events,
                 static fn ($event): bool => $event instanceof ExchangeFillReceived,

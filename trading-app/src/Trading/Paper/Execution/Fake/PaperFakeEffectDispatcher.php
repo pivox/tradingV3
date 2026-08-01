@@ -9,6 +9,7 @@ use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\TradeEntry\Execution\ExchangeExecutionService;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedDecision;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final readonly class PaperFakeEffectDispatcher
 {
@@ -46,6 +47,11 @@ final readonly class PaperFakeEffectDispatcher
             $normalized,
             ($result->raw['order']['metadata']['idempotent_replay'] ?? false) === true,
         );
+    }
+
+    public function dispatchMarket(PaperFakeRuntime $runtime, PaperMarketEvent $event): void
+    {
+        $runtime->applyMarketEvent($event);
     }
 
     /** @return list<ExchangeEventInterface> */

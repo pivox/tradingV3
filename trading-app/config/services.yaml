@@ -148,9 +148,28 @@ services:
         arguments:
             $preparationResolver: '@App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver'
 
+    App\Indicator\Provider\IndicatorProviderService:
+        arguments:
+            $fakeKlineProvider: '@App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter'
+
     App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory:
         arguments:
             $root: '%env(string:PAPER_FAKE_STATE_ROOT)%'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.empty_adapter_registry:
+        class: App\Exchange\Registry\ExchangeAdapterRegistry
+        arguments:
+            $adapters: []
+
+    paper.execution.exchange_execution_service:
+        class: App\TradeEntry\Execution\ExchangeExecutionService
+        arguments:
+            $adapters: '@paper.execution.empty_adapter_registry'
+
+    App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher:
+        arguments:
+            $execution: '@paper.execution.exchange_execution_service'
 
     App\Trading\Paper\Execution\PaperExecutionCoordinator:
         arguments:
@@ -741,6 +760,7 @@ services:
     App\MtfValidator\Service\TimeframeValidationService:
         arguments:
             $mtfLogger: '@monolog.logger.mtf'
+            $fakeKlineProvider: '@App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter'
 
     # Execution selector (decide 15m/5m/1m)
     App\MtfValidator\Execution\ExecutionSelector:

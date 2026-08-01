@@ -21,6 +21,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
 use DoctrineMigrations\Version20260801120000;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -173,6 +174,32 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_checkpoint_corrupt');
         $restarted->checkpoint($this->cell);
+    }
+
+    #[DataProvider('derivedCheckpointColumnProvider')]
+    public function testDerivedCheckpointColumnCorruptionIsDetectedOnRestart(string $column, string $value): void
+    {
+        $this->store->claimSource($this->cell, 0, $this->event(0));
+        $key = 'sha256:' . str_repeat('1', 64);
+        $this->store->appendEffect($this->cell, 0, $key, ['order' => 1]);
+        $this->store->acknowledge($this->cell, 0, $key, ['order_id' => 'fake-1'], 1);
+        $this->connection->executeStatement(
+            sprintf('UPDATE paper_execution_checkpoint SET %s = %s WHERE cell_id = ?', $column, $value),
+            [$this->cell->id],
+        );
+
+        $restarted = new DoctrinePaperExecutionStore($this->connection);
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_checkpoint_corrupt');
+        $restarted->checkpoint($this->cell);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function derivedCheckpointColumnProvider(): iterable
+    {
+        yield 'source position' => ['next_source_position', '9'];
+        yield 'fake cursor' => ['fake_event_cursor', '9'];
+        yield 'kill state' => ['killed', 'TRUE'];
     }
 
     public function testKillPersistsAcrossRestartAndResumeIsExplicit(): void

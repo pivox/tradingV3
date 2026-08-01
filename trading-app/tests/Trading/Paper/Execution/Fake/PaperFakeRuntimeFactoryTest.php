@@ -7,6 +7,8 @@ namespace App\Tests\Trading\Paper\Execution\Fake;
 use App\Common\Enum\Exchange;
 use App\Exchange\Contract\ExchangeAdapterInterface;
 use App\Exchange\Fake\FakeExchangeStateStore;
+use App\Exchange\Fake\FakeExchangeMatchingEngine;
+use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntime;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
@@ -65,12 +67,15 @@ final class PaperFakeRuntimeFactoryTest extends TestCase
 
     public function testRuntimeRejectsAnyNonFakeAdapter(): void
     {
+        $clock = new MockClock();
+        $state = new FakeExchangeStateStore();
+        $book = new FakeExchangeOrderBook($state);
         $adapter = $this->createMock(ExchangeAdapterInterface::class);
         $adapter->method('exchange')->willReturn(Exchange::BITMART);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('paper_execution_exchange_must_be_fake');
-        new PaperFakeRuntime($this->cell('run-1'), $this->root . '/state.dat', new FakeExchangeStateStore(), $adapter);
+        new PaperFakeRuntime($this->cell('run-1'), $this->root . '/state.dat', $state, $book, new FakeExchangeMatchingEngine($state, $book, $clock), $adapter);
     }
 
     private function cell(string $runId): PaperExecutionCell

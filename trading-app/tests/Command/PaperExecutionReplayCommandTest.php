@@ -6,12 +6,16 @@ namespace App\Tests\Command;
 
 use App\Command\PaperExecutionReplayCommand;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
@@ -77,13 +81,55 @@ final class PaperExecutionReplayCommandTest extends TestCase
         }
     }
 
-    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null): PaperExecutionReplayCommand
+    public function testPendingEffectResumesBeforeItsClaimedSourceInsteadOfSkippingIt(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $cell = PaperExecutionCell::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'sha256:' . str_repeat('a', 64),
+            'scalper_micro',
+            'paper-run-001',
+        );
+        $first = $this->event(0);
+        $pending = $this->event(1);
+        $store->claimSource($cell, 0, $first);
+        $store->claimSource($cell, 1, $pending);
+        $store->appendEffect($cell, 1, 'sha256:' . str_repeat('1', 64), ['pending' => true]);
+        $manifestPath = __DIR__ . '/../Fixtures/PaperExecution/hyperliquid-testnet-cell/manifest.json';
+        $manifest = (new PaperDatasetManifestCodec())->decode((string) file_get_contents($manifestPath));
+        $command = $this->command(store: $store);
+        $method = new \ReflectionMethod($command, 'replayCheckpoint');
+
+        $checkpoint = $method->invoke($command, $cell, $manifest, 'paper-consumer');
+
+        self::assertNotNull($checkpoint);
+        self::assertSame(0, $checkpoint->eventIndex);
+        self::assertSame($first->eventId, $checkpoint->eventId);
+    }
+
+    private function event(int $second): PaperMarketEvent
+    {
+        $timestamp = new \DateTimeImmutable(sprintf('2026-08-01T10:00:%02dZ', $second));
+
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $timestamp,
+            $timestamp,
+            (string) $second,
+            ['bid_price' => '99', 'ask_price' => '101'],
+        );
+    }
+
+    private function command(?PaperDatasetVerifier $verifier = null, ?PaperReplayReader $reader = null, ?PaperExecutionStoreInterface $store = null): PaperExecutionReplayCommand
     {
         $coordinator = new class implements PaperEventCoordinatorInterface {
             public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void { throw new \LogicException('not_called'); }
         };
-        /** @var PaperExecutionStoreInterface $store */
-        $store = new InMemoryPaperExecutionStore();
+        $store ??= new InMemoryPaperExecutionStore();
 
         return new PaperExecutionReplayCommand(
             $verifier ?? (new \ReflectionClass(PaperDatasetVerifier::class))->newInstanceWithoutConstructor(),

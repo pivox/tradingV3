@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Config\TradeEntryConfigResolver;
 use App\Exchange\Event\ExchangeEventInterface;
+use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Exchange\Registry\ExchangeAdapterRegistry;
@@ -65,8 +66,8 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $entries = array_filter($runtime->stateStore->getOrders('BTCUSDT'), static fn ($order): bool => !$order->reduceOnly);
             self::assertCount(1, $entries);
             self::assertNotEmpty($projection->events);
-            self::assertSame(1, $coordinator->counters($cell)->requested);
-            self::assertSame(1, $coordinator->counters($cell)->acknowledged);
+            self::assertSame(2, $coordinator->counters($cell)->requested);
+            self::assertSame(2, $coordinator->counters($cell)->acknowledged);
         } finally {
             $this->cleanup($root);
         }
@@ -83,7 +84,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
         $coordinator->consumeAt($this->cell(), PaperProfileEligibility::REFERENCE_ONLY, 'dataset-1', 0, $event);
     }
 
-    public function testNoDecisionAcknowledgesSourceWithoutFakeEffect(): void
+    public function testNoDecisionStillAdvancesTheDurableFakeMarketEffect(): void
     {
         $root = sys_get_temp_dir() . '/paper_coord_' . bin2hex(random_bytes(5));
         try {
@@ -95,8 +96,48 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $coordinator->consumeAt($this->cell(), PaperProfileEligibility::REFERENCE_ONLY, 'dataset-1', 0, $this->event());
 
             self::assertSame(1, $store->checkpoint($this->cell())->nextSourcePosition);
-            self::assertSame(0, $coordinator->counters($this->cell())->requested);
+            self::assertSame(1, $coordinator->counters($this->cell())->requested);
+            self::assertSame(1, $coordinator->counters($this->cell())->acknowledged);
             self::assertSame([], $store->pendingEffects($this->cell()));
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
+    public function testLaterBookEventTriggersExistingProtectionAndProjectsTheFill(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $projection = new RecordingProjectionStore();
+            $coordinator = $this->coordinator($store, $projection, $root, new FirstCandleMarketStrategy());
+            $coordinator->consumeAt($this->cell(), PaperProfileEligibility::REFERENCE_ONLY, 'dataset-1', 0, PaperMarketEvent::create(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::CANDLE_1M,
+                new \DateTimeImmutable('2026-08-01T10:00:59Z'),
+                new \DateTimeImmutable('2026-08-01T10:01:00Z'),
+                '1',
+                ['interval' => '1m', 'start_time' => '1785578400000', 'open' => '100', 'high' => '105', 'low' => '95', 'close' => '100', 'volume' => '5', 'confirmed' => true],
+            ));
+            $fillsBefore = array_values(array_filter($projection->events, static fn ($event): bool => $event instanceof ExchangeFillReceived));
+            self::assertNotEmpty($fillsBefore);
+
+            $coordinator->consumeAt($this->cell(), PaperProfileEligibility::REFERENCE_ONLY, 'dataset-1', 1, PaperMarketEvent::create(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'BTCUSDT',
+                PaperMarketDataChannel::TOP_OF_BOOK,
+                new \DateTimeImmutable('2026-08-01T10:01:01Z'),
+                new \DateTimeImmutable('2026-08-01T10:01:01Z'),
+                '2',
+                ['bid_price' => '104.5', 'ask_price' => '105'],
+            ));
+
+            $fillsAfter = array_values(array_filter($projection->events, static fn ($event): bool => $event instanceof ExchangeFillReceived));
+            self::assertGreaterThan(count($fillsBefore), count($fillsAfter));
+            self::assertSame(3, $coordinator->counters($this->cell())->acknowledged);
         } finally {
             $this->cleanup($root);
         }
@@ -156,6 +197,18 @@ final class DeterministicPaperStrategy implements PaperStrategyPreparationInterf
     public function prepareFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PreparedTradeEntry
     {
         return new PreparedTradeEntry(new OrderPlanModel('BTCUSDT', Side::Long, 'market', 'isolated', 1, 25000.0, 24800.0, 25200.0, 1, 3, 2, 1.0, exchangeContext: new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL)), null, 'decision-1', 'paper-trade-1', new LifecycleContextBuilder('BTCUSDT'), 'scalper_micro', '1m');
+    }
+}
+
+final class FirstCandleMarketStrategy implements PaperStrategyPreparationInterface
+{
+    public function prepareFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PreparedTradeEntry
+    {
+        if ($event->channel !== PaperMarketDataChannel::CANDLE_1M) {
+            return null;
+        }
+
+        return new PreparedTradeEntry(new OrderPlanModel('BTCUSDT', Side::Long, 'market', 'isolated', 1, 100.0, 98.0, 104.0, 1, 3, 2, 1.0, exchangeContext: new ExchangeContext(Exchange::FAKE, MarketType::PERPETUAL)), null, 'decision-market-1', 'paper-trade-market-1', new LifecycleContextBuilder('BTCUSDT'), 'scalper_micro', '1m');
     }
 }
 

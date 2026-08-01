@@ -158,7 +158,9 @@ final class PaperExecutionReplayCommand extends Command
 
     private function replayCheckpoint(PaperExecutionCell $cell, PaperDatasetManifest $manifest, string $consumerId): ?PaperReplayCheckpoint
     {
-        $position = $this->store->checkpoint($cell)->nextSourcePosition;
+        $checkpoint = $this->store->checkpoint($cell);
+        $pending = $this->store->pendingEffects($cell);
+        $position = $pending[0]->sourcePosition ?? $checkpoint->nextSourcePosition;
         if ($position === 0) {
             return null;
         }

@@ -50,7 +50,7 @@ final class PaperFakeRuntimeFactory
         $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
         $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
 
-        return new PaperFakeRuntime($cell, $statePath, $state, $adapter);
+        return new PaperFakeRuntime($cell, $statePath, $state, $book, $engine, $adapter);
     }
 
     private function privateRoot(): string

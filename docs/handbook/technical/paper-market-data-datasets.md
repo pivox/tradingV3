@@ -85,9 +85,16 @@ autre venue.
 
 Le coordinateur consomme les événements normalisés et route exclusivement les
 plans préparés vers `FakeExchangeAdapter`. Il est désactivé par défaut avec
-`PAPER_EXECUTION_ENABLED=0`. Aucun registry d'exchange, credential, wallet,
-signer, transport HTTP/WS privé ou appel exchange ne fait partie de son graphe
-runtime.
+`PAPER_EXECUTION_ENABLED=0`. Le sous-graphe d'exécution possède un registry
+explicitement vide : aucun adaptateur d'exchange réel, credential, wallet,
+signer, transport HTTP/WS privé ou appel exchange n'y est joignable.
+
+Chaque événement marché est lui-même un effet durable appliqué au carnet Fake
+avant l'éventuel ordre de la même source. Un top-of-book conserve exactement
+ses bid/ask. Une bougie utilise uniquement sa clôture avec le modèle déclaré
+`paper-candle-close-spread-v1` (2 bps) : le high/low ne sert jamais à inventer
+un chemin intrabar. Les fenêtres MTF du contexte `FAKE` lisent directement les
+klines projetées Paper, et non le provider Fake vide du mode démonstration.
 
 Une cellule est l'identité immuable suivante :
 
@@ -117,9 +124,10 @@ var/paper-fake-state/<cell-sha256>.dat
 
 Le journal applique trois phases durables :
 
-1. claim de la source, réservation de l'`OrderIntent`, création de la lineage
-   et append de l'effet préparé ;
-2. effet idempotent sur le compte Fake de la cellule ;
+1. claim de la source, append de l'effet marché puis, si une décision existe,
+   réservation de l'`OrderIntent`, création de la lineage et append de l'effet
+   d'ordre préparé ;
+2. effets idempotents et ordonnés sur le compte Fake de la cellule ;
 3. projection atomique des orders, lifecycle, fills et coûts, puis
    acknowledgement et avancement du checkpoint.
 
