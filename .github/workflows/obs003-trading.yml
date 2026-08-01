@@ -56,6 +56,7 @@ jobs:
       APP_SECRET: ci-obs003-secret
       DEFAULT_URI: 'http://localhost'
       REDIS_URL: 'redis://127.0.0.1:6379'
+      REDIS_ORDER_WATCH_CHANNEL: 'watcher:order:watch'
       # La vue est testée via une connexion DBAL PostgreSQL distincte qui lit DATABASE_URL.
       # (L'ORM de test reste sur sqlite via config/packages/test/doctrine.yaml ; ces suites
       # OBS-003 n'utilisent pas l'ORM — readers stubés + connexion vue dédiée.)
