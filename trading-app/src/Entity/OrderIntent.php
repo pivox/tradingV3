@@ -23,6 +23,8 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_order_intent_exchange_market_decision_key', columns: ['exchange', 'market_type', 'decision_key'])]
 class OrderIntent
 {
+    use PaperExecutionProvenance;
+
     public const STATUS_DRAFT = 'DRAFT';
     public const STATUS_VALIDATED = 'VALIDATED';
     public const STATUS_READY_TO_SEND = 'READY_TO_SEND';

@@ -23,6 +23,8 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_fill_cost_ledger_order_intent', columns: ['order_intent_id'])]
 final class FillCostLedgerEntry
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]

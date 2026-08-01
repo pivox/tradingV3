@@ -18,6 +18,8 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_zone_happened_at', columns: ['happened_at'])]
 class TradeZoneEvent
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]

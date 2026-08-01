@@ -21,6 +21,8 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_trade_lineage_run_set', columns: ['run_id', 'orchestration_set_id'])]
 final class TradeLineage
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
