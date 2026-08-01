@@ -29,6 +29,7 @@ use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\PaperExecutionCoordinator;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Execution\Persistence\PaperOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -112,6 +113,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             new PaperFakeRuntimeFactory($root, $clock),
             new PaperFakeEffectDispatcher($this->executionService(), new FakeExchangeEventNormalizer()),
             $projection,
+            new RecordingPaperOrderIntents(),
             new PaperRuntimeGuard(),
             new PaperDatabaseGuard(new class implements PaperDatabaseInspectorInterface {
                 public function inspect(): PaperDatabaseInspection { return new PaperDatabaseInspection('unit_paper_test', 0); }
@@ -165,4 +167,26 @@ final class RecordingProjectionStore implements ExchangeLocalProjectionStoreInte
     public function openPositions(Exchange $exchange, MarketType $marketType, ?string $symbol = null): array { return []; }
     public function project(ExchangeEventInterface $event): void { $this->events[] = $event; }
     public function projectAtomically(array $events): void { foreach ($events as $event) { $this->project($event); } }
+}
+
+final class RecordingPaperOrderIntents implements PaperOrderIntentRecorderInterface
+{
+    public int $reservations = 0;
+    public int $acknowledgements = 0;
+    /** @var list<array<string, mixed>> */ public array $reserved = [];
+    /** @var list<array<string, mixed>> */ public array $acknowledged = [];
+
+    public function reserve(PreparedTradeEntry $prepared, array $identity, array $provenance): array
+    {
+        ++$this->reservations;
+        $this->reserved[] = ['prepared' => $prepared, 'identity' => $identity, 'provenance' => $provenance];
+
+        return $identity + ['order_intent_id' => 42];
+    }
+
+    public function acknowledge(array $identity, \App\TradeEntry\Dto\ExecutionResult $result): void
+    {
+        ++$this->acknowledgements;
+        $this->acknowledged[] = ['identity' => $identity, 'result' => $result];
+    }
 }

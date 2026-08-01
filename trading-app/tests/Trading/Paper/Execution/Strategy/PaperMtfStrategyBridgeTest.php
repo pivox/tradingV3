@@ -65,10 +65,11 @@ final class PaperMtfStrategyBridgeTest extends TestCase
     {
         $prepared = $this->prepared();
         $codec = new PaperPreparedEffectCodec();
-        $encoded = $codec->encode($prepared, ['client_order_id' => 'paper-cid-1'], $this->cell()->provenance(\App\Trading\Paper\Execution\Profile\PaperProfileEligibility::REFERENCE_ONLY));
+        $encoded = $codec->encode($prepared, ['client_order_id' => 'paper-cid-1', 'order_intent_id' => 42], $this->cell()->provenance(\App\Trading\Paper\Execution\Profile\PaperProfileEligibility::REFERENCE_ONLY));
         $decoded = $codec->decode($encoded);
         self::assertSame($prepared->stablePlanPayload(), $decoded->prepared->stablePlanPayload());
         self::assertSame('paper-cid-1', $decoded->orderIntentIdentity['client_order_id']);
+        self::assertSame(42, $decoded->orderIntentIdentity['order_intent_id']);
 
         $encoded['payload']['decision_key'] = 'tampered';
         $this->expectException(\InvalidArgumentException::class);

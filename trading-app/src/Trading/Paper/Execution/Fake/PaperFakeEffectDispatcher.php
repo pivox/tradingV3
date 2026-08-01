@@ -31,9 +31,11 @@ final readonly class PaperFakeEffectDispatcher
             $decision->prepared->mode,
             $decision->prepared->executionTimeframe,
             $decision->orderIntentIdentity['client_order_id'],
+            orderIntentId: $decision->orderIntentIdentity['order_intent_id'],
             planPrepared: true,
             executionMetadata: $decision->provenance + $decision->prepared->lifecycle->toArray() + [
                 'internal_trade_id' => $decision->prepared->internalTradeId,
+                'order_intent_id' => $decision->orderIntentIdentity['order_intent_id'],
             ],
         );
 

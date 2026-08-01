@@ -17,7 +17,7 @@ use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 
 final class PaperPreparedEffectCodec
 {
-    private const SCHEMA_VERSION = 1;
+    private const SCHEMA_VERSION = 2;
     private const ENVELOPE_KEYS = ['schema_version', 'payload', 'payload_checksum'];
     private const PAYLOAD_KEYS = [
         'plan',
@@ -44,11 +44,14 @@ final class PaperPreparedEffectCodec
     public function encode(PreparedTradeEntry $prepared, array $orderIntentIdentity, array $provenance): array
     {
         try {
-            if (!$prepared->plan instanceof OrderPlanModel || array_keys($orderIntentIdentity) !== ['client_order_id']) {
+            if (!$prepared->plan instanceof OrderPlanModel || array_keys($orderIntentIdentity) !== ['client_order_id', 'order_intent_id']) {
                 throw new \InvalidArgumentException();
             }
             $clientOrderId = $orderIntentIdentity['client_order_id'];
             if (!is_string($clientOrderId) || $clientOrderId === '') {
+                throw new \InvalidArgumentException();
+            }
+            if (!is_int($orderIntentIdentity['order_intent_id']) || $orderIntentIdentity['order_intent_id'] < 1) {
                 throw new \InvalidArgumentException();
             }
 
@@ -105,8 +108,11 @@ final class PaperPreparedEffectCodec
                     throw new \InvalidArgumentException();
                 }
             }
-            $this->assertKeys($payload['order_intent_identity'], ['client_order_id']);
+            $this->assertKeys($payload['order_intent_identity'], ['client_order_id', 'order_intent_id']);
             if (!is_string($payload['order_intent_identity']['client_order_id']) || $payload['order_intent_identity']['client_order_id'] === '') {
+                throw new \InvalidArgumentException();
+            }
+            if (!is_int($payload['order_intent_identity']['order_intent_id']) || $payload['order_intent_identity']['order_intent_id'] < 1) {
                 throw new \InvalidArgumentException();
             }
             PaperMarketEventRedactor::assertSafe($payload['lifecycle']);
@@ -128,7 +134,7 @@ final class PaperPreparedEffectCodec
                 $payload['execution_timeframe'],
             );
 
-            /** @var array{client_order_id: string} $identity */
+            /** @var array{client_order_id: string, order_intent_id: int} $identity */
             $identity = $payload['order_intent_identity'];
 
             return new PaperPreparedDecision($prepared, $identity, $provenance);

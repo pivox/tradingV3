@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper;
 
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -37,10 +38,13 @@ final class PaperFixtureContractTest extends TestCase
         'api_key',
         'apikey',
         'api_secret',
+        'token',
+        'credential',
         'secret_key',
         'passphrase',
         'private_key',
         'signature',
+        'signer',
         'wallet',
         'mnemonic',
         'seed_phrase',
@@ -53,6 +57,7 @@ final class PaperFixtureContractTest extends TestCase
         '/api/v5/account',
         '/api/v5/asset',
         'place-order',
+        'post/action',
         'cancel-order',
         'amend-order',
         'Bearer ',
@@ -216,6 +221,46 @@ final class PaperFixtureContractTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_network_provenance_uncertifiable');
 
         $this->verifyCompleteDatasetFixture($datasetDirectory, true);
+    }
+
+    public function testPaperExecutionFixturesAreVerifiedSingleNetworkAndCredentialFree(): void
+    {
+        $root = dirname($this->fixtureRoot()) . '/PaperExecution';
+        $expected = [
+            'hyperliquid-mainnet-cell' => [PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::HYPERLIQUID],
+            'hyperliquid-testnet-cell' => [PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID],
+            'okx-mainnet-cell' => [PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX],
+        ];
+        self::assertSame(6, count($this->fixtureFiles($root)));
+
+        foreach ($expected as $directory => [$network, $venue]) {
+            $dataset = $root . '/' . $directory;
+            foreach ($this->fixtureFiles($dataset) as $path) {
+                self::assertLessThanOrEqual(self::MAX_FIXTURE_BYTES, filesize($path));
+                $this->assertPublicFixtureContents($path, (string) file_get_contents($path));
+            }
+            $eventsContents = (string) file_get_contents($dataset . '/events.ndjson');
+            $manifest = $venue === PaperMarketDataVenue::OKX
+                ? $this->verifyCompleteDatasetFixture($dataset, true)
+                : (new PaperDatasetManifestCodec())->decode((string) file_get_contents($dataset . '/manifest.json'));
+            self::assertSame($network, $manifest->network);
+            self::assertSame($venue, $manifest->venue);
+            self::assertSame(4, $manifest->eventCount);
+            self::assertSame(hash('sha256', $eventsContents), $manifest->eventsFileSha256);
+            $events = $this->decodeNdjsonFile($dataset . '/events.ndjson');
+            self::assertCount(4, $events);
+            foreach ($events as $eventData) {
+                $event = PaperMarketEvent::fromArray($eventData);
+                self::assertSame($network, $event->sourceNetwork);
+                self::assertSame($venue, $event->sourceVenue);
+            }
+            self::assertSame([
+                PaperMarketDataChannel::CANDLE_15M->value,
+                PaperMarketDataChannel::CANDLE_1H->value,
+                PaperMarketDataChannel::CANDLE_1M->value,
+                PaperMarketDataChannel::CANDLE_5M->value,
+            ], $manifest->channels);
+        }
     }
 
     #[DataProvider('rawHttpHeaderProvider')]

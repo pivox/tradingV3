@@ -84,7 +84,7 @@ final class PaperFakeEffectDispatcherTest extends TestCase
 
         return new PaperPreparedDecision(
             $prepared,
-            ['client_order_id' => 'CIDPAPER0001'],
+            ['client_order_id' => 'CIDPAPER0001', 'order_intent_id' => 42],
             $cell->provenance(PaperProfileEligibility::REFERENCE_ONLY),
         );
     }

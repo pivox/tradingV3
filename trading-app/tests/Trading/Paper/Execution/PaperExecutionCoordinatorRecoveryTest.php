@@ -110,7 +110,7 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
     private function coordinator(InMemoryPaperExecutionStore $store, RecordingProjectionStore $projection, string $root, ?callable $crash = null): PaperExecutionCoordinator
     {
         $clock = new MockClock('2026-08-01T10:00:00Z');
-        return new PaperExecutionCoordinator($store, new PaperMarketStateProjector(new PaperKlineProvider()), new DeterministicPaperStrategy(), new PaperPreparedEffectCodec(), new PaperFakeRuntimeFactory($root, $clock), new PaperFakeEffectDispatcher($this->executionService(), new FakeExchangeEventNormalizer()), $projection, new PaperRuntimeGuard(), new PaperDatabaseGuard(new class implements PaperDatabaseInspectorInterface { public function inspect(): PaperDatabaseInspection { return new PaperDatabaseInspection('unit_paper_test', 0); } }), 'test', true, $crash);
+        return new PaperExecutionCoordinator($store, new PaperMarketStateProjector(new PaperKlineProvider()), new DeterministicPaperStrategy(), new PaperPreparedEffectCodec(), new PaperFakeRuntimeFactory($root, $clock), new PaperFakeEffectDispatcher($this->executionService(), new FakeExchangeEventNormalizer()), $projection, new RecordingPaperOrderIntents(), new PaperRuntimeGuard(), new PaperDatabaseGuard(new class implements PaperDatabaseInspectorInterface { public function inspect(): PaperDatabaseInspection { return new PaperDatabaseInspection('unit_paper_test', 0); } }), 'test', true, $crash);
     }
 
     private function executionService(): ExchangeExecutionService

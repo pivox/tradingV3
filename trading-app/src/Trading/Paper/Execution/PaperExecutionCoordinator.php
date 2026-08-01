@@ -16,7 +16,7 @@ use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
-use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
+use App\Trading\Paper\Execution\Persistence\PaperOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedDecision;
@@ -44,6 +44,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         private readonly PaperFakeRuntimeFactory $runtimeFactory,
         private readonly PaperFakeEffectDispatcher $dispatcher,
         private readonly ExchangeLocalProjectionStoreInterface $exchangeProjection,
+        private readonly PaperOrderIntentRecorderInterface $orderIntents,
         private readonly PaperRuntimeGuard $runtimeGuard,
         private readonly PaperDatabaseGuard $databaseGuard,
         private readonly string $environment = 'prod',
@@ -101,8 +102,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $clientOrderId = (new IdempotencyPolicy())->clientOrderIdFromDecisionKey(
             $cell->id . '|' . $event->eventId . '|' . $prepared->decisionKey,
         );
-        $decision = new PaperPreparedDecision($prepared, ['client_order_id' => $clientOrderId], $provenance);
-        $encoded = $this->codec->encode($prepared, $decision->orderIntentIdentity, $provenance);
+        $identity = ['client_order_id' => $clientOrderId];
         $effectKey = 'sha256:' . hash('sha256', CanonicalJson::encode([
             'cell_id' => $cell->id,
             'source_event_id' => $event->eventId,
@@ -110,9 +110,13 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         ]));
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_1_COMMIT);
-        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $effectKey, $encoded): PaperSourceClaim {
+        $decision = null;
+        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $effectKey, $prepared, $identity, $provenance, &$decision): PaperSourceClaim {
             $claim = $this->store->claimSource($cell, $sourcePosition, $event);
             if ($claim->status === PaperSourceClaim::ACCEPTED) {
+                $durableIdentity = $this->orderIntents->reserve($prepared, $identity, $provenance);
+                $decision = new PaperPreparedDecision($prepared, $durableIdentity, $provenance);
+                $encoded = $this->codec->encode($prepared, $durableIdentity, $provenance);
                 $this->store->appendEffect($cell, $sourcePosition, $effectKey, $encoded);
             }
 
@@ -126,9 +130,13 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             return;
         }
 
+        if (!$decision instanceof PaperPreparedDecision) {
+            throw new \LogicException('paper_order_intent_reservation_missing');
+        }
+
         $dispatch = $this->dispatchEffect($cell, $sourcePosition, $effectKey, $runtime, $decision, false);
         $this->crash(PaperCrashPoint::AFTER_FAKE_EFFECT);
-        $this->completeEffect($cell, $sourcePosition, $effectKey, $runtime, $dispatch, $checkpoint->fakeEventCursor);
+        $this->completeEffect($cell, $sourcePosition, $effectKey, $runtime, $decision, $dispatch, $checkpoint->fakeEventCursor);
         $this->market->apply($event);
     }
 
@@ -143,7 +151,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             $decision = $this->codec->decode($pending->payload);
             $cursor = $this->store->checkpoint($cell)->fakeEventCursor;
             $dispatch = $this->dispatchEffect($cell, $pending->sourcePosition, $pending->effectKey, $runtime, $decision, true);
-            $this->completeEffect($cell, $pending->sourcePosition, $pending->effectKey, $runtime, $dispatch, $cursor);
+            $this->completeEffect($cell, $pending->sourcePosition, $pending->effectKey, $runtime, $decision, $dispatch, $cursor);
         }
     }
 
@@ -171,6 +179,7 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         int $sourcePosition,
         string $effectKey,
         PaperFakeRuntime $runtime,
+        PaperPreparedDecision $decision,
         PaperFakeDispatchResult $dispatch,
         int $cursor,
     ): void {
@@ -178,8 +187,9 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         $acknowledgement = $this->acknowledgementPayload($dispatch->execution, $events);
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_3_COMMIT);
-        $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $events, $acknowledgement): void {
+        $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $decision, $dispatch, $events, $acknowledgement): void {
             $this->exchangeProjection->projectAtomically($events);
+            $this->orderIntents->acknowledge($decision->orderIntentIdentity, $dispatch->execution);
             $this->store->acknowledge($cell, $sourcePosition, $effectKey, $acknowledgement, $runtime->eventCursor());
         });
         $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
