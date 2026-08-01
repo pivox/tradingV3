@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Runtime;
 
 use App\Common\Enum\Exchange;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
 
 final class PaperRuntimeGuard
 {
@@ -36,6 +37,19 @@ final class PaperRuntimeGuard
             if (!in_array($symbol, self::ALLOWED_SYMBOLS, true)) {
                 throw new \LogicException('paper_symbol_not_allowed');
             }
+        }
+    }
+
+    public function assertEventProvenance(
+        #[\SensitiveParameter] PaperRuntimeContext $context,
+        #[\SensitiveParameter] PaperMarketEvent $event,
+    ): void {
+        if ($event->sourceNetwork !== $context->cell->network) {
+            throw new \LogicException('paper_execution_network_mismatch');
+        }
+
+        if ($event->sourceVenue !== $context->cell->marketDataVenue) {
+            throw new \LogicException('paper_execution_market_data_venue_mismatch');
         }
     }
 }

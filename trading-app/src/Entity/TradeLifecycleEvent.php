@@ -13,8 +13,10 @@ use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: TradeLifecycleEventRepository::class)]
 #[ORM\Table(name: 'trade_lifecycle_event')]
-class TradeLifecycleEvent
+class TradeLifecycleEvent implements PaperExecutionProvenanceAwareInterface
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]

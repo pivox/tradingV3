@@ -46,6 +46,12 @@ final readonly class FakeExchangeMatchingEngine
         'origin',
         'attempt_number',
         'decision_key',
+        'paper_network',
+        'market_data_venue',
+        'paper_execution_cell_id',
+        'configuration_snapshot_id',
+        'paper_eligibility',
+        'strategy_profile',
     ];
     /**
      * @var string[]

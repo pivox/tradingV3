@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Logging;
 
 use App\Entity\TradeLifecycleEvent;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 
@@ -219,6 +220,11 @@ final class TradeLifecycleLogger
             ->setReplayOfCorrelationId($this->limitedStringValue($extra['replay_of_correlation_id'] ?? null, 96))
             ->setAttemptNumber($this->intValue($extra['attempt_number'] ?? null))
             ->setConfigHash($this->limitedStringValue($extra['config_hash'] ?? null, 128));
+
+        $paperProvenance = PaperExecutionProvenance::extract($extra);
+        if ($paperProvenance !== null) {
+            $event->applyPaperExecutionProvenance($paperProvenance);
+        }
     }
 
     private function limitedStringValue(mixed $value, int $maxLength): ?string

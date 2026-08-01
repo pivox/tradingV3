@@ -10,6 +10,8 @@
 imports:
 
 parameters:
+    env(PAPER_EXECUTION_ENABLED): '0'
+    env(PAPER_FAKE_STATE_ROOT): '%kernel.project_dir%/var/paper-fake-state'
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
@@ -132,6 +134,61 @@ services:
 
     App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface:
         alias: App\Trading\Paper\Runtime\DoctrinePaperDatabaseInspector
+
+    Doctrine\Migrations\DependencyFactory:
+        alias: doctrine.migrations.dependency_factory
+
+    App\Trading\Paper\Execution\PaperEventCoordinatorInterface:
+        alias: App\Trading\Paper\Execution\PaperExecutionCoordinator
+
+    App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge
+
+    App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge:
+        arguments:
+            $validator: '@paper.execution.mtf_validator'
+            $preparationResolver: '@App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver'
+            $indicators: '@App\Indicator\Provider\IndicatorProviderService'
+
+    paper.execution.mtf_validator_core:
+        class: App\MtfValidator\Service\MtfValidatorCoreService
+        arguments:
+            $indicatorProvider: '@App\Indicator\Provider\IndicatorProviderService'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.mtf_validator:
+        class: App\MtfValidator\Service\MtfValidatorService
+        arguments:
+            $core: '@paper.execution.mtf_validator_core'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    App\Indicator\Provider\IndicatorProviderService:
+        arguments:
+            $fakeKlineProvider: '@App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter'
+
+    App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory:
+        arguments:
+            $root: '%env(string:PAPER_FAKE_STATE_ROOT)%'
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    paper.execution.empty_adapter_registry:
+        class: App\Exchange\Registry\ExchangeAdapterRegistry
+        arguments:
+            $adapters: []
+
+    paper.execution.exchange_execution_service:
+        class: App\TradeEntry\Execution\ExchangeExecutionService
+        arguments:
+            $adapters: '@paper.execution.empty_adapter_registry'
+
+    App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher:
+        arguments:
+            $execution: '@paper.execution.exchange_execution_service'
+
+    App\Trading\Paper\Execution\PaperExecutionCoordinator:
+        arguments:
+            $environment: '%kernel.environment%'
+            $enabled: '%env(bool:PAPER_EXECUTION_ENABLED)%'
 
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader
@@ -717,6 +774,7 @@ services:
     App\MtfValidator\Service\TimeframeValidationService:
         arguments:
             $mtfLogger: '@monolog.logger.mtf'
+            $fakeKlineProvider: '@App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter'
 
     # Execution selector (decide 15m/5m/1m)
     App\MtfValidator\Execution\ExecutionSelector:

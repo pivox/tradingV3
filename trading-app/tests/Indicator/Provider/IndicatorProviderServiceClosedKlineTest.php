@@ -107,11 +107,8 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
             ->willReturn($klines);
 
         $snapshotRepository = $this->createMock(IndicatorSnapshotRepository::class);
-        $snapshotRepository
-            ->expects(self::exactly(2))
-            ->method('findLastBySymbolAndTimeframe')
-            ->willReturn(null);
-        $snapshotRepository->expects(self::once())->method('upsert');
+        $snapshotRepository->expects(self::never())->method('findLastBySymbolAndTimeframe');
+        $snapshotRepository->expects(self::never())->method('upsert');
 
         $result = $this->service(
             $legacyFallback,

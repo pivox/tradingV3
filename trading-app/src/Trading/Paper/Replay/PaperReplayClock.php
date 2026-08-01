@@ -10,9 +10,9 @@ final class PaperReplayClock implements ClockInterface
 {
     private \DateTimeImmutable $current;
 
-    public function __construct(#[\SensitiveParameter] \DateTimeImmutable $current)
+    public function __construct(#[\SensitiveParameter] ?\DateTimeImmutable $current = null)
     {
-        $this->current = self::toUtc($current);
+        $this->current = self::toUtc($current ?? new \DateTimeImmutable('@0'));
     }
 
     public function now(): \DateTimeImmutable

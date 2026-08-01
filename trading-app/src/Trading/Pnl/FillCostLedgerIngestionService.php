@@ -17,6 +17,7 @@ use App\Exchange\Fake\FakeLiquidationPolicy;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
@@ -80,6 +81,13 @@ final readonly class FillCostLedgerIngestionService
         $sourceVersion = $this->string($metadata['source_version'] ?? $payload['source_version'] ?? null)
             ?? $this->string($metadata['pnl_source'] ?? $payload['pnl_source'] ?? null)
             ?? self::SOURCE_VERSION;
+        $paperProvenance = PaperExecutionProvenance::extract(array_replace($payload, $metadata));
+        if ($lineage?->getPaperExecutionCellId() !== null) {
+            if ($paperProvenance === null) {
+                throw new \InvalidArgumentException('paper_execution_provenance_invalid');
+            }
+            PaperExecutionProvenance::assertMatches($lineage, $paperProvenance);
+        }
 
         $snapshot = [
             'internal_trade_id' => $internalTradeId,
@@ -112,6 +120,7 @@ final readonly class FillCostLedgerIngestionService
             'source_version' => $sourceVersion,
             'quality_flags' => array_values(array_unique($qualityFlags)),
             'raw_reference' => $this->rawReference($event->eventType(), $source, $exchangeFillId, $fill->exchangeOrderId, $fill->clientOrderId),
+            'paper_provenance' => $paperProvenance,
         ];
 
         return $this->persistSnapshot($idempotencyKey, $snapshot);
@@ -320,6 +329,10 @@ final readonly class FillCostLedgerIngestionService
             ->setLiquidationFeeUsdt($this->string($snapshot['liquidation_fee_usdt'] ?? null))
             ->setQualityFlags(\is_array($snapshot['quality_flags']) ? $snapshot['quality_flags'] : [])
             ->setRawReference(\is_array($snapshot['raw_reference']) ? $snapshot['raw_reference'] : []);
+
+        if (\is_array($snapshot['paper_provenance'] ?? null)) {
+            $entry->applyPaperExecutionProvenance($snapshot['paper_provenance']);
+        }
 
         try {
             $this->ledger->save($entry);

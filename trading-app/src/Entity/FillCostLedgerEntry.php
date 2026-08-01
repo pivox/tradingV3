@@ -21,8 +21,10 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_fill_cost_ledger_venue_order', columns: ['exchange', 'market_type', 'exchange_order_id'])]
 #[ORM\Index(name: 'idx_fill_cost_ledger_client_order', columns: ['exchange', 'market_type', 'client_order_id'])]
 #[ORM\Index(name: 'idx_fill_cost_ledger_order_intent', columns: ['order_intent_id'])]
-final class FillCostLedgerEntry
+final class FillCostLedgerEntry implements PaperExecutionProvenanceAwareInterface
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
@@ -211,6 +213,18 @@ final class FillCostLedgerEntry
     public function getExchange(): string
     {
         return $this->exchange;
+    }
+
+    public function setExchange(Exchange|string $exchange): self
+    {
+        $normalized = $exchange instanceof Exchange ? $exchange->value : strtolower(trim($exchange));
+        if (Exchange::tryFrom($normalized) === null) {
+            throw new \InvalidArgumentException('exchange_invalid');
+        }
+
+        $this->exchange = $normalized;
+
+        return $this;
     }
 
     public function getMarketDataVenue(): ?string

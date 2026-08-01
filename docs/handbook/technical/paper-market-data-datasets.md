@@ -79,6 +79,97 @@ compare au checkpoint. Il rejette notamment :
 
 Cette capacité ne change aucune readiness de trading Hyperliquid. Elle
 n'autorise ni exécution mainnet, ni exécution testnet, ni fallback vers une
-autre venue. Le prochain lot de la baseline #132 reste le coordinateur Paper,
-routé exclusivement vers `FakeExchangeAdapter` avec une base PostgreSQL Paper
-dédiée. Le retrait BitMart #305 reste hors de ce chantier.
+autre venue.
+
+## Coordinateur d'exécution Paper
+
+Le coordinateur consomme les événements normalisés et route exclusivement les
+plans préparés vers `FakeExchangeAdapter`. Il est désactivé par défaut avec
+`PAPER_EXECUTION_ENABLED=0`. Le sous-graphe d'exécution possède un registry
+explicitement vide : aucun adaptateur d'exchange réel, credential, wallet,
+signer, transport HTTP/WS privé ou appel exchange n'y est joignable.
+
+Chaque événement marché est lui-même un effet durable appliqué au carnet Fake
+avant l'éventuel ordre de la même source. Un top-of-book conserve exactement
+ses bid/ask. Une bougie utilise uniquement sa clôture avec le modèle déclaré
+`paper-candle-close-spread-v1` (2 bps) : le high/low ne sert jamais à inventer
+un chemin intrabar. Les fenêtres MTF du contexte `FAKE` lisent directement les
+klines projetées Paper, et non le provider Fake vide du mode démonstration.
+
+Une cellule est l'identité immuable suivante :
+
+```text
+network + market_data_venue + configuration_snapshot_id + strategy_profile + run_id
+```
+
+Son identifiant est le SHA-256 du tuple canonique. Aucun alias, profil par
+défaut ou fallback de venue n'est accepté. La configuration fournie est
+normalisée puis hashée dans `configuration_snapshot_id`; son contenu complet
+n'est jamais affiché par la commande opérateur. Dans ce lot technique, elle est
+une provenance demandée et non encore une preuve de configuration runtime
+effective : cette propagation appartient explicitement à #133/#302. Tous les
+profils actuellement acceptés restent donc `reference_only` et non certifiables
+pour une baseline moderne.
+
+Les profils legacy actuellement enregistrés sont `reference_only`. Leurs
+trades peuvent prouver le fonctionnement technique de la chaîne, mais sont
+exclus de toute baseline moderne et de toute agrégation certifiée.
+
+### Stockage et reprise
+
+La base doit être une PostgreSQL Paper dédiée dont le nom se termine par
+`_paper_test` en test et `_paper` ailleurs. Une base avec des migrations en
+retard ou contenant un compte non-Paper est refusée. Le compte Fake est isolé
+par cellule sous :
+
+```text
+var/paper-fake-state/<cell-sha256>.dat
+```
+
+Le journal applique trois phases durables :
+
+1. claim de la source, append de l'effet marché puis, si une décision existe,
+   réservation de l'`OrderIntent`, création de la lineage et append de l'effet
+   d'ordre préparé ;
+2. effets idempotents et ordonnés sur le compte Fake de la cellule ;
+3. projection atomique des orders, lifecycle, fills et coûts, puis
+   acknowledgement et avancement du checkpoint.
+
+Un restart rejoue d'abord tout effet pending. Les cinq frontières de crash
+avant/après la phase 1, après l'effet Fake et avant/après la phase 3 convergent
+vers un seul ordre Fake et les mêmes faits métier canoniques. La provenance
+réseau, venue, snapshot, cellule, profil, run et éligibilité suit
+l'`OrderIntent`, la lineage, les événements et le ledger de coûts.
+
+Le kill switch est persistant par cellule. Une cellule tuée reste bloquée après
+restart ; sa reprise exige une action explicite et ne change jamais son tuple
+d'identité.
+
+### Rejeu opérateur
+
+Le rejeu exige tous les paramètres, sans valeur implicite :
+
+```bash
+php bin/console app:paper-market:replay \
+  --dataset=/chemin/absolu/dataset \
+  --configuration=/chemin/absolu/configuration.json \
+  --profile=scalper_micro \
+  --run-id=run-20260801-001
+```
+
+Les chemins relatifs et symlinks sont rejetés. Le fichier de configuration doit
+être privé, borné et sans clé sensible. Le réseau et la venue viennent
+uniquement du manifeste vérifié ; un dataset v1 `legacy_unknown` reste lisible
+par les outils historiques mais ne peut lancer cette nouvelle baseline. La
+sortie ne contient que les identités, la position suivante et l'état du kill
+switch.
+
+Les codes de refus stables incluent notamment
+`paper_execution_cell_killed`, `paper_execution_dataset_mismatch`,
+`paper_execution_network_mismatch`, `paper_execution_venue_mismatch`,
+`paper_execution_source_gap`, `paper_execution_source_out_of_order` et
+`paper_execution_provenance_invalid`.
+
+Ce lot suit la PR #330 de capture live publique. Les prochaines étapes restent
+#300, #301, #310, #133 et #302 avant génération des populations modernes. Le
+retrait BitMart #305 reste hors de ce chantier.

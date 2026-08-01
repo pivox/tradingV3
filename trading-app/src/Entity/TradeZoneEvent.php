@@ -16,8 +16,10 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_zone_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 #[ORM\Index(name: 'idx_zone_reason', columns: ['reason'])]
 #[ORM\Index(name: 'idx_zone_happened_at', columns: ['happened_at'])]
-class TradeZoneEvent
+class TradeZoneEvent implements PaperExecutionProvenanceAwareInterface
 {
+    use PaperExecutionProvenance;
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]

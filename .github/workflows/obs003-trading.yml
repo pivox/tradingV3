@@ -56,6 +56,7 @@ jobs:
       APP_SECRET: ci-obs003-secret
       DEFAULT_URI: 'http://localhost'
       REDIS_URL: 'redis://127.0.0.1:6379'
+      REDIS_ORDER_WATCH_CHANNEL: 'watcher:order:watch'
       # La vue est testée via une connexion DBAL PostgreSQL distincte qui lit DATABASE_URL.
       # (L'ORM de test reste sur sqlite via config/packages/test/doctrine.yaml ; ces suites
       # OBS-003 n'utilisent pas l'ORM — readers stubés + connexion vue dédiée.)
@@ -80,6 +81,14 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Create isolated Paper test database
+        env:
+          PGPASSWORD: trading
+        run: >-
+          psql --host=127.0.0.1 --username=trading --dbname=postgres
+          --set=ON_ERROR_STOP=1
+          --command='CREATE DATABASE trading_app_paper_test'
+
       - name: Lint container
         run: php bin/console lint:container
 
@@ -91,7 +100,26 @@ jobs:
       # Ces suites OBS-003 n'amorcent pas le kernel (readers stubés + connexion vue dédiée)
       # et lisent DATABASE_URL depuis les variables d'environnement du job.
       - name: PHPUnit — Trading + MtfRunner
-        run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Trading tests/MtfRunner
+        run: |
+          vendor/bin/phpunit --bootstrap vendor/autoload.php \
+            $(find tests/Trading -mindepth 1 -maxdepth 1 -type d ! -name Paper -print | sort) \
+            tests/MtfRunner
+
+      # Keep Paper subprocess/crash tests isolated from tests that boot Symfony's kernel:
+      # forked children must not inherit the kernel's temporary XML cleanup handlers.
+      - name: PHPUnit — Paper market data and replay (isolated process)
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+        run: |
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped \
+            $(find tests/Trading/Paper -mindepth 1 -maxdepth 1 \( -type f -name '*Test.php' -o -type d ! -name Execution \) -print | sort)
+
+      - name: PHPUnit — Paper execution PostgreSQL (isolated process and database)
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+        run: >-
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
+          tests/Trading/Paper/Execution
 
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
