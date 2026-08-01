@@ -10,6 +10,8 @@
 imports:
 
 parameters:
+    env(PAPER_EXECUTION_ENABLED): '0'
+    env(PAPER_FAKE_STATE_ROOT): '%kernel.project_dir%/var/paper-fake-state'
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
@@ -132,6 +134,28 @@ services:
 
     App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface:
         alias: App\Trading\Paper\Runtime\DoctrinePaperDatabaseInspector
+
+    Doctrine\Migrations\DependencyFactory:
+        alias: doctrine.migrations.dependency_factory
+
+    App\Trading\Paper\Execution\PaperEventCoordinatorInterface:
+        alias: App\Trading\Paper\Execution\PaperExecutionCoordinator
+
+    App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge
+
+    App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge:
+        arguments:
+            $preparationResolver: '@App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver'
+
+    App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory:
+        arguments:
+            $root: '%env(string:PAPER_FAKE_STATE_ROOT)%'
+
+    App\Trading\Paper\Execution\PaperExecutionCoordinator:
+        arguments:
+            $environment: '%kernel.environment%'
+            $enabled: '%env(bool:PAPER_EXECUTION_ENABLED)%'
 
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader

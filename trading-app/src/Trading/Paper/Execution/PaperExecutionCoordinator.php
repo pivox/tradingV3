@@ -28,7 +28,7 @@ use App\Trading\Paper\Runtime\PaperDatabaseGuard;
 use App\Trading\Paper\Runtime\PaperRuntimeContext;
 use App\Trading\Paper\Runtime\PaperRuntimeGuard;
 
-final class PaperExecutionCoordinator
+final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
 {
     /** @var \Closure(PaperCrashPoint): void|null */
     private ?\Closure $crashInjector;
