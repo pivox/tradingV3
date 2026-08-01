@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "mode_id": "day_trading",
+  "mode_version": "1.0.0",
+  "lifecycle": { "status": "draft", "executable": false, "rationale": "Evidence gates remain open." },
+  "horizon": { "state": "unresolved", "value": null, "unit": "holding_horizon_policy", "source": "pending evidence", "justification": "Timeframes do not define maximum holding time." },
+  "session_policy": { "state": "unresolved", "value": null, "unit": "policy", "source": "pending evidence", "justification": "No source fact." },
+  "timeframes": { "regime": ["4h"], "context": ["1h"], "trigger": ["15m"], "execution": ["15m", "5m", "1m"] },
+  "cadence": {
+    "evaluation": { "state": "unresolved", "value": null, "unit": "duration", "source": "pending evidence", "justification": "No source fact." },
+    "validity_window": { "state": "unresolved", "value": null, "unit": "duration", "source": "pending evidence", "justification": "No source fact." }
+  },
+  "risk": {
+    "trade_budget": { "state": "defined", "value": 5.0, "unit": "percent_equity_per_trade", "source": "trade_entry.regular.yaml", "justification": "Extracted baseline." },
+    "daily_loss_cap": { "state": "defined", "value": { "percent_equity": 6.0, "absolute_quote": 30.0, "quote_currency": "USDT" }, "unit": "compound_percent_equity_and_quote_per_day", "source": "trade_entry.regular.yaml", "justification": "Extracted caps." },
+    "max_concurrent_positions": { "state": "defined", "value": 4, "unit": "positions", "source": "trade_entry.regular.yaml", "justification": "Extracted limit." },
+    "mode_exposure_cap": { "state": "unresolved", "value": null, "unit": "percent_equity_notional", "source": "pending evidence", "justification": "No mode-owned source fact." }
+  },
+  "leverage": { "state": "unresolved", "value": null, "unit": "leverage_multiple", "source": "pending ownership decision", "justification": "Legacy ownership is ambiguous." },
+  "order_policy": { "state": "defined", "value": { "margin_mode": "isolated", "preferred_type": "limit" }, "unit": "policy", "source": "trade_entry.regular.yaml", "justification": "Extracted preferences." },
+  "compatible_setup_ids": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"],
+  "data_contract": { "required_inputs": [{ "kind": "candles", "timeframes": ["4h", "1h", "15m", "5m", "1m"], "fields": ["open", "high", "low", "close", "volume"] }], "missing_data_policy": "reject" },
+  "governance": {
+    "promotion": { "target_status": "shadow", "conditions": ["evidence approved"], "action": "publish a new version" },
+    "suspension": { "target_status": "draft", "conditions": ["kill switch asserted"], "action": "reject new entries" },
+    "rollback": { "target_status": "retired", "conditions": ["risk invariant breach"], "action": "pin an explicit approved version" }
+  },
+  "ownership_model": "mode-contract-ownership-v1",
+  "provenance": [{ "path": "timeframes", "source": "validations.regular.yaml", "unit": "timeframe", "justification": "Observed active configuration." }]
+}
