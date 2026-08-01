@@ -104,6 +104,21 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->store->registerCell($other, PaperProfileEligibility::REFERENCE_ONLY);
     }
 
+    public function testDatasetIdentityIsBoundOnceAndCannotBeSubstitutedOnRestart(): void
+    {
+        $checksum = str_repeat('a', 64);
+        $this->store->bindDataset($this->cell, 'dataset-original', $checksum);
+        $this->store->bindDataset($this->cell, 'dataset-original', $checksum);
+        self::assertSame(
+            ['dataset_id' => 'dataset-original', 'events_file_sha256' => $checksum],
+            (new DoctrinePaperExecutionStore($this->connection))->datasetIdentity($this->cell),
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_dataset_identity_conflict');
+        $this->store->bindDataset($this->cell, 'dataset-substitute', str_repeat('b', 64));
+    }
+
     public function testExactSourceOrderingReplayAndConflictingDuplicate(): void
     {
         $event = $this->event(0, ['bid' => '999', 'ask' => '1001']);

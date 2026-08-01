@@ -98,6 +98,8 @@ final class PaperExecutionReplayCommandTest extends TestCase
         $store->appendEffect($cell, 1, 'sha256:' . str_repeat('1', 64), ['pending' => true]);
         $manifestPath = __DIR__ . '/../Fixtures/PaperExecution/hyperliquid-testnet-cell/manifest.json';
         $manifest = (new PaperDatasetManifestCodec())->decode((string) file_get_contents($manifestPath));
+        self::assertNotNull($manifest->eventsFileSha256);
+        $store->bindDataset($cell, $manifest->datasetId, $manifest->eventsFileSha256);
         $command = $this->command(store: $store);
         $method = new \ReflectionMethod($command, 'replayCheckpoint');
 

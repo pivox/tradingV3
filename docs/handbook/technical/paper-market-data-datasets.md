@@ -103,9 +103,13 @@ network + market_data_venue + configuration_snapshot_id + strategy_profile + run
 ```
 
 Son identifiant est le SHA-256 du tuple canonique. Aucun alias, profil par
-défaut ou fallback de venue n'est accepté. La configuration effective est
+défaut ou fallback de venue n'est accepté. La configuration fournie est
 normalisée puis hashée dans `configuration_snapshot_id`; son contenu complet
-n'est jamais affiché par la commande opérateur.
+n'est jamais affiché par la commande opérateur. Dans ce lot technique, elle est
+une provenance demandée et non encore une preuve de configuration runtime
+effective : cette propagation appartient explicitement à #133/#302. Tous les
+profils actuellement acceptés restent donc `reference_only` et non certifiables
+pour une baseline moderne.
 
 Les profils legacy actuellement enregistrés sont `reference_only`. Leurs
 trades peuvent prouver le fonctionnement technique de la chaîne, mais sont

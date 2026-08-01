@@ -28,9 +28,23 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     private int $acks = 0;
     private int $retries = 0;
     private int $failures = 0;
+    /** @var array{dataset_id: string, events_file_sha256: string}|null */
+    private ?array $datasetIdentity = null;
 
     public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void {}
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void {}
+    public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void
+    {
+        $identity = ['dataset_id' => $datasetId, 'events_file_sha256' => $eventsFileSha256];
+        if ($this->datasetIdentity !== null && $this->datasetIdentity !== $identity) {
+            throw new \LogicException('paper_execution_dataset_identity_conflict');
+        }
+        $this->datasetIdentity = $identity;
+    }
+    public function datasetIdentity(PaperExecutionCell $cell): array
+    {
+        return $this->datasetIdentity ?? throw new \LogicException('paper_execution_dataset_identity_missing');
+    }
     public function transactional(callable $operation): mixed { return $operation(); }
 
     public function claimSource(PaperExecutionCell $cell, int $position, PaperMarketEvent $event): PaperSourceClaim

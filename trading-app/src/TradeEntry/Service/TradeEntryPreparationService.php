@@ -15,6 +15,7 @@ use App\TradeEntry\Execution\ExecutionBox;
 use App\TradeEntry\Policy\DailyLossGuard;
 use App\TradeEntry\Workflow\BuildOrderPlan;
 use App\TradeEntry\Workflow\BuildPreOrder;
+use Psr\Clock\ClockInterface;
 
 final readonly class TradeEntryPreparationService
 {
@@ -24,6 +25,7 @@ final readonly class TradeEntryPreparationService
         private TradeEntryConfigResolver $configResolver,
         private ?ExecutionBox $executionBox = null,
         private ?DailyLossGuard $dailyLossGuard = null,
+        private ?ClockInterface $clock = null,
     ) {
     }
 
@@ -66,7 +68,7 @@ final readonly class TradeEntryPreparationService
             if ($fallback->enabled && $this->executionBox instanceof ExecutionBox) {
                 $zone = new EntryZone($plan->entryZoneLow ?? PHP_FLOAT_MIN, $plan->entryZoneHigh ?? PHP_FLOAT_MAX, 'plan_zone');
                 $currentPrice = (float) ($preflight->markPrice ?? ($request->side->value === 'long' ? $preflight->bestAsk : $preflight->bestBid));
-                $ttl = $plan->zoneExpiresAt === null ? PHP_INT_MAX : max(0, $plan->zoneExpiresAt->getTimestamp() - time());
+                $ttl = $this->remainingZoneTtl($plan->zoneExpiresAt);
                 $decision = $this->executionBox->applyEndOfZoneFallback($fallback, $zone, $request->symbol, $currentPrice, $ttl, $request->exchangeContext);
                 if (is_array($decision)) {
                     $orderType = $decision['order_type'];
@@ -132,5 +134,14 @@ final readonly class TradeEntryPreparationService
         } catch (\Throwable) {
             return uniqid('trd:' . strtolower($symbol) . ':', true);
         }
+    }
+
+    private function remainingZoneTtl(?\DateTimeImmutable $expiresAt): int
+    {
+        if ($expiresAt === null) {
+            return PHP_INT_MAX;
+        }
+
+        return max(0, $expiresAt->getTimestamp() - ($this->clock?->now()->getTimestamp() ?? time()));
     }
 }

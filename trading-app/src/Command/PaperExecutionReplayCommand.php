@@ -66,6 +66,10 @@ final class PaperExecutionReplayCommand extends Command
             $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
             $this->store->registerSnapshot($snapshot);
             $this->store->registerCell($cell, $eligibility);
+            if ($manifest->eventsFileSha256 === null) {
+                throw new \LogicException('paper_execution_dataset_checksum_missing');
+            }
+            $this->store->bindDataset($cell, $manifest->datasetId, $manifest->eventsFileSha256);
 
             $consumer = new PaperExecutionConsumer($this->coordinator, $this->store, $cell, $eligibility);
             $consumerId = 'paper-exec-' . substr($cell->id, 7, 16);
@@ -164,20 +168,27 @@ final class PaperExecutionReplayCommand extends Command
         if ($position === 0) {
             return null;
         }
+        $dataset = $this->store->datasetIdentity($cell);
+        if ($dataset['dataset_id'] !== $manifest->datasetId
+            || $manifest->eventsFileSha256 === null
+            || !hash_equals($dataset['events_file_sha256'], $manifest->eventsFileSha256)
+        ) {
+            throw new \LogicException('paper_execution_dataset_identity_conflict');
+        }
         $events = $this->store->acknowledgedSources($cell);
         $last = $events[$position - 1] ?? null;
-        if ($last === null || $manifest->eventsFileSha256 === null) {
+        if ($last === null) {
             throw new \LogicException('paper_execution_checkpoint_corrupt');
         }
 
         return new PaperReplayCheckpoint(
             $manifest->network,
-            $manifest->datasetId,
+            $dataset['dataset_id'],
             $consumerId,
             $last->eventId,
             $position - 1,
             $last->exchangeTimestamp,
-            $manifest->eventsFileSha256,
+            $dataset['events_file_sha256'],
         );
     }
 }

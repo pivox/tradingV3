@@ -13,7 +13,7 @@ use App\Logging\LifecycleContextFactory;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Builder\TradeEntryRequestBuilder;
 use App\TradeEntry\Dto\PreparedTradeEntry;
-use App\TradeEntry\Service\TradeEntryService;
+use App\TradeEntry\Service\TradeEntryPreparationService;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
@@ -22,7 +22,7 @@ final readonly class PaperMtfPreparationResolver
 {
     public function __construct(
         private TradeEntryRequestBuilder $requests,
-        private TradeEntryService $tradeEntry,
+        private TradeEntryPreparationService $tradeEntry,
         private LifecycleContextFactory $lifecycleContexts,
         private PaperKlineProvider $klines,
     ) {

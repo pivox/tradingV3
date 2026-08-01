@@ -47,6 +47,8 @@ CREATE TABLE paper_execution_cell (
     account_namespace VARCHAR(78) NOT NULL,
     eligibility VARCHAR(32) NOT NULL,
     terminal_state VARCHAR(32) NOT NULL,
+    dataset_id VARCHAR(128) DEFAULT NULL,
+    dataset_events_sha256 CHAR(64) DEFAULT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT fk_paper_execution_cell_snapshot FOREIGN KEY (configuration_snapshot_id) REFERENCES paper_configuration_snapshot (id),
     CONSTRAINT ux_paper_execution_cell_run_id UNIQUE (run_id),
@@ -56,6 +58,8 @@ CREATE TABLE paper_execution_cell (
     CONSTRAINT chk_paper_execution_cell_venue CHECK (market_data_venue IN ('okx', 'hyperliquid')),
     CONSTRAINT chk_paper_execution_cell_network_venue CHECK (market_data_venue <> 'okx' OR network = 'mainnet'),
     CONSTRAINT chk_paper_execution_cell_eligibility CHECK (eligibility IN ('reference_only')),
+    CONSTRAINT chk_paper_execution_cell_dataset_binding CHECK ((dataset_id IS NULL) = (dataset_events_sha256 IS NULL)),
+    CONSTRAINT chk_paper_execution_cell_dataset_checksum CHECK (dataset_events_sha256 IS NULL OR dataset_events_sha256 ~ '^[a-f0-9]{64}$'),
     CONSTRAINT chk_paper_execution_cell_terminal_state CHECK (terminal_state IN ('active', 'completed', 'failed'))
 )
 SQL);

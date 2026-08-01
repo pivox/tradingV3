@@ -15,6 +15,11 @@ interface PaperExecutionStoreInterface
 
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void;
 
+    public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void;
+
+    /** @return array{dataset_id: string, events_file_sha256: string} */
+    public function datasetIdentity(PaperExecutionCell $cell): array;
+
     public function transactional(callable $operation): mixed;
 
     public function claimSource(PaperExecutionCell $cell, int $position, PaperMarketEvent $event): PaperSourceClaim;

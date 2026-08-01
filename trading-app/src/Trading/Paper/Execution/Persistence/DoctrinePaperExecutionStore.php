@@ -102,6 +102,40 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
         });
     }
 
+    public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void
+    {
+        if (preg_match('/\A[a-z0-9][a-z0-9._-]{2,127}\z/D', $datasetId) !== 1
+            || preg_match('/\A[a-f0-9]{64}\z/D', $eventsFileSha256) !== 1
+        ) {
+            throw new \InvalidArgumentException('paper_execution_dataset_identity_invalid');
+        }
+
+        $this->atomic(function () use ($cell, $datasetId, $eventsFileSha256): void {
+            $existing = $this->connection->fetchAssociative('SELECT dataset_id, dataset_events_sha256 FROM paper_execution_cell WHERE id = ? FOR UPDATE', [$cell->id]);
+            if ($existing === false) {
+                throw new \LogicException('paper_execution_cell_not_registered');
+            }
+            if ($existing['dataset_id'] === null && $existing['dataset_events_sha256'] === null) {
+                $this->connection->executeStatement('UPDATE paper_execution_cell SET dataset_id = ?, dataset_events_sha256 = ? WHERE id = ?', [$datasetId, $eventsFileSha256, $cell->id]);
+
+                return;
+            }
+            if ($existing['dataset_id'] !== $datasetId || !hash_equals((string) $existing['dataset_events_sha256'], $eventsFileSha256)) {
+                throw new \LogicException('paper_execution_dataset_identity_conflict');
+            }
+        });
+    }
+
+    public function datasetIdentity(PaperExecutionCell $cell): array
+    {
+        $identity = $this->connection->fetchAssociative('SELECT dataset_id, dataset_events_sha256 FROM paper_execution_cell WHERE id = ?', [$cell->id]);
+        if ($identity === false || !is_string($identity['dataset_id']) || !is_string($identity['dataset_events_sha256'])) {
+            throw new \LogicException('paper_execution_dataset_identity_missing');
+        }
+
+        return ['dataset_id' => $identity['dataset_id'], 'events_file_sha256' => $identity['dataset_events_sha256']];
+    }
+
     public function transactional(callable $operation): mixed
     {
         return $this->connection->transactional(static fn (): mixed => $operation());
