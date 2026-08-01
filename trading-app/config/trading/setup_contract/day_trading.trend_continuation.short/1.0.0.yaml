@@ -1,0 +1,64 @@
+schema_version: '1.0.0'
+setup_id: day_trading.trend_continuation.short
+setup_version: '1.0.0'
+status: blocked
+executable: false
+family: trend_continuation
+side: short
+thesis: 'A bearish 4h/1h regime followed by aligned 15m downside momentum may continue downward.'
+source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
+compatible_modes: [{ mode_id: day_trading, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches the day_trading catalog frozen by #300.' }
+hypothesis: 'If bearish regime and momentum rules hold, downside continuation is predicted, but the global bullish pullback filters contradict the short trigger and block testing or publication.'
+context:
+  side: short
+  regime:
+    - { condition: price_regime_ok_short, timeframe: 4h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:255-260' }
+  context:
+    - { condition: price_regime_ok_short, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:275-285' }
+    - { condition: macd_hist_slope_neg, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:280-284 evidence variant' }
+  trigger:
+    - { condition: ema_20_lt_50, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:299-308' }
+    - { condition: close_below_vwap, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:299-308' }
+    - { condition: macd_hist_decreasing_n, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:301-304 evidence variant' }
+  confirmations:
+    - { condition: close_below_vwap, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:322-331 common confirmation' }
+    - { condition: macd_hist_slope_neg, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:342-349 common confirmation' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243 bullish global filter retained exactly' }
+  - { condition: pullback_confirmed, timeframe: global, parameters: { direction: bullish_ma9_cross_and_near_vwap }, provenance: 'validations.regular.yaml:84-88,238-243 contradictory bullish filter' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.regular.yaml', justification: 'No EntryZone source.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.regular.yaml', justification: 'No stop source.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.regular.yaml', justification: 'No target source.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.regular.yaml', justification: 'No certified net R source.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.regular.yaml', justification: 'No invalidation source.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'No duration source.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.regular.yaml', justification: 'Costs absent.' }
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
+  missing_conditions: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Full setup duration absent.' }
+governance:
+  shadow: ['resolve bullish-filter contradiction', 'resolve all execution decisions', 'capture full trace']
+  paper: ['pass shadow criteria', 'certified net cost accounting']
+  promotion: ['certified net baseline attached', 'independent risk review', 'new semantic version']
+  suspension: ['critical data absent or stale', 'condition breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'Blocked: short requires close_below_vwap at lines 307/330/347 while mandatory pullback_confirmed_ma9_21 and pullback_confirmed_vwap at lines 241-242 encode bullish pullback behavior.'
+  - 'Regular selector stay/drop bands overlap at lines 209-223.'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.regular.yaml:255-260', justification: 'Exact bearish 4h source.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.regular.yaml:275-285', justification: 'Exact bearish 1h source.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.regular.yaml:299-308', justification: 'Exact bearish 15m source.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.regular.yaml:322-349', justification: 'Common lower-TF confirmations.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.regular.yaml:238-243', justification: 'Contradictory filters retained rather than repaired.' }
+ownership_model: setup-contract-ownership-v1

@@ -1,0 +1,60 @@
+schema_version: '1.0.0'
+setup_id: scalping.trend_continuation.long
+setup_version: '1.0.0'
+status: draft
+executable: false
+family: trend_continuation
+side: long
+thesis: 'A bullish 1h regime with the 15m scenario-A trend and momentum alignment may continue upward.'
+source_origin: { file: 'src/MtfValidator/config/validations.scalper.yaml', line_range: '6-14,216-356', content_sha256: 5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2, commit: 6c42d14d20798f6fee9d55b306ccaa0539af5e79 }
+compatible_modes: [{ mode_id: scalping, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches scalping compatible setup list in #300.' }
+hypothesis: 'Scenario A predicts continuation after sourced 1h regime and 15m momentum alignment; outcome and invalidation remain to be defined and falsified in shadow.'
+context:
+  side: long
+  regime:
+    - { condition: price_regime_ok_long, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:271-278' }
+  context:
+    - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:286-299 scenario A' }
+    - { condition: close_above_vwap_or_ma9, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:286-299 scenario A' }
+  trigger:
+    - { condition: macd_hist_gt_eps, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:295-298 scenario-A evidence variant' }
+    - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 74 }, provenance: 'validations.scalper.yaml:293 scenario A' }
+    - { condition: atr_rel_in_range_15m, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:294 scenario A' }
+  confirmations:
+    - { condition: close_above_vwap_or_ma9_relaxed, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:320-329 common confirmation' }
+    - { condition: close_above_vwap_and_ma9, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.scalper.yaml:341-348 common confirmation' }
+filters: []
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution: &execution
+  side: long
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.scalper.yaml', justification: 'No EntryZone source.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.scalper.yaml', justification: 'No stop source.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.scalper.yaml', justification: 'No targets source.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.scalper.yaml', justification: 'Selector expected R is gross and ambiguous.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.scalper.yaml', justification: 'No invalidation source.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'No duration source.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.scalper.yaml', justification: 'Costs absent.' }
+data_condition_contract: &data
+  required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
+  missing_conditions: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'Full setup duration absent.' }
+governance: &governance
+  shadow: ['resolve execution decisions', 'capture trace', 'validate condition catalog hash']
+  paper: ['pass shadow criteria', 'paper-only certified net accounting']
+  promotion: ['certified net baseline attached', 'independent risk review', 'new semantic version']
+  suspension: ['critical data absent/stale', 'condition breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'The 15m selector has stay_on_if get_false and only conditional drop rules, so it can yield neither stay nor drop (lines 218-229).'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.scalper.yaml:271-278', justification: '1h bullish regime.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.scalper.yaml:286-299', justification: 'Scenario A remains distinct from scenario B.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.scalper.yaml:286-299', justification: 'Scenario-A trigger evidence.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.scalper.yaml:320-356', justification: '5m/1m are common confirmations.' }
+ownership_model: setup-contract-ownership-v1

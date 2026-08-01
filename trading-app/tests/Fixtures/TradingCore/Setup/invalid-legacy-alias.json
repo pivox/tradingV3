@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "setup_id": "scalper.pullback.long",
+  "setup_version": "latest",
+  "status": "active",
+  "executable": true,
+  "side": "long"
+}

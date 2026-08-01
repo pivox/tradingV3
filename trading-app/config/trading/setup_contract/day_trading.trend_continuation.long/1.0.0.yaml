@@ -1,0 +1,63 @@
+schema_version: '1.0.0'
+setup_id: day_trading.trend_continuation.long
+setup_version: '1.0.0'
+status: draft
+executable: false
+family: trend_continuation
+side: long
+thesis: 'A bullish 4h/1h regime followed by aligned 15m momentum may continue upward.'
+source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
+compatible_modes: [{ mode_id: day_trading, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches the day_trading compatible_setup_ids catalog frozen by #300.' }
+hypothesis: 'If the sourced bullish regime, momentum, pullback filters, and lower-timeframe confirmations hold, the setup predicts continuation before its unresolved invalidation; this requires shadow falsification and makes no profitability claim.'
+context:
+  side: long
+  regime:
+    - { condition: price_regime_ok_long, timeframe: 4h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:248-254' }
+  context:
+    - { condition: price_regime_ok_long, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:262-273' }
+    - { condition: macd_hist_gt_eps, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:268-272 evidence variant 1 of one continuation hypothesis' }
+  trigger:
+    - { condition: ema20_over_50_with_tolerance, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:287-298; any_of branches are evidence variants' }
+    - { condition: close_above_vwap_or_ma9, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:287-298' }
+    - { condition: macd_hist_gt_eps, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:289-295 evidence variant' }
+  confirmations:
+    - { condition: close_above_vwap_or_ma9, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:310-321 common confirmation' }
+    - { condition: macd_hist_gt_eps, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:333-341 common confirmation' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243' }
+  - { condition: pullback_confirmed, timeframe: global, parameters: { source_defaults: true }, provenance: 'validations.regular.yaml:84-88,238-243' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: long
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.regular.yaml', justification: 'The validation source contains no EntryZone contract.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.regular.yaml', justification: 'No stop is sourced.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.regular.yaml', justification: 'No targets are sourced.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.regular.yaml', justification: 'Selector gross expected-R is not a certified net-R floor.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.regular.yaml', justification: 'No falsification exit is sourced.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'No maximum duration is sourced.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.regular.yaml', justification: 'Fees, spread, slippage and funding are absent.' }
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
+  missing_conditions: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash is fabricated; publication remains blocked.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Legacy validity_bars is local to pullback_confirmed, not full setup duration.' }
+governance: &governance
+  shadow: ['resolve all unresolved execution decisions', 'capture full decision trace', 'validate condition catalog hash']
+  paper: ['pass shadow acceptance criteria', 'run paper-only with certified net cost accounting']
+  promotion: ['certified net baseline attached', 'independent risk review', 'publish a new semantic version']
+  suspension: ['critical data absent or stale', 'condition contract breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema or provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'Regular execution selector stay bands (R>=2.0, width<=1.3, ATR<=130) overlap drop bands (R<2.0, width>1.2, ATR>120) at lines 209-223.'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.regular.yaml:248-260', justification: '4h defines the directional regime.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.regular.yaml:262-285', justification: '1h defines directional momentum; any_of branches remain evidence variants.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.regular.yaml:287-308', justification: '15m supplies the first entry trigger.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.regular.yaml:310-349', justification: '5m/1m remain common confirmations, not separate setups.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.regular.yaml:238-243', justification: 'Global mandatory filters are retained without repair.' }
+ownership_model: setup-contract-ownership-v1

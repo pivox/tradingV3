@@ -1,0 +1,61 @@
+schema_version: '1.0.0'
+setup_id: crash_short
+setup_version: '1.0.0'
+status: draft
+executable: false
+family: crash_short
+side: short
+thesis: 'Aligned bearish 4h/1h context and accelerating 15m/5m/1m selling may continue during a violent dump.'
+source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+compatible_modes: []
+mode_compatibility: { state: unresolved, issue: '#310', justification: 'Crash is a setup, never a modern mode; compatible modern mode membership remains unresolved.' }
+hypothesis: 'During an aligned bearish crash context, sourced cascade patterns predict continued downside; compatible mode, costs and exits remain unresolved.'
+context:
+  side: short
+  regime:
+    - { condition: price_regime_ok_short, timeframe: 4h, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:259-264' }
+  context:
+    - { condition: crash_context_ok, timeframe: 1h, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:169-176,265-269' }
+  trigger:
+    - { condition: crash_short_pattern_15m, timeframe: 15m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:178-184,271-276' }
+    - { condition: crash_short_pattern_5m, timeframe: 5m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:186-194,278-285' }
+  confirmations:
+    - { condition: crash_short_pattern_1m, timeframe: 1m, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:196-203,293-300' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, parameters: { source_defaults: true }, provenance: 'validations.crash.yaml:247-249' }
+no_trade_rules:
+  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 anti-last-tick guard' }
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.crash.yaml', justification: 'near_vwap/pullback is not EntryZone.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.crash.yaml', justification: 'No stop source.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.crash.yaml', justification: 'No targets source.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.crash.yaml', justification: 'No certified net R.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.crash.yaml', justification: 'No invalidation source.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.crash.yaml', justification: 'No duration source.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.crash.yaml', justification: 'Crash fees, spread, slippage and funding are absent.' }
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
+  missing_conditions: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.crash.yaml', justification: 'Full duration absent.' }
+governance:
+  shadow: ['resolve #310 compatible modern mode', 'resolve execution/cost decisions', 'capture trace']
+  paper: ['pass shadow criteria', 'paper-only certified crash cost accounting']
+  promotion: ['certified net baseline', 'independent risk review', 'new semantic version']
+  suspension: ['critical data absent/stale', 'condition breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'Compatible modern mode is unresolved pending #310; no crash mode is created.'
+  - 'Costs are absent from the legacy validation source.'
+  - 'The 1m crash_short_entry_1m pullback branch at lines 302-305 is a strict subset of the normal branch at lines 297-300, so it is redundant and not a ninth setup.'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.crash.yaml:259-264', justification: '4h bearish source.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.crash.yaml:265-269', justification: '1h crash context.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.crash.yaml:271-285', justification: '15m/5m cascade patterns.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.crash.yaml:293-305', justification: '1m standard branch retained; redundant subset documented.' }
+ownership_model: setup-contract-ownership-v1
