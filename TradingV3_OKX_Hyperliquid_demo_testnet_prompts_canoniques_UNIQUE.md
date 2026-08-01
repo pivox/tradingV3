@@ -21,7 +21,7 @@
 | 10 | #195 — Inventaire statique Bitmart | pending | — | — | — | — | — | — | — |
 | 11 | #195 — Vérification runtime Bitmart | pending | — | — | — | — | — | — | — |
 | 12 | #195 — Matrice de remplacement | pending | — | — | — | — | — | — | — |
-| 13 | #132 — Baseline PnL représentative | in_progress | issue/132-hyperliquid-public-live | #291, #293, #294, #295, #296, #297, #298, #328 et #329 mergées ; capture live publique prête à livrer | — (PR live à ouvrir) | worker_critical → review_fix → review_escalated → worker_complex → review_fix | verte localement sur le HEAD live | à demander une fois sur le HEAD final de la PR live | — |
+| 13 | #132 — Baseline PnL représentative | in_progress | issue/132-paper-execution-coordinator | #291, #293, #294, #295, #296, #297, #298, #328, #329 et #330 mergées ; coordinateur Fake-only prêt au checkpoint draft | — (PR coordinateur à ouvrir) | worker_critical → review_fix → review_escalated → worker_complex → review_fix | verte localement sur le HEAD coordinateur | à demander une fois sur le HEAD final de la PR coordinateur | — |
 | 14 | #188 — Preuve R1-R16 représentative | pending | — | — | — | — | — | — | — |
 | 15 | DEMO-005 — Réévaluation | pending | — | — | — | — | — | — | — |
 | 16 | OKX-010 — Activation OKX Demo | pending | — | — | — | — | — | — | — |
@@ -34,25 +34,27 @@
 |---:|---|---|---|---|
 | 1 | Provenance réseau du contrat Paper | `issue/132-paper-market-network-provenance` | done — PR #328 mergée | Datasets v2 mono-réseau ; v1 relisible comme `legacy_unknown` mais non certifiable |
 | 2 | Historique public Hyperliquid | `issue/132-hyperliquid-public-history` | done — PR #329 mergée | Séparation stricte mainnet/testnet ; bougies publiques read-only et book historique explicitement modélisé |
-| 3 | Capture live publique Hyperliquid | `issue/132-hyperliquid-public-live` | delivery_ready — PR à ouvrir | Capture/replay égaux, réseau unique par dataset, continuité perdue non certifiable |
-| 4 | Coordinateur Paper Fake-only | `issue/132-paper-execution-coordinator` | pending | Cellule explicite réseau/venue/configuration/profil/run et PostgreSQL Paper isolé |
+| 3 | Capture live publique Hyperliquid | `issue/132-hyperliquid-public-live` | done — PR #330 mergée | Capture/replay égaux, réseau unique par dataset, continuité perdue non certifiable |
+| 4 | Coordinateur Paper Fake-only | `issue/132-paper-execution-coordinator` | delivery_ready — PR draft à ouvrir | Cellule explicite réseau/venue/configuration/profil/run, journal trois phases, compte Fake et PostgreSQL Paper isolés |
 | 5 | Modes et setups modernes | issues `#300`, `#301`, `#310`, `#133`, `#302` | pending | Identités modernes propagées au runtime |
 | 6 | Populations certifiées | à créer après les modes modernes | pending | Au moins 50 trades par cellule réellement exécutable |
 | 7 | Export final #132 | à créer après certification | pending | Markdown/JSON/CSV sans tuning dans la PR d’analyse |
 
 Après la source publique OKX historique/live de la PR #298, la PR #328 mergée
-fournit la provenance réseau du contrat Paper et la PR #329 mergée ajoute
-l'historique public Hyperliquid sans inventer de trades ni présenter le L2
-courant comme profondeur passée. Le lot PR3 prêt à livrer ajoute la capture live
-publique Hyperliquid sur des WebSockets mainnet et testnet strictement séparés.
+fournit la provenance réseau du contrat Paper, la PR #329 ajoute l'historique
+public Hyperliquid sans inventer de trades ni présenter le L2 courant comme
+profondeur passée, et la PR #330 livre la capture live publique sur des
+WebSockets mainnet et testnet strictement séparés.
 Il n'autorise que les douze subscriptions `trades`, `l2Book` et `candle`
 BTC/ETH (`1m`, `5m`, `15m`, `1h`), avec checkpoint atomique, acquittement
 durable, heartbeat, reconnexion bornée et égalité capture/replay. Toute perte
 de continuité après streaming rend le dataset non certifiable. L'acquisition
 reste désactivée par défaut, sans credential, wallet, signature, `post/action`
-ni écriture exchange. Le prochain lot reste le coordinateur Paper Fake-only.
-Les profils legacy restent `reference_only` et le retrait Bitmart #305 reste
-différé.
+ni écriture exchange. Le lot actif livre le coordinateur Paper déterministe :
+OrderIntent et lineage avant l'effet, journal durable, reprise des effets
+pending et compte Fake isolé par cellule. Les profils legacy restent
+`reference_only`. Les prochains lots sont #300/#301/#310 puis #133/#302 ; le
+retrait Bitmart #305 reste différé.
 
 Remarque: ne pas faire le scope de Birmart !
 ## 0. Etat actuel au 16 juillet 2026
@@ -61,7 +63,7 @@ Remarque: ne pas faire le scope de Birmart !
 |---|---|---|
 | Fake/Paper #196 | 14 scénarios golden exécutables sur 20 | Implémenter les 6 gaps restants, le daily loss cap et la liquidation, puis auditer `20/20`. |
 | Inventaire Bitmart #195 | Issue ouverte, inventaire global incomplet | Inventaire statique, vérification runtime dry-run, matrice de remplacement. |
-| Baseline PnL #132 | Fondation dataset Paper #291, replay/checkpoints #293, gardes runtime/base #294, provenance venue persistante/analytique #295/#296, fixtures #297, source publique OKX #298, provenance réseau #328 et historique public Hyperliquid #329 mergés ; capture live publique Hyperliquid prête à livrer | Livrer la capture live Hyperliquid, puis le coordinateur Fake-only et les modes modernes avant de générer les populations certifiées et l’export sans tuning. |
+| Baseline PnL #132 | Fondation dataset Paper #291, replay/checkpoints #293, gardes runtime/base #294, provenance venue persistante/analytique #295/#296, fixtures #297, source publique OKX #298, provenance réseau #328, historique public Hyperliquid #329 et capture live #330 mergés ; coordinateur Fake-only prêt au checkpoint draft | Merger le coordinateur, puis traiter les modes modernes #300/#301/#310 et la propagation #133/#302 avant de générer les populations certifiées et l’export sans tuning. |
 | Recette orchestrateur #188 | Outillée, scénarios critiques déjà exercés, preuve représentative incomplète | Rejouer R1-R16 sur un vrai jeu et consolider les preuves automatiques/guidées. |
 | DEMO-005 | Rapport mergé avec décision `blocked` | Réévaluer après les preuves #196/#188/#132 et les runtime-checks exchange. |
 | Hyperliquid HL-012 | Code contrôlé mergé, désactivé par défaut | Exécution testnet réelle seulement après décision autorisant la fenêtre. |
