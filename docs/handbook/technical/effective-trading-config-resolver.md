@@ -52,6 +52,25 @@ stable SHA-256, exact identities, condition-catalog hash, ordered source files,
 and leaf provenance. Array accessors return copies, so callers cannot mutate the
 snapshot.
 
+The compiler also hashes the complete canonical setup payload. Composition
+verifies that hash before trusting any setup field, including the recursive AST
+and condition identities; changing even one nested decision invalidates the
+snapshot.
+
+Mode/exchange overrides are deliberately narrow and field-specific:
+
+- trade budget, exposure cap, leverage, concurrency, and both daily-loss-cap
+  amounts may only stay equal or decrease, and must remain finite and
+  non-negative;
+- daily-loss-cap currency cannot change, and order policy cannot be altered;
+- maker/taker rates must be finite values from zero through one;
+- funding interval must remain an ISO-8601 duration.
+
+No pair override may loosen risk, notional, concurrency, loss, order, or safety
+policy. A structured override replaces provenance recursively: previous parent
+and descendant ownership is cleared and every resulting leaf is attributed to
+the mode/exchange layer.
+
 ## Current execution status and safety
 
 The published #300/#301/#310 contracts remain draft or blocked and unresolved.

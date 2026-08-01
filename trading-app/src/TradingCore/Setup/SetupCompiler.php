@@ -111,6 +111,11 @@ final class SetupCompiler
             'condition_catalog_hash' => $catalogHash,
             'blockers' => $blockers,
         ]);
+        $canonicalPayload['payload_hash'] = hash('sha256', json_encode(
+            $canonicalPayload,
+            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION,
+        ));
+        $canonicalPayload = $this->canonicalize($canonicalPayload);
 
         return new CompiledSetupSnapshot(
             $contract->setupId,
