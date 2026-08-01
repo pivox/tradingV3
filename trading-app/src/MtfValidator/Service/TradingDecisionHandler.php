@@ -20,6 +20,7 @@ use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 use Ramsey\Uuid\Uuid;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -70,12 +71,8 @@ final class TradingDecisionHandler
                 $exchangeContext->marketType->value,
                 false,
             )->assertExecutableTradeContract();
-            $resolvedMode = $lineageContext->modeId;
-            $tradeEntryConfig = $this->tradeEntryConfigResolver->resolveExact($resolvedMode);
-        } else {
-            $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
-            $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
         }
+        [$resolvedMode, $tradeEntryConfig] = $this->resolveTradeEntryConfig($lineageContext, $symbolResult->tradeEntryModeUsed);
         $decisionKey = $this->generateDecisionKey(
             symbolResult: $symbolResult,
             exchangeContext: $exchangeContext,
@@ -337,6 +334,19 @@ final class TradingDecisionHandler
                 tradeEntryModeUsed: $resolvedMode
             );
         }
+    }
+
+    /** @return array{string,TradeEntryConfig} */
+    private function resolveTradeEntryConfig(?LineageContext $lineageContext, ?string $legacyMode): array
+    {
+        if ($lineageContext?->modeId !== null) {
+            return [$lineageContext->modeId, CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)];
+        }
+
+        return [
+            $this->tradeEntryConfigResolver->resolveMode($legacyMode),
+            $this->tradeEntryConfigResolver->resolve($legacyMode),
+        ];
     }
 
     /** @param array<string, mixed> $options */

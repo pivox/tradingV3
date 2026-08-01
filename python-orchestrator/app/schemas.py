@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Mapping, Optional, Tuple
+import hashlib
+import json
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
+from app.backtesting.contracts import FrozenDict
 
 from app import __version__
 from app.services.live_guard import (
@@ -62,6 +65,59 @@ class Action(str, Enum):
     REPORTING = "reporting"
 
 
+def _thaw_snapshot(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_snapshot(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_snapshot(item) for item in value]
+    return value
+
+
+class CanonicalEffectiveConfigRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    mode_id: Literal["day_trading", "scalping", "micro_scalping"]
+    mode_version: Literal["1.0.0"]
+    setup_id: str
+    setup_version: Literal["1.0.0"]
+    exchange: Literal["fake", "okx", "hyperliquid"]
+    environment: Literal["local", "test", "demo", "testnet", "mainnet"]
+    side: Literal["long", "short"]
+
+
+class CanonicalEffectiveConfigSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+    request: CanonicalEffectiveConfigRequest
+    config: FrozenDict
+    config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    executable: bool
+    blockers: Tuple[str, ...] = ()
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def _freeze_config(cls, value: Any) -> FrozenDict:
+        if not isinstance(value, Mapping):
+            raise ValueError("effective_config_snapshot.config must be a mapping")
+        return FrozenDict(value)
+
+    @field_serializer("config")
+    def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
+        return _thaw_snapshot(value)
+
+    @model_validator(mode="after")
+    def _validate_hash(self) -> "CanonicalEffectiveConfigSnapshot":
+        canonical = json.dumps(
+            {"config": _thaw_snapshot(self.config), "condition_catalog_hash": self.condition_catalog_hash},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        expected = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if self.config_hash != expected:
+            raise ValueError("effective_config_snapshot_hash_mismatch")
+        return self
+
+
 class CanonicalTradingIdentity(BaseModel):
     """Immutable configuration identity copied unchanged through retries/replay.
 
@@ -87,6 +143,7 @@ class CanonicalTradingIdentity(BaseModel):
     condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     side: Literal["LONG", "SHORT"]
     effective_config_reference: str = Field(min_length=1)
+    effective_config_snapshot: CanonicalEffectiveConfigSnapshot
     requested_mode_id: Optional[str] = None
     resolved_mode_id: Optional[str] = None
     validated_mode_id: Optional[str] = None
@@ -129,6 +186,18 @@ class CanonicalTradingIdentity(BaseModel):
         ):
             if value is not None and value != self.mode_version:
                 raise ValueError("mode_version_mismatch")
+        snapshot = self.effective_config_snapshot
+        expected = snapshot.request
+        if (
+            expected.mode_id != self.mode_id
+            or expected.mode_version != self.mode_version
+            or expected.setup_id != self.setup_id
+            or expected.setup_version != self.setup_version
+            or expected.side.upper() != self.side
+            or snapshot.config_hash != self.config_hash
+            or snapshot.condition_catalog_hash != self.condition_catalog_hash
+        ):
+            raise ValueError("effective_config_snapshot_identity_mismatch")
         return self
 
 
@@ -311,6 +380,12 @@ class OrchestratorSet(BaseModel):
             Exchange.HYPERLIQUID,
         }:
             raise ValueError("canonical_exchange_invalid")
+        if self.trading_identity is not None:
+            request = self.trading_identity.effective_config_snapshot.request
+            if request.exchange != self.exchange.value:
+                raise ValueError("canonical_exchange_mismatch")
+            if request.environment != self.environment.value:
+                raise ValueError("canonical_environment_mismatch")
         return self
 
 

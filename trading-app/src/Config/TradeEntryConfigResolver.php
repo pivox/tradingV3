@@ -43,11 +43,6 @@ final class TradeEntryConfigResolver
         }
     }
 
-    public function resolveExact(string $mode): TradeEntryConfig
-    {
-        return $this->provider->getConfigForMode($mode);
-    }
-
     /**
      * Retourne le mode qui sera effectivement utilisé (mode fourni ou fallback).
      */

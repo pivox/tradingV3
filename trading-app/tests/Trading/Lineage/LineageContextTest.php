@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Lineage;
 
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -239,6 +240,8 @@ final class LineageContextTest extends TestCase
     /** @return array<string, mixed> */
     private function canonicalPayload(): array
     {
+        $config = ['trade_entry' => ['defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [], 'decision' => [], 'fees' => []]];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, self::CATALOG_HASH);
         return [
             'origin' => 'orchestrator',
             'orchestration_run_id' => 'run-1',
@@ -248,7 +251,7 @@ final class LineageContextTest extends TestCase
             'mode_version' => '1.0.0',
             'setup_id' => 'scalping.pullback.long',
             'setup_version' => '1.0.0',
-            'config_hash' => self::CONFIG_HASH,
+            'config_hash' => $configHash,
             'condition_catalog_hash' => self::CATALOG_HASH,
             'side' => 'LONG',
             'context_side' => 'LONG',
@@ -256,7 +259,14 @@ final class LineageContextTest extends TestCase
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'effective_config_reference' => 'effective-config:cfg-1',
-            'effective_config_snapshot' => ['schema_version' => '1.0.0', 'snapshot_id' => 'cfg-1'],
+            'effective_config_snapshot' => [
+                'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
+                'config' => $config,
+                'config_hash' => $configHash,
+                'condition_catalog_hash' => self::CATALOG_HASH,
+                'executable' => true,
+                'blockers' => [],
+            ],
             'dry_run' => true,
         ];
     }

@@ -8,6 +8,7 @@ use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Dto\TradeEntryRequest;
 use App\TradeEntry\Types\Side;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -68,7 +69,9 @@ final class TradeEntryRequestBuilder
         $atr = $atr ?? null;
 
         // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode, $lineageContext?->modeId !== null);
+        $config = $lineageContext?->modeId !== null
+            ? CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)
+            : $this->getConfigForMode($mode);
         if (!is_string($executionTf) || $executionTf === '') {
             throw new \InvalidArgumentException(
                 sprintf(

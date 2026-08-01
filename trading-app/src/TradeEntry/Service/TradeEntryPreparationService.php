@@ -16,6 +16,7 @@ use App\TradeEntry\Policy\DailyLossGuard;
 use App\TradeEntry\Workflow\BuildOrderPlan;
 use App\TradeEntry\Workflow\BuildPreOrder;
 use Psr\Clock\ClockInterface;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 
 final readonly class TradeEntryPreparationService
 {
@@ -62,7 +63,7 @@ final readonly class TradeEntryPreparationService
         }
 
         $config = $request->lineageContext?->modeId !== null
-            ? $this->configResolver->resolveExact($mode)
+            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->configResolver->resolve($mode);
         $preflight = ($this->preflight)($request, $decisionKey);
         try {

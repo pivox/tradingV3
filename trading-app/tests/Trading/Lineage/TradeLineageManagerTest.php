@@ -12,6 +12,7 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -94,7 +95,7 @@ final class TradeLineageManagerTest extends KernelTestCase
         $longOriginalRunId = 'run-original-' . str_repeat('x', 140);
         $longReplayRunId = 'run-source-' . str_repeat('y', 140);
 
-        $lineage = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload([
+        $payload = array_replace($this->canonicalLineagePayload('itd-lineage'), [
             'trade_id' => 'itd-lineage',
             'run_id' => 'corr-run',
             'correlation_run_id' => 'corr-run',
@@ -105,20 +106,11 @@ final class TradeLineageManagerTest extends KernelTestCase
             'replay_of_run_id' => $longReplayRunId,
             'replay_of_correlation_id' => 'source-corr',
             'attempt_number' => 2,
-            'config_hash' => 'sha256:' . str_repeat('a', 64),
-            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
-            'mode_id' => 'scalping',
-            'mode_version' => '1.0.0',
-            'setup_id' => 'scalping.pullback.long',
-            'setup_version' => '1.0.0',
             'decision_id' => '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b',
             'decision_key' => 'decision-key-1',
             'effective_config_reference' => 'effective-config:cfg-1',
-            'side' => 'LONG',
-            'exchange' => 'fake',
-            'market_type' => 'perpetual',
-            'symbol' => 'BTCUSDT',
-        ]));
+        ]);
+        $lineage = $this->manager->ensureForIntent($intent, LineageContext::fromOrchestratorPayload($payload));
         $this->em->clear();
 
         /** @var TradeLineage $reloaded */
@@ -130,7 +122,7 @@ final class TradeLineageManagerTest extends KernelTestCase
         self::assertSame($longReplayRunId, $reloaded->getReplayOfRunId());
         self::assertSame('source-corr', $reloaded->getReplayOfCorrelationId());
         self::assertSame(2, $reloaded->getAttemptNumber());
-        self::assertSame('sha256:' . str_repeat('a', 64), $reloaded->getConfigHash());
+        self::assertSame($payload['config_hash'], $reloaded->getConfigHash());
         self::assertSame('sha256:' . str_repeat('b', 64), $reloaded->getConditionCatalogHash());
         self::assertSame('scalping', $reloaded->getModeId());
         self::assertSame('1.0.0', $reloaded->getModeVersion());
@@ -295,6 +287,9 @@ final class TradeLineageManagerTest extends KernelTestCase
     /** @return array<string,mixed> */
     private function canonicalLineagePayload(string $tradeId): array
     {
+        $catalogHash = 'sha256:' . str_repeat('b', 64);
+        $config = ['trade_entry' => ['defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [], 'decision' => [], 'fees' => []]];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash);
         return [
             'origin' => 'orchestrator',
             'orchestration_run_id' => 'run-retry',
@@ -304,8 +299,8 @@ final class TradeLineageManagerTest extends KernelTestCase
             'mode_version' => '1.0.0',
             'setup_id' => 'scalping.pullback.long',
             'setup_version' => '1.0.0',
-            'config_hash' => 'sha256:' . str_repeat('a', 64),
-            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'config_hash' => $configHash,
+            'condition_catalog_hash' => $catalogHash,
             'side' => 'LONG',
             'exchange' => 'fake',
             'market_type' => 'perpetual',
@@ -314,6 +309,11 @@ final class TradeLineageManagerTest extends KernelTestCase
             'decision_key' => 'decision-key-retry',
             'trade_id' => $tradeId,
             'effective_config_reference' => 'effective-config:cfg-retry',
+            'effective_config_snapshot' => [
+                'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
+                'config' => $config, 'config_hash' => $configHash, 'condition_catalog_hash' => $catalogHash,
+                'executable' => true, 'blockers' => [],
+            ],
         ];
     }
 }

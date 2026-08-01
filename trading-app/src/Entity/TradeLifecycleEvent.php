@@ -154,7 +154,7 @@ class TradeLifecycleEvent implements PaperExecutionProvenanceAwareInterface
         $this->decisionId = $context->decisionId; $this->decisionKey = $context->decisionKey;
         $this->intentId = $context->intentId; $this->orderId = $context->orderId;
         $this->positionId = $context->positionId; $this->tradeId = $context->tradeId;
-        $this->effectiveConfigReference = $context->effectiveConfigReference; $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot;
+        $this->effectiveConfigReference = $context->effectiveConfigReference; $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
         $this->orchestrationRunId = $context->orchestrationRunId; $this->correlationRunId = $context->correlationRunId;
         $this->orchestrationSetId = $context->orchestrationSetId; $this->orchestrationDashboardId = $context->orchestrationDashboardId;
         $this->origin = $context->origin; $this->attemptNumber = $context->attemptNumber;

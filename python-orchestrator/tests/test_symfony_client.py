@@ -52,6 +52,23 @@ def _expected_config_hash(payload: dict) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
+def _canonical_identity() -> CanonicalTradingIdentity:
+    catalog_hash = "sha256:" + "b" * 64
+    config = {"trade_entry": {"defaults": {}, "entry": {}, "risk": {}, "leverage": {}, "decision": {}, "fees": {}}}
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    return CanonicalTradingIdentity(
+        mode_id="scalping", mode_version="1.0.0", setup_id="scalping.pullback.long", setup_version="1.0.0",
+        config_hash=config_hash, condition_catalog_hash=catalog_hash, side="LONG",
+        effective_config_reference="effective-config:cfg-1",
+        effective_config_snapshot={
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
+            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "executable": True, "blockers": [],
+        },
+    )
+
+
 def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     a_set = _make_set(symbols=("BTCUSDT", "ETHUSDT"), dry_run=True)
     snapshot = {"open_positions": [], "open_orders": []}
@@ -69,16 +86,7 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
 
 
 def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
-    identity = CanonicalTradingIdentity(
-        mode_id="scalping",
-        mode_version="1.0.0",
-        setup_id="scalping.pullback.long",
-        setup_version="1.0.0",
-        config_hash="sha256:" + "a" * 64,
-        condition_catalog_hash="sha256:" + "b" * 64,
-        side="LONG",
-        effective_config_reference="effective-config:cfg-1",
-    )
+    identity = _canonical_identity()
     a_set = _make_set(symbols=("BTCUSDT",), trading_identity=identity)
 
     first = build_mtf_payload(a_set, None)
@@ -103,16 +111,7 @@ def test_build_payload_refuses_bypassed_bitmart_canonical_set_before_http_serial
         sync_tables=False,
         symbols=("BTCUSDT",),
         priority=0,
-        trading_identity=CanonicalTradingIdentity(
-            mode_id="scalping",
-            mode_version="1.0.0",
-            setup_id="scalping.pullback.long",
-            setup_version="1.0.0",
-            config_hash="sha256:" + "a" * 64,
-            condition_catalog_hash="sha256:" + "b" * 64,
-            side="LONG",
-            effective_config_reference="effective-config:cfg-1",
-        ),
+        trading_identity=_canonical_identity(),
     )
 
     with pytest.raises(ValueError, match="canonical_exchange_invalid"):

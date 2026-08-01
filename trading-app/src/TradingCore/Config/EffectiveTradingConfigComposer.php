@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Config;
 
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+
 use App\TradingCore\Config\Exception\TradingConfigException;
 
 final class EffectiveTradingConfigComposer
@@ -76,16 +78,16 @@ final class EffectiveTradingConfigComposer
         $this->assertSafety($payload);
 
         $canonical = $this->canonicalize($payload);
-        $hash = hash('sha256', json_encode(
-            ['config' => $canonical, 'condition_catalog_hash' => $conditionCatalogHash],
-            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION,
-        ));
+        $canonicalCatalogHash = $conditionCatalogHash === null
+            ? null
+            : (str_starts_with($conditionCatalogHash, 'sha256:') ? $conditionCatalogHash : 'sha256:' . $conditionCatalogHash);
+        $hash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($canonical, (string) $canonicalCatalogHash);
 
         return new EffectiveTradingConfigSnapshot(
             $request,
             $canonical,
             $hash,
-            $conditionCatalogHash,
+            $canonicalCatalogHash,
             array_map(static fn (TradingConfigLayer $layer): array => $layer->toLogContext(), $layers),
             $this->canonicalize($provenance),
         );

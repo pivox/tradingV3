@@ -18,7 +18,7 @@ final class CanonicalTradingConfigRuntimeAdapterTest extends TestCase
     {
         $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
         $snapshot = new EffectiveTradingConfigSnapshot(
-            $request, ['canonical' => true], str_repeat('b', 64), str_repeat('c', 64), [], [],
+            $request, ['canonical' => true], 'sha256:' . str_repeat('b', 64), 'sha256:' . str_repeat('c', 64), [], [],
         );
         $resolver = new class($snapshot) implements EffectiveTradingConfigResolverInterface {
             public function __construct(private readonly EffectiveTradingConfigSnapshot $snapshot) {}

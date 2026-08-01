@@ -9,8 +9,14 @@ class TradeEntryConfig
     private readonly string $path;
     private array $config;
 
-    public function __construct(?string $path = null)
+    /** @param array<string,mixed>|null $config */
+    public function __construct(?string $path = null, ?array $config = null)
     {
+        if ($config !== null) {
+            $this->path = '';
+            $this->config = $config;
+            return;
+        }
         // Chemin par défaut: config/app/trade_entry.yaml
         $this->path = $path ?? \dirname(__DIR__, 2) . '/config/app/trade_entry.yaml';
         if (!is_file($this->path)) {
@@ -124,12 +130,18 @@ class TradeEntryConfig
 
     public function getVersion(): string
     {
+        if ($this->path === '') {
+            return (string)($this->config['version'] ?? '1.0.0');
+        }
         $parsed = \Symfony\Component\Yaml\Yaml::parseFile($this->path) ?? [];
         return (string)($parsed['version'] ?? '1.0');
     }
 
     public function getMeta(): array
     {
+        if ($this->path === '') {
+            return (array)($this->config['meta'] ?? []);
+        }
         $parsed = \Symfony\Component\Yaml\Yaml::parseFile($this->path) ?? [];
         return $parsed['meta'] ?? [];
     }

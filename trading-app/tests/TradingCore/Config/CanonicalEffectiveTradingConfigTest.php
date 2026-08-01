@@ -37,11 +37,11 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
         self::assertSame(['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'], array_column($first->orderedLayers(), 'type'));
         self::assertSame($first->configHash, $second->configHash);
         self::assertNotSame($first->configHash, $differentCatalog->configHash);
-        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->configHash);
+        self::assertMatchesRegularExpression('/^sha256:[a-f0-9]{64}$/', $first->configHash);
         self::assertSame('mode_exchange', $first->provenance()['mode.risk.trade_budget.value']['type']);
         self::assertSame('setup', $first->provenance()['setup.side']['type']);
         self::assertSame('environment', $first->provenance()['environment.dry_run']['type']);
-        self::assertSame(str_repeat('a', 64), $first->conditionCatalogHash);
+        self::assertSame('sha256:' . str_repeat('a', 64), $first->conditionCatalogHash);
         self::assertTrue($first->executable);
     }
 

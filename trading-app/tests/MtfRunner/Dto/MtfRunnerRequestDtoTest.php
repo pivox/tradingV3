@@ -7,6 +7,7 @@ namespace App\Tests\MtfRunner\Dto;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -16,6 +17,9 @@ final class MtfRunnerRequestDtoTest extends TestCase
 {
     public function testBuildsCanonicalIdentityFromPythonTradingIdentityWithoutProfileFallback(): void
     {
+        $catalogHash = 'sha256:' . str_repeat('b', 64);
+        $config = ['trade_entry' => ['defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [], 'decision' => [], 'fees' => []]];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash);
         $dto = MtfRunnerRequestDto::fromArray([
             'symbols' => ['BTCUSDT'],
             'run_id' => 'run-1',
@@ -29,10 +33,15 @@ final class MtfRunnerRequestDtoTest extends TestCase
                 'mode_version' => '1.0.0',
                 'setup_id' => 'scalping.pullback.long',
                 'setup_version' => '1.0.0',
-                'config_hash' => 'sha256:' . str_repeat('a', 64),
-                'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+                'config_hash' => $configHash,
+                'condition_catalog_hash' => $catalogHash,
                 'side' => 'LONG',
                 'effective_config_reference' => 'effective-config:cfg-1',
+                'effective_config_snapshot' => [
+                    'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
+                    'config' => $config, 'config_hash' => $configHash, 'condition_catalog_hash' => $catalogHash,
+                    'executable' => true, 'blockers' => [],
+                ],
             ],
         ]);
 

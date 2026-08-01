@@ -673,7 +673,7 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
         $this->canonicalPositionId = $context->positionId;
         $this->tradeId = $context->tradeId;
         $this->effectiveConfigReference = $context->effectiveConfigReference;
-        $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot;
+        $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
         $this->exchange = $context->exchange ?? $this->exchange;
         $this->marketType = $context->marketType ?? $this->marketType;
         $this->symbol = $context->symbol ?? $this->symbol;

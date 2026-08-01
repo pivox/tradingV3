@@ -214,7 +214,7 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         self::assertSame('binance', $intentRepository->findOneByClientOrderId('shared-client', $binanceContext)?->getExchange());
     }
 
-    public function testOrderIntentReservationBlocksReplayAfterFirstReservationWithoutMutatingIntent(): void
+    public function testOrderIntentReservationRejectsReplayWithChangedFinalParameters(): void
     {
         $manager = $this->orderIntentManager();
         $params = $this->orderIntentParams();
@@ -226,17 +226,18 @@ final class ExchangeScopedStorageTest extends KernelTestCase
         );
 
         $first = $manager->reserveIntent($params);
-        $second = $manager->reserveIntent($replayParams);
-
         self::assertTrue($first->created);
         self::assertFalse($first->blocked);
-        self::assertFalse($second->created);
-        self::assertTrue($second->blocked);
-        self::assertSame('idempotent_in_flight', $second->reason);
-        self::assertSame($first->intent->getId(), $second->intent->getId());
-        self::assertSame('cid-reservation', $second->intent->getClientOrderId());
-        self::assertSame('100', $second->intent->getPrice());
-        self::assertSame(1, $second->intent->getSize());
+
+        try {
+            $manager->reserveIntent($replayParams);
+            self::fail('A replay with changed final parameters must be rejected.');
+        } catch (\App\Trading\Lineage\LineageContextException $e) {
+            self::assertSame('canonical_identity_mismatch:price', $e->getMessage());
+        }
+        self::assertSame('cid-reservation', $first->intent->getClientOrderId());
+        self::assertSame('100', $first->intent->getPrice());
+        self::assertSame(1, $first->intent->getSize());
         self::assertCount(1, $this->em->getRepository(OrderIntent::class)->findBy([
             'exchange' => 'bitmart',
             'marketType' => 'perpetual',

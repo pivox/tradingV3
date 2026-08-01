@@ -12,6 +12,7 @@ use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 
 final class EntryZoneCalculator
 {
@@ -56,7 +57,9 @@ final class EntryZoneCalculator
             }
         }
         // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $this->getConfigForMode($mode, $lineageContext?->modeId !== null);
+        $config = $lineageContext !== null
+            ? CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)
+            : $this->getConfigForMode($mode);
         $post = $config?->getPostValidation() ?? [];
         $postEntryZone = (array)($post['entry_zone'] ?? []);
         $execTf = $post['execution_timeframe']['default'] ?? null;

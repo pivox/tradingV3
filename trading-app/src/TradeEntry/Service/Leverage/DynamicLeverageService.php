@@ -29,7 +29,8 @@ final class DynamicLeverageService implements LeverageServiceInterface
         ?float $stopPct = null,
         ?float $atr5mValue = null, // peut recevoir ATR 15m, le nom du param n'a pas d'incidence
         ?string $executionTf = null,
-        ?string $mode = null // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
+        ?string $mode = null, // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
+        ?TradeEntryConfig $config = null,
     ): int {
         // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
@@ -51,7 +52,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
         }
 
         // --- Lecture config selon le mode (même mécanisme que validations.{mode}.yaml) ---
-        $config = $this->getConfigForMode($mode);
+        $config ??= $this->getConfigForMode($mode);
         $defaults  = $config->getDefaults();
         $levConfig = $config->getLeverage();
 

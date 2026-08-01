@@ -37,6 +37,7 @@ final readonly class LineageContext
         public ?string $orchestrationDashboardId = null,
         public ?string $mtfProfile = null,
         public ?string $exchange = null,
+        public ?string $environment = null,
         public ?string $marketType = null,
         public ?string $symbol = null,
         public ?string $tradingDecisionId = null,
@@ -64,8 +65,8 @@ final readonly class LineageContext
         public ?string $positionId = null,
         public ?string $tradeId = null,
         public ?string $effectiveConfigReference = null,
-        /** @var array<string,mixed>|null */
-        public ?array $effectiveConfigSnapshot = null,
+        /** Validated immutable effective configuration supplied by the orchestrator. */
+        public ?CanonicalEffectiveConfigSnapshot $effectiveConfigSnapshot = null,
     ) {
         if (!\in_array($origin, [self::ORIGIN_ORCHESTRATOR, self::ORIGIN_LEGACY, self::ORIGIN_MANUAL, self::ORIGIN_REPLAY], true)) {
             throw new LineageContextException(sprintf('origin "%s" non supporte.', $origin));
@@ -93,6 +94,7 @@ final readonly class LineageContext
                 'condition_catalog_hash' => $conditionCatalogHash,
                 'side' => $side,
                 'exchange' => $exchange,
+                'environment' => $environment,
                 'market_type' => $marketType,
                 'symbol' => $symbol,
                 'decision_id' => $decisionId ?? $tradingDecisionId,
@@ -122,6 +124,11 @@ final readonly class LineageContext
         $profile = self::sameAlias($payload, 'profile', 'mtf_profile');
         $exchange = self::normalizeExchange(self::firstString($payload, ['exchange', 'cex']));
         $marketType = self::normalizeMarketType(self::firstString($payload, ['market_type', 'type_contract']));
+        $environment = self::string($payload['environment'] ?? null)
+            ?? self::snapshotRequestString($payload, 'environment');
+        if ($environment !== null) {
+            $payload['environment'] = $environment;
+        }
         $origin = self::string($payload['origin'] ?? null) ?? self::ORIGIN_ORCHESTRATOR;
         if ($canonical) {
             self::assertCanonicalPayload($payload);
@@ -135,6 +142,7 @@ final readonly class LineageContext
             orchestrationDashboardId: $dashboardId,
             mtfProfile: $profile,
             exchange: $exchange,
+            environment: $environment,
             marketType: $marketType,
             symbol: self::normalizeSymbol(self::string($payload['symbol'] ?? null)),
             tradingDecisionId: self::string($payload['trading_decision_id'] ?? null),
@@ -162,7 +170,7 @@ final readonly class LineageContext
             positionId: self::string($payload['position_id'] ?? $payload['exchange_position_id'] ?? null),
             tradeId: self::string($payload['trade_id'] ?? $payload['internal_trade_id'] ?? null),
             effectiveConfigReference: self::string($payload['effective_config_reference'] ?? null),
-            effectiveConfigSnapshot: self::stringKeyedArray($payload['effective_config_snapshot'] ?? null),
+            effectiveConfigSnapshot: self::effectiveConfigSnapshot($payload),
         );
     }
 
@@ -186,6 +194,10 @@ final readonly class LineageContext
      */
     public static function fromArray(array $data): self
     {
+        $environment = self::string($data['environment'] ?? null) ?? self::snapshotRequestString($data, 'environment');
+        if ($environment !== null) {
+            $data['environment'] = $environment;
+        }
         if (self::hasCanonicalIdentity($data)) {
             self::assertCanonicalPayload($data);
         }
@@ -198,6 +210,7 @@ final readonly class LineageContext
             orchestrationDashboardId: self::string($data['orchestration_dashboard_id'] ?? null),
             mtfProfile: self::string($data['mtf_profile'] ?? $data['profile'] ?? null),
             exchange: self::normalizeExchange(self::string($data['exchange'] ?? null)),
+            environment: $environment,
             marketType: self::normalizeMarketType(self::string($data['market_type'] ?? null)),
             symbol: self::normalizeSymbol(self::string($data['symbol'] ?? null)),
             tradingDecisionId: self::string($data['trading_decision_id'] ?? null),
@@ -225,7 +238,7 @@ final readonly class LineageContext
             positionId: self::string($data['position_id'] ?? null),
             tradeId: self::string($data['trade_id'] ?? null),
             effectiveConfigReference: self::string($data['effective_config_reference'] ?? null),
-            effectiveConfigSnapshot: self::stringKeyedArray($data['effective_config_snapshot'] ?? null),
+            effectiveConfigSnapshot: self::effectiveConfigSnapshot($data),
         );
     }
 
@@ -239,6 +252,7 @@ final readonly class LineageContext
             orchestrationDashboardId: $this->orchestrationDashboardId,
             mtfProfile: $this->mtfProfile,
             exchange: $this->exchange,
+            environment: $this->environment,
             marketType: $this->marketType,
             symbol: $this->symbol,
             tradingDecisionId: $this->tradingDecisionId,
@@ -319,11 +333,11 @@ final readonly class LineageContext
 
     public function assertExecutableTradeContract(): self
     {
-        $snapshot = $this->effectiveConfigSnapshot;
+        $snapshot = $this->effectiveConfigSnapshot?->toArray();
         if ($snapshot === null) {
             throw new LineageContextException('canonical_identity_missing:effective_config_snapshot');
         }
-        if (($snapshot['executable'] ?? false) !== true) {
+        if (!$this->effectiveConfigSnapshot?->executable()) {
             throw new LineageContextException('canonical_contract_not_executable');
         }
         foreach (['config_hash' => $this->configHash, 'condition_catalog_hash' => $this->conditionCatalogHash] as $field => $expected) {
@@ -341,6 +355,7 @@ final readonly class LineageContext
             'setup_id' => $this->setupId,
             'setup_version' => $this->setupVersion,
             'exchange' => $this->exchange,
+            'environment' => $this->environment,
             'side' => strtolower((string) $this->side),
         ] as $field => $expected) {
             if (($request[$field] ?? null) !== $expected) {
@@ -391,7 +406,7 @@ final readonly class LineageContext
             'position_id' => $this->positionId,
             'trade_id' => $this->tradeId,
             'effective_config_reference' => $this->effectiveConfigReference,
-            'effective_config_snapshot' => $this->effectiveConfigSnapshot,
+            'effective_config_snapshot' => $this->effectiveConfigSnapshot?->toArray(),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
@@ -431,10 +446,6 @@ final readonly class LineageContext
                 throw new LineageContextException('canonical_identity_missing:' . $field);
             }
         }
-        if (self::string($payload['effective_config_reference'] ?? null) === null && !\is_array($payload['effective_config_snapshot'] ?? null)) {
-            throw new LineageContextException('canonical_identity_missing:effective_config');
-        }
-
         $modeId = self::string($payload['mode_id'] ?? null);
         if (!\in_array($modeId, ['day_trading', 'scalping', 'micro_scalping'], true)) {
             throw new LineageContextException('canonical_identity_invalid:mode_id');
@@ -482,6 +493,16 @@ final readonly class LineageContext
             if (isset($payload[$idField]) && $payload[$idField] !== null && !self::isSafeId($payload[$idField], $max)) {
                 throw new LineageContextException('canonical_identity_invalid:' . $idField);
             }
+        }
+        if (self::string($payload['effective_config_reference'] ?? null) === null) {
+            throw new LineageContextException('canonical_identity_missing:effective_config_reference');
+        }
+        $effectiveSnapshot = $payload['effective_config_snapshot'] ?? null;
+        if (!\is_array($effectiveSnapshot) && !$effectiveSnapshot instanceof CanonicalEffectiveConfigSnapshot) {
+            throw new LineageContextException('canonical_identity_missing:effective_config_snapshot');
+        }
+        if (self::string($payload['environment'] ?? null) === null) {
+            throw new LineageContextException('canonical_identity_missing:environment');
         }
 
         self::assertSameValues($payload, 'side', ['context_side', 'execution_side'], true);
@@ -538,19 +559,37 @@ final readonly class LineageContext
         return $side === null ? null : strtoupper($side);
     }
 
-    /** @return array<string,mixed>|null */
-    private static function stringKeyedArray(mixed $value): ?array
+    /** @param array<string,mixed> $payload */
+    private static function effectiveConfigSnapshot(array $payload): ?CanonicalEffectiveConfigSnapshot
     {
-        if (!\is_array($value)) {
-            return null;
+        $snapshot = $payload['effective_config_snapshot'] ?? null;
+        if ($snapshot === null) { return null; }
+        if (!\is_array($snapshot)) {
+            throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
         }
-        foreach (array_keys($value) as $key) {
-            if (!\is_string($key)) {
-                throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
-            }
-        }
+        return CanonicalEffectiveConfigSnapshot::fromArray($snapshot, [
+            'mode_id' => self::string($payload['mode_id'] ?? null),
+            'mode_version' => self::string($payload['mode_version'] ?? null),
+            'setup_id' => self::string($payload['setup_id'] ?? null),
+            'setup_version' => self::string($payload['setup_version'] ?? null),
+            'exchange' => self::normalizeExchange(self::string($payload['exchange'] ?? null)),
+            'environment' => self::string($payload['environment'] ?? null) ?? self::snapshotRequestString($payload, 'environment'),
+            'side' => self::normalizeSide(self::string($payload['side'] ?? null)),
+            'config_hash' => self::string($payload['config_hash'] ?? null),
+            'condition_catalog_hash' => self::string($payload['condition_catalog_hash'] ?? null),
+        ]);
+    }
 
-        return $value;
+    /** @param array<string,mixed> $payload */
+    private static function snapshotRequestString(array $payload, string $field): ?string
+    {
+        $snapshot = $payload['effective_config_snapshot'] ?? null;
+        if ($snapshot instanceof CanonicalEffectiveConfigSnapshot) {
+            $snapshot = $snapshot->toArray();
+        }
+        return \is_array($snapshot) && \is_array($snapshot['request'] ?? null)
+            ? self::string($snapshot['request'][$field] ?? null)
+            : null;
     }
 
     /**

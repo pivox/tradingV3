@@ -1,4 +1,6 @@
 from datetime import datetime
+import hashlib
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -18,16 +20,7 @@ from app.schemas import (
 
 
 def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
-    identity = CanonicalTradingIdentity(
-        mode_id="scalping",
-        mode_version="1.0.0",
-        setup_id="scalping.pullback.long",
-        setup_version="1.0.0",
-        config_hash="sha256:" + "a" * 64,
-        condition_catalog_hash="sha256:" + "b" * 64,
-        side="LONG",
-        effective_config_reference="effective-config:cfg-1",
-    )
+    identity = CanonicalTradingIdentity(**_canonical_identity_payload())
     with pytest.raises(ValidationError):
         identity.side = "SHORT"  # type: ignore[misc]
 
@@ -102,16 +95,41 @@ def test_canonical_trading_identity_rejects_unknown_or_catalog_mismatched_identi
 
 
 def _canonical_identity_payload():
+    catalog_hash = "sha256:" + "b" * 64
+    config = {"trade_entry": {"defaults": {}, "entry": {}, "risk": {}, "leverage": {}, "decision": {}, "fees": {}}}
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
     return {
         "mode_id": "scalping",
         "mode_version": "1.0.0",
         "setup_id": "scalping.pullback.long",
         "setup_version": "1.0.0",
-        "config_hash": "sha256:" + "a" * 64,
-        "condition_catalog_hash": "sha256:" + "b" * 64,
+        "config_hash": config_hash,
+        "condition_catalog_hash": catalog_hash,
         "side": "LONG",
         "effective_config_reference": "effective-config:cfg-1",
+        "effective_config_snapshot": {
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
+            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "executable": True, "blockers": [],
+        },
     }
+
+
+def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
+    identity = _canonical_identity_payload()
+    with pytest.raises(ValidationError, match="canonical_exchange_mismatch"):
+        OrchestratorSet(
+            set_id="exchange-mismatch", exchange="okx", environment="demo", dry_run=True,
+            symbols=("BTCUSDT",), trading_identity=CanonicalTradingIdentity(**identity),
+        )
+
+    identity["effective_config_snapshot"]["request"]["environment"] = "test"
+    with pytest.raises(ValidationError, match="canonical_environment_mismatch"):
+        OrchestratorSet(
+            set_id="environment-mismatch", exchange="fake", environment="demo", dry_run=True,
+            symbols=("BTCUSDT",), trading_identity=CanonicalTradingIdentity(**identity),
+        )
 
 
 def test_okx_live_is_forbidden():

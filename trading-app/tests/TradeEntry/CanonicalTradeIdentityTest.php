@@ -9,7 +9,9 @@ use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Types\Side;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\MtfValidator\Service\ExecutionSelectionService;
+use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
 use App\MtfValidator\Service\TimeframeValidationService;
 use App\Contract\MtfValidator\Dto\ContextDecisionDto;
@@ -21,6 +23,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(OrderPlanModel::class)]
 #[CoversClass(LineageContext::class)]
 #[CoversClass(ExecutionSelectionService::class)]
+#[CoversClass(TradingDecisionHandler::class)]
 final class CanonicalTradeIdentityTest extends TestCase
 {
     public function testTradeEntryRejectsMissingCanonicalIdentity(): void
@@ -82,8 +85,21 @@ final class CanonicalTradeIdentityTest extends TestCase
         self::assertSame('selector_metrics_missing', $selection->reasonIfNone);
     }
 
+    public function testModernHandlerResolvesTradeEntryOnlyFromEffectiveSnapshot(): void
+    {
+        /** @var TradingDecisionHandler $handler */
+        $handler = (new \ReflectionClass(TradingDecisionHandler::class))->newInstanceWithoutConstructor();
+        $resolve = new \ReflectionMethod(TradingDecisionHandler::class, 'resolveTradeEntryConfig');
+
+        [$mode, $config] = $resolve->invoke($handler, $this->identity(), 'legacy-mode-must-not-be-read');
+
+        self::assertSame('scalping', $mode);
+        self::assertSame([], $config->getDefaults());
+    }
+
     private function identity(): LineageContext
     {
+        $snapshot = $this->effectiveSnapshot();
         return LineageContext::fromOrchestratorPayload([
             'origin' => 'orchestrator',
             'orchestration_run_id' => 'run-1',
@@ -93,29 +109,36 @@ final class CanonicalTradeIdentityTest extends TestCase
             'mode_version' => '1.0.0',
             'setup_id' => 'scalping.trend_continuation.long',
             'setup_version' => '1.0.0',
-            'config_hash' => 'sha256:' . str_repeat('a', 64),
+            'config_hash' => $snapshot['config_hash'],
             'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
             'side' => 'LONG',
             'exchange' => 'fake',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'effective_config_reference' => 'cfg://scalping/1.0.0',
-            'effective_config_snapshot' => $this->effectiveSnapshot('a'),
+            'effective_config_snapshot' => $snapshot,
         ]);
     }
 
     /** @return array<string,mixed> */
-    private function effectiveSnapshot(string $configHash): array
+    private function effectiveSnapshot(): array
     {
+        $config = ['trade_entry' => [
+            'defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [],
+            'decision' => [], 'fees' => [],
+        ]];
+        $catalogHash = 'sha256:' . str_repeat('b', 64);
         return [
             'request' => [
                 'mode_id' => 'scalping', 'mode_version' => '1.0.0',
                 'setup_id' => 'scalping.trend_continuation.long', 'setup_version' => '1.0.0',
                 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long',
             ],
-            'config_hash' => 'sha256:' . str_repeat($configHash, 64),
-            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'config' => $config,
+            'config_hash' => CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash),
+            'condition_catalog_hash' => $catalogHash,
             'executable' => true,
+            'blockers' => [],
         ];
     }
 }

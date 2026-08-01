@@ -23,6 +23,7 @@ use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
 use App\Trading\Orchestration\OrchestrationContextValidator;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -411,18 +412,26 @@ final class RunnerControllerTest extends TestCase
         );
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, mixed> */
     private static function canonicalTradingIdentity(): array
     {
+        $catalogHash = 'sha256:' . str_repeat('b', 64);
+        $config = ['trade_entry' => ['defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [], 'decision' => [], 'fees' => []]];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash);
         return [
             'mode_id' => 'scalping',
             'mode_version' => '1.0.0',
             'setup_id' => 'scalping.pullback.long',
             'setup_version' => '1.0.0',
-            'config_hash' => 'sha256:' . str_repeat('a', 64),
-            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
+            'config_hash' => $configHash,
+            'condition_catalog_hash' => $catalogHash,
             'side' => 'LONG',
             'effective_config_reference' => 'effective-config:cfg-1',
+            'effective_config_snapshot' => [
+                'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
+                'config' => $config, 'config_hash' => $configHash, 'condition_catalog_hash' => $catalogHash,
+                'executable' => true, 'blockers' => [],
+            ],
         ];
     }
 

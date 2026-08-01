@@ -23,6 +23,7 @@ use App\Provider\Context\ExchangeContext;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 
 final class TradeEntryService
 {
@@ -146,7 +147,7 @@ final class TradeEntryService
         }
 
         $entryConfig = $request->lineageContext?->modeId !== null
-            ? $this->tradeEntryConfigResolver->resolveExact((string) $mode)
+            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
 
@@ -387,7 +388,7 @@ final class TradeEntryService
         ]);
 
         $entryConfig = $request->lineageContext?->modeId !== null
-            ? $this->tradeEntryConfigResolver->resolveExact((string) $mode)
+            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
 
