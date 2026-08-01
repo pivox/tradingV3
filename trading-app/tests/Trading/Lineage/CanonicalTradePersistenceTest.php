@@ -76,6 +76,34 @@ final class CanonicalTradePersistenceTest extends TestCase
         $assert->invoke($manager, $existing, $changed, $params, [], null);
     }
 
+    public function testRetryRejectsMissingContextForExistingModernIntent(): void
+    {
+        $context = $this->identity('scalping.trend_continuation.long', 'LONG', 'a');
+        $manager = (new \ReflectionClass(OrderIntentManager::class))->newInstanceWithoutConstructor();
+        $params = ['exchange' => 'fake', 'market_type' => 'perpetual', 'symbol' => 'BTCUSDT', 'side' => 1, 'type' => 'market', 'size' => 1];
+        $build = new \ReflectionMethod(OrderIntentManager::class, 'buildIntent');
+        /** @var OrderIntent $existing */
+        $existing = $build->invoke($manager, $params, [], null, $context);
+
+        $assert = new \ReflectionMethod(OrderIntentManager::class, 'assertReplayIdentity');
+        $this->expectExceptionMessage('canonical_identity_required');
+        $assert->invoke($manager, $existing, null, $params, [], null);
+    }
+
+    public function testRetryRejectsModernContextForLegacyIntent(): void
+    {
+        $context = $this->identity('scalping.trend_continuation.long', 'LONG', 'a');
+        $manager = (new \ReflectionClass(OrderIntentManager::class))->newInstanceWithoutConstructor();
+        $params = ['exchange' => 'fake', 'market_type' => 'perpetual', 'symbol' => 'BTCUSDT', 'side' => 1, 'type' => 'market', 'size' => 1];
+        $build = new \ReflectionMethod(OrderIntentManager::class, 'buildIntent');
+        /** @var OrderIntent $legacy */
+        $legacy = $build->invoke($manager, $params, [], null, null);
+
+        $assert = new \ReflectionMethod(OrderIntentManager::class, 'assertReplayIdentity');
+        $this->expectExceptionMessage('canonical_identity_mismatch:contract_kind');
+        $assert->invoke($manager, $legacy, $context, $params, [], null);
+    }
+
     private function identity(string $setup, string $side, string $hash): LineageContext
     {
         $config = ['fixture' => $hash, 'trade_entry' => ['defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [], 'decision' => [], 'fees' => []]];
@@ -89,7 +117,7 @@ final class CanonicalTradePersistenceTest extends TestCase
             'condition_catalog_hash' => $catalogHash, 'side' => $side,
             'exchange' => 'fake', 'market_type' => 'perpetual', 'symbol' => 'BTCUSDT',
             'effective_config_reference' => 'cfg://scalping/1.0.0',
-            'effective_config_snapshot' => [
+            'effective_config_snapshot' => CanonicalSnapshotMetadataFixture::enrich([
                 'request' => [
                     'mode_id' => 'scalping', 'mode_version' => '1.0.0',
                     'setup_id' => $setup, 'setup_version' => '1.0.0',
@@ -100,7 +128,7 @@ final class CanonicalTradePersistenceTest extends TestCase
                 'condition_catalog_hash' => $catalogHash,
                 'executable' => true,
                 'blockers' => [],
-            ],
+            ]),
             'decision_id' => $hash === 'a' ? '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b' : '018f47a2-4f42-7e1b-8d3a-4dc9571bb22c',
             'decision_key' => 'decision-' . $hash,
             'intent_id' => 'intent-' . $hash,

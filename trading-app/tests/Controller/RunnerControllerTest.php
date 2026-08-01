@@ -24,6 +24,7 @@ use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
 use App\Trading\Orchestration\OrchestrationContextValidator;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\Tests\Trading\Lineage\CanonicalSnapshotMetadataFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
@@ -427,11 +428,11 @@ final class RunnerControllerTest extends TestCase
             'condition_catalog_hash' => $catalogHash,
             'side' => 'LONG',
             'effective_config_reference' => 'effective-config:cfg-1',
-            'effective_config_snapshot' => [
+            'effective_config_snapshot' => CanonicalSnapshotMetadataFixture::enrich([
                 'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
                 'config' => $config, 'config_hash' => $configHash, 'condition_catalog_hash' => $catalogHash,
                 'executable' => true, 'blockers' => [],
-            ],
+            ]),
         ];
     }
 

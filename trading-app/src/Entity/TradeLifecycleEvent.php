@@ -145,16 +145,19 @@ class TradeLifecycleEvent implements PaperExecutionProvenanceAwareInterface
 
     public function applyLineageContext(LineageContext $context): self
     {
-        $context->assertTradeBoundary($this->symbol, $context->side ?? '', $context->exchange, $context->marketType);
-        $this->modeId = $context->modeId; $this->modeVersion = $context->modeVersion;
-        $this->setupId = $context->setupId; $this->setupVersion = $context->setupVersion;
-        $this->configHash = $context->configHash; $this->conditionCatalogHash = $context->conditionCatalogHash;
-        $this->side = $context->side; $this->exchange = $context->exchange ?? $this->exchange;
+        if ($context->isModern()) {
+            $context->assertTradeBoundary($this->symbol, $context->side ?? '', $context->exchange, $context->marketType);
+            $this->modeId = $context->modeId; $this->modeVersion = $context->modeVersion;
+            $this->setupId = $context->setupId; $this->setupVersion = $context->setupVersion;
+            $this->configHash = $context->configHash; $this->conditionCatalogHash = $context->conditionCatalogHash;
+            $this->side = $context->side;
+            $this->decisionId = $context->decisionId; $this->decisionKey = $context->decisionKey;
+            $this->intentId = $context->intentId; $this->orderId = $context->orderId;
+            $this->positionId = $context->positionId; $this->tradeId = $context->tradeId;
+            $this->effectiveConfigReference = $context->effectiveConfigReference; $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
+        }
+        $this->exchange = $context->exchange ?? $this->exchange;
         $this->marketType = $context->marketType ?? $this->marketType;
-        $this->decisionId = $context->decisionId; $this->decisionKey = $context->decisionKey;
-        $this->intentId = $context->intentId; $this->orderId = $context->orderId;
-        $this->positionId = $context->positionId; $this->tradeId = $context->tradeId;
-        $this->effectiveConfigReference = $context->effectiveConfigReference; $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
         $this->orchestrationRunId = $context->orchestrationRunId; $this->correlationRunId = $context->correlationRunId;
         $this->orchestrationSetId = $context->orchestrationSetId; $this->orchestrationDashboardId = $context->orchestrationDashboardId;
         $this->origin = $context->origin; $this->attemptNumber = $context->attemptNumber;

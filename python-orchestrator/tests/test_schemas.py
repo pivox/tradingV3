@@ -12,11 +12,49 @@ from app.schemas import (
     MarketType,
     MtfProfile,
     OrchestratorSet,
+    CanonicalEffectiveConfigSnapshot,
     CanonicalTradingIdentity,
     SetCreate,
     SetRead,
     assert_set_persistable,
 )
+
+
+def test_full_php_133_snapshot_shape_round_trips_unchanged_with_hash_parity():
+    catalog_hash = "sha256:" + "b" * 64
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"},
+        "environment": {"id": "demo", "note": "café/path"},
+    }
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    assert config_hash == "sha256:06f3de28b7b0269688c30ccc4b88bedd9888bf33c360c463ed19717c3aa2cca7"
+    layers = [
+        {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
+        for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+    ]
+    payload = {
+        "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
+        "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+        "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": layers[1]}, "executable": True, "blockers": [],
+    }
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+
+    assert snapshot.model_dump(mode="json") == payload
+
+
+def test_full_php_133_snapshot_rejects_layer_file_order_mismatch():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["ordered_files"] = list(reversed(payload["ordered_files"]))
+    with pytest.raises(ValidationError, match="effective_config_snapshot_layer_files_mismatch"):
+        CanonicalEffectiveConfigSnapshot(**payload)
 
 
 def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
@@ -96,9 +134,17 @@ def test_canonical_trading_identity_rejects_unknown_or_catalog_mismatched_identi
 
 def _canonical_identity_payload():
     catalog_hash = "sha256:" + "b" * 64
-    config = {"trade_entry": {"defaults": {}, "entry": {}, "risk": {}, "leverage": {}, "decision": {}, "fees": {}}}
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"}, "environment": {"id": "demo"},
+    }
     canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
     config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
     return {
         "mode_id": "scalping",
         "mode_version": "1.0.0",
@@ -111,6 +157,8 @@ def _canonical_identity_payload():
         "effective_config_snapshot": {
             "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
             "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+            "provenance": {"mode.mode_id": layers[1]},
             "executable": True, "blockers": [],
         },
     }
@@ -125,6 +173,12 @@ def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
         )
 
     identity["effective_config_snapshot"]["request"]["environment"] = "test"
+    identity["effective_config_snapshot"]["config"]["environment"]["id"] = "test"
+    canonical = json.dumps(
+        {"config": identity["effective_config_snapshot"]["config"], "condition_catalog_hash": identity["condition_catalog_hash"]},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    identity["config_hash"] = identity["effective_config_snapshot"]["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     with pytest.raises(ValidationError, match="canonical_environment_mismatch"):
         OrchestratorSet(
             set_id="environment-mismatch", exchange="fake", environment="demo", dry_run=True,

@@ -39,7 +39,7 @@ final readonly class TradeEntryPreparationService
         ?string $paperCellId = null,
         ?string $sourceEventId = null,
     ): PreparedTradeEntry {
-        if ($request->lineageContext?->modeId !== null) {
+        if ($request->lineageContext?->isModern()) {
             $identity = $request->canonicalIdentity();
             if ($decisionKey !== $identity->decisionKey) {
                 throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
@@ -62,7 +62,7 @@ final readonly class TradeEntryPreparationService
             }
         }
 
-        $config = $request->lineageContext?->modeId !== null
+        $config = $request->lineageContext?->isModern()
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->configResolver->resolve($mode);
         $preflight = ($this->preflight)($request, $decisionKey);

@@ -309,11 +309,11 @@ final class TradeLineageManagerTest extends KernelTestCase
             'decision_key' => 'decision-key-retry',
             'trade_id' => $tradeId,
             'effective_config_reference' => 'effective-config:cfg-retry',
-            'effective_config_snapshot' => [
+            'effective_config_snapshot' => CanonicalSnapshotMetadataFixture::enrich([
                 'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
                 'config' => $config, 'config_hash' => $configHash, 'condition_catalog_hash' => $catalogHash,
                 'executable' => true, 'blockers' => [],
-            ],
+            ]),
         ];
     }
 }

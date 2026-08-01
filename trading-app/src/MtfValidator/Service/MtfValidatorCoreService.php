@@ -142,7 +142,7 @@ class MtfValidatorCoreService
             contextDecision: $contextDecision,
             exchangeContext: $exchangeContext,
             lineageContext: $input->lineageContext,
-            selectorMetrics: $input->lineageContext?->modeId !== null
+            selectorMetrics: $input->lineageContext?->isModern()
                 ? new ExecutionSelectorMetrics($input->lineageContext, $indicatorsByTimeframe)
                 : null,
         );

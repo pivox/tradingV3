@@ -632,7 +632,7 @@ final class OrderPlanBuilder
             $atr15m,
             $req->executionTf,
             $req->lineageContext?->modeId,
-            $req->lineageContext !== null ? CanonicalTradeEntryConfigFactory::fromLineage($req->lineageContext) : null,
+            $req->lineageContext?->isModern() ? CanonicalTradeEntryConfigFactory::fromLineage($req->lineageContext) : null,
         );
 
         $leverageMultiplier = $req->leverageMultiplier ?? 1.0;

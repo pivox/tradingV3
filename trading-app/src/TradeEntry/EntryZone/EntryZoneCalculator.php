@@ -45,7 +45,7 @@ final class EntryZoneCalculator
         ?LineageContext $lineageContext = null,
     ): EntryZone
     {
-        if ($lineageContext !== null) {
+        if ($lineageContext?->isModern()) {
             $lineageContext->assertTradeBoundary(
                 $symbol,
                 $side?->value ?? '',
@@ -57,7 +57,7 @@ final class EntryZoneCalculator
             }
         }
         // Lecture config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $lineageContext !== null
+        $config = $lineageContext?->isModern()
             ? CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)
             : $this->getConfigForMode($mode);
         $post = $config?->getPostValidation() ?? [];

@@ -659,21 +659,23 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
 
     public function applyLineageContext(LineageContext $context): self
     {
-        $context->assertTradeBoundary($context->symbol ?? '', $context->side ?? '');
-        $this->modeId = $context->modeId;
-        $this->modeVersion = $context->modeVersion;
-        $this->setupId = $context->setupId;
-        $this->setupVersion = $context->setupVersion;
-        $this->configHash = $context->configHash;
-        $this->conditionCatalogHash = $context->conditionCatalogHash;
-        $this->canonicalSide = $context->side;
-        $this->decisionId = $context->decisionId;
-        $this->decisionKey = $context->decisionKey;
-        $this->intentId = $context->intentId;
-        $this->canonicalPositionId = $context->positionId;
-        $this->tradeId = $context->tradeId;
-        $this->effectiveConfigReference = $context->effectiveConfigReference;
-        $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
+        if ($context->isModern()) {
+            $context->assertTradeBoundary($context->symbol ?? '', $context->side ?? '');
+            $this->modeId = $context->modeId;
+            $this->modeVersion = $context->modeVersion;
+            $this->setupId = $context->setupId;
+            $this->setupVersion = $context->setupVersion;
+            $this->configHash = $context->configHash;
+            $this->conditionCatalogHash = $context->conditionCatalogHash;
+            $this->canonicalSide = $context->side;
+            $this->decisionId = $context->decisionId;
+            $this->decisionKey = $context->decisionKey;
+            $this->intentId = $context->intentId;
+            $this->canonicalPositionId = $context->positionId;
+            $this->tradeId = $context->tradeId;
+            $this->effectiveConfigReference = $context->effectiveConfigReference;
+            $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
+        }
         $this->exchange = $context->exchange ?? $this->exchange;
         $this->marketType = $context->marketType ?? $this->marketType;
         $this->symbol = $context->symbol ?? $this->symbol;
@@ -695,6 +697,16 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
             }
         }
         return true;
+    }
+
+    public function hasAnyCanonicalIdentity(): bool
+    {
+        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->configHash, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot] as $value) {
+            if ($value !== null && $value !== '' && $value !== []) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public function getModeId(): ?string { return $this->modeId; }

@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace App\Tests\TradeEntry;
 
 use App\TradeEntry\Dto\TradeEntryRequest;
+use App\TradeEntry\Builder\TradeEntryRequestBuilder;
 use App\TradeEntry\OrderPlan\OrderPlanModel;
 use App\TradeEntry\Types\Side;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
-use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
 use App\MtfValidator\Service\ExecutionSelectionService;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
@@ -94,51 +95,24 @@ final class CanonicalTradeIdentityTest extends TestCase
         [$mode, $config] = $resolve->invoke($handler, $this->identity(), 'legacy-mode-must-not-be-read');
 
         self::assertSame('scalping', $mode);
-        self::assertSame([], $config->getDefaults());
+        self::assertSame(0.5, $config->getDefault('risk_pct_percent'));
+    }
+
+    public function testModernRequestFailsClosedAtUnownedInitialMarginBoundary(): void
+    {
+        /** @var TradeEntryRequestBuilder $builder */
+        $builder = (new \ReflectionClass(TradeEntryRequestBuilder::class))->newInstanceWithoutConstructor();
+
+        $this->expectExceptionMessage('canonical_config_unresolved:trade_entry.initial_margin_usdt');
+        $builder->fromMtfSignal(
+            'BTCUSDT', 'LONG', '1m', 100.0, 1.0, 'ignored',
+            exchangeContext: ExchangeContext::fromValues('fake', 'perpetual'),
+            lineageContext: $this->identity()->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key'),
+        );
     }
 
     private function identity(): LineageContext
     {
-        $snapshot = $this->effectiveSnapshot();
-        return LineageContext::fromOrchestratorPayload([
-            'origin' => 'orchestrator',
-            'orchestration_run_id' => 'run-1',
-            'correlation_run_id' => 'corr-1',
-            'orchestration_set_id' => 'set-1',
-            'mode_id' => 'scalping',
-            'mode_version' => '1.0.0',
-            'setup_id' => 'scalping.trend_continuation.long',
-            'setup_version' => '1.0.0',
-            'config_hash' => $snapshot['config_hash'],
-            'condition_catalog_hash' => 'sha256:' . str_repeat('b', 64),
-            'side' => 'LONG',
-            'exchange' => 'fake',
-            'market_type' => 'perpetual',
-            'symbol' => 'BTCUSDT',
-            'effective_config_reference' => 'cfg://scalping/1.0.0',
-            'effective_config_snapshot' => $snapshot,
-        ]);
-    }
-
-    /** @return array<string,mixed> */
-    private function effectiveSnapshot(): array
-    {
-        $config = ['trade_entry' => [
-            'defaults' => [], 'entry' => [], 'risk' => [], 'leverage' => [],
-            'decision' => [], 'fees' => [],
-        ]];
-        $catalogHash = 'sha256:' . str_repeat('b', 64);
-        return [
-            'request' => [
-                'mode_id' => 'scalping', 'mode_version' => '1.0.0',
-                'setup_id' => 'scalping.trend_continuation.long', 'setup_version' => '1.0.0',
-                'exchange' => 'fake', 'environment' => 'test', 'side' => 'long',
-            ],
-            'config' => $config,
-            'config_hash' => CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash),
-            'condition_catalog_hash' => $catalogHash,
-            'executable' => true,
-            'blockers' => [],
-        ];
+        return CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config());
     }
 }

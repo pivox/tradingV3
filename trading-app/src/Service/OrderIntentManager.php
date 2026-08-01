@@ -440,12 +440,14 @@ final class OrderIntentManager
         $intent->setRawInputs($rawInputs);
         $intent->setStatus(OrderIntent::STATUS_DRAFT);
         if ($lineageContext !== null) {
-            $lineageContext->assertTradeBoundary(
-                $intent->getSymbol(),
-                \in_array($intent->getSide(), [1, 2], true) ? 'LONG' : 'SHORT',
-                $intent->getExchange(),
-                $intent->getMarketType(),
-            );
+            if ($lineageContext->isModern()) {
+                $lineageContext->assertTradeBoundary(
+                    $intent->getSymbol(),
+                    \in_array($intent->getSide(), [1, 2], true) ? 'LONG' : 'SHORT',
+                    $intent->getExchange(),
+                    $intent->getMarketType(),
+                );
+            }
             $intent->applyLineageContext($lineageContext);
         }
 
@@ -490,6 +492,14 @@ final class OrderIntentManager
         ?array $rawInputs,
     ): void
     {
+        $storedModern = $existing->hasAnyCanonicalIdentity();
+        $requestedModern = $context?->isModern() ?? false;
+        if ($storedModern && !$requestedModern) {
+            throw new LineageContextException('canonical_identity_required');
+        }
+        if (!$storedModern && $requestedModern) {
+            throw new LineageContextException('canonical_identity_mismatch:contract_kind');
+        }
         $candidate = $this->buildIntent($orderParams, $quantization, $rawInputs, $context);
         $checks = [
             'exchange' => [$existing->getExchange(), $candidate->getExchange()],

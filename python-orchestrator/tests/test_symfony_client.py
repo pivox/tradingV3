@@ -54,9 +54,17 @@ def _expected_config_hash(payload: dict) -> str:
 
 def _canonical_identity() -> CanonicalTradingIdentity:
     catalog_hash = "sha256:" + "b" * 64
-    config = {"trade_entry": {"defaults": {}, "entry": {}, "risk": {}, "leverage": {}, "decision": {}, "fees": {}}}
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"}, "environment": {"id": "demo"},
+    }
     canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
     config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
     return CanonicalTradingIdentity(
         mode_id="scalping", mode_version="1.0.0", setup_id="scalping.pullback.long", setup_version="1.0.0",
         config_hash=config_hash, condition_catalog_hash=catalog_hash, side="LONG",
@@ -64,6 +72,8 @@ def _canonical_identity() -> CanonicalTradingIdentity:
         effective_config_snapshot={
             "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
             "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+            "provenance": {"mode.mode_id": layers[1]},
             "executable": True, "blockers": [],
         },
     )

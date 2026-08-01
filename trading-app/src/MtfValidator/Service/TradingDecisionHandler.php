@@ -63,7 +63,7 @@ final class TradingDecisionHandler
 
         $lineageContext ??= $mtfRunDto->lineageContext;
         $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
-        if ($lineageContext?->modeId !== null) {
+        if ($lineageContext?->isModern()) {
             $lineageContext->assertTradeBoundary(
                 $symbolResult->symbol,
                 (string) $symbolResult->signalSide,
@@ -77,11 +77,11 @@ final class TradingDecisionHandler
             symbolResult: $symbolResult,
             exchangeContext: $exchangeContext,
             strategyProfile: $resolvedMode,
-            strategyVersion: $lineageContext?->modeId !== null
+            strategyVersion: $lineageContext?->isModern()
                 ? (string) $lineageContext->modeVersion
                 : $tradeEntryConfig->getVersion(),
         );
-        if ($lineageContext?->modeId !== null) {
+        if ($lineageContext?->isModern()) {
             $decisionId = $lineageContext->decisionId ?? Uuid::uuid5(
                 Uuid::NAMESPACE_URL,
                 implode('|', [
@@ -339,7 +339,7 @@ final class TradingDecisionHandler
     /** @return array{string,TradeEntryConfig} */
     private function resolveTradeEntryConfig(?LineageContext $lineageContext, ?string $legacyMode): array
     {
-        if ($lineageContext?->modeId !== null) {
+        if ($lineageContext?->isModern()) {
             return [$lineageContext->modeId, CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)];
         }
 

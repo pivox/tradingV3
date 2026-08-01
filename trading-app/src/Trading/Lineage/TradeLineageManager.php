@@ -44,7 +44,7 @@ final class TradeLineageManager
         if ($identity === null && $this->containsModernIdentity($context)) {
             throw new \InvalidArgumentException('canonical_identity_typed_context_required');
         }
-        if ($identity?->modeId !== null) {
+        if ($identity?->isModern()) {
             $this->assertIntentMatchesIdentity($intent, $identity);
         }
         $context = $identity?->toArray() ?? $context;
@@ -61,7 +61,7 @@ final class TradeLineageManager
         if ($intentId !== null) {
             $existing = $this->repository->findOneByOrderIntentId($intentId);
             if ($existing instanceof TradeLineage) {
-                if ($identity?->modeId !== null) {
+                if ($identity?->isModern()) {
                     $this->assertCanonicalIdentityMatches($existing, $identity);
                 }
                 if ($paperProvenance !== null) {
@@ -76,7 +76,7 @@ final class TradeLineageManager
             ExchangeContext::fromValues($intent->getExchange(), $intent->getMarketType()),
         );
         if ($existingByClient instanceof TradeLineage) {
-            if ($identity?->modeId !== null) {
+            if ($identity?->isModern()) {
                 $this->assertCanonicalIdentityMatches($existingByClient, $identity);
             }
             if ($paperProvenance !== null) {

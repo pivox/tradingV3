@@ -38,7 +38,7 @@ class ExecutionSelectionService
         ?LineageContext $lineageContext = null,
         ?ExecutionSelectorMetrics $selectorMetrics = null,
     ): ExecutionSelectionDto {
-        if ($lineageContext?->modeId !== null) {
+        if ($lineageContext?->isModern()) {
             $lineageContext->assertTradeBoundary(
                 $symbol,
                 $lineageContext->side ?? '',

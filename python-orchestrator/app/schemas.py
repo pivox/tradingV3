@@ -84,12 +84,23 @@ class CanonicalEffectiveConfigRequest(BaseModel):
     side: Literal["long", "short"]
 
 
+class CanonicalEffectiveConfigLayer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    type: Literal["base", "mode", "setup", "exchange", "mode_exchange", "environment"]
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    required: Literal[True]
+
+
 class CanonicalEffectiveConfigSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
     request: CanonicalEffectiveConfigRequest
     config: FrozenDict
     config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    ordered_layers: Tuple[CanonicalEffectiveConfigLayer, ...]
+    ordered_files: Tuple[str, ...]
+    provenance: Mapping[str, CanonicalEffectiveConfigLayer]
     executable: bool
     blockers: Tuple[str, ...] = ()
 
@@ -106,8 +117,31 @@ class CanonicalEffectiveConfigSnapshot(BaseModel):
 
     @model_validator(mode="after")
     def _validate_hash(self) -> "CanonicalEffectiveConfigSnapshot":
+        expected_order = ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+        if tuple(layer.type for layer in self.ordered_layers) != expected_order:
+            raise ValueError("effective_config_snapshot_layer_order_invalid")
+        if tuple(layer.path for layer in self.ordered_layers) != self.ordered_files:
+            raise ValueError("effective_config_snapshot_layer_files_mismatch")
+        if not self.provenance:
+            raise ValueError("effective_config_snapshot_provenance_empty")
+        config = _thaw_snapshot(self.config)
+        if set(config) != {"schema_version", "units", "safety", "mode", "setup", "exchange", "environment"}:
+            raise ValueError("effective_config_snapshot_roots_invalid")
+        if config["schema_version"] != "effective-trading-config.v2":
+            raise ValueError("effective_config_snapshot_schema_version_invalid")
+        request = self.request
+        if (
+            config["mode"].get("mode_id") != request.mode_id
+            or config["mode"].get("mode_version") != request.mode_version
+            or config["setup"].get("setup_id") != request.setup_id
+            or config["setup"].get("setup_version") != request.setup_version
+            or config["setup"].get("side") != request.side
+            or config["exchange"].get("id") != request.exchange
+            or config["environment"].get("id") != request.environment
+        ):
+            raise ValueError("effective_config_snapshot_config_identity_mismatch")
         canonical = json.dumps(
-            {"config": _thaw_snapshot(self.config), "condition_catalog_hash": self.condition_catalog_hash},
+            {"config": config, "condition_catalog_hash": self.condition_catalog_hash},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

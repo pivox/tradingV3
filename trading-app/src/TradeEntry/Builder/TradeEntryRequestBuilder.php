@@ -55,7 +55,7 @@ final class TradeEntryRequestBuilder
             return null;
         }
 
-        if ($lineageContext?->modeId !== null) {
+        if ($lineageContext?->isModern()) {
             $lineageContext->assertTradeBoundary(
                 $symbol,
                 $side,
@@ -69,7 +69,7 @@ final class TradeEntryRequestBuilder
         $atr = $atr ?? null;
 
         // Charger la config selon le mode (même mécanisme que validations.{mode}.yaml)
-        $config = $lineageContext?->modeId !== null
+        $config = $lineageContext?->isModern()
             ? CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)
             : $this->getConfigForMode($mode);
         if (!is_string($executionTf) || $executionTf === '') {
@@ -82,6 +82,9 @@ final class TradeEntryRequestBuilder
         }
         $executionTf = strtolower($executionTf);
         $defaults = $config->getDefaults();
+        if ($lineageContext?->isModern() && !array_key_exists('initial_margin_usdt', $defaults)) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_config_unresolved:trade_entry.initial_margin_usdt');
+        }
 
         // Multiplicateur TF pour le TP (r_multiple), configuré côté defaults
         $defaultsTfMultipliers = $defaults['timeframe_multipliers'] ?? [];

@@ -25,7 +25,7 @@ final class BuildOrderPlan
 
     public function __invoke(TradeEntryRequest $req, PreflightReport $pre, ?string $decisionKey = null): OrderPlanModel
     {
-        $identity = $req->lineageContext?->modeId !== null ? $req->canonicalIdentity() : null;
+        $identity = $req->lineageContext?->isModern() ? $req->canonicalIdentity() : null;
         if ($identity !== null && $decisionKey !== $identity->decisionKey) {
             throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
         }

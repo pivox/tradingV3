@@ -13,6 +13,8 @@ namespace App\Trading\Lineage;
  */
 final readonly class LineageContext
 {
+    public const CONTRACT_LEGACY = 'legacy';
+    public const CONTRACT_MODERN = 'modern';
     public const ORIGIN_ORCHESTRATOR = 'orchestrator';
     public const ORIGIN_LEGACY = 'legacy';
     public const ORIGIN_MANUAL = 'manual';
@@ -28,6 +30,8 @@ final readonly class LineageContext
         'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'version' => '1.0.0'],
         'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
     ];
+
+    public string $contractKind;
 
     public function __construct(
         public string $origin,
@@ -67,7 +71,15 @@ final readonly class LineageContext
         public ?string $effectiveConfigReference = null,
         /** Validated immutable effective configuration supplied by the orchestrator. */
         public ?CanonicalEffectiveConfigSnapshot $effectiveConfigSnapshot = null,
+        ?string $contractKind = null,
     ) {
+        $this->contractKind = $contractKind ?? (($modeId !== null || $setupId !== null) ? self::CONTRACT_MODERN : self::CONTRACT_LEGACY);
+        if (!\in_array($this->contractKind, [self::CONTRACT_LEGACY, self::CONTRACT_MODERN], true)) {
+            throw new LineageContextException('canonical_identity_invalid:contract_kind');
+        }
+        if (($modeId !== null || $setupId !== null) && $this->contractKind !== self::CONTRACT_MODERN) {
+            throw new LineageContextException('canonical_identity_mismatch:contract_kind');
+        }
         if (!\in_array($origin, [self::ORIGIN_ORCHESTRATOR, self::ORIGIN_LEGACY, self::ORIGIN_MANUAL, self::ORIGIN_REPLAY], true)) {
             throw new LineageContextException(sprintf('origin "%s" non supporte.', $origin));
         }
@@ -80,7 +92,7 @@ final readonly class LineageContext
         if ($side !== null && !\in_array($side, ['LONG', 'SHORT'], true)) {
             throw new LineageContextException('canonical_identity_invalid:side');
         }
-        if ($modeId !== null || $setupId !== null) {
+        if ($this->isModern()) {
             self::assertCanonicalPayload([
                 'orchestration_run_id' => $orchestrationRunId,
                 'correlation_run_id' => $correlationRunId,
@@ -115,6 +127,10 @@ final readonly class LineageContext
     public static function fromOrchestratorPayload(array $payload): self
     {
         $canonical = self::hasCanonicalIdentity($payload);
+        $contractKind = self::string($payload['contract_kind'] ?? null) ?? ($canonical ? self::CONTRACT_MODERN : self::CONTRACT_LEGACY);
+        if ($canonical && $contractKind !== self::CONTRACT_MODERN) {
+            throw new LineageContextException('canonical_identity_mismatch:contract_kind');
+        }
         $runId = $canonical
             ? self::string($payload['orchestration_run_id'] ?? null)
             : self::firstString($payload, ['run_id', 'original_run_id', 'orchestration_run_id']);
@@ -171,6 +187,7 @@ final readonly class LineageContext
             tradeId: self::string($payload['trade_id'] ?? $payload['internal_trade_id'] ?? null),
             effectiveConfigReference: self::string($payload['effective_config_reference'] ?? null),
             effectiveConfigSnapshot: self::effectiveConfigSnapshot($payload),
+            contractKind: $contractKind,
         );
     }
 
@@ -198,7 +215,12 @@ final readonly class LineageContext
         if ($environment !== null) {
             $data['environment'] = $environment;
         }
-        if (self::hasCanonicalIdentity($data)) {
+        $canonical = self::hasCanonicalIdentity($data);
+        $contractKind = self::string($data['contract_kind'] ?? null) ?? ($canonical ? self::CONTRACT_MODERN : self::CONTRACT_LEGACY);
+        if ($canonical && $contractKind !== self::CONTRACT_MODERN) {
+            throw new LineageContextException('canonical_identity_mismatch:contract_kind');
+        }
+        if ($canonical) {
             self::assertCanonicalPayload($data);
         }
 
@@ -239,6 +261,7 @@ final readonly class LineageContext
             tradeId: self::string($data['trade_id'] ?? null),
             effectiveConfigReference: self::string($data['effective_config_reference'] ?? null),
             effectiveConfigSnapshot: self::effectiveConfigSnapshot($data),
+            contractKind: $contractKind,
         );
     }
 
@@ -281,6 +304,7 @@ final readonly class LineageContext
             tradeId: $this->tradeId,
             effectiveConfigReference: $this->effectiveConfigReference,
             effectiveConfigSnapshot: $this->effectiveConfigSnapshot,
+            contractKind: $this->contractKind,
         );
     }
 
@@ -306,7 +330,7 @@ final readonly class LineageContext
         ?string $marketType = null,
         bool $requireDecision = true,
     ): self {
-        if ($this->modeId === null || $this->setupId === null) {
+        if (!$this->isModern() || $this->modeId === null || $this->setupId === null) {
             throw new LineageContextException('canonical_identity_missing:modern_contract');
         }
         $checks = [
@@ -366,6 +390,11 @@ final readonly class LineageContext
         return $this;
     }
 
+    public function isModern(): bool
+    {
+        return $this->contractKind === self::CONTRACT_MODERN;
+    }
+
     /**
      * @return array<string,mixed>
      */
@@ -373,6 +402,7 @@ final readonly class LineageContext
     {
         return array_filter([
             'origin' => $this->origin,
+            'contract_kind' => $this->contractKind,
             'orchestration_run_id' => $this->orchestrationRunId,
             'correlation_run_id' => $this->correlationRunId,
             'orchestration_set_id' => $this->orchestrationSetId,

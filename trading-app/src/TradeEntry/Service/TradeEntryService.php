@@ -146,7 +146,7 @@ final class TradeEntryService
             ]);
         }
 
-        $entryConfig = $request->lineageContext?->modeId !== null
+        $entryConfig = $request->lineageContext?->isModern()
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
@@ -387,7 +387,7 @@ final class TradeEntryService
             'reason' => 'simulate_trade_entry',
         ]);
 
-        $entryConfig = $request->lineageContext?->modeId !== null
+        $entryConfig = $request->lineageContext?->isModern()
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
         $configDefaults = $entryConfig->getDefaults();
@@ -512,7 +512,7 @@ final class TradeEntryService
 
     private function assertCanonicalRequest(TradeEntryRequest $request, ?string $decisionKey, ?string $mode): void
     {
-        if ($request->lineageContext?->modeId === null) {
+        if (!$request->lineageContext?->isModern()) {
             return;
         }
         $identity = $request->canonicalIdentity();
@@ -779,7 +779,7 @@ final class TradeEntryService
             }
 
             $submittedIdentity = $request->lineageContext;
-            if ($submittedIdentity?->modeId !== null) {
+            if ($submittedIdentity?->isModern()) {
                 $submittedIdentity = $submittedIdentity->withIntent(
                     $submittedIdentity->intentId ?? 'int:' . substr(hash('sha256', (string) $submittedIdentity->decisionKey), 0, 48),
                 )->withExecution(

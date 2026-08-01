@@ -13,6 +13,32 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(LineageContext::class)]
 final class LineageContextTest extends TestCase
 {
+    public function testCanonicalHashMatchesPythonForFullPhpShapedUnicodeSnapshot(): void
+    {
+        $config = [
+            'schema_version' => 'effective-trading-config.v2',
+            'units' => ['percent' => 'percentage_points', 'duration' => 'iso8601', 'price' => 'quote_price', 'notional' => 'quote_notional'],
+            'safety' => ['mainnet_write_enabled' => false, 'demo_testnet_write_enabled' => false, 'require_stop_loss' => true, 'kill_switch_enabled' => true],
+            'mode' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0'],
+            'setup' => ['setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'side' => 'long'],
+            'exchange' => ['id' => 'fake'],
+            'environment' => ['id' => 'demo', 'note' => 'café/path'],
+        ];
+        self::assertSame(
+            'sha256:06f3de28b7b0269688c30ccc4b88bedd9888bf33c360c463ed19717c3aa2cca7',
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, self::CATALOG_HASH),
+        );
+    }
+    public function testContractKindExplicitlyDiscriminatesLegacyAndModernContexts(): void
+    {
+        self::assertFalse(LineageContext::legacy('BTCUSDT', 'bitmart', 'perpetual')->isModern());
+        self::assertTrue(LineageContext::fromOrchestratorPayload($this->canonicalPayload())->isModern());
+
+        $payload = $this->canonicalPayload();
+        $payload['contract_kind'] = 'legacy';
+        $this->expectExceptionMessage('canonical_identity_mismatch:contract_kind');
+        LineageContext::fromOrchestratorPayload($payload);
+    }
     private const CONFIG_HASH = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     private const CATALOG_HASH = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
@@ -259,14 +285,14 @@ final class LineageContextTest extends TestCase
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'effective_config_reference' => 'effective-config:cfg-1',
-            'effective_config_snapshot' => [
+            'effective_config_snapshot' => CanonicalSnapshotMetadataFixture::enrich([
                 'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],
                 'config' => $config,
                 'config_hash' => $configHash,
                 'condition_catalog_hash' => self::CATALOG_HASH,
                 'executable' => true,
                 'blockers' => [],
-            ],
+            ]),
             'dry_run' => true,
         ];
     }
