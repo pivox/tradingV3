@@ -9,7 +9,11 @@ use App\TradingCore\Setup\Exception\SetupContractException;
 final class SetupContractValidator
 {
     public const PROVENANCE_PATHS = [
-        'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters', 'filters.lev_bounds',
+        'mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations',
+        'filters', 'filters.lev_bounds', 'no_trade_rules',
+        'execution.entry_zone', 'execution.stop', 'execution.targets', 'execution.minimum_net_r',
+        'execution.invalidation', 'execution.time_stop', 'validity_window',
+        'execution.cost_contract', 'execution.order_policy', 'execution.risk_boundary', 'legacy.retest_variant',
     ];
     public const SETUP_IDS = [
         'day_trading.trend_continuation.long', 'day_trading.trend_continuation.short',
@@ -85,13 +89,19 @@ final class SetupContractValidator
         foreach (['schema_version', 'setup_id', 'setup_version', 'status', 'family', 'side', 'thesis', 'hypothesis', 'ownership_model'] as $key) {
             $this->string($document, $key, 'contract');
         }
-        if ($document['schema_version'] !== '1.0.0' || $document['setup_version'] !== '1.0.0') {
-            throw new SetupContractException('Only setup schema/version 1.0.0 is published; aliases and ranges are forbidden.');
+        $isCrashDecision = $document['setup_id'] === 'crash_short' && $document['setup_version'] === '1.1.0';
+        if ($document['schema_version'] !== '1.0.0'
+            || (!($document['setup_id'] === 'crash_short' && in_array($document['setup_version'], ['1.0.0', '1.1.0'], true))
+                && $document['setup_version'] !== '1.0.0')) {
+            throw new SetupContractException('Only exact published setup versions are accepted; aliases and ranges are forbidden.');
         }
         if (!isset(self::EXPECTED[$document['setup_id']])) {
             throw new SetupContractException(sprintf('Unknown canonical setup id "%s".', $document['setup_id']));
         }
         [$status, $side, $mode] = self::EXPECTED[$document['setup_id']];
+        if ($isCrashDecision) {
+            $status = 'blocked';
+        }
         if (!in_array($document['status'], self::STATUSES, true) || $document['status'] !== $status || $document['side'] !== $side) {
             throw new SetupContractException('Setup identity, initial status, or side differs from the frozen catalog.');
         }
@@ -129,8 +139,9 @@ final class SetupContractValidator
         }
         $compatibility = $this->map($document, 'mode_compatibility', 'contract');
         $this->exact($compatibility, ['state', 'issue', 'justification'], 'mode_compatibility');
-        if ($mode === null && ($compatibility['state'] !== 'unresolved' || $compatibility['issue'] !== '#310')) {
-            throw new SetupContractException('crash_short mode compatibility must remain unresolved pending #310.');
+        $expectedCrashCompatibility = $isCrashDecision ? 'distinct_operational_envelope' : 'unresolved';
+        if ($mode === null && ($compatibility['state'] !== $expectedCrashCompatibility || $compatibility['issue'] !== '#310')) {
+            throw new SetupContractException('crash_short mode compatibility must match its exact versioned #310 decision.');
         }
         if ($mode !== null && ($compatibility['state'] !== 'defined' || $compatibility['issue'] !== null)) {
             throw new SetupContractException('Catalogued setup compatibility must be defined without an issue placeholder.');
@@ -155,9 +166,19 @@ final class SetupContractValidator
         }
 
         $execution = $this->map($document, 'execution', 'contract');
-        $this->exact($execution, ['side', 'entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'], 'execution');
+        $executionKeys = ['side', 'entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'];
+        if ($isCrashDecision) {
+            $executionKeys[] = 'order_policy';
+            $executionKeys[] = 'risk_boundary';
+        }
+        $this->exact($execution, $executionKeys, 'execution');
         foreach (['entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'] as $key) {
-            $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key);
+            $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key, $isCrashDecision && $key === 'cost_contract');
+        }
+        if ($isCrashDecision) {
+            foreach (['order_policy', 'risk_boundary'] as $key) {
+                $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key, true);
+            }
         }
         $this->decision($this->map($document, 'validity_window', 'contract'), 'validity_window');
 
@@ -309,14 +330,21 @@ final class SetupContractValidator
     }
 
     /** @param array<string, mixed> $decision */
-    private function decision(array $decision, string $path): void
+    private function decision(array $decision, string $path, bool $requiresUnknownPolicy = false): void
     {
-        $this->exact($decision, ['state', 'value', 'unit', 'source', 'justification'], $path);
+        $keys = ['state', 'value', 'unit', 'source', 'justification'];
+        if ($requiresUnknownPolicy) {
+            $keys[] = 'unknown_policy';
+        }
+        $this->exact($decision, $keys, $path);
         if (!in_array($decision['state'] ?? null, ['defined', 'unresolved'], true)) {
             throw new SetupContractException($path . '.state must be defined or unresolved.');
         }
         foreach (['unit', 'source', 'justification'] as $key) {
             $this->string($decision, $key, $path);
+        }
+        if ($requiresUnknownPolicy && ($decision['unknown_policy'] ?? null) !== 'reject') {
+            throw new SetupContractException($path . '.unknown_policy must reject.');
         }
         if (($decision['state'] === 'unresolved') !== ($decision['value'] === null)) {
             throw new SetupContractException($path . ' state/value mismatch.');

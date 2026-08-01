@@ -63,6 +63,141 @@ final class SetupContractLoaderTest extends TestCase
         self::assertCount(8, array_unique($ids));
     }
 
+    public function testCrashDecisionUsesANewExactVersionWithoutCreatingANinthIdentity(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $legacy = $loader->load('crash_short', '1.0.0')->toArray();
+        $decided = $loader->load('crash_short', '1.1.0');
+        $document = $decided->toArray();
+
+        self::assertSame('unresolved', $legacy['mode_compatibility']['state']);
+        self::assertSame('1.1.0', $decided->setupVersion);
+        self::assertSame('blocked', $decided->status);
+        self::assertSame([], $document['compatible_modes']);
+        self::assertSame('distinct_operational_envelope', $document['mode_compatibility']['state']);
+        self::assertSame('#310', $document['mode_compatibility']['issue']);
+        self::assertFalse($decided->isExecutable());
+        self::assertFalse((new SetupCompiler())->compile($decided)->publishable);
+
+        $ids = array_map('basename', glob($this->root . '/*', GLOB_ONLYDIR) ?: []);
+        self::assertCount(8, array_unique($ids));
+        self::assertNotContains('crash', $ids);
+        self::assertNotContains('crash_pullback', $ids);
+    }
+
+    public function testCrashDecisionRemovesRedundantPullbackOrFromCanonicalAst(): void
+    {
+        $snapshot = (new SetupCompiler())->compile(
+            (new SetupContractLoader($this->root))->load('crash_short', '1.1.0'),
+        );
+        $confirmations = $snapshot->ast['confirmations'];
+
+        self::assertSame('any_of', $confirmations['op']);
+        self::assertCount(2, $confirmations['nodes']);
+        self::assertSame(
+            ['crash_context_ok', 'crash_short_pattern_5m'],
+            array_column($confirmations['nodes'][0]['nodes'], 'condition'),
+        );
+        self::assertSame('execution_variant=5m_default', $confirmations['nodes'][0]['provenance']);
+        self::assertSame('execution_variant=1m_extreme', $confirmations['nodes'][1]['provenance']);
+        self::assertStringNotContainsString(
+            'crash_short_entry_1m',
+            json_encode($snapshot->ast, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    public function testCrashDecisionIsCompleteButFailsClosedOnUnknownExecutionAndRiskInputs(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('crash_short', '1.1.0');
+        $document = $contract->toArray();
+
+        foreach (['entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract', 'order_policy', 'risk_boundary'] as $key) {
+            self::assertSame('unresolved', $document['execution'][$key]['state'], $key);
+            self::assertNull($document['execution'][$key]['value'], $key);
+        }
+        self::assertSame('reject', $document['execution']['cost_contract']['unknown_policy']);
+        self::assertSame('reject', $document['execution']['order_policy']['unknown_policy']);
+        self::assertSame('future_compatible_envelope', $document['execution']['risk_boundary']['unit']);
+        self::assertSame('unresolved', $document['validity_window']['state']);
+        self::assertContains('execution.cost_contract', $contract->unresolvedPaths());
+        self::assertContains('execution.risk_boundary', $contract->unresolvedPaths());
+
+        $blockers = implode(' ', array_merge(
+            $document['governance']['shadow'],
+            $document['governance']['paper'],
+            $document['governance']['promotion'],
+        ));
+        foreach (['#303', '#304', '#132', '#191'] as $issue) {
+            self::assertStringContainsString($issue, $blockers);
+        }
+        self::assertStringNotContainsString('BitMart fallback', $blockers);
+    }
+
+    public function testCrashDecisionProvenanceInventoriesValidationAndTradeEntrySources(): void
+    {
+        $document = (new SetupContractLoader($this->root))->load('crash_short', '1.1.0')->toArray();
+        $sources = array_column($document['provenance'], 'source', 'path');
+
+        foreach (['mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters', 'no_trade_rules'] as $path) {
+            self::assertStringContainsString('validations.crash.yaml:', $sources[$path]);
+        }
+        foreach (['execution.entry_zone', 'execution.stop', 'execution.targets', 'execution.minimum_net_r', 'execution.invalidation', 'execution.time_stop', 'execution.cost_contract', 'execution.order_policy', 'execution.risk_boundary', 'validity_window'] as $path) {
+            self::assertStringContainsString('trade_entry.crash.yaml:', $sources[$path]);
+        }
+        self::assertStringContainsString('redundant', $sources['legacy.retest_variant']);
+    }
+
+    public function testCrashDecisionFixturesStatePassFailOrBlockWithoutRuntimeClaims(): void
+    {
+        $fixture = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Setup/crash-short-1.1.0-scenarios.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($fixture);
+        self::assertSame('crash_short', $fixture['setup_id']);
+        self::assertSame('1.1.0', $fixture['setup_version']);
+        self::assertFalse($fixture['runtime_executable']);
+        self::assertSame(
+            [
+                'crash' => 'pass',
+                'false_crash' => 'fail',
+                'terminal_wick' => 'fail',
+                'valid_retest' => 'block',
+                'invalid_retest' => 'fail',
+            ],
+            array_column($fixture['scenarios'], 'expectation', 'id'),
+        );
+        foreach ($fixture['scenarios'] as $scenario) {
+            self::assertNotSame('', trim($scenario['rationale']));
+            self::assertNotSame([], $scenario['evidence']);
+        }
+    }
+
+    public function testCrashDecisionHasOpisAndPhpParityAndRejectsVersionDrift(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $document = $this->yaml($this->root . '/crash_short/1.1.0.yaml');
+        $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+
+        self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid());
+        (new SetupContractValidator())->validate($document);
+
+        $wrongIdentity = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $wrongIdentity['setup_version'] = '1.1.0';
+        $this->assertPhpAndSchemaReject($wrongIdentity, '1.1.0 is crash_short-only');
+
+        $costFallback = $document;
+        $costFallback['execution']['cost_contract']['unknown_policy'] = 'zero';
+        $this->assertPhpAndSchemaReject($costFallback, 'unknown crash costs cannot resolve to zero');
+
+        $legacyWithDecisionFields = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
+        $legacyWithDecisionFields['execution']['order_policy'] = $document['execution']['order_policy'];
+        $legacyWithDecisionFields['execution']['risk_boundary'] = $document['execution']['risk_boundary'];
+        $this->assertPhpAndSchemaReject($legacyWithDecisionFields, '1.1.0 decision fields on crash_short 1.0.0');
+    }
+
     public function testSourceOriginsPinExactCurrentContentHashes(): void
     {
         $expected = [

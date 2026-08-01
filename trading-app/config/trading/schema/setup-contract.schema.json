@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": { "const": "1.0.0" },
     "setup_id": { "enum": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short", "scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short", "micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short", "crash_short"] },
-    "setup_version": { "const": "1.0.0" },
+    "setup_version": { "enum": ["1.0.0", "1.1.0"] },
     "status": { "enum": ["draft", "blocked", "shadow", "paper", "candidate", "active", "retired"] },
     "executable": { "const": false },
     "family": { "$ref": "#/$defs/nonEmpty" },
@@ -40,7 +40,8 @@
         "side": { "enum": ["long", "short"] }, "entry_zone": { "$ref": "#/$defs/decision" },
         "stop": { "$ref": "#/$defs/decision" }, "targets": { "$ref": "#/$defs/decision" },
         "minimum_net_r": { "$ref": "#/$defs/decision" }, "invalidation": { "$ref": "#/$defs/decision" },
-        "time_stop": { "$ref": "#/$defs/decision" }, "cost_contract": { "$ref": "#/$defs/decision" }
+        "time_stop": { "$ref": "#/$defs/decision" }, "cost_contract": { "oneOf": [{ "$ref": "#/$defs/decision" }, { "$ref": "#/$defs/failClosedDecision" }] },
+        "order_policy": { "$ref": "#/$defs/failClosedDecision" }, "risk_boundary": { "$ref": "#/$defs/failClosedDecision" }
       }
     },
     "data_condition_contract": {
@@ -83,8 +84,10 @@
     { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "micro_scalping.momentum_ofi.long"] } } }, "then": { "properties": { "side": { "const": "long" } } }, "else": { "properties": { "side": { "const": "short" } } } },
     { "if": { "properties": { "side": { "const": "long" } }, "required": ["side"] }, "then": { "properties": { "context": { "properties": { "side": { "const": "long" } } }, "execution": { "properties": { "side": { "const": "long" } } } } } },
     { "if": { "properties": { "side": { "const": "short" } }, "required": ["side"] }, "then": { "properties": { "context": { "properties": { "side": { "const": "short" } } }, "execution": { "properties": { "side": { "const": "short" } } } } } },
-    { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.short", "micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } }, "then": { "properties": { "status": { "const": "blocked" } } }, "else": { "properties": { "status": { "const": "draft" } } } },
-    { "if": { "properties": { "setup_id": { "const": "crash_short" } } }, "then": { "properties": { "compatible_modes": { "maxItems": 0 }, "mode_compatibility": { "properties": { "state": { "const": "unresolved" }, "issue": { "const": "#310" } } } } }, "else": { "properties": { "compatible_modes": { "minItems": 1, "maxItems": 1 }, "mode_compatibility": { "properties": { "state": { "const": "defined" }, "issue": { "type": "null" } } } } } },
+    { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.short", "micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } }, "then": { "properties": { "status": { "const": "blocked" } } }, "else": { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "status": { "const": "blocked" } } }, "else": { "properties": { "status": { "const": "draft" } } } } },
+    { "if": { "properties": { "setup_id": { "const": "crash_short" } } }, "then": { "properties": { "compatible_modes": { "maxItems": 0 }, "mode_compatibility": { "properties": { "issue": { "const": "#310" } } } } }, "else": { "properties": { "setup_version": { "const": "1.0.0" }, "compatible_modes": { "minItems": 1, "maxItems": 1 }, "mode_compatibility": { "properties": { "state": { "const": "defined" }, "issue": { "type": "null" } } } } } },
+    { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.0.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "mode_compatibility": { "properties": { "state": { "const": "unresolved" } } } } } },
+    { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "mode_compatibility": { "properties": { "state": { "const": "distinct_operational_envelope" } } }, "execution": { "required": ["side", "entry_zone", "stop", "targets", "minimum_net_r", "invalidation", "time_stop", "cost_contract", "order_policy", "risk_boundary"] } } }, "else": { "properties": { "execution": { "properties": { "cost_contract": { "$ref": "#/$defs/decision" } }, "not": { "anyOf": [{ "required": ["order_policy"] }, { "required": ["risk_boundary"] }] } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "day_trading" } } } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "scalping" } } } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "micro_scalping" } } } } } } }
@@ -102,7 +105,7 @@
     },
     "modeCompatibility": {
       "type": "object", "additionalProperties": false, "required": ["state", "issue", "justification"],
-      "properties": { "state": { "enum": ["defined", "unresolved"] }, "issue": { "type": ["string", "null"] }, "justification": { "$ref": "#/$defs/nonEmpty" } }
+      "properties": { "state": { "enum": ["defined", "unresolved", "distinct_operational_envelope"] }, "issue": { "type": ["string", "null"] }, "justification": { "$ref": "#/$defs/nonEmpty" } }
     },
     "rules": { "type": "array", "items": { "$ref": "#/$defs/expression" } },
     "expression": { "oneOf": [{ "$ref": "#/$defs/leaf" }, { "$ref": "#/$defs/group" }] },
@@ -165,6 +168,10 @@
         { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "not": { "type": "null" } } } } }
       ]
     },
+    "failClosedDecision": {
+      "type": "object", "additionalProperties": false, "required": ["state", "value", "unit", "source", "justification", "unknown_policy"],
+      "properties": { "state": { "const": "unresolved" }, "value": { "type": "null" }, "unit": { "$ref": "#/$defs/nonEmpty" }, "source": { "$ref": "#/$defs/nonEmpty" }, "justification": { "$ref": "#/$defs/nonEmpty" }, "unknown_policy": { "const": "reject" } }
+    },
     "conditionCatalogHash": {
       "allOf": [
         { "$ref": "#/$defs/decision" },
@@ -179,7 +186,7 @@
     "criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmpty" } },
     "provenance": {
       "type": "object", "additionalProperties": false, "required": ["path", "source", "justification"],
-      "properties": { "path": { "enum": ["context.regime", "context.context", "context.trigger", "context.confirmations", "filters", "filters.lev_bounds"] }, "source": { "$ref": "#/$defs/nonEmpty" }, "justification": { "$ref": "#/$defs/nonEmpty" } }
+      "properties": { "path": { "enum": ["mode_compatibility", "context.regime", "context.context", "context.trigger", "context.confirmations", "filters", "filters.lev_bounds", "no_trade_rules", "execution.entry_zone", "execution.stop", "execution.targets", "execution.minimum_net_r", "execution.invalidation", "execution.time_stop", "validity_window", "execution.cost_contract", "execution.order_policy", "execution.risk_boundary", "legacy.retest_variant"] }, "source": { "$ref": "#/$defs/nonEmpty" }, "justification": { "$ref": "#/$defs/nonEmpty" } }
     }
   }
 }

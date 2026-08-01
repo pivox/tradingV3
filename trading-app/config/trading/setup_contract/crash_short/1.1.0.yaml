@@ -1,0 +1,107 @@
+schema_version: '1.0.0'
+setup_id: crash_short
+setup_version: '1.1.0'
+status: blocked
+executable: false
+family: crash_short
+side: short
+thesis: 'Strict bearish 4h/1h context plus 15m confirmation may precede continued downside on a sourced 5m-default or extreme-1m execution variant.'
+source_origin: { file: 'src/MtfValidator/config/validations.crash.yaml', line_range: '5-16,136-137,164-167,169-305', content_sha256: 5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2, commit: d1d9a174960660e88f84c54850ef61181d39a880 }
+compatible_modes: []
+mode_compatibility:
+  state: distinct_operational_envelope
+  issue: '#310'
+  justification: 'The 4h/1h regime resembles day_trading while 5m/1m volatility execution resembles scalping; unresolved horizon, time-stop, risk, costs, fill and exit policy and unsafe legacy fallbacks prove compatibility with neither mode contract 1.0.0. This is an operational classification, not a crash mode.'
+hypothesis: 'Only a complete bearish cascade—not RSI alone—qualifies: 4h regime, 1h crash context, 15m bearish EMA/MACD/below-VWAP/ATR confirmation, then either the 5m default volume-backed cascade or extreme 1m timing.'
+context:
+  side: short
+  regime:
+    op: all_of
+    provenance: 'validations.crash.yaml:259-264'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 4h, provenance: 'validations.crash.yaml:263' }
+  context:
+    op: all_of
+    provenance: 'validations.crash.yaml:265-269'
+    nodes:
+      - { condition: crash_context_ok, timeframe: 1h, provenance: 'validations.crash.yaml:269' }
+  trigger:
+    op: all_of
+    provenance: 'validations.crash.yaml:271-276; 15m confirmation'
+    nodes:
+      - { condition: crash_context_ok, timeframe: 15m, provenance: 'validations.crash.yaml:275' }
+      - { condition: crash_short_pattern_15m, timeframe: 15m, provenance: 'validations.crash.yaml:178-184,276' }
+  confirmations:
+    op: any_of
+    provenance: 'validations.crash.yaml:278-305; corrected 5m-default or 1m-extreme execution variants; redundant retest subset omitted'
+    nodes:
+      - op: all_of
+        provenance: 'execution_variant=5m_default'
+        nodes:
+          - { condition: crash_context_ok, timeframe: 5m, provenance: 'validations.crash.yaml:284' }
+          - { condition: crash_short_pattern_5m, timeframe: 5m, provenance: 'validations.crash.yaml:186-194,285' }
+      - op: all_of
+        provenance: 'execution_variant=1m_extreme'
+        nodes:
+          - { condition: crash_context_ok, timeframe: 1m, provenance: 'validations.crash.yaml:299' }
+          - { condition: crash_short_pattern_1m, timeframe: 1m, provenance: 'validations.crash.yaml:196-203,300' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
+  - { condition: lev_bounds, timeframe: global, provenance: 'validations.crash.yaml:164-167,247-249; values remain externally owned' }
+no_trade_rules:
+  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194; terminal-wick guard' }
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'config/app/trade_entry.crash.yaml:189-205', justification: 'Legacy VWAP/ATR width exists but lacks certified crash evidence and a compatible operational envelope.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'config/app/trade_entry.crash.yaml:34-42', justification: 'Legacy pivot/ATR fallback is not certified and profile propagation into SL paths is defective.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'config/app/trade_entry.crash.yaml:30-49,79-85', justification: 'Conflicting nominal target values and profile-loss defects prevent a canonical exit policy.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'config/app/trade_entry.crash.yaml:30-32', justification: 'Nominal gross R=1.0 has no certified net evidence after costs.' }
+  invalidation: { state: unresolved, value: null, unit: thesis_invalidation_policy, source: 'not defined by either legacy source', justification: 'No complete thesis invalidation or setup identity lifecycle is sourced.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'config/app/trade_entry.crash.yaml:79-85', justification: 'A nested 45-minute legacy value does not establish the full holding horizon or prove propagation.' }
+  cost_contract: { state: unresolved, value: null, unit: certified_net_cost_model, source: 'not defined by either legacy source', justification: 'Maker/taker fees, spread, slippage and funding are absent; zero-cost resolution is forbidden.', unknown_policy: reject }
+  order_policy: { state: unresolved, value: null, unit: fail_closed_order_policy, source: 'config/app/trade_entry.crash.yaml:51-58,139-183', justification: 'Maker preference conflicts with enabled taker/market fallbacks during volatility; no BitMart or venue fallback may be inferred.', unknown_policy: reject }
+  risk_boundary: { state: unresolved, value: null, unit: future_compatible_envelope, source: 'config/app/trade_entry.crash.yaml:19-28,65-128', justification: 'Conflicting multi-stage timeframe multipliers and profile-loss defects prevent setup-owned risk; a future compatible envelope must bound risk.', unknown_policy: reject }
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema_20, ema_50, ema_200, ema_200_slope, macd_hist, adx, rsi_5m, rsi_1m, atr_15m, atr_5m, vwap_15m, vwap_5m, vwap_1m, volume_ratio_5m, volume_ratio_1m, leverage_context]
+  missing_conditions: []
+  external_dependencies:
+    - { dependency_id: lev_bounds, state: unresolved, owner: mode_or_exchange, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Legacy bounds cannot become setup-owned leverage policy; authoritative modern limits are unresolved.', failure_policy: reject }
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No condition catalog hash is fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by either legacy source', justification: 'No full setup duration or freshness horizon is sourced.' }
+governance:
+  shadow: ['#303 typed evaluator defines observable 5m/1m variant traces and any future bearish retest-resumption condition', '#304 supplies a compatible fail-closed operational risk/order envelope', '#132 attaches certified Paper evidence', '#191 attaches certified net outcome and cost evidence']
+  paper: ['all #303/#304 contract blockers resolved under a new semantic version', '#132/#191 certified Paper evidence includes crash, false-crash, terminal-wick and retest vectors', 'unknown or incomplete costs reject']
+  promotion: ['independent risk review after #303/#304', 'certified net baseline from #132/#191', 'new semantic version explicitly names a compatible mode or approved envelope']
+  suspension: ['critical data absent or stale', 'unknown costs or venue capabilities', 'condition or trace breach']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk or order invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'No current mode contract version is compatible; distinct operational envelope is a classification, not a fifth mode.'
+  - 'Legacy crash_short_entry_1m is a strict subset of the normal 1m branch, so the redundant OR is removed without creating a ninth setup.'
+  - 'Legacy crash_pullback_ready is bullish-only and has no explicit bearish-resumption trigger; retest remains outside the canonical executable hypothesis pending #303.'
+  - 'Costs, complete validity, thesis invalidation, setup lifecycle, safe fill policy and authoritative risk/exit ownership remain unresolved.'
+  - 'Legacy timeframe multipliers occur at multiple stages and crash profile propagation is not preserved through leverage and TP/SL paths.'
+provenance:
+  - { path: mode_compatibility, source: 'src/MtfValidator/config/validations.crash.yaml:5-16; config/app/trade_entry.crash.yaml:7-12,131-183', justification: 'Mixed day-like context and scalp-like volatile execution plus unresolved legacy operations require a distinct envelope.' }
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.crash.yaml:259-264', justification: 'Strict 4h bearish regime.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.crash.yaml:265-269', justification: 'Strict 1h crash context.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.crash.yaml:271-276', justification: '15m bearish confirmation.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.crash.yaml:278-305', justification: 'Observable 5m-default and 1m-extreme execution variants.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.crash.yaml:244-249', justification: 'Global RSI and leverage filters.' }
+  - { path: filters.lev_bounds, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Safety dependency stays external and unresolved.' }
+  - { path: no_trade_rules, source: 'src/MtfValidator/config/validations.crash.yaml:136-137,186-194', justification: '5m RSI floor is the sourced terminal-wick guard.' }
+  - { path: execution.entry_zone, source: 'config/app/trade_entry.crash.yaml:189-205', justification: 'Legacy proposal inventories the source but is not promoted as certified.' }
+  - { path: execution.stop, source: 'config/app/trade_entry.crash.yaml:34-42', justification: 'Legacy pivot/ATR proposal remains unresolved.' }
+  - { path: execution.targets, source: 'config/app/trade_entry.crash.yaml:30-49,79-85', justification: 'Legacy target proposals conflict and lack net evidence.' }
+  - { path: execution.minimum_net_r, source: 'config/app/trade_entry.crash.yaml:30-32', justification: 'Nominal gross R lacks certified net evidence.' }
+  - { path: execution.invalidation, source: 'config/app/trade_entry.crash.yaml:1-205; no thesis invalidation contract', justification: 'Absence is explicit and fail-closed.' }
+  - { path: execution.time_stop, source: 'config/app/trade_entry.crash.yaml:79-85', justification: 'Nested 45-minute value is incomplete and propagation is unproven.' }
+  - { path: execution.cost_contract, source: 'config/app/trade_entry.crash.yaml:1-205; no fee/funding contract', justification: 'Source inventory proves cost absence; unknown rejects.' }
+  - { path: execution.order_policy, source: 'config/app/trade_entry.crash.yaml:51-58,139-183', justification: 'Conflicting maker preference and market/taker fallback are not canonicalized.' }
+  - { path: execution.risk_boundary, source: 'config/app/trade_entry.crash.yaml:19-28,65-128', justification: 'Risk and duplicated timeframe multipliers require a future envelope.' }
+  - { path: validity_window, source: 'config/app/trade_entry.crash.yaml:1-205; no complete validity contract', justification: 'Full duration and freshness remain unresolved.' }
+  - { path: legacy.retest_variant, source: 'src/MtfValidator/config/validations.crash.yaml:205-214,293-305; redundant OR', justification: 'Subset equivalence and missing bearish resumption block the legacy retest variant.' }
+ownership_model: setup-contract-ownership-v1

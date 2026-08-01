@@ -22,9 +22,11 @@ Le loader moderne lit uniquement
 fichiers `config/trading/mode/*.yaml` restent des couches legacy préparatoires
 du `EffectiveTradingConfigResolver`; ils ne sont pas des contrats modernes.
 
-`crash_short` reste une classification indécise jusqu'à #310. `swing_trading`
-est une recherche séparée de #309. Aucun des deux n'est un mode exécutable de
-cette vague.
+`crash_short` a depuis été classé par l'ADR-310 comme nécessitant une enveloppe
+opérationnelle distincte, compatible avec aucune version courante des contrats
+de mode. Cette décision ne crée pas un mode `crash`. `swing_trading` est une
+recherche séparée de #309. Aucun des deux n'est un mode exécutable de cette
+vague.
 
 Tous les contrats publiés ici sont `draft` et `executable: false`. Une limite
 inconnue n'est pas remplacée par une valeur plausible : elle est matérialisée
