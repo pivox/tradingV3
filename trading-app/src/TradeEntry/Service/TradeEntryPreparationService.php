@@ -17,6 +17,7 @@ use App\TradeEntry\Workflow\BuildOrderPlan;
 use App\TradeEntry\Workflow\BuildPreOrder;
 use Psr\Clock\ClockInterface;
 use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
 
 final readonly class TradeEntryPreparationService
 {
@@ -55,6 +56,9 @@ final readonly class TradeEntryPreparationService
         $config = $modern
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->configResolver->resolve($mode);
+        if ($modern) {
+            CanonicalTradeRuntimePolicyValidator::assertReady($config);
+        }
 
         if ($this->dailyLossGuard instanceof DailyLossGuard) {
             if ($modern) {
@@ -87,12 +91,16 @@ final readonly class TradeEntryPreparationService
                 $currentPrice = (float) ($preflight->markPrice ?? ($request->side->value === 'long' ? $preflight->bestAsk : $preflight->bestBid));
                 $ttl = $this->remainingZoneTtl($plan->zoneExpiresAt);
                 $decision = $this->executionBox->applyEndOfZoneFallback($fallback, $zone, $request->symbol, $currentPrice, $ttl, $request->exchangeContext);
+                CanonicalTradeRuntimePolicyValidator::assertNoEndOfZoneFallbackRewrite($modern, $decision);
                 if (is_array($decision)) {
                     $orderType = $decision['order_type'];
                     $plan = $plan->copyWith(orderType: $orderType, orderMode: $orderType === 'market' ? 1 : $plan->orderMode);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            if ($modern) {
+                throw $exception;
+            }
             // Preserve the legacy non-blocking fallback policy.
         }
 

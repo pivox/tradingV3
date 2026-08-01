@@ -100,6 +100,7 @@ final class CanonicalTradeEntryConfigFactory
             'entry' => ['entry_zone' => $entryZone, 'time_stop' => $timeStop, 'invalidation' => $invalidation],
             'risk' => ['daily_loss_cap' => $dailyLoss, 'max_concurrent_positions' => $maxPositions, 'mode_exposure_cap' => $exposure, 'minimum_net_r' => $minimumNetR],
             'leverage' => ['canonical_cap' => (float) $leverage],
+            'fallback_end_of_zone' => ['enabled' => false],
             'decision' => ['allowed_execution_timeframes' => $executionTfs],
             'fees' => ['maker_rate' => (float) $fees['maker_rate'], 'taker_rate' => (float) $fees['taker_rate']],
         ]);

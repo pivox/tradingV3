@@ -102,7 +102,7 @@ final class CanonicalTradeIdentityTest extends TestCase
         self::assertSame(50.0, $config->getDefault('initial_margin_usdt'));
     }
 
-    public function testModernRequestUsesModeOwnedQuoteBudgetAsInitialMargin(): void
+    public function testModernRequestRejectsUnownedRiskPercentBeforeSizing(): void
     {
         /** @var TradeEntryConfigProvider $provider */
         $provider = (new \ReflectionClass(TradeEntryConfigProvider::class))->newInstanceWithoutConstructor();
@@ -115,14 +115,14 @@ final class CanonicalTradeIdentityTest extends TestCase
             new NullLogger(),
         );
 
-        $request = $builder->fromMtfSignal(
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_risk_pct_pending_304');
+        $builder->fromMtfSignal(
             'BTCUSDT', 'LONG', '1m', 100.0, 1.0, 'ignored',
             exchangeContext: ExchangeContext::fromValues('fake', 'perpetual'),
             lineageContext: $this->identity()->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key'),
         );
 
-        self::assertNotNull($request);
-        self::assertSame(50.0, $request->initialMarginUsdt);
     }
 
     private function identity(): LineageContext

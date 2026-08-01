@@ -126,3 +126,11 @@ après :
 
 Aucun mainnet, tuning de seuil, wiring runtime, moteur risque #304 ou évaluateur
 #303 n'est autorisé par cette ADR.
+
+Le chemin moderne transporte déjà les valeurs canoniques de budget quote,
+daily loss composé, concurrence, exposition, levier et minimum net R. Elles
+restent toutefois bloquantes au runtime tant que #304 ne possède pas leurs
+sémantiques complètes et leurs consommateurs. En particulier, aucun pourcentage
+de risque par trade, aucune interprétation partielle du daily loss et aucun
+fallback LIMIT→MARKET ne sont déduits des valeurs legacy. Lot2B reste hors du
+périmètre de ce verrouillage.

@@ -69,7 +69,7 @@ final class DailyLossGuard
         }
 
         $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
-        $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
+        $measureValue = $measureName === 'equity' ? (float) $equity : (float) ($available ?? 0.0);
 
         // Reset baseline if missing or day changed
         $today = $this->today();
@@ -139,15 +139,7 @@ final class DailyLossGuard
     private function resolvePolicy(?string $mode, ?TradeEntryConfig $canonicalConfig): array
     {
         if ($canonicalConfig instanceof TradeEntryConfig) {
-            $dailyCap = $canonicalConfig->getRisk()['daily_loss_cap'] ?? null;
-            if (!\is_array($dailyCap) || array_is_list($dailyCap)
-                || !\is_numeric($dailyCap['absolute_quote'] ?? null)
-                || !\is_finite((float) $dailyCap['absolute_quote']) || (float) $dailyCap['absolute_quote'] <= 0.0
-                || ($dailyCap['quote_currency'] ?? null) !== 'USDT') {
-                throw new \RuntimeException('canonical_config_unresolved_or_unit_mismatch:mode.risk.daily_loss_cap');
-            }
-
-            return [(string) $mode, (float) $dailyCap['absolute_quote'], true];
+            throw new \RuntimeException('canonical_daily_loss_policy_pending_304');
         }
 
         $config = $this->configResolver->resolve($mode);
@@ -208,7 +200,7 @@ final class DailyLossGuard
         }
 
         $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
-        $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
+        $measureValue = $measureName === 'equity' ? (float) $equity : (float) ($available ?? 0.0);
 
         // Créer un nouvel état avec la baseline actuelle
         $today = $this->today();

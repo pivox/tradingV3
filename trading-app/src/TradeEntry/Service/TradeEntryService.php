@@ -24,6 +24,7 @@ use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
 use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
 
 final class TradeEntryService
 {
@@ -98,6 +99,9 @@ final class TradeEntryService
         $entryConfig = $modern
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
+        if ($modern) {
+            CanonicalTradeRuntimePolicyValidator::assertReady($entryConfig);
+        }
 
         // Daily loss guard: block trading when limit is reached
         try {
@@ -262,12 +266,16 @@ final class TradeEntryService
                 );
 
                 if (is_array($fallbackDecision)) {
+                    CanonicalTradeRuntimePolicyValidator::assertNoEndOfZoneFallbackRewrite($modern, $fallbackDecision);
                     $newOrderType = (string)($fallbackDecision['order_type'] ?? $plan->orderType);
                     $newOrderMode = $newOrderType === 'market' ? 1 : $plan->orderMode;
                     $plan = $plan->copyWith(orderType: $newOrderType, orderMode: $newOrderMode);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            if ($modern) {
+                throw $exception;
+            }
             // non-blocking
         }
 
@@ -392,9 +400,13 @@ final class TradeEntryService
             'reason' => 'simulate_trade_entry',
         ]);
 
-        $entryConfig = $request->lineageContext?->isModern()
+        $modern = $request->lineageContext?->isModern() === true;
+        $entryConfig = $modern
             ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
             : $this->tradeEntryConfigResolver->resolve($mode);
+        if ($modern) {
+            CanonicalTradeRuntimePolicyValidator::assertReady($entryConfig);
+        }
         $configDefaults = $entryConfig->getDefaults();
 
         // Run preflight and planning only (no execution)
@@ -473,12 +485,16 @@ final class TradeEntryService
                 );
 
                 if (is_array($fallbackDecision)) {
+                    CanonicalTradeRuntimePolicyValidator::assertNoEndOfZoneFallbackRewrite($modern, $fallbackDecision);
                     $newOrderType = (string)($fallbackDecision['order_type'] ?? $plan->orderType);
                     $newOrderMode = $newOrderType === 'market' ? 1 : $plan->orderMode;
                     $plan = $plan->copyWith(orderType: $newOrderType, orderMode: $newOrderMode);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            if ($modern) {
+                throw $exception;
+            }
             // ignore during simulation
         }
 

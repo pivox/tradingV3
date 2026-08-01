@@ -85,6 +85,9 @@ final class TradeEntryRequestBuilder
         if ($lineageContext?->isModern() && !array_key_exists('initial_margin_usdt', $defaults)) {
             throw new \App\Trading\Lineage\LineageContextException('canonical_config_unresolved:trade_entry.initial_margin_usdt');
         }
+        if ($lineageContext?->isModern() && !array_key_exists('risk_pct_percent', $defaults)) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_risk_pct_pending_304');
+        }
 
         // Multiplicateur TF pour le TP (r_multiple), configuré côté defaults
         $defaultsTfMultipliers = $defaults['timeframe_multipliers'] ?? [];

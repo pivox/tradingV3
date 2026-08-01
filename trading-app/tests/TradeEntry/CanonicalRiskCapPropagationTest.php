@@ -12,6 +12,7 @@ use App\TradeEntry\Service\Leverage\DynamicLeverageService;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Psr\Log\NullLogger;
+use App\Trading\Lineage\LineageContextException;
 
 #[CoversClass(DynamicLeverageService::class)]
 #[CoversClass(DailyLossGuard::class)]
@@ -35,7 +36,7 @@ final class CanonicalRiskCapPropagationTest extends TestCase
         ));
     }
 
-    public function testDailyLossPolicyReadsCanonicalAbsoluteQuoteWithoutLegacyResolver(): void
+    public function testDailyLossPolicyRejectsCompoundCanonicalSemanticsWithoutLegacyResolver(): void
     {
         /** @var DailyLossGuard $guard */
         $guard = (new \ReflectionClass(DailyLossGuard::class))->newInstanceWithoutConstructor();
@@ -46,11 +47,25 @@ final class CanonicalRiskCapPropagationTest extends TestCase
                 'quote_currency' => 'USDT',
             ]],
         ]);
-        $method = new \ReflectionMethod(DailyLossGuard::class, 'resolvePolicy');
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('canonical_daily_loss_policy_pending_304');
+        $guard->checkAndMaybeLock('scalping', $config);
+    }
 
-        self::assertSame(
-            ['scalping', 20.0, true],
-            $method->invoke($guard, 'scalping', $config),
+    public function testDynamicLeverageRejectsMissingCanonicalRiskPercentBeforeFormula(): void
+    {
+        /** @var TradeEntryConfigProvider $provider */
+        $provider = (new \ReflectionClass(TradeEntryConfigProvider::class))->newInstanceWithoutConstructor();
+        /** @var TradeEntryModeContext $modeContext */
+        $modeContext = (new \ReflectionClass(TradeEntryModeContext::class))->newInstanceWithoutConstructor();
+        $config = new TradeEntryConfig(config: ['defaults' => [], 'leverage' => ['canonical_cap' => 3.0]]);
+        $service = new DynamicLeverageService($provider, $modeContext, $config, new NullLogger());
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_risk_pct_pending_304');
+        $service->computeLeverage(
+            'BTCUSDT', 100.0, 1.0, 1, 0.0, 0.0, 1, 50,
+            stopPct: null, executionTf: '1m', config: $config,
         );
     }
 }

@@ -7,6 +7,7 @@ use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContex
 use App\Contract\EntryTrade\LeverageServiceInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Trading\Lineage\LineageContextException;
 
 final class DynamicLeverageService implements LeverageServiceInterface
 {
@@ -32,6 +33,12 @@ final class DynamicLeverageService implements LeverageServiceInterface
         ?string $mode = null, // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
         ?TradeEntryConfig $config = null,
     ): int {
+        if ($config instanceof TradeEntryConfig
+            && array_key_exists('canonical_cap', $config->getLeverage())
+            && !array_key_exists('risk_pct_percent', $config->getDefaults())) {
+            throw new LineageContextException('canonical_risk_pct_pending_304');
+        }
+
         // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
         if ($effectiveBudget <= 0.0) {
@@ -55,6 +62,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $config ??= $this->getConfigForMode($mode);
         $defaults  = $config->getDefaults();
         $levConfig = $config->getLeverage();
+        if (array_key_exists('canonical_cap', $levConfig) && !array_key_exists('risk_pct_percent', $defaults)) {
+            throw new LineageContextException('canonical_risk_pct_pending_304');
+        }
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 5.0);
         $riskPct = $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent;
@@ -188,6 +198,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
     /**
      * Applique les caps par regex de symbole, sinon fallback à exchangeCap.
      * Format attendu: [ { symbol_regex: "...", cap: float }, ... ]
+     * @param list<array{symbol_regex?:string,cap?:float|int}> $perSymbolCaps
      */
     private function resolveSymbolCap(string $symbol, array $perSymbolCaps, float $fallback): float
     {
