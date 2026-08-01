@@ -66,6 +66,51 @@ final class SetupCompiler
             && $catalogHash !== null
             && $document['governance']['activation_requires_trace']
             && $document['governance']['activation_requires_certified_net_baseline'];
+        $blockers = [];
+        if (!$contract->isExecutable()) {
+            $blockers[] = 'contract_not_executable:' . $contract->status;
+        }
+        foreach ($contract->unresolvedPaths() as $path) {
+            $blockers[] = 'unresolved:' . $path;
+        }
+        foreach ($document['data_condition_contract']['missing_conditions'] as $conditionId) {
+            $blockers[] = 'missing_condition:' . $conditionId;
+        }
+        if ($catalogHash === null) {
+            $blockers[] = 'condition_catalog_hash_unresolved';
+        }
+        if (!$publishable) {
+            $blockers[] = 'compiled_snapshot_not_publishable';
+        }
+        $blockers = array_values(array_unique($blockers));
+        sort($blockers, SORT_STRING);
+
+        $canonicalPayload = $this->canonicalize([
+            'schema_version' => 'compiled-setup.v1',
+            'setup_id' => $contract->setupId,
+            'setup_version' => $contract->setupVersion,
+            'status' => $contract->status,
+            'executable' => $contract->isExecutable(),
+            'publishable' => $publishable,
+            'family' => $document['family'],
+            'side' => $contract->side,
+            'thesis' => $document['thesis'],
+            'hypothesis' => $document['hypothesis'],
+            'mode_versions' => $modeVersions,
+            'mode_compatibility' => $document['mode_compatibility'],
+            'ast' => $ast,
+            'missing_data_policy' => $document['missing_data_policy'],
+            'data_condition_contract' => $document['data_condition_contract'],
+            'validity_window' => $document['validity_window'],
+            'governance' => $document['governance'],
+            'known_defects' => $document['known_defects'],
+            'ownership_model' => $document['ownership_model'],
+            'source_origins' => $document['source_origins'] ?? [$document['source_origin']],
+            'contract_provenance' => $provenance,
+            'contract_hash' => $configHash,
+            'condition_catalog_hash' => $catalogHash,
+            'blockers' => $blockers,
+        ]);
 
         return new CompiledSetupSnapshot(
             $contract->setupId,
@@ -77,6 +122,7 @@ final class SetupCompiler
             $publishable,
             $ast,
             $provenance,
+            $canonicalPayload,
         );
     }
 

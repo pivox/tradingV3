@@ -11,6 +11,7 @@ final readonly class CompiledSetupSnapshot
      * @param list<array{file: string, line_range: string, content_sha256: string, commit: string}> $sourceOrigins
      * @param array<string, mixed> $ast
      * @param array<string, string> $provenanceByKey
+     * @param array<string, mixed> $canonicalPayload
      */
     public function __construct(
         public string $setupId,
@@ -22,12 +23,29 @@ final readonly class CompiledSetupSnapshot
         public bool $publishable,
         public array $ast,
         public array $provenanceByKey,
+        private array $canonicalPayload,
     ) {
     }
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
-        return get_object_vars($this);
+        return [
+            'setupId' => $this->setupId,
+            'setupVersion' => $this->setupVersion,
+            'modeVersions' => $this->modeVersions,
+            'sourceOrigins' => $this->sourceOrigins,
+            'configHash' => $this->configHash,
+            'conditionCatalogHash' => $this->conditionCatalogHash,
+            'publishable' => $this->publishable,
+            'ast' => $this->ast,
+            'provenanceByKey' => $this->provenanceByKey,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function effectivePayload(): array
+    {
+        return $this->canonicalPayload;
     }
 }

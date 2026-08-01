@@ -40,6 +40,7 @@ final class EffectiveTradingConfigComposer
             }
             $this->assertOwnedDocument($layer);
         }
+        $this->assertCompiledSetup($request, $layers[2], $conditionCatalogHash);
 
         $payload = [];
         $provenance = [];
@@ -73,7 +74,7 @@ final class EffectiveTradingConfigComposer
         $payload['environment'] = $this->normalize($environment->config['environment'], 'environment');
         $this->recordLeaves($provenance, 'environment', $environment->config['environment'], $environment->toLogContext());
         $this->assertRequestIdentity($request, $payload);
-        $this->assertSafety($request, $payload);
+        $this->assertSafety($payload);
 
         $canonical = $this->canonicalize($payload);
         $hash = hash('sha256', json_encode(
@@ -121,10 +122,53 @@ final class EffectiveTradingConfigComposer
             $this->assertAllowedMapping($exchange, 'limits', ['max_orders', 'min_notional', 'max_notional']);
         }
         if ($layer->type === 'environment') {
-            $this->assertExactKeys($this->mapping($layer->config['environment'], 'environment'), ['id', 'allowed_symbols', 'allowed_markets', 'max_notional', 'dry_run', 'write_enabled', 'kill_switch_enabled'], 'environment contains an unknown key');
+            $this->assertExactKeys($this->mapping($layer->config['environment'], 'environment'), ['id', 'allowed_symbols', 'allowed_markets', 'max_notional', 'dry_run', 'write_enabled', 'kill_switch_enabled', 'require_stop_loss'], 'environment contains an unknown key');
         }
         if ($layer->type === 'mode_exchange') {
             $this->assertMapping($layer->config['overrides'], 'mode_exchange.overrides');
+        }
+    }
+
+    private function assertCompiledSetup(EffectiveTradingConfigRequest $request, TradingConfigLayer $layer, string $conditionCatalogHash): void
+    {
+        $setup = $this->mapping($layer->config['setup'], 'setup');
+        $this->assertExactKeys($setup, [
+            'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'publishable',
+            'family', 'side', 'thesis', 'hypothesis', 'mode_versions', 'mode_compatibility', 'ast',
+            'missing_data_policy', 'data_condition_contract', 'validity_window', 'governance',
+            'known_defects', 'ownership_model', 'source_origins', 'contract_provenance',
+            'contract_hash', 'condition_catalog_hash', 'blockers',
+        ], 'Canonical compiled setup payload is incomplete or contains an unknown key');
+        if ($setup['schema_version'] !== 'compiled-setup.v1'
+            || $setup['executable'] !== true
+            || $setup['publishable'] !== true
+            || $setup['blockers'] !== []
+            || $setup['condition_catalog_hash'] !== $conditionCatalogHash
+            || !is_string($setup['contract_hash'])
+            || preg_match('/^[a-f0-9]{64}$/', $setup['contract_hash']) !== 1) {
+            throw new TradingConfigException('Setup layer must be an executable, publishable, blocker-free canonical compiler snapshot with exact hashes.');
+        }
+        $modeVersions = $this->mapping($setup['mode_versions'], 'setup.mode_versions');
+        if (($modeVersions[$request->modeId] ?? null) !== $request->modeVersion) {
+            throw new TradingConfigException('Compiled setup mode version does not match the request.');
+        }
+        if (!is_array($setup['source_origins']) || !array_is_list($setup['source_origins']) || $setup['source_origins'] === []) {
+            throw new TradingConfigException('Compiled setup requires immutable source origins.');
+        }
+        $provenance = $this->mapping($setup['contract_provenance'], 'setup.contract_provenance');
+        if ($provenance === []) {
+            throw new TradingConfigException('Compiled setup requires contract provenance.');
+        }
+        $ast = $this->mapping($setup['ast'], 'setup.ast');
+        $this->assertExactKeys($ast, ['kind', 'side', 'regime', 'context', 'trigger', 'confirmations', 'filters', 'no_trade_rules', 'execution'], 'Canonical compiled setup AST is incomplete or contains an unknown key');
+        if ($ast['kind'] !== 'setup' || $ast['side'] !== $request->side) {
+            throw new TradingConfigException('Canonical compiled setup AST identity mismatch.');
+        }
+        $execution = $this->mapping($ast['execution'], 'setup.ast.execution');
+        foreach (['side', 'entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'] as $requiredDecision) {
+            if (!array_key_exists($requiredDecision, $execution)) {
+                throw new TradingConfigException(sprintf('Canonical compiled setup execution is missing "%s".', $requiredDecision));
+            }
         }
     }
 
@@ -156,7 +200,7 @@ final class EffectiveTradingConfigComposer
     }
 
     /** @param array<string,mixed> $payload */
-    private function assertSafety(EffectiveTradingConfigRequest $request, array $payload): void
+    private function assertSafety(array $payload): void
     {
         $safety = $this->mapping($payload['safety'], 'safety');
         foreach (['mainnet_write_enabled' => false, 'demo_testnet_write_enabled' => false, 'require_stop_loss' => true, 'kill_switch_enabled' => true] as $key => $required) {
@@ -168,13 +212,16 @@ final class EffectiveTradingConfigComposer
         if (($environment['kill_switch_enabled'] ?? null) !== true || !is_bool($environment['dry_run'] ?? null) || !is_bool($environment['write_enabled'] ?? null)) {
             throw new TradingConfigException('Environment execution gates are incomplete or unsafe.');
         }
-        if ($request->environment === 'mainnet' && ($environment['write_enabled'] !== false || $environment['dry_run'] !== true)) {
-            throw new TradingConfigException('Mainnet effective execution is permanently read-only.');
+        if ($environment['write_enabled'] !== false) {
+            throw new TradingConfigException('Every #133 environment requires write_enabled=false.');
         }
-        if (($request->exchange === 'okx' && $request->environment !== 'demo' && $environment['write_enabled'])
-            || ($request->exchange === 'hyperliquid' && $request->environment !== 'testnet' && $environment['write_enabled'])
-            || ($request->exchange === 'fake' && !in_array($request->environment, ['local', 'test'], true))) {
-            throw new TradingConfigException('Exchange/environment mutation constraint violated.');
+        if (($environment['require_stop_loss'] ?? null) !== true) {
+            throw new TradingConfigException('Every #133 environment requires require_stop_loss=true.');
+        }
+        $exchange = $this->mapping($payload['exchange'], 'exchange');
+        $capabilities = $this->mapping($exchange['capabilities'], 'exchange.capabilities');
+        if (($capabilities['stop_loss'] ?? null) !== true) {
+            throw new TradingConfigException('Every #133 exchange requires capabilities.stop_loss=true.');
         }
     }
 

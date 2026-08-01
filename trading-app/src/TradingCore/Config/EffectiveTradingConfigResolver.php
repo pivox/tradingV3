@@ -87,24 +87,10 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
 
         $loader = $this->loader ?? new TradingConfigLayerLoader();
         $modeDocument = $mode->toArray();
-        $execution = $setupDocument['execution'];
-        $setupPayload = [
-            'setup_id' => $setup->setupId,
-            'setup_version' => $setup->setupVersion,
-            'side' => $setup->side,
-            'hypothesis' => $setupDocument['hypothesis'],
-            'regime' => $setupDocument['context']['regime'],
-            'context' => $setupDocument['context']['context'],
-            'trigger' => $setupDocument['context']['trigger'],
-            'invalidation' => $execution['invalidation'],
-            'entry_zone' => $execution['entry_zone'],
-            'stop' => $execution['stop'],
-            'targets' => $execution['targets'],
-        ];
         $layers = [
             $loader->loadBase(),
             new TradingConfigLayer('mode', $mode->modeId . '@' . $mode->modeVersion, $modeLoader->pathFor($mode->modeId, $mode->modeVersion), true, ['mode' => $modeDocument]),
-            new TradingConfigLayer('setup', $setup->setupId . '@' . $setup->setupVersion, $setupLoader->pathFor($setup->setupId, $setup->setupVersion), true, ['setup' => $setupPayload]),
+            new TradingConfigLayer('setup', $setup->setupId . '@' . $setup->setupVersion, $setupLoader->pathFor($setup->setupId, $setup->setupVersion), true, ['setup' => $compiled->effectivePayload()]),
             $loader->requireExchange($request->exchange),
             $loader->requireModeExchange($request->modeId, $request->modeVersion, $request->exchange),
             $loader->requireEnvironment($request->environment),

@@ -25,8 +25,12 @@ base < mode < setup < exchange < mode_exchange < environment
 ```
 
 There are no optional runtime layers and no `missing_optional_layers` result.
-Mode and setup layers are the validated contract files themselves; historical
-compatibility pointers are provenance only and are never imports. The remaining
+The mode layer is the validated mode contract. The setup layer is the canonical
+compiler snapshot: it carries the full recursive AST (including confirmations,
+filters, no-trade rules, and every execution decision), missing-data and typed
+condition contracts, exact versions and hashes, source pins, contract provenance,
+and blockers. It does not reconstruct a lossy subset from the raw YAML.
+Historical compatibility pointers are provenance only and are never imports. The remaining
 files are loaded from `config/trading`. A future executable pair file is named
 `mode_exchange/{mode_id}.{mode_version}.{exchange}.yaml`, so an override cannot
 float across mode versions.
@@ -57,9 +61,12 @@ compatible modern mode and is rejected before execution.
 
 Supported modern venue targets are fake local/test, OKX demo, and Hyperliquid
 testnet. Mainnet may remain public/read-only, but effective execution keeps
-`mainnet_write_enabled=false`. Base safety requires
-`demo_testnet_write_enabled=false`, `require_stop_loss=true`, and
-`kill_switch_enabled=true`. No secrets belong in any layer.
+`mainnet_write_enabled=false`. Every #133 environment, including demo/testnet,
+must declare `write_enabled=false`, `require_stop_loss=true`, and an active kill
+switch. Every exchange layer must declare `capabilities.stop_loss=true`. Base
+safety also requires `demo_testnet_write_enabled=false`,
+`require_stop_loss=true`, and `kill_switch_enabled=true`. Activation belongs to
+a later issue; #133 never enables writes. No secrets belong in any layer.
 
 `GET /api/trading/config/effective` requires all seven identity query fields.
 Known blocked contracts return HTTP 422 with `executable=false`, blockers, and no

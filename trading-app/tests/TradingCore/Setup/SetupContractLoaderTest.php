@@ -572,6 +572,28 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame($first, $second);
     }
 
+    public function testCompilerExposesCompleteCanonicalEffectiveSetupPayload(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+        $document = $contract->toArray();
+        $snapshot = (new SetupCompiler())->compile($contract);
+        $payload = $snapshot->effectivePayload();
+
+        self::assertSame('compiled-setup.v1', $payload['schema_version']);
+        self::assertSame($document['hypothesis'], $payload['hypothesis']);
+        self::assertEquals($document['context']['confirmations'], $payload['ast']['confirmations']);
+        self::assertEquals(['op' => 'all_of', 'nodes' => $document['filters']], $payload['ast']['filters']);
+        self::assertEquals(['op' => 'all_of', 'nodes' => $document['no_trade_rules']], $payload['ast']['no_trade_rules']);
+        self::assertEquals($document['execution'], $payload['ast']['execution']);
+        self::assertEquals($document['missing_data_policy'], $payload['missing_data_policy']);
+        self::assertEquals($document['data_condition_contract'], $payload['data_condition_contract']);
+        self::assertEquals([$document['source_origin']], $payload['source_origins']);
+        self::assertSame($snapshot->provenanceByKey, $payload['contract_provenance']);
+        self::assertSame($snapshot->configHash, $payload['contract_hash']);
+        self::assertContains('condition_catalog_hash_unresolved', $payload['blockers']);
+        self::assertFalse($payload['publishable']);
+    }
+
     public function testPhpAndSchemaRejectDuplicateProvenancePathsBeforeCompilation(): void
     {
         $document = $this->yaml($this->root . '/crash_short/1.0.0.yaml');
