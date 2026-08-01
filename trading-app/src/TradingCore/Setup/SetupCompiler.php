@@ -11,6 +11,24 @@ final class SetupCompiler
     public function compile(SetupContract $contract, ?ConditionCatalog $conditionCatalog = null): CompiledSetupSnapshot
     {
         $document = $contract->toArray();
+        if ($conditionCatalog !== null) {
+            $referencedConditions = [];
+            foreach (['regime', 'context', 'trigger', 'confirmations'] as $role) {
+                $this->collectConditions($document['context'][$role], $referencedConditions);
+            }
+            $this->collectConditions($document['filters'], $referencedConditions);
+            $this->collectConditions($document['no_trade_rules'], $referencedConditions);
+            $externalDependencies = array_column($document['data_condition_contract']['external_dependencies'], 'dependency_id');
+            $missingConditions = array_values(array_diff(
+                array_keys($referencedConditions),
+                $conditionCatalog->conditionIds,
+                $externalDependencies,
+            ));
+            sort($missingConditions, SORT_STRING);
+            if ($missingConditions !== []) {
+                throw new SetupContractException('Supplied condition catalog is missing: ' . implode(', ', $missingConditions) . '.');
+            }
+        }
         $modeVersions = [];
         foreach ($document['compatible_modes'] as $mode) {
             $modeVersions[$mode['mode_id']] = $mode['mode_version'];
@@ -74,5 +92,19 @@ final class SetupCompiler
         }
 
         return $value;
+    }
+
+    /** @param array<string, true> $conditions */
+    private function collectConditions(mixed $node, array &$conditions): void
+    {
+        if (!is_array($node)) {
+            return;
+        }
+        if (isset($node['condition']) && is_string($node['condition'])) {
+            $conditions[$node['condition']] = true;
+        }
+        foreach ($node as $value) {
+            $this->collectConditions($value, $conditions);
+        }
     }
 }

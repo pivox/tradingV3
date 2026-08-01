@@ -351,7 +351,7 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testConditionCatalogHashIsSpecializedAndVerifiedDuringCompilation(): void
     {
-        $catalog = new ConditionCatalog(['rsi_lt_70', 'near_vwap']);
+        $catalog = new ConditionCatalog(SetupContractValidator::CONDITION_IDS);
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
         $document['data_condition_contract']['condition_catalog_hash'] = [
             'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
@@ -360,9 +360,10 @@ final class SetupContractLoaderTest extends TestCase
         $snapshot = (new SetupCompiler())->compile(SetupContract::fromDocument($document), $catalog);
         self::assertSame($catalog->stableHash(), $snapshot->conditionCatalogHash);
 
-        $mismatch = new ConditionCatalog(['rsi_lt_70']);
+        $mismatchedDocument = $document;
+        $mismatchedDocument['data_condition_contract']['condition_catalog_hash']['value'] = str_repeat('0', 64);
         try {
-            (new SetupCompiler())->compile(SetupContract::fromDocument($document), $mismatch);
+            (new SetupCompiler())->compile(SetupContract::fromDocument($mismatchedDocument), $catalog);
             self::fail('Compiler accepted mismatched condition catalog hash.');
         } catch (SetupContractException $exception) {
             self::assertStringContainsString('Condition catalog hash mismatch', $exception->getMessage());
@@ -437,6 +438,50 @@ final class SetupContractLoaderTest extends TestCase
         foreach ($mutations as $label => $mutation) {
             $this->assertPhpAndSchemaReject($mutation, 'duplicate ' . $label);
         }
+    }
+
+    public function testCompilerRejectsPartialConditionCatalogAcrossNestedAstBranches(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+
+        $this->expectException(SetupContractException::class);
+        $this->expectExceptionMessage('Supplied condition catalog is missing:');
+        $this->expectExceptionMessage('pullback_confirmed');
+        (new SetupCompiler())->compile($contract, new ConditionCatalog(['near_vwap']));
+    }
+
+    public function testExternalSafetyDependencyIsExcludedFromConditionCatalogCoverage(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('crash_short', '1.0.0');
+        $catalogIds = array_values(array_diff(SetupContractValidator::CONDITION_IDS, ['lev_bounds']));
+
+        $snapshot = (new SetupCompiler())->compile($contract, new ConditionCatalog($catalogIds));
+
+        self::assertFalse($snapshot->publishable);
+        self::assertContains('data_condition_contract.external_dependencies.0', $contract->unresolvedPaths());
+    }
+
+    public function testPhpAndSchemaRejectPathOutsideFrozenProvenanceCatalog(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $document['provenance'][0]['path'] = 'context.typo';
+
+        $this->assertPhpAndSchemaReject($document, 'unknown provenance path');
+    }
+
+    public function testPhpAndSchemaExposeSameFrozenProvenancePathCatalog(): void
+    {
+        $schema = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($schema);
+        self::assertSame(
+            SetupContractValidator::PROVENANCE_PATHS,
+            $schema['$defs']['provenance']['properties']['path']['enum'],
+        );
     }
 
     /** @param array<string, mixed> $mutation */

@@ -8,6 +8,9 @@ use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupContractValidator
 {
+    public const PROVENANCE_PATHS = [
+        'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters', 'filters.lev_bounds',
+    ];
     public const SETUP_IDS = [
         'day_trading.trend_continuation.long', 'day_trading.trend_continuation.short',
         'scalping.trend_continuation.long', 'scalping.pullback.long', 'scalping.trend_momentum.short',
@@ -224,10 +227,14 @@ final class SetupContractValidator
             foreach (['path', 'source', 'justification'] as $key) {
                 $this->string($row, $key, 'provenance[]');
             }
-            if (isset($provenancePaths[$row['path']])) {
-                throw new SetupContractException(sprintf('Duplicate provenance path "%s".', $row['path']));
+            $provenancePath = $row['path'];
+            if (!in_array($provenancePath, self::PROVENANCE_PATHS, true)) {
+                throw new SetupContractException(sprintf('Unknown provenance path "%s".', $provenancePath));
             }
-            $provenancePaths[$row['path']] = true;
+            if (isset($provenancePaths[$provenancePath])) {
+                throw new SetupContractException(sprintf('Duplicate provenance path "%s".', $provenancePath));
+            }
+            $provenancePaths[$provenancePath] = true;
         }
     }
 
