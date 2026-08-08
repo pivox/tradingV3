@@ -193,6 +193,74 @@ def test_run_mtf_set_failed_on_http_error():
     assert result["ok"] is False
 
 
+def test_run_mtf_set_propagates_canonical_lineage_headers_and_identity():
+    identity = _canonical_identity()
+    a_set = _make_set(set_id="modern-set", symbols=("BTCUSDT",), trading_identity=identity)
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(
+                client,
+                "http://sym",
+                a_set,
+                None,
+                run_id="run-modern",
+                dashboard_id="dash-modern",
+            )
+
+    result = asyncio.run(_run())
+
+    assert result["ok"] is True
+    assert captured["headers"]["x-run-id"] == "run-modern"
+    assert captured["headers"]["x-run-correlation-id"] == canonical_correlation_id("run-modern")
+    assert captured["headers"]["x-orchestration-set-id"] == "modern-set"
+    assert captured["headers"]["x-orchestration-dashboard-id"] == "dash-modern"
+    assert captured["json"]["trading_identity"] == identity.model_dump(mode="json", exclude_none=True)
+
+
+@pytest.mark.parametrize("run_id", [None, "", " \t "])
+def test_run_mtf_set_rejects_canonical_set_without_run_lineage_before_http(run_id):
+    calls: list = []
+    a_set = _make_set(trading_identity=_canonical_identity())
+
+    class NoDispatchClient:
+        async def post(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return _StubResponse(200, {"status": "success"})
+
+    with pytest.raises(ValueError, match="^canonical_lineage_missing:run_id$"):
+        asyncio.run(run_mtf_set(NoDispatchClient(), "http://sym", a_set, None, run_id=run_id))
+
+    assert calls == []
+
+
+def test_run_mtf_set_without_run_id_keeps_legacy_headers():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(client, "http://sym", _make_set(), None)
+
+    asyncio.run(_run())
+
+    headers = captured["headers"]
+    assert "x-run-id" not in headers
+    assert "x-run-correlation-id" not in headers
+    assert "x-orchestration-set-id" not in headers
+    assert "x-orchestration-dashboard-id" not in headers
+    assert headers["x-fake-only-safety-evidence"] == "v2"
+
+
 def test_build_payload_omits_snapshot_when_none():
     payload = build_mtf_payload(_make_set(), None)
 
