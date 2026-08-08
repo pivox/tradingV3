@@ -7,6 +7,7 @@ use App\Config\{TradeEntryConfig, TradeEntryConfigProvider, TradeEntryModeContex
 use App\Contract\EntryTrade\LeverageServiceInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Trading\Lineage\LineageContextException;
 
 final class DynamicLeverageService implements LeverageServiceInterface
 {
@@ -29,8 +30,15 @@ final class DynamicLeverageService implements LeverageServiceInterface
         ?float $stopPct = null,
         ?float $atr5mValue = null, // peut recevoir ATR 15m, le nom du param n'a pas d'incidence
         ?string $executionTf = null,
-        ?string $mode = null // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
+        ?string $mode = null, // Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
+        ?TradeEntryConfig $config = null,
     ): int {
+        if ($config instanceof TradeEntryConfig
+            && array_key_exists('canonical_cap', $config->getLeverage())
+            && !array_key_exists('risk_pct_percent', $config->getDefaults())) {
+            throw new LineageContextException('canonical_risk_pct_pending_304');
+        }
+
         // Budget effectif borné
         $effectiveBudget = min(max($budgetUsdt, 0.0), max($availableUsdt, 0.0));
         if ($effectiveBudget <= 0.0) {
@@ -51,9 +59,12 @@ final class DynamicLeverageService implements LeverageServiceInterface
         }
 
         // --- Lecture config selon le mode (même mécanisme que validations.{mode}.yaml) ---
-        $config = $this->getConfigForMode($mode);
+        $config ??= $this->getConfigForMode($mode);
         $defaults  = $config->getDefaults();
         $levConfig = $config->getLeverage();
+        if (array_key_exists('canonical_cap', $levConfig) && !array_key_exists('risk_pct_percent', $defaults)) {
+            throw new LineageContextException('canonical_risk_pct_pending_304');
+        }
 
         $riskPctPercent = (float)($defaults['risk_pct_percent'] ?? 5.0);
         $riskPct = $riskPctPercent > 1.0 ? $riskPctPercent / 100.0 : $riskPctPercent;
@@ -62,6 +73,14 @@ final class DynamicLeverageService implements LeverageServiceInterface
 
         $floorConfig    = (float)($levConfig['floor'] ?? 1.0);
         $exchangeCapCfg = (float)($levConfig['exchange_cap'] ?? $maxLeverage);
+        $canonicalCap = isset($levConfig['canonical_cap']) ? (float) $levConfig['canonical_cap'] : null;
+        if ($canonicalCap !== null && (!\is_finite($canonicalCap) || $canonicalCap <= 0.0)) {
+            throw new \RuntimeException('canonical_config_invalid:mode.leverage');
+        }
+        $canonicalIntegerCap = $canonicalCap !== null ? (int) floor($canonicalCap) : null;
+        if ($canonicalIntegerCap !== null && $canonicalIntegerCap < max(1, $minLeverage)) {
+            throw new \RuntimeException('canonical_config_unenforceable:mode.leverage');
+        }
         // Multiplicateur par timeframe appliqué AU LEVIER (DynamicLeverageService) : configuré côté defaults.
         $defaultsTfMultipliers = (array)($defaults['timeframe_multipliers'] ?? []);
         $perSymbolCaps  = (array)($levConfig['per_symbol_caps'] ?? []);
@@ -125,6 +144,9 @@ final class DynamicLeverageService implements LeverageServiceInterface
         $leverageRounded = max(1, $leverageRounded);
         $leverageRounded = max($minLeverage, $leverageRounded);
         $leverageRounded = min($maxLeverage, $leverageRounded);
+        if ($canonicalIntegerCap !== null) {
+            $leverageRounded = min($leverageRounded, $canonicalIntegerCap);
+        }
 
         $this->positionsLogger->debug('order_plan.leverage.dynamic', [
             'symbol'            => $symbol,
@@ -145,6 +167,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
             'atr_value'         => $atr5mValue,
             'vol_mult'          => $volMult,
             'exchange_cap_cfg'  => $exchangeCapCfg,
+            'canonical_cap'     => $canonicalCap,
             'symbol_cap'        => $symbolCap,
             'dyn_cap'           => $dynCap,
             'floor_config'      => $floorConfig,
@@ -175,6 +198,7 @@ final class DynamicLeverageService implements LeverageServiceInterface
     /**
      * Applique les caps par regex de symbole, sinon fallback à exchangeCap.
      * Format attendu: [ { symbol_regex: "...", cap: float }, ... ]
+     * @param list<array{symbol_regex?:string,cap?:float|int}> $perSymbolCaps
      */
     private function resolveSymbolCap(string $symbol, array $perSymbolCaps, float $fallback): float
     {

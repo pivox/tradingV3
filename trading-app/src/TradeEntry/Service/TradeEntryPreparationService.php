@@ -16,6 +16,8 @@ use App\TradeEntry\Policy\DailyLossGuard;
 use App\TradeEntry\Workflow\BuildOrderPlan;
 use App\TradeEntry\Workflow\BuildPreOrder;
 use Psr\Clock\ClockInterface;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
 
 final readonly class TradeEntryPreparationService
 {
@@ -38,21 +40,40 @@ final readonly class TradeEntryPreparationService
         ?string $paperCellId = null,
         ?string $sourceEventId = null,
     ): PreparedTradeEntry {
+        if ($request->lineageContext?->isModern()) {
+            $identity = $request->canonicalIdentity();
+            if ($decisionKey !== $identity->decisionKey) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:decisionKey');
+            }
+            if ($mode !== $identity->modeId) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:mode_id');
+            }
+        }
         $tradeId = $this->tradeId($request->symbol, $decisionKey, $internalTradeId, $paperCellId, $sourceEventId);
         $lifecycle->withDecisionKey($decisionKey)->withProfile($mode)->withInternalTradeId($tradeId)->withTradeId($tradeId);
 
-        if ($this->dailyLossGuard instanceof DailyLossGuard) {
-            try {
-                $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
-                if ($state['locked'] === true) {
-                    return $this->terminal($request, $decisionKey, $tradeId, $lifecycle, $mode, 'daily_loss_limit_reached', $state);
-                }
-            } catch (\Throwable) {
-                // Preserve the legacy guard's non-blocking failure policy.
-            }
+        $modern = $request->lineageContext?->isModern() === true;
+        $config = $modern
+            ? CanonicalTradeEntryConfigFactory::fromLineage($request->lineageContext)
+            : $this->configResolver->resolve($mode);
+        if ($modern) {
+            CanonicalTradeRuntimePolicyValidator::assertReady($config);
         }
 
-        $config = $this->configResolver->resolve($mode);
+        if ($this->dailyLossGuard instanceof DailyLossGuard) {
+            if ($modern) {
+                $state = $this->dailyLossGuard->checkAndMaybeLock($mode, $config);
+            } else {
+                try {
+                    $state = $this->dailyLossGuard->checkAndMaybeLock($mode);
+                } catch (\Throwable) {
+                    $state = null;
+                }
+            }
+            if ($state !== null && $state['locked'] === true) {
+                return $this->terminal($request, $decisionKey, $tradeId, $lifecycle, $mode, 'daily_loss_limit_reached', $state);
+            }
+        }
         $preflight = ($this->preflight)($request, $decisionKey);
         try {
             $plan = ($this->planner)($request, $preflight, $decisionKey);
@@ -70,12 +91,16 @@ final readonly class TradeEntryPreparationService
                 $currentPrice = (float) ($preflight->markPrice ?? ($request->side->value === 'long' ? $preflight->bestAsk : $preflight->bestBid));
                 $ttl = $this->remainingZoneTtl($plan->zoneExpiresAt);
                 $decision = $this->executionBox->applyEndOfZoneFallback($fallback, $zone, $request->symbol, $currentPrice, $ttl, $request->exchangeContext);
+                CanonicalTradeRuntimePolicyValidator::assertNoEndOfZoneFallbackRewrite($modern, $decision);
                 if (is_array($decision)) {
                     $orderType = $decision['order_type'];
                     $plan = $plan->copyWith(orderType: $orderType, orderMode: $orderType === 'market' ? 1 : $plan->orderMode);
                 }
             }
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
+            if ($modern) {
+                throw $exception;
+            }
             // Preserve the legacy non-blocking fallback policy.
         }
 

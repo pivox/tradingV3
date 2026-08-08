@@ -14,6 +14,22 @@ use Psr\Log\LoggerInterface;
 
 final class TradeLineageManager
 {
+    /**
+     * Structured canonical columns introduced for modern lineage. Their presence in
+     * an untyped dictionary is never treated as legacy compatibility.
+     */
+    private const MODERN_RAW_FIELDS = [
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'condition_catalog_hash',
+        'decision_id',
+        'decision_key',
+        'effective_config_reference',
+        'effective_config_snapshot',
+    ];
+
     public function __construct(
         private readonly TradeLineageRepository $repository,
         private readonly EntityManagerInterface $entityManager,
@@ -21,11 +37,18 @@ final class TradeLineageManager
     ) {
     }
 
-    /**
-     * @param array<string,mixed> $context
-     */
-    public function ensureForIntent(OrderIntent $intent, array $context = []): TradeLineage
+    /** @param array<string,mixed>|LineageContext $context */
+    public function ensureForIntent(OrderIntent $intent, array|LineageContext $context = []): TradeLineage
     {
+        $identity = $context instanceof LineageContext ? $context : null;
+        if ($identity === null && $this->containsModernIdentity($context)) {
+            throw new \InvalidArgumentException('canonical_identity_typed_context_required');
+        }
+        if ($identity?->isModern()) {
+            $this->assertIntentMatchesIdentity($intent, $identity);
+        }
+        $context = $identity?->toArray() ?? $context;
+
         $paperProvenance = PaperExecutionProvenance::extract($context);
         if ($intent->getPaperExecutionCellId() !== null && $paperProvenance === null) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
@@ -38,6 +61,9 @@ final class TradeLineageManager
         if ($intentId !== null) {
             $existing = $this->repository->findOneByOrderIntentId($intentId);
             if ($existing instanceof TradeLineage) {
+                if ($identity?->isModern()) {
+                    $this->assertCanonicalIdentityMatches($existing, $identity);
+                }
                 if ($paperProvenance !== null) {
                     PaperExecutionProvenance::assertMatches($existing, $paperProvenance);
                 }
@@ -50,6 +76,9 @@ final class TradeLineageManager
             ExchangeContext::fromValues($intent->getExchange(), $intent->getMarketType()),
         );
         if ($existingByClient instanceof TradeLineage) {
+            if ($identity?->isModern()) {
+                $this->assertCanonicalIdentityMatches($existingByClient, $identity);
+            }
             if ($paperProvenance !== null) {
                 PaperExecutionProvenance::assertMatches($existingByClient, $paperProvenance);
             }
@@ -81,7 +110,15 @@ final class TradeLineageManager
             ->setReplayOfRunId($this->contextString($context, 'replay_of_run_id', 255))
             ->setReplayOfCorrelationId($this->contextString($context, 'replay_of_correlation_id', 96))
             ->setAttemptNumber($this->contextInt($context, 'attempt_number'))
-            ->setConfigHash($this->contextString($context, 'config_hash', 128));
+            ->setConfigHash($this->contextString($context, 'config_hash', 128))
+            ->setConditionCatalogHash($this->contextString($context, 'condition_catalog_hash', 128))
+            ->setModeId($this->contextString($context, 'mode_id', 80))
+            ->setModeVersion($this->contextString($context, 'mode_version', 32))
+            ->setSetupId($this->contextString($context, 'setup_id', 160))
+            ->setSetupVersion($this->contextString($context, 'setup_version', 32))
+            ->setDecisionId($this->contextString($context, 'decision_id', 96))
+            ->setDecisionKey($this->contextString($context, 'decision_key', 160))
+            ->setEffectiveConfigReference($this->contextString($context, 'effective_config_reference', 255));
 
         if ($paperProvenance !== null) {
             $lineage->applyPaperExecutionProvenance($paperProvenance);
@@ -198,6 +235,14 @@ final class TradeLineageManager
             'replay_of_correlation_id' => $lineage->getReplayOfCorrelationId(),
             'attempt_number' => $lineage->getAttemptNumber(),
             'config_hash' => $lineage->getConfigHash(),
+            'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
+            'mode_id' => $lineage->getModeId(),
+            'mode_version' => $lineage->getModeVersion(),
+            'setup_id' => $lineage->getSetupId(),
+            'setup_version' => $lineage->getSetupVersion(),
+            'decision_id' => $lineage->getDecisionId(),
+            'decision_key' => $lineage->getDecisionKey(),
+            'effective_config_reference' => $lineage->getEffectiveConfigReference(),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
 
         if ($lineage->getPaperExecutionCellId() === null) {
@@ -298,5 +343,103 @@ final class TradeLineageManager
             2, 4 => 'SHORT',
             default => null,
         };
+    }
+
+    /** @param array<string,mixed> $context */
+    private function containsModernIdentity(array $context): bool
+    {
+        foreach (self::MODERN_RAW_FIELDS as $field) {
+            if (\array_key_exists($field, $context)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function assertIntentMatchesIdentity(OrderIntent $intent, LineageContext $identity): void
+    {
+        $actual = [
+            'exchange' => $intent->getExchange(),
+            'market_type' => $intent->getMarketType(),
+            'symbol' => strtoupper($intent->getSymbol()),
+            'side' => $this->sideFromIntent($intent),
+        ];
+        $expected = [
+            'exchange' => $identity->exchange,
+            'market_type' => $identity->marketType,
+            'symbol' => $identity->symbol,
+            'side' => $identity->side,
+        ];
+        foreach ($expected as $field => $value) {
+            if ($actual[$field] !== $value) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+    }
+
+    private function assertCanonicalIdentityMatches(TradeLineage $lineage, LineageContext $identity): void
+    {
+        $persisted = [
+            'orchestration_run_id' => $lineage->getOrchestrationRunId(),
+            'correlation_run_id' => $lineage->getCorrelationRunId(),
+            'orchestration_set_id' => $lineage->getOrchestrationSetId(),
+            'orchestration_dashboard_id' => $lineage->getOrchestrationDashboardId(),
+            'mode_id' => $lineage->getModeId(),
+            'mode_version' => $lineage->getModeVersion(),
+            'setup_id' => $lineage->getSetupId(),
+            'setup_version' => $lineage->getSetupVersion(),
+            'config_hash' => $lineage->getConfigHash(),
+            'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
+            'side' => $lineage->getSide(),
+            'exchange' => $lineage->getExchange(),
+            'market_type' => $lineage->getMarketType(),
+            'symbol' => $lineage->getSymbol(),
+            'decision_id' => $lineage->getDecisionId(),
+            'decision_key' => $lineage->getDecisionKey(),
+            'effective_config_reference' => $lineage->getEffectiveConfigReference(),
+        ];
+        $expected = [
+            'orchestration_run_id' => $identity->orchestrationRunId,
+            'correlation_run_id' => $identity->correlationRunId,
+            'orchestration_set_id' => $identity->orchestrationSetId,
+            'orchestration_dashboard_id' => $identity->orchestrationDashboardId,
+            'mode_id' => $identity->modeId,
+            'mode_version' => $identity->modeVersion,
+            'setup_id' => $identity->setupId,
+            'setup_version' => $identity->setupVersion,
+            'config_hash' => $identity->configHash,
+            'condition_catalog_hash' => $identity->conditionCatalogHash,
+            'side' => $identity->side,
+            'exchange' => $identity->exchange,
+            'market_type' => $identity->marketType,
+            'symbol' => $identity->symbol,
+            'decision_id' => $identity->decisionId,
+            'decision_key' => $identity->decisionKey,
+            'effective_config_reference' => $identity->effectiveConfigReference,
+        ];
+        foreach ($expected as $field => $value) {
+            if ($persisted[$field] !== $value) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+
+        $persistedIntentId = $lineage->getOrderIntent()?->getIntentId();
+        if ($persistedIntentId === null || $persistedIntentId === '' || $identity->intentId === null || $identity->intentId === '') {
+            throw new LineageContextException('canonical_identity_incomplete:intent_id');
+        }
+        if ($persistedIntentId !== $identity->intentId) {
+            throw new LineageContextException('canonical_identity_mismatch:intent_id');
+        }
+        $stageIds = [
+            'trade_id' => [$lineage->getInternalTradeId(), $identity->tradeId],
+            'order_id' => [$lineage->getExchangeOrderId(), $identity->orderId],
+            'position_id' => [$lineage->getPositionId(), $identity->positionId],
+        ];
+        foreach ($stageIds as $field => [$actual, $requested]) {
+            if ($requested !== null && $actual !== $requested) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
     }
 }

@@ -19,6 +19,11 @@ use App\Logging\LifecycleContextFactory;
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
+use App\Trading\Lineage\CanonicalRuntimePolicyException;
+use Ramsey\Uuid\Uuid;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -48,7 +53,7 @@ final class TradingDecisionHandler
         private readonly ?DecisionKeyFactory $decisionKeyFactory = null,
     ) {}
 
-    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId): SymbolResultDto
+    public function handleTradingDecision(SymbolResultDto $symbolResult, MtfRunDto $mtfRunDto, string $runId, ?LineageContext $lineageContext = null): SymbolResultDto
     {
         if ($symbolResult->isError() || $symbolResult->isSkipped()) {
             return $symbolResult;
@@ -58,15 +63,57 @@ final class TradingDecisionHandler
             return $symbolResult;
         }
 
+        $lineageContext ??= $mtfRunDto->lineageContext;
         $exchangeContext = ExchangeContext::fromArray($mtfRunDto->options);
-        $resolvedMode = $this->tradeEntryConfigResolver->resolveMode($symbolResult->tradeEntryModeUsed);
-        $tradeEntryConfig = $this->tradeEntryConfigResolver->resolve($symbolResult->tradeEntryModeUsed);
+        if ($lineageContext?->isModern()) {
+            $lineageContext->assertTradeBoundary(
+                $symbolResult->symbol,
+                (string) $symbolResult->signalSide,
+                $exchangeContext->exchange->value,
+                $exchangeContext->marketType->value,
+                false,
+            )->assertExecutableTradeContract();
+        }
+        [$resolvedMode, $tradeEntryConfig] = $this->resolveTradeEntryConfig($lineageContext, $symbolResult->tradeEntryModeUsed);
+        if ($lineageContext?->isModern()) {
+            try {
+                CanonicalTradeRuntimePolicyValidator::assertReady($tradeEntryConfig);
+            } catch (CanonicalRuntimePolicyException $exception) {
+                return $this->canonicalPolicyRejection($symbolResult, $resolvedMode, $runId, $exception);
+            }
+        }
         $decisionKey = $this->generateDecisionKey(
             symbolResult: $symbolResult,
             exchangeContext: $exchangeContext,
             strategyProfile: $resolvedMode,
-            strategyVersion: $tradeEntryConfig->getVersion(),
+            strategyVersion: $lineageContext?->isModern()
+                ? (string) $lineageContext->modeVersion
+                : $tradeEntryConfig->getVersion(),
         );
+        if ($lineageContext?->isModern()) {
+            $decisionId = $lineageContext->decisionId ?? Uuid::uuid5(
+                Uuid::NAMESPACE_URL,
+                implode('|', [
+                    $lineageContext->orchestrationRunId,
+                    $lineageContext->orchestrationSetId,
+                    $lineageContext->setupId,
+                    $symbolResult->symbol,
+                    $symbolResult->executionTf,
+                    $symbolResult->signalSide,
+                ]),
+            )->toString();
+            $lineageContext = $lineageContext->withDecision(
+                $decisionId,
+                $lineageContext->decisionKey ?? $decisionKey,
+            );
+            $decisionKey = $lineageContext->decisionKey ?? $decisionKey;
+            $lineageContext->assertTradeBoundary(
+                $symbolResult->symbol,
+                (string) $symbolResult->signalSide,
+                $exchangeContext->exchange->value,
+                $exchangeContext->marketType->value,
+            )->assertExecutableTradeContract();
+        }
         // trade_id global pour ce cycle de trade (zone → ouverture → clôture)
         $tradeId = $this->createTradeId($symbolResult->symbol, $decisionKey, $mtfRunDto->options);
         // Force ATR to the 5m timeframe so downstream sizing/guards stay consistent across execution TFs.
@@ -153,6 +200,7 @@ final class TradingDecisionHandler
             (\is_float($atrForTf) && $atrForTf > 0.0) ? $atrForTf : $forcedAtr5m,
             $resolvedMode, // Passer le mode (même mécanisme que validations.{mode}.yaml)
             exchangeContext: $exchangeContext,
+            lineageContext: $lineageContext,
         );
 
         if ($tradeRequest === null) {
@@ -295,6 +343,58 @@ final class TradingDecisionHandler
                 tradeEntryModeUsed: $resolvedMode
             );
         }
+    }
+
+    /** @return array{string,TradeEntryConfig} */
+    private function resolveTradeEntryConfig(?LineageContext $lineageContext, ?string $legacyMode): array
+    {
+        if ($lineageContext?->isModern()) {
+            return [$lineageContext->modeId, CanonicalTradeEntryConfigFactory::fromLineage($lineageContext)];
+        }
+
+        return [
+            $this->tradeEntryConfigResolver->resolveMode($legacyMode),
+            $this->tradeEntryConfigResolver->resolve($legacyMode),
+        ];
+    }
+
+    private function canonicalPolicyRejection(
+        SymbolResultDto $symbolResult,
+        string $resolvedMode,
+        string $runId,
+        CanonicalRuntimePolicyException $exception,
+    ): SymbolResultDto {
+        $reason = $exception->getMessage();
+        $decision = [
+            'status' => 'rejected',
+            'reason' => $reason,
+            'blockers' => $exception->blockers,
+            'retryable' => false,
+        ];
+        $context = [
+            'symbol' => $symbolResult->symbol,
+            'run_id' => $runId,
+            'reason' => $reason,
+            'blockers' => $exception->blockers,
+            'retryable' => false,
+        ];
+        $this->mtfLogger->warning('order_journey.canonical_policy_rejected', $context);
+        $this->auditLogger->logAction('CANONICAL_POLICY_REJECTED', 'TRADE_ENTRY', $symbolResult->symbol, $context);
+
+        return new SymbolResultDto(
+            symbol: $symbolResult->symbol,
+            status: $symbolResult->status,
+            executionTf: $symbolResult->executionTf,
+            blockingTf: $symbolResult->blockingTf,
+            signalSide: $symbolResult->signalSide,
+            tradingDecision: $decision,
+            error: $symbolResult->error,
+            context: $symbolResult->context,
+            currentPrice: $symbolResult->currentPrice,
+            atr: $symbolResult->atr,
+            validationModeUsed: $symbolResult->validationModeUsed,
+            tradeEntryModeUsed: $resolvedMode,
+        );
     }
 
     /** @param array<string, mixed> $options */

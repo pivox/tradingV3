@@ -1,189 +1,111 @@
-# Effective Trading Config Resolver
+# Canonical effective trading configuration
 
-## Objectif
+Issue #133 replaces the COMMON-002 preparatory deep merge with a strict runtime
+boundary. A request is identified by all of these exact values:
 
-`EffectiveTradingConfigResolver` introduit une resolution de configuration en couches pour le futur TradingCore modulaire, sans changer le runtime actuel.
+- `mode_id` and semantic `mode_version`;
+- `setup_id` and semantic `setup_version`;
+- `exchange`, `environment`, and `side`.
 
-L'ordre de resolution est deterministe :
+Aliases, version ranges, inferred defaults, and fallback profiles are rejected.
+In particular, `regular`, `scalper`, `scalper_micro`, BitMart, and the historical
+`scalping -> scalper` mapping are not modern effective-config identities.
 
-```text
-base
-< mode
-< exchange
-< mode_exchange
-< env
-= effective config
-```
+## Contract and layer order
 
-Exemple :
+The resolver first loads and validates the immutable mode and setup contracts. It
+requires bidirectional compatibility at the exact versions, identical setup and
+request sides, an executable mode/setup, a publishable compiled setup snapshot,
+and a resolved condition-catalog SHA-256.
 
-```text
-config/trading/base.yaml
-config/trading/mode/scalper.yaml
-config/trading/exchange/okx.yaml
-config/trading/mode_exchange/scalper.okx.yaml
-config/trading/env/dev.yaml
-```
-
-## Statut runtime
-
-COMMON-002 ne branche pas encore le resolver sur `mtf:run`, `POST /api/mtf/run`,
-TradeEntry, Temporal ou les gateways exchange.
-
-Les fichiers sous `trading-app/config/trading/` sont des references inactives. Ils
-documentent la cible et gardent les protections suivantes :
-
-- `dry_run: true` ;
-- `live_enabled: false` ;
-- `mainnet_write_enabled: false` ;
-- `demo_testnet_write_enabled: false` par defaut ;
-- `kill_switch_enabled: true` ;
-- `require_stop_loss: true` ;
-- `allowed_symbols` ou `allowed_markets` renseigne pour OKX demo et Hyperliquid testnet ;
-- `max_notional` renseigne ;
-- `runtime_check_required: true` pour OKX et Hyperliquid ;
-- Bitmart reste marque legacy tant que le runtime actuel en depend.
-
-## Couches
-
-- `base.yaml` est obligatoire.
-- `mode/{mode}.yaml` est optionnel.
-- `exchange/{exchange}.yaml` est optionnel.
-- `mode_exchange/{mode}.{exchange}.yaml` est optionnel.
-- `env/{env}.yaml` est optionnel.
-
-Une couche optionnelle absente est ignoree et exposee dans `missing_optional_layers`. Une couche obligatoire absente leve `TradingConfigException`.
-
-Les couches demo/testnet ajoutees par COMMON-002 sont :
-
-- `env/demo.yaml` ;
-- `env/testnet.yaml` ;
-- `exchange/okx.yaml` ;
-- `exchange/hyperliquid.yaml` ;
-- `mode_exchange/{regular,scalper,scalper_micro}.okx.yaml` ;
-- `mode_exchange/{regular,scalper,scalper_micro}.hyperliquid.yaml`.
-
-Les secrets ne sont pas stockes dans ces fichiers. Les credentials demo/testnet
-restent des variables d'environnement dediees et ne sont pas serialisees dans la
-config effective.
-
-## API read-only
-
-COMMON-002 expose une surface read-only pour inspecter la config effective :
-
-```bash
-curl 'http://localhost:8082/api/trading/config/effective?mode=scalper&exchange=okx&env=demo'
-```
-
-Exemple Hyperliquid testnet :
-
-```bash
-curl 'http://localhost:8082/api/trading/config/effective?mode=scalper&exchange=hyperliquid&env=testnet'
-```
-
-La reponse contient :
-
-- `request` : couple `mode`, `exchange`, `env` demande ;
-- `config` : configuration effective resolue ;
-- `config_hash` : hash SHA-256 stable de la config normalisee ;
-- `layers` : couches utilisees dans l'ordre ;
-- `missing_optional_layers` : couches optionnelles absentes ;
-- `provenance` : provenance par chemin de valeur, par exemple
-  `trading.execution.max_notional`.
-
-Erreurs structurees :
-
-- `400 missing_query_parameter` si `mode`, `exchange` ou `env` manque ;
-- `400 invalid_config_request` si une couche est invalide, non parseable ou si
-  la paire `exchange/env` est interdite.
-
-Paires supportees par COMMON-002 :
-
-- `exchange=okx&env=demo` ;
-- `exchange=hyperliquid&env=testnet`.
-
-Modes supportes par l'API COMMON-002 :
-
-- `regular` ;
-- `scalper` ;
-- `scalper_micro`.
-
-Les paires croisees comme `exchange=okx&env=testnet` ou
-`exchange=hyperliquid&env=demo` sont refusees avant resolution pour eviter une
-config effective incoherente. Les exchanges inconnus et Bitmart via cet endpoint
-sont egalement refuses : Bitmart reste legacy et n'est pas re-route par l'API
-COMMON-002.
-
-Les modes inconnus sont refuses avant resolution. Les couches `mode/*` restent
-optionnelles pour le resolver bas niveau, mais l'API ne doit pas transformer une
-typo comme `scalperr` en config effective valide.
-
-L'API ne modifie aucun etat et ne contacte aucun exchange.
-
-Le viewer Effective Config reste un follow-up separe : aucune integration runtime
-ou front n'est activee dans COMMON-002.
-
-## Exemples de resolution
-
-OKX demo scalper :
+Only then may it compose these six mandatory layers, in this exact order:
 
 ```text
-base
-< mode/scalper
-< exchange/okx
-< mode_exchange/scalper.okx
-< env/demo
-= trading.environment: demo
-= trading.execution.mainnet_write_enabled: false
-= trading.execution.demo_testnet_write_enabled: false
-= trading.execution.kill_switch_enabled: true
+base < mode < setup < exchange < mode_exchange < environment
 ```
 
-Hyperliquid testnet scalper :
+There are no optional runtime layers and no `missing_optional_layers` result.
+The mode layer is the validated mode contract. The setup layer is the canonical
+compiler snapshot: it carries the full recursive AST (including confirmations,
+filters, no-trade rules, and every execution decision), missing-data and typed
+condition contracts, exact versions and hashes, source pins, contract provenance,
+and blockers. It does not reconstruct a lossy subset from the raw YAML.
+Historical compatibility pointers are provenance only and are never imports. The remaining
+files are loaded from `config/trading`. A future executable pair file is named
+`mode_exchange/{mode_id}.{mode_version}.{exchange}.yaml`, so an override cannot
+float across mode versions.
 
-```text
-base
-< mode/scalper
-< exchange/hyperliquid
-< mode_exchange/scalper.hyperliquid
-< env/testnet
-= trading.environment: testnet
-= trading.execution.mainnet_write_enabled: false
-= trading.execution.demo_testnet_write_enabled: false
-= trading.execution.kill_switch_enabled: true
-```
+Composition is ownership-aware rather than a generic deep merge:
 
-## YAML historiques actuellement utilises
+- base owns schema, units, and ultimate safety guards;
+- mode owns the mode envelope and risk decisions;
+- setup owns hypothesis, side, regime/context/trigger, invalidation, entry zone,
+  stop, and targets;
+- exchange owns capabilities, fees, funding, precision, and limits;
+- mode/exchange owns only a finite allowlist of typed override paths;
+- environment owns allowlists, notional, dry-run/write gates, and kill switch.
 
-Regular :
+Wrong-owner and unknown keys, duplicate ownership, missing targets, and
+list/scalar type changes fail closed. The resulting readonly
+`EffectiveTradingConfigSnapshot` exposes normalized JSON-compatible data, a
+stable SHA-256, exact identities, condition-catalog hash, ordered source files,
+and leaf provenance. Array accessors return copies, so callers cannot mutate the
+snapshot.
 
-- TradeEntry : `trading-app/config/app/trade_entry.regular.yaml`
-- Validations MTF : `trading-app/src/MtfValidator/config/validations.regular.yaml`
-- Contrats MTF : fallback `trading-app/config/app/mtf_contracts.yaml`
+The compiler also hashes the complete canonical setup payload. Composition
+verifies that hash before trusting any setup field, including the recursive AST
+and condition identities; changing even one nested decision invalidates the
+snapshot.
 
-Scalper :
+Mode/exchange overrides are deliberately narrow and field-specific:
 
-- TradeEntry : `trading-app/config/app/trade_entry.scalper.yaml`
-- Validations MTF : `trading-app/src/MtfValidator/config/validations.scalper.yaml`
-- Contrats MTF : fallback `trading-app/config/app/mtf_contracts.yaml`
+- trade budget, exposure cap, leverage, concurrency, and both daily-loss-cap
+  amounts may only stay equal or decrease, and must remain finite and
+  non-negative;
+- daily-loss-cap currency cannot change, and order policy cannot be altered;
+- maker/taker rates must be finite values from zero through one;
+- funding interval must remain an ISO-8601 duration.
 
-Scalper micro :
+No pair override may loosen risk, notional, concurrency, loss, order, or safety
+policy. A structured override replaces provenance recursively: previous parent
+and descendant ownership is cleared and every resulting leaf is attributed to
+the mode/exchange layer.
 
-- TradeEntry : `trading-app/config/app/trade_entry.scalper_micro.yaml`
-- Validations MTF : `trading-app/src/MtfValidator/config/validations.scalper_micro.yaml`
-- Contrats MTF : `trading-app/config/app/mtf_contracts.scalper_micro.yaml`
+## Current execution status and safety
 
-Crash existe aussi comme profil historique, mais il n'est pas dans le scope de la PR 01 :
+The published #300/#301/#310 contracts remain draft or blocked and unresolved.
+They therefore produce a structured non-executable result; no strategy values
+were invented to make this boundary runnable. `crash_short@1.1.0` has no
+compatible modern mode and is rejected before execution.
 
-- TradeEntry : `trading-app/config/app/trade_entry.crash.yaml`
-- Validations MTF : `trading-app/src/MtfValidator/config/validations.crash.yaml`
+Supported modern venue targets are fake local/test, OKX demo, and Hyperliquid
+testnet. Mainnet may remain public/read-only, but effective execution keeps
+`mainnet_write_enabled=false`. Every #133 environment, including demo/testnet,
+must declare `write_enabled=false`, `require_stop_loss=true`, and an active kill
+switch. Every exchange layer must declare `capabilities.stop_loss=true`. Base
+safety also requires `demo_testnet_write_enabled=false`,
+`require_stop_loss=true`, and `kill_switch_enabled=true`. Activation belongs to
+a later issue; #133 never enables writes. No secrets belong in any layer.
 
-## Chargement actuel
+`GET /api/trading/config/effective` requires all seven identity query fields.
+Known blocked contracts return HTTP 422 with `executable=false`, blockers, and no
+config/hash. Unknown or mismatched identity returns a structured HTTP 400. A
+successful future response includes the hash, ordered layers/files, and
+provenance.
 
-Le runtime actuel charge encore les YAML via les providers historiques :
+## Legacy quarantine and migration
 
-- `App\Config\TradeEntryConfigProvider`
-- `App\Config\MtfValidationConfigProvider`
-- `App\Config\MtfContractsConfigProvider`
+`TradeEntryConfigProvider` and `MtfValidationConfigProvider` remain available
+only for explicitly historical IDs. They reject modern IDs before opening a
+legacy YAML file. `CanonicalTradingConfigRuntimeAdapter` is the immediate shared
+MTF/TradeEntry request boundary and returns the same snapshot/hash to both sides;
+full outcome lineage remains #302.
 
-Le nouveau resolver reste donc une brique preparatoire. Les PR suivantes pourront comparer puis brancher progressivement la config effective sans modifier les strategies dans cette PR.
+Callers that currently possess only a legacy profile cannot manufacture missing
+mode/setup versions or side. They remain fail closed until their request DTO is
+migrated. This is intentional and prevents `trade_entry.yaml`, generic MTF YAML,
+or BitMart from becoming an implicit runtime fallback.
+
+Rollback is a code rollback: revert the #133 wiring commit and redeploy. Do not
+restore service by adding runtime fallback, aliases, optional layers, or by
+editing published contract status/thresholds.

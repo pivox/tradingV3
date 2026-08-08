@@ -14,10 +14,12 @@ use App\Common\Enum\MarketType;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
+use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfRunner\Application\Result\MtfRunResultEnricher;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\MtfRunner\Service\MtfRunnerService;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Repository\ContractRepository;
@@ -354,6 +356,8 @@ final class MtfRunnerServiceSyncTablesTest extends TestCase
             $mtfLogger,
             $logger,
             $tradeDecisionDispatcher ?? $this->createMock(TradeDecisionDispatcherInterface::class),
+            new CanonicalMtfPolicyPreflight(),
+            $this->createMock(AuditLoggerInterface::class),
             '/tmp',
             $this->createMock(ClockInterface::class),
             null,

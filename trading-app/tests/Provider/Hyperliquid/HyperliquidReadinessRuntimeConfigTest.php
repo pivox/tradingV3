@@ -6,9 +6,6 @@ namespace App\Tests\Provider\Hyperliquid;
 
 use App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource;
 use App\Provider\Hyperliquid\FailClosedHyperliquidReconciliationStatus;
-use App\TradingCore\Config\EffectiveTradingConfigReadService;
-use App\TradingCore\Config\EffectiveTradingConfigResolver;
-use App\TradingCore\Config\TradingConfigLayerLoader;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -21,28 +18,23 @@ final class HyperliquidReadinessRuntimeConfigTest extends TestCase
         self::assertTrue((new FailClosedHyperliquidReconciliationStatus())->isInFlight());
     }
 
-    public function testReadsSafetyInputsFromDeterministicEffectiveTradingProfile(): void
+    public function testLegacyProfileOnlySourceFailsClosedWithoutCanonicalIdentity(): void
     {
-        $config = $this->source('scalper_micro')->current();
+        $config = $this->source()->current();
 
-        self::assertSame(['BTCUSDT'], $config->allowedSymbols);
-        self::assertSame(['perpetual'], $config->allowedMarkets);
-        self::assertSame(10.0, $config->maxNotional);
-        self::assertSame('scalper_micro', $config->profile);
-        self::assertTrue($config->dryRun);
-        self::assertFalse($config->liveEnabled);
-        self::assertTrue($config->runtimeCheckRequired);
-        self::assertFalse($config->mainnetWriteEnabled);
-        self::assertFalse($config->demoTestnetWriteEnabled);
+        self::assertSame([], $config->allowedSymbols);
+        self::assertSame([], $config->allowedMarkets);
+        self::assertNull($config->maxNotional);
+        self::assertNull($config->profile);
         self::assertTrue($config->killSwitchEnabled);
         self::assertTrue($config->requireStopLoss);
-        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $config->configHash);
+        self::assertNull($config->configHash);
         self::assertFalse($config->authorizesTestnetMutation());
     }
 
     public function testMissingDeterministicProfileFailsClosed(): void
     {
-        $config = $this->source('')->current();
+        $config = $this->source()->current();
 
         self::assertSame([], $config->allowedSymbols);
         self::assertSame([], $config->allowedMarkets);
@@ -55,7 +47,7 @@ final class HyperliquidReadinessRuntimeConfigTest extends TestCase
 
     public function testChangingOnlyCurrentProfileKillSwitchCannotAuthorizeMutation(): void
     {
-        $current = $this->source('scalper_micro')->current();
+        $current = $this->source()->current();
         $killSwitchOnly = new \App\Provider\Hyperliquid\HyperliquidMutationReadinessConfig(
             profile: $current->profile,
             allowedSymbols: $current->allowedSymbols,
@@ -117,15 +109,8 @@ final class HyperliquidReadinessRuntimeConfigTest extends TestCase
         return new \App\Provider\Hyperliquid\HyperliquidMutationReadinessConfig(...$values);
     }
 
-    private function source(string $profile): EffectiveTradingHyperliquidMutationReadinessConfigSource
+    private function source(): EffectiveTradingHyperliquidMutationReadinessConfigSource
     {
-        $root = dirname(__DIR__, 3) . '/config/trading';
-
-        return new EffectiveTradingHyperliquidMutationReadinessConfigSource(
-            new EffectiveTradingConfigReadService(
-                new EffectiveTradingConfigResolver(new TradingConfigLayerLoader($root)),
-            ),
-            $profile,
-        );
+        return new EffectiveTradingHyperliquidMutationReadinessConfigSource();
     }
 }

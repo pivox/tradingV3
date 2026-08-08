@@ -387,10 +387,6 @@ services:
         arguments:
             $httpClient: '@app.http_client.exchange_guard.hyperliquid'
 
-    App\Provider\Hyperliquid\EffectiveTradingHyperliquidMutationReadinessConfigSource:
-        arguments:
-            $profile: '%app.trade_entry_default_mode%'
-
     App\Exchange\Okx\OkxConfig:
         arguments:
             $environment: '%env(string:OKX_ENV)%'
@@ -723,6 +719,8 @@ services:
     # Providers pour gérer les modes (regular/scalping)
     App\Config\MtfValidationConfigProvider: ~
     App\Config\TradeEntryConfigProvider: ~
+
+    App\TradingCore\Config\EffectiveTradingConfigResolverInterface: '@App\TradingCore\Config\EffectiveTradingConfigResolver'
 
     # Config par défaut (compatibilité)
     App\Config\TradeEntryConfig:

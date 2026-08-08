@@ -10,6 +10,8 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\OrderIntentRepository;
 use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -43,9 +45,10 @@ final class OrderIntentManager
     public function createIntent(
         array $orderParams,
         array $quantization = [],
-        ?array $rawInputs = null
+        ?array $rawInputs = null,
+        ?LineageContext $lineageContext = null,
     ): OrderIntent {
-        $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
+        $intent = $this->buildIntent($orderParams, $quantization, $rawInputs, $lineageContext);
 
         $this->entityManager->persist($intent);
         $this->entityManager->flush();
@@ -70,6 +73,7 @@ final class OrderIntentManager
         array $orderParams,
         array $quantization = [],
         ?array $rawInputs = null,
+        ?LineageContext $lineageContext = null,
     ): OrderIntentReservation {
         $decisionKey = isset($orderParams['decision_key']) ? trim((string) $orderParams['decision_key']) : '';
         if ($decisionKey === '') {
@@ -78,6 +82,7 @@ final class OrderIntentManager
             if ($clientOrderId !== '') {
                 $existing = $this->orderIntentRepository->findOneByClientOrderId($clientOrderId, $context);
                 if ($existing instanceof OrderIntent) {
+                    $this->assertReplayIdentity($existing, $lineageContext, $orderParams, $quantization, $rawInputs);
                     $this->logger->warning('[OrderIntentManager] Duplicate client_order_id replay blocked', [
                         'order_intent_id' => $existing->getId(),
                         'client_order_id' => $existing->getClientOrderId(),
@@ -92,7 +97,7 @@ final class OrderIntentManager
             $connection = $this->entityManager->getConnection();
             $connection->beginTransaction();
             try {
-                $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
+                $intent = $this->buildIntent($orderParams, $quantization, $rawInputs, $lineageContext);
                 $this->entityManager->persist($intent);
 
                 if (
@@ -164,11 +169,12 @@ final class OrderIntentManager
 
                 $existing = $this->orderIntentRepository->findOneByDecisionKey($decisionKey, $context);
                 if ($existing instanceof OrderIntent) {
+                    $this->assertReplayIdentity($existing, $lineageContext, $orderParams, $quantization, $rawInputs);
                     $connection->commit();
                     return $this->reservationForExisting($existing);
                 }
 
-                $intent = $this->buildIntent($orderParams, $quantization, $rawInputs);
+                $intent = $this->buildIntent($orderParams, $quantization, $rawInputs, $lineageContext);
                 $this->entityManager->persist($intent);
 
                 if (
@@ -231,6 +237,7 @@ final class OrderIntentManager
         } catch (UniqueConstraintViolationException $e) {
             $existing = $this->orderIntentRepository->findOneByDecisionKey($decisionKey, $context);
             if ($existing instanceof OrderIntent) {
+                $this->assertReplayIdentity($existing, $lineageContext, $orderParams, $quantization, $rawInputs);
                 return $this->reservationForExisting($existing);
             }
 
@@ -394,6 +401,7 @@ final class OrderIntentManager
         array $orderParams,
         array $quantization = [],
         ?array $rawInputs = null,
+        ?LineageContext $lineageContext = null,
     ): OrderIntent {
         $intent = new OrderIntent();
 
@@ -431,6 +439,17 @@ final class OrderIntentManager
         $intent->setQuantization($quantization);
         $intent->setRawInputs($rawInputs);
         $intent->setStatus(OrderIntent::STATUS_DRAFT);
+        if ($lineageContext !== null) {
+            if ($lineageContext->isModern()) {
+                $lineageContext->assertTradeBoundary(
+                    $intent->getSymbol(),
+                    \in_array($intent->getSide(), [1, 2], true) ? 'LONG' : 'SHORT',
+                    $intent->getExchange(),
+                    $intent->getMarketType(),
+                );
+            }
+            $intent->applyLineageContext($lineageContext);
+        }
 
         $paperProvenance = PaperExecutionProvenance::extract($orderParams);
         if ($paperProvenance !== null) {
@@ -458,6 +477,101 @@ final class OrderIntentManager
         }
 
         return $intent;
+    }
+
+    /**
+     * @param array<string,mixed> $orderParams
+     * @param array<string,mixed> $quantization
+     * @param array<string,mixed>|null $rawInputs
+     */
+    private function assertReplayIdentity(
+        OrderIntent $existing,
+        ?LineageContext $context,
+        array $orderParams,
+        array $quantization,
+        ?array $rawInputs,
+    ): void
+    {
+        $storedModern = $existing->hasAnyCanonicalIdentity();
+        $requestedModern = $context?->isModern() ?? false;
+        if ($storedModern && !$requestedModern) {
+            throw new LineageContextException('canonical_identity_required');
+        }
+        if (!$storedModern && $requestedModern) {
+            throw new LineageContextException('canonical_identity_mismatch:contract_kind');
+        }
+        $candidate = $this->buildIntent($orderParams, $quantization, $rawInputs, $context);
+        $checks = [
+            'exchange' => [$existing->getExchange(), $candidate->getExchange()],
+            'market_type' => [$existing->getMarketType(), $candidate->getMarketType()],
+            'symbol' => [$existing->getSymbol(), $candidate->getSymbol()],
+            'order_side' => [$existing->getSide(), $candidate->getSide()],
+            'order_type' => [$existing->getType(), $candidate->getType()],
+            'open_type' => [$existing->getOpenType(), $candidate->getOpenType()],
+            'leverage' => [$existing->getLeverage(), $candidate->getLeverage()],
+            'position_mode' => [$existing->getPositionMode(), $candidate->getPositionMode()],
+            'price' => [$existing->getPrice(), $candidate->getPrice()],
+            'size' => [$existing->getSize(), $candidate->getSize()],
+            'preset_mode' => [$existing->getPresetMode(), $candidate->getPresetMode()],
+            'quantization' => [$existing->getQuantization(), $candidate->getQuantization()],
+            'raw_inputs' => [$existing->getRawInputs(), $candidate->getRawInputs()],
+            'protections' => [self::protectionValues($existing), self::protectionValues($candidate)],
+            'strategy_profile' => [$existing->getStrategyProfile(), $candidate->getStrategyProfile()],
+            'strategy_version' => [$existing->getStrategyVersion(), $candidate->getStrategyVersion()],
+            'timeframe' => [$existing->getTimeframe(), $candidate->getTimeframe()],
+            'candle_open_ts' => [$existing->getCandleOpenTs()?->format('U'), $candidate->getCandleOpenTs()?->format('U')],
+        ];
+        if ($context !== null) {
+            $checks += [
+                'mode_id' => [$existing->getModeId(), $context->modeId],
+                'mode_version' => [$existing->getModeVersion(), $context->modeVersion],
+                'setup_id' => [$existing->getSetupId(), $context->setupId],
+                'setup_version' => [$existing->getSetupVersion(), $context->setupVersion],
+                'config_hash' => [$existing->getConfigHash(), $context->configHash],
+                'condition_catalog_hash' => [$existing->getConditionCatalogHash(), $context->conditionCatalogHash],
+                'side' => [$existing->getCanonicalSide(), $context->side],
+                'decision_id' => [$existing->getDecisionId(), $context->decisionId],
+                'decision_key' => [$existing->getDecisionKey(), $context->decisionKey],
+                'effective_config_reference' => [$existing->getEffectiveConfigReference(), $context->effectiveConfigReference],
+                'effective_config_snapshot' => [$existing->getEffectiveConfigSnapshot(), $context->effectiveConfigSnapshot?->toArray()],
+                'orchestration_run_id' => [$existing->getOrchestrationRunId(), $context->orchestrationRunId],
+                'correlation_run_id' => [$existing->getCorrelationRunId(), $context->correlationRunId],
+                'orchestration_set_id' => [$existing->getOrchestrationSetId(), $context->orchestrationSetId],
+                'orchestration_dashboard_id' => [$existing->getOrchestrationDashboardId(), $context->orchestrationDashboardId],
+                'origin' => [$existing->getOrigin(), $context->origin],
+                'replay_of_run_id' => [$existing->getReplayOfRunId(), $context->replayOfRunId],
+                'replay_of_correlation_id' => [$existing->getReplayOfCorrelationId(), $context->replayOfCorrelationId],
+                'attempt_number' => [$existing->getAttemptNumber(), $context->attemptNumber],
+                'intent_id' => [$existing->getIntentId(), $context->intentId],
+                'canonical_position_id' => [$existing->getCanonicalPositionId(), $context->positionId],
+                'trade_id' => [$existing->getTradeId(), $context->tradeId],
+            ];
+        }
+        if (isset($orderParams['client_order_id'])) {
+            $checks['client_order_id'] = [$existing->getClientOrderId(), $candidate->getClientOrderId()];
+        }
+        if ($context?->orderId !== null) {
+            $checks['order_id'] = [$existing->getExchangeOrderId() ?? $existing->getOrderId(), $context->orderId];
+        }
+        foreach ($checks as $field => [$stored, $requested]) {
+            if ($stored !== $requested) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+    }
+
+    /** @return list<array{type:string,price:string,price_type:?int}> */
+    private static function protectionValues(OrderIntent $intent): array
+    {
+        $values = [];
+        foreach ($intent->getProtections() as $protection) {
+            $values[] = [
+                'type' => $protection->getType(),
+                'price' => $protection->getPrice(),
+                'price_type' => $protection->getPriceType(),
+            ];
+        }
+        return $values;
     }
 
     /**

@@ -8,6 +8,8 @@ use App\Contract\MtfValidator\Dto\ContextDecisionDto;
 use App\Contract\MtfValidator\Dto\ExecutionSelectionDto;
 use App\Contract\MtfValidator\Dto\TimeframeDecisionDto;
 use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
+use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
+use App\Trading\Lineage\LineageContext;
 use App\Provider\Context\ExchangeContext;
 use Symfony\Component\DependencyInjection\Attribute\Lazy;
 
@@ -33,7 +35,21 @@ class ExecutionSelectionService
         array $indicatorsByTimeframe,
         ContextDecisionDto $contextDecision,
         ?ExchangeContext $exchangeContext = null,
+        ?LineageContext $lineageContext = null,
+        ?ExecutionSelectorMetrics $selectorMetrics = null,
     ): ExecutionSelectionDto {
+        if ($lineageContext?->isModern()) {
+            $lineageContext->assertTradeBoundary(
+                $symbol,
+                $lineageContext->side ?? '',
+                $exchangeContext?->exchange->value,
+                $exchangeContext?->marketType->value,
+                false,
+            );
+            if ($selectorMetrics === null || $selectorMetrics->identity !== $lineageContext || !$selectorMetrics->covers($executionTimeframes)) {
+                return new ExecutionSelectionDto(null, null, 'selector_metrics_missing', []);
+            }
+        }
         $decisions = [];
 
         foreach ($executionTimeframes as $tf) {

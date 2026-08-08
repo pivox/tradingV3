@@ -12,13 +12,16 @@ use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\Provider\Context\ExchangeContext;
+use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
 class MtfValidatorCoreService
 {
     public function __construct(
+        private readonly CanonicalMtfPolicyPreflight $canonicalPolicyPreflight,
         private readonly MtfValidationConfigProvider $configProvider,
         private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly ContextValidationService $contextValidationService,
@@ -33,6 +36,10 @@ class MtfValidatorCoreService
     public function validate(MtfRunDto $input): MtfResultDto
     {
         $now = $input->now ?? $this->clock->now();
+        $canonicalRejection = $this->rejectBlockedCanonicalRun($input, $now);
+        if ($canonicalRejection !== null) {
+            return $canonicalRejection;
+        }
         $exchangeContext = ExchangeContext::fromArray($input->options);
 
         // 1. Config
@@ -140,6 +147,10 @@ class MtfValidatorCoreService
             indicatorsByTimeframe: $indicatorsByTimeframe,
             contextDecision: $contextDecision,
             exchangeContext: $exchangeContext,
+            lineageContext: $input->lineageContext,
+            selectorMetrics: $input->lineageContext?->isModern()
+                ? new ExecutionSelectorMetrics($input->lineageContext, $indicatorsByTimeframe)
+                : null,
         );
 
         $result = $this->buildResultExecution(
@@ -155,11 +166,13 @@ class MtfValidatorCoreService
         return $result;
     }
 
+    /** @param array<string,mixed> $extra */
     private function buildEmptyResult(
         MtfRunDto $input,
         ?string $mode,
         \DateTimeImmutable $now,
         string $reason,
+        array $extra = [],
     ): MtfResultDto {
         $emptyContext = new ContextDecisionDto(
             isValid: false,
@@ -188,8 +201,44 @@ class MtfValidatorCoreService
             extra: [
                 'request_id' => $input->requestId,
                 'options'    => $input->options,
+            ] + $extra,
+        );
+    }
+
+    private function rejectBlockedCanonicalRun(MtfRunDto $input, \DateTimeImmutable $now): ?MtfResultDto
+    {
+        $identity = $input->lineageContext;
+        if ($identity === null) {
+            return null;
+        }
+
+        $rejection = $this->canonicalPolicyPreflight->reject($identity);
+        if ($rejection === null) {
+            return null;
+        }
+
+        $reason = $rejection->reason;
+        $blockers = $rejection->blockers;
+        $this->mtfLogger->warning('mtf.canonical_policy_rejected', [
+            'symbol' => $input->symbol,
+            'profile' => $input->profile,
+            'reason' => $reason,
+            'blockers' => $blockers,
+            'identity' => $identity->redacted(),
+        ]);
+        $result = $this->buildEmptyResult(
+            input: $input,
+            mode: $identity->modeId,
+            now: $now,
+            reason: $reason,
+            extra: [
+                'canonical_status' => 'canonical_policy_rejected',
+                'canonical_policy_blockers' => $blockers,
             ],
         );
+        $this->auditResult($input, $result, 'MTF_CANONICAL_POLICY_REJECTED');
+
+        return $result;
     }
 
     private function buildResultContextKo(

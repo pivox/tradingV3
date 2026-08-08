@@ -1,0 +1,147 @@
+schema_version: '1.0.0'
+setup_id: day_trading.trend_continuation.short
+setup_version: '1.0.0'
+status: blocked
+executable: false
+family: trend_continuation
+side: short
+thesis: 'A bearish 4h/1h regime followed by aligned 15m downside momentum may continue downward.'
+source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,84-88,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
+compatible_modes: [{ mode_id: day_trading, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches the day_trading catalog frozen by #300.' }
+hypothesis: 'If bearish regime and momentum rules hold, downside continuation is predicted, but the global bullish pullback filters contradict the short trigger and block testing or publication.'
+context:
+  side: short
+  regime:
+    op: all_of
+    provenance: 'validations.regular.yaml:255-260'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:257-259'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:258 evidence branch'
+            nodes:
+              - { condition: ema_50_lt_200, timeframe: 4h, provenance: 'validations.regular.yaml:258' }
+              - { condition: close_below_ema_200, timeframe: 4h, provenance: 'validations.regular.yaml:258' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:259 evidence branch'
+            nodes:
+              - { condition: ema_below_200_with_tolerance, timeframe: 4h, provenance: 'validations.regular.yaml:259' }
+              - { condition: ema_50_lt_200, timeframe: 4h, provenance: 'validations.regular.yaml:259' }
+      - { condition: price_regime_ok_short, timeframe: 4h, provenance: 'validations.regular.yaml:260' }
+  context:
+    op: all_of
+    provenance: 'validations.regular.yaml:275-285'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:277-279'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:278'
+            nodes:
+              - { condition: ema_below_200_with_tolerance, timeframe: 1h, provenance: 'validations.regular.yaml:278' }
+              - { condition: ema_50_lt_200, timeframe: 1h, provenance: 'validations.regular.yaml:278' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:279'
+            nodes:
+              - { condition: ema200_slope_neg, timeframe: 1h, provenance: 'validations.regular.yaml:279' }
+              - { condition: ema_50_lt_200, timeframe: 1h, provenance: 'validations.regular.yaml:279' }
+      - op: any_of
+        provenance: 'validations.regular.yaml:280-284 evidence variants'
+        nodes:
+          - { condition: macd_line_cross_down_with_hysteresis, timeframe: 1h, provenance: 'validations.regular.yaml:281-282' }
+          - { condition: macd_hist_decreasing_n, timeframe: 1h, provenance: 'validations.regular.yaml:283' }
+          - { condition: macd_hist_slope_neg, timeframe: 1h, provenance: 'validations.regular.yaml:284' }
+      - { condition: price_regime_ok_short, timeframe: 1h, provenance: 'validations.regular.yaml:285' }
+  trigger:
+    op: all_of
+    provenance: 'validations.regular.yaml:299-308'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:301-304 evidence variants'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:302-303'
+            nodes:
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 15m, provenance: 'validations.regular.yaml:303' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:304'
+            nodes:
+              - { condition: macd_hist_decreasing_n, timeframe: 15m, provenance: 'validations.regular.yaml:304' }
+              - { condition: ema_20_lt_50, timeframe: 15m, provenance: 'validations.regular.yaml:304' }
+      - { condition: ema_20_lt_50, timeframe: 15m, provenance: 'validations.regular.yaml:305' }
+      - { condition: rsi_gt_softfloor, timeframe: 15m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:306' }
+      - { condition: close_below_vwap, timeframe: 15m, provenance: 'validations.regular.yaml:307' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.regular.yaml:308' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.regular.yaml:322-349 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.regular.yaml:322-331'
+        nodes:
+          - op: any_of
+            provenance: 'validations.regular.yaml:324-327'
+            nodes:
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.regular.yaml:326' }
+              - op: all_of
+                provenance: 'validations.regular.yaml:327'
+                nodes:
+                  - { condition: macd_hist_decreasing_n, timeframe: 5m, provenance: 'validations.regular.yaml:327' }
+                  - { condition: ema_20_lt_50, timeframe: 5m, provenance: 'validations.regular.yaml:327' }
+          - { condition: ema_20_lt_50, timeframe: 5m, provenance: 'validations.regular.yaml:328' }
+          - { condition: rsi_gt_softfloor, timeframe: 5m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:329' }
+          - { condition: close_below_vwap, timeframe: 5m, provenance: 'validations.regular.yaml:330' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.regular.yaml:331' }
+      - op: all_of
+        provenance: 'validations.regular.yaml:342-349'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 1m, provenance: 'validations.regular.yaml:344' }
+          - { condition: ema_20_lt_50, timeframe: 1m, provenance: 'validations.regular.yaml:345' }
+          - { condition: rsi_gt_softfloor, timeframe: 1m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:346' }
+          - { condition: close_below_vwap, timeframe: 1m, provenance: 'validations.regular.yaml:347' }
+          - { condition: macd_hist_slope_neg, timeframe: 1m, provenance: 'validations.regular.yaml:348' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.regular.yaml:349' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243 bullish global filter retained exactly' }
+  - { condition: adx_min_for_trend_1h, timeframe: 1h, provenance: 'validations.regular.yaml:240' }
+  - { condition: pullback_confirmed_ma9_21, timeframe: global, provenance: 'validations.regular.yaml:241 contradictory bullish MA9 cross filter' }
+  - { condition: pullback_confirmed_vwap, timeframe: global, provenance: 'validations.regular.yaml:242 contradictory bullish VWAP filter' }
+  - { condition: price_lte_ma21_plus_k_atr, timeframe: global, provenance: 'validations.regular.yaml:243' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.regular.yaml', justification: 'No EntryZone source.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.regular.yaml', justification: 'No stop source.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.regular.yaml', justification: 'No target source.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.regular.yaml', justification: 'No certified net R source.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.regular.yaml', justification: 'No invalidation source.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'No duration source.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.regular.yaml', justification: 'Costs absent.' }
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Full setup duration absent.' }
+governance:
+  shadow: ['resolve bullish-filter contradiction', 'resolve all execution decisions', 'capture full trace']
+  paper: ['pass shadow criteria', 'certified net cost accounting']
+  promotion: ['certified net baseline attached', 'independent risk review', 'new semantic version']
+  suspension: ['critical data absent or stale', 'condition breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'Blocked: short requires close_below_vwap at lines 307/330/347 while mandatory pullback_confirmed_ma9_21 and pullback_confirmed_vwap at lines 241-242 encode bullish pullback behavior.'
+  - 'Regular selector stay/drop bands overlap at lines 209-223.'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.regular.yaml:255-260', justification: 'Exact bearish 4h source.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.regular.yaml:275-285', justification: 'Exact bearish 1h source.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.regular.yaml:299-308', justification: 'Exact bearish 15m source.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.regular.yaml:322-349', justification: 'Common lower-TF confirmations.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.regular.yaml:238-243', justification: 'Contradictory filters retained rather than repaired.' }
+ownership_model: setup-contract-ownership-v1

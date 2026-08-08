@@ -1,4 +1,6 @@
 from datetime import datetime
+import hashlib
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -10,10 +12,367 @@ from app.schemas import (
     MarketType,
     MtfProfile,
     OrchestratorSet,
+    CanonicalEffectiveConfigRequest,
+    CanonicalEffectiveConfigSnapshot,
+    CanonicalTradingIdentity,
     SetCreate,
     SetRead,
+    SetUpdate,
     assert_set_persistable,
 )
+
+
+def test_full_php_133_snapshot_shape_round_trips_unchanged_with_hash_parity():
+    catalog_hash = "sha256:" + "b" * 64
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"},
+        "environment": {"id": "test", "note": "café/path"},
+    }
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    assert config_hash == "sha256:057ac6a372647c22330a50d9b0f3dfecd0afbb05152f5ad460e07132fe2f5b9f"
+    layers = [
+        {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
+        for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+    ]
+    payload = {
+        "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+        "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": layers[1]}, "executable": True, "blockers": [],
+    }
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+
+    assert snapshot.model_dump(mode="json") == payload
+
+
+def test_effective_snapshot_hash_normalizes_integral_float_and_deep_freezes_metadata():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["config"]["environment"]["note"] = "café/path"
+    payload["config"]["environment"]["leverage"] = 3.0
+    normalized = json.loads(json.dumps(payload["config"], ensure_ascii=False))
+    assert normalized["environment"]["leverage"] == 3.0
+    normalized["environment"]["leverage"] = 3
+    canonical = json.dumps(
+        {"config": normalized, "condition_catalog_hash": payload["condition_catalog_hash"]},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+    before_hash = snapshot.config_hash
+    before_payload = snapshot.model_dump(mode="json")
+
+    with pytest.raises(TypeError):
+        snapshot.provenance["mode.mode_id"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError):
+        snapshot.provenance["mode.mode_id"]["path"] = "/mutated.yaml"  # type: ignore[index]
+
+    assert snapshot.config_hash == before_hash
+    assert snapshot.model_dump(mode="json") == before_payload
+
+
+def test_php_api_integral_number_unicode_slash_hash_fixture_matches_python():
+    config = {"leverage": 3, "note": "café/path"}
+    canonical = json.dumps(
+        {"config": config, "condition_catalog_hash": "sha256:" + "b" * 64},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    assert "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest() == (
+        "sha256:1f55b0a0080a7c32b97ab8ff2907485ac3ebcb0dd4f1efb391b4c4b5f90c1418"
+    )
+
+
+def test_full_php_133_snapshot_rejects_layer_file_order_mismatch():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["ordered_files"] = list(reversed(payload["ordered_files"]))
+    with pytest.raises(ValidationError, match="effective_config_snapshot_layer_files_mismatch"):
+        CanonicalEffectiveConfigSnapshot(**payload)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    [
+        ("config_not_mapping", "effective_config_snapshot.config must be a mapping"),
+        ("provenance_empty", "effective_config_snapshot_provenance_empty"),
+        ("layer_order", "effective_config_snapshot_layer_order_invalid"),
+        ("roots", "effective_config_snapshot_roots_invalid"),
+        ("schema_version", "effective_config_snapshot_schema_version_invalid"),
+        ("config_identity", "effective_config_snapshot_config_identity_mismatch"),
+        ("hash", "effective_config_snapshot_hash_mismatch"),
+    ],
+)
+def test_effective_snapshot_rejects_each_fail_closed_contract_boundary(case, expected_error):
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+
+    if case == "config_not_mapping":
+        payload["config"] = []
+    elif case == "provenance_empty":
+        payload["provenance"] = {}
+    elif case == "layer_order":
+        payload["ordered_layers"][0], payload["ordered_layers"][1] = (
+            payload["ordered_layers"][1],
+            payload["ordered_layers"][0],
+        )
+        payload["ordered_files"] = [layer["path"] for layer in payload["ordered_layers"]]
+    elif case == "roots":
+        del payload["config"]["safety"]
+        _rehash_effective_snapshot(payload)
+    elif case == "schema_version":
+        payload["config"]["schema_version"] = "effective-trading-config.v1"
+        _rehash_effective_snapshot(payload)
+    elif case == "config_identity":
+        payload["config"]["mode"]["mode_id"] = "day_trading"
+        _rehash_effective_snapshot(payload)
+    elif case == "hash":
+        payload["config_hash"] = "sha256:" + "c" * 64
+
+    with pytest.raises(ValidationError, match=expected_error):
+        CanonicalEffectiveConfigSnapshot(**payload)
+
+
+def test_effective_snapshot_round_trip_thaws_sequences_and_hashes_integral_floats():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["config"]["environment"]["tags"] = ["paper", "certified"]
+    payload["config"]["environment"]["leverage"] = 3.0
+    _rehash_effective_snapshot(payload, normalize_integral_floats=True)
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+
+    assert snapshot.model_dump(mode="json")["config"]["environment"] == {
+        "id": "test",
+        "tags": ["paper", "certified"],
+        "leverage": 3.0,
+    }
+
+
+def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
+    identity = CanonicalTradingIdentity(**_canonical_identity_payload())
+    with pytest.raises(ValidationError):
+        identity.side = "SHORT"  # type: ignore[misc]
+
+    with pytest.raises(ValidationError, match="mode_version_mismatch"):
+        CanonicalTradingIdentity(
+            **identity.model_dump(exclude_none=True), requested_mode_version="2.0.0"
+        )
+
+
+def test_canonical_trading_identity_rejects_mode_and_snapshot_identity_mismatches():
+    with pytest.raises(ValidationError, match="mode_id_mismatch"):
+        CanonicalTradingIdentity(
+            **_canonical_identity_payload(), requested_mode_id="day_trading"
+        )
+
+    payload = _canonical_identity_payload()
+    payload["config_hash"] = "sha256:" + "c" * 64
+    with pytest.raises(ValidationError, match="effective_config_snapshot_identity_mismatch"):
+        CanonicalTradingIdentity(**payload)
+
+
+def test_effective_config_reference_is_trimmed_and_blank_is_rejected():
+    identity = CanonicalTradingIdentity(
+        **{**_canonical_identity_payload(), "effective_config_reference": "  effective-config:cfg-1  "}
+    )
+    assert identity.effective_config_reference == "effective-config:cfg-1"
+
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(
+            **{**_canonical_identity_payload(), "effective_config_reference": "   "}
+        )
+
+
+def test_bitmart_remains_legacy_only_when_canonical_identity_is_present():
+    legacy = OrchestratorSet(set_id="legacy-bitmart", exchange="bitmart", dry_run=True)
+    assert legacy.trading_identity is None
+
+    with pytest.raises(ValidationError, match="canonical_exchange_invalid"):
+        OrchestratorSet(
+            set_id="modern-bitmart",
+            exchange="bitmart",
+            dry_run=True,
+            symbols=("BTCUSDT",),
+            trading_identity=CanonicalTradingIdentity(**_canonical_identity_payload()),
+        )
+
+
+@pytest.mark.parametrize("version", ["latest", "^1.0", "1", "1.0", "01.0.0", "1.0.0-rc1"])
+def test_canonical_trading_identity_rejects_non_exact_published_versions(version):
+    payload = _canonical_identity_payload()
+    payload["mode_version"] = version
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+    payload = _canonical_identity_payload()
+    payload["setup_version"] = version
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+@pytest.mark.parametrize("field", ["config_hash", "condition_catalog_hash"])
+@pytest.mark.parametrize("value", ["a" * 64, "sha256:" + "A" * 64, "sha256:" + "a" * 63, "md5:" + "a" * 64])
+def test_canonical_trading_identity_rejects_malformed_hashes(field, value):
+    payload = _canonical_identity_payload()
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"mode_id": "scalper"},
+        {"setup_id": "scalping.unknown.long"},
+        {"mode_id": "day_trading"},
+        {"side": "SHORT"},
+        {"setup_version": "1.0.1"},
+    ],
+)
+def test_canonical_trading_identity_rejects_unknown_or_catalog_mismatched_identity(override):
+    payload = {**_canonical_identity_payload(), **override}
+    with pytest.raises(ValidationError):
+        CanonicalTradingIdentity(**payload)
+
+
+def _canonical_identity_payload():
+    catalog_hash = "sha256:" + "b" * 64
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"}, "environment": {"id": "test"},
+    }
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
+    return {
+        "mode_id": "scalping",
+        "mode_version": "1.0.0",
+        "setup_id": "scalping.pullback.long",
+        "setup_version": "1.0.0",
+        "config_hash": config_hash,
+        "condition_catalog_hash": catalog_hash,
+        "side": "LONG",
+        "effective_config_reference": "effective-config:cfg-1",
+        "effective_config_snapshot": {
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+            "provenance": {"mode.mode_id": layers[1]},
+            "executable": True, "blockers": [],
+        },
+    }
+
+
+def _rehash_effective_snapshot(payload, *, normalize_integral_floats=False):
+    config = payload["config"]
+    if normalize_integral_floats:
+        config_for_hash = json.loads(json.dumps(config))
+        config_for_hash["environment"]["leverage"] = 3
+    else:
+        config_for_hash = config
+    canonical = json.dumps(
+        {"config": config_for_hash, "condition_catalog_hash": payload["condition_catalog_hash"]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
+    identity = _canonical_identity_payload()
+    with pytest.raises(ValidationError, match="canonical_exchange_mismatch"):
+        OrchestratorSet(
+            set_id="exchange-mismatch", exchange="okx", environment="demo", dry_run=True,
+            symbols=("BTCUSDT",), trading_identity=CanonicalTradingIdentity(**identity),
+        )
+
+    identity["effective_config_snapshot"]["request"]["environment"] = "test"
+    identity["effective_config_snapshot"]["config"]["environment"]["id"] = "test"
+    canonical = json.dumps(
+        {"config": identity["effective_config_snapshot"]["config"], "condition_catalog_hash": identity["condition_catalog_hash"]},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    )
+    identity["config_hash"] = identity["effective_config_snapshot"]["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    with pytest.raises(ValidationError, match="canonical_environment_mismatch"):
+        OrchestratorSet(
+            set_id="environment-mismatch", exchange="fake", environment="demo", dry_run=True,
+            symbols=("BTCUSDT",), trading_identity=CanonicalTradingIdentity(**identity),
+        )
+
+
+@pytest.mark.parametrize(
+    ("exchange", "environment"),
+    [
+        ("fake", "local"),
+        ("fake", "test"),
+        ("okx", "demo"),
+        ("okx", "mainnet"),
+        ("hyperliquid", "testnet"),
+        ("hyperliquid", "mainnet"),
+    ],
+)
+def test_canonical_effective_config_request_accepts_php_exchange_environment_pairs(
+    exchange, environment
+):
+    request = CanonicalEffectiveConfigRequest(
+        mode_id="scalping",
+        mode_version="1.0.0",
+        setup_id="scalping.pullback.long",
+        setup_version="1.0.0",
+        exchange=exchange,
+        environment=environment,
+        side="long",
+    )
+
+    assert request.exchange == exchange
+    assert request.environment == environment
+
+
+def test_canonical_effective_config_request_rejects_invalid_exchange_environment_pair():
+    with pytest.raises(ValidationError, match="canonical_exchange_environment_invalid"):
+        CanonicalEffectiveConfigRequest(
+            mode_id="scalping",
+            mode_version="1.0.0",
+            setup_id="scalping.pullback.long",
+            setup_version="1.0.0",
+            exchange="fake",
+            environment="demo",
+            side="long",
+        )
+
+
+def test_environment_enum_exposes_canonical_fake_environments():
+    assert Environment.LOCAL.value == "local"
+    assert Environment.TEST.value == "test"
+
+
+@pytest.mark.parametrize("schema", [SetCreate, SetUpdate])
+@pytest.mark.parametrize("trading_identity", [None, {}])
+def test_persisted_set_schema_rejects_canonical_identity_until_lot_2b(
+    schema, trading_identity
+):
+    payload = {"trading_identity": trading_identity}
+    if schema is SetCreate:
+        payload.update(
+            set_id="pending-identity",
+            exchange="fake",
+            environment="test",
+            symbols=["BTCUSDT"],
+        )
+
+    with pytest.raises(
+        ValidationError, match="canonical_persisted_identity_pending_lot_2b"
+    ):
+        schema.model_validate(payload)
 
 
 def test_okx_live_is_forbidden():

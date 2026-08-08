@@ -1,0 +1,81 @@
+schema_version: '1.0.0'
+setup_id: micro_scalping.momentum_ofi.short
+setup_version: '1.0.0'
+status: blocked
+executable: false
+family: momentum_ofi
+side: short
+thesis: 'Negative 5m momentum plus a tight 1m spread and negative order-flow imbalance may precede a micro short move.'
+source_origin: { file: 'src/MtfValidator/config/validations.scalper_micro.yaml', line_range: '5-19,95-125', content_sha256: 47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2, commit: 75a4cef8852f99d6e8202422fdd0531cdfce60bb }
+compatible_modes: [{ mode_id: micro_scalping, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches #300 micro_scalping catalog.' }
+hypothesis: 'Negative local momentum plus executable spread and OFI could predict a downward micro move; absent conditions/data block evaluation.'
+context:
+  side: short
+  regime:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101'
+    nodes:
+      - { condition: close_below_vwap_or_ma9, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:97' }
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
+      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
+      - { condition: rsi_gt_30, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:100' }
+      - { condition: atr_volatility_ok, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:101' }
+  context:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101'
+    nodes:
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
+      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
+  trigger:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:117-125'
+    nodes:
+      - { condition: near_vwap, timeframe: 1m, parameters: { near_vwap_tolerance: 0.0012 }, provenance: 'validations.scalper_micro.yaml:119' }
+      - { condition: spread_bps_lte, timeframe: 1m, parameters: { max_spread_bps: 8 }, provenance: 'validations.scalper_micro.yaml:120; condition implementation absent' }
+      - { condition: order_flow_imbalance_lte, timeframe: 1m, parameters: { max_ofi: -0.15 }, provenance: 'validations.scalper_micro.yaml:121; condition/data implementation absent' }
+      - { condition: close_below_vwap_or_ma9, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:122' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:123-125'
+    nodes:
+      - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { n: 1, eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:123' }
+      - { condition: rsi_bearish, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:124' }
+      - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
+filters:
+  - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.scalper_micro.yaml', justification: 'near_vwap is not EntryZone.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.scalper_micro.yaml', justification: 'No stop.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.scalper_micro.yaml', justification: 'No targets.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.scalper_micro.yaml', justification: 'No net R.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.scalper_micro.yaml', justification: 'No invalidation.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper_micro.yaml', justification: 'No duration.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.scalper_micro.yaml', justification: 'Spread threshold is not full costs.' }
+data_condition_contract:
+  required_data: [ohlcv_5m, ohlcv_1m, vwap, ma9, macd, rsi, atr, spread_bps, order_flow_imbalance]
+  missing_conditions: [spread_bps_lte, order_flow_imbalance_lte]
+  external_dependencies: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper_micro.yaml', justification: 'Full duration absent.' }
+governance:
+  shadow: ['implement/certify spread and OFI conditions/data', 'resolve execution decisions', 'capture trace']
+  paper: ['pass shadow criteria', 'certified net costs']
+  promotion: ['certified net baseline', 'risk review', 'new semantic version']
+  suspension: ['spread/OFI missing or stale', 'condition breach', 'trace gap']
+  rollback: ['net regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'Blocked: spread_bps_lte and order_flow_imbalance_lte condition implementations and trustworthy data are absent.'
+  - 'The 5m MACD epsilon band can admit both long and short.'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:95-101', justification: 'Active 5m short context.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:95-101', justification: 'Active 5m momentum.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:117-125', justification: 'Active 1m spread/OFI trigger.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:117-125', justification: 'Active 1m confirmation.' }
+ownership_model: setup-contract-ownership-v1

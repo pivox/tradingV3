@@ -13,6 +13,7 @@ use App\TradeEntry\RiskSizer\{PositionSizer, StopLossCalculator, TakeProfitCalcu
 use App\TradeEntry\Types\Side;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
 
 final class OrderPlanBuilder
 {
@@ -630,6 +631,8 @@ final class OrderPlanBuilder
             $stopPct,
             $atr15m,
             $req->executionTf,
+            $req->lineageContext?->modeId,
+            $req->lineageContext?->isModern() ? CanonicalTradeEntryConfigFactory::fromLineage($req->lineageContext) : null,
         );
 
         $leverageMultiplier = $req->leverageMultiplier ?? 1.0;
@@ -791,6 +794,7 @@ final class OrderPlanBuilder
             stopPivot: $stopPivot,
             stopFinalSource: $stopFinalSource,
             exchangeContext: $req->exchangeContext,
+            lineageContext: $req->lineageContext,
         );
 
         $this->positionsLogger->info('order_plan.model_ready', [

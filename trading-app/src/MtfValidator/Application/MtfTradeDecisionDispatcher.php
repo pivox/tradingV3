@@ -11,7 +11,6 @@ use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\MtfValidator\Message\MtfTradingDecisionMessage;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Messenger\MessageBusInterface;
 
 #[AsAlias(id: TradeDecisionDispatcherInterface::class)]
@@ -19,10 +18,8 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
 {
     public function __construct(
         private readonly MessageBusInterface $messageBus,
-        #[Autowire(service: 'monolog.logger.mtf')]
+        #[\Symfony\Component\DependencyInjection\Attribute\Autowire(service: 'monolog.logger.mtf')]
         private readonly LoggerInterface $mtfLogger,
-        #[Autowire('%app.trade_entry_default_mode%')]
-        private readonly string $defaultProfile,
     ) {
     }
 
@@ -35,6 +32,19 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
 
             $result = $entry['result'] ?? null;
             if (!$result instanceof MtfResultDto || !$result->isTradable) {
+                continue;
+            }
+
+            $identity = $request->lineageContext;
+            if ($identity->modeId !== null && (
+                $identity->symbol !== strtoupper($result->symbol)
+                || $identity->side !== strtoupper((string) $result->side)
+                || $identity->modeId !== ($result->profile !== '' ? $result->profile : $request->profile)
+            )) {
+                $this->mtfLogger->error('[MTF Dispatcher] Canonical identity rejected', [
+                    'reason' => 'canonical_identity_mismatch:validated_decision',
+                    'identity' => $identity->redacted(),
+                ]);
                 continue;
             }
 
@@ -53,6 +63,7 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                     $effectiveRunId,
                     $mtfRun,
                     $result,
+                    $identity,
                 ));
 
                 $this->mtfLogger->debug('[MTF Dispatcher] Trading decision dispatched', [
@@ -79,7 +90,7 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
     {
         return new MtfRunDto(
             symbol: $result->symbol,
-            profile: $result->profile !== '' ? $result->profile : ($request->profile ?? $this->defaultProfile),
+            profile: $result->profile !== '' ? $result->profile : ($request->profile ?? throw new \InvalidArgumentException('canonical_identity_missing:mode_id')),
             mode: $result->mode ?? $request->mode,
             now: $result->evaluatedAt,
             requestId: $runId,
@@ -109,6 +120,7 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 'config_hash' => $request->lineageContext->configHash,
                 'lineage_context' => $request->lineageContext->toArray(),
             ],
+            lineageContext: $request->lineageContext,
         );
     }
 }

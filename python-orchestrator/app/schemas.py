@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Mapping, Optional, Tuple
+import hashlib
+import json
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
+from app.backtesting.contracts import FrozenDict
 
 from app import __version__
 from app.services.live_guard import (
@@ -51,6 +54,8 @@ class MtfProfile(str, Enum):
 
 
 class Environment(str, Enum):
+    LOCAL = "local"
+    TEST = "test"
     DEMO = "demo"
     TESTNET = "testnet"
     MAINNET = "mainnet"
@@ -60,6 +65,210 @@ class Action(str, Enum):
     MTF_RUN = "mtf_run"
     SYNC_CONTRACTS = "sync_contracts"
     REPORTING = "reporting"
+
+
+def _thaw_snapshot(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_snapshot(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_snapshot(item) for item in value]
+    return value
+
+
+def _canonical_hash_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_hash_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_canonical_hash_value(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+class CanonicalEffectiveConfigRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    mode_id: Literal["day_trading", "scalping", "micro_scalping"]
+    mode_version: Literal["1.0.0"]
+    setup_id: str
+    setup_version: Literal["1.0.0"]
+    exchange: Literal["fake", "okx", "hyperliquid"]
+    environment: Literal["local", "test", "demo", "testnet", "mainnet"]
+    side: Literal["long", "short"]
+
+    @model_validator(mode="after")
+    def _validate_exchange_environment_pair(self) -> "CanonicalEffectiveConfigRequest":
+        allowed = {
+            "fake": {"local", "test"},
+            "okx": {"demo", "mainnet"},
+            "hyperliquid": {"testnet", "mainnet"},
+        }
+        if self.environment not in allowed[self.exchange]:
+            raise ValueError("canonical_exchange_environment_invalid")
+        return self
+
+
+class CanonicalEffectiveConfigLayer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    type: Literal["base", "mode", "setup", "exchange", "mode_exchange", "environment"]
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    required: Literal[True]
+
+
+class CanonicalEffectiveConfigSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+    request: CanonicalEffectiveConfigRequest
+    config: FrozenDict
+    config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    ordered_layers: Tuple[CanonicalEffectiveConfigLayer, ...]
+    ordered_files: Tuple[str, ...]
+    provenance: FrozenDict
+    executable: bool
+    blockers: Tuple[str, ...] = ()
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def _freeze_config(cls, value: Any) -> FrozenDict:
+        if not isinstance(value, Mapping):
+            raise ValueError("effective_config_snapshot.config must be a mapping")
+        return FrozenDict(value)
+
+    @field_serializer("config")
+    def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
+        return _thaw_snapshot(value)
+
+    @field_validator("provenance", mode="before")
+    @classmethod
+    def _freeze_provenance(cls, value: Any) -> FrozenDict:
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError("effective_config_snapshot_provenance_empty")
+        for layer in value.values():
+            CanonicalEffectiveConfigLayer.model_validate(layer)
+        return FrozenDict(value)
+
+    @field_serializer("provenance")
+    def _serialize_provenance(self, value: FrozenDict) -> dict[str, Any]:
+        return _thaw_snapshot(value)
+
+    @model_validator(mode="after")
+    def _validate_hash(self) -> "CanonicalEffectiveConfigSnapshot":
+        expected_order = ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+        if tuple(layer.type for layer in self.ordered_layers) != expected_order:
+            raise ValueError("effective_config_snapshot_layer_order_invalid")
+        if tuple(layer.path for layer in self.ordered_layers) != self.ordered_files:
+            raise ValueError("effective_config_snapshot_layer_files_mismatch")
+        if not self.provenance:
+            raise ValueError("effective_config_snapshot_provenance_empty")
+        config = _thaw_snapshot(self.config)
+        if set(config) != {"schema_version", "units", "safety", "mode", "setup", "exchange", "environment"}:
+            raise ValueError("effective_config_snapshot_roots_invalid")
+        if config["schema_version"] != "effective-trading-config.v2":
+            raise ValueError("effective_config_snapshot_schema_version_invalid")
+        request = self.request
+        if (
+            config["mode"].get("mode_id") != request.mode_id
+            or config["mode"].get("mode_version") != request.mode_version
+            or config["setup"].get("setup_id") != request.setup_id
+            or config["setup"].get("setup_version") != request.setup_version
+            or config["setup"].get("side") != request.side
+            or config["exchange"].get("id") != request.exchange
+            or config["environment"].get("id") != request.environment
+        ):
+            raise ValueError("effective_config_snapshot_config_identity_mismatch")
+        canonical = json.dumps(
+            _canonical_hash_value({"config": config, "condition_catalog_hash": self.condition_catalog_hash}),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        expected = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if self.config_hash != expected:
+            raise ValueError("effective_config_snapshot_hash_mismatch")
+        return self
+
+
+class CanonicalTradingIdentity(BaseModel):
+    """Immutable configuration identity copied unchanged through retries/replay.
+
+    Runtime stage identifiers are added by the stage that creates them. This model
+    deliberately contains no profile aliases and performs no mode normalization.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode_id: Literal["day_trading", "scalping", "micro_scalping"]
+    mode_version: Literal["1.0.0"]
+    setup_id: Literal[
+        "day_trading.trend_continuation.long",
+        "day_trading.trend_continuation.short",
+        "scalping.trend_continuation.long",
+        "scalping.pullback.long",
+        "scalping.trend_momentum.short",
+        "micro_scalping.momentum_ofi.long",
+        "micro_scalping.momentum_ofi.short",
+    ]
+    setup_version: Literal["1.0.0"]
+    config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    side: Literal["LONG", "SHORT"]
+    effective_config_reference: str = Field(min_length=1)
+    effective_config_snapshot: CanonicalEffectiveConfigSnapshot
+    requested_mode_id: Optional[str] = None
+    resolved_mode_id: Optional[str] = None
+    validated_mode_id: Optional[str] = None
+    requested_mode_version: Optional[str] = None
+    resolved_mode_version: Optional[str] = None
+    validated_mode_version: Optional[str] = None
+
+    @field_validator("effective_config_reference")
+    @classmethod
+    def _normalize_effective_config_reference(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("effective_config_reference_empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def _reject_contradictory_resolution(self) -> "CanonicalTradingIdentity":
+        expected_mode, expected_side = {
+            "day_trading.trend_continuation.long": ("day_trading", "LONG"),
+            "day_trading.trend_continuation.short": ("day_trading", "SHORT"),
+            "scalping.trend_continuation.long": ("scalping", "LONG"),
+            "scalping.pullback.long": ("scalping", "LONG"),
+            "scalping.trend_momentum.short": ("scalping", "SHORT"),
+            "micro_scalping.momentum_ofi.long": ("micro_scalping", "LONG"),
+            "micro_scalping.momentum_ofi.short": ("micro_scalping", "SHORT"),
+        }[self.setup_id]
+        if self.mode_id != expected_mode or self.side != expected_side:
+            raise ValueError("setup_mode_side_mismatch")
+        for value in (
+            self.requested_mode_id,
+            self.resolved_mode_id,
+            self.validated_mode_id,
+        ):
+            if value is not None and value != self.mode_id:
+                raise ValueError("mode_id_mismatch")
+        for value in (
+            self.requested_mode_version,
+            self.resolved_mode_version,
+            self.validated_mode_version,
+        ):
+            if value is not None and value != self.mode_version:
+                raise ValueError("mode_version_mismatch")
+        snapshot = self.effective_config_snapshot
+        expected = snapshot.request
+        if (
+            expected.mode_id != self.mode_id
+            or expected.mode_version != self.mode_version
+            or expected.setup_id != self.setup_id
+            or expected.setup_version != self.setup_version
+            or expected.side.upper() != self.side
+            or snapshot.config_hash != self.config_hash
+            or snapshot.condition_catalog_hash != self.condition_catalog_hash
+        ):
+            raise ValueError("effective_config_snapshot_identity_mismatch")
+        return self
 
 
 def assert_recipe_fault_profile_allowed(
@@ -207,7 +416,10 @@ class OrchestratorSet(BaseModel):
     exchange: Exchange = Field(..., description="Exchange cible.")
     market_type: MarketType = Field(default=MarketType.PERPETUAL, description="perpetual ou spot.")
     mtf_profile: MtfProfile = Field(default=MtfProfile.REGULAR, description="Profil MTF.")
-    environment: Environment = Field(default=Environment.DEMO, description="demo, testnet, mainnet.")
+    environment: Environment = Field(
+        default=Environment.DEMO,
+        description="local, test, demo, testnet ou mainnet.",
+    )
     dry_run: bool = Field(default=True, description="Simulation ou exécution réelle.")
     workers: int = Field(
         default=1,
@@ -220,6 +432,10 @@ class OrchestratorSet(BaseModel):
     # pas la mutation d'une liste interne (ex. symbols.append(...)).
     symbols: Tuple[str, ...] = Field(default_factory=tuple, description="Liste optionnelle de symboles.")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
+    trading_identity: Optional[CanonicalTradingIdentity] = Field(
+        default=None,
+        description="Identité canonique moderne; absence réservée aux sets historiques.",
+    )
 
     @model_validator(mode="after")
     def _forbid_live_on_restricted_exchanges(self) -> "OrchestratorSet":
@@ -231,6 +447,18 @@ class OrchestratorSet(BaseModel):
             environment=self.environment,
             dry_run=self.dry_run,
         )
+        if self.trading_identity is not None and self.exchange not in {
+            Exchange.FAKE,
+            Exchange.OKX,
+            Exchange.HYPERLIQUID,
+        }:
+            raise ValueError("canonical_exchange_invalid")
+        if self.trading_identity is not None:
+            request = self.trading_identity.effective_config_snapshot.request
+            if request.exchange != self.exchange.value:
+                raise ValueError("canonical_exchange_mismatch")
+            if request.environment != self.environment.value:
+                raise ValueError("canonical_environment_mismatch")
         return self
 
 
@@ -379,6 +607,12 @@ def _reject_explicit_nulls(data: object, *, fields, nullable) -> object:
     return data
 
 
+def _reject_pending_persisted_canonical_identity(data: object) -> object:
+    if isinstance(data, Mapping) and "trading_identity" in data:
+        raise ValueError("canonical_persisted_identity_pending_lot_2b")
+    return data
+
+
 class DashboardCreate(BaseModel):
     """Payload de création d'un dashboard d'orchestration."""
 
@@ -445,13 +679,21 @@ class SetCreate(BaseModel):
     exchange: Exchange = Field(..., description="Exchange cible.")
     market_type: MarketType = Field(default=MarketType.PERPETUAL, description="perpetual ou spot.")
     mtf_profile: MtfProfile = Field(default=MtfProfile.REGULAR, description="Profil MTF.")
-    environment: Environment = Field(default=Environment.DEMO, description="demo, testnet, mainnet.")
+    environment: Environment = Field(
+        default=Environment.DEMO,
+        description="local, test, demo, testnet ou mainnet.",
+    )
     dry_run: bool = Field(default=True, description="Simulation (true). Le live n'est pas persistable en PY-002.")
     workers: int = Field(default=1, ge=1, le=MAX_WORKERS_PER_SET, description="Workers Symfony (borné).")
     sync_tables: bool = Field(default=False, description="Sync des tables exchange côté Symfony.")
     symbols: List[str] = Field(default_factory=list, description="Sélection explicite de symboles.")
     contracts_limit: Optional[int] = Field(default=None, ge=1, description="Sélection dynamique bornée (PY-004).")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_pending_canonical_identity(cls, data: object) -> object:
+        return _reject_pending_persisted_canonical_identity(data)
 
     @model_validator(mode="after")
     def _enforce_persistable_invariants(self) -> "SetCreate":
@@ -506,6 +748,7 @@ class SetUpdate(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _forbid_null_overrides(cls, data: object) -> object:
+        data = _reject_pending_persisted_canonical_identity(data)
         return _reject_explicit_nulls(
             data, fields=cls.model_fields, nullable=_SET_NULLABLE_UPDATE_FIELDS
         )

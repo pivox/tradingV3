@@ -8,6 +8,7 @@ use App\Entity\TradeLifecycleEvent;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
+use App\Trading\Lineage\LineageContext;
 
 final class TradeLifecycleLogger
 {
@@ -36,6 +37,7 @@ final class TradeLifecycleLogger
         ?string $configVersion = null,
         ?string $planId = null,
         ?string $marketType = null,
+        ?LineageContext $lineageContext = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::ORDER_SUBMITTED)
             ->setRunId($runId)
@@ -52,6 +54,9 @@ final class TradeLifecycleLogger
             ->setConfigVersion($configVersion)
             ->setPlanId($planId)
             ->setExtra($this->normalizeExtra($extra));
+        if ($lineageContext !== null) {
+            $event->applyLineageContext($lineageContext);
+        }
 
         $this->persist($event);
     }
@@ -70,6 +75,7 @@ final class TradeLifecycleLogger
         ?string $accountId = null,
         array $extra = [],
         ?string $marketType = null,
+        ?LineageContext $lineageContext = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::ORDER_EXPIRED)
             ->setRunId($runId)
@@ -81,6 +87,7 @@ final class TradeLifecycleLogger
             ->setSide($side)
             ->setReasonCode($reasonCode)
             ->setExtra($this->normalizeExtra($extra));
+        if ($lineageContext !== null) { $event->applyLineageContext($lineageContext); }
 
         $this->persist($event);
     }
@@ -99,6 +106,7 @@ final class TradeLifecycleLogger
         ?string $accountId = null,
         array $extra = [],
         ?string $marketType = null,
+        ?LineageContext $lineageContext = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::POSITION_OPENED)
             ->setRunId($runId)
@@ -110,6 +118,7 @@ final class TradeLifecycleLogger
             ->setQty($qty)
             ->setPrice($entryPrice)
             ->setExtra($this->normalizeExtra($extra));
+        if ($lineageContext !== null) { $event->applyLineageContext($lineageContext); }
 
         $this->persist($event);
     }
@@ -127,6 +136,7 @@ final class TradeLifecycleLogger
         array $extra = [],
         ?string $exchange = null,
         ?string $marketType = null,
+        ?LineageContext $lineageContext = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::SYMBOL_SKIPPED)
             ->setRunId($runId)
@@ -137,6 +147,7 @@ final class TradeLifecycleLogger
             ->setConfigProfile($configProfile)
             ->setConfigVersion($configVersion)
             ->setExtra($this->normalizeExtra($extra));
+        if ($lineageContext !== null) { $event->applyLineageContext($lineageContext); }
 
         $this->persist($event);
     }
@@ -154,6 +165,7 @@ final class TradeLifecycleLogger
         ?string $reasonCode = null,
         ?array $extra = null,
         ?string $marketType = null,
+        ?LineageContext $lineageContext = null,
     ): void {
         $event = $this->newEvent($symbol, TradeLifecycleEventType::POSITION_CLOSED)
             ->setPositionId($positionId)
@@ -163,6 +175,7 @@ final class TradeLifecycleLogger
             ->setMarketType($marketType)
             ->setAccountId($accountId)
             ->setReasonCode($reasonCode);
+        if ($lineageContext !== null) { $event->applyLineageContext($lineageContext); }
 
         if ($extra !== null) {
             $event->setExtra($this->normalizeExtra($extra));

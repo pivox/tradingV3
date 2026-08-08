@@ -1,0 +1,39 @@
+{
+  "fixture_version": "1.0.0",
+  "setup_id": "crash_short",
+  "setup_version": "1.1.0",
+  "runtime_executable": false,
+  "purpose": "Contract-level decision vectors only; no current runtime evaluator or order path consumes these scenarios.",
+  "scenarios": [
+    {
+      "id": "crash",
+      "expectation": "pass",
+      "rationale": "The complete sourced bearish 4h/1h regime, 15m confirmation, 5m execution cascade and 1m timing hypothesis is present; pass means hypothesis match only, never execution approval.",
+      "evidence": ["4h price_regime_ok_short", "1h crash_context_ok", "15m crash_short_pattern_15m", "5m crash_short_pattern_5m", "1m crash_short_pattern_1m", "known costs"]
+    },
+    {
+      "id": "false_crash",
+      "expectation": "fail",
+      "rationale": "A bearish 1m print without the strict 4h/1h bearish context is not crash_short and must not degrade into an RSI-only signal.",
+      "evidence": ["4h price_regime_ok_short=false", "1h crash_context_ok=false", "1m rsi_1m_lt_extreme=true"]
+    },
+    {
+      "id": "terminal_wick",
+      "expectation": "fail",
+      "rationale": "The sourced 5m RSI floor rejects an already exhausted terminal tick even when lower-timeframe price and volume look bearish.",
+      "evidence": ["5m rsi_5m_gt_floor=false", "1m crash_short_pattern_1m=true"]
+    },
+    {
+      "id": "valid_retest",
+      "expectation": "block",
+      "rationale": "A retest followed by an observed bearish resumption is not canonical until #303 defines a typed resumption condition and #304 supplies a compatible risk/order envelope.",
+      "evidence": ["1m near_vwap=true", "1m bearish_resumption_observed=true", "typed bearish resumption condition absent"]
+    },
+    {
+      "id": "invalid_retest",
+      "expectation": "fail",
+      "rationale": "The legacy bullish pullback readiness signal alone has no bearish-resumption evidence and the redundant subset cannot create a second setup identity.",
+      "evidence": ["1m near_vwap=true", "1m bearish_resumption_observed=false"]
+    }
+  ]
+}

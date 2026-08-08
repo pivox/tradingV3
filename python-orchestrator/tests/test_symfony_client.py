@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.schemas import OrchestratorSet
+from app.schemas import CanonicalTradingIdentity, OrchestratorSet
 from app.services.correlation import canonical_correlation_id
 from app.services.symfony_client import (
     ContractsUnavailableError,
@@ -52,6 +52,33 @@ def _expected_config_hash(payload: dict) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
+def _canonical_identity() -> CanonicalTradingIdentity:
+    catalog_hash = "sha256:" + "b" * 64
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"}, "environment": {"id": "test"},
+    }
+    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
+    return CanonicalTradingIdentity(
+        mode_id="scalping", mode_version="1.0.0", setup_id="scalping.pullback.long", setup_version="1.0.0",
+        config_hash=config_hash, condition_catalog_hash=catalog_hash, side="LONG",
+        effective_config_reference="effective-config:cfg-1",
+        effective_config_snapshot={
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+            "provenance": {"mode.mode_id": layers[1]},
+            "executable": True, "blockers": [],
+        },
+    )
+
+
 def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     a_set = _make_set(symbols=("BTCUSDT", "ETHUSDT"), dry_run=True)
     snapshot = {"open_positions": [], "open_orders": []}
@@ -66,6 +93,41 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
     assert payload["symbols"] == ["BTCUSDT", "ETHUSDT"]
     assert payload["exchange"] == "fake"
     assert payload["market_type"] == "perpetual"
+
+
+def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
+    identity = _canonical_identity()
+    a_set = _make_set(
+        symbols=("BTCUSDT",), environment="test", trading_identity=identity
+    )
+
+    first = build_mtf_payload(a_set, None)
+    retry = build_mtf_payload(a_set, None)
+
+    assert first["trading_identity"] == identity.model_dump(exclude_none=True)
+    assert retry["trading_identity"] == first["trading_identity"]
+    assert retry["config_hash"] == first["config_hash"]
+
+
+def test_build_payload_refuses_bypassed_bitmart_canonical_set_before_http_serialization():
+    bypassed = OrchestratorSet.model_construct(
+        set_id="bypassed-modern-bitmart",
+        enabled=True,
+        action="mtf_run",
+        exchange=SimpleNamespace(value="bitmart"),
+        market_type=SimpleNamespace(value="perpetual"),
+        mtf_profile=SimpleNamespace(value="scalper"),
+        environment=SimpleNamespace(value="demo"),
+        dry_run=True,
+        workers=1,
+        sync_tables=False,
+        symbols=("BTCUSDT",),
+        priority=0,
+        trading_identity=_canonical_identity(),
+    )
+
+    with pytest.raises(ValueError, match="canonical_exchange_invalid"):
+        build_mtf_payload(bypassed, None)
 
 
 @pytest.mark.parametrize(
@@ -131,6 +193,97 @@ def test_run_mtf_set_failed_on_business_failure_with_http_200():
 def test_run_mtf_set_failed_on_http_error():
     result = _run_set(500, {"status": "error"})
     assert result["ok"] is False
+
+
+def test_run_mtf_set_propagates_canonical_lineage_headers_and_identity():
+    identity = _canonical_identity()
+    a_set = _make_set(
+        set_id="modern-set",
+        symbols=("BTCUSDT",),
+        environment="test",
+        trading_identity=identity,
+    )
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(
+                client,
+                "http://sym",
+                a_set,
+                None,
+                run_id="run-modern",
+                dashboard_id="dash-modern",
+            )
+
+    result = asyncio.run(_run())
+
+    assert result["ok"] is True
+    assert captured["headers"]["x-run-id"] == "run-modern"
+    assert captured["headers"]["x-run-correlation-id"] == canonical_correlation_id("run-modern")
+    assert captured["headers"]["x-orchestration-set-id"] == "modern-set"
+    assert captured["headers"]["x-orchestration-dashboard-id"] == "dash-modern"
+    assert captured["json"]["trading_identity"] == identity.model_dump(mode="json", exclude_none=True)
+
+
+def test_run_mtf_set_normalizes_canonical_run_lineage_headers():
+    a_set = _make_set(environment="test", trading_identity=_canonical_identity())
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(client, "http://sym", a_set, None, run_id="  run-modern  ")
+
+    asyncio.run(_run())
+
+    assert captured["headers"]["x-run-id"] == "run-modern"
+    assert captured["headers"]["x-run-correlation-id"] == canonical_correlation_id("run-modern")
+
+
+@pytest.mark.parametrize("run_id", [None, "", " \t "])
+def test_run_mtf_set_rejects_canonical_set_without_run_lineage_before_http(run_id):
+    calls: list = []
+    a_set = _make_set(environment="test", trading_identity=_canonical_identity())
+
+    class NoDispatchClient:
+        async def post(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return _StubResponse(200, {"status": "success"})
+
+    with pytest.raises(ValueError, match="^canonical_lineage_missing:run_id$"):
+        asyncio.run(run_mtf_set(NoDispatchClient(), "http://sym", a_set, None, run_id=run_id))
+
+    assert calls == []
+
+
+def test_run_mtf_set_without_run_id_keeps_legacy_headers():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(client, "http://sym", _make_set(), None)
+
+    asyncio.run(_run())
+
+    headers = captured["headers"]
+    assert "x-run-id" not in headers
+    assert "x-run-correlation-id" not in headers
+    assert "x-orchestration-set-id" not in headers
+    assert "x-orchestration-dashboard-id" not in headers
+    assert headers["x-fake-only-safety-evidence"] == "v2"
 
 
 def test_build_payload_omits_snapshot_when_none():

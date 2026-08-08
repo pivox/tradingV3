@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\TradeEntry\Policy;
 
+use App\Config\TradeEntryConfig;
 use App\Config\TradeEntryConfigResolver;
 use App\Contract\Provider\MainProviderInterface;
 use Psr\Log\LoggerInterface;
@@ -39,16 +40,9 @@ final class DailyLossGuard
      * @param string|null $mode Mode de configuration (ex: 'regular', 'scalping'). Si null, utilise la config par défaut.
      * @return array{date:string, start_measure:float, measure:string, measure_value:float, pnl_today:float, limit_usdt:float, locked:bool, locked_at?:string}
      */
-    public function checkAndMaybeLock(?string $mode = null): array
+    public function checkAndMaybeLock(?string $mode = null, ?TradeEntryConfig $canonicalConfig = null): array
     {
-        $config = $this->configResolver->resolve($mode);
-        $modeUsed = $this->configResolver->resolveMode($mode);
-        $risk = $config->getRisk();
-        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? (float)$risk['daily_max_loss_usdt'] : 0.0;
-        if ($limitUsdt <= 0.0) {
-            $limitUsdt = 0.0;
-        }
-        $countUnrealized = (bool)($risk['daily_loss_count_unrealized'] ?? true);
+        [$modeUsed, $limitUsdt, $countUnrealized] = $this->resolvePolicy($mode, $canonicalConfig);
 
         if ($limitUsdt <= 0.0) {
             return [
@@ -75,7 +69,7 @@ final class DailyLossGuard
         }
 
         $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
-        $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
+        $measureValue = $measureName === 'equity' ? (float) $equity : (float) ($available ?? 0.0);
 
         // Reset baseline if missing or day changed
         $today = $this->today();
@@ -141,6 +135,21 @@ final class DailyLossGuard
         return $state;
     }
 
+    /** @return array{string,float,bool} */
+    private function resolvePolicy(?string $mode, ?TradeEntryConfig $canonicalConfig): array
+    {
+        if ($canonicalConfig instanceof TradeEntryConfig) {
+            throw new \RuntimeException('canonical_daily_loss_policy_pending_304');
+        }
+
+        $config = $this->configResolver->resolve($mode);
+        $modeUsed = $this->configResolver->resolveMode($mode);
+        $risk = $config->getRisk();
+        $limitUsdt = isset($risk['daily_max_loss_usdt']) ? max(0.0, (float) $risk['daily_max_loss_usdt']) : 0.0;
+
+        return [$modeUsed, $limitUsdt, (bool) ($risk['daily_loss_count_unrealized'] ?? true)];
+    }
+
     public function isLocked(?string $mode = null): bool
     {
         $modeUsed = $this->configResolver->resolveMode($mode);
@@ -191,7 +200,7 @@ final class DailyLossGuard
         }
 
         $measureName = $countUnrealized && $equity !== null ? 'equity' : 'available';
-        $measureValue = $measureName === 'equity' ? (float)($equity ?? 0.0) : (float)($available ?? 0.0);
+        $measureValue = $measureName === 'equity' ? (float) $equity : (float) ($available ?? 0.0);
 
         // Créer un nouvel état avec la baseline actuelle
         $today = $this->today();

@@ -175,6 +175,45 @@ def test_patch_set_partial(api_client):
     assert body["exchange"] == "bitmart"  # inchangé
 
 
+def test_create_set_rejects_canonical_identity_without_persisting(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+
+    resp = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(
+            set_id="pending_identity",
+            trading_identity={"mode_id": "scalping"},
+        ),
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["msg"] == (
+        "Value error, canonical_persisted_identity_pending_lot_2b"
+    )
+    assert api_client.get(f"/dashboards/{dashboard_id}/sets").json() == []
+
+
+def test_patch_set_rejects_canonical_identity_without_changing_set(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets", json=_set_payload()
+    ).json()
+
+    resp = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top",
+        json={"trading_identity": None, "priority": 42},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["msg"] == (
+        "Value error, canonical_persisted_identity_pending_lot_2b"
+    )
+    persisted = api_client.get(
+        f"/dashboards/{dashboard_id}/sets/bitmart_regular_top"
+    ).json()
+    assert persisted == created
+
+
 # --- Payload serveur (PY-004) -----------------------------------------------
 
 

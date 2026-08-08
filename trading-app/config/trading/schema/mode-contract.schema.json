@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pivox.local/schemas/trading/mode-contract/1.0.0",
+  "title": "Pivox modern trading mode contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode_id", "mode_version", "lifecycle", "horizon", "session_policy", "timeframes", "cadence", "risk", "leverage", "order_policy", "compatible_setup_ids", "data_contract", "governance", "ownership_model", "provenance"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "mode_id": { "enum": ["day_trading", "scalping", "micro_scalping"] },
+    "mode_version": { "enum": ["1.0.0"] },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "executable", "rationale"],
+      "properties": {
+        "status": { "enum": ["draft", "shadow", "paper", "candidate", "active", "retired"] },
+        "executable": { "type": "boolean" },
+        "rationale": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "allOf": [{ "if": { "properties": { "status": { "enum": ["draft", "retired"] } }, "required": ["status"] }, "then": { "properties": { "executable": { "const": false } } } }]
+    },
+    "horizon": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "holding_horizon_policy" } } }] },
+    "session_policy": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "session_policy" } } }] },
+    "timeframes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["regime", "context", "trigger", "execution"],
+      "properties": {
+        "regime": { "$ref": "#/$defs/timeframeList" },
+        "context": { "$ref": "#/$defs/timeframeList" },
+        "trigger": { "$ref": "#/$defs/timeframeList" },
+        "execution": { "$ref": "#/$defs/timeframeList" }
+      }
+    },
+    "cadence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evaluation", "validity_window"],
+      "properties": {
+        "evaluation": { "allOf": [{ "$ref": "#/$defs/durationDecision" }, { "properties": { "unit": { "const": "duration" } } }] },
+        "validity_window": { "allOf": [{ "$ref": "#/$defs/durationDecision" }, { "properties": { "unit": { "const": "duration" } } }] }
+      }
+    },
+    "risk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["trade_budget", "daily_loss_cap", "max_concurrent_positions", "mode_exposure_cap"],
+      "properties": {
+        "trade_budget": { "oneOf": [
+          { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_per_trade" } } }] },
+          { "allOf": [{ "$ref": "#/$defs/quoteBudgetDecision" }, { "properties": { "unit": { "const": "quote_notional" } } }] }
+        ] },
+        "daily_loss_cap": { "allOf": [{ "$ref": "#/$defs/dailyCapDecision" }, { "properties": { "unit": { "const": "compound_percent_equity_and_quote_per_day" } } }] },
+        "max_concurrent_positions": { "allOf": [{ "$ref": "#/$defs/positiveIntegerDecision" }, { "properties": { "unit": { "const": "positions" } } }] },
+        "mode_exposure_cap": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_notional" } } }] }
+      }
+    },
+    "leverage": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "leverage_multiple" } } }] },
+    "order_policy": { "allOf": [{ "$ref": "#/$defs/orderDecision" }, { "properties": { "unit": { "const": "policy" } } }] },
+    "compatible_setup_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^(day_trading|scalping|micro_scalping)\\.[a-z0-9_]+\\.(long|short)$" } },
+    "data_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["required_inputs", "missing_data_policy"],
+      "properties": {
+        "required_inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/dataInput" } },
+        "missing_data_policy": { "const": "reject" }
+      }
+    },
+    "governance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["promotion", "suspension", "rollback"],
+      "properties": {
+        "promotion": { "allOf": [{ "$ref": "#/$defs/governanceRule" }, { "properties": { "target_status": { "const": "shadow" } } }] },
+        "suspension": { "allOf": [{ "$ref": "#/$defs/governanceRule" }, { "properties": { "target_status": { "const": "draft" } } }] },
+        "rollback": { "allOf": [{ "$ref": "#/$defs/governanceRule" }, { "properties": { "target_status": { "const": "retired" } } }] }
+      }
+    },
+    "ownership_model": { "const": "mode-contract-ownership-v1" },
+    "provenance": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/provenance" } }
+  },
+  "allOf": [
+    { "if": { "properties": { "mode_id": { "const": "day_trading" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } } },
+    { "if": { "properties": { "mode_id": { "const": "scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } } },
+    { "if": { "properties": { "mode_id": { "const": "micro_scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } } }
+  ],
+  "$defs": {
+    "nonEmptyString": { "type": "string", "pattern": "\\S" },
+    "timeframeList": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["4h", "1h", "15m", "5m", "1m"] } },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "value", "unit", "source", "justification"],
+      "properties": {
+        "state": { "enum": ["defined", "unresolved"] },
+        "value": {},
+        "unit": { "$ref": "#/$defs/nonEmptyString" },
+        "source": { "$ref": "#/$defs/nonEmptyString" },
+        "justification": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "unresolved" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "not": { "type": "null" } } } } }
+      ]
+    },
+    "stringDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/nonEmptyString" } } } }
+      ]
+    },
+    "durationDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "string", "pattern": "^P(?=[0-9]|T[0-9])(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+D)?(?:T(?=[0-9])(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+S)?)?$" } } } }
+      ]
+    },
+    "positiveNumberDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "number", "exclusiveMinimum": 0 } } } }
+      ]
+    },
+    "positiveIntegerDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "integer", "minimum": 1 } } } }
+      ]
+    },
+    "dailyCapDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/dailyCap" } } } }
+      ]
+    },
+    "quoteBudgetDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/quoteBudget" } } } }
+      ]
+    },
+    "quoteBudget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["amount", "quote_currency"],
+      "properties": {
+        "amount": { "type": "number", "exclusiveMinimum": 0 },
+        "quote_currency": { "const": "USDT" }
+      }
+    },
+    "dailyCap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["percent_equity", "absolute_quote", "quote_currency"],
+      "properties": {
+        "percent_equity": { "type": "number", "exclusiveMinimum": 0 },
+        "absolute_quote": { "type": "number", "exclusiveMinimum": 0 },
+        "quote_currency": { "const": "USDT" }
+      }
+    },
+    "orderDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/orderPolicy" } } } }
+      ]
+    },
+    "orderPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["margin_mode", "preferred_type"],
+      "properties": {
+        "margin_mode": { "enum": ["isolated", "cross"] },
+        "preferred_type": { "enum": ["limit", "market"] }
+      }
+    },
+    "dataInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "timeframes", "fields"],
+      "properties": {
+        "kind": { "enum": ["candles", "order_book"] },
+        "timeframes": { "$ref": "#/$defs/timeframeList" },
+        "fields": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmptyString" } }
+      }
+    },
+    "governanceRule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_status", "conditions", "action"],
+      "properties": {
+        "target_status": { "enum": ["draft", "shadow", "paper", "candidate", "active", "retired"] },
+        "conditions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "action": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "source", "unit", "justification"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "source": { "$ref": "#/$defs/nonEmptyString" },
+        "unit": { "$ref": "#/$defs/nonEmptyString" },
+        "justification": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}

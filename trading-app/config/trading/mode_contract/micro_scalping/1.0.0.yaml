@@ -1,0 +1,46 @@
+schema_version: '1.0.0'
+mode_id: micro_scalping
+mode_version: '1.0.0'
+lifecycle: { status: draft, executable: false, rationale: 'Observed 5m/1m behavior is catalogued, but #132/#191 evidence and operational approvals are absent.' }
+horizon: { state: unresolved, value: null, unit: holding_horizon_policy, source: 'product decision pending #132/#191 evidence', justification: 'Timeframe roles do not define a maximum holding horizon; no value is inferred from the modern mode name.' }
+session_policy: { state: unresolved, value: null, unit: session_policy, source: 'product decision pending #132/#191 evidence', justification: 'No authoritative session policy exists in source.' }
+timeframes:
+  regime: ['5m']
+  context: ['5m']
+  trigger: ['1m']
+  execution: ['1m']
+cadence:
+  evaluation: { state: unresolved, value: null, unit: duration, source: 'product decision pending #132/#191 evidence', justification: 'The source defines timeframe roles, not a scheduler cadence.' }
+  validity_window: { state: unresolved, value: null, unit: duration, source: 'product decision pending #132/#191 evidence', justification: 'Entry-zone TTL is not promoted to a mode-wide validity fact.' }
+risk:
+  trade_budget: { state: defined, value: 0.4, unit: percent_equity_per_trade, source: 'config/app/trade_entry.scalper_micro.yaml:29-35', justification: 'Direct extraction of defaults.risk_pct_percent, not a profitability claim.' }
+  daily_loss_cap: { state: defined, value: { percent_equity: 2.5, absolute_quote: 50.0, quote_currency: USDT }, unit: compound_percent_equity_and_quote_per_day, source: 'config/app/trade_entry.scalper_micro.yaml:79-83', justification: 'Direct extraction of both daily caps; mainnet writes remain prohibited.' }
+  max_concurrent_positions: { state: defined, value: 3, unit: positions, source: 'config/app/trade_entry.scalper_micro.yaml:79-83', justification: 'Direct extraction of risk.max_concurrent_positions.' }
+  mode_exposure_cap: { state: unresolved, value: null, unit: percent_equity_notional, source: 'product decision pending portfolio contract and #132/#191 evidence', justification: 'No unambiguous per-mode cap exists; aggregate exposure remains portfolio-owned.' }
+leverage: { state: unresolved, value: null, unit: leverage_multiple, source: 'ownership review of config/app/trade_entry.scalper_micro.yaml:84-105', justification: 'Legacy exchange_cap and timeframe multiplier conflict with clean ownership; no modern cap is inferred.' }
+order_policy:
+  state: defined
+  value: { margin_mode: isolated, preferred_type: limit }
+  unit: policy
+  source: 'config/app/trade_entry.scalper_micro.yaml:57-60'
+  justification: 'Direct extraction of active default order type and margin mode; contradictory maker/taker comments are not imported.'
+compatible_setup_ids:
+  - micro_scalping.momentum_ofi.long
+  - micro_scalping.momentum_ofi.short
+data_contract:
+  required_inputs:
+    - { kind: candles, timeframes: ['5m', '1m'], fields: [open, high, low, close, volume] }
+    - { kind: order_book, timeframes: ['1m'], fields: [best_bid, best_ask, spread_bps, order_flow_imbalance] }
+  missing_data_policy: reject
+governance:
+  promotion: { target_status: shadow, conditions: ['#132 and #191 evidence attached', 'independent risk review approved', 'all unresolved constraints resolved'], action: 'publish a new semantic version; never mutate this version in place' }
+  suspension: { target_status: draft, conditions: ['kill switch asserted', 'data contract breach', 'daily loss cap breached', 'evidence invalidated'], action: 'reject new entries and preserve audit lineage' }
+  rollback: { target_status: retired, conditions: ['promotion regression', 'risk invariant breach', 'schema or provenance defect'], action: 'pin the last approved version explicitly; no implicit fallback' }
+ownership_model: mode-contract-ownership-v1
+provenance:
+  - { path: timeframes.regime, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '5m is the only active context and carries local momentum/regime.' }
+  - { path: timeframes.context, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '5m is the only active context; commented 15m is deliberately ignored.' }
+  - { path: timeframes.trigger, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '1m contains timing and OFI trigger rules.' }
+  - { path: timeframes.execution, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:10-18', unit: timeframe, justification: '1m is the sole active execution timeframe and default.' }
+  - { path: data_contract.required_inputs, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:87-101,109-125', unit: OHLCV_and_order_book_fields_by_timeframe, justification: 'Active 5m rules require candle indicators and active 1m rules require candles plus spread/order-flow imbalance; the commented 15m block is excluded.' }
+  - { path: compatible_setup_ids, source: 'GitHub issue #300 catalog for #301', unit: setup_id, justification: 'Stable IDs only; setup definitions remain owned by #301.' }

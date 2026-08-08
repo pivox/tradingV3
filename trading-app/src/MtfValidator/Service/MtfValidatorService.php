@@ -65,6 +65,7 @@ class MtfValidatorService implements MtfValidatorInterface
                         'exchange'              => $request->exchange?->value,
                         'market_type'           => $request->marketType?->value,
                     ],
+                    lineageContext: $request->lineageContext,
                 );
 
                 $result = $this->core->validate($mtfRunDto);

@@ -8,12 +8,32 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Provider\Context\ExchangeContextResolver;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 
 /**
  * DTO pour les requêtes d'exécution du Runner MTF
  */
 final class MtfRunnerRequestDto
 {
+    /** @var string[] */
+    private const CANONICAL_TRADING_IDENTITY_INPUT_KEYS = [
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'config_hash',
+        'condition_catalog_hash',
+        'side',
+        'effective_config_reference',
+        'effective_config_snapshot',
+        'requested_mode_id',
+        'resolved_mode_id',
+        'validated_mode_id',
+        'requested_mode_version',
+        'resolved_mode_version',
+        'validated_mode_version',
+    ];
+
     public readonly LineageContext $lineageContext;
 
     /**
@@ -151,6 +171,26 @@ final class MtfRunnerRequestDto
      */
     private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
+        $tradingIdentity = null;
+        if (\array_key_exists('trading_identity', $data)) {
+            $tradingIdentity = $data['trading_identity'];
+            self::assertCanonicalTradingIdentityInput($tradingIdentity);
+        }
+
+        if ($tradingIdentity !== null) {
+            return LineageContext::fromOrchestratorPayload(array_replace($tradingIdentity, [
+                'origin' => LineageContext::ORIGIN_ORCHESTRATOR,
+                'orchestration_run_id' => $data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null,
+                'correlation_run_id' => $data['correlation_run_id'] ?? null,
+                'orchestration_set_id' => $data['set_id'] ?? $data['orchestration_set_id'] ?? null,
+                'orchestration_dashboard_id' => $data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null,
+                'exchange' => $exchange?->value,
+                'market_type' => $marketType?->value,
+                'symbol' => self::canonicalBindingSymbol($data),
+                'dry_run' => $data['dry_run'] ?? null,
+            ]));
+        }
+
         if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
             return LineageContext::fromArray($data['lineage_context']);
         }
@@ -177,6 +217,49 @@ final class MtfRunnerRequestDto
             marketType: $marketType?->value,
             mtfProfile: $profile,
         );
+    }
+
+    /** @phpstan-assert array<string,mixed> $identity */
+    public static function assertCanonicalTradingIdentityInput(mixed $identity): void
+    {
+        if (!\is_array($identity)) {
+            throw new LineageContextException('canonical_identity_invalid:trading_identity');
+        }
+
+        $keys = array_map(static fn(int|string $key): string => (string) $key, array_keys($identity));
+        sort($keys, SORT_STRING);
+
+        foreach ($keys as $key) {
+            if (!\in_array($key, self::CANONICAL_TRADING_IDENTITY_INPUT_KEYS, true)) {
+                throw new LineageContextException('canonical_identity_forbidden:' . $key);
+            }
+        }
+
+        $hasModeId = self::nonEmptyString($identity['mode_id'] ?? null) !== null;
+        $hasSetupId = self::nonEmptyString($identity['setup_id'] ?? null) !== null;
+        if (!$hasModeId && !$hasSetupId) {
+            throw new LineageContextException('canonical_identity_invalid:trading_identity');
+        }
+        if (!$hasModeId) {
+            throw new LineageContextException('canonical_identity_missing:mode_id');
+        }
+        if (!$hasSetupId) {
+            throw new LineageContextException('canonical_identity_missing:setup_id');
+        }
+    }
+
+    /** @param array<string,mixed> $data */
+    private static function canonicalBindingSymbol(array $data): ?string
+    {
+        $symbols = isset($data['symbols']) && \is_array($data['symbols']) ? $data['symbols'] : [];
+        $symbol = $symbols[0] ?? null;
+        if (!\is_string($symbol)) {
+            return null;
+        }
+
+        $symbol = strtoupper(trim($symbol));
+
+        return $symbol !== '' ? $symbol : null;
     }
 
     /**

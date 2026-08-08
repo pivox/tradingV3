@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Config;
 
+use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Mode\ModeContractValidator;
 use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 
 /**
@@ -17,7 +19,7 @@ final class MtfValidationConfigProvider
     /** @var array<string, MtfValidationConfig> Cache des configs par mode */
     private array $configCache = [];
 
-    /** @var array<string, array{name: string, enabled: bool, priority: int}> Liste des modes activés triés par priority */
+    /** @var array<int, array{name: string, enabled: bool, priority: int}> Liste des modes activés triés par priority */
     private array $enabledModes = [];
 
     private readonly string $configDir;
@@ -37,7 +39,7 @@ final class MtfValidationConfigProvider
      * Le format YAML [name: 'x', enabled: true, priority: 1] est parsé comme:
      * [[['name' => 'x']], [['enabled' => true]], [['priority' => 1]]]
      * La constante MINIMUM_MODE_PARTS reflète ce format où les trois blocs sont attendus.
-     * @param array<int, array> $modes
+     * @param array<int, mixed> $modes
      * @return array<int, array{name: string, enabled: bool, priority: int}>
      */
     private function loadEnabledModes(array $modes): array
@@ -64,7 +66,7 @@ final class MtfValidationConfigProvider
             foreach ($mode as $item) {
                 if (is_array($item)) {
                     if (isset($item['name'])) {
-                        $name = $item['name'];
+                        $name = is_string($item['name']) ? $item['name'] : 'unknown';
                     } elseif (isset($item['enabled'])) {
                         $enabledFlag = (bool)$item['enabled'];
                     } elseif (isset($item['priority'])) {
@@ -83,7 +85,7 @@ final class MtfValidationConfigProvider
         }
 
         // Trier par priority (croissant)
-        usort($enabled, fn($a, $b) => ($a['priority'] ?? 999) <=> ($b['priority'] ?? 999));
+        usort($enabled, fn(array $a, array $b): int => $a['priority'] <=> $b['priority']);
 
         return $enabled;
     }
@@ -123,6 +125,9 @@ final class MtfValidationConfigProvider
      */
     public function getConfigForMode(string $modeName): MtfValidationConfig
     {
+        if (in_array($modeName, ModeContractValidator::MODE_IDS, true)) {
+            throw new TradingConfigException(sprintf('Modern mode "%s" must consume the canonical snapshot; legacy MTF YAML is quarantined.', $modeName));
+        }
         // Vérifier le cache
         if (isset($this->configCache[$modeName])) {
             return $this->configCache[$modeName];
@@ -154,32 +159,6 @@ final class MtfValidationConfigProvider
      */
     private function getConfigFilename(string $modeName): string
     {
-        // Mapping des modes vers les noms de fichiers
-        $mapping = [
-            'regular' => 'validations.regular.yaml',
-            'scalping' => 'validations.scalper.yaml',
-        ];
-
-        // Si le mapping existe, l'utiliser
-        if (isset($mapping[$modeName])) {
-            $mappedFile = $mapping[$modeName];
-            $mappedPath = $this->configDir . '/' . $mappedFile;
-
-            // Si le fichier mappé existe, l'utiliser
-            if (is_file($mappedPath)) {
-                return $mappedFile;
-            }
-        }
-
-        // Fallback : pour 'regular', essayer validations.yaml
-        if ($modeName === 'regular') {
-            $fallbackPath = $this->configDir . '/validations.yaml';
-            if (is_file($fallbackPath)) {
-                return 'validations.yaml';
-            }
-        }
-
-        // Sinon, utiliser le pattern validations.{mode}.yaml
         return sprintf('validations.%s.yaml', $modeName);
     }
 
@@ -210,4 +189,3 @@ final class MtfValidationConfigProvider
     }
 
 }
-

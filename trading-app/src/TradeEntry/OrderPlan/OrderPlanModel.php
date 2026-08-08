@@ -5,6 +5,7 @@ namespace App\TradeEntry\OrderPlan;
 
 use App\Provider\Context\ExchangeContext;
 use App\TradeEntry\Types\Side;
+use App\Trading\Lineage\LineageContext;
 
 final class OrderPlanModel
 {
@@ -31,7 +32,14 @@ final class OrderPlanModel
         public readonly ?float $stopPivot = null,
         public readonly ?string $stopFinalSource = null,
         public readonly ?ExchangeContext $exchangeContext = null,
+        public readonly ?LineageContext $lineageContext = null,
     ) {}
+
+    /** @return array<string,mixed> */
+    public function canonicalSnapshot(): array
+    {
+        return $this->lineageContext?->toArray() ?? [];
+    }
 
     public function copyWith(
         ?string $orderType = null,
@@ -63,6 +71,7 @@ final class OrderPlanModel
             $this->stopPivot,
             $this->stopFinalSource,
             $this->exchangeContext,
+            $this->lineageContext,
         );
     }
 }

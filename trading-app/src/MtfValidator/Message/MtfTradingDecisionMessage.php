@@ -6,15 +6,16 @@ namespace App\MtfValidator\Message;
 
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
+use App\Trading\Lineage\LineageContext;
 
 final class MtfTradingDecisionMessage
 {
     public function __construct(
         public readonly string $runId,
         public readonly MtfRunDto $mtfRun,
-        public readonly MtfResultDto $result
+        public readonly MtfResultDto $result,
+        public readonly LineageContext $identity,
     ) {
     }
 
 }
-

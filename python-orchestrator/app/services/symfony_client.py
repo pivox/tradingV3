@@ -257,6 +257,7 @@ def _base_mtf_payload(
     market_type: str,
     mtf_profile: str,
     symbols: Any,
+    trading_identity: Any = None,
 ) -> Dict[str, Any]:
     """Cœur du payload ``/api/mtf/run``, source unique de sa forme.
 
@@ -280,6 +281,8 @@ def _base_mtf_payload(
     }
     if symbols:
         payload["symbols"] = list(symbols)
+    if trading_identity is not None:
+        payload["trading_identity"] = trading_identity.model_dump(exclude_none=True)
     return payload
 
 
@@ -312,6 +315,12 @@ def build_mtf_payload(
     résolue par l'appelant (override run-level) ; si ``None``, on retombe sur le
     ``dry_run`` du set. Le reste de la forme vient de ``_base_mtf_payload``.
     """
+    if a_set.trading_identity is not None and a_set.exchange.value not in {
+        "fake",
+        "okx",
+        "hyperliquid",
+    }:
+        raise ValueError("canonical_exchange_invalid")
     payload = _base_mtf_payload(
         dry_run=a_set.dry_run,
         workers=a_set.workers,
@@ -319,6 +328,7 @@ def build_mtf_payload(
         market_type=a_set.market_type.value,
         mtf_profile=a_set.mtf_profile.value,
         symbols=a_set.symbols,
+        trading_identity=a_set.trading_identity,
     )
     if dry_run is not None:
         payload["dry_run"] = dry_run
@@ -490,10 +500,23 @@ async def run_mtf_set(
     a_set: OrchestratorSet,
     snapshot: Optional[Dict[str, Any]],
     dry_run: Optional[bool] = None,
+    *,
+    run_id: Optional[str] = None,
+    dashboard_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Exécute un set pydantic via ``POST /api/mtf/run`` avec le snapshot en cache."""
+    normalized_run_id = run_id.strip() if run_id is not None else None
+    if a_set.trading_identity is not None and not normalized_run_id:
+        raise ValueError("canonical_lineage_missing:run_id")
     payload = build_mtf_payload(a_set, snapshot, dry_run)
-    return await _dispatch_mtf_run(client, base_url, a_set.set_id, payload)
+    return await _dispatch_mtf_run(
+        client,
+        base_url,
+        a_set.set_id,
+        payload,
+        run_id=normalized_run_id,
+        dashboard_id=dashboard_id,
+    )
 
 
 async def run_persisted_set(

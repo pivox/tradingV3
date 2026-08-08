@@ -20,41 +20,21 @@ final readonly class TradingConfigLayerLoader
         return $this->load('base', 'base', 'base.yaml', true);
     }
 
-    public function loadMode(string $mode): ?TradingConfigLayer
+    public function requireExchange(string $exchange): TradingConfigLayer
     {
-        return $this->load('mode', $mode, sprintf('mode/%s.yaml', $mode), false);
+        return $this->load('exchange', $exchange, sprintf('exchange/%s.yaml', $exchange), true);
     }
 
-    public function loadExchange(string $exchange): ?TradingConfigLayer
+    public function requireModeExchange(string $mode, string $modeVersion, string $exchange): TradingConfigLayer
     {
-        return $this->load('exchange', $exchange, sprintf('exchange/%s.yaml', $exchange), false);
+        $name = sprintf('%s.%s.%s', $mode, $modeVersion, $exchange);
+
+        return $this->load('mode_exchange', $name, sprintf('mode_exchange/%s.yaml', $name), true);
     }
 
-    public function loadModeExchange(string $mode, string $exchange): ?TradingConfigLayer
+    public function requireEnvironment(string $environment): TradingConfigLayer
     {
-        $name = sprintf('%s.%s', $mode, $exchange);
-
-        return $this->load('mode_exchange', $name, sprintf('mode_exchange/%s.yaml', $name), false);
-    }
-
-    public function loadEnv(string $env): ?TradingConfigLayer
-    {
-        return $this->load('env', $env, sprintf('env/%s.yaml', $env), false);
-    }
-
-    /**
-     * @return array{type: string, name: string, path: string, required: bool}
-     */
-    public function describeOptional(string $type, string $name): array
-    {
-        $this->assertSafeLayerName($type, $name);
-
-        return [
-            'type' => $type,
-            'name' => $name,
-            'path' => $this->pathFor($this->relativePathFor($type, $name)),
-            'required' => false,
-        ];
+        return $this->load('environment', $environment, sprintf('env/%s.yaml', $environment), true);
     }
 
     private function load(string $type, string $name, string $relativePath, bool $required): ?TradingConfigLayer
@@ -105,17 +85,6 @@ final readonly class TradingConfigLayerLoader
     private function root(): string
     {
         return $this->configRoot ?? dirname(__DIR__, 3) . '/config/trading';
-    }
-
-    private function relativePathFor(string $type, string $name): string
-    {
-        return match ($type) {
-            'mode' => sprintf('mode/%s.yaml', $name),
-            'exchange' => sprintf('exchange/%s.yaml', $name),
-            'mode_exchange' => sprintf('mode_exchange/%s.yaml', $name),
-            'env' => sprintf('env/%s.yaml', $name),
-            default => sprintf('%s.yaml', $name),
-        };
     }
 
     private function assertSafeLayerName(string $type, string $name): void

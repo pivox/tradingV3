@@ -1,0 +1,107 @@
+schema_version: '1.0.0'
+setup_id: scalping.trend_momentum.short
+setup_version: '1.0.0'
+status: draft
+executable: false
+family: trend_momentum
+side: short
+thesis: 'A bearish 1h regime with 15m bearish structure and momentum may continue downward.'
+source_origin: { file: 'src/MtfValidator/config/validations.scalper.yaml', line_range: '6-14,216-356', content_sha256: 5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2, commit: 6c42d14d20798f6fee9d55b306ccaa0539af5e79 }
+compatible_modes: [{ mode_id: scalping, mode_version: '1.0.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Matches #300 scalping catalog.' }
+hypothesis: 'Sourced bearish trend and momentum alignment predicts downside continuation before unresolved invalidation; shadow evidence must falsify or retain it.'
+context:
+  side: short
+  regime:
+    op: all_of
+    provenance: 'validations.scalper.yaml:279-285'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 1h, provenance: 'validations.scalper.yaml:281' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:282-284'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 1h, provenance: 'validations.scalper.yaml:283' }
+          - { condition: macd_hist_slope_neg, timeframe: 1h, provenance: 'validations.scalper.yaml:284' }
+      - { condition: adx_min_for_trend, timeframe: 1h, provenance: 'validations.scalper.yaml:285' }
+  context:
+    op: all_of
+    provenance: 'validations.scalper.yaml:306-318'
+    nodes:
+      - { condition: price_regime_ok_short, timeframe: 15m, provenance: 'validations.scalper.yaml:308' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:309-311'
+        nodes:
+          - { condition: ema_20_lt_50, timeframe: 15m, provenance: 'validations.scalper.yaml:310' }
+          - { condition: ema_50_lt_200, timeframe: 15m, provenance: 'validations.scalper.yaml:311' }
+  trigger:
+    op: all_of
+    provenance: 'validations.scalper.yaml:306-318'
+    nodes:
+      - op: any_of
+        provenance: 'validations.scalper.yaml:312-315'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 15m, provenance: 'validations.scalper.yaml:313' }
+          - { condition: macd_hist_slope_neg, timeframe: 15m, provenance: 'validations.scalper.yaml:314' }
+          - { condition: macd_line_below_signal, timeframe: 15m, provenance: 'validations.scalper.yaml:315' }
+      - { condition: close_below_vwap, timeframe: 15m, provenance: 'validations.scalper.yaml:316' }
+      - { condition: rsi_gt_softfloor, timeframe: 15m, parameters: { rsi_softfloor_threshold: 20 }, provenance: 'validations.scalper.yaml:317' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.scalper.yaml:318' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.scalper.yaml:331-356 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.scalper.yaml:331-339'
+        nodes:
+          - op: any_of
+            provenance: 'validations.scalper.yaml:333-335'
+            nodes:
+              - { condition: macd_hist_decreasing_n, timeframe: 5m, provenance: 'validations.scalper.yaml:334' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.scalper.yaml:335' }
+          - { condition: close_below_vwap, timeframe: 5m, provenance: 'validations.scalper.yaml:336' }
+          - { condition: rsi_gt_softfloor, timeframe: 5m, parameters: { rsi_softfloor_threshold: 18 }, provenance: 'validations.scalper.yaml:337' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:338' }
+          - { condition: volume_ratio_ok, timeframe: 5m, provenance: 'validations.scalper.yaml:339' }
+      - op: all_of
+        provenance: 'validations.scalper.yaml:350-356'
+        nodes:
+          - { condition: macd_hist_decreasing_n, timeframe: 1m, provenance: 'validations.scalper.yaml:352' }
+          - { condition: close_below_vwap, timeframe: 1m, provenance: 'validations.scalper.yaml:353' }
+          - { condition: rsi_gt_softfloor, timeframe: 1m, parameters: { rsi_softfloor_threshold: 22 }, provenance: 'validations.scalper.yaml:354' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.scalper.yaml:355' }
+          - { condition: volume_ratio_ok, timeframe: 1m, provenance: 'validations.scalper.yaml:356' }
+filters: []
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  entry_zone: { state: unresolved, value: null, unit: price_zone_policy, source: 'not defined by validations.scalper.yaml', justification: 'No EntryZone source.' }
+  stop: { state: unresolved, value: null, unit: stop_policy, source: 'not defined by validations.scalper.yaml', justification: 'No stop source.' }
+  targets: { state: unresolved, value: null, unit: target_policy, source: 'not defined by validations.scalper.yaml', justification: 'No targets source.' }
+  minimum_net_r: { state: unresolved, value: null, unit: net_r_multiple, source: 'not defined by validations.scalper.yaml', justification: 'No certified net R source.' }
+  invalidation: { state: unresolved, value: null, unit: invalidation_policy, source: 'not defined by validations.scalper.yaml', justification: 'No invalidation source.' }
+  time_stop: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'No duration source.' }
+  cost_contract: { state: unresolved, value: null, unit: net_cost_model, source: 'not defined by validations.scalper.yaml', justification: 'Costs absent.' }
+data_condition_contract:
+  required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  unknown_condition_policy: reject
+validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'Full setup duration absent.' }
+governance:
+  shadow: ['resolve execution decisions', 'capture trace', 'validate condition catalog hash']
+  paper: ['pass shadow criteria', 'paper-only certified net accounting']
+  promotion: ['certified net baseline attached', 'independent risk review', 'new semantic version']
+  suspension: ['critical data absent/stale', 'condition breach', 'trace gap']
+  rollback: ['net baseline regression', 'schema/provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects:
+  - 'The 15m selector can yield neither stay nor drop (lines 218-229).'
+provenance:
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.scalper.yaml:279-285', justification: '1h bearish regime.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.scalper.yaml:306-318', justification: '15m bearish structure.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.scalper.yaml:306-318', justification: '15m bearish momentum.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.scalper.yaml:331-356', justification: 'Common lower-TF confirmations.' }
+ownership_model: setup-contract-ownership-v1
