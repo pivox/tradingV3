@@ -333,6 +333,9 @@ final readonly class LineageContext
         if (!$this->isModern() || $this->modeId === null || $this->setupId === null) {
             throw new LineageContextException('canonical_identity_missing:modern_contract');
         }
+        if ($this->symbol === null) {
+            throw new LineageContextException('canonical_identity_missing:symbol');
+        }
         $checks = [
             'symbol' => [self::normalizeSymbol($symbol), $this->symbol],
             'side' => [self::normalizeSide($side), $this->side],
@@ -471,7 +474,7 @@ final readonly class LineageContext
     /** @param array<string,mixed> $payload */
     private static function assertCanonicalPayload(array $payload): void
     {
-        foreach (['orchestration_run_id', 'orchestration_set_id', 'mode_id', 'mode_version', 'setup_id', 'setup_version', 'config_hash', 'condition_catalog_hash', 'side', 'exchange', 'market_type', 'symbol'] as $field) {
+        foreach (['orchestration_run_id', 'orchestration_set_id', 'mode_id', 'mode_version', 'setup_id', 'setup_version', 'config_hash', 'condition_catalog_hash', 'side', 'exchange', 'market_type'] as $field) {
             if (self::string($payload[$field] ?? null) === null) {
                 throw new LineageContextException('canonical_identity_missing:' . $field);
             }
@@ -508,7 +511,7 @@ final readonly class LineageContext
         if (!\in_array($payload['market_type'] ?? null, ['perpetual', 'spot'], true)) {
             throw new LineageContextException('canonical_identity_invalid:market_type');
         }
-        if (!\is_string($payload['symbol'] ?? null) || preg_match('/\A[A-Z0-9]{2,32}\z/D', $payload['symbol']) !== 1) {
+        if (($payload['symbol'] ?? null) !== null && (!\is_string($payload['symbol']) || preg_match('/\A[A-Z0-9]{2,32}\z/D', $payload['symbol']) !== 1)) {
             throw new LineageContextException('canonical_identity_invalid:symbol');
         }
         foreach (['orchestration_run_id' => 255, 'correlation_run_id' => 96, 'orchestration_set_id' => 96, 'orchestration_dashboard_id' => 96] as $idField => $max) {

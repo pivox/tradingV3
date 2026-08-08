@@ -263,6 +263,51 @@ final class RunnerControllerTest extends TestCase
         self::assertSame('scalping', $body['data']['run']['lineage']['mode_id'] ?? null);
     }
 
+    public function testCanonicalActiveUniverseRequestReachesPolicyPreflightWithoutProviderWork(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method(self::anything());
+        $contractRepository = $this->createMock(ContractRepository::class);
+        $contractRepository->expects(self::never())->method(self::anything());
+        $mainProvider = $this->createMock(MainProviderInterface::class);
+        $mainProvider->expects(self::never())->method(self::anything());
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'run-canonical',
+                'HTTP_X_RUN_CORRELATION_ID' => 'run-canonical',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'set-canonical',
+            ],
+            content: json_encode([
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => self::canonicalTradingIdentity(),
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService(
+                $validator,
+                contractRepository: $contractRepository,
+                mainProvider: $mainProvider,
+            )),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertSame('rejected', $body['data']['run']['status'] ?? null);
+        self::assertSame('canonical_config_invalid:roots', $body['data']['run']['reason'] ?? null);
+        self::assertArrayNotHasKey('symbol', $body['data']['run']['lineage'] ?? []);
+    }
+
     /**
      * @param array<string, mixed> $tradingIdentity
      */
@@ -658,11 +703,12 @@ final class RunnerControllerTest extends TestCase
         MtfValidatorInterface $validator,
         ?TradeDecisionDispatcherInterface $tradeDecisionDispatcher = null,
         ?ContractRepository $contractRepository = null,
+        ?MainProviderInterface $mainProvider = null,
     ): MtfRunnerService
     {
         $logger = new NullLogger();
         $switchRepository = $this->createMock(MtfSwitchRepository::class);
-        $mainProvider = $this->createMock(MainProviderInterface::class);
+        $mainProvider ??= $this->createMock(MainProviderInterface::class);
 
         return new MtfRunnerService(
             new SymbolUniverseResolver(

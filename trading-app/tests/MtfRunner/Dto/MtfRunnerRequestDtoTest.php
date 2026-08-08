@@ -9,6 +9,7 @@ use App\Common\Enum\MarketType;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Tests\Trading\Lineage\CanonicalSnapshotMetadataFixture;
+use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -51,6 +52,25 @@ final class MtfRunnerRequestDtoTest extends TestCase
         self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
         self::assertSame('set-1', $dto->lineageContext->orchestrationSetId);
         self::assertArrayNotHasKey('profile', $dto->lineageContext->toArray());
+    }
+
+    public function testBuildsUnboundCanonicalIdentityWhenActiveUniverseRequestOmitsSymbols(): void
+    {
+        $tradingIdentity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($tradingIdentity['symbol']);
+
+        $dto = MtfRunnerRequestDto::fromArray([
+            'run_id' => 'run-fixture',
+            'orchestration_set_id' => 'set-fixture',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'dry_run' => true,
+            'trading_identity' => $tradingIdentity,
+        ]);
+
+        self::assertSame([], $dto->symbols);
+        self::assertTrue($dto->lineageContext->isModern());
+        self::assertNull($dto->lineageContext->symbol);
     }
     /**
      * @return iterable<string, array{0: string, 1: Exchange}>

@@ -90,6 +90,43 @@ final class LineageContextTest extends TestCase
         self::assertArrayNotHasKey('config_effective_version', $identity->toArray());
     }
 
+    public function testRequestStageCanonicalIdentityWithoutSymbolRoundTrips(): void
+    {
+        $payload = $this->canonicalPayload();
+        unset($payload['symbol']);
+
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+
+        self::assertTrue($identity->isModern());
+        self::assertNull($identity->symbol);
+        self::assertArrayNotHasKey('symbol', $identity->toArray());
+        self::assertEquals($identity, LineageContext::fromArray($identity->toArray()));
+    }
+
+    public function testRequestStageCanonicalIdentityWithoutSymbolFailsAtTradeBoundary(): void
+    {
+        $payload = $this->canonicalPayload();
+        unset($payload['symbol']);
+        $identity = LineageContext::fromOrchestratorPayload($payload);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        $identity->assertTradeBoundary('BTCUSDT', 'LONG', 'fake', 'perpetual', false);
+    }
+
+    public function testExplicitCanonicalSymbolStillPassesAndMismatchStillFailsAtTradeBoundary(): void
+    {
+        $identity = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+
+        self::assertSame($identity, $identity->assertTradeBoundary('btcusdt', 'long', 'FAKE', 'PERP', false));
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:symbol');
+
+        $identity->assertTradeBoundary('ETHUSDT', 'LONG', 'fake', 'perpetual', false);
+    }
+
     public function testModernIdentityFailsClosedWhenRequiredFieldIsMissing(): void
     {
         $payload = $this->canonicalPayload();
