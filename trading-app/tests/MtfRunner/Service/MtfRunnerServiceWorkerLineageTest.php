@@ -63,13 +63,13 @@ final class MtfRunnerServiceWorkerLineageTest extends TestCase
         $data['dry_run'] = true;
         $identity = LineageContext::fromArray($data);
         $request = new MtfRunnerRequestDto(
-            dryRun: false,
-            exchange: Exchange::BITMART,
-            marketType: MarketType::SPOT,
-            profile: null,
-            originalRunId: 'top-level-run-other',
-            correlationRunId: 'top-level-correlation-other',
-            setId: 'top-level-set-other',
+            dryRun: true,
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
+            profile: 'scalping',
+            originalRunId: 'run-fixture',
+            correlationRunId: 'run-fixture',
+            setId: 'set-fixture',
             lineageContext: $identity,
         );
         $service = (new \ReflectionClass(MtfRunnerService::class))->newInstanceWithoutConstructor();

@@ -59,7 +59,8 @@ final class CanonicalSnapshotFixture
             'origin' => 'orchestrator', 'orchestration_run_id' => 'run-fixture', 'orchestration_set_id' => 'set-fixture',
             'mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0',
             'config_hash' => $hash, 'condition_catalog_hash' => $catalog, 'side' => 'LONG', 'exchange' => 'fake', 'environment' => 'test',
-            'market_type' => 'perpetual', 'symbol' => 'BTCUSDT', 'effective_config_reference' => 'effective-config:fixture', 'effective_config_snapshot' => $snapshot,
+            'market_type' => 'perpetual', 'symbol' => 'BTCUSDT', 'dry_run' => true,
+            'effective_config_reference' => 'effective-config:fixture', 'effective_config_snapshot' => $snapshot,
         ]);
     }
 }

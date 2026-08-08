@@ -168,6 +168,42 @@ final class MtfRunnerRequestDtoTest extends TestCase
         yield 'null' => [null];
         yield 'string' => ['truncated'];
         yield 'empty' => [[]];
+        yield 'truncated object' => [['truncated' => true]];
+    }
+
+    public function testNormalizesModernTopLevelRuntimeFieldsFromExplicitEnvelope(): void
+    {
+        $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($data['symbol']);
+        $data['dry_run'] = true;
+
+        $dto = MtfRunnerRequestDto::fromArray(['lineage_context' => $data]);
+
+        self::assertTrue($dto->dryRun);
+        self::assertSame(Exchange::FAKE, $dto->exchange);
+        self::assertSame(MarketType::PERPETUAL, $dto->marketType);
+        self::assertSame('scalping', $dto->profile);
+        self::assertSame('run-fixture', $dto->originalRunId);
+        self::assertSame('run-fixture', $dto->correlationRunId);
+        self::assertSame('set-fixture', $dto->setId);
+    }
+
+    public function testRejectsTopLevelRuntimeFieldsThatConflictWithExplicitEnvelope(): void
+    {
+        $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($data['symbol']);
+        $data['dry_run'] = false;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:dry_run');
+
+        MtfRunnerRequestDto::fromArray([
+            'dry_run' => true,
+            'exchange' => 'bitmart',
+            'market_type' => 'spot',
+            'mtf_profile' => 'regular',
+            'lineage_context' => $data,
+        ]);
     }
 
     public function testFullyValidatesPartialCanonicalIdentityBeforeLegacyLineageContext(): void

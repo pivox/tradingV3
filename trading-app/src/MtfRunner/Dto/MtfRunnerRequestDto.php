@@ -88,6 +88,20 @@ final class MtfRunnerRequestDto
             marketType: $marketType?->value,
             mtfProfile: $profile,
         );
+        if ($this->lineageContext->isModern()) {
+            self::assertCanonicalRequestDuplicates(
+                $this->lineageContext,
+                $dryRun,
+                $exchange,
+                $marketType,
+                $profile,
+                $originalRunId,
+                $correlationRunId,
+                $dashboardId,
+                $setId,
+                true,
+            );
+        }
     }
 
     /**
@@ -99,10 +113,36 @@ final class MtfRunnerRequestDto
         [$profile, $validationMode] = self::extractProfileAndMode($data);
 
         $lineageContext = self::buildLineageContext($data, $exchange, $marketType, $profile);
+        $dryRun = (bool) ($data['dry_run'] ?? false);
+        $originalRunId = self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? null);
+        $correlationRunId = self::nonEmptyString($data['correlation_run_id'] ?? null);
+        $dashboardId = self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null);
+        $setId = self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null);
+        if ($lineageContext->isModern()) {
+            self::assertCanonicalRequestDuplicates(
+                $lineageContext,
+                \array_key_exists('dry_run', $data) ? $dryRun : null,
+                $exchange,
+                $marketType,
+                $profile,
+                $originalRunId,
+                $correlationRunId,
+                $dashboardId,
+                $setId,
+            );
+            $dryRun = $lineageContext->dryRun ?? throw new LineageContextException('canonical_identity_missing:dry_run');
+            $exchange = Exchange::from((string) $lineageContext->exchange);
+            $marketType = MarketType::from((string) $lineageContext->marketType);
+            $profile = $lineageContext->modeId;
+            $originalRunId = $lineageContext->orchestrationRunId;
+            $correlationRunId = $lineageContext->correlationRunId;
+            $dashboardId = $lineageContext->orchestrationDashboardId;
+            $setId = $lineageContext->orchestrationSetId;
+        }
 
         return new self(
             symbols: $data['symbols'] ?? [],
-            dryRun: (bool) ($data['dry_run'] ?? false),
+            dryRun: $dryRun,
             forceRun: (bool) ($data['force_run'] ?? false),
             currentTf: $data['current_tf'] ?? null,
             forceTimeframeCheck: (bool) ($data['force_timeframe_check'] ?? false),
@@ -119,10 +159,10 @@ final class MtfRunnerRequestDto
             profile: $profile,
             validationMode: $validationMode,
             openStateSnapshot: self::extractOpenStateSnapshot($data),
-            originalRunId: self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? null),
-            correlationRunId: self::nonEmptyString($data['correlation_run_id'] ?? null),
-            dashboardId: self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null),
-            setId: self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null),
+            originalRunId: $originalRunId,
+            correlationRunId: $correlationRunId,
+            dashboardId: $dashboardId,
+            setId: $setId,
             suppressExchangeCapableAsyncWork: (bool) ($data['suppress_exchange_capable_async_work'] ?? false),
             lineageContext: $lineageContext,
         );
@@ -172,7 +212,10 @@ final class MtfRunnerRequestDto
     private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
         if (\array_key_exists('lineage_context', $data)
-            && (!\is_array($data['lineage_context']) || $data['lineage_context'] === [])
+            && (!\is_array($data['lineage_context'])
+                || $data['lineage_context'] === []
+                || !\is_string($data['lineage_context']['origin'] ?? null)
+                || !\is_string($data['lineage_context']['contract_kind'] ?? null))
         ) {
             throw new LineageContextException('canonical_identity_invalid:lineage_context');
         }
@@ -222,6 +265,38 @@ final class MtfRunnerRequestDto
             marketType: $marketType?->value,
             mtfProfile: $profile,
         );
+    }
+
+    private static function assertCanonicalRequestDuplicates(
+        LineageContext $identity,
+        ?bool $dryRun,
+        ?Exchange $exchange,
+        ?MarketType $marketType,
+        ?string $profile,
+        ?string $originalRunId,
+        ?string $correlationRunId,
+        ?string $dashboardId,
+        ?string $setId,
+        bool $requireAll = false,
+    ): void {
+        $checks = [
+            'dry_run' => [$dryRun, $identity->dryRun],
+            'exchange' => [$exchange?->value, $identity->exchange],
+            'market_type' => [$marketType?->value, $identity->marketType],
+            'mode_id' => [$profile, $identity->modeId],
+            'orchestration_run_id' => [$originalRunId, $identity->orchestrationRunId],
+            'correlation_run_id' => [$correlationRunId, $identity->correlationRunId],
+            'orchestration_dashboard_id' => [$dashboardId, $identity->orchestrationDashboardId],
+            'orchestration_set_id' => [$setId, $identity->orchestrationSetId],
+        ];
+        foreach ($checks as $field => [$actual, $expected]) {
+            if ($requireAll && $expected !== null && $actual === null) {
+                throw new LineageContextException('canonical_identity_missing:' . $field);
+            }
+            if ($actual !== null && $actual !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
     }
 
     /** @phpstan-assert array<string,mixed> $identity */
