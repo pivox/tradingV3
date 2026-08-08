@@ -627,7 +627,10 @@ final readonly class LineageContext
      */
     public function redacted(): array
     {
-        return $this->toArray();
+        $redacted = $this->toArray();
+        unset($redacted['effective_config_snapshot']);
+
+        return $redacted;
     }
 
     /**

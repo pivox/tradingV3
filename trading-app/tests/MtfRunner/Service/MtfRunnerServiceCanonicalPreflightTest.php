@@ -36,7 +36,10 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
 {
     public function testExecutableModernRequestIsRejectedBeforeParallelAndPeripheralWork(): void
     {
-        $identity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config());
+        $secret = 'TOP-SECRET';
+        $config = CanonicalSnapshotFixture::config();
+        $config['exchange']['api_key'] = $secret;
+        $identity = CanonicalSnapshotFixture::lineage($config);
         $blockers = [
             ['code' => 'canonical_risk_pct_pending_304', 'path' => 'runtime.trade_entry.risk_pct'],
             ['code' => 'canonical_daily_loss_policy_pending_304', 'path' => 'mode.risk.daily_loss_cap'],
@@ -46,10 +49,12 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
             ['code' => 'canonical_minimum_net_r_pending_304', 'path' => 'setup.ast.execution.minimum_net_r'],
         ];
 
+        $diagnostics = [];
         $result = $this->strictService(
             identity: $identity,
             reason: 'canonical_risk_pct_pending_304',
             blockers: $blockers,
+            diagnostics: $diagnostics,
         )->run($this->modernRequest($identity));
 
         self::assertSame('rejected', $result['summary']['status'] ?? null);
@@ -59,6 +64,17 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
         self::assertSame(2, $result['summary']['symbols_requested'] ?? null);
         self::assertSame($blockers, $result['summary']['canonical_policy_blockers'] ?? null);
         self::assertSame($identity->redacted(), $result['summary']['lineage'] ?? null);
+        self::assertArrayNotHasKey('effective_config_snapshot', $diagnostics['logger']['identity'] ?? []);
+        self::assertArrayNotHasKey('effective_config_snapshot', $diagnostics['audit']['identity'] ?? []);
+        self::assertArrayNotHasKey('effective_config_snapshot', $result['summary']['lineage']);
+        self::assertStringNotContainsString(
+            $secret,
+            json_encode([
+                'logger' => $diagnostics['logger'] ?? null,
+                'audit' => $diagnostics['audit'] ?? null,
+                'summary' => $result['summary']['lineage'],
+            ], JSON_THROW_ON_ERROR),
+        );
     }
 
     public function testNonExecutableModernSnapshotReturnsTypedCanonicalReason(): void
@@ -72,10 +88,12 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
             'path' => 'effective_config_snapshot',
         ]];
 
+        $diagnostics = [];
         $result = $this->strictService(
             identity: $identity,
             reason: 'canonical_contract_not_executable',
             blockers: $blockers,
+            diagnostics: $diagnostics,
         )->run($this->modernRequest($identity));
 
         self::assertSame('rejected', $result['summary']['status'] ?? null);
@@ -90,9 +108,14 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
      * projection, trade dispatch, locks/switches, and TP/SL provider access.
      *
      * @param list<array{code:string,path:string}> $blockers
+     * @param array<string,array<string,mixed>> $diagnostics
      */
-    private function strictService(LineageContext $identity, string $reason, array $blockers): MtfRunnerService
-    {
+    private function strictService(
+        LineageContext $identity,
+        string $reason,
+        array $blockers,
+        array &$diagnostics,
+    ): MtfRunnerService {
         $runId = 'run-fixture';
         $context = [
             'run_id' => $runId,
@@ -108,7 +131,14 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
         $mtfLogger = $this->createMock(LoggerInterface::class);
         $mtfLogger->expects(self::once())
             ->method('warning')
-            ->with('mtf.runner.canonical_policy_rejected', $context);
+            ->with(
+                'mtf.runner.canonical_policy_rejected',
+                self::callback(static function (array $actual) use (&$diagnostics, $context): bool {
+                    $diagnostics['logger'] = $actual;
+
+                    return $actual === $context;
+                }),
+            );
         $mtfLogger->expects(self::never())->method('info');
         $mtfLogger->expects(self::never())->method('debug');
         $mtfLogger->expects(self::never())->method('error');
@@ -142,7 +172,11 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
             'MTF_CANONICAL_POLICY_REJECTED',
             'MTF_RUN',
             $runId,
-            $context,
+            self::callback(static function (array $actual) use (&$diagnostics, $context): bool {
+                $diagnostics['audit'] = $actual;
+
+                return $actual === $context;
+            }),
             'canonical-user',
             '203.0.113.42',
         );

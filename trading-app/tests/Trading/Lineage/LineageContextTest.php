@@ -264,6 +264,28 @@ final class LineageContextTest extends TestCase
         self::assertSame('run-a', $context->redacted()['orchestration_run_id']);
     }
 
+    public function testRedactedCanonicalIdentityOmitsTheEffectiveConfigSnapshot(): void
+    {
+        $secret = 'TOP-SECRET';
+        $config = CanonicalSnapshotFixture::config();
+        $config['exchange']['api_key'] = $secret;
+        $identity = CanonicalSnapshotFixture::lineage($config);
+
+        self::assertSame(
+            $secret,
+            $identity->toArray()['effective_config_snapshot']['config']['exchange']['api_key'] ?? null,
+            'The lossless transport representation must retain the validated snapshot.',
+        );
+
+        $redacted = $identity->redacted();
+
+        self::assertArrayNotHasKey('effective_config_snapshot', $redacted);
+        self::assertSame($identity->effectiveConfigReference, $redacted['effective_config_reference'] ?? null);
+        self::assertSame($identity->configHash, $redacted['config_hash'] ?? null);
+        self::assertSame($identity->conditionCatalogHash, $redacted['condition_catalog_hash'] ?? null);
+        self::assertStringNotContainsString($secret, json_encode($redacted, JSON_THROW_ON_ERROR));
+    }
+
     public function testCanonicalHashSurvivesNormalJsonRoundTripAcrossIntegralFloatUnicodeAndSlash(): void
     {
         $config = ['leverage' => 3.0, 'note' => 'café/path'];
