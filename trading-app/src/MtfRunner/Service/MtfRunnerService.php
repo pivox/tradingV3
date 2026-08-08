@@ -14,12 +14,14 @@ use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Contract\Provider\MainProviderInterface;
 use App\Contract\Provider\Dto\OrderDto;
+use App\Contract\Runtime\AuditLoggerInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Common\Enum\OrderSide;
 use App\Common\Enum\PositionSide;
 use App\MtfRunner\Dto\MtfRunnerRequestDto as RunnerRequestDto;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Context\ExchangeContext;
@@ -65,6 +67,8 @@ final class MtfRunnerService
         private readonly LoggerInterface $mtfLogger,
         private readonly LoggerInterface $positionsLogger,
         private readonly TradeDecisionDispatcherInterface $tradeDecisionDispatcher,
+        private readonly CanonicalMtfPolicyPreflight $canonicalMtfPolicyPreflight,
+        private readonly AuditLoggerInterface $auditLogger,
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly ClockInterface $clock,
@@ -101,7 +105,6 @@ final class MtfRunnerService
             throw new \LogicException('fake_only_safety_requires_fake_dry_run_single_process');
         }
 
-        $profiler = new PerformanceProfiler();
         // OBS-003 : si l'orchestrateur a fourni un run_id (X-Run-Id), on l'utilise comme
         // identifiant de corrélation canonique (≤64, jamais tronqué) du run — il finit sur
         // `trade_lifecycle_event.run_id` et permet le rapprochement run ↔ trades. Sans
@@ -109,6 +112,40 @@ final class MtfRunnerService
         $runId = RunCorrelationId::canonicalOrNull($request->originalRunId)
             ?? RunCorrelationId::canonicalOrNull($request->correlationRunId)
             ?? Uuid::uuid4()->toString();
+
+        $canonicalRejection = $this->canonicalMtfPolicyPreflight->reject($request->lineageContext);
+        if ($canonicalRejection !== null) {
+            $identity = $request->lineageContext;
+            $context = [
+                'run_id' => $runId,
+                'reason' => $canonicalRejection->reason,
+                'blockers' => $canonicalRejection->blockers,
+                'identity' => $identity->redacted(),
+            ];
+            $this->mtfLogger->warning('mtf.runner.canonical_policy_rejected', $context);
+            $this->auditLogger->logAction(
+                action: 'MTF_CANONICAL_POLICY_REJECTED',
+                entity: 'MTF_RUN',
+                entityId: $runId,
+                data: $context,
+                userId: $request->userId,
+                ipAddress: $request->ipAddress,
+            );
+
+            return $this->buildRejectedRun(
+                runId: $runId,
+                message: 'Canonical MTF request rejected by runtime policy.',
+                reason: $canonicalRejection->reason,
+                symbolsRequested: count($request->symbols),
+                extraSummary: [
+                    'canonical_status' => 'canonical_policy_rejected',
+                    'canonical_policy_blockers' => $canonicalRejection->blockers,
+                    'lineage' => $identity->redacted(),
+                ],
+            );
+        }
+
+        $profiler = new PerformanceProfiler();
         $startTime = microtime(true);
         $openPositions = null;
         $openOrders = null;
@@ -1076,9 +1113,15 @@ final class MtfRunnerService
      *     orders_placed: array<string,mixed>,
      *     performance: array<string,mixed>
      * }
+     * @param array<string,mixed> $extraSummary
      */
-    private function buildRejectedRun(string $runId, string $message, string $reason, int $symbolsRequested): array
-    {
+    private function buildRejectedRun(
+        string $runId,
+        string $message,
+        string $reason,
+        int $symbolsRequested,
+        array $extraSummary = [],
+    ): array {
         return [
             'summary' => [
                 'run_id' => $runId,
@@ -1088,7 +1131,7 @@ final class MtfRunnerService
                 'symbols_requested' => $symbolsRequested,
                 'symbols_processed' => 0,
                 'timestamp' => date('Y-m-d H:i:s'),
-            ],
+            ] + $extraSummary,
             'results' => [],
             'errors' => [$message],
             'summary_by_tf' => [],
