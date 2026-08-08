@@ -9,6 +9,8 @@ use App\Contract\MtfValidator\Dto\ExecutionSelectionDto;
 use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
+use App\Common\Enum\Exchange;
+use App\Common\Enum\MarketType;
 use App\MtfValidator\Application\MtfTradeDecisionDispatcher;
 use App\MtfValidator\Message\MtfTradingDecisionMessage;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
@@ -34,12 +36,18 @@ final class MtfTradeDecisionDispatcherLineageTest extends TestCase
         );
         $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
         unset($data['symbol']);
+        $data['correlation_run_id'] = 'run-1';
+        $data['dry_run'] = true;
         $requestIdentity = LineageContext::fromArray($data);
         $request = new MtfRunRequestDto(
             symbols: ['ETHUSDT'],
             dryRun: true,
+            exchange: Exchange::FAKE,
+            marketType: MarketType::PERPETUAL,
             profile: 'scalping',
             requestId: 'run-1',
+            orchestrationRunId: 'run-fixture',
+            setId: 'set-fixture',
             lineageContext: $requestIdentity,
         );
         $result = new MtfResultDto(
@@ -81,5 +89,6 @@ final class MtfTradeDecisionDispatcherLineageTest extends TestCase
             $dispatched->identity->toArray(),
             $dispatched->mtfRun->options['lineage_context'],
         );
+        $dispatched->assertCanonicalIdentity();
     }
 }

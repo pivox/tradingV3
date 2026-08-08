@@ -9,6 +9,7 @@ use App\MtfValidator\Service\Dto\SymbolResultDto;
 use App\MtfValidator\Service\TradingDecisionHandler;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\Messenger\Attribute\AsMessageHandler;
+use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 #[AsMessageHandler]
 final class MtfTradingDecisionMessageHandler
@@ -21,6 +22,17 @@ final class MtfTradingDecisionMessageHandler
 
     public function __invoke(MtfTradingDecisionMessage $message): void
     {
+        try {
+            $message->assertCanonicalIdentity();
+        } catch (\Throwable $exception) {
+            throw new UnrecoverableMessageHandlingException(
+                $exception instanceof \App\Trading\Lineage\LineageContextException
+                    ? $exception->getMessage()
+                    : 'canonical_identity_invalid:messenger_envelope',
+                previous: $exception,
+            );
+        }
+
         $mtfRunDto = $message->mtfRun;
         $result = $message->result;
         $identity = $message->identity;
@@ -28,13 +40,6 @@ final class MtfTradingDecisionMessageHandler
         if (!$result->isTradable || $result->executionTimeframe === null || $result->side === null) {
             return;
         }
-        if ($identity->modeId !== null && (
-            $identity->symbol !== strtoupper($result->symbol)
-            || $identity->side !== strtoupper($result->side)
-        )) {
-            throw new \InvalidArgumentException('canonical_identity_mismatch:messenger_decision');
-        }
-
         $this->mtfLogger->info('[MTF Messenger] Dispatching trading decision', [
             'run_id' => $message->runId,
             'symbol' => $result->symbol,
