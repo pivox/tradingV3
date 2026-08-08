@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\Common\Enum\Exchange;
+use App\Config\TradeEntryModeContext;
 use App\MtfRunner\Application\RunMtfCycleUseCase;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
@@ -22,6 +23,7 @@ class RunnerController extends AbstractController
 {
     public function __construct(
         private readonly LoggerInterface $logger,
+        private readonly TradeEntryModeContext $modeContext,
         private readonly OrchestrationContextValidator $orchestrationContextValidator,
         private readonly FakeOnlyExchangeCallAudit $fakeOnlyExchangeCallAudit = new FakeOnlyExchangeCallAudit(),
     ) {
@@ -95,7 +97,24 @@ class RunnerController extends AbstractController
             );
 
             $tradingIdentity = \is_array($data['trading_identity'] ?? null) ? $data['trading_identity'] : null;
-            $explicitProfile = $tradingIdentity['mode_id'] ?? $data['profile'] ?? $data['mtf_profile'] ?? null;
+            $explicitLegacyProfile = $data['profile'] ?? $data['mtf_profile'] ?? null;
+            $resolvedProfile = $tradingIdentity['mode_id'] ?? $explicitLegacyProfile;
+
+            if (
+                $tradingIdentity === null
+                && !array_key_exists('profile', $data)
+                && !array_key_exists('mtf_profile', $data)
+            ) {
+                $enabledModes = $this->modeContext->getEnabledModes();
+                $defaultProfile = $enabledModes[0]['name'] ?? null;
+                if (is_string($defaultProfile) && $defaultProfile !== '') {
+                    $resolvedProfile = $defaultProfile;
+                    $this->logger->debug('[Runner Controller] Auto-injecting profile from config', [
+                        'profile' => $defaultProfile,
+                        'enabled_modes' => array_column($enabledModes, 'name'),
+                    ]);
+                }
+            }
 
             // Construire la requête Runner (le Runner gère tout : résolution, filtrage, switches, TP/SL, post-processing)
             $runnerRequest = MtfRunnerRequestDto::fromArray([
@@ -114,7 +133,7 @@ class RunnerController extends AbstractController
                 'workers' => $workers,
                 'sync_tables' => filter_var($data['sync_tables'] ?? true, FILTER_VALIDATE_BOOLEAN),
                 'process_tp_sl' => filter_var($data['process_tp_sl'] ?? true, FILTER_VALIDATE_BOOLEAN),
-                'profile' => $explicitProfile,
+                'profile' => $resolvedProfile,
                 'trading_identity' => $tradingIdentity,
                 'mtf_profile' => $data['mtf_profile'] ?? null,
                 'validation_mode' => $data['validation_mode'] ?? null,

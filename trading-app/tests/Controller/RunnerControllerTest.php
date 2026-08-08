@@ -9,6 +9,8 @@ use App\Application\Runner\OpenActivityFilter;
 use App\Application\Runner\PostRunProjectionDispatcher;
 use App\Application\Runner\RunResultAssembler;
 use App\Application\Runner\SymbolUniverseResolver;
+use App\Config\TradeEntryConfigProvider;
+use App\Config\TradeEntryModeContext;
 use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\Dto\MtfRunResponseDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
@@ -23,6 +25,7 @@ use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\MtfValidator\Repository\MtfLockRepository;
 use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Repository\ContractRepository;
+use App\Provider\Context\ExchangeContext;
 use App\Repository\PositionRepository;
 use App\Trading\Orchestration\OrchestrationContextValidator;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
@@ -40,6 +43,145 @@ use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 #[CoversClass(RunnerController::class)]
 final class RunnerControllerTest extends TestCase
 {
+    public function testProfilelessLegacyRequestUsesFirstEnabledModeForResolutionAndValidation(): void
+    {
+        $validator = new class implements MtfValidatorInterface {
+            public ?MtfRunRequestDto $request = null;
+
+            public function run(MtfRunRequestDto $request): MtfRunResponseDto
+            {
+                $this->request = $request;
+
+                return new MtfRunResponseDto(
+                    runId: 'validator-run',
+                    status: 'success',
+                    executionTimeSeconds: 0.0,
+                    symbolsRequested: 1,
+                    symbolsProcessed: 1,
+                    symbolsSuccessful: 1,
+                    symbolsFailed: 0,
+                    symbolsSkipped: 0,
+                    successRate: 100.0,
+                    results: [],
+                    errors: [],
+                    timestamp: new \DateTimeImmutable('2026-07-18T00:00:00+00:00'),
+                );
+            }
+
+            public function getServiceName(): string
+            {
+                return 'runner-controller-legacy-default-spy';
+            }
+
+            /** @return string[] */
+            public function getListTimeframe(string $profile): array
+            {
+                return [];
+            }
+        };
+        $contractRepository = $this->createMock(ContractRepository::class);
+        $contractRepository->expects(self::once())
+            ->method('allActiveSymbolNames')
+            ->with([], false, 'scalper', self::isInstanceOf(ExchangeContext::class))
+            ->willReturn(['BTCUSDT']);
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator, contractRepository: $contractRepository)),
+        );
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertNotNull($validator->request);
+        self::assertSame('scalper', $validator->request->profile);
+        self::assertSame('scalper', $validator->request->lineageContext->mtfProfile);
+    }
+
+    public function testExplicitLegacyMtfProfileWinsOverEnabledModeDefault(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::once())
+            ->method('run')
+            ->with(self::callback(static fn(MtfRunRequestDto $request): bool => $request->profile === 'regular'))
+            ->willReturn($this->successfulMtfResponse());
+        $validator->method('getListTimeframe')->willReturn([]);
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mtf_profile' => 'regular',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+    }
+
+    public function testCanonicalModeIdIsNotReplacedByLegacyEnabledModeDefault(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method('run');
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'run-canonical',
+                'HTTP_X_RUN_CORRELATION_ID' => 'run-canonical',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'set-canonical',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => self::canonicalTradingIdentity(),
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertSame('rejected', $body['data']['run']['status'] ?? null);
+        self::assertSame('scalping', $body['data']['run']['lineage']['mode_id'] ?? null);
+    }
+
     /**
      * @param array<string, mixed> $tradingIdentity
      */
@@ -175,13 +317,9 @@ final class RunnerControllerTest extends TestCase
             }
         };
 
-        $parameterBag = $this->createMock(ParameterBagInterface::class);
-        $parameterBag->method('get')->willReturnMap([
-            ['kernel.project_dir', '/tmp'],
-            ['mode', []],
-        ]);
         $controller = new RunnerController(
             new NullLogger(),
+            $this->modeContext(),
             new OrchestrationContextValidator(),
         );
         $container = $this->createMock(ContainerInterface::class);
@@ -379,15 +517,12 @@ final class RunnerControllerTest extends TestCase
         )];
     }
 
-    private function controller(): RunnerController
+    /** @param array<int, array{name: string, enabled: bool, priority: int}> $enabledModes */
+    private function controller(array $enabledModes = []): RunnerController
     {
-        $parameterBag = $this->createMock(ParameterBagInterface::class);
-        $parameterBag->method('get')->willReturnMap([
-            ['kernel.project_dir', '/tmp'],
-            ['mode', []],
-        ]);
         $controller = new RunnerController(
             new NullLogger(),
+            $this->modeContext($enabledModes),
             new OrchestrationContextValidator(),
         );
         $container = $this->createMock(ContainerInterface::class);
@@ -441,6 +576,7 @@ final class RunnerControllerTest extends TestCase
     private function runnerService(
         MtfValidatorInterface $validator,
         ?TradeDecisionDispatcherInterface $tradeDecisionDispatcher = null,
+        ?ContractRepository $contractRepository = null,
     ): MtfRunnerService
     {
         $logger = new NullLogger();
@@ -449,7 +585,7 @@ final class RunnerControllerTest extends TestCase
 
         return new MtfRunnerService(
             new SymbolUniverseResolver(
-                $this->createMock(ContractRepository::class),
+                $contractRepository ?? $this->createMock(ContractRepository::class),
                 $switchRepository,
                 $logger,
                 $logger,
@@ -480,6 +616,38 @@ final class RunnerControllerTest extends TestCase
             $this->createMock(AuditLoggerInterface::class),
             '/tmp',
             $this->createMock(ClockInterface::class),
+        );
+    }
+
+    /** @return array<int, array{name: string, enabled: bool, priority: int}> */
+    private function enabledModes(): array
+    {
+        return [
+            ['name' => 'scalper', 'enabled' => true, 'priority' => 1],
+            ['name' => 'regular', 'enabled' => true, 'priority' => 2],
+        ];
+    }
+
+    /** @param array<int, array{name: string, enabled: bool, priority: int}> $enabledModes */
+    private function modeContext(array $enabledModes = []): TradeEntryModeContext
+    {
+        $parameterBag = $this->createMock(ParameterBagInterface::class);
+        $parameterBag->method('get')->willReturnMap([
+            ['kernel.project_dir', '/tmp'],
+            ['mode', array_map(
+                static fn(array $mode): array => [
+                    ['name' => $mode['name']],
+                    ['enabled' => $mode['enabled']],
+                    ['priority' => $mode['priority']],
+                ],
+                $enabledModes,
+            )],
+        ]);
+
+        return new TradeEntryModeContext(
+            new TradeEntryConfigProvider($parameterBag),
+            'regular',
+            new NullLogger(),
         );
     }
 }
