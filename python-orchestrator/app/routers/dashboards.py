@@ -37,6 +37,7 @@ from app.schemas import (
     SetCreate,
     SetRead,
     SetUpdate,
+    assert_canonical_set_context,
     assert_recipe_fault_profile_allowed,
     assert_set_persistable,
 )
@@ -172,7 +173,16 @@ def update_set(
     effective_market_type = updates.get("market_type", a_set.market_type)
     effective_environment = updates.get("environment", a_set.environment)
     effective_mtf_profile = updates.get("mtf_profile", a_set.mtf_profile)
+    effective_trading_identity = updates.get(
+        "trading_identity", a_set.trading_identity
+    )
     try:
+        if (
+            a_set.trading_identity is not None
+            and "trading_identity" in updates
+            and updates["trading_identity"] != a_set.trading_identity
+        ):
+            raise ValueError("canonical_identity_immutable")
         assert_set_persistable(
             dry_run=effective_dry_run,
             symbols=effective_symbols,
@@ -186,6 +196,12 @@ def update_set(
             exchange=effective_exchange,
             environment=effective_environment,
             dry_run=effective_dry_run,
+        )
+        assert_canonical_set_context(
+            trading_identity=effective_trading_identity,
+            exchange=effective_exchange,
+            environment=effective_environment,
+            mtf_profile=effective_mtf_profile,
         )
     except ValueError as exc:
         # 422 littéral : la constante `status.HTTP_422_*` a été renommée selon

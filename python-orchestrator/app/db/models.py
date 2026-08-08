@@ -101,6 +101,9 @@ class OrchestrationSet(Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Payload prêt envoyé à Symfony (préparé par PY-004). Null tant que non préparé.
     payload: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
+    # Snapshot canonique validé au bord API. Nullable uniquement pour préserver
+    # la lisibilité des sets historiques legacy ; aucun backfill n'est inféré.
+    trading_identity: Mapped[Optional[dict]] = mapped_column(JSONVariant, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

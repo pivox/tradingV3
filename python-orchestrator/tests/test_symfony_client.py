@@ -33,6 +33,9 @@ from app.services.symfony_client import (
 
 def _make_set(**kwargs: Any) -> OrchestratorSet:
     base = {"set_id": "s", "exchange": "fake"}
+    identity = kwargs.get("trading_identity")
+    if identity is not None and "mtf_profile" not in kwargs:
+        base["mtf_profile"] = identity.mode_id
     base.update(kwargs)
     return OrchestratorSet(**base)
 
@@ -104,7 +107,9 @@ def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
     first = build_mtf_payload(a_set, None)
     retry = build_mtf_payload(a_set, None)
 
-    assert first["trading_identity"] == identity.model_dump(exclude_none=True)
+    assert first["trading_identity"] == identity.model_dump(
+        mode="json", exclude_none=True
+    )
     assert retry["trading_identity"] == first["trading_identity"]
     assert retry["config_hash"] == first["config_hash"]
 
@@ -591,6 +596,7 @@ def _orm_set(**kwargs: Any) -> SimpleNamespace:
         "market_type": "perpetual",
         "mtf_profile": "scalper_micro",
         "symbols": ["BTCUSDT", "ETHUSDT"],
+        "trading_identity": None,
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -611,6 +617,29 @@ def test_generate_set_payload_from_orm_string_fields():
     }
     # Le snapshot est une valeur runtime : jamais stockée dans le payload préparé.
     assert "open_state_snapshot" not in payload
+
+
+def test_generate_and_effective_payload_use_validated_identity_column_as_authority():
+    identity = _canonical_identity().model_dump(mode="json", exclude_none=True)
+    stale_payload = {
+        "trading_identity": {"mode_id": "attacker-controlled-stale-payload"},
+        "symbols": ["ETHUSDT"],
+    }
+    orm = _orm_set(
+        exchange="fake",
+        mtf_profile="scalping",
+        trading_identity=identity,
+        payload=stale_payload,
+        symbols=["BTCUSDT"],
+    )
+
+    generated = generate_set_payload(orm)
+    effective = effective_set_payload(orm)
+
+    assert generated["trading_identity"] == identity
+    assert effective["trading_identity"] == identity
+    assert generated["symbols"] == ["BTCUSDT"]
+    assert effective["symbols"] == ["BTCUSDT"]
 
 
 def test_generate_set_payload_none_when_symbols_blank():
@@ -900,6 +929,42 @@ def test_run_persisted_set_rebuilds_from_orm_columns_not_stored_payload():
         "dry_run", "workers", "exchange", "market_type", "mtf_profile",
         "sync_tables", "process_tp_sl", "symbols", "open_state_snapshot", "config_hash",
     }
+
+
+def test_run_persisted_set_retry_preserves_exact_identity_from_column():
+    identity = _canonical_identity().model_dump(mode="json", exclude_none=True)
+    orm = _orm_set(
+        set_id="canonical",
+        dashboard_id=42,
+        exchange="fake",
+        mtf_profile="scalping",
+        trading_identity=identity,
+        payload={"trading_identity": {"mode_id": "stale"}},
+        symbols=["BTCUSDT"],
+    )
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run_twice():
+        async with _client_with(handler) as client:
+            first = await run_persisted_set(
+                client, "http://sym", orm, None, run_id="run-canonical"
+            )
+            retry = await run_persisted_set(
+                client, "http://sym", orm, None, run_id="run-canonical"
+            )
+            return first, retry
+
+    first, retry = asyncio.run(_run_twice())
+
+    assert len(sent) == 2
+    assert sent[0]["trading_identity"] == identity
+    assert sent[1]["trading_identity"] == identity
+    assert first["payload_sent"]["trading_identity"] == identity
+    assert retry["payload_sent"]["trading_identity"] == identity
 
 
 def test_run_persisted_set_clamps_oversized_workers():

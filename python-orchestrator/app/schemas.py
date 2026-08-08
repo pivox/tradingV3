@@ -50,6 +50,9 @@ class MtfProfile(str, Enum):
     REGULAR = "regular"
     SCALPER = "scalper"
     SCALPER_MICRO = "scalper_micro"
+    DAY_TRADING = "day_trading"
+    SCALPING = "scalping"
+    MICRO_SCALPING = "micro_scalping"
     RECIPE_FUNCTIONAL_ERROR = "recipe_functional_error"
 
 
@@ -214,12 +217,18 @@ class CanonicalTradingIdentity(BaseModel):
     side: Literal["LONG", "SHORT"]
     effective_config_reference: str = Field(min_length=1)
     effective_config_snapshot: CanonicalEffectiveConfigSnapshot
-    requested_mode_id: Optional[str] = None
-    resolved_mode_id: Optional[str] = None
-    validated_mode_id: Optional[str] = None
-    requested_mode_version: Optional[str] = None
-    resolved_mode_version: Optional[str] = None
-    validated_mode_version: Optional[str] = None
+    requested_mode_id: Optional[str] = Field(default=None, exclude_if=lambda value: value is None)
+    resolved_mode_id: Optional[str] = Field(default=None, exclude_if=lambda value: value is None)
+    validated_mode_id: Optional[str] = Field(default=None, exclude_if=lambda value: value is None)
+    requested_mode_version: Optional[str] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    resolved_mode_version: Optional[str] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    validated_mode_version: Optional[str] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("effective_config_reference")
     @classmethod
@@ -392,6 +401,38 @@ def assert_set_persistable(
         )
 
 
+def assert_canonical_set_context(
+    *,
+    trading_identity: object,
+    exchange: object,
+    environment: object,
+    mtf_profile: object,
+) -> None:
+    """Valide la cohérence entre colonnes du set et identité moderne.
+
+    Les anciens profils restent acceptés pour les sets legacy. Dès qu'une
+    identité canonique existe, le profil est le ``mode_id`` moderne exact :
+    aucun alias ``regular``/``scalper``/``scalper_micro`` n'est accepté.
+    """
+    if trading_identity is None:
+        return
+    identity = (
+        trading_identity
+        if isinstance(trading_identity, CanonicalTradingIdentity)
+        else CanonicalTradingIdentity.model_validate(trading_identity)
+    )
+    exchange_value = getattr(exchange, "value", exchange)
+    environment_value = getattr(environment, "value", environment)
+    profile_value = getattr(mtf_profile, "value", mtf_profile)
+    request = identity.effective_config_snapshot.request
+    if exchange_value != request.exchange:
+        raise ValueError("canonical_exchange_mismatch")
+    if environment_value != request.environment:
+        raise ValueError("canonical_environment_mismatch")
+    if profile_value != identity.mode_id:
+        raise ValueError("canonical_profile_mismatch")
+
+
 class Health(BaseModel):
     """Réponse du healthcheck. La version provient de ``app.__version__``."""
 
@@ -454,11 +495,12 @@ class OrchestratorSet(BaseModel):
         }:
             raise ValueError("canonical_exchange_invalid")
         if self.trading_identity is not None:
-            request = self.trading_identity.effective_config_snapshot.request
-            if request.exchange != self.exchange.value:
-                raise ValueError("canonical_exchange_mismatch")
-            if request.environment != self.environment.value:
-                raise ValueError("canonical_environment_mismatch")
+            assert_canonical_set_context(
+                trading_identity=self.trading_identity,
+                exchange=self.exchange,
+                environment=self.environment,
+                mtf_profile=self.mtf_profile,
+            )
         return self
 
 
@@ -607,12 +649,6 @@ def _reject_explicit_nulls(data: object, *, fields, nullable) -> object:
     return data
 
 
-def _reject_pending_persisted_canonical_identity(data: object) -> object:
-    if isinstance(data, Mapping) and "trading_identity" in data:
-        raise ValueError("canonical_persisted_identity_pending_lot_2b")
-    return data
-
-
 class DashboardCreate(BaseModel):
     """Payload de création d'un dashboard d'orchestration."""
 
@@ -689,11 +725,10 @@ class SetCreate(BaseModel):
     symbols: List[str] = Field(default_factory=list, description="Sélection explicite de symboles.")
     contracts_limit: Optional[int] = Field(default=None, ge=1, description="Sélection dynamique bornée (PY-004).")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_pending_canonical_identity(cls, data: object) -> object:
-        return _reject_pending_persisted_canonical_identity(data)
+    trading_identity: Optional[CanonicalTradingIdentity] = Field(
+        default=None,
+        description="Snapshot canonique moderne; null uniquement pour le legacy historique.",
+    )
 
     @model_validator(mode="after")
     def _enforce_persistable_invariants(self) -> "SetCreate":
@@ -710,6 +745,12 @@ class SetCreate(BaseModel):
             exchange=self.exchange,
             environment=self.environment,
             dry_run=self.dry_run,
+        )
+        assert_canonical_set_context(
+            trading_identity=self.trading_identity,
+            exchange=self.exchange,
+            environment=self.environment,
+            mtf_profile=self.mtf_profile,
         )
         return self
 
@@ -744,11 +785,11 @@ class SetUpdate(BaseModel):
     symbols: Optional[List[str]] = None
     contracts_limit: Optional[int] = Field(default=None, ge=1)
     priority: Optional[int] = None
+    trading_identity: Optional[CanonicalTradingIdentity] = None
 
     @model_validator(mode="before")
     @classmethod
     def _forbid_null_overrides(cls, data: object) -> object:
-        data = _reject_pending_persisted_canonical_identity(data)
         return _reject_explicit_nulls(
             data, fields=cls.model_fields, nullable=_SET_NULLABLE_UPDATE_FIELDS
         )
@@ -775,6 +816,7 @@ class SetRead(BaseModel):
     contracts_limit: Optional[int] = None
     priority: int
     payload: Optional[dict] = None
+    trading_identity: Optional[CanonicalTradingIdentity] = None
     created_at: datetime
     updated_at: datetime
 

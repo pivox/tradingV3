@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
+import pytest
+
 
 def _create_dashboard(client, name="dash_a", enabled=True, description="demo"):
     return client.post(
@@ -20,6 +25,50 @@ def _set_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def _canonical_identity_payload():
+    catalog_hash = "sha256:" + "b" * 64
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
+        "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
+        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "exchange": {"id": "fake"},
+        "environment": {"id": "test"},
+    }
+    canonical = json.dumps(
+        {"config": config, "condition_catalog_hash": catalog_hash},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    layers = [
+        {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
+        for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+    ]
+    return {
+        "mode_id": "scalping",
+        "mode_version": "1.0.0",
+        "setup_id": "scalping.pullback.long",
+        "setup_version": "1.0.0",
+        "config_hash": config_hash,
+        "condition_catalog_hash": catalog_hash,
+        "side": "LONG",
+        "effective_config_reference": "effective-config:cfg-1",
+        "effective_config_snapshot": {
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+            "config": config,
+            "config_hash": config_hash,
+            "condition_catalog_hash": catalog_hash,
+            "ordered_layers": layers,
+            "ordered_files": [layer["path"] for layer in layers],
+            "provenance": {"mode.mode_id": layers[1]},
+            "executable": True,
+            "blockers": [],
+        },
+    }
 
 
 # --- Dashboards -------------------------------------------------------------
@@ -175,7 +224,158 @@ def test_patch_set_partial(api_client):
     assert body["exchange"] == "bitmart"  # inchangé
 
 
-def test_create_set_rejects_canonical_identity_without_persisting(api_client):
+def test_create_read_and_patch_preserve_exact_canonical_identity(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    identity = _canonical_identity_payload()
+    create_payload = _set_payload(
+        set_id="canonical",
+        exchange="fake",
+        environment="test",
+        mtf_profile="scalping",
+        trading_identity=identity,
+    )
+
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets", json=create_payload
+    )
+    assert created.status_code == 201
+    assert created.json()["trading_identity"] == identity
+    assert created.json()["payload"]["trading_identity"] == identity
+    assert created.json()["effective_payload"]["trading_identity"] == identity
+
+    read = api_client.get(f"/dashboards/{dashboard_id}/sets/canonical")
+    assert read.status_code == 200
+    assert read.json()["trading_identity"] == identity
+
+    patched = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/canonical",
+        json={"symbols": ["SOLUSDT"]},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["trading_identity"] == identity
+    assert patched.json()["payload"]["trading_identity"] == identity
+    assert patched.json()["effective_payload"]["trading_identity"] == identity
+
+
+def test_patch_can_promote_historical_legacy_set_with_exact_identity(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="legacy", exchange="fake", environment="test"),
+    )
+    identity = _canonical_identity_payload()
+
+    patched = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/legacy",
+        json={"mtf_profile": "scalping", "trading_identity": identity},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["trading_identity"] == identity
+
+
+@pytest.mark.parametrize(
+    ("override", "error"),
+    [
+        ({"exchange": "okx", "environment": "demo"}, "canonical_exchange_mismatch"),
+        ({"environment": "local"}, "canonical_environment_mismatch"),
+        ({"mtf_profile": "scalper"}, "canonical_profile_mismatch"),
+    ],
+)
+def test_create_rejects_canonical_set_context_contradictions(api_client, override, error):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    payload = _set_payload(
+        set_id="contradiction",
+        exchange="fake",
+        environment="test",
+        mtf_profile="scalping",
+        trading_identity=_canonical_identity_payload(),
+    )
+    payload.update(override)
+
+    response = api_client.post(f"/dashboards/{dashboard_id}/sets", json=payload)
+
+    assert response.status_code == 422
+    assert error in response.text
+    assert api_client.get(f"/dashboards/{dashboard_id}/sets").json() == []
+
+
+@pytest.mark.parametrize(
+    ("patch", "error"),
+    [
+        ({"exchange": "okx"}, "canonical_exchange_mismatch"),
+        ({"environment": "local"}, "canonical_environment_mismatch"),
+        ({"mtf_profile": "scalper"}, "canonical_profile_mismatch"),
+    ],
+)
+def test_patch_validates_merged_canonical_set_context(api_client, patch, error):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    identity = _canonical_identity_payload()
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(
+            set_id="canonical",
+            exchange="fake",
+            environment="test",
+            mtf_profile="scalping",
+            trading_identity=identity,
+        ),
+    )
+    assert created.status_code == 201
+
+    response = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/canonical", json=patch
+    )
+
+    assert response.status_code == 422
+    assert error in response.text
+    persisted = api_client.get(f"/dashboards/{dashboard_id}/sets/canonical").json()
+    assert persisted["trading_identity"] == identity
+    for key in patch:
+        assert persisted[key] == created.json()[key]
+
+
+def test_patch_rejects_replacing_immutable_canonical_identity(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    identity = _canonical_identity_payload()
+    api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(
+            set_id="canonical",
+            exchange="fake",
+            environment="test",
+            mtf_profile="scalping",
+            trading_identity=identity,
+        ),
+    )
+    replacement = _canonical_identity_payload()
+    replacement["effective_config_reference"] = "effective-config:cfg-2"
+
+    response = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/canonical",
+        json={"trading_identity": replacement},
+    )
+
+    assert response.status_code == 422
+    assert "canonical_identity_immutable" in response.text
+    assert api_client.get(
+        f"/dashboards/{dashboard_id}/sets/canonical"
+    ).json()["trading_identity"] == identity
+
+
+def test_historical_set_without_identity_remains_legacy(api_client):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets", json=_set_payload()
+    )
+
+    assert created.status_code == 201
+    assert created.json()["trading_identity"] is None
+    assert "trading_identity" not in created.json()["payload"]
+    assert "trading_identity" not in created.json()["effective_payload"]
+
+
+def test_create_set_rejects_incomplete_canonical_identity_without_persisting(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
 
     resp = api_client.post(
@@ -187,9 +387,7 @@ def test_create_set_rejects_canonical_identity_without_persisting(api_client):
     )
 
     assert resp.status_code == 422
-    assert resp.json()["detail"][0]["msg"] == (
-        "Value error, canonical_persisted_identity_pending_lot_2b"
-    )
+    assert "trading_identity" in resp.text
     assert api_client.get(f"/dashboards/{dashboard_id}/sets").json() == []
 
 
@@ -205,9 +403,7 @@ def test_patch_set_rejects_canonical_identity_without_changing_set(api_client):
     )
 
     assert resp.status_code == 422
-    assert resp.json()["detail"][0]["msg"] == (
-        "Value error, canonical_persisted_identity_pending_lot_2b"
-    )
+    assert "champ 'trading_identity' ne peut pas être null" in resp.text
     persisted = api_client.get(
         f"/dashboards/{dashboard_id}/sets/bitmart_regular_top"
     ).json()
