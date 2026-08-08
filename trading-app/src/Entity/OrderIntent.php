@@ -711,12 +711,45 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
 
     public function hasAnyCanonicalIdentity(): bool
     {
-        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot] as $value) {
+        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->configHash, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->decisionKey, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot, $this->environment, $this->dryRun] as $value) {
             if ($value !== null && $value !== '' && $value !== []) {
                 return true;
             }
         }
         return false;
+    }
+
+    public function hasCanonicalContractMarkers(): bool
+    {
+        foreach ([$this->modeId, $this->modeVersion, $this->setupId, $this->setupVersion, $this->conditionCatalogHash, $this->canonicalSide, $this->decisionId, $this->intentId, $this->canonicalPositionId, $this->tradeId, $this->effectiveConfigReference, $this->effectiveConfigSnapshot] as $value) {
+            if ($value !== null && $value !== '' && $value !== []) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function requireExecutionLineageContext(): LineageContext
+    {
+        $context = $this->requireLineageContext();
+        if (!isset($this->clientOrderId) || trim($this->clientOrderId) === '') {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:client_order_id');
+        }
+        $payload = $context->toArray();
+        $payload['client_order_id'] = $this->clientOrderId;
+        if ($this->exchangeOrderId !== null) {
+            $payload['exchange_order_id'] = $this->exchangeOrderId;
+            $payload['order_id'] = $this->exchangeOrderId;
+        }
+        if ($this->internalTradeId !== null) {
+            $payload['internal_trade_id'] = $this->internalTradeId;
+        }
+        if ($this->internalPositionId !== null) {
+            $payload['internal_position_id'] = $this->internalPositionId;
+        }
+
+        return LineageContext::fromArray($payload);
     }
 
     public function getModeId(): ?string { return $this->modeId; }

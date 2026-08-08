@@ -492,7 +492,7 @@ final class OrderIntentManager
         ?array $rawInputs,
     ): void
     {
-        $storedModern = $existing->hasAnyCanonicalIdentity();
+        $storedModern = $existing->hasCanonicalContractMarkers();
         $requestedModern = $context?->isModern() ?? false;
         if ($storedModern && !$requestedModern) {
             throw new LineageContextException('canonical_identity_required');

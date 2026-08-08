@@ -13,10 +13,13 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
+use App\Entity\OrderIntent;
+use App\Trading\Lineage\Persistence\OrderIntentRecoverySource;
 use App\Exchange\Value\ExactOrderQuantities;
 use App\Exchange\Value\LegacyOrderQuantity;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 class FuturesOrderSyncService
 {
@@ -26,6 +29,8 @@ class FuturesOrderSyncService
         private readonly FuturesOrderTradeRepository $futuresOrderTradeRepository,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
+        #[Autowire(service: \App\Repository\OrderIntentRepository::class)]
+        private readonly ?OrderIntentRecoverySource $orderIntentRepository = null,
     ) {
     }
 
@@ -58,6 +63,15 @@ class FuturesOrderSyncService
 
             if (!$order) {
                 $order = new FuturesOrder();
+            }
+            $intent = $this->findExactOrderIntent($orderId, $clientOrderId, $context);
+            if ($order->lineageClassification() !== 'legacy'
+                && (!$intent instanceof OrderIntent || !$intent->hasAnyCanonicalIdentity())
+            ) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:order_intent_predecessor');
+            }
+            if ($intent instanceof OrderIntent && $intent->hasAnyCanonicalIdentity() && $clientOrderId === null) {
+                $clientOrderId = $intent->getClientOrderId();
             }
 
             $size = $this->legacyIntegerQuantity($orderData, 'size');
@@ -127,6 +141,9 @@ class FuturesOrderSyncService
 
             // Stocker les données brutes
             $order->setRawData($orderData);
+            if ($intent instanceof OrderIntent && $intent->hasAnyCanonicalIdentity()) {
+                $order->applyOrderIntentLineage($intent);
+            }
 
             $this->entityManager->persist($order);
             $this->entityManager->flush();
@@ -140,6 +157,32 @@ class FuturesOrderSyncService
             ]);
             return null;
         }
+    }
+
+    private function findExactOrderIntent(
+        ?string $orderId,
+        ?string $clientOrderId,
+        ExchangeContext $context,
+    ): ?OrderIntent {
+        if ($this->orderIntentRepository === null) {
+            return null;
+        }
+
+        $orderMatches = $orderId !== null
+            ? $this->orderIntentRepository->findByOrderIdForRecovery($orderId, $context)
+            : [];
+        if (count($orderMatches) > 1) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:order_intent_predecessor');
+        }
+        $byOrder = $orderMatches[0] ?? null;
+        $byClient = $clientOrderId !== null
+            ? $this->orderIntentRepository->findOneByClientOrderId($clientOrderId, $context)
+            : null;
+        if ($byOrder instanceof OrderIntent && $byClient instanceof OrderIntent && $byOrder !== $byClient) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:order_intent_predecessor');
+        }
+
+        return $byOrder ?? $byClient;
     }
 
     /**
