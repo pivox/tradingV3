@@ -159,6 +159,12 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(name: 'config_hash', type: Types::STRING, length: 128, nullable: true)]
     private ?string $configHash = null;
 
+    #[ORM\Column(name: 'environment', type: Types::STRING, length: 32, nullable: true)]
+    private ?string $environment = null;
+
+    #[ORM\Column(name: 'dry_run', type: Types::BOOLEAN, nullable: true)]
+    private ?bool $dryRun = null;
+
     #[ORM\Column(name: 'mode_id', length: 64, nullable: true)]
     private ?string $modeId = null;
 
@@ -675,6 +681,8 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
             $this->tradeId = $context->tradeId;
             $this->effectiveConfigReference = $context->effectiveConfigReference;
             $this->effectiveConfigSnapshot = $context->effectiveConfigSnapshot?->toArray();
+            $this->environment = $context->environment;
+            $this->dryRun = $context->dryRun;
         }
         $this->exchange = $context->exchange ?? $this->exchange;
         $this->marketType = $context->marketType ?? $this->marketType;
@@ -684,6 +692,8 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
         $this->orchestrationSetId = $context->orchestrationSetId;
         $this->orchestrationDashboardId = $context->orchestrationDashboardId;
         $this->origin = $context->origin;
+        $this->replayOfRunId = $context->replayOfRunId;
+        $this->replayOfCorrelationId = $context->replayOfCorrelationId;
         $this->attemptNumber = $context->attemptNumber;
 
         return $this->touch();
@@ -722,6 +732,50 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
     public function getEffectiveConfigReference(): ?string { return $this->effectiveConfigReference; }
     /** @return array<string,mixed>|null */
     public function getEffectiveConfigSnapshot(): ?array { return $this->effectiveConfigSnapshot; }
+    public function getEnvironment(): ?string { return $this->environment; }
+    public function isDryRun(): ?bool { return $this->dryRun; }
+
+    public function requireLineageContext(): LineageContext
+    {
+        if (!$this->hasAnyCanonicalIdentity()) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:order_intent');
+        }
+        if ($this->dryRun === null) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:dry_run');
+        }
+
+        return LineageContext::fromArray([
+            'origin' => $this->origin,
+            'contract_kind' => LineageContext::CONTRACT_MODERN,
+            'orchestration_run_id' => $this->orchestrationRunId,
+            'correlation_run_id' => $this->correlationRunId,
+            'orchestration_set_id' => $this->orchestrationSetId,
+            'orchestration_dashboard_id' => $this->orchestrationDashboardId,
+            'exchange' => $this->exchange,
+            'environment' => $this->environment,
+            'market_type' => $this->marketType,
+            'symbol' => isset($this->symbol) ? $this->symbol : null,
+            'replay_of_run_id' => $this->replayOfRunId,
+            'replay_of_correlation_id' => $this->replayOfCorrelationId,
+            'attempt_number' => $this->attemptNumber,
+            'config_hash' => $this->configHash,
+            'dry_run' => $this->dryRun,
+            'mode_id' => $this->modeId,
+            'mode_version' => $this->modeVersion,
+            'setup_id' => $this->setupId,
+            'setup_version' => $this->setupVersion,
+            'condition_catalog_hash' => $this->conditionCatalogHash,
+            'side' => $this->canonicalSide,
+            'decision_id' => $this->decisionId,
+            'decision_key' => $this->decisionKey,
+            'intent_id' => $this->intentId,
+            'position_id' => $this->canonicalPositionId,
+            'exchange_position_id' => $this->canonicalPositionId,
+            'trade_id' => $this->tradeId,
+            'effective_config_reference' => $this->effectiveConfigReference,
+            'effective_config_snapshot' => $this->effectiveConfigSnapshot,
+        ]);
+    }
 
     public function setConfigHash(?string $configHash): self
     {
