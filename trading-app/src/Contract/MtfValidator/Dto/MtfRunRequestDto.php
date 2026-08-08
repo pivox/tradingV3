@@ -142,8 +142,16 @@ final class MtfRunRequestDto
         if (\array_key_exists('lineage_context', $data)) {
             if (!\is_array($data['lineage_context'])
                 || $data['lineage_context'] === []
-                || !\is_string($data['lineage_context']['origin'] ?? null)
-                || !\is_string($data['lineage_context']['contract_kind'] ?? null)
+                || !\in_array($data['lineage_context']['origin'] ?? null, [
+                    LineageContext::ORIGIN_ORCHESTRATOR,
+                    LineageContext::ORIGIN_LEGACY,
+                    LineageContext::ORIGIN_MANUAL,
+                    LineageContext::ORIGIN_REPLAY,
+                ], true)
+                || !\in_array($data['lineage_context']['contract_kind'] ?? null, [
+                    LineageContext::CONTRACT_LEGACY,
+                    LineageContext::CONTRACT_MODERN,
+                ], true)
             ) {
                 throw new \App\Trading\Lineage\LineageContextException('canonical_identity_invalid:lineage_context');
             }

@@ -169,6 +169,23 @@ final class MtfRunnerRequestDtoTest extends TestCase
         yield 'string' => ['truncated'];
         yield 'empty' => [[]];
         yield 'truncated object' => [['truncated' => true]];
+        yield 'blank markers' => [['origin' => '   ', 'contract_kind' => '']];
+        yield 'unknown origin' => [['origin' => 'external', 'contract_kind' => 'modern']];
+        yield 'unknown contract' => [['origin' => 'orchestrator', 'contract_kind' => 'future']];
+    }
+
+    public function testRejectsTwoSimultaneousCanonicalEnvelopes(): void
+    {
+        $lineage = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($lineage['symbol']);
+        $lineage['dry_run'] = true;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:multiple_envelopes');
+
+        MtfRunnerRequestDto::fromArray(self::canonicalRequest(self::canonicalTradingIdentity()) + [
+            'lineage_context' => $lineage,
+        ]);
     }
 
     public function testNormalizesModernTopLevelRuntimeFieldsFromExplicitEnvelope(): void

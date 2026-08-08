@@ -214,8 +214,16 @@ final class MtfRunnerRequestDto
         if (\array_key_exists('lineage_context', $data)
             && (!\is_array($data['lineage_context'])
                 || $data['lineage_context'] === []
-                || !\is_string($data['lineage_context']['origin'] ?? null)
-                || !\is_string($data['lineage_context']['contract_kind'] ?? null))
+                || !\in_array($data['lineage_context']['origin'] ?? null, [
+                    LineageContext::ORIGIN_ORCHESTRATOR,
+                    LineageContext::ORIGIN_LEGACY,
+                    LineageContext::ORIGIN_MANUAL,
+                    LineageContext::ORIGIN_REPLAY,
+                ], true)
+                || !\in_array($data['lineage_context']['contract_kind'] ?? null, [
+                    LineageContext::CONTRACT_LEGACY,
+                    LineageContext::CONTRACT_MODERN,
+                ], true))
         ) {
             throw new LineageContextException('canonical_identity_invalid:lineage_context');
         }
@@ -226,7 +234,7 @@ final class MtfRunnerRequestDto
         }
 
         if ($tradingIdentity !== null) {
-            return LineageContext::fromOrchestratorPayload(array_replace($tradingIdentity, [
+            $identity = LineageContext::fromOrchestratorPayload(array_replace($tradingIdentity, [
                 'origin' => LineageContext::ORIGIN_ORCHESTRATOR,
                 'orchestration_run_id' => $data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null,
                 'correlation_run_id' => $data['correlation_run_id'] ?? null,
@@ -237,6 +245,11 @@ final class MtfRunnerRequestDto
                 'symbol' => self::validateCanonicalRequestSymbols($data),
                 'dry_run' => $data['dry_run'] ?? null,
             ]));
+            if (\array_key_exists('lineage_context', $data)) {
+                throw new LineageContextException('canonical_identity_invalid:multiple_envelopes');
+            }
+
+            return $identity;
         }
 
         if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
