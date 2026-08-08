@@ -54,6 +54,8 @@ class MtfProfile(str, Enum):
 
 
 class Environment(str, Enum):
+    LOCAL = "local"
+    TEST = "test"
     DEMO = "demo"
     TESTNET = "testnet"
     MAINNET = "mainnet"
@@ -92,6 +94,17 @@ class CanonicalEffectiveConfigRequest(BaseModel):
     exchange: Literal["fake", "okx", "hyperliquid"]
     environment: Literal["local", "test", "demo", "testnet", "mainnet"]
     side: Literal["long", "short"]
+
+    @model_validator(mode="after")
+    def _validate_exchange_environment_pair(self) -> "CanonicalEffectiveConfigRequest":
+        allowed = {
+            "fake": {"local", "test"},
+            "okx": {"demo", "mainnet"},
+            "hyperliquid": {"testnet", "mainnet"},
+        }
+        if self.environment not in allowed[self.exchange]:
+            raise ValueError("canonical_exchange_environment_invalid")
+        return self
 
 
 class CanonicalEffectiveConfigLayer(BaseModel):
@@ -403,7 +416,10 @@ class OrchestratorSet(BaseModel):
     exchange: Exchange = Field(..., description="Exchange cible.")
     market_type: MarketType = Field(default=MarketType.PERPETUAL, description="perpetual ou spot.")
     mtf_profile: MtfProfile = Field(default=MtfProfile.REGULAR, description="Profil MTF.")
-    environment: Environment = Field(default=Environment.DEMO, description="demo, testnet, mainnet.")
+    environment: Environment = Field(
+        default=Environment.DEMO,
+        description="local, test, demo, testnet ou mainnet.",
+    )
     dry_run: bool = Field(default=True, description="Simulation ou exécution réelle.")
     workers: int = Field(
         default=1,
@@ -591,6 +607,12 @@ def _reject_explicit_nulls(data: object, *, fields, nullable) -> object:
     return data
 
 
+def _reject_pending_persisted_canonical_identity(data: object) -> object:
+    if isinstance(data, Mapping) and "trading_identity" in data:
+        raise ValueError("canonical_persisted_identity_pending_lot_2b")
+    return data
+
+
 class DashboardCreate(BaseModel):
     """Payload de création d'un dashboard d'orchestration."""
 
@@ -657,13 +679,21 @@ class SetCreate(BaseModel):
     exchange: Exchange = Field(..., description="Exchange cible.")
     market_type: MarketType = Field(default=MarketType.PERPETUAL, description="perpetual ou spot.")
     mtf_profile: MtfProfile = Field(default=MtfProfile.REGULAR, description="Profil MTF.")
-    environment: Environment = Field(default=Environment.DEMO, description="demo, testnet, mainnet.")
+    environment: Environment = Field(
+        default=Environment.DEMO,
+        description="local, test, demo, testnet ou mainnet.",
+    )
     dry_run: bool = Field(default=True, description="Simulation (true). Le live n'est pas persistable en PY-002.")
     workers: int = Field(default=1, ge=1, le=MAX_WORKERS_PER_SET, description="Workers Symfony (borné).")
     sync_tables: bool = Field(default=False, description="Sync des tables exchange côté Symfony.")
     symbols: List[str] = Field(default_factory=list, description="Sélection explicite de symboles.")
     contracts_limit: Optional[int] = Field(default=None, ge=1, description="Sélection dynamique bornée (PY-004).")
     priority: int = Field(default=0, description="Ordre / priorité fonctionnelle.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_pending_canonical_identity(cls, data: object) -> object:
+        return _reject_pending_persisted_canonical_identity(data)
 
     @model_validator(mode="after")
     def _enforce_persistable_invariants(self) -> "SetCreate":
@@ -718,6 +748,7 @@ class SetUpdate(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _forbid_null_overrides(cls, data: object) -> object:
+        data = _reject_pending_persisted_canonical_identity(data)
         return _reject_explicit_nulls(
             data, fields=cls.model_fields, nullable=_SET_NULLABLE_UPDATE_FIELDS
         )

@@ -60,7 +60,7 @@ def _canonical_identity() -> CanonicalTradingIdentity:
         "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
         "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
         "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
-        "exchange": {"id": "fake"}, "environment": {"id": "demo"},
+        "exchange": {"id": "fake"}, "environment": {"id": "test"},
     }
     canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
     config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
@@ -70,7 +70,7 @@ def _canonical_identity() -> CanonicalTradingIdentity:
         config_hash=config_hash, condition_catalog_hash=catalog_hash, side="LONG",
         effective_config_reference="effective-config:cfg-1",
         effective_config_snapshot={
-            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "demo", "side": "long"},
+            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
             "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
             "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
             "provenance": {"mode.mode_id": layers[1]},
@@ -97,7 +97,9 @@ def test_build_payload_forces_sync_tables_false_and_attaches_snapshot():
 
 def test_build_payload_carries_exact_canonical_identity_and_hash_on_retry():
     identity = _canonical_identity()
-    a_set = _make_set(symbols=("BTCUSDT",), trading_identity=identity)
+    a_set = _make_set(
+        symbols=("BTCUSDT",), environment="test", trading_identity=identity
+    )
 
     first = build_mtf_payload(a_set, None)
     retry = build_mtf_payload(a_set, None)
@@ -195,7 +197,12 @@ def test_run_mtf_set_failed_on_http_error():
 
 def test_run_mtf_set_propagates_canonical_lineage_headers_and_identity():
     identity = _canonical_identity()
-    a_set = _make_set(set_id="modern-set", symbols=("BTCUSDT",), trading_identity=identity)
+    a_set = _make_set(
+        set_id="modern-set",
+        symbols=("BTCUSDT",),
+        environment="test",
+        trading_identity=identity,
+    )
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -225,7 +232,7 @@ def test_run_mtf_set_propagates_canonical_lineage_headers_and_identity():
 
 
 def test_run_mtf_set_normalizes_canonical_run_lineage_headers():
-    a_set = _make_set(trading_identity=_canonical_identity())
+    a_set = _make_set(environment="test", trading_identity=_canonical_identity())
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -245,7 +252,7 @@ def test_run_mtf_set_normalizes_canonical_run_lineage_headers():
 @pytest.mark.parametrize("run_id", [None, "", " \t "])
 def test_run_mtf_set_rejects_canonical_set_without_run_lineage_before_http(run_id):
     calls: list = []
-    a_set = _make_set(trading_identity=_canonical_identity())
+    a_set = _make_set(environment="test", trading_identity=_canonical_identity())
 
     class NoDispatchClient:
         async def post(self, *args, **kwargs):
