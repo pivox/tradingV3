@@ -31,6 +31,23 @@ final readonly class LineageContext
         'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
     ];
 
+    /** @var string[] */
+    private const TRADE_STAGE_ID_FIELDS = [
+        'trading_decision_id',
+        'order_intent_id',
+        'internal_trade_id',
+        'internal_position_id',
+        'client_order_id',
+        'exchange_order_id',
+        'exchange_position_id',
+        'decision_id',
+        'decision_key',
+        'intent_id',
+        'order_id',
+        'position_id',
+        'trade_id',
+    ];
+
     public string $contractKind;
 
     public function __construct(
@@ -109,6 +126,13 @@ final readonly class LineageContext
                 'environment' => $environment,
                 'market_type' => $marketType,
                 'symbol' => $symbol,
+                'trading_decision_id' => $tradingDecisionId,
+                'order_intent_id' => $orderIntentId,
+                'internal_trade_id' => $internalTradeId,
+                'internal_position_id' => $internalPositionId,
+                'client_order_id' => $clientOrderId,
+                'exchange_order_id' => $exchangeOrderId,
+                'exchange_position_id' => $exchangePositionId,
                 'decision_id' => $decisionId ?? $tradingDecisionId,
                 'decision_key' => $decisionKey,
                 'intent_id' => $intentId ?? $orderIntentId,
@@ -513,6 +537,13 @@ final readonly class LineageContext
         }
         if (($payload['symbol'] ?? null) !== null && (!\is_string($payload['symbol']) || preg_match('/\A[A-Z0-9]{2,32}\z/D', $payload['symbol']) !== 1)) {
             throw new LineageContextException('canonical_identity_invalid:symbol');
+        }
+        if (($payload['symbol'] ?? null) === null) {
+            foreach (self::TRADE_STAGE_ID_FIELDS as $field) {
+                if (($payload[$field] ?? null) !== null) {
+                    throw new LineageContextException('canonical_identity_missing:symbol');
+                }
+            }
         }
         foreach (['orchestration_run_id' => 255, 'correlation_run_id' => 96, 'orchestration_set_id' => 96, 'orchestration_dashboard_id' => 96] as $idField => $max) {
             if (isset($payload[$idField]) && $payload[$idField] !== null && !self::isSafeId($payload[$idField], $max)) {

@@ -8,6 +8,7 @@ use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\JsonResponse;
 
@@ -113,6 +114,107 @@ final class LineageContextTest extends TestCase
         $this->expectExceptionMessage('canonical_identity_missing:symbol');
 
         $identity->assertTradeBoundary('BTCUSDT', 'LONG', 'fake', 'perpetual', false);
+    }
+
+    #[DataProvider('unboundTradeStageIdProvider')]
+    public function testRequestStageCanonicalIdentityWithoutSymbolRejectsTradeStageIds(string $field, string $value): void
+    {
+        $payload = $this->canonicalPayload();
+        unset($payload['symbol']);
+        $payload[$field] = $value;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        LineageContext::fromOrchestratorPayload($payload);
+    }
+
+    /** @return iterable<string, array{string,string}> */
+    public static function unboundTradeStageIdProvider(): iterable
+    {
+        $decisionId = '018f47a2-4f42-7e1b-8d3a-4dc9571bb11b';
+
+        yield 'trading decision compatibility id' => ['trading_decision_id', $decisionId];
+        yield 'order intent compatibility id' => ['order_intent_id', 'intent-compat-1'];
+        yield 'internal trade compatibility id' => ['internal_trade_id', 'trade-compat-1'];
+        yield 'internal position compatibility id' => ['internal_position_id', 'position-compat-1'];
+        yield 'client order compatibility id' => ['client_order_id', 'client-order-1'];
+        yield 'exchange order compatibility id' => ['exchange_order_id', 'exchange-order-1'];
+        yield 'exchange position compatibility id' => ['exchange_position_id', 'exchange-position-1'];
+        yield 'decision id' => ['decision_id', $decisionId];
+        yield 'decision key' => ['decision_key', 'decision-key-1'];
+        yield 'intent id' => ['intent_id', 'intent-1'];
+        yield 'order id' => ['order_id', 'order-1'];
+        yield 'position id' => ['position_id', 'position-1'];
+        yield 'trade id' => ['trade_id', 'trade-1'];
+    }
+
+    public function testDirectUnboundCanonicalConstructionRejectsCompatibilityStageId(): void
+    {
+        $bound = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        new LineageContext(
+            origin: $bound->origin,
+            orchestrationRunId: $bound->orchestrationRunId,
+            orchestrationSetId: $bound->orchestrationSetId,
+            exchange: $bound->exchange,
+            environment: $bound->environment,
+            marketType: $bound->marketType,
+            clientOrderId: 'client-order-1',
+            configHash: $bound->configHash,
+            modeId: $bound->modeId,
+            modeVersion: $bound->modeVersion,
+            setupId: $bound->setupId,
+            setupVersion: $bound->setupVersion,
+            conditionCatalogHash: $bound->conditionCatalogHash,
+            side: $bound->side,
+            effectiveConfigReference: $bound->effectiveConfigReference,
+            effectiveConfigSnapshot: $bound->effectiveConfigSnapshot,
+            contractKind: LineageContext::CONTRACT_MODERN,
+        );
+    }
+
+    public function testUnboundCanonicalIdentityCannotAcquireDecisionStageIds(): void
+    {
+        $identity = $this->unboundCanonicalIdentity();
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        $identity->withDecision('018f47a2-4f42-7e1b-8d3a-4dc9571bb11b', 'decision-key-1');
+    }
+
+    public function testUnboundCanonicalIdentityCannotAcquireIntentStageId(): void
+    {
+        $identity = $this->unboundCanonicalIdentity();
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        $identity->withIntent('intent-1');
+    }
+
+    public function testUnboundCanonicalIdentityCannotAcquireExecutionStageIds(): void
+    {
+        $identity = $this->unboundCanonicalIdentity();
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:symbol');
+
+        $identity->withExecution('order-1', 'position-1', 'trade-1');
+    }
+
+    public function testUnboundCanonicalIdentityMayCarryReplayRequestMetadata(): void
+    {
+        $replay = $this->unboundCanonicalIdentity()->asReplay('run-replay', 'run-source', 'corr-source', 2);
+
+        self::assertNull($replay->symbol);
+        self::assertSame('run-source', $replay->replayOfRunId);
+        self::assertSame('corr-source', $replay->replayOfCorrelationId);
+        self::assertEquals($replay, LineageContext::fromArray($replay->toArray()));
     }
 
     public function testExplicitCanonicalSymbolStillPassesAndMismatchStillFailsAtTradeBoundary(): void
@@ -373,5 +475,13 @@ final class LineageContextTest extends TestCase
             ]),
             'dry_run' => true,
         ];
+    }
+
+    private function unboundCanonicalIdentity(): LineageContext
+    {
+        $payload = $this->canonicalPayload();
+        unset($payload['symbol']);
+
+        return LineageContext::fromOrchestratorPayload($payload);
     }
 }
