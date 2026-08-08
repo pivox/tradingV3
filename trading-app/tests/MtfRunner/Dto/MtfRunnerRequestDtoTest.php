@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\MtfRunner\Dto\MtfRunnerRequestDto;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\Trading\Lineage\LineageContextException;
 use App\Tests\Trading\Lineage\CanonicalSnapshotMetadataFixture;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -56,8 +57,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
     public function testBuildsUnboundCanonicalIdentityWhenActiveUniverseRequestOmitsSymbols(): void
     {
-        $tradingIdentity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
-        unset($tradingIdentity['symbol']);
+        $tradingIdentity = self::canonicalTradingIdentity();
 
         $dto = MtfRunnerRequestDto::fromArray([
             'run_id' => 'run-fixture',
@@ -71,6 +71,72 @@ final class MtfRunnerRequestDtoTest extends TestCase
         self::assertSame([], $dto->symbols);
         self::assertTrue($dto->lineageContext->isModern());
         self::assertNull($dto->lineageContext->symbol);
+    }
+
+    public function testRejectsForbiddenCanonicalIdentityFieldsInSortedOrder(): void
+    {
+        $tradingIdentity = self::canonicalTradingIdentity();
+        $tradingIdentity['symbol'] = 'sensitive-symbol';
+        $tradingIdentity['exchange'] = 'sensitive-exchange';
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_forbidden:exchange');
+
+        MtfRunnerRequestDto::fromArray(self::canonicalRequest($tradingIdentity));
+    }
+
+    /** @param array<string,mixed> $tradingIdentity */
+    #[DataProvider('forbiddenCanonicalIdentityFields')]
+    public function testRejectsEveryServerOwnedCanonicalIdentityField(
+        array $tradingIdentity,
+        string $expectedErrorCode,
+    ): void {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage($expectedErrorCode);
+
+        MtfRunnerRequestDto::fromArray(self::canonicalRequest($tradingIdentity));
+    }
+
+    /** @return iterable<string, array{array<string,mixed>, string}> */
+    public static function forbiddenCanonicalIdentityFields(): iterable
+    {
+        foreach (['orchestration_run_id', 'set_id', 'exchange', 'symbol'] as $field) {
+            $tradingIdentity = self::canonicalTradingIdentity();
+            $tradingIdentity[$field] = 'sensitive-' . $field;
+
+            yield $field => [$tradingIdentity, 'canonical_identity_forbidden:' . $field];
+        }
+    }
+
+    public function testNormalizesCanonicalBindingSymbolBeforeStrictValidation(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray(self::canonicalRequest(
+            self::canonicalTradingIdentity(),
+            ['  btcusdt  '],
+        ));
+
+        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+    }
+
+    public function testNormalizesBlankCanonicalBindingSymbolToNull(): void
+    {
+        $dto = MtfRunnerRequestDto::fromArray(self::canonicalRequest(
+            self::canonicalTradingIdentity(),
+            ['   '],
+        ));
+
+        self::assertNull($dto->lineageContext->symbol);
+    }
+
+    public function testRejectsMalformedCanonicalBindingSymbolAfterNormalization(): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:symbol');
+
+        MtfRunnerRequestDto::fromArray(self::canonicalRequest(
+            self::canonicalTradingIdentity(),
+            ['  btc/usdt  '],
+        ));
     }
     /**
      * @return iterable<string, array{0: string, 1: Exchange}>
@@ -268,6 +334,42 @@ final class MtfRunnerRequestDtoTest extends TestCase
         self::assertSame('corr-source', $roundTrip->lineageContext->replayOfCorrelationId);
         self::assertSame(2, $roundTrip->lineageContext->attemptNumber);
         self::assertSame('cfg-replay', $roundTrip->lineageContext->configHash);
+    }
+
+    /** @return array<string,mixed> */
+    private static function canonicalTradingIdentity(): array
+    {
+        $identity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+
+        return array_intersect_key($identity, array_flip([
+            'mode_id',
+            'mode_version',
+            'setup_id',
+            'setup_version',
+            'config_hash',
+            'condition_catalog_hash',
+            'side',
+            'effective_config_reference',
+            'effective_config_snapshot',
+        ]));
+    }
+
+    /**
+     * @param array<string,mixed> $tradingIdentity
+     * @param string[] $symbols
+     * @return array<string,mixed>
+     */
+    private static function canonicalRequest(array $tradingIdentity, array $symbols = ['BTCUSDT']): array
+    {
+        return [
+            'symbols' => $symbols,
+            'run_id' => 'run-fixture',
+            'orchestration_set_id' => 'set-fixture',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'dry_run' => true,
+            'trading_identity' => $tradingIdentity,
+        ];
     }
 
     public function testCreatesTypedLineageContextForOrchestratorAndLegacy(): void

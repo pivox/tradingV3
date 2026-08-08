@@ -248,7 +248,7 @@ class RunnerController extends AbstractController
             }
             return $this->json($errorResponse, Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (LineageContextException $e) {
-            $errorCode = preg_match('/^canonical_identity_(?:missing|invalid|mismatch):[a-zA-Z0-9_]+$/D', $e->getMessage()) === 1
+            $errorCode = preg_match('/^canonical_identity_(?:missing|invalid|mismatch|forbidden):[a-zA-Z0-9_]+$/D', $e->getMessage()) === 1
                 ? $e->getMessage()
                 : 'canonical_identity_invalid';
             $this->logger->warning('[Runner Controller] Canonical trading identity rejected', [

@@ -308,6 +308,122 @@ final class RunnerControllerTest extends TestCase
         self::assertArrayNotHasKey('symbol', $body['data']['run']['lineage'] ?? []);
     }
 
+    public function testLowercaseCanonicalSymbolReachesPolicyPreflightWithoutProviderWork(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method(self::anything());
+        $contractRepository = $this->createMock(ContractRepository::class);
+        $contractRepository->expects(self::never())->method(self::anything());
+        $mainProvider = $this->createMock(MainProviderInterface::class);
+        $mainProvider->expects(self::never())->method(self::anything());
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'run-canonical',
+                'HTTP_X_RUN_CORRELATION_ID' => 'run-canonical',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'set-canonical',
+            ],
+            content: json_encode([
+                'symbols' => ['  btcusdt  '],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => self::canonicalTradingIdentity(),
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService(
+                $validator,
+                contractRepository: $contractRepository,
+                mainProvider: $mainProvider,
+            )),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertSame('rejected', $body['data']['run']['status'] ?? null);
+        self::assertSame('canonical_config_invalid:roots', $body['data']['run']['reason'] ?? null);
+        self::assertSame('BTCUSDT', $body['data']['run']['lineage']['symbol'] ?? null);
+    }
+
+    /** @param array<string,mixed> $nestedFields */
+    #[\PHPUnit\Framework\Attributes\DataProvider('serverOwnedNestedIdentityFields')]
+    public function testRejectsServerOwnedNestedIdentityWithoutLineageOrAuditWork(
+        array $nestedFields,
+        string $expectedErrorCode,
+        string $sensitiveValue,
+    ): void {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method(self::anything());
+        $auditLogger = $this->createMock(AuditLoggerInterface::class);
+        $auditLogger->expects(self::never())->method(self::anything());
+        $tradingIdentity = self::canonicalTradingIdentity();
+        foreach ($nestedFields as $field => $value) {
+            $tradingIdentity[$field] = $value;
+        }
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'server-run',
+                'HTTP_X_RUN_CORRELATION_ID' => 'server-run',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'server-set',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => $tradingIdentity,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator, auditLogger: $auditLogger)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame($expectedErrorCode, $body['error_code'] ?? null);
+        self::assertSame('Canonical trading identity rejected.', $body['message'] ?? null);
+        self::assertStringNotContainsString($sensitiveValue, (string) $response->getContent());
+        self::assertArrayNotHasKey('data', $body);
+    }
+
+    /** @return iterable<string, array{array<string,mixed>, string, string}> */
+    public static function serverOwnedNestedIdentityFields(): iterable
+    {
+        yield 'run id' => [
+            ['orchestration_run_id' => 'sensitive-attacker-run'],
+            'canonical_identity_forbidden:orchestration_run_id',
+            'sensitive-attacker-run',
+        ];
+        yield 'set id' => [
+            ['set_id' => 'sensitive-attacker-set'],
+            'canonical_identity_forbidden:set_id',
+            'sensitive-attacker-set',
+        ];
+        yield 'exchange and symbol are sorted deterministically' => [
+            ['symbol' => 'SENSITIVEATTACKERSYMBOL', 'exchange' => 'sensitive-attacker-exchange'],
+            'canonical_identity_forbidden:exchange',
+            'sensitive-attacker-exchange',
+        ];
+    }
+
     /**
      * @param array<string, mixed> $tradingIdentity
      */
@@ -704,6 +820,7 @@ final class RunnerControllerTest extends TestCase
         ?TradeDecisionDispatcherInterface $tradeDecisionDispatcher = null,
         ?ContractRepository $contractRepository = null,
         ?MainProviderInterface $mainProvider = null,
+        ?AuditLoggerInterface $auditLogger = null,
     ): MtfRunnerService
     {
         $logger = new NullLogger();
@@ -740,7 +857,7 @@ final class RunnerControllerTest extends TestCase
             $logger,
             $tradeDecisionDispatcher ?? $this->createMock(TradeDecisionDispatcherInterface::class),
             new CanonicalMtfPolicyPreflight(),
-            $this->createMock(AuditLoggerInterface::class),
+            $auditLogger ?? $this->createMock(AuditLoggerInterface::class),
             '/tmp',
             $this->createMock(ClockInterface::class),
         );
