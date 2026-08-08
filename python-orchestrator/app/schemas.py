@@ -418,11 +418,15 @@ def assert_canonical_set_context(
 ) -> None:
     """Valide la cohérence entre colonnes du set et identité moderne.
 
-    Les anciens profils restent acceptés pour les sets legacy. Dès qu'une
-    identité canonique existe, le profil est le ``mode_id`` moderne exact :
-    aucun alias ``regular``/``scalper``/``scalper_micro`` n'est accepté.
+    Les anciens profils restent acceptés pour les sets legacy. Les profils
+    modernes exigent une identité canonique, puis le profil doit être son
+    ``mode_id`` exact : aucun alias ``regular``/``scalper``/``scalper_micro``
+    n'est accepté.
     """
+    profile_value = getattr(mtf_profile, "value", mtf_profile)
     if trading_identity is None:
+        if profile_value in {"day_trading", "scalping", "micro_scalping"}:
+            raise ValueError("canonical_identity_required")
         return
     identity = (
         trading_identity
@@ -431,7 +435,6 @@ def assert_canonical_set_context(
     )
     exchange_value = getattr(exchange, "value", exchange)
     environment_value = getattr(environment, "value", environment)
-    profile_value = getattr(mtf_profile, "value", mtf_profile)
     request = identity.effective_config_snapshot.request
     if exchange_value != request.exchange:
         raise ValueError("canonical_exchange_mismatch")

@@ -375,6 +375,60 @@ def test_historical_set_without_identity_remains_legacy(api_client):
     assert "trading_identity" not in created.json()["effective_payload"]
 
 
+@pytest.mark.parametrize("mtf_profile", ["day_trading", "scalping", "micro_scalping"])
+def test_create_requires_identity_for_every_modern_profile(api_client, mtf_profile):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+
+    response = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="modern", mtf_profile=mtf_profile),
+    )
+
+    assert response.status_code == 422
+    assert "canonical_identity_required" in response.text
+    assert api_client.get(f"/dashboards/{dashboard_id}/sets").json() == []
+
+
+@pytest.mark.parametrize("mtf_profile", ["day_trading", "scalping", "micro_scalping"])
+def test_patch_merged_state_requires_identity_for_modern_profile(
+    api_client, mtf_profile
+):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id="legacy", mtf_profile="regular"),
+    ).json()
+
+    response = api_client.patch(
+        f"/dashboards/{dashboard_id}/sets/legacy",
+        json={"mtf_profile": mtf_profile},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "canonical_identity_required"
+    assert api_client.get(f"/dashboards/{dashboard_id}/sets/legacy").json() == created
+
+
+@pytest.mark.parametrize("mtf_profile", ["regular", "scalper", "scalper_micro"])
+def test_legacy_profiles_without_identity_remain_accepted_and_readable(
+    api_client, mtf_profile
+):
+    dashboard_id = _create_dashboard(api_client).json()["id"]
+
+    created = api_client.post(
+        f"/dashboards/{dashboard_id}/sets",
+        json=_set_payload(set_id=f"legacy-{mtf_profile}", mtf_profile=mtf_profile),
+    )
+
+    assert created.status_code == 201
+    assert created.json()["trading_identity"] is None
+    read = api_client.get(
+        f"/dashboards/{dashboard_id}/sets/legacy-{mtf_profile}"
+    )
+    assert read.status_code == 200
+    assert read.json()["trading_identity"] is None
+
+
 def test_create_set_rejects_incomplete_canonical_identity_without_persisting(api_client):
     dashboard_id = _create_dashboard(api_client).json()["id"]
 

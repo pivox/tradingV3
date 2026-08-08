@@ -558,6 +558,10 @@ async def run_persisted_set(
     que d'envoyer un ``/api/mtf/run`` sans ``symbols`` (qui exécuterait tout
     l'univers actif).
     """
+    normalized_run_id = run_id.strip() if run_id is not None else None
+    if getattr(orm_set, "trading_identity", None) is not None and not normalized_run_id:
+        raise ValueError("canonical_lineage_missing:run_id")
+
     # Allow-list : repart des colonnes ORM, jamais du JSON stocké (anti control-flag
     # et anti-divergence). Forme + clamp workers délégués à `effective_set_payload`,
     # la fonction canonique partagée avec `SetRead.effective_payload` (PY-007) : la
@@ -585,7 +589,7 @@ async def run_persisted_set(
         base_url,
         orm_set.set_id,
         payload,
-        run_id=run_id,
+        run_id=normalized_run_id,
         dashboard_id=getattr(orm_set, "dashboard_id", None),
     )
     result["payload_sent"] = payload

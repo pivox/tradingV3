@@ -967,6 +967,35 @@ def test_run_persisted_set_retry_preserves_exact_identity_from_column():
     assert retry["payload_sent"]["trading_identity"] == identity
 
 
+@pytest.mark.parametrize("run_id", [None, "", " \t "])
+def test_run_persisted_set_rejects_canonical_set_without_run_lineage_before_http(
+    run_id,
+):
+    identity = _canonical_identity().model_dump(mode="json", exclude_none=True)
+    orm = _orm_set(
+        set_id="canonical",
+        exchange="fake",
+        mtf_profile="scalping",
+        trading_identity=identity,
+        symbols=["BTCUSDT"],
+    )
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_persisted_set(
+                client, "http://sym", orm, None, run_id=run_id
+            )
+
+    with pytest.raises(ValueError, match="^canonical_lineage_missing:run_id$"):
+        asyncio.run(_run())
+    assert calls == []
+
+
 def test_run_persisted_set_clamps_oversized_workers():
     # Ligne écrite hors API avec workers>1 (aucune contrainte DB) : le dispatch
     # doit clamper à la borne (politique « workers=1 côté Symfony »).
