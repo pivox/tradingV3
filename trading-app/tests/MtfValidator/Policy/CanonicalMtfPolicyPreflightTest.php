@@ -24,7 +24,8 @@ final class CanonicalMtfPolicyPreflightTest extends TestCase
             CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config()),
         );
 
-        self::assertSame('canonical_risk_pct_pending_304', $rejection?->reason);
+        self::assertNotNull($rejection);
+        self::assertSame('canonical_risk_pct_pending_304', $rejection->reason);
         self::assertSame([
             'canonical_risk_pct_pending_304',
             'canonical_daily_loss_policy_pending_304',
@@ -32,7 +33,7 @@ final class CanonicalMtfPolicyPreflightTest extends TestCase
             'canonical_max_concurrent_positions_pending_304',
             'canonical_mode_exposure_cap_pending_304',
             'canonical_minimum_net_r_pending_304',
-        ], array_column($rejection?->blockers ?? [], 'code'));
+        ], array_column($rejection->blockers, 'code'));
     }
 
     public function testRejectsNonExecutableModernSnapshotAtEffectiveConfigPath(): void
@@ -43,7 +44,8 @@ final class CanonicalMtfPolicyPreflightTest extends TestCase
 
         $rejection = (new CanonicalMtfPolicyPreflight())->reject(LineageContext::fromArray($payload));
 
-        self::assertSame('canonical_contract_not_executable', $rejection?->reason);
-        self::assertSame([['code' => 'canonical_contract_not_executable', 'path' => 'effective_config_snapshot']], $rejection?->blockers);
+        self::assertNotNull($rejection);
+        self::assertSame('canonical_contract_not_executable', $rejection->reason);
+        self::assertSame([['code' => 'canonical_contract_not_executable', 'path' => 'effective_config_snapshot']], $rejection->blockers);
     }
 }
