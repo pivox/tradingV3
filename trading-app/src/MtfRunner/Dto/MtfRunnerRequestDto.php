@@ -171,14 +171,14 @@ final class MtfRunnerRequestDto
      */
     private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
-        if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
-            return LineageContext::fromArray($data['lineage_context']);
+        $tradingIdentity = null;
+        if (\array_key_exists('trading_identity', $data)) {
+            $tradingIdentity = $data['trading_identity'];
+            self::assertCanonicalTradingIdentityInput($tradingIdentity);
         }
 
-        if (isset($data['trading_identity']) && \is_array($data['trading_identity'])) {
-            self::assertCanonicalTradingIdentityInput($data['trading_identity']);
-
-            return LineageContext::fromOrchestratorPayload(array_replace($data['trading_identity'], [
+        if ($tradingIdentity !== null) {
+            return LineageContext::fromOrchestratorPayload(array_replace($tradingIdentity, [
                 'origin' => LineageContext::ORIGIN_ORCHESTRATOR,
                 'orchestration_run_id' => $data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null,
                 'correlation_run_id' => $data['correlation_run_id'] ?? null,
@@ -189,6 +189,10 @@ final class MtfRunnerRequestDto
                 'symbol' => self::canonicalBindingSymbol($data),
                 'dry_run' => $data['dry_run'] ?? null,
             ]));
+        }
+
+        if (isset($data['lineage_context']) && \is_array($data['lineage_context'])) {
+            return LineageContext::fromArray($data['lineage_context']);
         }
 
         $hasOrchestratorLineage = self::nonEmptyString($data['run_id'] ?? $data['original_run_id'] ?? $data['orchestration_run_id'] ?? null) !== null
@@ -215,9 +219,13 @@ final class MtfRunnerRequestDto
         );
     }
 
-    /** @param array<string,mixed> $identity */
-    private static function assertCanonicalTradingIdentityInput(array $identity): void
+    /** @phpstan-assert array<string,mixed> $identity */
+    public static function assertCanonicalTradingIdentityInput(mixed $identity): void
     {
+        if (!\is_array($identity)) {
+            throw new LineageContextException('canonical_identity_invalid:trading_identity');
+        }
+
         $keys = array_map(static fn(int|string $key): string => (string) $key, array_keys($identity));
         sort($keys, SORT_STRING);
 
@@ -225,6 +233,18 @@ final class MtfRunnerRequestDto
             if (!\in_array($key, self::CANONICAL_TRADING_IDENTITY_INPUT_KEYS, true)) {
                 throw new LineageContextException('canonical_identity_forbidden:' . $key);
             }
+        }
+
+        $hasModeId = self::nonEmptyString($identity['mode_id'] ?? null) !== null;
+        $hasSetupId = self::nonEmptyString($identity['setup_id'] ?? null) !== null;
+        if (!$hasModeId && !$hasSetupId) {
+            throw new LineageContextException('canonical_identity_invalid:trading_identity');
+        }
+        if (!$hasModeId) {
+            throw new LineageContextException('canonical_identity_missing:mode_id');
+        }
+        if (!$hasSetupId) {
+            throw new LineageContextException('canonical_identity_missing:setup_id');
         }
     }
 

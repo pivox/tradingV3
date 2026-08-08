@@ -424,6 +424,87 @@ final class RunnerControllerTest extends TestCase
         ];
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('malformedExplicitTradingIdentities')]
+    public function testRejectsMalformedExplicitTradingIdentityBeforePeripheralWork(
+        mixed $tradingIdentity,
+        string $expectedErrorCode,
+        string $sensitiveValue,
+    ): void {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method(self::anything());
+        $contractRepository = $this->createMock(ContractRepository::class);
+        $contractRepository->expects(self::never())->method(self::anything());
+        $mainProvider = $this->createMock(MainProviderInterface::class);
+        $mainProvider->expects(self::never())->method(self::anything());
+        $auditLogger = $this->createMock(AuditLoggerInterface::class);
+        $auditLogger->expects(self::never())->method(self::anything());
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::never())->method('debug');
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'server-run',
+                'HTTP_X_RUN_CORRELATION_ID' => 'server-run',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'server-set',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => false,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => $tradingIdentity,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes(), $logger)->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService(
+                $validator,
+                contractRepository: $contractRepository,
+                mainProvider: $mainProvider,
+                auditLogger: $auditLogger,
+            )),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame($expectedErrorCode, $body['error_code'] ?? null);
+        self::assertSame('Canonical trading identity rejected.', $body['message'] ?? null);
+        self::assertStringNotContainsString($sensitiveValue, (string) $response->getContent());
+        self::assertArrayNotHasKey('data', $body);
+    }
+
+    /** @return iterable<string, array{mixed, string, string}> */
+    public static function malformedExplicitTradingIdentities(): iterable
+    {
+        yield 'non-array string' => [
+            'sensitive-non-array-identity',
+            'canonical_identity_invalid:trading_identity',
+            'sensitive-non-array-identity',
+        ];
+        yield 'empty object' => [
+            (object) [],
+            'canonical_identity_invalid:trading_identity',
+            'server-run',
+        ];
+        yield 'mode only' => [
+            ['mode_id' => 'scalping'],
+            'canonical_identity_missing:setup_id',
+            'scalping',
+        ];
+        yield 'setup only' => [
+            ['setup_id' => 'scalping.pullback.long'],
+            'canonical_identity_missing:mode_id',
+            'scalping.pullback.long',
+        ];
+    }
+
     /**
      * @param array<string, mixed> $tradingIdentity
      */

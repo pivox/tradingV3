@@ -96,7 +96,12 @@ class RunnerController extends AbstractController
                 $data,
             );
 
-            $tradingIdentity = \is_array($data['trading_identity'] ?? null) ? $data['trading_identity'] : null;
+            $hasTradingIdentity = \array_key_exists('trading_identity', $data);
+            $tradingIdentity = null;
+            if ($hasTradingIdentity) {
+                $tradingIdentity = $data['trading_identity'];
+                MtfRunnerRequestDto::assertCanonicalTradingIdentityInput($tradingIdentity);
+            }
             $explicitLegacyProfile = $data['profile'] ?? $data['mtf_profile'] ?? null;
             $genericMode = $data['mode'] ?? null;
             $genericLegacyProfile = null;
@@ -109,7 +114,7 @@ class RunnerController extends AbstractController
             $resolvedProfile = $tradingIdentity['mode_id'] ?? $explicitLegacyProfile ?? $genericLegacyProfile;
 
             if (
-                $tradingIdentity === null
+                !$hasTradingIdentity
                 && !array_key_exists('profile', $data)
                 && !array_key_exists('mtf_profile', $data)
                 && $genericLegacyProfile === null
@@ -143,7 +148,7 @@ class RunnerController extends AbstractController
                 'sync_tables' => filter_var($data['sync_tables'] ?? true, FILTER_VALIDATE_BOOLEAN),
                 'process_tp_sl' => filter_var($data['process_tp_sl'] ?? true, FILTER_VALIDATE_BOOLEAN),
                 'profile' => $resolvedProfile,
-                'trading_identity' => $tradingIdentity,
+                ...($hasTradingIdentity ? ['trading_identity' => $tradingIdentity] : []),
                 'mtf_profile' => $data['mtf_profile'] ?? null,
                 'validation_mode' => $data['validation_mode'] ?? null,
                 'context_mode' => $data['context_mode'] ?? null,

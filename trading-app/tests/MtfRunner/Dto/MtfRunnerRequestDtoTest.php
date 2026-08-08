@@ -108,6 +108,70 @@ final class MtfRunnerRequestDtoTest extends TestCase
         }
     }
 
+    #[DataProvider('malformedTradingIdentityInputs')]
+    public function testRejectsEveryExplicitMalformedTradingIdentity(
+        mixed $tradingIdentity,
+        string $expectedErrorCode,
+    ): void {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage($expectedErrorCode);
+
+        MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'trading_identity' => $tradingIdentity,
+        ]);
+    }
+
+    /** @return iterable<string, array{mixed, string}> */
+    public static function malformedTradingIdentityInputs(): iterable
+    {
+        yield 'null' => [null, 'canonical_identity_invalid:trading_identity'];
+        yield 'string' => ['sensitive-non-array-identity', 'canonical_identity_invalid:trading_identity'];
+        yield 'empty object' => [[], 'canonical_identity_invalid:trading_identity'];
+        yield 'non-canonical allowed field only' => [
+            ['requested_mode_id' => 'scalping'],
+            'canonical_identity_invalid:trading_identity',
+        ];
+        yield 'mode only' => [
+            ['mode_id' => 'scalping'],
+            'canonical_identity_missing:setup_id',
+        ];
+        yield 'setup only' => [
+            ['setup_id' => 'scalping.pullback.long'],
+            'canonical_identity_missing:mode_id',
+        ];
+    }
+
+    public function testRejectsMalformedTradingIdentityEvenWhenLineageContextIsAlsoPresent(): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:trading_identity');
+
+        MtfRunnerRequestDto::fromArray([
+            'lineage_context' => ['origin' => 'legacy', 'contract_kind' => 'legacy'],
+            'trading_identity' => [],
+        ]);
+    }
+
+    public function testFullyValidatesPartialCanonicalIdentityBeforeLegacyLineageContext(): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_missing:mode_version');
+
+        MtfRunnerRequestDto::fromArray([
+            'symbols' => ['BTCUSDT'],
+            'run_id' => 'run-fixture',
+            'orchestration_set_id' => 'set-fixture',
+            'exchange' => 'fake',
+            'market_type' => 'perpetual',
+            'lineage_context' => ['origin' => 'legacy', 'contract_kind' => 'legacy'],
+            'trading_identity' => [
+                'mode_id' => 'scalping',
+                'setup_id' => 'scalping.pullback.long',
+            ],
+        ]);
+    }
+
     public function testNormalizesCanonicalBindingSymbolBeforeStrictValidation(): void
     {
         $dto = MtfRunnerRequestDto::fromArray(self::canonicalRequest(
