@@ -35,7 +35,9 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 continue;
             }
 
-            $identity = $request->lineageContext;
+            $identity = $request->lineageContext->isModern()
+                ? $request->lineageContext->withSymbol($result->symbol)
+                : $request->lineageContext;
             if ($identity->modeId !== null && (
                 $identity->symbol !== strtoupper($result->symbol)
                 || $identity->side !== strtoupper((string) $result->side)
@@ -56,7 +58,7 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 ? $request->requestId
                 : $response->runId;
 
-            $mtfRun = $this->buildRunDto($request, $effectiveRunId, $result);
+            $mtfRun = $this->buildRunDto($request, $effectiveRunId, $result, $identity);
 
             try {
                 $this->messageBus->dispatch(new MtfTradingDecisionMessage(
@@ -86,7 +88,12 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
         }
     }
 
-    private function buildRunDto(MtfRunRequestDto $request, string $runId, MtfResultDto $result): MtfRunDto
+    private function buildRunDto(
+        MtfRunRequestDto $request,
+        string $runId,
+        MtfResultDto $result,
+        \App\Trading\Lineage\LineageContext $identity,
+    ): MtfRunDto
     {
         return new MtfRunDto(
             symbol: $result->symbol,
@@ -113,14 +120,14 @@ final class MtfTradeDecisionDispatcher implements TradeDecisionDispatcherInterfa
                 'orchestration_run_id' => $request->orchestrationRunId,
                 'orchestration_dashboard_id' => $request->dashboardId,
                 'orchestration_set_id' => $request->setId,
-                'origin' => $request->lineageContext->origin,
-                'replay_of_run_id' => $request->lineageContext->replayOfRunId,
-                'replay_of_correlation_id' => $request->lineageContext->replayOfCorrelationId,
-                'attempt_number' => $request->lineageContext->attemptNumber,
-                'config_hash' => $request->lineageContext->configHash,
-                'lineage_context' => $request->lineageContext->toArray(),
+                'origin' => $identity->origin,
+                'replay_of_run_id' => $identity->replayOfRunId,
+                'replay_of_correlation_id' => $identity->replayOfCorrelationId,
+                'attempt_number' => $identity->attemptNumber,
+                'config_hash' => $identity->configHash,
+                'lineage_context' => $identity->toArray(),
             ],
-            lineageContext: $request->lineageContext,
+            lineageContext: $identity,
         );
     }
 }

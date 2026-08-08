@@ -45,6 +45,9 @@ class MtfValidatorService implements MtfValidatorInterface
             $symbolsProcessed++;
 
             try {
+                $lineageContext = $request->lineageContext->isModern()
+                    ? $request->lineageContext->withSymbol($symbol)
+                    : $request->lineageContext;
                 $mtfRunDto = new MtfRunDto(
                     symbol: $symbol,
                     profile: $profile,
@@ -65,7 +68,7 @@ class MtfValidatorService implements MtfValidatorInterface
                         'exchange'              => $request->exchange?->value,
                         'market_type'           => $request->marketType?->value,
                     ],
-                    lineageContext: $request->lineageContext,
+                    lineageContext: $lineageContext,
                 );
 
                 $result = $this->core->validate($mtfRunDto);

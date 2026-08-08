@@ -9,6 +9,8 @@ use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -102,8 +104,40 @@ final class MtfRunWorkerCommand extends Command
         $configHash = $this->optString($input->getOption('config-hash'));
 
         try {
+            $encodedLineage = $this->optString(getenv('MTF_CANONICAL_LINEAGE'));
+            $lineageContext = null;
+            if ($encodedLineage !== null) {
+                if (\count($symbols) !== 1) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_symbols');
+                }
+                $decoded = base64_decode($encodedLineage, true);
+                if ($decoded === false) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                try {
+                    $payload = json_decode($decoded, true, 512, JSON_THROW_ON_ERROR);
+                } catch (\JsonException) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                if (!\is_array($payload)) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                $lineageContext = LineageContext::fromArray($payload)->withSymbol($symbols[0]);
+                $this->assertWorkerContext(
+                    $lineageContext,
+                    $orchestrationRunId,
+                    $setId,
+                    $dashboardId,
+                    $exchangeOpt,
+                    $marketTypeOpt,
+                    $profile,
+                );
+            } elseif (\in_array($profile, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+                throw new LineageContextException('canonical_identity_missing:worker_lineage');
+            }
+
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
-            $request = MtfRunRequestDto::fromArray([
+            $requestData = [
                 'symbols' => $symbols,
                 'dry_run' => $dryRun,
                 'force_run' => $forceRun,
@@ -127,7 +161,11 @@ final class MtfRunWorkerCommand extends Command
                 'replay_of_correlation_id' => $replayOfCorrelationId,
                 'attempt_number' => $attemptNumber,
                 'config_hash' => $configHash,
-            ]);
+            ];
+            if ($lineageContext instanceof LineageContext) {
+                $requestData['lineage_context'] = $lineageContext->toArray();
+            }
+            $request = MtfRunRequestDto::fromArray($requestData);
             $response = $this->mtfValidator->run($request);
             $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);
 
@@ -196,5 +234,34 @@ final class MtfRunWorkerCommand extends Command
     private function optString(mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
+
+    private function assertWorkerContext(
+        LineageContext $identity,
+        ?string $runId,
+        ?string $setId,
+        ?string $dashboardId,
+        mixed $exchange,
+        mixed $marketType,
+        ?string $profile,
+    ): void {
+        $checks = [
+            'orchestration_run_id' => [$runId, $identity->orchestrationRunId],
+            'orchestration_set_id' => [$setId, $identity->orchestrationSetId],
+            'orchestration_dashboard_id' => [$dashboardId, $identity->orchestrationDashboardId],
+            'exchange' => [$this->normalizedOption($exchange), $identity->exchange],
+            'market_type' => [$this->normalizedOption($marketType), $identity->marketType],
+            'mode_id' => [$profile, $identity->modeId],
+        ];
+        foreach ($checks as $field => [$actual, $expected]) {
+            if ($actual !== null && $actual !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+    }
+
+    private function normalizedOption(mixed $value): ?string
+    {
+        return \is_string($value) && trim($value) !== '' ? strtolower(trim($value)) : null;
     }
 }

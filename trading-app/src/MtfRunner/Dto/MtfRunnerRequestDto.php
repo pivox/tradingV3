@@ -186,7 +186,7 @@ final class MtfRunnerRequestDto
                 'orchestration_dashboard_id' => $data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null,
                 'exchange' => $exchange?->value,
                 'market_type' => $marketType?->value,
-                'symbol' => self::canonicalBindingSymbol($data),
+                'symbol' => self::validateCanonicalRequestSymbols($data),
                 'dry_run' => $data['dry_run'] ?? null,
             ]));
         }
@@ -249,17 +249,22 @@ final class MtfRunnerRequestDto
     }
 
     /** @param array<string,mixed> $data */
-    private static function canonicalBindingSymbol(array $data): ?string
+    private static function validateCanonicalRequestSymbols(array $data): null
     {
         $symbols = isset($data['symbols']) && \is_array($data['symbols']) ? $data['symbols'] : [];
-        $symbol = $symbols[0] ?? null;
-        if (!\is_string($symbol)) {
-            return null;
+        foreach ($symbols as $symbol) {
+            if (!\is_string($symbol)) {
+                continue;
+            }
+            $symbol = strtoupper(trim($symbol));
+            if ($symbol !== '' && preg_match('/\A[A-Z0-9]{2,32}\z/D', $symbol) !== 1) {
+                throw new LineageContextException('canonical_identity_invalid:symbol');
+            }
         }
 
-        $symbol = strtoupper(trim($symbol));
-
-        return $symbol !== '' ? $symbol : null;
+        // Request scope deliberately stays unbound. The validator/worker fan-out
+        // creates one immutable symbol-bound copy for each concrete symbol.
+        return null;
     }
 
     /**

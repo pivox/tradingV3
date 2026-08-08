@@ -572,6 +572,7 @@ final class MtfRunnerService
             'replay_of_correlation_id' => $request->lineageContext->replayOfCorrelationId,
             'attempt_number' => $request->lineageContext->attemptNumber,
             'config_hash' => $request->lineageContext->configHash,
+            'lineage_context' => $request->lineageContext,
         ];
 
         $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
@@ -682,7 +683,7 @@ final class MtfRunnerService
                 $process = new Process(
                     $this->buildWorkerCommand($symbol, $options),
                     $this->projectDir,
-                    ['APP_DEBUG' => '0']
+                    $this->buildWorkerEnvironment($symbol, $request->lineageContext),
                 );
                 $process->start();
                 $workerStartTimes[$symbol] = $workerStart;
@@ -780,6 +781,7 @@ final class MtfRunnerService
      *     replay_of_correlation_id?: ?string,
      *     attempt_number?: int,
      *     config_hash?: ?string,
+     *     lineage_context: \App\Trading\Lineage\LineageContext,
      * } $options
      * @return string[]
      */
@@ -859,8 +861,26 @@ final class MtfRunnerService
         if (!empty($options['config_hash'])) {
             $command[] = '--config-hash=' . $options['config_hash'];
         }
-
         return $command;
+    }
+
+    /** @return array<string,string> */
+    private function buildWorkerEnvironment(string $symbol, \App\Trading\Lineage\LineageContext $lineageContext): array
+    {
+        // Explicitly clear any inherited value for legacy workers so a stale
+        // parent environment can never upgrade a legacy invocation to modern.
+        $environment = ['APP_DEBUG' => '0', 'MTF_CANONICAL_LINEAGE' => ''];
+        if (!$lineageContext->isModern()) {
+            return $environment;
+        }
+
+        $bound = $lineageContext->withSymbol($symbol);
+        $environment['MTF_CANONICAL_LINEAGE'] = base64_encode(json_encode(
+            $bound->toArray(),
+            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION,
+        ));
+
+        return $environment;
     }
 
     /**

@@ -116,6 +116,30 @@ final class LineageContextTest extends TestCase
         $identity->assertTradeBoundary('BTCUSDT', 'LONG', 'fake', 'perpetual', false);
     }
 
+    public function testUnboundCanonicalIdentityCreatesIndependentSymbolCopies(): void
+    {
+        $request = $this->unboundCanonicalIdentity();
+
+        $btc = $request->withSymbol(' btcusdt ');
+        $eth = $request->withSymbol('ETHUSDT');
+
+        self::assertNull($request->symbol);
+        self::assertSame('BTCUSDT', $btc->symbol);
+        self::assertSame('ETHUSDT', $eth->symbol);
+        self::assertSame($request->configHash, $btc->configHash);
+        self::assertEquals($request->effectiveConfigSnapshot, $eth->effectiveConfigSnapshot);
+    }
+
+    public function testBoundCanonicalIdentityRejectsRebindingToAnotherSymbol(): void
+    {
+        $identity = $this->unboundCanonicalIdentity()->withSymbol('BTCUSDT');
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:symbol');
+
+        $identity->withSymbol('ETHUSDT');
+    }
+
     #[DataProvider('unboundTradeStageIdProvider')]
     public function testRequestStageCanonicalIdentityWithoutSymbolRejectsTradeStageIds(string $field, string $value): void
     {

@@ -50,7 +50,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
         self::assertSame('scalping', $dto->lineageContext->modeId);
         self::assertSame('scalping.pullback.long', $dto->lineageContext->setupId);
-        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+        self::assertNull($dto->lineageContext->symbol);
         self::assertSame('set-1', $dto->lineageContext->orchestrationSetId);
         self::assertArrayNotHasKey('profile', $dto->lineageContext->toArray());
     }
@@ -172,14 +172,14 @@ final class MtfRunnerRequestDtoTest extends TestCase
         ]);
     }
 
-    public function testNormalizesCanonicalBindingSymbolBeforeStrictValidation(): void
+    public function testKeepsCanonicalRequestIdentityUnboundAfterValidatingSymbols(): void
     {
         $dto = MtfRunnerRequestDto::fromArray(self::canonicalRequest(
             self::canonicalTradingIdentity(),
             ['  btcusdt  '],
         ));
 
-        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+        self::assertNull($dto->lineageContext->symbol);
     }
 
     public function testNormalizesBlankCanonicalBindingSymbolToNull(): void

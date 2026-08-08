@@ -337,6 +337,22 @@ final readonly class LineageContext
         return $this->copy(decisionId: $decisionId, decisionKey: $decisionKey);
     }
 
+    public function withSymbol(string $symbol): self
+    {
+        $symbol = strtoupper(trim($symbol));
+        if (preg_match('/\A[A-Z0-9]{2,32}\z/D', $symbol) !== 1) {
+            throw new LineageContextException('canonical_identity_invalid:symbol');
+        }
+        if ($this->symbol !== null && $this->symbol !== $symbol) {
+            throw new LineageContextException('canonical_identity_mismatch:symbol');
+        }
+
+        $data = $this->toArray();
+        $data['symbol'] = $symbol;
+
+        return self::fromArray($data);
+    }
+
     public function withIntent(string $intentId): self
     {
         return $this->copy(intentId: $intentId);

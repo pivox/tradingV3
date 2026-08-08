@@ -351,7 +351,7 @@ final class RunnerControllerTest extends TestCase
         self::assertSame(Response::HTTP_OK, $response->getStatusCode());
         self::assertSame('rejected', $body['data']['run']['status'] ?? null);
         self::assertSame('canonical_config_invalid:roots', $body['data']['run']['reason'] ?? null);
-        self::assertSame('BTCUSDT', $body['data']['run']['lineage']['symbol'] ?? null);
+        self::assertNull($body['data']['run']['lineage']['symbol'] ?? null);
     }
 
     /** @param array<string,mixed> $nestedFields */
