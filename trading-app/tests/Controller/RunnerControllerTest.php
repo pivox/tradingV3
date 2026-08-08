@@ -146,6 +146,76 @@ final class RunnerControllerTest extends TestCase
         self::assertSame(Response::HTTP_OK, $response->getStatusCode());
     }
 
+    public function testGenericLegacyModeActsAsExplicitProfile(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::once())
+            ->method('run')
+            ->with(self::callback(static fn(MtfRunRequestDto $request): bool => $request->profile === 'regular'))
+            ->willReturn($this->successfulMtfResponse());
+        $validator->method('getListTimeframe')->willReturn([]);
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mode' => 'regular',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+    }
+
+    public function testStrictGenericModeUsesEnabledProfileDefaultAndRemainsValidationMode(): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::once())
+            ->method('run')
+            ->with(self::callback(static fn(MtfRunRequestDto $request): bool => (
+                $request->profile === 'scalper' && $request->mode === 'strict'
+            )))
+            ->willReturn($this->successfulMtfResponse());
+        $validator->method('getListTimeframe')->willReturn([]);
+
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: ['CONTENT_TYPE' => 'application/json'],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'mode' => 'strict',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller($this->enabledModes())->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+    }
+
     public function testCanonicalModeIdIsNotReplacedByLegacyEnabledModeDefault(): void
     {
         $validator = $this->createMock(MtfValidatorInterface::class);

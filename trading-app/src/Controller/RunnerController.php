@@ -98,12 +98,21 @@ class RunnerController extends AbstractController
 
             $tradingIdentity = \is_array($data['trading_identity'] ?? null) ? $data['trading_identity'] : null;
             $explicitLegacyProfile = $data['profile'] ?? $data['mtf_profile'] ?? null;
-            $resolvedProfile = $tradingIdentity['mode_id'] ?? $explicitLegacyProfile;
+            $genericMode = $data['mode'] ?? null;
+            $genericLegacyProfile = null;
+            if (is_string($genericMode) && trim($genericMode) !== '') {
+                $normalizedGenericMode = strtolower(trim($genericMode));
+                if (!in_array($normalizedGenericMode, ['pragmatic', 'strict'], true)) {
+                    $genericLegacyProfile = trim($genericMode);
+                }
+            }
+            $resolvedProfile = $tradingIdentity['mode_id'] ?? $explicitLegacyProfile ?? $genericLegacyProfile;
 
             if (
                 $tradingIdentity === null
                 && !array_key_exists('profile', $data)
                 && !array_key_exists('mtf_profile', $data)
+                && $genericLegacyProfile === null
             ) {
                 $enabledModes = $this->modeContext->getEnabledModes();
                 $defaultProfile = $enabledModes[0]['name'] ?? null;
