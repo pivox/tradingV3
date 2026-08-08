@@ -15,6 +15,7 @@ use App\Contract\Provider\KlineProviderInterface;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\MtfValidator\ConditionLoader\ConditionRegistry;
 use App\MtfValidator\ConditionLoader\TimeframeEvaluator;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\MtfValidator\Service\ContextValidationService;
 use App\MtfValidator\Service\Execution\ExecutionSelectorEngineInterface;
 use App\MtfValidator\Service\ExecutionSelectionService;
@@ -97,6 +98,7 @@ final class MtfValidatorCoreServiceFakeKlineTest extends TestCase
         $clock = new MockClock('2026-07-18T12:00:00+00:00');
 
         $service = new MtfValidatorCoreService(
+            new CanonicalMtfPolicyPreflight(),
             $configProvider,
             $indicatorProvider,
             new ContextValidationService($timeframeValidation),

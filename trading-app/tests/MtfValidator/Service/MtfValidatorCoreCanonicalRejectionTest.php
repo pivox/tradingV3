@@ -8,6 +8,7 @@ use App\Config\MtfValidationConfigProvider;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\MtfValidator\Service\ContextValidationService;
 use App\MtfValidator\Service\ExecutionSelectionService;
 use App\MtfValidator\Service\MtfTimeframeResolver;
@@ -59,6 +60,14 @@ final class MtfValidatorCoreCanonicalRejectionTest extends TestCase
         self::assertFalse($result->isTradable);
         self::assertSame('canonical_risk_pct_pending_304', $result->finalReason);
         self::assertSame('canonical_policy_rejected', $result->extra['canonical_status'] ?? null);
+        self::assertSame([
+            ['code' => 'canonical_risk_pct_pending_304', 'path' => 'runtime.trade_entry.risk_pct'],
+            ['code' => 'canonical_daily_loss_policy_pending_304', 'path' => 'mode.risk.daily_loss_cap'],
+            ['code' => 'canonical_end_of_zone_fallback_pending_304', 'path' => 'runtime.trade_entry.fallback_end_of_zone'],
+            ['code' => 'canonical_max_concurrent_positions_pending_304', 'path' => 'mode.risk.max_concurrent_positions'],
+            ['code' => 'canonical_mode_exposure_cap_pending_304', 'path' => 'mode.risk.mode_exposure_cap'],
+            ['code' => 'canonical_minimum_net_r_pending_304', 'path' => 'setup.ast.execution.minimum_net_r'],
+        ], $result->extra['canonical_policy_blockers'] ?? null);
     }
 
     public function testNonExecutableCanonicalSnapshotIsAStableRejectionBeforeLegacyConfig(): void
@@ -85,6 +94,9 @@ final class MtfValidatorCoreCanonicalRejectionTest extends TestCase
         self::assertFalse($result->isTradable);
         self::assertSame('canonical_contract_not_executable', $result->finalReason);
         self::assertSame('canonical_policy_rejected', $result->extra['canonical_status'] ?? null);
+        self::assertSame([
+            ['code' => 'canonical_contract_not_executable', 'path' => 'effective_config_snapshot'],
+        ], $result->extra['canonical_policy_blockers'] ?? null);
     }
 
     private function service(
@@ -98,6 +110,7 @@ final class MtfValidatorCoreCanonicalRejectionTest extends TestCase
         $executionSelection->expects(self::never())->method(self::anything());
 
         return new MtfValidatorCoreService(
+            new CanonicalMtfPolicyPreflight(),
             new MtfValidationConfigProvider(new ParameterBag([
                 'kernel.project_dir' => dirname(__DIR__, 3),
                 'mode' => [],

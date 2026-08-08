@@ -12,18 +12,16 @@ use App\Contract\MtfValidator\Dto\MtfResultDto;
 use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
+use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
 use App\Provider\Context\ExchangeContext;
 use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
-use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
-use App\Trading\Lineage\CanonicalRuntimePolicyException;
-use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
-use App\Trading\Lineage\LineageContextException;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
 class MtfValidatorCoreService
 {
     public function __construct(
+        private readonly CanonicalMtfPolicyPreflight $canonicalPolicyPreflight,
         private readonly MtfValidationConfigProvider $configProvider,
         private readonly IndicatorProviderInterface $indicatorProvider,
         private readonly ContextValidationService $contextValidationService,
@@ -210,27 +208,17 @@ class MtfValidatorCoreService
     private function rejectBlockedCanonicalRun(MtfRunDto $input, \DateTimeImmutable $now): ?MtfResultDto
     {
         $identity = $input->lineageContext;
-        if (!$identity?->isModern()) {
+        if ($identity === null) {
             return null;
         }
 
-        try {
-            $tradeEntryConfig = CanonicalTradeEntryConfigFactory::fromLineage($identity);
-            CanonicalTradeRuntimePolicyValidator::assertReady($tradeEntryConfig);
-            $blockers = [[
-                'code' => 'canonical_mtf_evaluator_pending_303',
-                'path' => 'runtime.mtf.condition_evaluator',
-            ]];
-        } catch (CanonicalRuntimePolicyException $exception) {
-            $blockers = $exception->blockers;
-        } catch (LineageContextException $exception) {
-            $blockers = [[
-                'code' => $exception->getMessage(),
-                'path' => 'effective_config_snapshot',
-            ]];
+        $rejection = $this->canonicalPolicyPreflight->reject($identity);
+        if ($rejection === null) {
+            return null;
         }
 
-        $reason = $blockers[0]['code'];
+        $reason = $rejection->reason;
+        $blockers = $rejection->blockers;
         $this->mtfLogger->warning('mtf.canonical_policy_rejected', [
             'symbol' => $input->symbol,
             'profile' => $input->profile,
