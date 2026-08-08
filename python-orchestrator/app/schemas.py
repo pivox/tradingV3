@@ -118,40 +118,48 @@ class CanonicalEffectiveConfigLayer(BaseModel):
     required: Literal[True]
 
 
+class _CanonicalFrozenDict(FrozenDict):
+    """Frozen snapshot mapping exposed as a regular JSON object in OpenAPI."""
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _core_schema: Any, _handler: Any) -> dict:
+        return {"type": "object", "additionalProperties": True}
+
+
 class CanonicalEffectiveConfigSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
     request: CanonicalEffectiveConfigRequest
-    config: FrozenDict
+    config: _CanonicalFrozenDict
     config_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     condition_catalog_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     ordered_layers: Tuple[CanonicalEffectiveConfigLayer, ...]
     ordered_files: Tuple[str, ...]
-    provenance: FrozenDict
+    provenance: _CanonicalFrozenDict
     executable: bool
     blockers: Tuple[str, ...] = ()
 
     @field_validator("config", mode="before")
     @classmethod
-    def _freeze_config(cls, value: Any) -> FrozenDict:
+    def _freeze_config(cls, value: Any) -> _CanonicalFrozenDict:
         if not isinstance(value, Mapping):
             raise ValueError("effective_config_snapshot.config must be a mapping")
-        return FrozenDict(value)
+        return _CanonicalFrozenDict(value)
 
     @field_serializer("config")
-    def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
+    def _serialize_config(self, value: _CanonicalFrozenDict) -> dict[str, Any]:
         return _thaw_snapshot(value)
 
     @field_validator("provenance", mode="before")
     @classmethod
-    def _freeze_provenance(cls, value: Any) -> FrozenDict:
+    def _freeze_provenance(cls, value: Any) -> _CanonicalFrozenDict:
         if not isinstance(value, Mapping) or not value:
             raise ValueError("effective_config_snapshot_provenance_empty")
         for layer in value.values():
             CanonicalEffectiveConfigLayer.model_validate(layer)
-        return FrozenDict(value)
+        return _CanonicalFrozenDict(value)
 
     @field_serializer("provenance")
-    def _serialize_provenance(self, value: FrozenDict) -> dict[str, Any]:
+    def _serialize_provenance(self, value: _CanonicalFrozenDict) -> dict[str, Any]:
         return _thaw_snapshot(value)
 
     @model_validator(mode="after")
