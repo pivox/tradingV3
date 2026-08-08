@@ -34,6 +34,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Clock\ClockInterface;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -149,6 +150,16 @@ final class RunnerControllerTest extends TestCase
     {
         $validator = $this->createMock(MtfValidatorInterface::class);
         $validator->expects(self::never())->method('run');
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::once())
+            ->method('debug')
+            ->with(
+                '[Runner Controller] Resolved request profile',
+                self::callback(static fn(array $context): bool => (
+                    ($context['profile'] ?? null) === 'scalping'
+                    && ($context['contract_kind'] ?? null) === 'modern'
+                )),
+            );
         $request = Request::create(
             '/api/mtf/run',
             'POST',
@@ -171,7 +182,7 @@ final class RunnerControllerTest extends TestCase
             ], JSON_THROW_ON_ERROR),
         );
 
-        $response = $this->controller($this->enabledModes())->index(
+        $response = $this->controller($this->enabledModes(), $logger)->index(
             $request,
             new RunMtfCycleUseCase($this->runnerService($validator)),
         );
@@ -518,10 +529,10 @@ final class RunnerControllerTest extends TestCase
     }
 
     /** @param array<int, array{name: string, enabled: bool, priority: int}> $enabledModes */
-    private function controller(array $enabledModes = []): RunnerController
+    private function controller(array $enabledModes = [], ?LoggerInterface $logger = null): RunnerController
     {
         $controller = new RunnerController(
-            new NullLogger(),
+            $logger ?? new NullLogger(),
             $this->modeContext($enabledModes),
             new OrchestrationContextValidator(),
         );

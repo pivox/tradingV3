@@ -152,6 +152,10 @@ class RunnerController extends AbstractController
                 'config_hash' => $data['config_hash'] ?? null,
                 'suppress_exchange_capable_async_work' => $safetyEvidenceRequested,
             ]);
+            $this->logger->debug('[Runner Controller] Resolved request profile', [
+                'profile' => $runnerRequest->profile,
+                'contract_kind' => $runnerRequest->lineageContext->contractKind,
+            ]);
             if ($safetyEvidenceRequested) {
                 if (
                     $runnerRequest->exchange !== Exchange::FAKE
