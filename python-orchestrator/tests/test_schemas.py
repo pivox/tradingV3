@@ -94,6 +94,62 @@ def test_full_php_133_snapshot_rejects_layer_file_order_mismatch():
         CanonicalEffectiveConfigSnapshot(**payload)
 
 
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    [
+        ("config_not_mapping", "effective_config_snapshot.config must be a mapping"),
+        ("provenance_empty", "effective_config_snapshot_provenance_empty"),
+        ("layer_order", "effective_config_snapshot_layer_order_invalid"),
+        ("roots", "effective_config_snapshot_roots_invalid"),
+        ("schema_version", "effective_config_snapshot_schema_version_invalid"),
+        ("config_identity", "effective_config_snapshot_config_identity_mismatch"),
+        ("hash", "effective_config_snapshot_hash_mismatch"),
+    ],
+)
+def test_effective_snapshot_rejects_each_fail_closed_contract_boundary(case, expected_error):
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+
+    if case == "config_not_mapping":
+        payload["config"] = []
+    elif case == "provenance_empty":
+        payload["provenance"] = {}
+    elif case == "layer_order":
+        payload["ordered_layers"][0], payload["ordered_layers"][1] = (
+            payload["ordered_layers"][1],
+            payload["ordered_layers"][0],
+        )
+        payload["ordered_files"] = [layer["path"] for layer in payload["ordered_layers"]]
+    elif case == "roots":
+        del payload["config"]["safety"]
+        _rehash_effective_snapshot(payload)
+    elif case == "schema_version":
+        payload["config"]["schema_version"] = "effective-trading-config.v1"
+        _rehash_effective_snapshot(payload)
+    elif case == "config_identity":
+        payload["config"]["mode"]["mode_id"] = "day_trading"
+        _rehash_effective_snapshot(payload)
+    elif case == "hash":
+        payload["config_hash"] = "sha256:" + "c" * 64
+
+    with pytest.raises(ValidationError, match=expected_error):
+        CanonicalEffectiveConfigSnapshot(**payload)
+
+
+def test_effective_snapshot_round_trip_thaws_sequences_and_hashes_integral_floats():
+    payload = _canonical_identity_payload()["effective_config_snapshot"]
+    payload["config"]["environment"]["tags"] = ["paper", "certified"]
+    payload["config"]["environment"]["leverage"] = 3.0
+    _rehash_effective_snapshot(payload, normalize_integral_floats=True)
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+
+    assert snapshot.model_dump(mode="json")["config"]["environment"] == {
+        "id": "demo",
+        "tags": ["paper", "certified"],
+        "leverage": 3.0,
+    }
+
+
 def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
     identity = CanonicalTradingIdentity(**_canonical_identity_payload())
     with pytest.raises(ValidationError):
@@ -103,6 +159,18 @@ def test_canonical_trading_identity_is_immutable_and_rejects_mismatch():
         CanonicalTradingIdentity(
             **identity.model_dump(exclude_none=True), requested_mode_version="2.0.0"
         )
+
+
+def test_canonical_trading_identity_rejects_mode_and_snapshot_identity_mismatches():
+    with pytest.raises(ValidationError, match="mode_id_mismatch"):
+        CanonicalTradingIdentity(
+            **_canonical_identity_payload(), requested_mode_id="day_trading"
+        )
+
+    payload = _canonical_identity_payload()
+    payload["config_hash"] = "sha256:" + "c" * 64
+    with pytest.raises(ValidationError, match="effective_config_snapshot_identity_mismatch"):
+        CanonicalTradingIdentity(**payload)
 
 
 def test_effective_config_reference_is_trimmed_and_blank_is_rejected():
@@ -199,6 +267,22 @@ def _canonical_identity_payload():
             "executable": True, "blockers": [],
         },
     }
+
+
+def _rehash_effective_snapshot(payload, *, normalize_integral_floats=False):
+    config = payload["config"]
+    if normalize_integral_floats:
+        config_for_hash = json.loads(json.dumps(config))
+        config_for_hash["environment"]["leverage"] = 3
+    else:
+        config_for_hash = config
+    canonical = json.dumps(
+        {"config": config_for_hash, "condition_catalog_hash": payload["condition_catalog_hash"]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
