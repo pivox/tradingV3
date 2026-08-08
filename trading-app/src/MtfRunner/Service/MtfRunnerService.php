@@ -548,32 +548,7 @@ final class MtfRunnerService
         $pollingTime = 0;
         $pollingCount = 0;
 
-        $options = [
-            'dry_run' => $request->dryRun,
-            'force_run' => $request->forceRun,
-            'current_tf' => $request->currentTf,
-            'force_timeframe_check' => $request->forceTimeframeCheck,
-            'skip_context' => $request->skipContextValidation,
-            'lock_per_symbol' => $request->lockPerSymbol,
-            'skip_open_filter' => true, // Déjà filtré en amont
-            'user_id' => $request->userId,
-            'ip_address' => $request->ipAddress,
-            'exchange' => $context->exchange->value,
-            'market_type' => $context->marketType->value,
-            'profile' => $request->profile,
-            'validation_mode' => $request->validationMode,
-            // OBS-003 : lineage propagé au worker (puis au dispatcher → order_submitted).
-            'request_id' => $runId,
-            'orchestration_run_id' => $request->originalRunId,
-            'dashboard_id' => $request->dashboardId,
-            'set_id' => $request->setId,
-            'origin' => $request->lineageContext->origin,
-            'replay_of_run_id' => $request->lineageContext->replayOfRunId,
-            'replay_of_correlation_id' => $request->lineageContext->replayOfCorrelationId,
-            'attempt_number' => $request->lineageContext->attemptNumber,
-            'config_hash' => $request->lineageContext->configHash,
-            'lineage_context' => $request->lineageContext,
-        ];
+        $options = $this->buildWorkerOptions($request, $context, $runId);
 
         $this->mtfLogger->info('[MTF Runner] Starting parallel execution', [
             'run_id' => $runId,
@@ -751,6 +726,42 @@ final class MtfRunnerService
             'summary' => $summary,
             'results' => $results,
             'errors' => $errors,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function buildWorkerOptions(RunnerRequestDto $request, ExchangeContext $context, string $runId): array
+    {
+        $identity = $request->lineageContext;
+        $modern = $identity->isModern();
+        if ($modern && $identity->dryRun === null) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:dry_run');
+        }
+
+        return [
+            'dry_run' => $modern ? $identity->dryRun : $request->dryRun,
+            'force_run' => $request->forceRun,
+            'current_tf' => $request->currentTf,
+            'force_timeframe_check' => $request->forceTimeframeCheck,
+            'skip_context' => $request->skipContextValidation,
+            'lock_per_symbol' => $request->lockPerSymbol,
+            'skip_open_filter' => true,
+            'user_id' => $request->userId,
+            'ip_address' => $request->ipAddress,
+            'exchange' => $modern ? $identity->exchange : $context->exchange->value,
+            'market_type' => $modern ? $identity->marketType : $context->marketType->value,
+            'profile' => $modern ? $identity->modeId : $request->profile,
+            'validation_mode' => $request->validationMode,
+            'request_id' => $modern ? $identity->correlationRunId : $runId,
+            'orchestration_run_id' => $modern ? $identity->orchestrationRunId : $request->originalRunId,
+            'dashboard_id' => $modern ? $identity->orchestrationDashboardId : $request->dashboardId,
+            'set_id' => $modern ? $identity->orchestrationSetId : $request->setId,
+            'origin' => $identity->origin,
+            'replay_of_run_id' => $identity->replayOfRunId,
+            'replay_of_correlation_id' => $identity->replayOfCorrelationId,
+            'attempt_number' => $identity->attemptNumber,
+            'config_hash' => $identity->configHash,
+            'lineage_context' => $identity,
         ];
     }
 

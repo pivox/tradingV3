@@ -15,6 +15,14 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(MtfRunRequestDto::class)]
 final class MtfRunRequestDtoTest extends TestCase
 {
+    public function testRejectsExplicitEmptyLineageContext(): void
+    {
+        $this->expectException(\App\Trading\Lineage\LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunRequestDto::fromArray(['lineage_context' => []]);
+    }
+
     public function testParsesRequestIdAndOrchestrationLineage(): void
     {
         $dto = MtfRunRequestDto::fromArray([

@@ -140,7 +140,7 @@ final class MtfRunRequestDto
     private static function buildLineageContext(array $data, array $symbols, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
         if (\array_key_exists('lineage_context', $data)) {
-            if (!\is_array($data['lineage_context'])) {
+            if (!\is_array($data['lineage_context']) || $data['lineage_context'] === []) {
                 throw new \App\Trading\Lineage\LineageContextException('canonical_identity_invalid:lineage_context');
             }
 

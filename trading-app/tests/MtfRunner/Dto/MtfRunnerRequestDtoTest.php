@@ -153,6 +153,23 @@ final class MtfRunnerRequestDtoTest extends TestCase
         ]);
     }
 
+    #[DataProvider('malformedLineageContextInputs')]
+    public function testRejectsEveryExplicitMalformedLineageContext(mixed $lineageContext): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunnerRequestDto::fromArray(['lineage_context' => $lineageContext]);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function malformedLineageContextInputs(): iterable
+    {
+        yield 'null' => [null];
+        yield 'string' => ['truncated'];
+        yield 'empty' => [[]];
+    }
+
     public function testFullyValidatesPartialCanonicalIdentityBeforeLegacyLineageContext(): void
     {
         $this->expectException(LineageContextException::class);

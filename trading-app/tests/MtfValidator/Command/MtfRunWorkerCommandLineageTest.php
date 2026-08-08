@@ -199,6 +199,38 @@ final class MtfRunWorkerCommandLineageTest extends TestCase
         self::assertStringContainsString('canonical_identity_missing:worker_replay_of_run_id', $tester->getDisplay());
     }
 
+    #[DataProvider('invalidWorkerFlagProvider')]
+    public function testRejectsInvalidLexicalWorkerFlagBeforeValidator(
+        string $option,
+        string $value,
+        string $field,
+    ): void {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method('run');
+        $identityData = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        $identityData['dry_run'] = true;
+        $encoded = base64_encode(json_encode(
+            $identityData,
+            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION,
+        ));
+        $tester = new CommandTester(new MtfRunWorkerCommand(
+            $validator,
+            $this->createMock(TradeDecisionDispatcherInterface::class),
+        ));
+
+        putenv('MTF_CANONICAL_LINEAGE=' . $encoded);
+        try {
+            $options = $this->workerOptions($identityData);
+            $options[$option] = $value;
+            $exit = $tester->execute($options);
+        } finally {
+            putenv('MTF_CANONICAL_LINEAGE');
+        }
+
+        self::assertSame(Command::FAILURE, $exit);
+        self::assertStringContainsString('canonical_identity_invalid:worker_' . $field, $tester->getDisplay());
+    }
+
     /** @return iterable<string,array{string,string,string}> */
     public static function conflictingWorkerDuplicateProvider(): iterable
     {
@@ -220,6 +252,14 @@ final class MtfRunWorkerCommandLineageTest extends TestCase
         yield 'exchange' => ['--exchange', 'exchange'];
         yield 'attempt' => ['--attempt-number', 'attempt_number'];
         yield 'dry run' => ['--dry-run', 'dry_run'];
+    }
+
+    /** @return iterable<string,array{string,string,string}> */
+    public static function invalidWorkerFlagProvider(): iterable
+    {
+        yield 'dry run text' => ['--dry-run', 'banana', 'dry_run'];
+        yield 'attempt suffix' => ['--attempt-number', '1junk', 'attempt_number'];
+        yield 'attempt zero' => ['--attempt-number', '0', 'attempt_number'];
     }
 
     /**

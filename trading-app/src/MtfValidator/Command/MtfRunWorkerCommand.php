@@ -71,7 +71,9 @@ final class MtfRunWorkerCommand extends Command
             return Command::INVALID;
         }
 
-        $dryRun = ((string) $input->getOption('dry-run')) !== '0';
+        $dryRunRaw = (string) $input->getOption('dry-run');
+        $dryRunValid = \in_array($dryRunRaw, ['0', '1'], true);
+        $dryRun = $dryRunRaw === '1';
         $dryRunProvided = $input->hasParameterOption('--dry-run');
         $forceRun = (bool) $input->getOption('force-run');
         $currentTf = $input->getOption('tf');
@@ -101,11 +103,22 @@ final class MtfRunWorkerCommand extends Command
         $origin = $this->optString($input->getOption('origin'));
         $replayOfRunId = $this->optString($input->getOption('replay-of-run-id'));
         $replayOfCorrelationId = $this->optString($input->getOption('replay-of-correlation-id'));
-        $attemptNumber = (int) ($input->getOption('attempt-number') ?? 1);
+        $attemptNumberRaw = (string) ($input->getOption('attempt-number') ?? '1');
+        $attemptNumberParsed = filter_var($attemptNumberRaw, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => PHP_INT_MAX],
+        ]);
+        $attemptNumberValid = $attemptNumberParsed !== false;
+        $attemptNumber = $attemptNumberValid ? $attemptNumberParsed : 0;
         $attemptNumberProvided = $input->hasParameterOption('--attempt-number');
         $configHash = $this->optString($input->getOption('config-hash'));
 
         try {
+            if ($dryRunProvided && !$dryRunValid) {
+                throw new LineageContextException('canonical_identity_invalid:worker_dry_run');
+            }
+            if ($attemptNumberProvided && !$attemptNumberValid) {
+                throw new LineageContextException('canonical_identity_invalid:worker_attempt_number');
+            }
             $encodedLineage = $this->optString(getenv('MTF_CANONICAL_LINEAGE'));
             $lineageContext = null;
             if ($encodedLineage !== null) {

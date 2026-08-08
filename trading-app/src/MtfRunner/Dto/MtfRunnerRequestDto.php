@@ -171,6 +171,11 @@ final class MtfRunnerRequestDto
      */
     private static function buildLineageContext(array $data, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
+        if (\array_key_exists('lineage_context', $data)
+            && (!\is_array($data['lineage_context']) || $data['lineage_context'] === [])
+        ) {
+            throw new LineageContextException('canonical_identity_invalid:lineage_context');
+        }
         $tradingIdentity = null;
         if (\array_key_exists('trading_identity', $data)) {
             $tradingIdentity = $data['trading_identity'];
