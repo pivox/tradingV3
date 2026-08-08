@@ -132,7 +132,11 @@ final class MtfRunWorkerCommandLineageTest extends TestCase
         self::assertStringContainsString('canonical_identity_mismatch:' . $field, $tester->getDisplay());
     }
 
-    public function testRejectsMissingRequiredModernWorkerDuplicateBeforeValidator(): void
+    #[DataProvider('missingRequiredWorkerDuplicateProvider')]
+    public function testRejectsMissingRequiredModernWorkerDuplicateBeforeValidator(
+        string $option,
+        string $field,
+    ): void
     {
         $validator = $this->createMock(MtfValidatorInterface::class);
         $validator->expects(self::never())->method('run');
@@ -150,14 +154,14 @@ final class MtfRunWorkerCommandLineageTest extends TestCase
         putenv('MTF_CANONICAL_LINEAGE=' . $encoded);
         try {
             $options = $this->workerOptions($identityData);
-            unset($options['--exchange']);
+            unset($options[$option]);
             $exit = $tester->execute($options);
         } finally {
             putenv('MTF_CANONICAL_LINEAGE');
         }
 
         self::assertSame(Command::FAILURE, $exit);
-        self::assertStringContainsString('canonical_identity_missing:worker_exchange', $tester->getDisplay());
+        self::assertStringContainsString('canonical_identity_missing:worker_' . $field, $tester->getDisplay());
     }
 
     public function testRejectsMissingReplayDuplicateBeforeValidator(): void
@@ -208,6 +212,14 @@ final class MtfRunWorkerCommandLineageTest extends TestCase
         yield 'attempt' => ['--attempt-number', '2', 'attempt_number'];
         yield 'config hash' => ['--config-hash', 'sha256:' . str_repeat('f', 64), 'config_hash'];
         yield 'dry run' => ['--dry-run', '0', 'dry_run'];
+    }
+
+    /** @return iterable<string,array{string,string}> */
+    public static function missingRequiredWorkerDuplicateProvider(): iterable
+    {
+        yield 'exchange' => ['--exchange', 'exchange'];
+        yield 'attempt' => ['--attempt-number', 'attempt_number'];
+        yield 'dry run' => ['--dry-run', 'dry_run'];
     }
 
     /**

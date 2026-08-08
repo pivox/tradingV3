@@ -72,6 +72,7 @@ final class MtfRunWorkerCommand extends Command
         }
 
         $dryRun = ((string) $input->getOption('dry-run')) !== '0';
+        $dryRunProvided = $input->hasParameterOption('--dry-run');
         $forceRun = (bool) $input->getOption('force-run');
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
@@ -101,6 +102,7 @@ final class MtfRunWorkerCommand extends Command
         $replayOfRunId = $this->optString($input->getOption('replay-of-run-id'));
         $replayOfCorrelationId = $this->optString($input->getOption('replay-of-correlation-id'));
         $attemptNumber = (int) ($input->getOption('attempt-number') ?? 1);
+        $attemptNumberProvided = $input->hasParameterOption('--attempt-number');
         $configHash = $this->optString($input->getOption('config-hash'));
 
         try {
@@ -136,8 +138,10 @@ final class MtfRunWorkerCommand extends Command
                     $replayOfRunId,
                     $replayOfCorrelationId,
                     $attemptNumber,
+                    $attemptNumberProvided,
                     $configHash,
                     $dryRun,
+                    $dryRunProvided,
                 );
             } elseif (\in_array($profile, ['day_trading', 'scalping', 'micro_scalping'], true)) {
                 throw new LineageContextException('canonical_identity_missing:worker_lineage');
@@ -258,8 +262,10 @@ final class MtfRunWorkerCommand extends Command
         ?string $replayOfRunId,
         ?string $replayOfCorrelationId,
         int $attemptNumber,
+        bool $attemptNumberProvided,
         ?string $configHash,
         bool $dryRun,
+        bool $dryRunProvided,
     ): void {
         $required = [
             'request_id' => $requestId,
@@ -269,7 +275,9 @@ final class MtfRunWorkerCommand extends Command
             'market_type' => $this->normalizedOption($marketType),
             'mode_id' => $profile,
             'origin' => $origin,
+            'attempt_number' => $attemptNumberProvided ? $attemptNumber : null,
             'config_hash' => $configHash,
+            'dry_run' => $dryRunProvided ? $dryRun : null,
         ];
         if ($identity->orchestrationDashboardId !== null) {
             $required['orchestration_dashboard_id'] = $dashboardId;
