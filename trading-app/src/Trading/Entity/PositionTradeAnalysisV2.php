@@ -49,16 +49,16 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'run_id')]
     private ?string $runId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'correlation_run_id')]
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_correlation_run_id')]
     private ?string $correlationRunId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 255, nullable: true, name: 'orchestration_run_id')]
+    #[ORM\Column(type: Types::STRING, length: 255, nullable: true, name: 'canonical_orchestration_run_id')]
     private ?string $orchestrationRunId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'dashboard_id')]
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_orchestration_dashboard_id')]
     private ?string $dashboardId = null;
 
-    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'set_id')]
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_orchestration_set_id')]
     private ?string $setId = null;
 
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true)]
@@ -66,6 +66,9 @@ class PositionTradeAnalysisV2
 
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'market_data_venue')]
     private ?string $marketDataVenue = null;
+
+    #[ORM\Column(type: Types::STRING, length: 16, nullable: true, name: 'paper_network')]
+    private ?string $paperNetwork = null;
 
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'market_type')]
     private ?string $marketType = null;
@@ -81,6 +84,48 @@ class PositionTradeAnalysisV2
 
     #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'position_id')]
     private ?string $positionId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 64, nullable: true, name: 'mode_id')]
+    private ?string $modeId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'mode_version')]
+    private ?string $modeVersion = null;
+
+    #[ORM\Column(type: Types::STRING, length: 160, nullable: true, name: 'setup_id')]
+    private ?string $setupId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'setup_version')]
+    private ?string $setupVersion = null;
+
+    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'canonical_config_hash')]
+    private ?string $canonicalConfigHash = null;
+
+    #[ORM\Column(type: Types::STRING, length: 128, nullable: true, name: 'condition_catalog_hash')]
+    private ?string $conditionCatalogHash = null;
+
+    #[ORM\Column(type: Types::STRING, length: 8, nullable: true, name: 'canonical_side')]
+    private ?string $canonicalSide = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'decision_id')]
+    private ?string $decisionId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 160, nullable: true, name: 'decision_key')]
+    private ?string $decisionKey = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'intent_id')]
+    private ?string $intentId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_order_id')]
+    private ?string $canonicalOrderId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_position_id')]
+    private ?string $canonicalPositionId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 96, nullable: true, name: 'canonical_trade_id')]
+    private ?string $canonicalTradeId = null;
+
+    #[ORM\Column(type: Types::STRING, length: 16, name: 'lineage_classification')]
+    private string $lineageClassification = 'legacy';
 
     #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, name: 'entry_time')]
     // @phpstan-ignore property.onlyRead
@@ -217,7 +262,7 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'total_known_cost_usdt')]
     private ?float $totalKnownCostUsdt = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'net_pnl_usdt')]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'canonical_net_pnl_usdt')]
     private ?float $netPnlUsdt = null;
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'risk_usdt_at_entry')]
@@ -235,7 +280,7 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'realized_gross_pnl_r')]
     private ?float $realizedGrossPnlR = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'realized_net_pnl_r')]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'canonical_realized_net_pnl_r')]
     private ?float $realizedNetPnlR = null;
 
     #[ORM\Column(type: Types::BOOLEAN, nullable: true, name: 'position_fully_closed')]
@@ -311,6 +356,8 @@ class PositionTradeAnalysisV2
         return $this->marketDataVenue;
     }
 
+    public function getPaperNetwork(): ?string { return $this->paperNetwork; }
+
     public function getMarketType(): ?string
     {
         return $this->marketType;
@@ -335,6 +382,22 @@ class PositionTradeAnalysisV2
     {
         return $this->positionId;
     }
+
+    public function getModeId(): ?string { return $this->modeId; }
+    public function getModeVersion(): ?string { return $this->modeVersion; }
+    public function getSetupId(): ?string { return $this->setupId; }
+    public function getSetupVersion(): ?string { return $this->setupVersion; }
+    public function getCanonicalConfigHash(): ?string { return $this->canonicalConfigHash; }
+    public function getConditionCatalogHash(): ?string { return $this->conditionCatalogHash; }
+    public function getCanonicalSide(): ?string { return $this->canonicalSide; }
+    public function getDecisionId(): ?string { return $this->decisionId; }
+    public function getDecisionKey(): ?string { return $this->decisionKey; }
+    public function getIntentId(): ?string { return $this->intentId; }
+    public function getCanonicalOrderId(): ?string { return $this->canonicalOrderId; }
+    public function getCanonicalPositionId(): ?string { return $this->canonicalPositionId; }
+    public function getCanonicalTradeId(): ?string { return $this->canonicalTradeId; }
+    public function getLineageClassification(): string { return $this->lineageClassification; }
+    public function hasCanonicalLineage(): bool { return $this->lineageClassification === 'canonical'; }
 
     public function getEntryTime(): \DateTimeImmutable
     {
@@ -628,6 +691,6 @@ class PositionTradeAnalysisV2
 
     public function hasCertifiedNetPnl(): bool
     {
-        return $this->isMatchedClosed() && $this->isCostComplete() && $this->netPnlUsdt !== null;
+        return $this->hasCanonicalLineage() && $this->isMatchedClosed() && $this->isCostComplete() && $this->netPnlUsdt !== null;
     }
 }

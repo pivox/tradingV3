@@ -21,36 +21,38 @@ def load_module():
 def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> None:
     module = load_module()
 
-    result = module.build_baseline(FIXTURE, seed=132, monte_carlo_runs=20)
+    result = module.build_baseline(FIXTURE, seed=132, monte_carlo_runs=20, min_cell_size=1)
 
     assert result["population"]["total_rows"] == 6
     assert result["population"]["certified_rows"] == 5
     assert result["population"]["excluded_rows"] == 1
     assert result["population"]["excluded_by_reason"]["cost_completeness:partial"] == 1
-    assert result["population"]["profiles"]["regular"]["certified_rows"] == 2
-    assert result["population"]["profiles"]["scalper"]["certified_rows"] == 2
-    assert result["population"]["profiles"]["scalper_micro"]["certified_rows"] == 1
+    assert result["population"]["modes"]["day_trading"]["certified_rows"] == 2
+    assert result["population"]["modes"]["scalping"]["certified_rows"] == 2
+    assert result["population"]["modes"]["micro_scalping"]["certified_rows"] == 1
+    assert result["certification_cells"]["eligible_cell_count"] == 4
+    assert result["certification_cells"]["eligible_trade_count"] == 5
 
-    regular = result["groups"]["profile"]["regular"]
-    assert regular["wins"] == 1
-    assert regular["losses"] == 1
-    assert regular["winrate"] == 0.5
-    assert regular["net_expectancy_usdt"] == 0.5
-    assert regular["profit_factor"] == 2.0
-    assert regular["max_drawdown_usdt"] == -1.0
-    assert regular["mean_realized_net_pnl_r"] == 0.25
-    assert regular["median_realized_net_pnl_r"] == 0.25
-    assert regular["wilson_95"]["low"] < regular["winrate"] < regular["wilson_95"]["high"]
-    assert regular["liquidity"]["maker_fills"] == 1
-    assert regular["liquidity"]["taker_fills"] == 1
-    assert result["groups"]["direction"]["long"]["rows"] == 4
-    assert result["groups"]["direction"]["short"]["rows"] == 1
+    day_trading = result["groups"]["mode"]["day_trading"]
+    assert day_trading["wins"] == 1
+    assert day_trading["losses"] == 1
+    assert day_trading["winrate"] == 0.5
+    assert day_trading["net_expectancy_usdt"] == 0.5
+    assert day_trading["profit_factor"] == 2.0
+    assert day_trading["max_drawdown_usdt"] == -1.0
+    assert day_trading["mean_realized_net_pnl_r"] == 0.25
+    assert day_trading["median_realized_net_pnl_r"] == 0.25
+    assert day_trading["wilson_95"]["low"] < day_trading["winrate"] < day_trading["wilson_95"]["high"]
+    assert day_trading["liquidity"]["maker_fills"] == 1
+    assert day_trading["liquidity"]["taker_fills"] == 1
+    assert result["groups"]["side"]["LONG"]["rows"] == 4
+    assert result["groups"]["side"]["SHORT"]["rows"] == 1
 
-    scalper = result["groups"]["profile"]["scalper"]
-    assert scalper["loss_causes"]["costs_destroy_edge"] == 2
-    assert scalper["loss_causes"]["entry_momentum_extreme_candidate"] == 1
+    scalping = result["groups"]["mode"]["scalping"]
+    assert scalping["loss_causes"]["costs_destroy_edge"] == 2
+    assert scalping["loss_causes"]["entry_momentum_extreme_candidate"] == 1
 
-    simulation = result["simulation"]["profile"]["regular"]
+    simulation = result["simulation"]["mode"]["day_trading"]
     assert simulation["capital_usdt"] == 100.0
     assert simulation["trades_per_path"] == 100
     assert simulation["compounding_on"]["status"] == "not_computable_missing_risk_policy"
@@ -74,13 +76,15 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
             "132",
             "--monte-carlo-runs",
             "20",
+            "--min-cell-size",
+            "1",
         ]
     )
 
     assert exit_code == 0
     rendered = output_md.read_text(encoding="utf-8")
     assert "# Baseline bad trades certifiee v2" in rendered
-    assert "## Metriques par direction" in rendered
+    assert "## Metriques par side" in rendered
     assert "costs_destroy_edge" in rendered
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["population"]["certified_rows"] == 5

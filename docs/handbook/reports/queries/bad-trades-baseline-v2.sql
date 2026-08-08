@@ -28,7 +28,8 @@ COPY (
 WITH scoped AS (
   SELECT pta.*
   FROM position_trade_analysis_v2 pta
-  WHERE pta.mtf_profile IN ('regular', 'scalper', 'scalper_micro')
+  WHERE pta.lineage_classification = 'canonical'
+    AND pta.mode_id IN ('day_trading', 'scalping', 'micro_scalping')
     AND pta.entry_time >= :'from_ts'::timestamptz
     AND pta.entry_time < :'to_ts'::timestamptz
 ),
@@ -98,6 +99,15 @@ enriched AS (
       AND oi.exchange IS NOT DISTINCT FROM pta.exchange
       AND oi.market_type IS NOT DISTINCT FROM pta.market_type
       AND oi.symbol = pta.symbol
+      AND oi.mode_id IS NOT DISTINCT FROM pta.mode_id
+      AND oi.mode_version IS NOT DISTINCT FROM pta.mode_version
+      AND oi.setup_id IS NOT DISTINCT FROM pta.setup_id
+      AND oi.setup_version IS NOT DISTINCT FROM pta.setup_version
+      AND oi.config_hash IS NOT DISTINCT FROM pta.canonical_config_hash
+      AND oi.condition_catalog_hash IS NOT DISTINCT FROM pta.condition_catalog_hash
+      AND oi.canonical_side IS NOT DISTINCT FROM pta.canonical_side
+      AND oi.decision_id IS NOT DISTINCT FROM pta.decision_id
+      AND oi.intent_id IS NOT DISTINCT FROM pta.intent_id
   ) order_scope ON true
   LEFT JOIN LATERAL (
     SELECT
@@ -197,7 +207,8 @@ finalized AS (
   SELECT
     ledger_certified.*,
     (
-      analysis_status = 'matched_closed'
+      lineage_classification = 'canonical'
+      AND analysis_status = 'matched_closed'
       AND close_match_status = 'matched'
       AND cost_completeness = 'complete'
       AND pnl_quality_flag_count = 0
@@ -206,7 +217,8 @@ finalized AS (
       AND realized_net_pnl_r IS NOT NULL
     ) AS v2_is_certified,
     (
-      ledger_certification_status = 'complete'
+      lineage_classification = 'canonical'
+      AND ledger_certification_status = 'complete'
       AND analysis_status = 'matched_closed'
       AND close_match_status = 'matched'
       AND position_fully_closed IS TRUE
@@ -270,6 +282,21 @@ SELECT
   entry_time,
   close_time,
   mtf_profile,
+  lineage_classification,
+  paper_network,
+  market_data_venue,
+  mode_id,
+  mode_version,
+  setup_id,
+  setup_version,
+  canonical_side,
+  canonical_config_hash AS config_hash,
+  condition_catalog_hash,
+  decision_id,
+  intent_id,
+  canonical_order_id,
+  canonical_position_id,
+  canonical_trade_id,
   symbol,
   timeframe,
   direction,
@@ -316,11 +343,11 @@ SELECT
   effective_cost_completeness AS cost_completeness,
   effective_pnl_quality_flags AS pnl_quality_flags,
   position_fully_closed,
-  COALESCE(net_pnl_usdt, ledger_net_pnl_usdt) AS net_pnl_usdt,
+  COALESCE(canonical_net_pnl_usdt, ledger_net_pnl_usdt) AS net_pnl_usdt,
   gross_realized_pnl_usdt,
   recorded_pnl_usdt,
   estimated_net_pnl_usdt,
-  COALESCE(realized_net_pnl_r, ledger_realized_net_pnl_r) AS realized_net_pnl_r,
+  COALESCE(canonical_realized_net_pnl_r, ledger_realized_net_pnl_r) AS realized_net_pnl_r,
   realized_gross_pnl_r,
   pnl_r,
   risk_usdt_at_entry,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\Trading\Lineage\Export\CanonicalLifecycleExport;
 use Doctrine\DBAL\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -12,7 +13,6 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
-use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 
 #[AsCommand(
     name: 'app:export-symbol-data',
@@ -22,7 +22,7 @@ final class ExportSymbolDataCommand extends Command
 {
     public function __construct(
         private readonly Connection $connection,
-        private readonly ParameterBagInterface $parameterBag
+        private readonly CanonicalLifecycleExport $canonicalLifecycleExport,
     ) {
         parent::__construct();
     }
@@ -147,6 +147,7 @@ final class ExportSymbolDataCommand extends Command
                 'first_event' => $run['first_event'],
                 'last_event' => $run['last_event'],
                 'event_count' => $run['event_count'],
+                'canonical_lineage' => $this->canonicalLifecycleExport->classify($runData['trade_lifecycle_event']),
                 'data' => $runData
             ];
             $progressBar->advance();
@@ -204,6 +205,10 @@ final class ExportSymbolDataCommand extends Command
         return Command::SUCCESS;
     }
 
+    /**
+     * @param list<string> $traceIds
+     * @return array<string,list<array<string,mixed>>>
+     */
     private function exportRunData(string $symbol, string $runId, array $traceIds, bool $showSql = false, ?SymfonyStyle $io = null): array
     {
         $data = [];
@@ -371,6 +376,7 @@ final class ExportSymbolDataCommand extends Command
         return $data;
     }
 
+    /** @return array<string,list<array<string,mixed>>> */
     private function exportGlobalSymbolData(string $symbol, \DateTimeImmutable $startTime, \DateTimeImmutable $endTime, bool $showSql = false, ?SymfonyStyle $io = null): array
     {
         $data = [];
@@ -446,6 +452,7 @@ final class ExportSymbolDataCommand extends Command
         return $data;
     }
 
+    /** @return array<string,list<string>> */
     private function exportLogsForDateTime(string $symbol, \DateTimeImmutable $targetDateTime, bool $showLogs = false, ?SymfonyStyle $io = null): array
     {
         $logData = [];
@@ -515,4 +522,3 @@ final class ExportSymbolDataCommand extends Command
         return $logData;
     }
 }
-

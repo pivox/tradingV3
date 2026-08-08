@@ -17,7 +17,7 @@ final readonly class ExchangeEventBus
 
     public function publish(ExchangeEventInterface $event): void
     {
-        $this->projectionStore->project($event);
+        $this->projectionStore->projectAtomically([$event]);
         $this->logProjected($event);
     }
 

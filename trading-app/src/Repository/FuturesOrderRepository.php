@@ -9,11 +9,12 @@ use App\Entity\FuturesOrder;
 use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
+use App\Trading\Lineage\Persistence\FuturesOrderRecoverySource;
 
 /**
  * @extends ServiceEntityRepository<FuturesOrder>
  */
-final class FuturesOrderRepository extends ServiceEntityRepository
+final class FuturesOrderRepository extends ServiceEntityRepository implements FuturesOrderRecoverySource
 {
     private const OPEN_STATUSES = ['pending', 'partially_filled', 'new', 'sent', 'open', 'submitted'];
     private const CLOSED_STATUSES = ['filled', 'cancelled', 'canceled', 'rejected', 'expired', 'closed'];

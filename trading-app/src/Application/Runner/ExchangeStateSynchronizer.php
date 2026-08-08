@@ -12,6 +12,8 @@ use App\Entity\Position;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\PositionRepository;
 use Psr\Log\LoggerInterface;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\Persistence\CanonicalPositionRecoveryService;
 
 final class ExchangeStateSynchronizer
 {
@@ -20,6 +22,7 @@ final class ExchangeStateSynchronizer
         private readonly PositionRepository $positionRepository,
         private readonly LoggerInterface $logger,
         private readonly LoggerInterface $positionsLogger,
+        private readonly ?CanonicalPositionRecoveryService $canonicalPositionRecovery = null,
     ) {
     }
 
@@ -54,6 +57,8 @@ final class ExchangeStateSynchronizer
             if ($orderProvider) {
                 $openOrders = $this->syncOrders($orderProvider);
             }
+        } catch (LineageContextException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Runner] Failed to sync tables', [
                 'error' => $e->getMessage(),
@@ -88,9 +93,40 @@ final class ExchangeStateSynchronizer
                     $symbol = strtoupper($positionDto->symbol);
                     $side = strtoupper($positionDto->side->value);
 
-                    $position = $this->positionRepository->findOneBySymbolSide($symbol, $side, $context);
+                    $evidence = $positionDto->canonicalEvidence();
+                    $position = $evidence->exchangePositionId !== null
+                        ? $this->positionRepository->findOneByCanonicalExchangePositionId($evidence->exchangePositionId, $context)
+                        : $this->positionRepository->findOneBySymbolSide($symbol, $side, $context);
                     if (!$position) {
                         $position = new Position($symbol, $side, $context->exchange, $context->marketType);
+                    }
+
+                    if ($position->getSymbol() !== $symbol
+                        || $position->getSide() !== $side
+                        || $position->getExchange() !== $context->exchange->value
+                        || $position->getMarketType() !== $context->marketType->value
+                    ) {
+                        throw new LineageContextException('canonical_identity_mismatch:position_boundary');
+                    }
+                    $classification = $position->lineageClassification();
+                    if ($classification === 'incomplete') {
+                        throw new LineageContextException('canonical_identity_incomplete:position');
+                    }
+                    $predecessor = $this->canonicalPositionRecovery?->resolve($evidence, $context);
+                    if ($classification === 'canonical') {
+                        $stored = $position->requireLineageContext();
+                        if ($evidence->exchangePositionId === null
+                            || $predecessor === null
+                            || $predecessor->context->toArray() !== $stored->toArray()
+                            || $predecessor->exchangePositionId !== $position->getCanonicalExchangePositionId()
+                        ) {
+                            throw new LineageContextException('canonical_identity_mismatch:position_predecessor');
+                        }
+                    } elseif ($predecessor !== null) {
+                        if (!\in_array($predecessor->order->getSide(), [1, 4], true)) {
+                            throw new LineageContextException('canonical_identity_invalid:position_opening_order');
+                        }
+                        $position->applyCanonicalPredecessor($predecessor);
                     }
 
                     $position->setSize($positionDto->size->__toString());
@@ -107,6 +143,8 @@ final class ExchangeStateSynchronizer
                     ]);
 
                     $this->positionRepository->upsert($position);
+                } catch (LineageContextException $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
                     $this->logger->error('[MTF Runner] Failed to sync position', [
                         'symbol' => $positionDto->symbol ?? 'unknown',
@@ -114,6 +152,8 @@ final class ExchangeStateSynchronizer
                     ]);
                 }
             }
+        } catch (LineageContextException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logger->error('[MTF Runner] Failed to sync positions', [
                 'error' => $e->getMessage(),

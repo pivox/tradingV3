@@ -14,6 +14,7 @@ use DoctrineMigrations\Version20260625000000;
 use DoctrineMigrations\Version20260625020000;
 use DoctrineMigrations\Version20260626000000;
 use DoctrineMigrations\Version20260719130000;
+use DoctrineMigrations\Version20260808114000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -36,6 +37,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260625020000::class)]
 #[CoversClass(Version20260626000000::class)]
 #[CoversClass(Version20260719130000::class)]
+#[CoversClass(Version20260808114000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -65,6 +67,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     {
         if (isset($this->conn)) {
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
             $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
             $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
@@ -155,6 +158,41 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('not_applicable', $eth['cost_completeness']);
         self::assertNull($eth['close_event_id']);
         self::assertNull($eth['recorded_pnl_usdt']);
+    }
+
+    public function testStructuredCanonicalIdentityIsProjectedWithoutLegacyFallback(): void
+    {
+        $run = 'run-canonical-view';
+        $this->entry('BTCUSDT', $run, 'legacy-set', 'scalper', 'fake', 'perpetual', [
+            'trade_id' => 'trade-1', 'pnl_source' => 'legacy-extra-must-not-certify',
+        ], '2026-08-08 10:00:00+00', 2700, 'fake');
+        $this->close('BTCUSDT', $run, ['trade_id' => 'trade-1', 'pnl' => 1.0], 'position-1', '2026-08-08 10:01:00+00', 2701, 'fake', 'perpetual', 'fake');
+
+        $contract = [
+            'correlation_run_id' => 'correlation-1', 'orchestration_run_id' => 'orchestration-1',
+            'orchestration_set_id' => 'set-1', 'orchestration_dashboard_id' => 'dashboard-1',
+            'mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback',
+            'setup_version' => '1.0.0', 'config_hash' => 'config-hash',
+            'condition_catalog_hash' => 'catalog-hash', 'side' => 'LONG', 'decision_id' => 'decision-1',
+            'decision_key' => 'decision-key-1', 'intent_id' => 'intent-1', 'order_id' => 'order-1',
+            'paper_network' => 'testnet',
+        ];
+        foreach ([2700, 2701] as $id) {
+            $sets = implode(', ', array_map(static fn (string $field): string => "$field = :$field", array_keys($contract)));
+            $this->conn->executeStatement("UPDATE trade_lifecycle_event SET $sets, trade_id = :trade_id WHERE id = :id", $contract + ['trade_id' => 'trade-1', 'id' => $id]);
+        }
+        $this->conn->executeStatement('UPDATE trade_lifecycle_event SET position_id = ? WHERE id = ?', ['position-1', 2700]);
+
+        $row = $this->conn->fetchAssociative('SELECT * FROM position_trade_analysis_v2 WHERE entry_event_id = 2700');
+
+        self::assertIsArray($row);
+        self::assertSame('canonical', $row['lineage_classification']);
+        self::assertSame('scalping', $row['mode_id']);
+        self::assertSame('scalping.pullback', $row['setup_id']);
+        self::assertSame('config-hash', $row['canonical_config_hash']);
+        self::assertSame('LONG', $row['canonical_side']);
+        self::assertSame('position-1', $row['canonical_position_id']);
+        self::assertSame('trade-1', $row['canonical_trade_id']);
     }
 
     public function testMarketDataVenueIsProjectedAndScopesInternalTradeIdMatch(): void
@@ -1180,6 +1218,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     private function createMinimalSchema(): void
     {
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
+        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
         $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
         $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
@@ -1190,8 +1229,25 @@ CREATE TABLE trade_lifecycle_event (
     symbol VARCHAR(50) NOT NULL,
     event_type VARCHAR(32) NOT NULL,
     run_id VARCHAR(64),
+    order_id VARCHAR(64),
     internal_trade_id VARCHAR(96),
     position_id VARCHAR(64),
+    trade_id VARCHAR(96),
+    correlation_run_id VARCHAR(96),
+    orchestration_run_id VARCHAR(255),
+    orchestration_set_id VARCHAR(96),
+    orchestration_dashboard_id VARCHAR(96),
+    mode_id VARCHAR(64),
+    mode_version VARCHAR(32),
+    setup_id VARCHAR(160),
+    setup_version VARCHAR(32),
+    config_hash VARCHAR(128),
+    condition_catalog_hash VARCHAR(128),
+    side VARCHAR(16),
+    decision_id VARCHAR(96),
+    decision_key VARCHAR(160),
+    intent_id VARCHAR(96),
+    paper_network VARCHAR(16),
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
     exchange VARCHAR(32) DEFAULT 'bitmart',
@@ -1234,8 +1290,11 @@ SQL);
         if (!class_exists(Version20260719130000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260719130000.php';
         }
+        if (!class_exists(Version20260808114000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260808114000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class, Version20260808114000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {

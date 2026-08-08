@@ -227,7 +227,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             symbol: $order->symbol,
             exchangeOrderId: $order->exchangeOrderId,
             clientOrderId: $order->clientOrderId,
-            fillId: $this->fillId($event, $order, $fillQuantity, $fillPrice),
+            fillId: $this->identifier($event->payload['fill_id'] ?? null) ?? $this->fillId($event, $order, $fillQuantity, $fillPrice),
             side: $order->side,
             positionSide: $order->positionSide,
             quantity: $fillQuantity,
@@ -321,6 +321,12 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             position: $eventClass === ExchangePositionClosed::class ? null : $position,
             occurredAt: $event->occurredAt,
             payload: $event->payload,
+            canonicalEvidence: $position?->canonicalEvidence() ?? new \App\Trading\Lineage\Persistence\CanonicalPositionEvidence(
+                exchangePositionId: $this->identifier($event->payload['exchange_position_id'] ?? $event->payload['position_id'] ?? null),
+                exchangeOrderId: $this->identifier($event->payload['opening_order_id'] ?? $event->payload['order_id'] ?? null),
+                clientOrderId: $this->identifier($event->payload['opening_client_order_id'] ?? $event->payload['client_order_id'] ?? null),
+                exchangeFillId: $this->identifier($event->payload['opening_fill_id'] ?? $event->payload['exchange_fill_id'] ?? null),
+            ),
         )];
     }
 
@@ -345,10 +351,24 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 openedAt: isset($snapshot['opened_at']) && $snapshot['opened_at'] !== null ? new \DateTimeImmutable((string)$snapshot['opened_at']) : null,
                 updatedAt: isset($snapshot['updated_at']) && $snapshot['updated_at'] !== null ? new \DateTimeImmutable((string)$snapshot['updated_at']) : null,
                 metadata: \is_array($snapshot['metadata'] ?? null) ? $snapshot['metadata'] : [],
+                exchangePositionId: $this->identifier($snapshot['exchange_position_id'] ?? null),
+                exchangeOrderId: $this->identifier($snapshot['exchange_order_id'] ?? null),
+                clientOrderId: $this->identifier($snapshot['client_order_id'] ?? null),
+                exchangeFillId: $this->identifier($snapshot['exchange_fill_id'] ?? null),
             );
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function identifier(mixed $value): ?string
+    {
+        if (!\is_string($value) && !\is_int($value)) {
+            return null;
+        }
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 
     private function fillId(FakeExchangeEvent $event, ExchangeOrderDto $order, float $quantity, float $price): string

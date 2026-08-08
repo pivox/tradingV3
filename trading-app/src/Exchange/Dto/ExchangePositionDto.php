@@ -28,6 +28,20 @@ final readonly class ExchangePositionDto
         public ?\DateTimeImmutable $openedAt = null,
         public ?\DateTimeImmutable $updatedAt = null,
         public array $metadata = [],
+        public ?string $exchangePositionId = null,
+        public ?string $exchangeOrderId = null,
+        public ?string $clientOrderId = null,
+        public ?string $exchangeFillId = null,
     ) {
+    }
+
+    public function canonicalEvidence(): \App\Trading\Lineage\Persistence\CanonicalPositionEvidence
+    {
+        return new \App\Trading\Lineage\Persistence\CanonicalPositionEvidence(
+            $this->exchangePositionId,
+            $this->exchangeOrderId,
+            $this->clientOrderId,
+            $this->exchangeFillId,
+        );
     }
 }

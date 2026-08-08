@@ -23,7 +23,11 @@ final class PositionHistoryEntryDto
         public readonly ?BigDecimal $fees,
         public readonly \DateTimeImmutable $openedAt,
         public readonly \DateTimeImmutable $closedAt,
-        public readonly array $raw = []
+        public readonly array $raw = [],
+        public readonly ?string $exchangePositionId = null,
+        public readonly ?string $exchangeOrderId = null,
+        public readonly ?string $clientOrderId = null,
+        public readonly ?string $exchangeFillId = null,
     ) {}
 
     /**
@@ -56,8 +60,21 @@ final class PositionHistoryEntryDto
             fees: $fees,
             openedAt: $providerDto->openedAt,
             closedAt: $providerDto->closedAt,
-            raw: $providerDto->metadata
+            raw: $providerDto->metadata,
+            exchangePositionId: $providerDto->exchangePositionId,
+            exchangeOrderId: $providerDto->exchangeOrderId,
+            clientOrderId: $providerDto->clientOrderId,
+            exchangeFillId: $providerDto->exchangeFillId,
+        );
+    }
+
+    public function canonicalEvidence(): \App\Trading\Lineage\Persistence\CanonicalPositionEvidence
+    {
+        return new \App\Trading\Lineage\Persistence\CanonicalPositionEvidence(
+            $this->exchangePositionId,
+            $this->exchangeOrderId,
+            $this->clientOrderId,
+            $this->exchangeFillId,
         );
     }
 }
-

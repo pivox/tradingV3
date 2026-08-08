@@ -7,6 +7,9 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\FuturesOrderTradeRepository;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\Persistence\CanonicalLineageProjection;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -17,6 +20,10 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_futures_order_trade_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class FuturesOrderTrade
 {
+    use CanonicalLineageProjection {
+        requireLineageContext as private requireProjectedLineageContext;
+    }
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
@@ -24,6 +31,9 @@ class FuturesOrderTrade
 
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $tradeId = null;
+
+    #[ORM\Column(name: 'canonical_exchange_fill_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $canonicalExchangeFillId = null;
 
     #[ORM\Column(type: Types::STRING, length: 80)]
     private string $orderId; // référence vers futures_order.order_id
@@ -242,6 +252,83 @@ class FuturesOrderTrade
     {
         $this->futuresOrder = $futuresOrder;
         return $this->touch();
+    }
+
+    public function applyFuturesOrderLineage(FuturesOrder $order): self
+    {
+        $source = $order->requireLineageContext();
+        if (!isset($this->orderId) || trim($this->orderId) === '' || $this->orderId !== $order->getOrderId()) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
+        }
+        if ($this->tradeId === null || trim($this->tradeId) === '') {
+            throw new LineageContextException('canonical_identity_missing:exchange_trade_id');
+        }
+        if ($this->canonicalExchangeFillId !== null && $this->canonicalExchangeFillId !== $this->tradeId) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_trade_id');
+        }
+        if ($this->side !== $order->getSide()) {
+            throw new LineageContextException('canonical_identity_mismatch:fill_order_side');
+        }
+        $source->assertTradeBoundary(
+            $this->symbol,
+            self::canonicalSide($this->side),
+            $this->exchange,
+            $this->marketType,
+        );
+
+        $this->projectCanonicalLineage($source, 'futures_order_trade');
+        $this->canonicalExchangeFillId = $this->tradeId;
+        $this->futuresOrder = $order;
+
+        return $this->touch();
+    }
+
+    public function requireLineageContext(): LineageContext
+    {
+        $context = $this->requireProjectedLineageContext();
+        if (!$this->futuresOrder instanceof FuturesOrder) {
+            throw new LineageContextException('canonical_identity_missing:futures_order_predecessor');
+        }
+        $context->assertTradeBoundary(
+            $this->symbol,
+            self::canonicalSide($this->side),
+            $this->exchange,
+            $this->marketType,
+        );
+        if (!isset($this->orderId) || $context->orderId !== $this->orderId) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
+        }
+        if ($this->tradeId === null || $this->canonicalExchangeFillId !== $this->tradeId) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_trade_id');
+        }
+        if ($this->side !== $this->futuresOrder->getSide()) {
+            throw new LineageContextException('canonical_identity_mismatch:fill_order_side');
+        }
+        $source = $this->futuresOrder->requireLineageContext();
+        if ($source->toArray() !== $context->toArray()) {
+            throw new LineageContextException('canonical_identity_mismatch:futures_order_predecessor');
+        }
+
+        return $context;
+    }
+
+    public function getCanonicalExchangeFillId(): ?string
+    {
+        return $this->canonicalExchangeFillId;
+    }
+
+    protected function hasAdditionalProjectedCanonicalField(): bool
+    {
+        return $this->canonicalExchangeFillId !== null;
+    }
+
+    private static function canonicalSide(int $side): string
+    {
+        return match ($side) {
+            1, 2 => 'LONG',
+            3, 4 => 'SHORT',
+            default => throw new LineageContextException('canonical_identity_invalid:side'),
+        };
     }
 
     public function getCreatedAt(): \DateTimeImmutable

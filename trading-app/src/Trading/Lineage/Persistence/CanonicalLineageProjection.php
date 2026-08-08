@@ -183,6 +183,9 @@ trait CanonicalLineageProjection
 
     private function hasAnyProjectedCanonicalField(): bool
     {
+        if ($this->hasAdditionalProjectedCanonicalField()) {
+            return true;
+        }
         foreach ([
             $this->canonicalOrchestrationRunId,
             $this->canonicalCorrelationRunId,
@@ -213,6 +216,11 @@ trait CanonicalLineageProjection
             }
         }
 
+        return false;
+    }
+
+    protected function hasAdditionalProjectedCanonicalField(): bool
+    {
         return false;
     }
 
