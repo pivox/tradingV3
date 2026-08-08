@@ -224,6 +224,24 @@ def test_run_mtf_set_propagates_canonical_lineage_headers_and_identity():
     assert captured["json"]["trading_identity"] == identity.model_dump(mode="json", exclude_none=True)
 
 
+def test_run_mtf_set_normalizes_canonical_run_lineage_headers():
+    a_set = _make_set(trading_identity=_canonical_identity())
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"status": "success"})
+
+    async def _run():
+        async with _client_with(handler) as client:
+            return await run_mtf_set(client, "http://sym", a_set, None, run_id="  run-modern  ")
+
+    asyncio.run(_run())
+
+    assert captured["headers"]["x-run-id"] == "run-modern"
+    assert captured["headers"]["x-run-correlation-id"] == canonical_correlation_id("run-modern")
+
+
 @pytest.mark.parametrize("run_id", [None, "", " \t "])
 def test_run_mtf_set_rejects_canonical_set_without_run_lineage_before_http(run_id):
     calls: list = []

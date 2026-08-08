@@ -505,7 +505,8 @@ async def run_mtf_set(
     dashboard_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Exécute un set pydantic via ``POST /api/mtf/run`` avec le snapshot en cache."""
-    if a_set.trading_identity is not None and (run_id is None or not run_id.strip()):
+    normalized_run_id = run_id.strip() if run_id is not None else None
+    if a_set.trading_identity is not None and not normalized_run_id:
         raise ValueError("canonical_lineage_missing:run_id")
     payload = build_mtf_payload(a_set, snapshot, dry_run)
     return await _dispatch_mtf_run(
@@ -513,7 +514,7 @@ async def run_mtf_set(
         base_url,
         a_set.set_id,
         payload,
-        run_id=run_id,
+        run_id=normalized_run_id,
         dashboard_id=dashboard_id,
     )
 
