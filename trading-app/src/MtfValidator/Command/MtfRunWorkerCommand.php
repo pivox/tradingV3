@@ -125,12 +125,19 @@ final class MtfRunWorkerCommand extends Command
                 $lineageContext = LineageContext::fromArray($payload)->withSymbol($symbols[0]);
                 $this->assertWorkerContext(
                     $lineageContext,
+                    $requestId,
                     $orchestrationRunId,
                     $setId,
                     $dashboardId,
                     $exchangeOpt,
                     $marketTypeOpt,
                     $profile,
+                    $origin,
+                    $replayOfRunId,
+                    $replayOfCorrelationId,
+                    $attemptNumber,
+                    $configHash,
+                    $dryRun,
                 );
             } elseif (\in_array($profile, ['day_trading', 'scalping', 'micro_scalping'], true)) {
                 throw new LineageContextException('canonical_identity_missing:worker_lineage');
@@ -148,9 +155,11 @@ final class MtfRunWorkerCommand extends Command
                 'skip_open_state_filter' => $skipOpenFilter,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
-                'exchange' => $exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value,
-                'market_type' => $marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value,
-                'profile' => $profile,
+                'exchange' => $lineageContext?->exchange
+                    ?? ($exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value),
+                'market_type' => $lineageContext?->marketType
+                    ?? ($marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value),
+                'profile' => $lineageContext?->modeId ?? $profile,
                 'validation_mode' => $validationMode,
                 'request_id' => $requestId,
                 'orchestration_run_id' => $orchestrationRunId,
@@ -238,20 +247,59 @@ final class MtfRunWorkerCommand extends Command
 
     private function assertWorkerContext(
         LineageContext $identity,
+        ?string $requestId,
         ?string $runId,
         ?string $setId,
         ?string $dashboardId,
         mixed $exchange,
         mixed $marketType,
         ?string $profile,
+        ?string $origin,
+        ?string $replayOfRunId,
+        ?string $replayOfCorrelationId,
+        int $attemptNumber,
+        ?string $configHash,
+        bool $dryRun,
     ): void {
+        $required = [
+            'request_id' => $requestId,
+            'orchestration_run_id' => $runId,
+            'orchestration_set_id' => $setId,
+            'exchange' => $this->normalizedOption($exchange),
+            'market_type' => $this->normalizedOption($marketType),
+            'mode_id' => $profile,
+            'origin' => $origin,
+            'config_hash' => $configHash,
+        ];
+        if ($identity->orchestrationDashboardId !== null) {
+            $required['orchestration_dashboard_id'] = $dashboardId;
+        }
+        if ($identity->replayOfRunId !== null) {
+            $required['replay_of_run_id'] = $replayOfRunId;
+        }
+        if ($identity->replayOfCorrelationId !== null) {
+            $required['replay_of_correlation_id'] = $replayOfCorrelationId;
+        }
+        foreach ($required as $field => $value) {
+            if ($value === null || $value === '') {
+                throw new LineageContextException('canonical_identity_missing:worker_' . $field);
+            }
+        }
+
         $checks = [
+            'correlation_run_id' => [$requestId, $identity->correlationRunId],
             'orchestration_run_id' => [$runId, $identity->orchestrationRunId],
             'orchestration_set_id' => [$setId, $identity->orchestrationSetId],
             'orchestration_dashboard_id' => [$dashboardId, $identity->orchestrationDashboardId],
             'exchange' => [$this->normalizedOption($exchange), $identity->exchange],
             'market_type' => [$this->normalizedOption($marketType), $identity->marketType],
             'mode_id' => [$profile, $identity->modeId],
+            'origin' => [$origin === null ? null : strtolower($origin), $identity->origin],
+            'replay_of_run_id' => [$replayOfRunId, $identity->replayOfRunId],
+            'replay_of_correlation_id' => [$replayOfCorrelationId, $identity->replayOfCorrelationId],
+            'attempt_number' => [$attemptNumber, $identity->attemptNumber],
+            'config_hash' => [$configHash, $identity->configHash],
+            'dry_run' => [$dryRun, $identity->dryRun],
         ];
         foreach ($checks as $field => [$actual, $expected]) {
             if ($actual !== null && $actual !== $expected) {
