@@ -71,6 +71,53 @@ final class CanonicalLifecycleExport
         return ['lineage_classification' => 'canonical', 'identity' => $identity, 'reasons' => []];
     }
 
+    /**
+     * @param list<array<string,mixed>> $events
+     * @return list<array{lifecycle_key:string,event_ids:list<string>,lineage_classification:'canonical'|'legacy'|'incomplete',identity:array<string,string>|null,reasons:list<string>}>
+     */
+    public function classifyAll(array $events): array
+    {
+        $groups = [];
+        foreach ($events as $index => $event) {
+            $key = $this->groupKey($event, $index);
+            $groups[$key][] = $event;
+        }
+        ksort($groups);
+
+        $result = [];
+        foreach ($groups as $key => $group) {
+            $classification = $this->classify($group);
+            $result[] = [
+                'lifecycle_key' => $key,
+                'event_ids' => array_map(
+                    fn (array $event, int $index): string => $this->string($event['id'] ?? null) ?? "event-$index",
+                    $group,
+                    array_keys($group),
+                ),
+                ...$classification,
+            ];
+        }
+
+        return $result;
+    }
+
+    /** @param array<string,mixed> $event */
+    private function groupKey(array $event, int $index): string
+    {
+        if (!$this->hasModernMarker($event)) {
+            return 'legacy:' . ($this->string($event['id'] ?? null) ?? "event-$index");
+        }
+
+        $decisionId = $this->string($event['decision_id'] ?? null);
+        $intentId = $this->string($event['intent_id'] ?? null);
+        $orderId = $this->string($event['order_id'] ?? null);
+        if ($decisionId === null || $intentId === null || $orderId === null) {
+            return 'incomplete:' . ($this->string($event['id'] ?? null) ?? "event-$index");
+        }
+
+        return implode(':', ['canonical', $decisionId, $intentId, $orderId]);
+    }
+
     /** @param array<string,mixed> $event */
     private function hasModernMarker(array $event): bool
     {

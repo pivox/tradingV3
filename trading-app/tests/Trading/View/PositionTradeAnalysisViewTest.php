@@ -193,6 +193,12 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('LONG', $row['canonical_side']);
         self::assertSame('position-1', $row['canonical_position_id']);
         self::assertSame('trade-1', $row['canonical_trade_id']);
+
+        $this->conn->executeStatement("UPDATE trade_lifecycle_event SET paper_network = 'mainnet' WHERE id = 2701");
+        $crossNetwork = $this->conn->fetchAssociative('SELECT lineage_classification, canonical_net_pnl_usdt FROM position_trade_analysis_v2 WHERE entry_event_id = 2700');
+        self::assertIsArray($crossNetwork);
+        self::assertSame('incomplete', $crossNetwork['lineage_classification']);
+        self::assertNull($crossNetwork['canonical_net_pnl_usdt']);
     }
 
     public function testMarketDataVenueIsProjectedAndScopesInternalTradeIdMatch(): void

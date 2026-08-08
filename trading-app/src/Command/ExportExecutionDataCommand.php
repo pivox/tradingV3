@@ -238,7 +238,7 @@ final class ExportExecutionDataCommand extends Command
             [$runId, $runId]
         );
         $exportData['data']['trade_lifecycle_event'] = $tradeLifecycleEvents;
-        $exportData['canonical_lineage'] = $this->canonicalLifecycleExport->classify($tradeLifecycleEvents);
+        $exportData['canonical_lifecycles'] = $this->canonicalLifecycleExport->classifyAll($tradeLifecycleEvents);
         $io->success(count($tradeLifecycleEvents) . ' enregistrements');
 
         // 6. Trade Zone Events

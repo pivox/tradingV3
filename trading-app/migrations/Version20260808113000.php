@@ -29,6 +29,7 @@ final class Version20260808113000 extends AbstractMigration
     public function up(Schema $schema): void
     {
         $this->addSql('ALTER TABLE positions DROP CONSTRAINT IF EXISTS ux_positions_exchange_market_symbol_side');
+        $this->addSql('DROP INDEX IF EXISTS ux_positions_exchange_market_symbol_side');
         $this->addSql('ALTER TABLE positions ADD COLUMN IF NOT EXISTS opening_order_id BIGINT DEFAULT NULL');
         $this->addSql('ALTER TABLE positions ADD COLUMN IF NOT EXISTS opening_fill_id BIGINT DEFAULT NULL');
         foreach (self::COLUMNS as $column => $type) {
@@ -55,6 +56,6 @@ final class Version20260808113000 extends AbstractMigration
         }
         $this->addSql('ALTER TABLE positions DROP COLUMN IF EXISTS opening_order_id');
         $this->addSql('ALTER TABLE positions DROP COLUMN IF EXISTS opening_fill_id');
-        $this->addSql('ALTER TABLE positions ADD CONSTRAINT ux_positions_exchange_market_symbol_side UNIQUE (exchange, market_type, symbol, side)');
+        $this->addSql('CREATE UNIQUE INDEX ux_positions_exchange_market_symbol_side ON positions (exchange, market_type, symbol, side)');
     }
 }

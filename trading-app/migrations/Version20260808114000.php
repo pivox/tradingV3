@@ -78,6 +78,8 @@ CROSS JOIN LATERAL (
       OR c.orchestration_run_id IS DISTINCT FROM e.orchestration_run_id
       OR c.orchestration_set_id IS DISTINCT FROM e.orchestration_set_id
       OR c.orchestration_dashboard_id IS DISTINCT FROM e.orchestration_dashboard_id
+      OR c.paper_network IS DISTINCT FROM e.paper_network
+      OR c.market_data_venue IS DISTINCT FROM e.market_data_venue
       OR c.order_id IS DISTINCT FROM e.order_id
       OR c.position_id IS NULL OR c.trade_id IS NULL
     ) THEN 'incomplete'

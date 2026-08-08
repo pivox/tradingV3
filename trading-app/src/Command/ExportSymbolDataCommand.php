@@ -147,7 +147,7 @@ final class ExportSymbolDataCommand extends Command
                 'first_event' => $run['first_event'],
                 'last_event' => $run['last_event'],
                 'event_count' => $run['event_count'],
-                'canonical_lineage' => $this->canonicalLifecycleExport->classify($runData['trade_lifecycle_event']),
+                'canonical_lifecycles' => $this->canonicalLifecycleExport->classifyAll($runData['trade_lifecycle_event']),
                 'data' => $runData
             ];
             $progressBar->advance();
