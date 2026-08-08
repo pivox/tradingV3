@@ -14,6 +14,10 @@ use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
 use App\Provider\Context\ExchangeContext;
 use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
+use App\TradeEntry\Policy\CanonicalTradeRuntimePolicyValidator;
+use App\Trading\Lineage\CanonicalRuntimePolicyException;
+use App\Trading\Lineage\CanonicalTradeEntryConfigFactory;
+use App\Trading\Lineage\LineageContextException;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 
@@ -34,6 +38,10 @@ class MtfValidatorCoreService
     public function validate(MtfRunDto $input): MtfResultDto
     {
         $now = $input->now ?? $this->clock->now();
+        $canonicalRejection = $this->rejectBlockedCanonicalRun($input, $now);
+        if ($canonicalRejection !== null) {
+            return $canonicalRejection;
+        }
         $exchangeContext = ExchangeContext::fromArray($input->options);
 
         // 1. Config
@@ -160,11 +168,13 @@ class MtfValidatorCoreService
         return $result;
     }
 
+    /** @param array<string,mixed> $extra */
     private function buildEmptyResult(
         MtfRunDto $input,
         ?string $mode,
         \DateTimeImmutable $now,
         string $reason,
+        array $extra = [],
     ): MtfResultDto {
         $emptyContext = new ContextDecisionDto(
             isValid: false,
@@ -193,8 +203,54 @@ class MtfValidatorCoreService
             extra: [
                 'request_id' => $input->requestId,
                 'options'    => $input->options,
+            ] + $extra,
+        );
+    }
+
+    private function rejectBlockedCanonicalRun(MtfRunDto $input, \DateTimeImmutable $now): ?MtfResultDto
+    {
+        $identity = $input->lineageContext;
+        if (!$identity?->isModern()) {
+            return null;
+        }
+
+        try {
+            $tradeEntryConfig = CanonicalTradeEntryConfigFactory::fromLineage($identity);
+            CanonicalTradeRuntimePolicyValidator::assertReady($tradeEntryConfig);
+            $blockers = [[
+                'code' => 'canonical_mtf_evaluator_pending_303',
+                'path' => 'runtime.mtf.condition_evaluator',
+            ]];
+        } catch (CanonicalRuntimePolicyException $exception) {
+            $blockers = $exception->blockers;
+        } catch (LineageContextException $exception) {
+            $blockers = [[
+                'code' => $exception->getMessage(),
+                'path' => 'effective_config_snapshot',
+            ]];
+        }
+
+        $reason = $blockers[0]['code'];
+        $this->mtfLogger->warning('mtf.canonical_policy_rejected', [
+            'symbol' => $input->symbol,
+            'profile' => $input->profile,
+            'reason' => $reason,
+            'blockers' => $blockers,
+            'identity' => $identity->redacted(),
+        ]);
+        $result = $this->buildEmptyResult(
+            input: $input,
+            mode: $identity->modeId,
+            now: $now,
+            reason: $reason,
+            extra: [
+                'canonical_status' => 'canonical_policy_rejected',
+                'canonical_policy_blockers' => $blockers,
             ],
         );
+        $this->auditResult($input, $result, 'MTF_CANONICAL_POLICY_REJECTED');
+
+        return $result;
     }
 
     private function buildResultContextKo(
