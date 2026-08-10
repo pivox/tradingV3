@@ -336,6 +336,6 @@ git add docs/handbook/technical/risk-and-leverage-module.md docs/superpowers/pla
 git commit -m "docs(risk): record canonical lot A boundary"
 ```
 
-- [ ] **Step 5: Prepare review handoff**
+- [x] **Step 5: Prepare review handoff**
 
 Push `codex/issue-304-risk-runtime`, open a draft PR referencing #304, include Lot B/C continuation notes, request a full-diff Codex review, and do not mark ready or merge until review findings and CI are resolved.
