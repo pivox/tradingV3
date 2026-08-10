@@ -38,6 +38,7 @@ final readonly class CanonicalPortfolioReservation
         public float $filledQuantity,
         public float $protectedQuantity,
         public float $remainingQuantity,
+        public float $venueRemainingQuantity,
         public float $filledEntryNotionalQuote,
         public float $accumulatedEntryFeeQuote,
         public float $filledRiskQuote,
@@ -47,6 +48,7 @@ final readonly class CanonicalPortfolioReservation
         public string $filledQuantityDecimal,
         public string $protectedQuantityDecimal,
         public string $remainingQuantityDecimal,
+        public string $venueRemainingQuantityDecimal,
         public string $filledEntryNotionalDecimal,
         public string $accumulatedEntryFeeDecimal,
         public string $filledRiskDecimal,
@@ -58,6 +60,7 @@ final readonly class CanonicalPortfolioReservation
         public array $appliedFillHashes,
         public array $transitionInputHashes,
         public int $version,
+        public ?string $previousStateHash,
         public \DateTimeImmutable $observedAt,
         public string $stateHash,
     ) {
@@ -106,6 +109,7 @@ final readonly class CanonicalPortfolioReservation
             'filledQuantity' => 0.0,
             'protectedQuantity' => 0.0,
             'remainingQuantity' => $plan->quantity,
+            'venueRemainingQuantity' => $plan->quantity,
             'filledEntryNotionalQuote' => 0.0,
             'accumulatedEntryFeeQuote' => 0.0,
             'filledRiskQuote' => 0.0,
@@ -115,6 +119,7 @@ final readonly class CanonicalPortfolioReservation
             'filledQuantityDecimal' => '0',
             'protectedQuantityDecimal' => '0',
             'remainingQuantityDecimal' => self::decimal($plan->quantity)->__toString(),
+            'venueRemainingQuantityDecimal' => self::decimal($plan->quantity)->__toString(),
             'filledEntryNotionalDecimal' => '0',
             'accumulatedEntryFeeDecimal' => '0',
             'filledRiskDecimal' => '0',
@@ -126,6 +131,7 @@ final readonly class CanonicalPortfolioReservation
             'appliedFillHashes' => [],
             'transitionInputHashes' => [$decision->portfolioInputHash],
             'version' => 1,
+            'previousStateHash' => null,
             'observedAt' => $decision->createdAt,
         ]);
     }
@@ -165,7 +171,8 @@ final readonly class CanonicalPortfolioReservation
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_stop_polarity_invalid');
         }
-        $remainingBefore = BigDecimal::of($this->remainingQuantityDecimal);
+        $authorizedRemainingBefore = BigDecimal::of($this->remainingQuantityDecimal);
+        $venueRemainingBefore = BigDecimal::of($this->venueRemainingQuantityDecimal);
         $step = self::decimal($this->quantityStep);
         if (
             !$fillQuantity->dividedBy($step, 0, RoundingMode::DOWN)->multipliedBy($step)->isEqualTo($fillQuantity)
@@ -174,11 +181,11 @@ final readonly class CanonicalPortfolioReservation
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_quantity_grid_invalid');
         }
-        if ($fillQuantity->isGreaterThan($remainingBefore)) {
+        if ($fillQuantity->isGreaterThan($venueRemainingBefore)) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_quantity_exceeded');
         }
-        $expectedRemaining = $remainingBefore->minus($fillQuantity);
-        if (!$expectedRemaining->isEqualTo(self::decimal($fill->remainingOrderQuantity))) {
+        $expectedVenueRemaining = $venueRemainingBefore->minus($fillQuantity);
+        if (!$expectedVenueRemaining->isEqualTo(self::decimal($fill->remainingOrderQuantity))) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_remaining_mismatch');
         }
         $filledQuantity = BigDecimal::of($this->filledQuantityDecimal)->plus($fillQuantity);
@@ -212,9 +219,17 @@ final readonly class CanonicalPortfolioReservation
         $reservedRisk = self::decimal($this->reservedRiskQuote);
         $plannedQuantity = self::decimal($this->plannedQuantity);
         $reservedNotional = self::decimal($this->reservedNotionalQuote);
-        $allowedRemaining = $expectedRemaining;
-        $requiredAction = $expectedRemaining->isZero() ? 'none' : 'keep_residual';
-        $status = $expectedRemaining->isZero() ? 'filled' : 'active';
+        $authorizedAfterFill = $authorizedRemainingBefore->minus($fillQuantity);
+        if ($authorizedAfterFill->isNegative()) {
+            $authorizedAfterFill = BigDecimal::zero();
+        }
+        $allowedRemaining = $authorizedAfterFill->isLessThan($expectedVenueRemaining)
+            ? $authorizedAfterFill
+            : $expectedVenueRemaining;
+        $requiredAction = $expectedVenueRemaining->isZero()
+            ? 'none'
+            : ($allowedRemaining->isLessThan($expectedVenueRemaining) ? ($allowedRemaining->isZero() ? 'cancel_residual' : 'reduce_residual') : 'keep_residual');
+        $status = $expectedVenueRemaining->isZero() ? 'filled' : 'active';
 
         if ($protectedQuantity->isLessThan($filledQuantity)) {
             $allowedRemaining = BigDecimal::zero();
@@ -234,8 +249,9 @@ final readonly class CanonicalPortfolioReservation
                 ->multipliedBy($step);
             if ($maximumRemaining->isLessThan($allowedRemaining)) {
                 $allowedRemaining = $maximumRemaining;
+            }
+            if ($allowedRemaining->isLessThan($expectedVenueRemaining)) {
                 $requiredAction = $allowedRemaining->isZero() ? 'cancel_residual' : 'reduce_residual';
-                $status = $allowedRemaining->isZero() ? 'filled' : 'active';
             }
         }
 
@@ -258,7 +274,6 @@ final readonly class CanonicalPortfolioReservation
                 ->multipliedBy($allowedRemaining)
                 ->dividedBy($plannedQuantity, 24, RoundingMode::UP);
             $requiredAction = $allowedRemaining->isZero() ? 'cancel_residual' : 'reduce_residual';
-            $status = $allowedRemaining->isZero() ? 'filled' : 'active';
         }
         if ($status === 'active' && $filledRisk->plus($residualRisk)->isGreaterThan($reservedRisk)) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_arithmetic_invalid');
@@ -272,6 +287,7 @@ final readonly class CanonicalPortfolioReservation
             'filledQuantity' => self::float($filledQuantity),
             'protectedQuantity' => self::float($protectedQuantity),
             'remainingQuantity' => self::float($allowedRemaining),
+            'venueRemainingQuantity' => self::float($expectedVenueRemaining),
             'filledEntryNotionalQuote' => self::float($filledEntryNotional),
             'accumulatedEntryFeeQuote' => self::float($accumulatedEntryFee),
             'filledRiskQuote' => self::float($filledRisk),
@@ -281,6 +297,7 @@ final readonly class CanonicalPortfolioReservation
             'filledQuantityDecimal' => $filledQuantity->__toString(),
             'protectedQuantityDecimal' => $protectedQuantity->__toString(),
             'remainingQuantityDecimal' => $allowedRemaining->__toString(),
+            'venueRemainingQuantityDecimal' => $expectedVenueRemaining->__toString(),
             'filledEntryNotionalDecimal' => $filledEntryNotional->__toString(),
             'accumulatedEntryFeeDecimal' => $accumulatedEntryFee->__toString(),
             'filledRiskDecimal' => $filledRisk->__toString(),
@@ -292,6 +309,7 @@ final readonly class CanonicalPortfolioReservation
             'appliedFillHashes' => $fillHashes,
             'transitionInputHashes' => $transitionInputHashes,
             'version' => $this->version + 1,
+            'previousStateHash' => $this->stateHash,
             'observedAt' => $fill->observedAt,
         ]));
     }
@@ -299,7 +317,7 @@ final readonly class CanonicalPortfolioReservation
     public function cancelResidual(\DateTimeImmutable $observedAt, string $inputHash): self
     {
         self::terminalInput($observedAt, $inputHash, $this->observedAt);
-        if ($this->remainingQuantity === 0.0) {
+        if ($this->venueRemainingQuantity === 0.0) {
             return $this;
         }
         if ($this->version === PHP_INT_MAX) {
@@ -308,15 +326,57 @@ final readonly class CanonicalPortfolioReservation
 
         return self::create(array_replace($this->values(), [
             'remainingQuantity' => 0.0,
+            'venueRemainingQuantity' => 0.0,
             'residualRiskQuote' => 0.0,
             'residualNotionalQuote' => 0.0,
             'remainingQuantityDecimal' => '0',
+            'venueRemainingQuantityDecimal' => '0',
             'residualRiskDecimal' => '0',
             'residualNotionalDecimal' => '0',
-            'status' => $this->filledQuantity > 0.0 ? 'partially_filled' : 'cancelled',
-            'requiredAction' => 'none',
+            'status' => $this->status === 'compensation_required'
+                ? 'compensation_required'
+                : ($this->filledQuantity > 0.0 ? 'partially_filled' : 'cancelled'),
+            'requiredAction' => $this->status === 'compensation_required' ? $this->requiredAction : 'none',
             'transitionInputHashes' => [...$this->transitionInputHashes, $inputHash],
             'version' => $this->version + 1,
+            'previousStateHash' => $this->stateHash,
+            'observedAt' => $observedAt,
+        ]));
+    }
+
+    public function acknowledgeResidualReduction(
+        float $venueRemainingQuantity,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): self {
+        self::terminalInput($observedAt, $inputHash, $this->observedAt);
+        if ($this->status !== 'active') {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_not_reducible');
+        }
+        $venueRemaining = self::decimal($venueRemainingQuantity);
+        $step = self::decimal($this->quantityStep);
+        if (
+            $venueRemaining->isZero()
+            || !$venueRemaining->dividedBy($step, 0, RoundingMode::DOWN)->multipliedBy($step)->isEqualTo($venueRemaining)
+            || !$venueRemaining->isEqualTo(BigDecimal::of($this->remainingQuantityDecimal))
+            || $venueRemaining->isGreaterThan(BigDecimal::of($this->venueRemainingQuantityDecimal))
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_reduction_mismatch');
+        }
+        if ($venueRemaining->isEqualTo(BigDecimal::of($this->venueRemainingQuantityDecimal))) {
+            return $this;
+        }
+        if ($this->version === PHP_INT_MAX) {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_version_overflow');
+        }
+
+        return self::create(array_replace($this->values(), [
+            'venueRemainingQuantity' => self::float($venueRemaining),
+            'venueRemainingQuantityDecimal' => $venueRemaining->__toString(),
+            'requiredAction' => 'keep_residual',
+            'transitionInputHashes' => [...$this->transitionInputHashes, $inputHash],
+            'version' => $this->version + 1,
+            'previousStateHash' => $this->stateHash,
             'observedAt' => $observedAt,
         ]));
     }
@@ -333,11 +393,13 @@ final readonly class CanonicalPortfolioReservation
 
         return self::create(array_replace($this->values(), [
             'remainingQuantity' => 0.0,
+            'venueRemainingQuantity' => 0.0,
             'filledRiskQuote' => 0.0,
             'residualRiskQuote' => 0.0,
             'filledNotionalQuote' => 0.0,
             'residualNotionalQuote' => 0.0,
             'remainingQuantityDecimal' => '0',
+            'venueRemainingQuantityDecimal' => '0',
             'filledRiskDecimal' => '0',
             'residualRiskDecimal' => '0',
             'filledNotionalDecimal' => '0',
@@ -346,6 +408,7 @@ final readonly class CanonicalPortfolioReservation
             'requiredAction' => 'none',
             'transitionInputHashes' => [...$this->transitionInputHashes, $inputHash],
             'version' => $this->version + 1,
+            'previousStateHash' => $this->stateHash,
             'observedAt' => $observedAt,
         ]));
     }

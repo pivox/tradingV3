@@ -30,6 +30,18 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
         self::assertSame(2, $store->scopeVersion($decision->scope));
     }
 
+    public function testEquivalentReconstructedPlanIsAnIdempotentRetry(): void
+    {
+        [$decision, $plan] = $this->admission('decision-1', 1);
+        $copy = unserialize(serialize($plan));
+        self::assertNotSame($plan, $copy);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+
+        $first = $store->reserve($decision, $plan);
+
+        self::assertSame($first, $store->reserve($decision, $copy));
+    }
+
     public function testStaleAdmissionCannotRaceACommittedReservation(): void
     {
         [$first, $firstPlan] = $this->admission('decision-1', 1);
@@ -58,6 +70,29 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
         $store->save($current, $next);
+    }
+
+    public function testTransitionCannotReplaceCommittedHistoryWithAnotherBranch(): void
+    {
+        [$decision, $plan] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $current = $store->reserve($decision, $plan);
+        $committed = $current->cancelResidual(
+            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+            'sha256:' . str_repeat('a', 64),
+        );
+        $foreignBranch = $current->cancelResidual(
+            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+            'sha256:' . str_repeat('b', 64),
+        )->close(
+            new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+            'sha256:' . str_repeat('c', 64),
+        );
+        $store->save($current, $committed);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
+        $store->save($committed, $foreignBranch);
     }
 
     /** @return array{\App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservationDecision, \App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan} */

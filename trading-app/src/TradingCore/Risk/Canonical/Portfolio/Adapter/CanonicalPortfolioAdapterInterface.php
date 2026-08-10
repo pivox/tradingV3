@@ -23,4 +23,23 @@ interface CanonicalPortfolioAdapterInterface
         CanonicalPortfolioReservation $reservation,
         CanonicalPortfolioFill $fill,
     ): CanonicalPortfolioReservation;
+
+    public function cancelResidual(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
+
+    public function acknowledgeResidualReduction(
+        CanonicalPortfolioReservation $reservation,
+        float $venueRemainingQuantity,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
+
+    public function close(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
 }

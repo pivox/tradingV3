@@ -36,6 +36,39 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
         CanonicalPortfolioReservation $reservation,
         CanonicalPortfolioFill $fill,
     ): CanonicalPortfolioReservation {
-        return $this->reservationStore->save($reservation, $reservation->applyFill($fill));
+        $next = $reservation->applyFill($fill);
+
+        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+    }
+
+    final public function cancelResidual(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        $next = $reservation->cancelResidual($observedAt, $inputHash);
+
+        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+    }
+
+    final public function acknowledgeResidualReduction(
+        CanonicalPortfolioReservation $reservation,
+        float $venueRemainingQuantity,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        $next = $reservation->acknowledgeResidualReduction($venueRemainingQuantity, $observedAt, $inputHash);
+
+        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+    }
+
+    final public function close(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        $next = $reservation->close($observedAt, $inputHash);
+
+        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
     }
 }

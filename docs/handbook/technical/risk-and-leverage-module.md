@@ -356,7 +356,10 @@ Chaque fill est lie au meme scope et recalcule en decimal exact risque rempli,
 risque residuel, notionals, frais et quantite protegee. Un reliquat hors budget
 est reduit ou annule ; une quantite remplie non protegee ou deja hors budget
 demande la compensation et interdit tout fill supplementaire. Cancel et close
-liberent les reservations de facon idempotente.
+liberent les reservations de facon idempotente. La quantite encore ouverte sur
+la venue reste distincte du reliquat autorise jusqu'a l'accuse de reduction :
+les fills recus pendant cette fenetre sont donc toujours comptabilises. Chaque
+transition porte le hash exact de son etat precedent avant le compare-and-swap.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme

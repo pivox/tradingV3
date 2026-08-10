@@ -29,7 +29,7 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
                 $existing->admissionHash !== $decision->reservationHash
                 || $existing->planHash !== $plan->planHash
                 || !isset($this->plans[$reservationKey])
-                || $this->plans[$reservationKey] !== $plan
+                || $this->plans[$reservationKey]->planHash !== $plan->planHash
             ) {
                 throw new CanonicalPortfolioException('canonical_portfolio_reservation_identity_conflict');
             }
@@ -62,6 +62,7 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
             || $next->decisionKey !== $expected->decisionKey
             || $next->admissionHash !== $expected->admissionHash
             || $next->version !== $expected->version + 1
+            || $next->previousStateHash !== $expected->stateHash
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_conflict');
         }

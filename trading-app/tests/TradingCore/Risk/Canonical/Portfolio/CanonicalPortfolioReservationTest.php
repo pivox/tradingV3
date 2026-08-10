@@ -24,6 +24,7 @@ final class CanonicalPortfolioReservationTest extends TestCase
 
         self::assertSame('active', $reservation->status);
         self::assertSame($plan->quantity, $reservation->remainingQuantity);
+        self::assertSame($plan->quantity, $reservation->venueRemainingQuantity);
         self::assertSame(0.0, $reservation->filledQuantity);
         self::assertSame(0.0, $reservation->filledRiskQuote);
         self::assertSame($plan->totalStopLoss, $reservation->residualRiskQuote);
@@ -79,6 +80,60 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertLessThan($fill->remainingOrderQuantity, $next->remainingQuantity);
     }
 
+    public function testFillArrivingBeforeResidualReductionAcknowledgementIsStillAccounted(): void
+    {
+        [$reservation, $plan] = $this->reservation();
+        $venueRemainingAfterFirstFill = round($plan->quantity - 2.0, 3);
+        $reduced = $reservation->applyFill($this->fill(
+            $reservation,
+            quantity: 2.0,
+            price: $plan->entryPrice + 0.2,
+            entryFeeQuote: 0.2,
+            protectedQuantityAfter: 2.0,
+            remainingOrderQuantity: $venueRemainingAfterFirstFill,
+        ));
+        self::assertLessThan($venueRemainingAfterFirstFill, $reduced->remainingQuantity);
+
+        $lateFill = $reduced->applyFill($this->fill(
+            $reduced,
+            fillId: 'fill-2',
+            quantity: 0.2,
+            price: $plan->entryPrice + 0.2,
+            entryFeeQuote: 0.05,
+            protectedQuantityAfter: 2.2,
+            remainingOrderQuantity: round($venueRemainingAfterFirstFill - 0.2, 3),
+        ));
+
+        self::assertSame(2.2, $lateFill->filledQuantity);
+        self::assertGreaterThan($reduced->filledRiskQuote, $lateFill->filledRiskQuote);
+        self::assertContains($lateFill->requiredAction, ['reduce_residual', 'cancel_residual', 'compensate_over_budget_fill']);
+    }
+
+    public function testResidualReductionAcknowledgementUpdatesVenueOutstandingSeparately(): void
+    {
+        [$reservation, $plan] = $this->reservation();
+        $reduced = $reservation->applyFill($this->fill(
+            $reservation,
+            quantity: 1.0,
+            price: $plan->entryPrice + 0.4,
+            entryFeeQuote: 0.1,
+            protectedQuantityAfter: 1.0,
+            remainingOrderQuantity: round($plan->quantity - 1.0, 3),
+        ));
+        self::assertSame('reduce_residual', $reduced->requiredAction);
+        self::assertGreaterThan($reduced->remainingQuantity, $reduced->venueRemainingQuantity);
+
+        $acknowledged = $reduced->acknowledgeResidualReduction(
+            $reduced->remainingQuantity,
+            new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+            'sha256:' . str_repeat('a', 64),
+        );
+
+        self::assertSame($acknowledged->remainingQuantity, $acknowledged->venueRemainingQuantity);
+        self::assertSame('keep_residual', $acknowledged->requiredAction);
+        self::assertSame($reduced->stateHash, $acknowledged->previousStateHash);
+    }
+
     public function testUnprotectedFilledQuantityRequiresCompensationAndBlocksFurtherFill(): void
     {
         [$reservation, $plan] = $this->reservation();
@@ -95,9 +150,16 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertSame(0.0, $next->remainingQuantity);
         self::assertSame(0.0, $next->residualRiskQuote);
 
+        $cancelAcknowledged = $next->cancelResidual(
+            new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+            'sha256:' . str_repeat('a', 64),
+        );
+        self::assertSame('compensation_required', $cancelAcknowledged->status);
+        self::assertSame('compensate_unprotected_fill', $cancelAcknowledged->requiredAction);
+
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_not_fillable');
-        $next->applyFill($this->fill($next,
+        $cancelAcknowledged->applyFill($this->fill($cancelAcknowledged,
             fillId: 'fill-2',
             quantity: 0.1,
             price: $plan->entryPrice,
@@ -204,6 +266,7 @@ final class CanonicalPortfolioReservationTest extends TestCase
         );
         self::assertSame('partially_filled', $cancelled->status);
         self::assertSame(0.0, $cancelled->remainingQuantity);
+        self::assertSame(0.0, $cancelled->venueRemainingQuantity);
         self::assertSame(0.0, $cancelled->residualRiskQuote);
         self::assertContains('sha256:' . str_repeat('a', 64), $cancelled->transitionInputHashes);
         self::assertSame($cancelled, $cancelled->cancelResidual(

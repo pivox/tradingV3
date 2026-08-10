@@ -73,6 +73,41 @@ final class CanonicalPortfolioAdapterParityTest extends TestCase
         self::assertSame(['canonical_portfolio_concurrency_exceeded'], array_values(array_unique($reasonCodes)));
     }
 
+    public function testAllAdaptersPersistCancelAndCloseWithIdenticalStates(): void
+    {
+        $request = $this->request();
+        $cancelHashes = [];
+        $closeHashes = [];
+        foreach ($this->adapters() as $adapter) {
+            $reservation = $adapter->reserve($adapter->admit($request), $request->plan);
+            $cancelled = $adapter->cancelResidual(
+                $reservation,
+                new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+                'sha256:' . str_repeat('a', 64),
+            );
+            self::assertSame($cancelled, $adapter->cancelResidual(
+                $cancelled,
+                new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+                'sha256:' . str_repeat('a', 64),
+            ));
+            $closed = $adapter->close(
+                $cancelled,
+                new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+                'sha256:' . str_repeat('b', 64),
+            );
+            self::assertSame($closed, $adapter->close(
+                $closed,
+                new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+                'sha256:' . str_repeat('b', 64),
+            ));
+            $cancelHashes[] = $cancelled->stateHash;
+            $closeHashes[] = $closed->stateHash;
+        }
+
+        self::assertCount(1, array_unique($cancelHashes));
+        self::assertCount(1, array_unique($closeHashes));
+    }
+
     public function testThinAdaptersCannotImportLegacyOrPrivateExecutionLayers(): void
     {
         foreach ([

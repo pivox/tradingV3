@@ -123,8 +123,10 @@ final readonly class CanonicalPortfolioAdmissionEngine
             'projected_concurrent_positions' => $projectedConcurrent,
             'created_at' => $now->format('Y-m-d\TH:i:s.uP'),
         ];
+        $identityValues = $values;
+        unset($identityValues['created_at']);
         $reservationHash = 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode(
-            $values,
+            $identityValues,
             'canonical_portfolio_reservation_hash_invalid',
         ));
 

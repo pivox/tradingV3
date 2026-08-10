@@ -118,6 +118,17 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
         (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))->admit($request);
     }
 
+    public function testAdmissionIdentityIsStableAcrossProcessingTimeRetries(): void
+    {
+        $request = $this->request();
+
+        $first = (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))->admit($request);
+        $retry = (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:01+00:00')))->admit($request);
+
+        self::assertSame($first->reservationHash, $retry->reservationHash);
+        self::assertNotEquals($first->createdAt, $retry->createdAt);
+    }
+
     public function testRejectsStalePortfolioState(): void
     {
         $request = $this->request(snapshot: $this->snapshot(observedAt: '2026-08-10T11:58:59+00:00'));
