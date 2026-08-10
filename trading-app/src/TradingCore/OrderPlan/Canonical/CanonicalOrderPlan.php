@@ -82,6 +82,7 @@ final readonly class CanonicalOrderPlan
         CanonicalOrderPlanBuildRequest $request,
         \DateTimeImmutable $createdAt,
     ): self {
+        $request = (new CanonicalOrderPlanAuthority())->verify($request);
         $policy = $request->policy;
         $riskPolicy = $policy->riskPolicy;
         $risk = $request->risk;

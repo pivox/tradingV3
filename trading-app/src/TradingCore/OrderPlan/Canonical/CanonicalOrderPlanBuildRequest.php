@@ -11,7 +11,9 @@ final readonly class CanonicalOrderPlanBuildRequest
 {
     public function __construct(
         public CanonicalExecutionPolicy $policy,
+        public CanonicalEntryZoneRequest $zoneRequest,
         public CanonicalEntryZone $zone,
+        public CanonicalProtectionRequest $protectionRequest,
         public CanonicalProtectionDecision $protection,
         public CanonicalRiskCalculationRequest $riskRequest,
         public CanonicalRiskDecision $risk,

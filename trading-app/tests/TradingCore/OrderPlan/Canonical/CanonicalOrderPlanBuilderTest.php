@@ -11,6 +11,9 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\OrderPlan\Canonical\CanonicalNetRDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalNetRTargetDecision;
+use App\TradingCore\OrderPlan\Canonical\CanonicalEntryZone;
+use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionDecision;
+use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionTarget;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -56,7 +59,9 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $this->expectExceptionMessage('canonical_order_plan_identity_mismatch');
         (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))->build(new CanonicalOrderPlanBuildRequest(
             $long['policy'],
+            $long['zoneRequest'],
             $long['zone'],
+            $long['protectionRequest'],
             $short['protection'],
             $long['riskRequest'],
             $long['risk'],
@@ -77,6 +82,37 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:03:01+00:00')))->validate($plan);
     }
 
+    public function testBuilderRejectsFabricatedEntryZoneBounds(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $zoneArguments = get_object_vars($components['zone']);
+        $zoneArguments['lowerPrice'] = 90.0;
+        $components['zone'] = new CanonicalEntryZone(...$zoneArguments);
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_entry_zone_mismatch');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
+    public function testBuilderRejectsFabricatedProtectionTarget(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $first = $components['protection']->targets[0];
+        $targetArguments = get_object_vars($first);
+        $targetArguments['price'] = $first->price + 1.0;
+        $protectionArguments = get_object_vars($components['protection']);
+        $protectionArguments['targets'][0] = new CanonicalProtectionTarget(...$targetArguments);
+        $components['protection'] = new CanonicalProtectionDecision(...$protectionArguments);
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_protection_mismatch');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
     public function testBuilderRejectsInternallyConsistentButFabricatedNetRDecision(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
@@ -87,7 +123,9 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $this->expectExceptionMessage('canonical_order_plan_net_r_mismatch');
         (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))->build(new CanonicalOrderPlanBuildRequest(
             $components['policy'],
+            $components['zoneRequest'],
             $components['zone'],
+            $components['protectionRequest'],
             $components['protection'],
             $components['riskRequest'],
             $components['risk'],
@@ -101,7 +139,9 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $components = CanonicalOrderPlanPipelineFixture::accepted();
         $request = new CanonicalOrderPlanBuildRequest(
             $components['policy'],
+            $components['zoneRequest'],
             $components['zone'],
+            $components['protectionRequest'],
             $components['protection'],
             $components['riskRequest'],
             $components['risk'],
@@ -110,7 +150,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         );
 
         $this->expectException(CanonicalOrderPlanException::class);
-        $this->expectExceptionMessage('canonical_order_plan_target_cost_mismatch');
+        $this->expectExceptionMessage('canonical_order_plan_net_r_mismatch');
         CanonicalOrderPlan::fromAcceptedComponents($request, new \DateTimeImmutable('2026-08-10T12:00:00+00:00'));
     }
 
@@ -126,7 +166,9 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $this->expectExceptionMessage('canonical_order_plan_risk_mismatch');
         (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))->build(new CanonicalOrderPlanBuildRequest(
             $components['policy'],
+            $components['zoneRequest'],
             $components['zone'],
+            $components['protectionRequest'],
             $components['protection'],
             $components['riskRequest'],
             $forged,
@@ -150,7 +192,9 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             + $components['risk']->fundingCost;
         $request = new CanonicalOrderPlanBuildRequest(
             $components['policy'],
+            $components['zoneRequest'],
             $components['zone'],
+            $components['protectionRequest'],
             $components['protection'],
             $components['riskRequest'],
             new CanonicalRiskDecision(...$arguments),
@@ -159,7 +203,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         );
 
         $this->expectException(CanonicalOrderPlanException::class);
-        $this->expectExceptionMessage('canonical_order_plan_risk_components_mismatch');
+        $this->expectExceptionMessage('canonical_order_plan_risk_mismatch');
         CanonicalOrderPlan::fromAcceptedComponents($request, new \DateTimeImmutable('2026-08-10T12:00:00+00:00'));
     }
 

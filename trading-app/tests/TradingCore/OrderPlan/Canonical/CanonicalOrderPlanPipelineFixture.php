@@ -30,7 +30,9 @@ final class CanonicalOrderPlanPipelineFixture
     /**
      * @return array{
      *   policy: CanonicalExecutionPolicy,
+     *   zoneRequest: CanonicalEntryZoneRequest,
      *   zone: CanonicalEntryZone,
+     *   protectionRequest: CanonicalProtectionRequest,
      *   protection: CanonicalProtectionDecision,
      *   riskRequest: CanonicalRiskCalculationRequest,
      *   risk: CanonicalRiskDecision,
@@ -43,20 +45,22 @@ final class CanonicalOrderPlanPipelineFixture
         $policy = CanonicalExecutionPolicyFixture::policy($side);
         $observed = new \DateTimeImmutable('2026-08-10T11:59:30+00:00');
         $candidate = $side === 'long' ? 100.1 : 100.39;
-        $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate(new CanonicalEntryZoneRequest(
+        $zoneRequest = new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
             new CanonicalPriceObservation('fake', 'BTCUSDT', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
             new CanonicalPriceObservation('fake', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
             new CanonicalMarketSnapshot('fake', 'BTCUSDT', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
             new CanonicalTickSnapshot('fake', 'BTCUSDT', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
-        ));
-        $protection = (new CanonicalProtectionEngine())->calculate(new CanonicalProtectionRequest(
+        );
+        $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate($zoneRequest);
+        $protectionRequest = new CanonicalProtectionRequest(
             $policy,
             $zone,
             new CanonicalPriceObservation('fake', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
             null,
-        ));
+        );
+        $protection = (new CanonicalProtectionEngine())->calculate($protectionRequest);
         $costs = new CanonicalExecutionCostSnapshot(
             'fake',
             'test',
@@ -101,6 +105,16 @@ final class CanonicalOrderPlanPipelineFixture
         $risk = (new CanonicalRiskEngine())->calculate($riskRequest);
         $netR = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
 
-        return ['policy' => $policy, 'zone' => $zone, 'protection' => $protection, 'riskRequest' => $riskRequest, 'risk' => $risk, 'netR' => $netR, 'costs' => $costs];
+        return [
+            'policy' => $policy,
+            'zoneRequest' => $zoneRequest,
+            'zone' => $zone,
+            'protectionRequest' => $protectionRequest,
+            'protection' => $protection,
+            'riskRequest' => $riskRequest,
+            'risk' => $risk,
+            'netR' => $netR,
+            'costs' => $costs,
+        ];
     }
 }

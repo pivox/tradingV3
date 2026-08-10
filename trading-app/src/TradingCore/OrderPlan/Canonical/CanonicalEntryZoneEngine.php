@@ -16,6 +16,11 @@ final readonly class CanonicalEntryZoneEngine
 
     public function calculate(CanonicalEntryZoneRequest $request): CanonicalEntryZone
     {
+        return self::calculateAt($request, $this->clock->now());
+    }
+
+    public static function calculateAt(CanonicalEntryZoneRequest $request, \DateTimeImmutable $now): CanonicalEntryZone
+    {
         $policy = $request->policy;
         $zonePolicy = $policy->entryZone;
         $risk = $policy->riskPolicy;
@@ -42,14 +47,13 @@ final readonly class CanonicalEntryZoneEngine
             throw new CanonicalOrderPlanException('canonical_entry_zone_atr_mismatch');
         }
 
-        $this->validatePositive($request->anchor->value, 'canonical_entry_zone_anchor_invalid');
-        $this->validatePositive($request->atr->value, 'canonical_entry_zone_atr_invalid');
-        $this->validatePositive($request->market->candidatePrice, 'canonical_entry_zone_candidate_invalid');
-        $this->validatePositive($request->tick->tickSize, 'canonical_entry_zone_tick_invalid');
-        $now = $this->clock->now();
+        self::validatePositive($request->anchor->value, 'canonical_entry_zone_anchor_invalid');
+        self::validatePositive($request->atr->value, 'canonical_entry_zone_atr_invalid');
+        self::validatePositive($request->market->candidatePrice, 'canonical_entry_zone_candidate_invalid');
+        self::validatePositive($request->tick->tickSize, 'canonical_entry_zone_tick_invalid');
         $observedAt = $request->anchor->observedAt;
         foreach ([$request->anchor, $request->atr, $request->market, $request->tick] as $input) {
-            $this->validateInputHash($input->inputHash);
+            self::validateInputHash($input->inputHash);
             if ($input->observedAt > $now) {
                 throw new CanonicalOrderPlanException('canonical_entry_zone_input_future');
             }
@@ -120,14 +124,14 @@ final readonly class CanonicalEntryZoneEngine
         );
     }
 
-    private function validatePositive(float $value, string $reasonCode): void
+    private static function validatePositive(float $value, string $reasonCode): void
     {
         if (!\is_finite($value) || $value <= 0.0) {
             throw new CanonicalOrderPlanException($reasonCode);
         }
     }
 
-    private function validateInputHash(string $hash): void
+    private static function validateInputHash(string $hash): void
     {
         if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $hash) !== 1) {
             throw new CanonicalOrderPlanException('canonical_entry_zone_input_hash_invalid');

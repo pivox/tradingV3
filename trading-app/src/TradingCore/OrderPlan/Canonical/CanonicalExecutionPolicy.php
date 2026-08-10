@@ -315,6 +315,31 @@ final readonly class CanonicalExecutionPolicy
         ) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_setup_schema_invalid');
         }
+        $dataContract = self::mapping($setup, 'data_condition_contract', 'canonical_execution_policy_catalog_invalid');
+        self::requireExactKeys($dataContract, [
+            'required_data',
+            'missing_conditions',
+            'external_dependencies',
+            'condition_catalog_hash',
+            'unknown_condition_policy',
+        ], 'canonical_execution_policy_catalog_invalid');
+        $catalogDecision = self::mapping($dataContract, 'condition_catalog_hash', 'canonical_execution_policy_catalog_invalid');
+        self::requireExactKeys(
+            $catalogDecision,
+            ['state', 'value', 'unit', 'source', 'justification'],
+            'canonical_execution_policy_catalog_invalid',
+        );
+        if (
+            ($catalogDecision['state'] ?? null) !== 'defined'
+            || ($catalogDecision['unit'] ?? null) !== 'sha256'
+            || ($catalogDecision['value'] ?? null) !== $setup['condition_catalog_hash']
+            || !\is_string($catalogDecision['source'] ?? null)
+            || trim($catalogDecision['source']) === ''
+            || !\is_string($catalogDecision['justification'] ?? null)
+            || trim($catalogDecision['justification']) === ''
+        ) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_catalog_invalid');
+        }
         $modeVersions = self::mapping($setup, 'mode_versions', 'canonical_execution_policy_setup_schema_invalid');
         $provenance = self::mapping($setup, 'contract_provenance', 'canonical_execution_policy_setup_schema_invalid');
         if (

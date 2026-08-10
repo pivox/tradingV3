@@ -98,6 +98,17 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
     }
 
+    public function testRejectsNestedConditionCatalogConflict(): void
+    {
+        $payload = $this->payload();
+        $payload['setup']['data_condition_contract']['condition_catalog_hash']['state'] = 'unresolved';
+        $payload['setup']['data_condition_contract']['condition_catalog_hash']['value'] = null;
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_catalog_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
     public function testRejectsAmbiguousStopSource(): void
     {
         $payload = $this->payload();
