@@ -706,6 +706,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'floatval',
                     array_filter($macdFull['hist'], static fn (mixed $value): bool => is_numeric($value) && is_finite((float) $value)),
                 )), -60);
+                $adx = [
+                    14 => $this->adxService->calculate($highs, $lows, $closes, 14),
+                    15 => $this->adxService->calculate($highs, $lows, $closes, 15),
+                ];
                 $volumeRatio = $this->volumeRatio($volumes);
                 $atr = $snapshot->atr?->toFloat();
                 $ma21 = $snapshot->ma21?->toFloat();
@@ -721,7 +725,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'macd_hist'    => $snapshot->macdHistogram?->toFloat(),
                     'vwap'         => $snapshot->vwap?->toFloat(),
                     'atr'          => $snapshot->atr?->toFloat(),
-                    'adx'          => $snapshot->meta['adx'] ?? null, // si tu stockes ADX dans meta
+                    'adx'          => $adx,
                     'ma9'          => $snapshot->ma9?->toFloat(),
                     'ma21'         => $snapshot->ma21?->toFloat(),
                     'bb_upper'     => $snapshot->bbUpper?->toFloat(),
