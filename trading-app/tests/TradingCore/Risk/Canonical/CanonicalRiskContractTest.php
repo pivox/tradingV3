@@ -76,6 +76,7 @@ final class CanonicalRiskContractTest extends TestCase
         new CanonicalCostSnapshot(...$arguments);
     }
 
+    /** @param array<string, mixed> $overrides */
     #[DataProvider('invalidRequestProvider')]
     public function testRejectsInvalidRiskRequest(string $reasonCode, string $side, array $overrides): void
     {

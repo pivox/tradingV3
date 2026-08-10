@@ -235,3 +235,43 @@ Ils couvrent :
 - floor et rounding ;
 - representation de `max_loss_pct` sans changer le calcul initial ;
 - absence de levier arbitraire sans stop valide.
+
+## #304 Lot A - autorite de risque canonique
+
+Le namespace `App\TradingCore\Risk\Canonical` est la nouvelle autorite pure du
+chemin moderne. Les classes historiques `PositionSizer`, `LeverageCalculator`
+et `RiskConfigInterpreter` restent reservees au chemin legacy explicite ; elles
+ne sont ni adaptees ni utilisees comme fallback par le moteur canonique.
+
+`CanonicalRiskPolicyCompiler` lit exclusivement le snapshot effectif immuable.
+Il exige `risk.trade_budget` avec l'unite
+`percent_equity_per_trade`, puis convertit les points de pourcentage une seule
+fois : `0.4` devient le taux interne `0.004`. Les alias historiques et toute
+seconde source de risque sont rejetes.
+
+`CanonicalRiskEngine` dimensionne ensuite la quantite a partir de la perte
+totale au stop :
+
+```text
+risk_budget_quote = equity_quote * risk_rate
+total_stop_loss = gross_stop_loss
+  + entry_fee + stop_exit_fee
+  + spread_cost + slippage_cost + adverse_funding_cost
+```
+
+La quantite est bornee par les caps de volume, de notional et de levier, puis
+arrondie vers le bas au pas exchange. Tous les composants sont recalcules avec
+la quantite finale. Une decision n'est produite que si la perte finale reste
+inferieure ou egale au budget et si le levier entier final reste inferieur ou
+egal a chacun des caps applicables. Aucun multiplicateur de timeframe,
+confiance ou liquidite n'existe dans ce contrat.
+
+Les couts inconnus sont rejetes ; une valeur nulle doit etre fournie
+explicitement lorsqu'un cout vaut reellement zero. Les appels directs au moteur
+conservent des gardes locales contre des caps invalides, meme s'ils contournent
+le compilateur.
+
+Le Lot A n'est pas encore branche au runtime TradeEntry. Les blockers modernes
+restent donc en place jusqu'aux Lots B (EntryZone, protection, net R et
+OrderPlan) et C (caps portefeuille, partial fills et parite). Mainnet reste
+public/read-only et aucune execution privee mainnet n'est activee.

@@ -34,16 +34,18 @@ final class CanonicalRiskPolicyCompiler
             throw new CanonicalRiskException('canonical_policy_identity_mismatch');
         }
 
-        if (
-            ($safety['mainnet_write_enabled'] ?? null) !== false
-            || ($safety['demo_testnet_write_enabled'] ?? null) !== false
-            || ($safety['require_stop_loss'] ?? null) !== true
-            || ($safety['kill_switch_enabled'] ?? null) !== true
-            || ($environment['write_enabled'] ?? null) !== false
-            || ($environment['require_stop_loss'] ?? null) !== true
-            || ($environment['kill_switch_enabled'] ?? null) !== true
-        ) {
-            throw new CanonicalRiskException('canonical_policy_safety_invalid');
+        foreach ([
+            [$safety, 'mainnet_write_enabled', false],
+            [$safety, 'demo_testnet_write_enabled', false],
+            [$safety, 'require_stop_loss', true],
+            [$safety, 'kill_switch_enabled', true],
+            [$environment, 'write_enabled', false],
+            [$environment, 'require_stop_loss', true],
+            [$environment, 'kill_switch_enabled', true],
+        ] as [$owner, $key, $expected]) {
+            if (!array_key_exists($key, $owner) || $owner[$key] !== $expected) {
+                throw new CanonicalRiskException('canonical_policy_safety_invalid');
+            }
         }
 
         $risk = $this->mapping($mode, 'risk', 'canonical_policy_shape_invalid');
@@ -60,7 +62,7 @@ final class CanonicalRiskPolicyCompiler
         if (($tradeBudget['unit'] ?? null) !== 'percent_equity_per_trade') {
             throw new CanonicalRiskException('canonical_policy_trade_budget_unit_invalid');
         }
-        $tradeBudgetPercent = $this->finiteNumber($tradeBudget['value'] ?? null, 'canonical_policy_trade_budget_value_invalid');
+        $tradeBudgetPercent = $this->finiteNumber($tradeBudget['value'], 'canonical_policy_trade_budget_value_invalid');
         if ($tradeBudgetPercent <= 0.0 || $tradeBudgetPercent > 100.0) {
             throw new CanonicalRiskException('canonical_policy_trade_budget_value_invalid');
         }

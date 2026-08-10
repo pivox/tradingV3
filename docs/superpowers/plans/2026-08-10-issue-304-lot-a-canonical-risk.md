@@ -1,6 +1,6 @@
 # Issue #304 Lot A Canonical Risk Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the single modern risk authority that compiles explicit units, sizes against cost-inclusive stop loss, applies every notional/leverage cap, quantizes conservatively, and proves the final loss remains within budget.
 
@@ -18,7 +18,7 @@
 - Create: `trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskPolicyCompiler.php`
 - Create: `trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskPolicyCompilerTest.php`
 
-- [ ] **Step 1: Write the failing compiler tests**
+- [x] **Step 1: Write the failing compiler tests**
 
 Create a synthetic executable `EffectiveTradingConfigSnapshot` fixture containing full decision objects. Assert that `0.4` with unit `percent_equity_per_trade` becomes exactly `0.004`, identity and hash are retained, mode leverage and notional caps are retained, and maker/taker fees are retained. Add data-provider cases for an unresolved decision, `quote_notional`, a non-finite/out-of-range value, a legacy duplicate key, unsafe write gates, and mismatched identity. Every rejection must expose the exact stable `reasonCode`.
 
@@ -32,7 +32,7 @@ $this->expectExceptionMessage('canonical_policy_trade_budget_unit_invalid');
 (new CanonicalRiskPolicyCompiler())->compile($this->snapshot(0.4, 'quote_notional'));
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -42,7 +42,7 @@ trading-app/vendor/bin/phpunit -c trading-app/phpunit.xml.dist trading-app/tests
 
 Expected: test loading fails because the canonical classes do not exist.
 
-- [ ] **Step 3: Implement the immutable policy and structured exception**
+- [x] **Step 3: Implement the immutable policy and structured exception**
 
 Use these public contracts:
 
@@ -91,11 +91,11 @@ The compiler must require `snapshot->executable === true`, no blockers, exact re
 
 Convert with `$riskRate = (float) $value / 100.0`. Reject any legacy risk key instead of selecting precedence. Validate all numeric values with `is_finite`, require `0 < riskRate <= 1`, `modeLeverageCap >= 1`, rates in `[0, 1)`, and positive notional caps.
 
-- [ ] **Step 4: Run compiler tests and verify GREEN**
+- [x] **Step 4: Run compiler tests and verify GREEN**
 
 Run the Task 1 PHPUnit command. Expected: all compiler cases pass.
 
-- [ ] **Step 5: Commit the compiler boundary**
+- [x] **Step 5: Commit the compiler boundary**
 
 ```bash
 git add trading-app/src/TradingCore/Risk/Canonical trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskPolicyCompilerTest.php
@@ -110,7 +110,7 @@ git commit -m "feat(risk): compile canonical risk policy units"
 - Create: `trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskDecision.php`
 - Create: `trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskContractTest.php`
 
-- [ ] **Step 1: Write failing contract validation tests**
+- [x] **Step 1: Write failing contract validation tests**
 
 Assert that missing spread, slippage, funding, entry fee, or stop-exit fee is rejected; negative steps/prices/equity are rejected; long/short stop polarity is enforced; and `fundingIntervals=0` with an explicit `fundingRate=0.0` is accepted. Use stable codes such as `canonical_market_cost_unknown`, `canonical_risk_quantity_step_invalid`, and `canonical_risk_stop_side_invalid`.
 
@@ -126,11 +126,11 @@ new CanonicalCostSnapshot(
 );
 ```
 
-- [ ] **Step 2: Run the contract tests and verify RED**
+- [x] **Step 2: Run the contract tests and verify RED**
 
 Run the new test file. Expected: missing classes cause failure.
 
-- [ ] **Step 3: Implement exact DTOs with constructor validation**
+- [x] **Step 3: Implement exact DTOs with constructor validation**
 
 Use these fields without percentage aliases or multipliers:
 
@@ -193,7 +193,7 @@ final readonly class CanonicalRiskDecision
 
 Constructors reject non-finite values and invalid ranges immediately. `side` must exactly match the policy and be `long` or `short`. No `0.4` heuristic is allowed.
 
-- [ ] **Step 4: Run contract tests and the existing legacy risk suite**
+- [x] **Step 4: Run contract tests and the existing legacy risk suite**
 
 Run:
 
@@ -203,7 +203,7 @@ trading-app/vendor/bin/phpunit -c trading-app/phpunit.xml.dist trading-app/tests
 
 Expected: canonical and unchanged legacy tests pass.
 
-- [ ] **Step 5: Commit the explicit snapshots**
+- [x] **Step 5: Commit the explicit snapshots**
 
 ```bash
 git add trading-app/src/TradingCore/Risk/Canonical trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskContractTest.php
@@ -216,7 +216,7 @@ git commit -m "feat(risk): add explicit canonical calculation snapshots"
 - Create: `trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskEngine.php`
 - Create: `trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskEngineTest.php`
 
-- [ ] **Step 1: Write failing deterministic sizing tests**
+- [x] **Step 1: Write failing deterministic sizing tests**
 
 Cover long and short examples, non-zero fees/spread/slippage/funding, quantity-step rounding, minimum quantity rejection, max/market quantity caps, exchange/environment notional caps, and explicit zero available balance. Assert the recomputed component sum and `totalStopLoss <= riskBudgetQuote`.
 
@@ -231,11 +231,11 @@ $costPerUnit = $entry * $contractSize * ($entryFee + $spread + $slippage + max(0
 $expectedRaw = $riskBudget / ($grossPerUnit + $costPerUnit);
 ```
 
-- [ ] **Step 2: Run engine tests and verify RED**
+- [x] **Step 2: Run engine tests and verify RED**
 
 Run the new engine test. Expected: `CanonicalRiskEngine` is missing.
 
-- [ ] **Step 3: Implement cost-inclusive sizing**
+- [x] **Step 3: Implement cost-inclusive sizing**
 
 The engine must calculate:
 
@@ -253,11 +253,11 @@ $rawQuantity = $riskBudget / ($grossPerQuantity + $costPerQuantity);
 
 Intersect that quantity with max quantity, optional market max quantity, exchange/environment notional caps, and leverage capacity before flooring to the quantity step. Never round up to minimum quantity. Recompute every quote component from final quantity and reject `canonical_risk_post_quantization_breach` if the total exceeds budget.
 
-- [ ] **Step 4: Run focused and legacy suites and verify GREEN**
+- [x] **Step 4: Run focused and legacy suites and verify GREEN**
 
 Run the Task 3 test plus all `tests/TradingCore/Risk`. Expected: all pass with no legacy behavior change.
 
-- [ ] **Step 5: Commit cost-aware sizing**
+- [x] **Step 5: Commit cost-aware sizing**
 
 ```bash
 git add trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskEngine.php trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskEngineTest.php
@@ -270,7 +270,7 @@ git commit -m "feat(risk): enforce cost-aware post-quantization budget"
 - Create: `trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskInvariantTest.php`
 - Modify: `trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskEngine.php`
 
-- [ ] **Step 1: Add deterministic property loops and verify RED where needed**
+- [x] **Step 1: Add deterministic property loops and verify RED where needed**
 
 Use a fixed seed and at least 500 generated cases spanning both sides, risk rates `0.001..0.1`, stop distances, quantity steps, fee/cost rates, balances, and contradictory mode/exchange/symbol caps. For every accepted result assert:
 
@@ -282,19 +282,19 @@ self::assertEqualsWithDelta(0.0, fmod($decision->quantity, $step), 1e-9);
 
 The first two PHPUnit arguments are expected-value first; these assertions mean actual loss/leverage are less than or equal to their limits. Also assert no request or result property contains `multiplier`, `riskPct`, or `risk_pct_percent`.
 
-- [ ] **Step 2: Run invariant tests and capture any counterexample**
+- [x] **Step 2: Run invariant tests and capture any counterexample**
 
 Run only `CanonicalRiskInvariantTest`. Expected: any float-boundary or cap-order defect is exposed with the seeded case in the failure message.
 
-- [ ] **Step 3: Apply the minimal conservative correction**
+- [x] **Step 3: Apply the minimal conservative correction**
 
 Compute the effective integer leverage cap as `floor(min(all configured caps))`. Cap notional to `availableBalanceQuote * effectiveCap`, then quantize quantity down. Derive final leverage as `max(1, ceil(positionNotional / availableBalanceQuote - 1e-12))`. If a floating boundary still breaches risk, subtract exactly one quantity step and recompute all components; reject if the result falls below minimum quantity.
 
-- [ ] **Step 4: Run invariant, canonical, and legacy risk suites**
+- [x] **Step 4: Run invariant, canonical, and legacy risk suites**
 
 Expected: 500+ invariant cases and all focused tests pass deterministically.
 
-- [ ] **Step 5: Commit invariant hardening**
+- [x] **Step 5: Commit invariant hardening**
 
 ```bash
 git add trading-app/src/TradingCore/Risk/Canonical/CanonicalRiskEngine.php trading-app/tests/TradingCore/Risk/Canonical/CanonicalRiskInvariantTest.php
@@ -307,28 +307,28 @@ git commit -m "test(risk): prove canonical sizing invariants"
 - Modify: `docs/handbook/technical/risk-and-leverage-module.md`
 - Modify: `docs/superpowers/plans/2026-08-10-issue-304-lot-a-canonical-risk.md`
 
-- [ ] **Step 1: Document legacy/canonical separation**
+- [x] **Step 1: Document legacy/canonical separation**
 
 Add a `#304 Lot A` section stating that the old `PositionSizer`, `LeverageCalculator`, and `RiskConfigInterpreter` remain legacy-only; the new canonical engine has one percentage source, includes stop-path costs, reapplies caps after quantization, and is not wired until Lots B/C complete. State explicitly that runtime blockers and mainnet write prohibition remain.
 
-- [ ] **Step 2: Run complete Lot A verification**
+- [x] **Step 2: Run complete Lot A verification**
 
 Run:
 
 ```bash
 trading-app/vendor/bin/phpunit -c trading-app/phpunit.xml.dist trading-app/tests/TradingCore/Risk trading-app/tests/TradeEntry/Policy/CanonicalTradeRuntimePolicyValidatorTest.php
-trading-app/vendor/bin/phpstan analyse -c trading-app/phpstan.neon --no-progress trading-app/src/TradingCore/Risk/Canonical trading-app/tests/TradingCore/Risk/Canonical
+trading-app/vendor/bin/phpstan analyse -c trading-app/phpstan.dist.neon --no-progress trading-app/src/TradingCore/Risk/Canonical trading-app/tests/TradingCore/Risk/Canonical
 find trading-app/src/TradingCore/Risk/Canonical trading-app/tests/TradingCore/Risk/Canonical -name '*.php' -print0 | xargs -0 -n1 php -l
 git diff --check origin/main...HEAD
 ```
 
 Expected: PHPUnit and PHPStan report zero failures/errors, every PHP file reports no syntax error, and diff check is clean.
 
-- [ ] **Step 3: Inspect scope and leave runtime blockers intact**
+- [x] **Step 3: Inspect scope and leave runtime blockers intact**
 
 Confirm the diff does not modify legacy YAML, `CanonicalTradeRuntimePolicyValidator`, execution ports, or mainnet write gates. Confirm no class in the canonical namespace imports `TradeEntryConfig`, `ExecutionBox`, providers, Doctrine, Messenger, or HTTP clients.
 
-- [ ] **Step 4: Mark completed checkboxes and commit documentation**
+- [x] **Step 4: Mark completed checkboxes and commit documentation**
 
 ```bash
 git add docs/handbook/technical/risk-and-leverage-module.md docs/superpowers/plans/2026-08-10-issue-304-lot-a-canonical-risk.md
