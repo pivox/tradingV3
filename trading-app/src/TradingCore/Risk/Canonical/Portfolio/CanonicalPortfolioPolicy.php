@@ -32,6 +32,18 @@ final readonly class CanonicalPortfolioPolicy
     ) {
     }
 
+    /** @return never */
+    public function __serialize(): array
+    {
+        throw new CanonicalPortfolioException('canonical_portfolio_policy_serialization_forbidden');
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new CanonicalPortfolioException('canonical_portfolio_policy_serialization_forbidden');
+    }
+
     public static function fromSnapshot(EffectiveTradingConfigSnapshot $snapshot): self
     {
         if (!$snapshot->executable || $snapshot->blockers !== []) {

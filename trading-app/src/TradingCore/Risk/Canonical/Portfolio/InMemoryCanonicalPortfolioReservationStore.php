@@ -38,6 +38,9 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
                 || $existing->planHash !== $plan->planHash
                 || $existing->configHash !== $request->policy->configHash
                 || $existing->portfolioInputHash !== $request->snapshot->inputHash
+                || $existing->portfolioSnapshotIdentityHash !== $request->snapshot->identityHash()
+                || $existing->portfolioSource !== $request->snapshot->source
+                || $existing->portfolioSourceVersion !== $request->snapshot->sourceVersion
                 || $existing->scope != $request->scope
                 || !isset($this->plans[$reservationKey])
                 || $this->plans[$reservationKey]->planHash !== $plan->planHash
@@ -165,7 +168,9 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
                 'canonical_portfolio_state_unreconciled',
             );
             $committedRisk = $filledRisk->plus($residualRisk);
-            $riskToReserve = $reservation->venueRemainingQuantity > 0.0 && $originalRisk->isGreaterThan($committedRisk)
+            $venueExceedsAuthorized = BigDecimal::of($reservation->venueRemainingQuantityDecimal)
+                ->isGreaterThan(BigDecimal::of($reservation->remainingQuantityDecimal));
+            $riskToReserve = $venueExceedsAuthorized && $originalRisk->isGreaterThan($committedRisk)
                 ? $originalRisk
                 : $committedRisk;
             $filledNotional = BigDecimal::of($reservation->filledNotionalDecimal);

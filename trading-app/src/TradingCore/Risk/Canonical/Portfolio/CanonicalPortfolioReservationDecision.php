@@ -12,6 +12,7 @@ final readonly class CanonicalPortfolioReservationDecision
         public string $configHash,
         public string $planHash,
         public string $portfolioInputHash,
+        public string $portfolioSnapshotIdentityHash,
         public string $portfolioSource,
         public string $portfolioSourceVersion,
         public int $expectedStateVersion,
