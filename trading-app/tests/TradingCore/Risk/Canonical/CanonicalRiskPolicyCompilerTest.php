@@ -37,6 +37,16 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         self::assertSame(250.0, $policy->environmentMaxNotional);
     }
 
+    public function testCompilesSevenTenthsPercentagePointWithoutBinaryDivisionArtifact(): void
+    {
+        $payload = $this->payload();
+        $payload['mode']['risk']['trade_budget']['value'] = 0.7;
+
+        $policy = (new CanonicalRiskPolicyCompiler())->compile($this->snapshot($payload));
+
+        self::assertSame(0.007, $policy->riskRate);
+    }
+
     /**
      * @param callable(array<string, mixed>): array<string, mixed> $mutate
      */

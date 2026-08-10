@@ -6,6 +6,8 @@ namespace App\TradingCore\Risk\Canonical;
 
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 
 final readonly class CanonicalRiskPolicy
 {
@@ -92,7 +94,10 @@ final readonly class CanonicalRiskPolicy
         if ($tradeBudgetPercent <= 0.0 || $tradeBudgetPercent > 100.0) {
             throw new CanonicalRiskException('canonical_policy_trade_budget_value_invalid');
         }
-        $riskRate = $tradeBudgetPercent / 100.0;
+        $tradeBudgetDecimal = self::decimal($tradeBudgetPercent, 'canonical_policy_trade_budget_value_invalid');
+        $riskRate = $tradeBudgetDecimal
+            ->dividedBy('100', $tradeBudgetDecimal->getScale() + 2, RoundingMode::UNNECESSARY)
+            ->toFloat();
 
         $leverage = self::mapping($mode, 'leverage', 'canonical_policy_mode_leverage_unresolved');
         if (($leverage['state'] ?? null) !== 'defined' || ($leverage['unit'] ?? null) !== 'leverage_multiple' || !array_key_exists('value', $leverage)) {
@@ -189,5 +194,33 @@ final readonly class CanonicalRiskPolicy
         }
 
         return $rate;
+    }
+
+    private static function decimal(float $value, string $reasonCode): BigDecimal
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        if ($previousPrecision === false) {
+            throw new CanonicalRiskException($reasonCode);
+        }
+
+        $changed = $previousPrecision !== '-1';
+        if ($changed && ini_set('serialize_precision', '-1') === false) {
+            throw new CanonicalRiskException($reasonCode);
+        }
+
+        $encoded = false;
+        $restored = true;
+        try {
+            $encoded = json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+        } finally {
+            if ($changed) {
+                $restored = ini_set('serialize_precision', $previousPrecision) !== false;
+            }
+        }
+        if (!\is_string($encoded) || !$restored) {
+            throw new CanonicalRiskException($reasonCode);
+        }
+
+        return BigDecimal::of($encoded);
     }
 }
