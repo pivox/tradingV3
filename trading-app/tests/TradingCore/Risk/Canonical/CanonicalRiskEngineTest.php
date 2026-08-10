@@ -317,6 +317,30 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertSame(0.3, $decision->quantity);
     }
 
+    public function testDerivedNotionalCapPreservesExactDecimalGridPoint(): void
+    {
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 100.02,
+                environmentMaxNotional: 1_000.0,
+            ),
+            'equityQuote' => 1_000.0,
+            'availableBalanceQuote' => 1_000.0,
+            'entryPrice' => 250.05,
+            'stopPrice' => 249.05,
+            'quantityStep' => 0.1,
+            'minQuantity' => 0.4,
+            'maxQuantity' => 0.4,
+            'marketMaxQuantity' => 0.4,
+        ]));
+
+        self::assertSame(0.4, $decision->quantity);
+        self::assertEqualsWithDelta(100.02, $decision->positionNotional, 1.0e-12);
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);

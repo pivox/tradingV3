@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Risk\Canonical;
 
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
+
 final class CanonicalRiskEngine
 {
     private const MAX_EXACT_FLOAT_INTEGER_DECIMAL = '9007199254740992';
@@ -63,17 +66,29 @@ final class CanonicalRiskEngine
 
         $rawQuantity = $riskBudgetQuote / $lossPerQuantity;
         $quantityCaps = [
-            $rawQuantity,
-            $request->maxQuantity,
-            $request->policy->exchangeMaxNotional / $entryNotionalPerQuantity,
-            $request->policy->environmentMaxNotional / $entryNotionalPerQuantity,
-            ($request->availableBalanceQuote * $effectiveLeverageCap) / $entryNotionalPerQuantity,
+            $this->quantizeRatioDown([$riskBudgetQuote], [$lossPerQuantity], $request->quantityStep),
+            $this->quantizeDown($request->maxQuantity, $request->quantityStep),
+            $this->quantizeRatioDown(
+                [$request->policy->exchangeMaxNotional],
+                [$request->entryPrice, $request->contractSize],
+                $request->quantityStep,
+            ),
+            $this->quantizeRatioDown(
+                [$request->policy->environmentMaxNotional],
+                [$request->entryPrice, $request->contractSize],
+                $request->quantityStep,
+            ),
+            $this->quantizeRatioDown(
+                [$request->availableBalanceQuote, (float) $effectiveLeverageCap],
+                [$request->entryPrice, $request->contractSize],
+                $request->quantityStep,
+            ),
         ];
         if ($request->marketMaxQuantity !== null) {
-            $quantityCaps[] = $request->marketMaxQuantity;
+            $quantityCaps[] = $this->quantizeDown($request->marketMaxQuantity, $request->quantityStep);
         }
 
-        $quantity = $this->quantizeDown(min($quantityCaps), $request->quantityStep);
+        $quantity = min($quantityCaps);
         foreach ($quantityCaps as $quantityCap) {
             if ($quantity > $quantityCap) {
                 throw new CanonicalRiskException('canonical_risk_post_quantization_cap_breach');
@@ -207,6 +222,41 @@ final class CanonicalRiskEngine
         $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
 
         return round($quantizedUnits / $scale, $decimalPlaces);
+    }
+
+    /**
+     * @param non-empty-list<float> $numeratorFactors
+     * @param non-empty-list<float> $denominatorFactors
+     */
+    private function quantizeRatioDown(array $numeratorFactors, array $denominatorFactors, float $step): float
+    {
+        $numerator = BigDecimal::of('1');
+        foreach ($numeratorFactors as $factor) {
+            if (!\is_finite($factor) || $factor <= 0.0) {
+                return 0.0;
+            }
+            $numerator = $numerator->multipliedBy(BigDecimal::of($this->canonicalDecimal($factor)));
+        }
+        $denominator = BigDecimal::of('1');
+        foreach ($denominatorFactors as $factor) {
+            if (!\is_finite($factor) || $factor <= 0.0) {
+                return 0.0;
+            }
+            $denominator = $denominator->multipliedBy(BigDecimal::of($this->canonicalDecimal($factor)));
+        }
+
+        $stepDecimal = BigDecimal::of($this->canonicalDecimal($step));
+        $steps = $numerator->dividedBy(
+            $denominator->multipliedBy($stepDecimal),
+            0,
+            RoundingMode::FLOOR,
+        );
+        $quantity = $stepDecimal->multipliedBy($steps)->toFloat();
+        if (!\is_finite($quantity) || $quantity < 0.0) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        return $quantity;
     }
 
     private function scaledFloorUnits(float $value, int $decimalPlaces): int
