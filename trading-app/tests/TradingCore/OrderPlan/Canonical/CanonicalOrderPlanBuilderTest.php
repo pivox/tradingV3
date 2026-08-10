@@ -33,7 +33,10 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertSame($components['zone']->entryPrice, $plan->entryPrice);
         self::assertSame($components['protection']->stopPrice, $plan->stopPrice);
         self::assertSame($components['risk']->totalStopLoss, $plan->totalStopLoss);
+        self::assertSame($components['risk']->contractSize, $plan->contractSize);
+        self::assertSame($components['risk']->grossStopLoss, $plan->grossStopLoss);
         self::assertSame($components['risk']->effectiveLeverageCap, $plan->effectiveLeverageCap);
+        self::assertSame($components['netR']->fundingIntervals, $plan->fundingIntervals);
         self::assertCount(2, $plan->targets);
         self::assertGreaterThanOrEqual($plan->minimumNetR, $plan->targets[0]->netR);
         self::assertSame('sha256:', substr($plan->planHash, 0, 7));

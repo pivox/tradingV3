@@ -8,6 +8,7 @@ use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskPolicy;
 use App\TradingCore\Risk\Canonical\CanonicalRiskPolicyCompiler;
+use Brick\Math\BigInteger;
 
 final readonly class CanonicalExecutionPolicy
 {
@@ -211,14 +212,15 @@ final readonly class CanonicalExecutionPolicy
         if (!\is_string($value) || preg_match('/\APT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?\z/D', $value, $matches) !== 1) {
             throw new CanonicalOrderPlanException('canonical_time_stop_invalid');
         }
-        $hours = isset($matches[1]) && $matches[1] !== '' ? (int) $matches[1] : 0;
-        $minutes = isset($matches[2]) && $matches[2] !== '' ? (int) $matches[2] : 0;
-        $seconds = isset($matches[3]) && $matches[3] !== '' ? (int) $matches[3] : 0;
-        if ($hours === 0 && $minutes === 0 && $seconds === 0) {
+        $hours = BigInteger::of(isset($matches[1]) && $matches[1] !== '' ? $matches[1] : '0');
+        $minutes = BigInteger::of(isset($matches[2]) && $matches[2] !== '' ? $matches[2] : '0');
+        $seconds = BigInteger::of(isset($matches[3]) && $matches[3] !== '' ? $matches[3] : '0');
+        $duration = $hours->multipliedBy(3600)->plus($minutes->multipliedBy(60))->plus($seconds);
+        if ($duration->isZero() || $duration->isGreaterThan(PHP_INT_MAX)) {
             throw new CanonicalOrderPlanException('canonical_time_stop_invalid');
         }
 
-        return ($hours * 3600) + ($minutes * 60) + $seconds;
+        return $duration->toInt();
     }
 
     private static function costContract(mixed $value): CanonicalCostContract

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\TradingCore\OrderPlan\Canonical;
 
 use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 use Psr\Clock\ClockInterface;
 
 final readonly class CanonicalOrderPlanValidator
@@ -28,12 +29,14 @@ final readonly class CanonicalOrderPlanValidator
         foreach ([
             $plan->quantity,
             $plan->quantityStep,
+            $plan->contractSize,
             $plan->entryPrice,
             $plan->stopPrice,
             $plan->tickSize,
             $plan->zoneLowerPrice,
             $plan->zoneUpperPrice,
             $plan->positionNotional,
+            $plan->grossStopLoss,
             $plan->modeLeverageCap,
             $plan->exchangeMaxNotional,
             $plan->environmentMaxNotional,
@@ -72,6 +75,24 @@ final readonly class CanonicalOrderPlanValidator
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_risk_budget_breach');
         }
+        $quantity = self::decimal($plan->quantity);
+        $contractSize = self::decimal($plan->contractSize);
+        $entry = self::decimal($plan->entryPrice);
+        $expectedNotional = $entry->multipliedBy($contractSize)->multipliedBy($quantity);
+        if (!$expectedNotional->isEqualTo(self::decimal($plan->positionNotional))) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_notional_mismatch');
+        }
+        $expectedStopLoss = self::decimal($plan->grossStopLoss)
+            ->plus(self::decimal($plan->entryFee))
+            ->plus(self::decimal($plan->stopExitFee))
+            ->plus(self::decimal($plan->entrySpreadCost))
+            ->plus(self::decimal($plan->stopSpreadCost))
+            ->plus(self::decimal($plan->entrySlippageCost))
+            ->plus(self::decimal($plan->stopSlippageCost))
+            ->plus(self::decimal($plan->fundingCost));
+        if (!$expectedStopLoss->isEqualTo(self::decimal($plan->totalStopLoss))) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_risk_components_mismatch');
+        }
         if (
             $plan->finalLeverage < 1
             || $plan->effectiveLeverageCap < 1
@@ -98,6 +119,27 @@ final readonly class CanonicalOrderPlanValidator
             }
             if (!self::aligned($target->price, $plan->tickSize)) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_price_tick_invalid');
+            }
+            $expectedGrossReward = self::decimal($target->price)
+                ->minus($entry)
+                ->abs()
+                ->multipliedBy($contractSize)
+                ->multipliedBy($quantity);
+            $expectedNetReward = $expectedGrossReward
+                ->minus(self::decimal($target->entryFee))
+                ->minus(self::decimal($target->targetFee))
+                ->minus(self::decimal($target->entrySpreadCost))
+                ->minus(self::decimal($target->entrySlippageCost))
+                ->minus(self::decimal($target->targetSpreadCost))
+                ->minus(self::decimal($target->targetSlippageCost))
+                ->minus(self::decimal($target->fundingCost));
+            $expectedNetR = $expectedNetReward->dividedBy(self::decimal($target->netRisk), 18, RoundingMode::DOWN);
+            if (
+                $expectedGrossReward->toFloat() !== $target->grossReward
+                || $expectedNetReward->toFloat() !== $target->netReward
+                || $expectedNetR->toFloat() !== $target->netR
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_target_cost_mismatch');
             }
             $ids[$target->id] = true;
         }

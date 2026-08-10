@@ -79,6 +79,9 @@ final readonly class CanonicalEntryZoneEngine
         $upperWidth = $halfWidth->multipliedBy(BigDecimal::one()->minus(self::decimal($signedAsymmetry)));
         $lower = self::quantize($anchor->minus($lowerWidth), $tick, RoundingMode::FLOOR);
         $upper = self::quantize($anchor->plus($upperWidth), $tick, RoundingMode::CEILING);
+        if ($lower->isLessThanOrEqualTo(BigDecimal::zero()) || !$upper->isGreaterThan($lower)) {
+            throw new CanonicalOrderPlanException('canonical_entry_zone_bounds_invalid');
+        }
         $entry = self::quantize(
             self::decimal($request->market->candidatePrice),
             $tick,

@@ -120,6 +120,16 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
     }
 
+    public function testRejectsTimeStopThatCannotFitRuntimeSeconds(): void
+    {
+        $payload = $this->payload();
+        $payload['setup']['ast']['execution']['time_stop']['value'] = 'PT999999999999999999999H';
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_time_stop_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
     public function testRejectsConfigHashThatDoesNotAuthenticateExecutionPayload(): void
     {
         $snapshot = $this->snapshot();

@@ -17,6 +17,13 @@ final class CanonicalNetREngine
         $costs = $request->costs;
         if (
             $protection->configHash !== $policy->configHash
+            || $protection->modeId !== $policy->riskPolicy->modeId
+            || $protection->modeVersion !== $policy->riskPolicy->modeVersion
+            || $protection->setupId !== $policy->riskPolicy->setupId
+            || $protection->setupVersion !== $policy->riskPolicy->setupVersion
+            || $protection->exchange !== $policy->riskPolicy->exchange
+            || $protection->environment !== $policy->riskPolicy->environment
+            || $protection->side !== $policy->riskPolicy->side
             || $risk->policy->configHash !== $policy->configHash
             || $risk->symbol !== $protection->symbol
             || $risk->side !== $protection->side

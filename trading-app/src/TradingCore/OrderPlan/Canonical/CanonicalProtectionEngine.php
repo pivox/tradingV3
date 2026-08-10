@@ -35,8 +35,11 @@ final class CanonicalProtectionEngine
         $tick = self::decimal($zone->tickSize);
         $buffer = self::decimal($policy->stop->bufferRate);
         if ($policy->stop->kind === 'atr') {
+            if ($policy->stop->atrMultiplier === null) {
+                throw new CanonicalOrderPlanException('canonical_protection_atr_required');
+            }
             $distance = self::decimal($stopInput->value)
-                ->multipliedBy(self::decimal($policy->stop->atrMultiplier ?? 0.0))
+                ->multipliedBy(self::decimal($policy->stop->atrMultiplier))
                 ->plus($entry->multipliedBy($buffer));
             $rawStop = $risk->side === 'long' ? $entry->minus($distance) : $entry->plus($distance);
         } else {
@@ -99,18 +102,15 @@ final class CanonicalProtectionEngine
 
     private function stopInput(CanonicalProtectionRequest $request): CanonicalPriceObservation
     {
-        if ($request->policy->stop->kind === 'atr') {
-            if ($request->atr === null || $request->pivot !== null) {
-                throw new CanonicalOrderPlanException('canonical_protection_atr_required');
-            }
-
-            return $request->atr;
-        }
-        if ($request->pivot === null || $request->atr !== null) {
-            throw new CanonicalOrderPlanException('canonical_protection_pivot_required');
-        }
-
-        return $request->pivot;
+        return match ($request->policy->stop->kind) {
+            'atr' => $request->atr !== null && $request->pivot === null
+                ? $request->atr
+                : throw new CanonicalOrderPlanException('canonical_protection_atr_required'),
+            'pivot' => $request->pivot !== null && $request->atr === null
+                ? $request->pivot
+                : throw new CanonicalOrderPlanException('canonical_protection_pivot_required'),
+            default => throw new CanonicalOrderPlanException('canonical_stop_policy_invalid'),
+        };
     }
 
     private function validateStopInput(CanonicalPriceObservation $input, CanonicalProtectionRequest $request): void

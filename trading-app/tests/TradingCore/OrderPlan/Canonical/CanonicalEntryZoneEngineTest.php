@@ -104,6 +104,13 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         $this->engine()->calculate($this->request(tickSize: 0.0));
     }
 
+    public function testRejectsTickThatQuantizesLowerBoundToZero(): void
+    {
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_bounds_invalid');
+        $this->engine()->calculate($this->request(tickSize: 200.0));
+    }
+
     public function testRejectsMarketIdentityMismatch(): void
     {
         $request = $this->request();
