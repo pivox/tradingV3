@@ -11,9 +11,9 @@ use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalHoldingBoundary;
-use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
+use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
@@ -37,6 +37,9 @@ final readonly class DayTradingShadowRuntime
 
     public function run(DayTradingShadowRequest $request): DayTradingShadowOutcome
     {
+        if (!$this->isSupportedIdentity($request)) {
+            return $this->reject($request, 'day_trading_shadow_identity_unsupported');
+        }
         $capability = $request->configRequest->capability;
         if ($capability === null || !$capability->permitsShadow()) {
             return $this->reject($request, 'day_trading_shadow_capability_forbidden');
@@ -101,11 +104,22 @@ final readonly class DayTradingShadowRuntime
                     'rules' => $rules->trace,
                 ],
             );
-        } catch (CanonicalOrderPlanException|CanonicalPortfolioException $exception) {
+        } catch (CanonicalOrderPlanException|CanonicalPortfolioException|CanonicalRiskException $exception) {
             return $this->reject($request, $exception->reasonCode, ['domain_evidence' => $exception->evidence]);
         } catch (TradingConfigException $exception) {
             return $this->reject($request, $exception->getMessage());
         }
+    }
+
+    private function isSupportedIdentity(DayTradingShadowRequest $request): bool
+    {
+        $config = $request->configRequest;
+
+        return $config->modeId === 'day_trading'
+            && $config->modeVersion === '1.1.0'
+            && $config->setupId === 'day_trading.trend_continuation.long'
+            && $config->setupVersion === '1.1.0'
+            && $config->side === 'long';
     }
 
     private function adapterMatches(ShadowExecutionCapability $capability): bool
@@ -158,8 +172,8 @@ final readonly class DayTradingShadowRuntime
             $costs->entryLiquidityRole !== $orderPolicy->liquidityRole
             || $costs->entryLiquidityRole !== $policy->costContract->entryLiquidityRole
             || $costs->stopLiquidityRole !== $policy->costContract->stopLiquidityRole
-            || $request->liveSpreadBps !== (float) $costs->entrySpreadRate * 10_000.0
-            || $request->estimatedSlippageBps !== (float) $costs->entrySlippageRate * 10_000.0
+            || abs($request->liveSpreadBps - (float) $costs->entrySpreadRate * 10_000.0) > 1.0e-9
+            || abs($request->estimatedSlippageBps - (float) $costs->entrySlippageRate * 10_000.0) > 1.0e-9
         ) {
             return 'day_trading_live_cost_snapshot_mismatch';
         }

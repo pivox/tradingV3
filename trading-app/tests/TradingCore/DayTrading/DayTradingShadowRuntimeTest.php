@@ -80,6 +80,16 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertNull($excessive->reservation);
     }
 
+    public function testLiveGuardAndNetCostSnapshotMustDescribeTheSameCosts(): void
+    {
+        $outcome = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: 1.0001));
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('day_trading_live_cost_snapshot_mismatch', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
     public function testDailyLossConcurrencyAndExposureRejectionsNeverReserve(): void
     {
         $dailyLoss = self::fixtureRuntime()->run(self::fixtureRequest(realizedNetPnlQuote: -30.0));
