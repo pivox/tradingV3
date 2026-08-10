@@ -12,6 +12,7 @@ final readonly class CanonicalRiskDecision
         public float $quantity,
         public float $positionNotional,
         public int $finalLeverage,
+        public int $effectiveLeverageCap,
         public float $grossStopLoss,
         public float $entryFee,
         public float $stopExitFee,
@@ -25,6 +26,14 @@ final readonly class CanonicalRiskDecision
         public float $quantityStep,
         public array $capsApplied,
         public CanonicalRiskPolicy $policy,
+        public string $symbol,
+        public string $marketType,
+        public string $side,
+        public float $entryPrice,
+        public float $stopPrice,
+        public float $contractSize,
+        public CanonicalCostSnapshot $costs,
+        public CanonicalInstrumentSnapshot $instrument,
     ) {
     }
 }

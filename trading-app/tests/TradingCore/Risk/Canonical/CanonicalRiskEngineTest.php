@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Risk\Canonical;
 
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
@@ -546,6 +547,7 @@ final class CanonicalRiskEngineTest extends TestCase
         $arguments = [
             'policy' => $this->policy('long'),
             'symbol' => 'BTCUSDT',
+            'marketType' => 'perpetual',
             'side' => 'long',
             'equityQuote' => 1000.0,
             'availableBalanceQuote' => 100.0,
@@ -561,7 +563,33 @@ final class CanonicalRiskEngineTest extends TestCase
             'costs' => new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
         ];
 
-        return new CanonicalRiskCalculationRequest(...array_replace($arguments, $overrides));
+        $arguments = array_replace($arguments, $overrides);
+        $arguments['instrument'] ??= $this->instrument($arguments);
+
+        return new CanonicalRiskCalculationRequest(...$arguments);
+    }
+
+    /** @param array<string, mixed> $arguments */
+    private function instrument(array $arguments): CanonicalInstrumentSnapshot
+    {
+        /** @var CanonicalRiskPolicy $policy */
+        $policy = $arguments['policy'];
+
+        return new CanonicalInstrumentSnapshot(
+            $policy->exchange,
+            $policy->environment,
+            $arguments['symbol'],
+            $arguments['marketType'],
+            $arguments['contractSize'],
+            $arguments['quantityStep'],
+            $arguments['minQuantity'],
+            $arguments['maxQuantity'],
+            $arguments['marketMaxQuantity'],
+            $arguments['exchangeLeverageCap'],
+            $arguments['symbolLeverageCap'],
+            new \DateTimeImmutable('2026-08-10T11:59:40+00:00'),
+            'sha256:' . str_repeat('7', 64),
+        );
     }
 
     private function policy(

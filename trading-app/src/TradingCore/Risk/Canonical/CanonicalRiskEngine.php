@@ -132,6 +132,7 @@ final class CanonicalRiskEngine
             quantity: $quantity,
             positionNotional: $positionNotional,
             finalLeverage: $finalLeverage,
+            effectiveLeverageCap: $effectiveLeverageCap,
             grossStopLoss: $components['gross'],
             entryFee: $components['entry_fee'],
             stopExitFee: $components['stop_exit_fee'],
@@ -145,6 +146,14 @@ final class CanonicalRiskEngine
             quantityStep: $request->quantityStep,
             capsApplied: $this->capsApplied($request),
             policy: $request->policy,
+            symbol: $request->symbol,
+            marketType: $request->marketType,
+            side: $request->side,
+            entryPrice: $request->entryPrice,
+            stopPrice: $request->stopPrice,
+            contractSize: $request->contractSize,
+            costs: $request->costs,
+            instrument: $request->instrument,
         );
     }
 
