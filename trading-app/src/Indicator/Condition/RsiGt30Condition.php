@@ -21,20 +21,23 @@ final class RsiGt30Condition extends AbstractCondition
 
     public function getName(): string { return 'rsi_gt_30'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $rsi = $context['rsi'] ?? null;
+        $threshold = (float) ($context['rsi_threshold'] ?? 30.0);
         if (!is_float($rsi)) {
-            $this->logFailure($context, null, 30.0, 'missing_data');
-            return $this->result($this->getName(), false, null, 30.0, $this->baseMeta($context, ['missing_data' => true]));
+            $this->logFailure($context, null, $threshold, 'missing_data');
+            return $this->result($this->getName(), false, null, $threshold, $this->baseMeta($context, ['missing_data' => true]));
         }
-        $passed = $rsi > 30.0;
+        $passed = $rsi > $threshold;
         if (!$passed) {
-            $this->logFailure($context, $rsi, 30.0, 'threshold');
+            $this->logFailure($context, $rsi, $threshold, 'threshold');
         }
-        return $this->result($this->getName(), $passed, $rsi, 30.0, $this->baseMeta($context, ['source' => 'RSI']));
+        return $this->result($this->getName(), $passed, $rsi, $threshold, $this->baseMeta($context, ['source' => 'RSI']));
     }
 
+    /** @param array<string, mixed> $context */
     private function logFailure(array $context, ?float $value, ?float $threshold, string $reason): void
     {
         $this->conditionsLogger->info('[Condition] rsi_gt_30 failed', [

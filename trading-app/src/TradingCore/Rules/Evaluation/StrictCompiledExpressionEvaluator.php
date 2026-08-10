@@ -11,6 +11,7 @@ final readonly class StrictCompiledExpressionEvaluator
     private const IDS = [
         'adx_min_for_trend_1h',
         'close_above_vwap_and_ma9',
+        'close_above_vwap_or_ma9',
         'close_above_vwap_or_ma9_relaxed',
         'close_below_vwap_or_ma9',
         'crash_context_ok',
@@ -18,7 +19,15 @@ final readonly class StrictCompiledExpressionEvaluator
         'crash_short_pattern_15m',
         'crash_short_pattern_1m',
         'crash_short_pattern_5m',
+        'ema20_over_50_with_tolerance',
+        'ema20_over_50_with_tolerance_moderate',
+        'ema_above_200_with_tolerance',
+        'ema_below_200_with_tolerance',
+        'price_regime_ok_long',
+        'price_regime_ok_short',
         'pullback_confirmed',
+        'pullback_confirmed_ma9_21',
+        'pullback_confirmed_vwap',
         'rsi_5m_gt_floor',
     ];
 
@@ -40,12 +49,20 @@ final readonly class StrictCompiledExpressionEvaluator
         }
 
         return match ($conditionId) {
-            'adx_min_for_trend_1h' => $this->numberComparison($conditionId, $context['adx_1h'] ?? $context['adx'] ?? null, 20.0, '>='),
+            'adx_min_for_trend_1h' => $this->numberComparison($conditionId, $context['adx'][14] ?? $context['adx_1h'] ?? $context['adx'] ?? null, (float) ($context['threshold'] ?? 20.0), '>='),
             'rsi_5m_gt_floor' => $this->numberComparison($conditionId, $context['rsi'] ?? null, (float) ($context['gt'] ?? 20.0), '>'),
-            'close_above_vwap_and_ma9' => $this->pricePair($conditionId, $context, true, false),
-            'close_below_vwap_or_ma9' => $this->pricePair($conditionId, $context, false, true),
+            'close_above_vwap_and_ma9' => $this->allChildren($conditionId, ['close_above_vwap', 'close_above_ma_9'], $context),
+            'close_above_vwap_or_ma9' => $this->anyChildren($conditionId, ['close_above_vwap', 'close_above_ma_9'], $context),
+            'close_below_vwap_or_ma9' => $this->anyChildren($conditionId, ['close_below_vwap', 'close_below_ma_9'], $context),
             'close_above_vwap_or_ma9_relaxed' => $this->relaxedCloseAbove($context),
-            'pullback_confirmed' => $this->anyChildren($conditionId, ['ma9_cross_up_ma21', 'near_vwap'], $context),
+            'ema20_over_50_with_tolerance', 'ema20_over_50_with_tolerance_moderate' => $this->ema20Tolerance($conditionId, $context),
+            'ema_above_200_with_tolerance' => $this->ema200Tolerance($conditionId, $context, true),
+            'ema_below_200_with_tolerance' => $this->ema200Tolerance($conditionId, $context, false),
+            'price_regime_ok_long' => $this->priceRegime($conditionId, $context, true),
+            'price_regime_ok_short' => $this->priceRegime($conditionId, $context, false),
+            'pullback_confirmed' => $this->pullbackConfirmed($context),
+            'pullback_confirmed_ma9_21' => $this->allChildren($conditionId, ['ma9_cross_up_ma21'], $context),
+            'pullback_confirmed_vwap' => $this->allChildren($conditionId, ['near_vwap'], $context),
             'crash_context_ok' => $this->allChildren($conditionId, ['price_regime_ok_short', 'ema200_slope_neg', 'macd_hist_decreasing_n', 'adx_min_for_trend'], $context),
             'crash_short_pattern_15m' => $this->allChildren($conditionId, ['ema_20_lt_50', 'close_below_vwap', 'macd_hist_decreasing_n', 'atr_rel_in_range_15m'], $context),
             'crash_short_pattern_5m' => $this->allChildren($conditionId, ['ema_20_lt_50', 'close_below_vwap', 'macd_hist_decreasing_n', 'atr_rel_in_range_5m', 'volume_ratio_ok', 'rsi_5m_gt_floor'], $context),
@@ -55,34 +72,92 @@ final readonly class StrictCompiledExpressionEvaluator
     }
 
     /** @param array<string, mixed> $context */
-    private function pricePair(string $name, array $context, bool $above, bool $any): ConditionResult
+    private function relaxedCloseAbove(array $context): ConditionResult
     {
-        $close = $this->number($context['close'] ?? null);
-        $vwap = $this->number($context['vwap'] ?? null);
-        $ma9 = $this->number($context['ma_9'] ?? ($context['ema'][9] ?? null));
-        if ($close === null || $vwap === null || $ma9 === null) {
-            return $this->result($name, false, null, null, ['missing_data' => true]);
-        }
-        $vwapPassed = $above ? $close > $vwap : $close < $vwap;
-        $maPassed = $above ? $close > $ma9 : $close < $ma9;
-        $passed = $any ? ($vwapPassed || $maPassed) : ($vwapPassed && $maPassed);
+        $strict = $this->evaluate('close_above_vwap_or_ma9', $context);
+        $atr = $this->child('atr_rel_in_range_5m', $context);
+        $near = $this->child('near_vwap', $context);
+        $passed = $strict->passed || ($atr->passed && $near->passed);
 
-        return $this->result($name, $passed, $close, null, ['vwap' => $vwap, 'ma_9' => $ma9]);
+        return $this->result('close_above_vwap_or_ma9_relaxed', $passed, null, null, [
+            'children' => [$strict->toArray(), $atr->toArray(), $near->toArray()],
+        ]);
     }
 
     /** @param array<string, mixed> $context */
-    private function relaxedCloseAbove(array $context): ConditionResult
+    private function ema20Tolerance(string $name, array $context): ConditionResult
     {
-        $strict = $this->child('close_above_vwap_or_ma9', $context);
-        $atr = $this->child('atr_rel_in_range_5m', $context);
-        $close = $this->number($context['close'] ?? null);
-        $vwap = $this->number($context['vwap'] ?? null);
-        $near = $close !== null && $vwap !== null && $vwap > 0.0 && abs(($close / $vwap) - 1.0) <= 0.004;
-        $passed = $strict->passed || ($atr->passed && $near);
+        $tolerance = (float) ($context['tolerance_ratio'] ?? 0.0);
+        $ema20 = $this->number($context['ema'][20] ?? null);
+        $ema50 = $this->number($context['ema'][50] ?? null);
+        $ratio = $ema20 !== null && $ema50 !== null && $ema50 !== 0.0 ? ($ema20 / $ema50) - 1.0 : null;
+        $ratioResult = $this->numberComparison($name . '.ratio', $ratio, -$tolerance, '>');
+        $direct = $this->child('ema_20_gt_50', $context);
+        $slope = $this->child('ema_20_slope_pos', $context);
 
-        return $this->result('close_above_vwap_or_ma9_relaxed', $passed, $close, null, [
-            'children' => [$strict->toArray(), $atr->toArray()],
-            'near_vwap_0_004' => $near,
+        return $this->result($name, $direct->passed || $ratioResult->passed || $slope->passed, $ratio, -$tolerance, [
+            'operator' => 'any_of',
+            'children' => [$direct->toArray(), $ratioResult->toArray(), $slope->toArray()],
+        ]);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function ema200Tolerance(string $name, array $context, bool $above): ConditionResult
+    {
+        $tolerance = (float) ($context['tolerance_ratio'] ?? 0.0);
+        $close = $this->number($context['close'] ?? null);
+        $ema200 = $this->number($context['ema'][200] ?? null);
+        $ratio = $close !== null && $ema200 !== null && $ema200 !== 0.0 ? ($close / $ema200) - 1.0 : null;
+        $ratioResult = $this->numberComparison($name . '.ratio', $ratio, -$tolerance, $above ? '>' : '<');
+        $direct = $this->child($above ? 'close_above_ema_200' : 'close_below_ema_200', $context);
+        $slope = $this->child($above ? 'ema200_slope_pos' : 'ema200_slope_neg', $context);
+
+        return $this->result($name, $direct->passed || $ratioResult->passed || $slope->passed, $ratio, -$tolerance, [
+            'operator' => 'any_of',
+            'children' => [$direct->toArray(), $ratioResult->toArray(), $slope->toArray()],
+        ]);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function priceRegime(string $name, array $context, bool $long): ConditionResult
+    {
+        $tolerance = $long ? 'ema_above_200_with_tolerance' : 'ema_below_200_with_tolerance';
+        $emaRelation = $long ? 'ema_50_gt_200' : 'ema_50_lt_200';
+        $closeRelation = $long ? 'close_above_ema_200' : 'close_below_ema_200';
+        $slope = $long ? 'ema200_slope_pos' : 'ema200_slope_neg';
+        $first = $this->evaluate($tolerance, $context);
+        $second = $this->child($emaRelation, $context);
+        $third = $this->child($closeRelation, $context);
+        $fourth = $this->child($slope, $context);
+        $passed = ($first->passed && $second->passed) || ($third->passed && $fourth->passed);
+
+        return $this->result($name, $passed, null, null, [
+            'operator' => 'any_of',
+            'branches' => [
+                ['operator' => 'all_of', 'children' => [$first->toArray(), $second->toArray()]],
+                ['operator' => 'all_of', 'children' => [$third->toArray(), $fourth->toArray()]],
+            ],
+        ]);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function pullbackConfirmed(array $context): ConditionResult
+    {
+        $confirmation = $this->anyChildren('pullback_confirmation', ['ma9_cross_up_ma21', 'near_vwap'], $context);
+        $age = $this->number($context['pullback_age_bars'] ?? null);
+        $validityBars = (float) ($context['validity_bars'] ?? 3);
+        if ($age === null) {
+            return $this->result('pullback_confirmed', false, null, $validityBars, [
+                'missing_data' => true,
+                'missing_field' => 'pullback_age_bars',
+                'children' => [$confirmation->toArray()],
+            ]);
+        }
+        $validity = $this->numberComparison('pullback_age_bars_lte', $age, $validityBars, '<=');
+
+        return $this->result('pullback_confirmed', $confirmation->passed && $validity->passed, $age, $validityBars, [
+            'operator' => 'all_of',
+            'children' => [$confirmation->toArray(), $validity->toArray()],
         ]);
     }
 
@@ -90,7 +165,7 @@ final readonly class StrictCompiledExpressionEvaluator
     private function crashPattern1m(array $context): ConditionResult
     {
         $base = $this->allChildren('crash_short_pattern_1m', ['macd_hist_decreasing_n', 'close_below_vwap', 'atr_rel_in_range_5m', 'volume_ratio_ok'], $context);
-        $rsi = $this->numberComparison('rsi_1m_lt_extreme', $context['rsi'] ?? null, 10.0, '<');
+        $rsi = $this->numberComparison('rsi_1m_lt_extreme', $context['rsi'] ?? null, (float) ($context['rsi_extreme_max'] ?? 10.0), '<');
 
         return $this->result('crash_short_pattern_1m', $base->passed && $rsi->passed, null, null, [
             'children' => [...($base->meta['children'] ?? []), $rsi->toArray()],
@@ -174,6 +249,7 @@ final readonly class StrictCompiledExpressionEvaluator
             '>' => $value > $threshold,
             '>=' => $value >= $threshold,
             '<' => $value < $threshold,
+            '<=' => $value <= $threshold,
             default => false,
         };
 

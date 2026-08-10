@@ -53,6 +53,34 @@ final class ConditionCatalogLoaderTest extends TestCase
         self::assertSame($loader->load($document)->stableHash(), $loader->load($reordered)->stableHash());
     }
 
+    public function testEveryReferencedYamlCompositeUsesTheCompiledAuthority(): void
+    {
+        $catalog = (new ConditionCatalogLoader())->loadFile($this->catalogPath);
+        $compositeIds = [];
+        foreach (glob(dirname(__DIR__, 4) . '/src/MtfValidator/config/validations.*.yaml') ?: [] as $path) {
+            $document = Yaml::parseFile($path);
+            self::assertIsArray($document);
+            foreach ($document['mtf_validation']['rules'] ?? [] as $conditionId => $definition) {
+                if (!is_string($conditionId)
+                    || !in_array($conditionId, $catalog->conditionIds(), true)
+                    || !is_array($definition)
+                    || (!array_key_exists('all_of', $definition) && !array_key_exists('any_of', $definition))) {
+                    continue;
+                }
+                $compositeIds[$conditionId] = true;
+            }
+        }
+
+        self::assertCount(18, $compositeIds);
+        foreach (array_keys($compositeIds) as $conditionId) {
+            self::assertSame(
+                'compiled_expression:' . $conditionId,
+                $catalog->definition($conditionId)->implementation,
+                sprintf('YAML composite "%s" must not collide with a PHP condition service.', $conditionId),
+            );
+        }
+    }
+
     public function testRejectsDuplicateIdsUnknownFieldsEmptyCompatibilityAndUnsafeMissingPolicy(): void
     {
         $loader = new ConditionCatalogLoader();

@@ -100,12 +100,12 @@ final readonly class StrictRuleEvaluator
         if ($condition === null && !$isCompiledExpression) {
             return [false, 'condition_implementation_missing', $base];
         }
-        $conditionContext = $snapshot->values + $node->parameters + [
+        $conditionContext = array_replace($snapshot->values, $node->parameters, [
             'timeframe' => $node->timeframe,
             'series_order' => $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
-        ];
+        ]);
         try {
             $result = $isCompiledExpression
                 ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry))->evaluate($node->conditionId, $conditionContext)

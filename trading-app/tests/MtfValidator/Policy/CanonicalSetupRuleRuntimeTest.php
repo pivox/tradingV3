@@ -52,4 +52,20 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             $now,
         )->reasonCode);
     }
+
+    public function testCompiledPlanCacheIsBoundToExactCatalogSetupAndConfigHashes(): void
+    {
+        $runtime = new CanonicalSetupRuleRuntime([]);
+        $identity = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config());
+        $now = new \DateTimeImmutable('2026-08-10T10:00:00+00:00');
+        $inputs = ['15m' => ['kline_time' => '2026-08-10T09:45:00+00:00']];
+
+        $first = $runtime->evaluate($identity, $inputs, $now);
+        $second = $runtime->evaluate($identity, $inputs, $now);
+
+        self::assertFalse($first->trace['plan_cache_hit']);
+        self::assertTrue($second->trace['plan_cache_hit']);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->trace['plan_cache_key']);
+        self::assertSame($first->trace['plan_cache_key'], $second->trace['plan_cache_key']);
+    }
 }

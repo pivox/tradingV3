@@ -22,18 +22,19 @@ final class AdxMinForTrendCondition extends AbstractCondition
         return self::NAME;
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $tf = $context['timeframe'] ?? null;
 
-        // 1) Récupération ADX(1h) souple: accepte float|int|string numériques
-        $adx1hRaw = $context['adx'][$this->minAdx] ?? null;
-        if ($adx1hRaw === null && $tf === '1h') {
-            $adx1hRaw = $context['adx'] ?? null; // fallback sur 1h
+        // ADX(14) is the dedicated value emitted by IndicatorContextBuilder.
+        $adxRaw = is_array($context['adx'] ?? null) ? ($context['adx'][14] ?? null) : null;
+        if ($adxRaw === null && $tf === '1h' && !is_array($context['adx'] ?? null)) {
+            $adxRaw = $context['adx'] ?? null;
         }
-        $adx1h = $this->toFloatOrNull($adx1hRaw);
+        $adx = $this->toFloatOrNull($adxRaw);
 
-        if ($adx1h === null) {
+        if ($adx === null) {
             return $this->result(
                 self::NAME,
                 false,
@@ -47,7 +48,7 @@ final class AdxMinForTrendCondition extends AbstractCondition
         }
 
         // 2) Nettoyage de la valeur (plage ADX: 0..100)
-        if (!is_finite($adx1h)) {
+        if (!is_finite($adx)) {
             return $this->result(
                 self::NAME,
                 false,
@@ -59,29 +60,25 @@ final class AdxMinForTrendCondition extends AbstractCondition
                 ]),
             );
         }
-        $adx1h = max(0.0, min(100.0, $adx1h));
+        $adx = max(0.0, min(100.0, $adx));
 
         // 3) Seuil (context override → sinon défaut)
-        // Accepte 'threshold' (syntaxe YAML standard) ou 'adx_1h_min_threshold' (legacy)
         $threshold = $this->minAdx;
         $source = 'default';
         if (isset($context['threshold']) && is_numeric($context['threshold'])) {
             $threshold = (float) $context['threshold'];
             $source = 'context';
-        } elseif (array_key_exists('adx_1h_min_threshold', $context) && is_numeric($context['adx_1h_min_threshold'])) {
-            $threshold = (float) $context['adx_1h_min_threshold'];
-            $source = 'context';
         }
 
-        $passed = $adx1h >= $threshold;
+        $passed = $adx >= $threshold;
 
         return $this->result(
             self::NAME,
             $passed,
-            $adx1h,
+            $adx,
             $threshold,
             $this->baseMeta($context, [
-                'adx_1h'           => $adx1h,
+                'adx_14'           => $adx,
                 'threshold_source' => $source,
                 'timeframe'        => $tf,
             ]),

@@ -325,6 +325,27 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame($this->catalog()->conditionIds(), $schemaConditionIds);
     }
 
+    public function testSetupSchemaParameterKeysMatchCanonicalCatalog(): void
+    {
+        $schema = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($schema);
+        $schemaParameterKeys = array_keys($schema['$defs']['parameters']['properties'] ?? []);
+        sort($schemaParameterKeys, SORT_STRING);
+        $catalogParameterKeys = [];
+        $catalog = $this->catalog();
+        foreach ($catalog->conditionIds() as $conditionId) {
+            $catalogParameterKeys = array_merge($catalogParameterKeys, array_keys($catalog->definition($conditionId)->parameters));
+        }
+        $catalogParameterKeys = array_values(array_unique($catalogParameterKeys));
+        sort($catalogParameterKeys, SORT_STRING);
+
+        self::assertSame($catalogParameterKeys, $schemaParameterKeys);
+    }
+
     public function testImmutableSnapshotHasStableHashesVersionsAndProvenanceByKey(): void
     {
         $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');

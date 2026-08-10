@@ -18,15 +18,15 @@ context:
     nodes:
       - { condition: close_below_vwap_or_ma9, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:97' }
       - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
-      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
-      - { condition: rsi_gt_30, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:100' }
+      - { condition: rsi_bearish, timeframe: 5m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:99; frozen condition threshold' }
+      - { condition: rsi_gt_30, timeframe: 5m, parameters: { rsi_threshold: 30 }, provenance: 'validations.scalper_micro.yaml:100; frozen condition threshold' }
       - { condition: atr_volatility_ok, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:101' }
   context:
     op: all_of
     provenance: 'validations.scalper_micro.yaml:95-101'
     nodes:
       - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:98' }
-      - { condition: rsi_bearish, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:99' }
+      - { condition: rsi_bearish, timeframe: 5m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:99; frozen condition threshold' }
   trigger:
     op: all_of
     provenance: 'validations.scalper_micro.yaml:117-125'
@@ -40,7 +40,7 @@ context:
     provenance: 'validations.scalper_micro.yaml:123-125'
     nodes:
       - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { n: 1, eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:123' }
-      - { condition: rsi_bearish, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:124' }
+      - { condition: rsi_bearish, timeframe: 1m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:124; frozen condition threshold' }
       - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
 filters:
   - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
@@ -59,7 +59,7 @@ data_condition_contract:
   required_data: [ohlcv_5m, ohlcv_1m, vwap, ma9, macd, rsi, atr, spread_bps, order_flow_imbalance]
   missing_conditions: [spread_bps_lte, order_flow_imbalance_lte]
   external_dependencies: []
-  condition_catalog_hash: { state: defined, value: 4f7678e3de3368c2c93a223ad479327c0cf998436fb88e623cccce55ae8c8f0a, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: a5dff2b2d727870b75df39bd34ab5e6a4653a5840e022c0723023d4844e22159, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper_micro.yaml', justification: 'Full duration absent.' }
 governance:

@@ -77,6 +77,33 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertSame('missing_critical_data', $this->evaluator([$missing])->evaluate($node, $context)->reasonCode);
     }
 
+    public function testCompiledParametersAndRuntimeMetadataOverrideSnapshotKeys(): void
+    {
+        $condition = new class implements ConditionInterface {
+            public function getName(): string { return 'adx_min_for_trend'; }
+            /** @param array<string, mixed> $context */
+            public function evaluate(array $context): ConditionResult
+            {
+                $passed = ($context['threshold'] ?? null) === 20.0
+                    && ($context['timeframe'] ?? null) === '1h'
+                    && ($context['_input_source'] ?? null) === 'indicator_snapshot';
+
+                return new ConditionResult($this->getName(), $passed);
+            }
+        };
+        $node = new ConditionNode('adx_min_for_trend', '1h', 'long', ['threshold' => 20.0], 'fixture:override');
+        $context = $this->context([
+            'threshold' => 99.0,
+            'timeframe' => 'forged',
+            '_input_source' => 'forged',
+        ], timeframe: '1h');
+
+        $result = $this->evaluator([$condition])->evaluate($node, $context);
+
+        self::assertTrue($result->passed);
+        self::assertSame('condition_passed', $result->reasonCode);
+    }
+
     /** @param list<ConditionInterface> $conditions */
     private function evaluator(array $conditions): StrictRuleEvaluator
     {

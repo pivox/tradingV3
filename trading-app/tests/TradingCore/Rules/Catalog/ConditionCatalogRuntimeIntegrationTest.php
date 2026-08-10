@@ -49,4 +49,34 @@ final class ConditionCatalogRuntimeIntegrationTest extends KernelTestCase
             );
         }
     }
+
+    public function testEveryExecutableCatalogConditionRejectsAnEmptyInputDirectly(): void
+    {
+        self::bootKernel();
+        $registry = self::getContainer()->get(ConditionRegistry::class);
+        self::assertInstanceOf(ConditionRegistry::class, $registry);
+        $expressions = new StrictCompiledExpressionEvaluator(new \App\TradingCore\Rules\Evaluation\StrictConditionRegistry(
+            array_values(array_filter(array_map(
+                static fn (string $name) => $registry->get($name),
+                $registry->names(),
+            ))),
+        ));
+        $catalog = (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 4) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
+
+        foreach ($catalog->conditionIds() as $conditionId) {
+            $definition = $catalog->definition($conditionId);
+            if ($definition->status !== 'executable') {
+                continue;
+            }
+            $result = str_starts_with($definition->implementation, 'condition_service:')
+                ? $registry->get($conditionId)?->evaluate([])
+                : $expressions->evaluate($conditionId, []);
+
+            self::assertNotNull($result, sprintf('Condition "%s" has no direct evaluator.', $conditionId));
+            self::assertSame($conditionId, $result->name);
+            self::assertFalse($result->passed, sprintf('Condition "%s" fails open on empty input.', $conditionId));
+        }
+    }
 }

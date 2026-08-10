@@ -17,12 +17,14 @@ use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
 
-final readonly class CanonicalSetupRuleRuntime
+final class CanonicalSetupRuleRuntime
 {
     private ConditionCatalog $catalog;
     private SetupContractLoader $contracts;
     private StrictSetupRuleCompiler $compiler;
     private StrictRuleEvaluator $evaluator;
+    /** @var array<string, \App\TradingCore\Rules\Compiler\CompiledSetupRulePlan> */
+    private array $planCache = [];
 
     /** @param iterable<ConditionInterface> $conditions */
     public function __construct(
@@ -54,7 +56,14 @@ final readonly class CanonicalSetupRuleRuntime
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
         }
         $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
-        $plan = $this->compiler->compile($contract);
+        $planCacheKey = hash('sha256', json_encode([
+            'catalog_hash' => $this->catalog->stableHash(),
+            'setup_id' => $identity->setupId,
+            'setup_version' => $identity->setupVersion,
+            'config_hash' => $identity->configHash,
+        ], JSON_THROW_ON_ERROR));
+        $planCacheHit = isset($this->planCache[$planCacheKey]);
+        $plan = $this->planCache[$planCacheKey] ??= $this->compiler->compile($contract);
         $context = new RuleEvaluationContext(
             (string) $identity->configHash,
             $evaluatedAt,
@@ -86,6 +95,8 @@ final readonly class CanonicalSetupRuleRuntime
             'catalog_version' => $plan->catalogVersion,
             'catalog_hash' => $plan->catalogHash,
             'config_hash' => $identity->configHash,
+            'plan_cache_key' => $planCacheKey,
+            'plan_cache_hit' => $planCacheHit,
             'blockers' => $plan->blockers,
             'sections' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $sectionResults),
             'filters' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
