@@ -7,6 +7,7 @@ namespace App\TradingCore\Config;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Mode\ModeContractValidator;
 use App\TradingCore\Setup\SetupContractValidator;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
 final readonly class EffectiveTradingConfigRequest
 {
@@ -18,6 +19,7 @@ final readonly class EffectiveTradingConfigRequest
         public string $exchange,
         public string $environment,
         public string $side,
+        public ?ShadowExecutionCapability $capability = null,
     ) {
         if (!in_array($modeId, ModeContractValidator::MODE_IDS, true)) {
             throw new TradingConfigException(sprintf('Unknown modern mode id "%s"; aliases and legacy profiles are forbidden.', $modeId));
@@ -46,10 +48,10 @@ final readonly class EffectiveTradingConfigRequest
         }
     }
 
-    /** @return array{mode_id:string,mode_version:string,setup_id:string,setup_version:string,exchange:string,environment:string,side:string} */
+    /** @return array<string, string> */
     public function toArray(): array
     {
-        return [
+        $identity = [
             'mode_id' => $this->modeId,
             'mode_version' => $this->modeVersion,
             'setup_id' => $this->setupId,
@@ -58,5 +60,10 @@ final readonly class EffectiveTradingConfigRequest
             'environment' => $this->environment,
             'side' => $this->side,
         ];
+        if ($this->capability !== null) {
+            $identity['execution_capability'] = $this->capability->value;
+        }
+
+        return $identity;
     }
 }

@@ -7,6 +7,8 @@ namespace App\Tests\TradingCore\Config;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
+use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -35,7 +37,7 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
     {
         $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
             'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
-            $exchange, $environment, 'long',
+            $exchange, $environment, 'long', ShadowExecutionCapability::Paper,
         ));
 
         self::assertSame(
@@ -45,6 +47,7 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         self::assertFalse($snapshot->payload()['environment']['write_enabled']);
         self::assertTrue($snapshot->payload()['environment']['dry_run']);
         self::assertSame($exchange, $snapshot->payload()['exchange']['id']);
+        self::assertSame('paper', $snapshot->request->toArray()['execution_capability']);
         self::assertMatchesRegularExpression('/^sha256:[a-f0-9]{64}$/', $snapshot->configHash);
         self::assertStringNotContainsString(
             'config/trading/mode/regular.yaml',
@@ -59,5 +62,16 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         yield 'Fake test' => ['fake', 'test'];
         yield 'OKX demo Paper' => ['okx', 'demo'];
         yield 'Hyperliquid testnet Paper' => ['hyperliquid', 'testnet'];
+    }
+
+    public function testDayTradingShadowRejectsPrivateMainnetCapabilityBeforeResolution(): void
+    {
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('private_mainnet_execution_forbidden');
+
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'okx', 'mainnet', 'long', ShadowExecutionCapability::PrivateMainnet,
+        ));
     }
 }
