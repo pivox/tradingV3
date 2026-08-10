@@ -467,6 +467,17 @@ final class LineageContextTest extends TestCase
         );
     }
 
+    public function testCanonicalHashRejectsAmbiguousContiguousIntegerKeyMap(): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:effective_config_snapshot.ambiguous_integer_key_map');
+
+        CanonicalEffectiveConfigSnapshot::calculateConfigHash(
+            ['ambiguous' => [1 => 'b', 0 => 'a']],
+            self::CATALOG_HASH,
+        );
+    }
+
     /** @return array<string, mixed> */
     private function canonicalPayload(): array
     {

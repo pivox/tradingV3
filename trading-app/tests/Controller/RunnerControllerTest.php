@@ -550,6 +550,66 @@ final class RunnerControllerTest extends TestCase
         self::assertStringNotContainsString($sensitiveInput, (string) $response->getContent());
     }
 
+    /**
+     * @param object $ambiguousValue
+     * @param list<string> $collidingList
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('jsonObjectsThatCollapseDuringAssociativeDecode')]
+    public function testCanonicalIdentityRejectsJsonObjectsThatCollapseDuringAssociativeDecode(
+        object $ambiguousValue,
+        array $collidingList,
+    ): void
+    {
+        $validator = $this->createMock(MtfValidatorInterface::class);
+        $validator->expects(self::never())->method('run');
+        $identity = self::canonicalTradingIdentity();
+        $catalogHash = (string) $identity['condition_catalog_hash'];
+        $listConfig = ['ambiguous' => $collidingList];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($listConfig, $catalogHash);
+        $identity['config_hash'] = $configHash;
+        $identity['effective_config_snapshot']['config_hash'] = $configHash;
+        $identity['effective_config_snapshot']['config'] = (object) [
+            'ambiguous' => $ambiguousValue,
+        ];
+        $request = Request::create(
+            '/api/mtf/run',
+            'POST',
+            server: [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_X_RUN_ID' => 'run-canonical',
+                'HTTP_X_RUN_CORRELATION_ID' => 'run-canonical',
+                'HTTP_X_ORCHESTRATION_SET_ID' => 'set-canonical',
+            ],
+            content: json_encode([
+                'symbols' => ['BTCUSDT'],
+                'dry_run' => true,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'workers' => 1,
+                'sync_tables' => false,
+                'process_tp_sl' => false,
+                'skip_open_state_filter' => true,
+                'trading_identity' => $identity,
+            ], JSON_THROW_ON_ERROR),
+        );
+
+        $response = $this->controller()->index(
+            $request,
+            new RunMtfCycleUseCase($this->runnerService($validator)),
+        );
+        $body = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertSame('canonical_identity_invalid:effective_config_structure', $body['error_code'] ?? null);
+    }
+
+    /** @return iterable<string,array{object,list<string>}> */
+    public static function jsonObjectsThatCollapseDuringAssociativeDecode(): iterable
+    {
+        yield 'ordered numeric object' => [(object) ['0' => 'a', '1' => 'b'], ['a', 'b']];
+        yield 'empty object' => [(object) [], []];
+    }
+
     /** @return iterable<string, array{array<string, mixed>, string, string}> */
     public static function invalidCanonicalIdentityPayloads(): iterable
     {
