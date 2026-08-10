@@ -134,7 +134,7 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertSame($reduced->stateHash, $acknowledged->previousStateHash);
     }
 
-    public function testUnprotectedFilledQuantityRequiresCompensationAndBlocksFurtherFill(): void
+    public function testUnprotectedFilledQuantityRequiresCompensationAndAccountsForInFlightFill(): void
     {
         [$reservation, $plan] = $this->reservation();
         $next = $reservation->applyFill($this->fill($reservation,
@@ -150,7 +150,19 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertSame(0.0, $next->remainingQuantity);
         self::assertSame(0.0, $next->residualRiskQuote);
 
-        $cancelAcknowledged = $next->cancelResidual(
+        $inFlight = $next->applyFill($this->fill($next,
+            fillId: 'fill-2',
+            quantity: 0.1,
+            price: $plan->entryPrice,
+            entryFeeQuote: 0.01,
+            protectedQuantityAfter: 1.1,
+            remainingOrderQuantity: round($plan->quantity - 1.1, 3),
+        ));
+        self::assertSame(1.1, $inFlight->filledQuantity);
+        self::assertSame('compensation_required', $inFlight->status);
+        self::assertSame('compensate_unprotected_fill', $inFlight->requiredAction);
+
+        $cancelAcknowledged = $inFlight->cancelResidual(
             new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
             'sha256:' . str_repeat('a', 64),
         );
@@ -160,11 +172,11 @@ final class CanonicalPortfolioReservationTest extends TestCase
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_not_fillable');
         $cancelAcknowledged->applyFill($this->fill($cancelAcknowledged,
-            fillId: 'fill-2',
+            fillId: 'fill-3',
             quantity: 0.1,
             price: $plan->entryPrice,
             entryFeeQuote: 0.01,
-            protectedQuantityAfter: 0.6,
+            protectedQuantityAfter: 1.2,
             remainingOrderQuantity: 0.0,
         ));
     }

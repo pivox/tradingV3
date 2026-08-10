@@ -154,7 +154,10 @@ final readonly class CanonicalPortfolioReservation
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_identity_mismatch');
         }
-        if ($this->status !== 'active') {
+        if (
+            $this->status !== 'active'
+            && !($this->status === 'compensation_required' && $this->venueRemainingQuantity > 0.0)
+        ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_not_fillable');
         }
         if ($this->version === PHP_INT_MAX) {
@@ -231,7 +234,11 @@ final readonly class CanonicalPortfolioReservation
             : ($allowedRemaining->isLessThan($expectedVenueRemaining) ? ($allowedRemaining->isZero() ? 'cancel_residual' : 'reduce_residual') : 'keep_residual');
         $status = $expectedVenueRemaining->isZero() ? 'filled' : 'active';
 
-        if ($protectedQuantity->isLessThan($filledQuantity)) {
+        if ($this->status === 'compensation_required') {
+            $allowedRemaining = BigDecimal::zero();
+            $requiredAction = $this->requiredAction;
+            $status = 'compensation_required';
+        } elseif ($protectedQuantity->isLessThan($filledQuantity)) {
             $allowedRemaining = BigDecimal::zero();
             $requiredAction = 'compensate_unprotected_fill';
             $status = 'compensation_required';
