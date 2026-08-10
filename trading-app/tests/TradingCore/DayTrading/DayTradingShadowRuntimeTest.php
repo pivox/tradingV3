@@ -19,6 +19,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
@@ -32,7 +33,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
 {
     public function testValidLongBuildsAndReservesCanonicalPlan(): void
     {
-        $outcome = $this->runtime()->run($this->request());
+        $outcome = self::fixtureRuntime()->run(self::fixtureRequest());
 
         self::assertSame('planned', $outcome->status);
         self::assertSame('day_trading_shadow_planned', $outcome->reasonCode);
@@ -46,11 +47,11 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testRuleRejectionNeverCreatesAReservation(): void
     {
-        $request = $this->request();
+        $request = self::fixtureRequest();
         $inputs = $request->indicatorsByTimeframe;
         unset($inputs['1m']);
 
-        $outcome = $this->runtime()->run($request->withIndicators($inputs));
+        $outcome = self::fixtureRuntime()->run($request->withIndicators($inputs));
 
         self::assertSame('no_trade', $outcome->status);
         self::assertSame('critical_timeframe_missing', $outcome->reasonCode);
@@ -60,7 +61,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testExcessiveLiveSpreadIsFailClosedBeforePlanCreation(): void
     {
-        $outcome = $this->runtime()->run($this->request(liveSpreadBps: 6.01));
+        $outcome = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: 6.01));
 
         self::assertSame('no_trade', $outcome->status);
         self::assertSame('day_trading_live_spread_exceeded', $outcome->reasonCode);
@@ -70,8 +71,8 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testUnavailableOrExcessiveSlippageIsFailClosed(): void
     {
-        $unavailable = $this->runtime()->run($this->request(estimatedSlippageBps: null));
-        $excessive = $this->runtime()->run($this->request(estimatedSlippageBps: 8.01));
+        $unavailable = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: null));
+        $excessive = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: 8.01));
 
         self::assertSame('day_trading_slippage_unavailable', $unavailable->reasonCode);
         self::assertSame('day_trading_slippage_exceeded', $excessive->reasonCode);
@@ -81,9 +82,9 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testDailyLossConcurrencyAndExposureRejectionsNeverReserve(): void
     {
-        $dailyLoss = $this->runtime()->run($this->request(realizedNetPnlQuote: -30.0));
-        $concurrency = $this->runtime()->run($this->request(openPositions: 4));
-        $exposure = $this->runtime()->run($this->request(openNotionalQuote: 1000.0));
+        $dailyLoss = self::fixtureRuntime()->run(self::fixtureRequest(realizedNetPnlQuote: -30.0));
+        $concurrency = self::fixtureRuntime()->run(self::fixtureRequest(openPositions: 4));
+        $exposure = self::fixtureRuntime()->run(self::fixtureRequest(openNotionalQuote: 1000.0));
 
         self::assertSame('canonical_portfolio_daily_loss_exceeded', $dailyLoss->reasonCode);
         self::assertSame('canonical_portfolio_concurrency_exceeded', $concurrency->reasonCode);
@@ -93,16 +94,16 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertNull($exposure->reservation);
     }
 
-    private function runtime(): DayTradingShadowRuntime
+    public static function fixtureRuntime(?CanonicalPortfolioAdapterInterface $adapter = null): DayTradingShadowRuntime
     {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
         return new DayTradingShadowRuntime(
             new EffectiveTradingConfigResolver(),
-            new CanonicalSetupRuleRuntime($this->passingConditions()),
+            new CanonicalSetupRuleRuntime(self::passingConditions()),
             new CanonicalExecutionPolicyCompiler(),
             new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)),
-            new FakeCanonicalPortfolioAdapter(
+            $adapter ?? new FakeCanonicalPortfolioAdapter(
                 new CanonicalPortfolioAdmissionEngine($clock),
                 new InMemoryCanonicalPortfolioReservationStore(),
             ),
@@ -110,17 +111,18 @@ final class DayTradingShadowRuntimeTest extends TestCase
         );
     }
 
-    private function request(
+    public static function fixtureRequest(
         float $liveSpreadBps = 1.0,
         ?float $estimatedSlippageBps = 1.0,
         float $realizedNetPnlQuote = 0.0,
         int $openPositions = 0,
         float $openNotionalQuote = 0.0,
+        ShadowExecutionCapability $capability = ShadowExecutionCapability::Fake,
     ): DayTradingShadowRequest
     {
         $configRequest = new EffectiveTradingConfigRequest(
             'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
-            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+            'fake', 'test', 'long', $capability,
         );
         $snapshot = (new EffectiveTradingConfigResolver())->resolve($configRequest);
         $lineage = LineageContext::fromOrchestratorPayload([
@@ -186,7 +188,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
     }
 
     /** @return list<ConditionInterface> */
-    private function passingConditions(): array
+    private static function passingConditions(): array
     {
         $ids = (new \App\TradingCore\Rules\Catalog\ConditionCatalogLoader())->loadFile(
             dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
@@ -195,6 +197,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
         return array_map(static fn (string $id): ConditionInterface => new class($id) implements ConditionInterface {
             public function __construct(private readonly string $id) {}
             public function getName(): string { return $this->id; }
+            /** @param array<string, mixed> $context */
             public function evaluate(array $context): ConditionResult { return new ConditionResult($this->id, true); }
         }, $ids);
     }
