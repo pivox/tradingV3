@@ -45,6 +45,9 @@ final class CanonicalRiskEngine
         }
 
         $rawQuantity = $riskBudgetDecimal->dividedBy($lossPerQuantityDecimal, 18, RoundingMode::DOWN)->toFloat();
+        if (!\is_finite($rawQuantity)) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
         $quantityCaps = [
             $this->quantizeDecimalRatioDown($riskBudgetDecimal, $lossPerQuantityDecimal, $request->quantityStep),
             $this->quantizeDownDecimal($request->maxQuantity, $request->quantityStep),

@@ -441,6 +441,29 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
+    public function testRejectsNonFiniteRawQuantityAuditValue(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_precision_unsupported');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'equityQuote' => 1.0e300,
+            'availableBalanceQuote' => 1.0,
+            'entryPrice' => 1.0,
+            'stopPrice' => 0.9999999999999999,
+            'quantityStep' => 1.0,
+            'minQuantity' => 1.0,
+            'maxQuantity' => 1.0,
+            'marketMaxQuantity' => 1.0,
+        ]));
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);
