@@ -13,6 +13,7 @@ use App\Contract\MtfValidator\Dto\MtfRunDto;
 use App\Contract\Runtime\AuditLoggerInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
 use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
+use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\Provider\Context\ExchangeContext;
 use App\MtfValidator\Service\Execution\ExecutionSelectorMetrics;
 use Psr\Clock\ClockInterface;
@@ -30,6 +31,7 @@ class MtfValidatorCoreService
         private readonly ClockInterface $clock,
         private readonly LoggerInterface $mtfLogger,
         private readonly MtfTimeframeResolver $timeframeResolver,
+        private readonly ?CanonicalSetupRuleRuntime $canonicalRuleRuntime = null,
     ) {
     }
 
@@ -103,6 +105,36 @@ class MtfValidatorCoreService
             );
 
             $this->auditResult($input, $result, 'MTF_NOT_ENOUGH_KLINES');
+
+            return $result;
+        }
+
+        // Canonical modern requests have exactly one rule authority. They never
+        // continue into ConditionRegistry/YAML, even when strict evaluation fails.
+        if ($input->lineageContext?->isModern()) {
+            if ($this->canonicalRuleRuntime === null) {
+                $result = $this->buildEmptyResult(
+                    input: $input,
+                    mode: $mode,
+                    now: $now,
+                    reason: 'canonical_strict_rule_runtime_unavailable',
+                );
+                $this->auditResult($input, $result, 'MTF_CANONICAL_RULE_RUNTIME_UNAVAILABLE');
+
+                return $result;
+            }
+            $strict = $this->canonicalRuleRuntime->evaluate($input->lineageContext, $indicatorsByTimeframe, $now);
+            $reason = $strict->passed
+                ? 'canonical_execution_projection_pending_306'
+                : 'canonical_rule_rejected:' . $strict->reasonCode;
+            $result = $this->buildEmptyResult(
+                input: $input,
+                mode: $mode,
+                now: $now,
+                reason: $reason,
+                extra: ['canonical_rule_trace' => $strict->trace],
+            );
+            $this->auditResult($input, $result, $strict->passed ? 'MTF_CANONICAL_EXECUTION_PENDING' : 'MTF_CANONICAL_RULE_REJECTED');
 
             return $result;
         }
