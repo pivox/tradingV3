@@ -71,6 +71,7 @@ final readonly class CanonicalOrderPlan
         public float $fundingCost,
         public int $fundingIntervals,
         public int $maximumInputAgeSeconds,
+        public \DateTimeImmutable $inputObservedAt,
         public \DateTimeImmutable $observedAt,
         public \DateTimeImmutable $costObservedAt,
         public \DateTimeImmutable $zoneComputedAt,
@@ -103,6 +104,16 @@ final readonly class CanonicalOrderPlan
             )
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
+        }
+        if (
+            $request->protection->oldestObservedAt > $now
+            || CanonicalOrderPlanTime::isOlderThan(
+                $request->protection->oldestObservedAt,
+                $now,
+                $request->policy->entryZone->maximumInputAgeSeconds,
+            )
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_input_stale');
         }
 
         return $validator->validate(self::fromAcceptedComponents($request, $now));
@@ -220,6 +231,7 @@ final readonly class CanonicalOrderPlan
             'fundingCost' => $risk->fundingCost,
             'fundingIntervals' => $request->netR->fundingIntervals,
             'maximumInputAgeSeconds' => $policy->entryZone->maximumInputAgeSeconds,
+            'inputObservedAt' => $request->protection->oldestObservedAt,
             'observedAt' => $zone->observedAt,
             'costObservedAt' => $costs->observedAt,
             'zoneComputedAt' => $zone->computedAt,
@@ -250,7 +262,7 @@ final readonly class CanonicalOrderPlan
             static fn (CanonicalOrderPlanTarget $target): array => $target->toArray(),
             $values['targets'],
         );
-        foreach (['observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt'] as $field) {
+        foreach (['inputObservedAt', 'observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt'] as $field) {
             $timestamp = $values[$field];
             if (!$timestamp instanceof \DateTimeImmutable) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_timestamp_invalid');

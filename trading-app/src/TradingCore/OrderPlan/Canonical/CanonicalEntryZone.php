@@ -24,6 +24,7 @@ final readonly class CanonicalEntryZone
         public string $anchorSource,
         public string $anchorTimeframe,
         public string $atrTimeframe,
+        public \DateTimeImmutable $oldestObservedAt,
         public \DateTimeImmutable $observedAt,
         public \DateTimeImmutable $computedAt,
         public \DateTimeImmutable $expiresAt,

@@ -10,6 +10,7 @@ final readonly class CanonicalPriceObservation
         public string $exchange,
         public string $environment,
         public string $symbol,
+        public string $marketType,
         public string $source,
         public string $timeframe,
         public float $value,

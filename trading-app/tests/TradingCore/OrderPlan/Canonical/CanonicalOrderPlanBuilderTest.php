@@ -15,6 +15,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalEntryZone;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionTarget;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
+use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -106,6 +107,34 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
     }
 
+    public function testBuildRejectsEntryAndProtectionInputsStaleAtExecutionTime(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $clock = new MockClock('2026-08-10T12:00:31+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_input_stale');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
+    public function testAuthorityRejectsRiskSizingFromDifferentMarketType(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $riskRequestArguments = get_object_vars($components['riskRequest']);
+        $riskRequestArguments['marketType'] = 'spot';
+        $riskArguments = get_object_vars($components['risk']);
+        $riskArguments['marketType'] = 'spot';
+        $components['riskRequest'] = new CanonicalRiskCalculationRequest(...$riskRequestArguments);
+        $components['risk'] = new CanonicalRiskDecision(...$riskArguments);
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_identity_mismatch');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
     public function testFinalValidatorRejectsPlanWhenRetainedCostsBecomeStale(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
@@ -116,6 +145,18 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_order_plan_cost_stale');
         (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:01:00+00:00')))->validate($plan);
+    }
+
+    public function testFinalValidatorRejectsPlanWhenRetainedInputsBecomeStale(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $buildClock = new MockClock('2026-08-10T12:00:00+00:00');
+        $plan = (new CanonicalOrderPlanBuilder($buildClock, new CanonicalOrderPlanValidator($buildClock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_input_stale');
+        (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:00:31+00:00')))->validate($plan);
     }
 
     public function testBuilderRejectsFabricatedEntryZoneBounds(): void

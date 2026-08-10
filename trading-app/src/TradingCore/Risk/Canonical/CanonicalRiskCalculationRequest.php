@@ -12,6 +12,7 @@ final readonly class CanonicalRiskCalculationRequest
     public function __construct(
         public CanonicalRiskPolicy $policy,
         public string $symbol,
+        public string $marketType,
         public string $side,
         public float $equityQuote,
         public float $availableBalanceQuote,
@@ -28,6 +29,9 @@ final readonly class CanonicalRiskCalculationRequest
     ) {
         if (trim($symbol) === '') {
             throw new CanonicalRiskException('canonical_risk_symbol_invalid');
+        }
+        if (preg_match('/\A[a-z0-9][a-z0-9_.-]*\z/D', $marketType) !== 1) {
+            throw new CanonicalRiskException('canonical_risk_market_type_invalid');
         }
         if (!\in_array($side, ['long', 'short'], true)) {
             throw new CanonicalRiskException('canonical_risk_side_invalid');

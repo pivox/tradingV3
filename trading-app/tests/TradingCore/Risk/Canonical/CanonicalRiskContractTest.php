@@ -115,6 +115,7 @@ final class CanonicalRiskContractTest extends TestCase
     public static function invalidRequestProvider(): iterable
     {
         yield 'empty symbol' => ['canonical_risk_symbol_invalid', 'long', ['symbol' => '']];
+        yield 'invalid market type' => ['canonical_risk_market_type_invalid', 'long', ['marketType' => '']];
         yield 'zero equity' => ['canonical_risk_equity_invalid', 'long', ['equityQuote' => 0.0]];
         yield 'negative balance' => ['canonical_risk_available_balance_invalid', 'long', ['availableBalanceQuote' => -1.0]];
         yield 'zero entry' => ['canonical_risk_price_invalid', 'long', ['entryPrice' => 0.0]];
@@ -175,6 +176,7 @@ final class CanonicalRiskContractTest extends TestCase
         return [
             'policy' => $this->policy($side),
             'symbol' => 'BTCUSDT',
+            'marketType' => 'perpetual',
             'side' => $side,
             'equityQuote' => 1000.0,
             'availableBalanceQuote' => 100.0,

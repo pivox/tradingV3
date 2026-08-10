@@ -147,6 +147,7 @@ final class CanonicalRiskEngine
             capsApplied: $this->capsApplied($request),
             policy: $request->policy,
             symbol: $request->symbol,
+            marketType: $request->marketType,
             side: $request->side,
             entryPrice: $request->entryPrice,
             stopPrice: $request->stopPrice,

@@ -546,6 +546,7 @@ final class CanonicalRiskEngineTest extends TestCase
         $arguments = [
             'policy' => $this->policy('long'),
             'symbol' => 'BTCUSDT',
+            'marketType' => 'perpetual',
             'side' => 'long',
             'equityQuote' => 1000.0,
             'availableBalanceQuote' => 100.0,

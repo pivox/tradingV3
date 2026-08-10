@@ -166,6 +166,7 @@ final class CanonicalRiskInvariantTest extends TestCase
         return new CanonicalRiskCalculationRequest(
             policy: $policy,
             symbol: 'BTCUSDT',
+            marketType: 'perpetual',
             side: $side,
             equityQuote: $equity,
             availableBalanceQuote: $available,

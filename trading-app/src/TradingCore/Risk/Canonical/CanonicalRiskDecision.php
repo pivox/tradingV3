@@ -27,6 +27,7 @@ final readonly class CanonicalRiskDecision
         public array $capsApplied,
         public CanonicalRiskPolicy $policy,
         public string $symbol,
+        public string $marketType,
         public string $side,
         public float $entryPrice,
         public float $stopPrice,

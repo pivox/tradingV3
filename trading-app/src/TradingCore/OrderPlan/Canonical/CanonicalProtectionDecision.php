@@ -24,6 +24,7 @@ final readonly class CanonicalProtectionDecision
         public float $stopPrice,
         public float $riskDistance,
         public array $targets,
+        public \DateTimeImmutable $oldestObservedAt,
         public \DateTimeImmutable $computedAt,
         public string $configHash,
         public array $inputHashes,

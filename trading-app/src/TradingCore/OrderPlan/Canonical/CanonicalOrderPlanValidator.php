@@ -41,6 +41,13 @@ final readonly class CanonicalOrderPlanValidator
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
         }
+        if (
+            $plan->inputObservedAt > $plan->createdAt
+            || $plan->inputObservedAt > $now
+            || CanonicalOrderPlanTime::isOlderThan($plan->inputObservedAt, $now, $plan->maximumInputAgeSeconds)
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_input_stale');
+        }
         foreach ([
             $plan->quantity,
             $plan->quantityStep,

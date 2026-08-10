@@ -51,16 +51,16 @@ final class CanonicalOrderPlanPipelineFixture
         $zoneRequest = new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
             new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
-            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
+            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
         );
         $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate($zoneRequest);
         $protectionRequest = new CanonicalProtectionRequest(
             $policy,
             $zone,
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
             null,
         );
         $protection = (new CanonicalProtectionEngine())->calculate($protectionRequest);
@@ -92,6 +92,7 @@ final class CanonicalOrderPlanPipelineFixture
         $riskRequest = new CanonicalRiskCalculationRequest(
             $policy->riskPolicy,
             'BTCUSDT',
+            'perpetual',
             $side,
             1000.0,
             1000.0,

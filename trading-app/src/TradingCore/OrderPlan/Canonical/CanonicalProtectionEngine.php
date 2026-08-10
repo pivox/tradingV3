@@ -95,6 +95,7 @@ final class CanonicalProtectionEngine
             stopPrice: $stop->toFloat(),
             riskDistance: $riskDistance->toFloat(),
             targets: $targets,
+            oldestObservedAt: min($zone->oldestObservedAt, $stopInput->observedAt),
             computedAt: $zone->computedAt,
             configHash: $policy->configHash,
             inputHashes: [...$zone->inputHashes, $stopInput->inputHash],
@@ -122,6 +123,7 @@ final class CanonicalProtectionEngine
             $input->exchange !== $policy->riskPolicy->exchange
             || $input->environment !== $policy->riskPolicy->environment
             || $input->symbol !== $zone->symbol
+            || $input->marketType !== $zone->marketType
         ) {
             throw new CanonicalOrderPlanException('canonical_protection_input_identity_mismatch');
         }

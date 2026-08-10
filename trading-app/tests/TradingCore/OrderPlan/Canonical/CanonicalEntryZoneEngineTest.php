@@ -157,6 +157,56 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         $this->engine()->calculate($this->request(marketType: 'spot'));
     }
 
+    public function testRejectsAnchorFromDifferentMarketType(): void
+    {
+        $request = $this->request();
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_market_identity_mismatch');
+        $this->engine()->calculate(new CanonicalEntryZoneRequest(
+            $request->policy,
+            $request->symbol,
+            new CanonicalPriceObservation(
+                'fake',
+                'test',
+                $request->symbol,
+                'spot',
+                'vwap',
+                '5m',
+                100.0,
+                $request->anchor->observedAt,
+                $request->anchor->inputHash,
+            ),
+            $request->atr,
+            $request->market,
+            $request->tick,
+        ));
+    }
+
+    public function testRejectsTickFromDifferentMarketType(): void
+    {
+        $request = $this->request();
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_market_identity_mismatch');
+        $this->engine()->calculate(new CanonicalEntryZoneRequest(
+            $request->policy,
+            $request->symbol,
+            $request->anchor,
+            $request->atr,
+            $request->market,
+            new CanonicalTickSnapshot(
+                'fake',
+                'test',
+                $request->symbol,
+                'spot',
+                0.1,
+                $request->tick->observedAt,
+                $request->tick->inputHash,
+            ),
+        ));
+    }
+
     private function engine(): CanonicalEntryZoneEngine
     {
         return new CanonicalEntryZoneEngine(new MockClock(self::NOW));
@@ -180,10 +230,10 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         return new CanonicalEntryZoneRequest(
             policy: $policy,
             symbol: $symbol,
-            anchor: new CanonicalPriceObservation('fake', 'test', $symbol, $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
-            atr: new CanonicalPriceObservation('fake', 'test', $symbol, 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
+            anchor: new CanonicalPriceObservation('fake', 'test', $symbol, $marketType, $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
+            atr: new CanonicalPriceObservation('fake', 'test', $symbol, $marketType, 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
             market: new CanonicalMarketSnapshot('fake', 'test', $symbol, $marketType, 'order_book', $candidatePrice, new \DateTimeImmutable('2026-08-10T11:59:45+00:00'), 'sha256:' . str_repeat('3', 64)),
-            tick: new CanonicalTickSnapshot('fake', 'test', $symbol, $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
+            tick: new CanonicalTickSnapshot('fake', 'test', $symbol, $marketType, $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
         );
     }
 }

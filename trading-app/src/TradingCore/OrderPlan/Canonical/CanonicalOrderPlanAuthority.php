@@ -31,6 +31,7 @@ final readonly class CanonicalOrderPlanAuthority
                 || $component->environment !== $riskPolicy->environment
                 || $component->side !== $riskPolicy->side
                 || $component->symbol !== $zone->symbol
+                || $component->marketType !== $zone->marketType
                 || $component->configHash !== $policy->configHash
             ) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_identity_mismatch');
@@ -41,11 +42,13 @@ final readonly class CanonicalOrderPlanAuthority
             || $request->protectionRequest->policy->configHash !== $policy->configHash
             || $request->riskRequest->policy->configHash !== $policy->configHash
             || $request->riskRequest->symbol !== $zone->symbol
+            || $request->riskRequest->marketType !== $zone->marketType
             || $request->riskRequest->side !== $zone->side
             || $request->riskRequest->entryPrice !== $zone->entryPrice
             || $request->riskRequest->stopPrice !== $protection->stopPrice
             || $request->risk->policy->configHash !== $policy->configHash
             || $request->risk->symbol !== $zone->symbol
+            || $request->risk->marketType !== $zone->marketType
             || $request->risk->side !== $zone->side
             || $request->risk->entryPrice !== $zone->entryPrice
             || $request->risk->stopPrice !== $protection->stopPrice

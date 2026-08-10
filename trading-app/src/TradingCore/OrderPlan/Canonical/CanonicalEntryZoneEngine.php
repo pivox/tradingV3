@@ -46,6 +46,9 @@ final readonly class CanonicalEntryZoneEngine
             || $request->atr->symbol !== $request->symbol
             || $request->market->symbol !== $request->symbol
             || $request->tick->symbol !== $request->symbol
+            || $request->anchor->marketType !== $request->market->marketType
+            || $request->atr->marketType !== $request->market->marketType
+            || $request->tick->marketType !== $request->market->marketType
             || $request->market->source !== $policy->costContract->entrySpreadSource
         ) {
             throw new CanonicalOrderPlanException('canonical_entry_zone_market_identity_mismatch');
@@ -62,6 +65,7 @@ final readonly class CanonicalEntryZoneEngine
         self::validatePositive($request->market->candidatePrice, 'canonical_entry_zone_candidate_invalid');
         self::validatePositive($request->tick->tickSize, 'canonical_entry_zone_tick_invalid');
         $observedAt = $request->anchor->observedAt;
+        $oldestObservedAt = $request->anchor->observedAt;
         foreach ([$request->anchor, $request->atr, $request->market, $request->tick] as $input) {
             self::validateInputHash($input->inputHash);
             if ($input->observedAt > $now) {
@@ -72,6 +76,9 @@ final readonly class CanonicalEntryZoneEngine
             }
             if ($input->observedAt > $observedAt) {
                 $observedAt = $input->observedAt;
+            }
+            if ($input->observedAt < $oldestObservedAt) {
+                $oldestObservedAt = $input->observedAt;
             }
         }
 
@@ -122,6 +129,7 @@ final readonly class CanonicalEntryZoneEngine
             anchorSource: $zonePolicy->anchorSource,
             anchorTimeframe: $zonePolicy->anchorTimeframe,
             atrTimeframe: $zonePolicy->atrTimeframe,
+            oldestObservedAt: $oldestObservedAt,
             observedAt: $observedAt,
             computedAt: $now,
             expiresAt: $now->modify(sprintf('+%d seconds', $zonePolicy->ttlSeconds)),

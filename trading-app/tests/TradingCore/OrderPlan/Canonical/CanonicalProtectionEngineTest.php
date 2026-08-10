@@ -101,10 +101,10 @@ final class CanonicalProtectionEngineTest extends TestCase
         $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate(new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
             new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
-            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
+            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
         ));
 
         return [$policy, $zone];
@@ -116,6 +116,7 @@ final class CanonicalProtectionEngineTest extends TestCase
             'fake',
             'test',
             'BTCUSDT',
+            'perpetual',
             $source,
             '5m',
             $value,

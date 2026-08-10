@@ -26,6 +26,7 @@ final class CanonicalNetREngine
             || $protection->side !== $policy->riskPolicy->side
             || $risk->policy->configHash !== $policy->configHash
             || $risk->symbol !== $protection->symbol
+            || $risk->marketType !== $protection->marketType
             || $risk->side !== $protection->side
             || $risk->entryPrice !== $protection->entryPrice
             || $risk->stopPrice !== $protection->stopPrice
