@@ -5,17 +5,14 @@ namespace App\Tests\Indicator\Snapshot;
 use App\Common\Enum\Timeframe;
 use App\Entity\IndicatorSnapshot;
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Core\AtrCalculator;
-use App\Indicator\Core\Momentum\Macd;
-use App\Indicator\Core\Momentum\Rsi;
-use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
-use App\Indicator\Core\Volume\Vwap;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Repository\IndicatorSnapshotRepository;
 use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\Tools\SchemaTool;
+use PHPUnit\Framework\Attributes\CoversNothing;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
+#[CoversNothing]
 class IndicatorSnapshotRegressionTest extends KernelTestCase
 {
     private IndicatorContextBuilder $contextBuilder;
@@ -25,28 +22,30 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
 
     protected function setUp(): void
     {
-        $kernel = self::bootKernel();
-        $container = $kernel->getContainer();
+        self::bootKernel();
+        $container = self::getContainer();
 
         $this->entityManager = $container->get('doctrine.orm.entity_manager');
         $this->snapshotRepository = $container->get(IndicatorSnapshotRepository::class);
 
-        // Créer les dépendances nécessaires
-        $rsi = new Rsi();
-        $macd = new Macd();
-        $ema = new Ema();
-        $adx = new Adx();
-        $vwap = new Vwap();
-        $atrCalc = new AtrCalculator();
+        (new SchemaTool($this->entityManager))->createSchema([
+            $this->entityManager->getClassMetadata(IndicatorSnapshot::class),
+        ]);
 
-        $this->contextBuilder = new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
-        $this->conditionRegistry = new ConditionRegistry();
+        $this->contextBuilder = $container->get(IndicatorContextBuilder::class);
+        $this->conditionRegistry = $container->get(ConditionRegistry::class);
+    }
+
+    protected static function getKernelClass(): string
+    {
+        return \App\Kernel::class;
     }
 
     protected function tearDown(): void
     {
-        // Nettoyer la base de données après chaque test
-        $this->entityManager->createQuery('DELETE FROM App\Entity\IndicatorSnapshot')->execute();
+        (new SchemaTool($this->entityManager))->dropSchema([
+            $this->entityManager->getClassMetadata(IndicatorSnapshot::class),
+        ]);
         $this->entityManager->clear();
     }
 
@@ -59,7 +58,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         $snapshot = new IndicatorSnapshot();
         $snapshot
             ->setSymbol('BTCUSDT')
-            ->setTimeframe(Timeframe::H1)
+            ->setTimeframe(Timeframe::TF_1H)
             ->setKlineTime(new \DateTimeImmutable('2024-01-01 12:00:00', new \DateTimeZone('UTC')))
             ->setValues([
                 'ema20' => (string)$context['ema'][20],
@@ -87,7 +86,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         $retrievedSnapshot = $this->snapshotRepository->find($snapshot->getId());
         $this->assertNotNull($retrievedSnapshot);
         $this->assertEquals('BTCUSDT', $retrievedSnapshot->getSymbol());
-        $this->assertEquals(Timeframe::H1, $retrievedSnapshot->getTimeframe());
+        $this->assertEquals(Timeframe::TF_1H, $retrievedSnapshot->getTimeframe());
         $this->assertEquals('2024-01-01 12:00:00', $retrievedSnapshot->getKlineTime()->format('Y-m-d H:i:s'));
     }
 
@@ -95,13 +94,13 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     {
         // Créer et sauvegarder un snapshot de référence
         $referenceContext = $this->createRealisticContext();
-        $referenceSnapshot = $this->createSnapshotFromContext($referenceContext, 'BTCUSDT', Timeframe::H1, '2024-01-01 12:00:00');
+        $referenceSnapshot = $this->createSnapshotFromContext($referenceContext, 'BTCUSDT', Timeframe::TF_1H, '2024-01-01 12:00:00');
         $this->entityManager->persist($referenceSnapshot);
         $this->entityManager->flush();
 
         // Recalculer les indicateurs avec les mêmes données
         $newContext = $this->createRealisticContext();
-        $newSnapshot = $this->createSnapshotFromContext($newContext, 'BTCUSDT', Timeframe::H1, '2024-01-01 12:00:00');
+        $newSnapshot = $this->createSnapshotFromContext($newContext, 'BTCUSDT', Timeframe::TF_1H, '2024-01-01 12:00:00');
 
         // Comparer les résultats avec une tolérance
         $this->compareSnapshots($referenceSnapshot, $newSnapshot, 0.001); // Tolérance de 0.1%
@@ -117,7 +116,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         $snapshot = new IndicatorSnapshot();
         $snapshot
             ->setSymbol('ETHUSDT')
-            ->setTimeframe(Timeframe::H4)
+            ->setTimeframe(Timeframe::TF_4H)
             ->setKlineTime(new \DateTimeImmutable('2024-01-01 00:00:00', new \DateTimeZone('UTC')))
             ->setValues([
                 'conditions_results' => $conditionsResults,
@@ -154,7 +153,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     public function testMultipleSnapshotsForSameSymbol(): void
     {
         $symbol = 'ADAUSDT';
-        $timeframe = Timeframe::H1;
+        $timeframe = Timeframe::TF_1H;
 
         // Créer plusieurs snapshots pour le même symbole
         $snapshots = [];
@@ -186,7 +185,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
     public function testSnapshotUpsert(): void
     {
         $symbol = 'DOTUSDT';
-        $timeframe = Timeframe::H4;
+        $timeframe = Timeframe::TF_4H;
         $klineTime = new \DateTimeImmutable('2024-01-01 00:00:00', new \DateTimeZone('UTC'));
 
         // Créer un snapshot initial
@@ -214,6 +213,7 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         $this->assertTrue($retrievedSnapshot->getValue('updated'));
     }
 
+    /** @return array<string, mixed> */
     private function createRealisticContext(): array
     {
         return $this->contextBuilder
@@ -229,7 +229,8 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
                 56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800, 56900,
                 57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800, 57900,
                 58000, 58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800, 58900,
-                59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900
+                59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900,
+                ...range(60000, 70000, 100)
             ])
             ->highs([
                 50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800, 50900, 51000,
@@ -241,7 +242,8 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
                 56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800, 56900, 57000,
                 57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800, 57900, 58000,
                 58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800, 58900, 59000,
-                59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900, 60000
+                59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800, 59900, 60000,
+                ...range(60100, 70100, 100)
             ])
             ->lows([
                 49900, 50000, 50100, 50200, 50300, 50400, 50500, 50600, 50700, 50800,
@@ -253,7 +255,8 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
                 55900, 56000, 56100, 56200, 56300, 56400, 56500, 56600, 56700, 56800,
                 56900, 57000, 57100, 57200, 57300, 57400, 57500, 57600, 57700, 57800,
                 57900, 58000, 58100, 58200, 58300, 58400, 58500, 58600, 58700, 58800,
-                58900, 59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800
+                58900, 59000, 59100, 59200, 59300, 59400, 59500, 59600, 59700, 59800,
+                ...range(59900, 69900, 100)
             ])
             ->volumes([
                 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900,
@@ -265,12 +268,14 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
                 7000, 7100, 7200, 7300, 7400, 7500, 7600, 7700, 7800, 7900,
                 8000, 8100, 8200, 8300, 8400, 8500, 8600, 8700, 8800, 8900,
                 9000, 9100, 9200, 9300, 9400, 9500, 9600, 9700, 9800, 9900,
-                10000, 10100, 10200, 10300, 10400, 10500, 10600, 10700, 10800, 10900
+                10000, 10100, 10200, 10300, 10400, 10500, 10600, 10700, 10800, 10900,
+                ...range(11000, 21000, 100)
             ])
             ->withDefaults()
             ->build();
     }
 
+    /** @param array<string, mixed> $context */
     private function createSnapshotFromContext(array $context, string $symbol, Timeframe $timeframe, string $klineTime): IndicatorSnapshot
     {
         $snapshot = new IndicatorSnapshot();
@@ -323,4 +328,3 @@ class IndicatorSnapshotRegressionTest extends KernelTestCase
         }
     }
 }
-

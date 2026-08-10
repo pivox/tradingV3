@@ -70,6 +70,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
         }
 
         $builder = $this->contextBuilder
+            ->reset()
             ->withDefaults()
             ->symbol($symbol)
             ->timeframe($timeframe)

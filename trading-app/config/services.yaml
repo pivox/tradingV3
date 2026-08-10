@@ -786,7 +786,6 @@ services:
         arguments:
             $rsi: '@App\Indicator\Core\Momentum\Rsi'
             $macd: '@App\Indicator\Core\Momentum\Macd'
-            $ema: '@App\Indicator\Core\Trend\Ema'
             $adx: '@App\Indicator\Core\Trend\Adx'
             $vwap: '@App\Indicator\Core\Volume\Vwap'
             $atrCalc: '@App\Indicator\Core\AtrCalculator'

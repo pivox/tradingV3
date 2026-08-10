@@ -9,7 +9,6 @@ use App\Indicator\Core\AtrCalculator;
 use App\Indicator\Core\Momentum\Macd;
 use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volume\Vwap;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -33,7 +32,6 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         $context = (new IndicatorContextBuilder(
             new Rsi(),
             $macd,
-            new Ema(),
             new Adx(),
             new Vwap(),
             new AtrCalculator(),
@@ -52,5 +50,42 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertSame(array_slice($highs, -60), $context['high_series']);
         self::assertSame(array_slice($lows, -60), $context['low_series']);
         self::assertSame('oldest_to_newest', $context['series_order']);
+    }
+
+    public function testBuildResetsAllMutableInputAndOverrideState(): void
+    {
+        $builder = new IndicatorContextBuilder(
+            new Rsi(),
+            new Macd(),
+            new Adx(),
+            new Vwap(),
+            new AtrCalculator(),
+            new Sma(),
+        );
+        $first = $builder
+            ->symbol('BTCUSDT')
+            ->timeframe('5m')
+            ->closes([100.0, 101.0])
+            ->highs([101.0, 102.0])
+            ->lows([99.0, 100.0])
+            ->volumes([1.0, 1.0])
+            ->entryPrice(100.5)
+            ->stopLoss(99.5)
+            ->withDefaults()
+            ->build();
+        $second = $builder
+            ->symbol('ETHUSDT')
+            ->timeframe('1m')
+            ->closes([200.0])
+            ->build();
+
+        self::assertSame('BTCUSDT', $first['symbol']);
+        self::assertSame(100.5, $first['entry_price']);
+        self::assertSame('ETHUSDT', $second['symbol']);
+        self::assertSame(200.0, $second['close']);
+        self::assertArrayNotHasKey('entry_price', $second);
+        self::assertArrayNotHasKey('stop_loss', $second);
+        self::assertArrayNotHasKey('min_atr_pct', $second);
+        self::assertArrayNotHasKey('high_series', $second);
     }
 }

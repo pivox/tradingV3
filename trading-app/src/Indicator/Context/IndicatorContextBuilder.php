@@ -6,7 +6,6 @@ use App\Indicator\Core\AtrCalculator;
 use App\Indicator\Core\Momentum\Macd;
 use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volume\Vwap;
 use Psr\Log\LoggerInterface;
@@ -41,7 +40,6 @@ class IndicatorContextBuilder
     public function __construct(
         private readonly Rsi $rsi,
         private readonly Macd $macd,
-        private readonly Ema $ema,
         private readonly Adx $adx,
         private readonly Vwap $vwap,
         private readonly AtrCalculator $atrCalc,
@@ -74,6 +72,27 @@ class IndicatorContextBuilder
     public function rsiCrossUpLevel(?float $level): self { $this->rsiCrossUpLevel = $level; return $this; }
     public function rsiCrossDownLevel(?float $level): self { $this->rsiCrossDownLevel = $level; return $this; }
 
+    public function reset(): self
+    {
+        $this->symbol = null;
+        $this->timeframe = null;
+        $this->closes = [];
+        $this->highs = [];
+        $this->lows = [];
+        $this->volumes = [];
+        $this->ohlc = [];
+        $this->entryPrice = null;
+        $this->stopLoss = null;
+        $this->atrK = null;
+        $this->minAtrPct = null;
+        $this->maxAtrPct = null;
+        $this->rsiLt70Threshold = null;
+        $this->rsiCrossUpLevel = null;
+        $this->rsiCrossDownLevel = null;
+
+        return $this;
+    }
+
     /**
      * Configure les paramètres par défaut pour les conditions.
      * Utile pour initialiser rapidement avec des valeurs standard.
@@ -89,7 +108,7 @@ class IndicatorContextBuilder
             ->rsiCrossDownLevel(70.0);
     }
 
-    /** Retourne le contexte prêt pour ConditionRegistry->evaluate(). */
+    /** @return array<string, mixed> Retourne le contexte prêt pour ConditionRegistry->evaluate(). */
     public function build(): array
     {
         // Sanity check for invalid close series (all non-positive)
@@ -104,14 +123,14 @@ class IndicatorContextBuilder
         $close = !empty($this->closes) ? (float) end($this->closes) : null;
 
         $rsiSeries = $this->computeRsiSeries($this->closes);
-        $rsiVals = $rsiSeries['rsi'] ?? [];
+        $rsiVals = $rsiSeries['rsi'];
         $rsi = $rsiVals ? (float) end($rsiVals) : null;
         $prevRsi = (count($rsiVals) > 1) ? (float) $rsiVals[count($rsiVals) - 2] : null;
 
         $macdFull = $this->computeMacdSeries($this->closes);
-        $macdSeriesRaw = $macdFull['macd'] ?? [];
-        $signalSeriesRaw = $macdFull['signal'] ?? [];
-        $histSeriesRaw = $macdFull['hist'] ?? [];
+        $macdSeriesRaw = $macdFull['macd'];
+        $signalSeriesRaw = $macdFull['signal'];
+        $histSeriesRaw = $macdFull['hist'];
 
         $macdSeries = array_values(array_filter($macdSeriesRaw, static fn($v) => is_numeric($v) && is_finite((float) $v)));
         $signalSeries = array_values(array_filter($signalSeriesRaw, static fn($v) => is_numeric($v) && is_finite((float) $v)));
@@ -145,7 +164,7 @@ class IndicatorContextBuilder
         }
 
         // Warn if EMA9 ~ 0 while close > 0 (suspect data)
-        if ($this->indicatorLogger && isset($emaMap[9]) && is_float($emaMap[9]) && abs($emaMap[9]) < 1.0e-12 && is_float($close) && $close > 0.0) {
+        if ($this->indicatorLogger && isset($emaMap[9]) && abs($emaMap[9]) < 1.0e-12 && $close > 0.0) {
             $this->indicatorLogger->warning('EMA9 is approximately zero with positive close; data may be invalid', [
                 'symbol' => $this->symbol,
                 'timeframe' => $this->timeframe,
@@ -168,7 +187,7 @@ class IndicatorContextBuilder
                 $hlcSeries['highs'],
                 $hlcSeries['lows'],
                 $hlcSeries['closes'],
-                $this->ohlc
+                $this->ohlc ?: null,
             );
         }
 
@@ -244,7 +263,7 @@ class IndicatorContextBuilder
         }
 
 
-        return array_filter([
+        $context = array_filter([
             'symbol' => $this->symbol,
             'timeframe' => $this->timeframe,
             'close' => $close,
@@ -291,6 +310,9 @@ class IndicatorContextBuilder
             'rsi_cross_up_level' => $this->rsiCrossUpLevel,
             'rsi_cross_down_level' => $this->rsiCrossDownLevel,
         ], fn($v) => $v !== null);
+        $this->reset();
+
+        return $context;
     }
 
     /**
@@ -389,6 +411,7 @@ class IndicatorContextBuilder
 
     /**
      * Pure-PHP EMA (bypass TRADER) with simple recursive smoothing seeded by first price.
+     * @param float[] $closes
      */
     private function computeEmaPure(array $closes, int $period): float
     {
@@ -537,7 +560,7 @@ class IndicatorContextBuilder
 
         // Volume actuel (dernière kline)
         $currentVol = end($volumes);
-        if ($currentVol === null || $currentVol <= 0.0) {
+        if ($currentVol === false || $currentVol <= 0.0) {
             return null;
         }
 
@@ -549,10 +572,6 @@ class IndicatorContextBuilder
 
         // Nombre de périodes disponible pour la moyenne (adaptatif : min entre 20 et le nombre de volumes passés)
         $window = min(20, count($pastVolumes));
-        if ($window < 1) {
-            return null;
-        }
-
         // Prendre les N dernières volumes passés pour le calcul de la moyenne
         $windowVolumes = array_slice($pastVolumes, -$window);
         if (empty($windowVolumes)) {

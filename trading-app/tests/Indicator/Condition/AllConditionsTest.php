@@ -2,69 +2,27 @@
 
 namespace App\Tests\Indicator\Condition;
 
-use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Core\AtrCalculator;
-use App\Indicator\Core\Momentum\Macd;
-use App\Indicator\Core\Momentum\Rsi;
-use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
-use App\Indicator\Core\Volume\Vwap;
 use App\Indicator\Registry\ConditionRegistry;
-use PHPUnit\Framework\TestCase;
-use Psr\Container\ContainerInterface;
-use Symfony\Contracts\Service\ServiceProviderInterface;
+use PHPUnit\Framework\Attributes\CoversNothing;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
-class AllConditionsTest extends TestCase
+#[CoversNothing]
+class AllConditionsTest extends KernelTestCase
 {
     private IndicatorContextBuilder $contextBuilder;
     private ConditionRegistry $conditionRegistry;
 
     protected function setUp(): void
     {
-        // Créer les dépendances nécessaires
-        $rsi = new Rsi();
-        $macd = new Macd();
-        $ema = new Ema();
-        $adx = new Adx();
-        $vwap = new Vwap();
-        $atrCalc = new AtrCalculator();
+        self::bootKernel();
+        $this->contextBuilder = self::getContainer()->get(IndicatorContextBuilder::class);
+        $this->conditionRegistry = self::getContainer()->get(ConditionRegistry::class);
+    }
 
-        $this->contextBuilder = new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
-
-        $conditions = [];
-        $conditionsByName = [];
-        $projectRoot = dirname(dirname(dirname(__DIR__)));
-        $conditionDir = $projectRoot . '/src/Indicator/Condition';
-        foreach (glob($conditionDir . '/*Condition.php') ?: [] as $file) {
-            $class = 'App\\Indicator\\Condition\\' . basename($file, '.php');
-            if (!is_subclass_of($class, ConditionInterface::class)) {
-                continue;
-            }
-            $reflection = new \ReflectionClass($class);
-            if ($reflection->isAbstract()) {
-                continue;
-            }
-            $condition = $reflection->newInstance();
-            $conditions[] = $condition;
-            // Créer un index par nom pour le locator
-            $name = $condition->getName();
-            $conditionsByName[$name] = $condition;
-        }
-
-        // Créer un mock du ContainerInterface qui implémente ServiceProviderInterface
-        $locator = $this->createMock(ContainerInterface::class);
-        if ($locator instanceof ServiceProviderInterface || method_exists($locator, 'getProvidedServices')) {
-            $locator->method('getProvidedServices')->willReturn(array_fill_keys(array_keys($conditionsByName), 'App\\Indicator\\Condition\\ConditionInterface'));
-        }
-        $locator->method('has')->willReturnCallback(function ($name) use ($conditionsByName) {
-            return isset($conditionsByName[$name]);
-        });
-        $locator->method('get')->willReturnCallback(function ($name) use ($conditionsByName) {
-            return $conditionsByName[$name] ?? null;
-        });
-
-        $this->conditionRegistry = new ConditionRegistry($conditionsByName, $locator);
+    protected static function getKernelClass(): string
+    {
+        return \App\Kernel::class;
     }
 
     public function testAllConditionsWithValidData(): void
@@ -156,6 +114,7 @@ class AllConditionsTest extends TestCase
         }
     }
 
+    /** @param array<string, array<string, mixed>> $results */
     private function displayResultsSummary(array $results): void
     {
         $total = count($results);
