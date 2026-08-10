@@ -68,6 +68,78 @@ final class SetupContractLoaderTest extends TestCase
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $contract->stableHash());
     }
 
+    public function testPublishesExecutableDayTradingLongShadowSetup(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $contract = $loader->load('day_trading.trend_continuation.long', '1.1.0');
+        $compiled = (new SetupCompiler())->compile($contract);
+        $execution = $compiled->ast['execution'];
+
+        self::assertSame('shadow', $contract->status);
+        self::assertTrue($contract->isExecutable());
+        self::assertTrue($compiled->publishable);
+        self::assertSame([], $contract->unresolvedPaths());
+        self::assertSame(['day_trading' => '1.1.0'], $compiled->modeVersions);
+        self::assertSame('15m', $execution['execution_timeframe']['value']);
+        self::assertSame(['5m', '1m'], $execution['mandatory_confirmations']['value']);
+        self::assertSame(0.30, $execution['entry_zone']['value']['atr_multiplier']);
+        self::assertSame(2.0, $execution['targets']['value'][0]['risk_multiple']);
+        self::assertSame(1.3, $execution['minimum_net_r']['value']);
+        self::assertSame('limit', $execution['order_policy']['value']['type']);
+        self::assertFalse($execution['order_policy']['value']['market_fallback']);
+        self::assertSame('blocked', $loader->load('day_trading.trend_continuation.short', '1.0.0')->status);
+    }
+
+    public function testDayTradingLongShadowHasPhpAndSchemaParity(): void
+    {
+        $document = $this->yaml($this->root . '/day_trading.trend_continuation.long/1.1.0.yaml');
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $validator = new JsonSchemaValidator();
+        $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue($validator->validate($object, $schema)->isValid());
+
+        $mutations = [];
+        $mutations['market fallback'] = $document;
+        $mutations['market fallback']['execution']['order_policy']['value']['market_fallback'] = true;
+        $mutations['execution descent'] = $document;
+        $mutations['execution descent']['execution']['execution_timeframe']['value'] = '1m';
+        $mutations['missing confirmation'] = $document;
+        $mutations['missing confirmation']['execution']['mandatory_confirmations']['value'] = ['5m'];
+
+        foreach ($mutations as $label => $mutation) {
+            try {
+                (new SetupContractValidator())->validate($mutation);
+                self::fail('PHP accepted mutation: ' . $label);
+            } catch (SetupContractException) {
+                self::addToAssertionCount(1);
+            }
+            $mutationObject = json_decode(json_encode($mutation, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertFalse($validator->validate($mutationObject, $schema)->isValid(), 'schema accepted mutation: ' . $label);
+        }
+    }
+
+    public function testDayTradingLongShadowFixtureFreezesPassAndFailScenarios(): void
+    {
+        $fixture = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Setup/day-trading-long-1.1.0-scenarios.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        self::assertSame('day_trading.trend_continuation.long', $fixture['setup_id']);
+        self::assertSame('1.1.0', $fixture['setup_version']);
+        self::assertSame([
+            'valid_long' => 'pass',
+            'failed_condition' => 'no_trade',
+            'missing_1m' => 'no_trade',
+            'stale_5m' => 'no_trade',
+        ], array_column($fixture['scenarios'], 'expectation', 'id'));
+        foreach ($fixture['scenarios'] as $scenario) {
+            self::assertNotSame([], $scenario['evidence']);
+        }
+    }
+
     public function testCatalogContainsNoSwingOrNinthCrashPullbackSetup(): void
     {
         $paths = glob($this->root . '/*/1.0.0.yaml') ?: [];
@@ -256,9 +328,10 @@ final class SetupContractLoaderTest extends TestCase
             'validations.crash.yaml' => ['5dd5cbf03cdbcb804cd664e47c0dce4007438bbce973af027a05e7155b2c10e2', 'd1d9a174960660e88f84c54850ef61181d39a880'],
             'trade_entry.crash.yaml' => ['722bd2ee013a24ae86ffae2aa846437db7a51898ef8de4a0cd58e693a8ffb90f', '6ff8ab88e1bb9465f92f39424ae64305ca20ee0d'],
         ];
-        $expectedCrashDecisionRanges = [
+        $expectedDecisionRanges = [
             'src/MtfValidator/config/validations.crash.yaml' => '5-16,136-137,164-167,169-305',
             'config/app/trade_entry.crash.yaml' => '7-12,19-205',
+            'src/MtfValidator/config/validations.regular.yaml' => '7-12,84-88,238-349',
         ];
 
         foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
@@ -275,7 +348,7 @@ final class SetupContractLoaderTest extends TestCase
                 self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
                 self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
                 if (($document['setup_version'] ?? null) === '1.1.0') {
-                    self::assertSame($expectedCrashDecisionRanges[$origin['file']], $origin['line_range']);
+                    self::assertSame($expectedDecisionRanges[$origin['file']], $origin['line_range']);
                 }
             }
         }
