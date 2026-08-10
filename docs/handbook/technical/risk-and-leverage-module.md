@@ -285,3 +285,49 @@ Le Lot A n'est pas encore branche au runtime TradeEntry. Les blockers modernes
 restent donc en place jusqu'aux Lots B (EntryZone, protection, net R et
 OrderPlan) et C (caps portefeuille, partial fills et parite). Mainnet reste
 public/read-only et aucune execution privee mainnet n'est activee.
+
+## #304 Lot B - EntryZone et OrderPlan canoniques
+
+Le namespace `App\TradingCore\OrderPlan\Canonical` consomme exclusivement un
+`EffectiveTradingConfigSnapshot` executable et authentifie. Le compilateur
+exige des decisions `defined` pour l'EntryZone, le stop, les targets, le R net,
+l'invalidation, le time stop et le contrat de couts. Les formes et unites sont
+exactes : une cle supplementaire, un alias legacy, une valeur non resolue ou
+une modification non couverte par `config_hash` rejette la politique.
+
+L'EntryZone est calculee depuis des observations horodatees portant venue,
+symbole, source, timeframe et hash d'entree. L'ancre et l'ATR doivent
+correspondre exactement au contrat compile. Les donnees futures ou trop
+anciennes sont rejetees. La largeur ATR est bornee, l'asymetrie est appliquee
+selon le side, puis les limites sont quantifiees vers l'exterieur. Le prix
+d'entree est quantifie de maniere conservative et doit rester dans la zone. Le
+resultat conserve les timestamps d'observation, calcul et expiration ainsi que
+le lineage complet des inputs.
+
+La protection possede deux branches exclusives :
+
+- un stop ATR exige l'observation ATR exacte et interdit un pivot concurrent ;
+- un stop pivot exige l'identifiant exact et interdit tout fallback ATR.
+
+Le stop est quantifie en s'eloignant de l'entree. Les targets sont derivees de
+la distance exacte entre l'entree et le stop quantifies, puis quantifiees vers
+l'entree. La polarite long/short est reverifiee apres ces arrondis.
+
+Le calcul de R net utilise la meme decision de sizing et le meme snapshot de
+couts que le chemin stop : frais maker/taker authentifies, spread et slippage
+explicites pour entree/stop/chaque target, funding adverse et nombre
+d'intervalles derive du time stop. Le calcul decimal rejette le plan complet si
+une seule target passe son R brut mais reste sous `minimum_net_r` apres couts.
+
+`CanonicalOrderPlanBuilder` assemble enfin uniquement les decisions acceptees.
+Le plan immuable est toujours `limit`, contient les versions mode/setup, le
+hash de config, les hashes d'inputs, les timestamps, les caps, tous les couts et
+le R net de chaque target. Son propre hash couvre ce contenu. Le validateur
+final recalcule expiration, containment de zone, grilles prix/quantite,
+polarite, budget de risque, caps de levier/notional et minimum de R net.
+
+Ce Lot B est une autorite pure et non branchee : il ne depend pas de
+`TradeEntryConfig`, `ExecutionBox`, des mappers legacy, de Doctrine, Messenger
+ou d'un provider. Il ne rend aucun setup actuellement non resolu executable,
+ne retire aucun blocker portefeuille du Lot C et n'active aucune execution
+mainnet.
