@@ -7,6 +7,7 @@ namespace App\Repository;
 use App\Entity\OrderIntent;
 use App\Provider\Context\ExchangeContext;
 use App\Trading\Lineage\ReadModel\LineageReadCriteria;
+use App\Trading\Lineage\Persistence\OrderIntentRecoverySource;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
@@ -14,7 +15,7 @@ use Doctrine\Persistence\ManagerRegistry;
 /**
  * @extends ServiceEntityRepository<OrderIntent>
  */
-final class OrderIntentRepository extends ServiceEntityRepository
+final class OrderIntentRepository extends ServiceEntityRepository implements OrderIntentRecoverySource
 {
     private const CRITERIA_FIELD_MAP = [
         'orchestration_run_id' => 'orchestrationRunId',
@@ -52,16 +53,27 @@ final class OrderIntentRepository extends ServiceEntityRepository
 
     public function findOneByOrderId(string $orderId, ?ExchangeContext $context = null): ?OrderIntent
     {
-        return $this->createQueryBuilder('oi')
+        $matches = $this->findByOrderIdForRecovery($orderId, $context);
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /** @return list<OrderIntent> */
+    public function findByOrderIdForRecovery(string $orderId, ?ExchangeContext $context = null): array
+    {
+        /** @var list<OrderIntent> $matches */
+        $matches = $this->createQueryBuilder('oi')
             ->where('oi.exchange = :exchange')
             ->andWhere('oi.marketType = :marketType')
             ->andWhere('(oi.orderId = :orderId OR oi.exchangeOrderId = :orderId)')
             ->setParameter('exchange', ExchangeContext::exchangeValue($context))
             ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
             ->setParameter('orderId', $orderId)
-            ->setMaxResults(1)
+            ->setMaxResults(2)
             ->getQuery()
-            ->getOneOrNullResult();
+            ->getResult();
+
+        return $matches;
     }
 
     public function findOneById(int $id): ?OrderIntent

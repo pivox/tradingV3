@@ -8,6 +8,7 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Exchange\Dto\ExchangePositionDto;
 use App\Exchange\Enum\ExchangePositionSide;
+use App\Trading\Lineage\Persistence\CanonicalPositionEvidence;
 
 abstract readonly class AbstractExchangePositionEvent extends AbstractExchangeEvent
 {
@@ -23,6 +24,7 @@ abstract readonly class AbstractExchangePositionEvent extends AbstractExchangeEv
         private ?ExchangePositionDto $position,
         \DateTimeImmutable $occurredAt,
         array $payload = [],
+        private ?CanonicalPositionEvidence $canonicalEvidence = null,
     ) {
         parent::__construct($exchange, $marketType, $symbol, $occurredAt, $payload);
     }
@@ -40,5 +42,10 @@ abstract readonly class AbstractExchangePositionEvent extends AbstractExchangeEv
     public function position(): ?ExchangePositionDto
     {
         return $this->position;
+    }
+
+    public function canonicalEvidence(): CanonicalPositionEvidence
+    {
+        return $this->canonicalEvidence ?? $this->position?->canonicalEvidence() ?? new CanonicalPositionEvidence();
     }
 }

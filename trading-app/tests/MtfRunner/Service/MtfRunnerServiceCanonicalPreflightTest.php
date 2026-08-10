@@ -229,6 +229,8 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
             processTpSl: true,
             profile: 'scalping',
             originalRunId: 'run-fixture',
+            correlationRunId: 'run-fixture',
+            setId: 'set-fixture',
             userId: 'canonical-user',
             ipAddress: '203.0.113.42',
             lineageContext: $identity,

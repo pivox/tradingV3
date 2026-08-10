@@ -40,6 +40,25 @@ final class CanonicalTradePersistenceTest extends TestCase
         self::assertFalse((new TradeLifecycleEvent('BTCUSDT', 'legacy'))->hasCompleteCanonicalIdentity());
     }
 
+    public function testIntentRebuildsExactModernIdentityFromStructuredColumns(): void
+    {
+        $identity = $this->identity('scalping.trend_continuation.long', 'LONG', 'a')->asReplay(
+            'run-replay-a',
+            'run-a',
+            'corr-a',
+            2,
+        );
+        $intent = (new OrderIntent())->applyLineageContext($identity);
+
+        $restored = $intent->requireLineageContext();
+
+        self::assertSame($identity->toArray(), $restored->toArray());
+        self::assertSame('test', $intent->getEnvironment());
+        self::assertTrue($intent->isDryRun());
+        self::assertSame('run-a', $intent->getReplayOfRunId());
+        self::assertSame('corr-a', $intent->getReplayOfCorrelationId());
+    }
+
     public function testRetryRejectsChangedFinalOrderDimensions(): void
     {
         $context = $this->identity('scalping.trend_continuation.long', 'LONG', 'a');
@@ -116,6 +135,7 @@ final class CanonicalTradePersistenceTest extends TestCase
             'setup_version' => '1.0.0', 'config_hash' => $configHash,
             'condition_catalog_hash' => $catalogHash, 'side' => $side,
             'exchange' => 'fake', 'market_type' => 'perpetual', 'symbol' => 'BTCUSDT',
+            'environment' => 'test', 'dry_run' => true,
             'effective_config_reference' => 'cfg://scalping/1.0.0',
             'effective_config_snapshot' => CanonicalSnapshotMetadataFixture::enrich([
                 'request' => [

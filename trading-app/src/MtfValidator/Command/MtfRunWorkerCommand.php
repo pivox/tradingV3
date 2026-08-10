@@ -9,6 +9,8 @@ use App\Contract\MtfValidator\Dto\MtfRunRequestDto;
 use App\Contract\MtfValidator\MtfValidatorInterface;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 use App\MtfValidator\Application\TradeDecisionDispatcherInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -69,7 +71,10 @@ final class MtfRunWorkerCommand extends Command
             return Command::INVALID;
         }
 
-        $dryRun = ((string) $input->getOption('dry-run')) !== '0';
+        $dryRunRaw = (string) $input->getOption('dry-run');
+        $dryRunValid = \in_array($dryRunRaw, ['0', '1'], true);
+        $dryRun = $dryRunRaw === '1';
+        $dryRunProvided = $input->hasParameterOption('--dry-run');
         $forceRun = (bool) $input->getOption('force-run');
         $currentTf = $input->getOption('tf');
         $currentTf = is_string($currentTf) && $currentTf !== '' ? $currentTf : null;
@@ -98,12 +103,65 @@ final class MtfRunWorkerCommand extends Command
         $origin = $this->optString($input->getOption('origin'));
         $replayOfRunId = $this->optString($input->getOption('replay-of-run-id'));
         $replayOfCorrelationId = $this->optString($input->getOption('replay-of-correlation-id'));
-        $attemptNumber = (int) ($input->getOption('attempt-number') ?? 1);
+        $attemptNumberRaw = (string) ($input->getOption('attempt-number') ?? '1');
+        $attemptNumberParsed = filter_var($attemptNumberRaw, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => PHP_INT_MAX],
+        ]);
+        $attemptNumberValid = $attemptNumberParsed !== false;
+        $attemptNumber = $attemptNumberValid ? $attemptNumberParsed : 0;
+        $attemptNumberProvided = $input->hasParameterOption('--attempt-number');
         $configHash = $this->optString($input->getOption('config-hash'));
 
         try {
+            if ($dryRunProvided && !$dryRunValid) {
+                throw new LineageContextException('canonical_identity_invalid:worker_dry_run');
+            }
+            if ($attemptNumberProvided && !$attemptNumberValid) {
+                throw new LineageContextException('canonical_identity_invalid:worker_attempt_number');
+            }
+            $encodedLineage = $this->optString(getenv('MTF_CANONICAL_LINEAGE'));
+            $lineageContext = null;
+            if ($encodedLineage !== null) {
+                if (\count($symbols) !== 1) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_symbols');
+                }
+                $decoded = base64_decode($encodedLineage, true);
+                if ($decoded === false) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                try {
+                    $payload = json_decode($decoded, true, 512, JSON_THROW_ON_ERROR);
+                } catch (\JsonException) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                if (!\is_array($payload)) {
+                    throw new LineageContextException('canonical_identity_invalid:worker_lineage');
+                }
+                $lineageContext = LineageContext::fromArray($payload)->withSymbol($symbols[0]);
+                $this->assertWorkerContext(
+                    $lineageContext,
+                    $requestId,
+                    $orchestrationRunId,
+                    $setId,
+                    $dashboardId,
+                    $exchangeOpt,
+                    $marketTypeOpt,
+                    $profile,
+                    $origin,
+                    $replayOfRunId,
+                    $replayOfCorrelationId,
+                    $attemptNumber,
+                    $attemptNumberProvided,
+                    $configHash,
+                    $dryRun,
+                    $dryRunProvided,
+                );
+            } elseif (\in_array($profile, ['day_trading', 'scalping', 'micro_scalping'], true)) {
+                throw new LineageContextException('canonical_identity_missing:worker_lineage');
+            }
+
             // En mode worker, activer le verrou par symbole pour éviter le blocage global
-            $request = MtfRunRequestDto::fromArray([
+            $requestData = [
                 'symbols' => $symbols,
                 'dry_run' => $dryRun,
                 'force_run' => $forceRun,
@@ -114,9 +172,11 @@ final class MtfRunWorkerCommand extends Command
                 'skip_open_state_filter' => $skipOpenFilter,
                 'user_id' => $userId,
                 'ip_address' => $ipAddress,
-                'exchange' => $exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value,
-                'market_type' => $marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value,
-                'profile' => $profile,
+                'exchange' => $lineageContext?->exchange
+                    ?? ($exchangeOpt !== null && $exchangeOpt !== '' ? $exchangeOpt : Exchange::BITMART->value),
+                'market_type' => $lineageContext?->marketType
+                    ?? ($marketTypeOpt !== null && $marketTypeOpt !== '' ? $marketTypeOpt : MarketType::PERPETUAL->value),
+                'profile' => $lineageContext?->modeId ?? $profile,
                 'validation_mode' => $validationMode,
                 'request_id' => $requestId,
                 'orchestration_run_id' => $orchestrationRunId,
@@ -127,7 +187,11 @@ final class MtfRunWorkerCommand extends Command
                 'replay_of_correlation_id' => $replayOfCorrelationId,
                 'attempt_number' => $attemptNumber,
                 'config_hash' => $configHash,
-            ]);
+            ];
+            if ($lineageContext instanceof LineageContext) {
+                $requestData['lineage_context'] = $lineageContext->toArray();
+            }
+            $request = MtfRunRequestDto::fromArray($requestData);
             $response = $this->mtfValidator->run($request);
             $this->tradeDecisionDispatcher->dispatchFromResponse($request, $response);
 
@@ -196,5 +260,77 @@ final class MtfRunWorkerCommand extends Command
     private function optString(mixed $value): ?string
     {
         return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
+
+    private function assertWorkerContext(
+        LineageContext $identity,
+        ?string $requestId,
+        ?string $runId,
+        ?string $setId,
+        ?string $dashboardId,
+        mixed $exchange,
+        mixed $marketType,
+        ?string $profile,
+        ?string $origin,
+        ?string $replayOfRunId,
+        ?string $replayOfCorrelationId,
+        int $attemptNumber,
+        bool $attemptNumberProvided,
+        ?string $configHash,
+        bool $dryRun,
+        bool $dryRunProvided,
+    ): void {
+        $required = [
+            'request_id' => $requestId,
+            'orchestration_run_id' => $runId,
+            'orchestration_set_id' => $setId,
+            'exchange' => $this->normalizedOption($exchange),
+            'market_type' => $this->normalizedOption($marketType),
+            'mode_id' => $profile,
+            'origin' => $origin,
+            'attempt_number' => $attemptNumberProvided ? $attemptNumber : null,
+            'config_hash' => $configHash,
+            'dry_run' => $dryRunProvided ? $dryRun : null,
+        ];
+        if ($identity->orchestrationDashboardId !== null) {
+            $required['orchestration_dashboard_id'] = $dashboardId;
+        }
+        if ($identity->replayOfRunId !== null) {
+            $required['replay_of_run_id'] = $replayOfRunId;
+        }
+        if ($identity->replayOfCorrelationId !== null) {
+            $required['replay_of_correlation_id'] = $replayOfCorrelationId;
+        }
+        foreach ($required as $field => $value) {
+            if ($value === null || $value === '') {
+                throw new LineageContextException('canonical_identity_missing:worker_' . $field);
+            }
+        }
+
+        $checks = [
+            'correlation_run_id' => [$requestId, $identity->correlationRunId],
+            'orchestration_run_id' => [$runId, $identity->orchestrationRunId],
+            'orchestration_set_id' => [$setId, $identity->orchestrationSetId],
+            'orchestration_dashboard_id' => [$dashboardId, $identity->orchestrationDashboardId],
+            'exchange' => [$this->normalizedOption($exchange), $identity->exchange],
+            'market_type' => [$this->normalizedOption($marketType), $identity->marketType],
+            'mode_id' => [$profile, $identity->modeId],
+            'origin' => [$origin === null ? null : strtolower($origin), $identity->origin],
+            'replay_of_run_id' => [$replayOfRunId, $identity->replayOfRunId],
+            'replay_of_correlation_id' => [$replayOfCorrelationId, $identity->replayOfCorrelationId],
+            'attempt_number' => [$attemptNumber, $identity->attemptNumber],
+            'config_hash' => [$configHash, $identity->configHash],
+            'dry_run' => [$dryRun, $identity->dryRun],
+        ];
+        foreach ($checks as $field => [$actual, $expected]) {
+            if ($actual !== null && $actual !== $expected) {
+                throw new LineageContextException('canonical_identity_mismatch:' . $field);
+            }
+        }
+    }
+
+    private function normalizedOption(mixed $value): ?string
+    {
+        return \is_string($value) && trim($value) !== '' ? strtolower(trim($value)) : null;
     }
 }

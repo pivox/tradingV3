@@ -273,6 +273,15 @@ final class FakeExchangeEventNormalizerTest extends TestCase
         self::assertSame(true, $normalized[0]->payload()['position_fully_closed'] ?? null);
         self::assertSame('itd-normalized-close', $normalized[0]->payload()['internal_trade_id'] ?? null);
         self::assertSame('fake-normalized-pos', $normalized[0]->payload()['position_id'] ?? null);
+        self::assertNotEmpty($normalized[0]->payload()['opening_fill_id'] ?? null);
+        self::assertSame(
+            $normalized[0]->payload()['opening_fill_id'],
+            $normalized[0]->canonicalEvidence()->exchangeFillId,
+        );
+        self::assertNotSame(
+            $normalized[0]->payload()['trade_id'] ?? null,
+            $normalized[0]->canonicalEvidence()->exchangeFillId,
+        );
         self::assertArrayHasKey('gross_realized_pnl_usdt', $normalized[0]->payload());
         self::assertArrayHasKey('entry_fee_usdt', $normalized[0]->payload());
         self::assertArrayHasKey('exit_fee_usdt', $normalized[0]->payload());

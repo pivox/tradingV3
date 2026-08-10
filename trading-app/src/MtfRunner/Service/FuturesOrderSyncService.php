@@ -13,10 +13,13 @@ use App\Provider\Context\ExchangeContext;
 use App\Repository\FuturesOrderRepository;
 use App\Repository\FuturesOrderTradeRepository;
 use App\Repository\FuturesPlanOrderRepository;
+use App\Entity\OrderIntent;
+use App\Trading\Lineage\Persistence\OrderIntentRecoverySource;
 use App\Exchange\Value\ExactOrderQuantities;
 use App\Exchange\Value\LegacyOrderQuantity;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
 class FuturesOrderSyncService
 {
@@ -26,6 +29,8 @@ class FuturesOrderSyncService
         private readonly FuturesOrderTradeRepository $futuresOrderTradeRepository,
         private readonly EntityManagerInterface $entityManager,
         private readonly LoggerInterface $logger,
+        #[Autowire(service: \App\Repository\OrderIntentRepository::class)]
+        private readonly ?OrderIntentRecoverySource $orderIntentRepository = null,
     ) {
     }
 
@@ -58,6 +63,15 @@ class FuturesOrderSyncService
 
             if (!$order) {
                 $order = new FuturesOrder();
+            }
+            $intent = $this->findExactOrderIntent($orderId, $clientOrderId, $context);
+            if ($order->lineageClassification() !== 'legacy'
+                && (!$intent instanceof OrderIntent || !$intent->hasAnyCanonicalIdentity())
+            ) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:order_intent_predecessor');
+            }
+            if ($intent instanceof OrderIntent && $intent->hasAnyCanonicalIdentity() && $clientOrderId === null) {
+                $clientOrderId = $intent->getClientOrderId();
             }
 
             $size = $this->legacyIntegerQuantity($orderData, 'size');
@@ -127,6 +141,9 @@ class FuturesOrderSyncService
 
             // Stocker les données brutes
             $order->setRawData($orderData);
+            if ($intent instanceof OrderIntent && $intent->hasAnyCanonicalIdentity()) {
+                $order->applyOrderIntentLineage($intent);
+            }
 
             $this->entityManager->persist($order);
             $this->entityManager->flush();
@@ -140,6 +157,32 @@ class FuturesOrderSyncService
             ]);
             return null;
         }
+    }
+
+    private function findExactOrderIntent(
+        ?string $orderId,
+        ?string $clientOrderId,
+        ExchangeContext $context,
+    ): ?OrderIntent {
+        if ($this->orderIntentRepository === null) {
+            return null;
+        }
+
+        $orderMatches = $orderId !== null
+            ? $this->orderIntentRepository->findByOrderIdForRecovery($orderId, $context)
+            : [];
+        if (count($orderMatches) > 1) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:order_intent_predecessor');
+        }
+        $byOrder = $orderMatches[0] ?? null;
+        $byClient = $clientOrderId !== null
+            ? $this->orderIntentRepository->findOneByClientOrderId($clientOrderId, $context)
+            : null;
+        if ($byOrder instanceof OrderIntent && $byClient instanceof OrderIntent && $byOrder !== $byClient) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:order_intent_predecessor');
+        }
+
+        return $byOrder ?? $byClient;
     }
 
     /**
@@ -251,10 +294,14 @@ class FuturesOrderSyncService
         try {
             $tradeId = $this->extractString($tradeData, 'trade_id');
             $context = $this->resolveContext($tradeData);
+            $generatedTradeId = false;
             if (!$tradeId) {
                 // Essayer d'utiliser un identifiant alternatif ou générer un ID temporaire
-                $tradeId = $this->extractString($tradeData, 'id') 
-                    ?? sprintf('trade_%s_%d', $this->extractString($tradeData, 'order_id', 'unknown'), time());
+                $alternateTradeId = $this->extractString($tradeData, 'id');
+                $generatedTradeId = $alternateTradeId === null || trim($alternateTradeId) === '';
+                $tradeId = $generatedTradeId
+                    ? sprintf('trade_%s_%d', $this->extractString($tradeData, 'order_id', 'unknown'), time())
+                    : $alternateTradeId;
                 $this->logger->warning('[FuturesOrderSync] Missing trade_id, using generated ID', [
                     'generated_id' => $tradeId,
                     'data' => $tradeData,
@@ -267,6 +314,53 @@ class FuturesOrderSyncService
                 $trade = new FuturesOrderTrade();
             }
 
+            $orderId = $this->extractString($tradeData, 'order_id');
+            $clientOrderId = $this->extractString($tradeData, 'client_order_id');
+            $symbol = $this->extractString($tradeData, 'symbol', '') ?? '';
+            $side = $this->extractInt($tradeData, 'side', 0) ?? 0;
+            $futuresOrder = $orderId !== null && trim($orderId) !== ''
+                ? $this->futuresOrderRepository->findOneByOrderId($orderId, $context)
+                : null;
+            $intent = $this->findExactOrderIntent($orderId, $clientOrderId, $context);
+
+            $tradeClassification = $trade->lineageClassification();
+            $orderClassification = $futuresOrder?->lineageClassification();
+            if ($tradeClassification === 'incomplete' || $orderClassification === 'incomplete') {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_incomplete:fill_recovery');
+            }
+            $modernIntentDetected = $intent instanceof OrderIntent && $intent->hasAnyCanonicalIdentity();
+            if (($tradeClassification === 'canonical' || $modernIntentDetected)
+                && $orderClassification !== 'canonical'
+            ) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:futures_order_predecessor');
+            }
+            if ($orderClassification === 'canonical') {
+                if ($generatedTradeId) {
+                    throw new \App\Trading\Lineage\LineageContextException('canonical_identity_missing:exchange_trade_id');
+                }
+                if ($orderId === null || $futuresOrder?->getOrderId() !== $orderId) {
+                    throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:exchange_order_id');
+                }
+                if ($clientOrderId !== null && $futuresOrder->getClientOrderId() !== $clientOrderId) {
+                    throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:client_order_id');
+                }
+                $futuresOrder->requireLineageContext()->assertTradeBoundary(
+                    $symbol,
+                    self::canonicalTradeSide($side),
+                    $context->exchange->value,
+                    $context->marketType->value,
+                );
+                if ($tradeClassification === 'canonical') {
+                    $trade->requireLineageContext();
+                    if ($trade->getOrderId() !== $orderId
+                        || $trade->getSymbol() !== strtoupper($symbol)
+                        || $trade->getSide() !== $side
+                    ) {
+                        throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:fill_business_key');
+                    }
+                }
+            }
+
             $size = $this->extractInt($tradeData, 'size', 0) ?? 0;
             $quantityDecimal = $this->tradeQuantityDecimal($tradeData, $size, $trade);
 
@@ -274,9 +368,9 @@ class FuturesOrderSyncService
             $trade->setExchange($context->exchange);
             $trade->setMarketType($context->marketType);
             $trade->setTradeId($tradeId);
-            $trade->setOrderId($this->extractString($tradeData, 'order_id', ''));
-            $trade->setSymbol($this->extractString($tradeData, 'symbol', ''));
-            $trade->setSide($this->extractInt($tradeData, 'side', 0));
+            $trade->setOrderId($orderId ?? '');
+            $trade->setSymbol($symbol);
+            $trade->setSide($side);
             $trade->setPrice($this->extractString($tradeData, 'price', '0'));
             $trade->setSize($size);
             $trade->setQuantityDecimal($quantityDecimal);
@@ -285,12 +379,10 @@ class FuturesOrderSyncService
             $trade->setTradeTime($this->extractInt($tradeData, 'trade_time', 0));
 
             // Lier au FuturesOrder si l'order_id existe
-            $orderId = $this->extractString($tradeData, 'order_id');
-            if ($orderId) {
-                $futuresOrder = $this->futuresOrderRepository->findOneByOrderId($orderId, $context);
-                if ($futuresOrder) {
-                    $trade->setFuturesOrder($futuresOrder);
-                }
+            if ($futuresOrder instanceof FuturesOrder && $orderClassification === 'canonical') {
+                $trade->applyFuturesOrderLineage($futuresOrder);
+            } elseif ($futuresOrder instanceof FuturesOrder) {
+                $trade->setFuturesOrder($futuresOrder);
             }
 
             // Stocker les données brutes
@@ -308,6 +400,15 @@ class FuturesOrderSyncService
             ]);
             return null;
         }
+    }
+
+    private static function canonicalTradeSide(int $side): string
+    {
+        return match ($side) {
+            1, 2 => 'LONG',
+            3, 4 => 'SHORT',
+            default => throw new \App\Trading\Lineage\LineageContextException('canonical_identity_invalid:side'),
+        };
     }
 
     /**

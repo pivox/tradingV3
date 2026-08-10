@@ -483,13 +483,19 @@ final readonly class FakeExchangeMatchingEngine
         );
 
         $this->stateStore->saveOrder($updated);
-        $this->applyPositionFill($updated, $fillQuantity, $executionPrice, $fillCost);
+        $exchangeFillId = 'fake-fill-' . substr(hash('sha256', implode(':', [
+            $updated->exchangeOrderId,
+            $newFilledDecimal,
+            self::canonicalFloat($executionPrice),
+        ])), 0, 32);
+        $this->applyPositionFill($updated, $fillQuantity, $executionPrice, $fillCost, $exchangeFillId);
         $this->appendEvent(
             $status === ExchangeOrderStatus::FILLED ? 'order.filled' : 'order.partially_filled',
             $updated,
             [
                 'fill_quantity' => $fillQuantity,
                 'fill_price' => $executionPrice,
+                'fill_id' => $exchangeFillId,
                 'fill_fee' => $this->fillFee(
                     $fillQuantity,
                     $executionPrice,
@@ -935,6 +941,10 @@ final readonly class FakeExchangeMatchingEngine
             openedAt: $position->openedAt,
             updatedAt: $this->clock->now(),
             metadata: $metadata,
+            exchangePositionId: $position->exchangePositionId,
+            exchangeOrderId: $position->exchangeOrderId,
+            clientOrderId: $position->clientOrderId,
+            exchangeFillId: $position->exchangeFillId,
         );
     }
 
@@ -1084,7 +1094,14 @@ final readonly class FakeExchangeMatchingEngine
             'position.closed',
             $position->symbol,
             $this->clock->now(),
-            ['order_id' => $order->exchangeOrderId, 'close_reason' => 'liquidation'] + $closePayload,
+            [
+                'order_id' => $order->exchangeOrderId,
+                'opening_order_id' => $position->exchangeOrderId,
+                'opening_client_order_id' => $position->clientOrderId,
+                'opening_fill_id' => $position->exchangeFillId,
+                'exchange_position_id' => $position->exchangePositionId,
+                'close_reason' => 'liquidation',
+            ] + $closePayload,
         ));
         $this->stateStore->applyCertifiedBalanceDeltaUsdt(
             (string) $closePayload['recorded_pnl_usdt_decimal'],
@@ -2426,6 +2443,7 @@ final readonly class FakeExchangeMatchingEngine
         float $fillQuantity,
         float $executionPrice,
         FakeFillCost $fillCost,
+        string $exchangeFillId,
     ): void
     {
         if ($order->positionSide === null) {
@@ -2462,7 +2480,14 @@ final readonly class FakeExchangeMatchingEngine
                     'position.closed',
                     $order->symbol,
                     $this->clock->now(),
-                    ['order_id' => $order->exchangeOrderId] + $this->certifiedClosePayload($existing, $exitLedger),
+                    [
+                        'order_id' => $order->exchangeOrderId,
+                        'client_order_id' => $order->clientOrderId,
+                        'opening_order_id' => $existing->exchangeOrderId,
+                        'opening_client_order_id' => $existing->clientOrderId,
+                        'opening_fill_id' => $existing->exchangeFillId,
+                        'exchange_position_id' => $existing->exchangePositionId,
+                    ] + $this->certifiedClosePayload($existing, $exitLedger),
                 ));
                 $this->cancelSiblingProtectionOrders($order);
 
@@ -2536,6 +2561,10 @@ final readonly class FakeExchangeMatchingEngine
                 $fillFee,
                 $fillCost,
             ),
+            exchangePositionId: $positionIdentity,
+            exchangeOrderId: $existing?->exchangeOrderId ?? $order->exchangeOrderId,
+            clientOrderId: $existing?->clientOrderId ?? $order->clientOrderId,
+            exchangeFillId: $existing?->exchangeFillId ?? $exchangeFillId,
         );
         $this->stateStore->savePosition($position);
         $this->stateStore->appendEvent(new FakeExchangeEvent(
@@ -2596,6 +2625,10 @@ final readonly class FakeExchangeMatchingEngine
             openedAt: $position->openedAt,
             updatedAt: $this->clock->now(),
             metadata: $positionMetadata,
+            exchangePositionId: $position->exchangePositionId,
+            exchangeOrderId: $position->exchangeOrderId,
+            clientOrderId: $position->clientOrderId,
+            exchangeFillId: $position->exchangeFillId,
         );
     }
 

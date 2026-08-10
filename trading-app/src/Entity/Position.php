@@ -7,15 +7,22 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\PositionRepository;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\Persistence\CanonicalLineageProjection;
+use App\Trading\Lineage\Persistence\CanonicalPositionPredecessor;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: PositionRepository::class)]
 #[ORM\Table(name: 'positions')]
-#[ORM\UniqueConstraint(name: 'ux_positions_exchange_market_symbol_side', columns: ['exchange', 'market_type', 'symbol', 'side'])]
 #[ORM\Index(name: 'idx_positions_symbol', columns: ['exchange', 'market_type', 'symbol'])]
 class Position
 {
+    use CanonicalLineageProjection {
+        requireLineageContext as private requireProjectedLineageContext;
+    }
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
@@ -33,6 +40,17 @@ class Position
     #[ORM\Column(type: Types::STRING, length: 10)]
     private string $side; // LONG | SHORT
 
+    #[ORM\Column(name: 'canonical_exchange_position_id', type: Types::STRING, length: 96, nullable: true)]
+    private ?string $canonicalExchangePositionId = null;
+
+    #[ORM\ManyToOne(targetEntity: FuturesOrder::class)]
+    #[ORM\JoinColumn(name: 'opening_order_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?FuturesOrder $openingOrder = null;
+
+    #[ORM\ManyToOne(targetEntity: FuturesOrderTrade::class)]
+    #[ORM\JoinColumn(name: 'opening_fill_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?FuturesOrderTrade $openingFill = null;
+
     #[ORM\Column(type: Types::DECIMAL, precision: 28, scale: 12, nullable: true)]
     private ?string $size = null;
 
@@ -48,6 +66,7 @@ class Position
     #[ORM\Column(type: Types::STRING, length: 16, options: ['default' => 'OPEN'])]
     private string $status = 'OPEN'; // OPEN | CLOSED
 
+    /** @var array<string,mixed> */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true])]
     private array $payload = [];
 
@@ -110,6 +129,76 @@ class Position
         return $this->side;
     }
 
+    public function applyCanonicalPredecessor(CanonicalPositionPredecessor $predecessor): self
+    {
+        if (!\in_array($predecessor->order->getSide(), [1, 4], true)) {
+            throw new LineageContextException('canonical_identity_invalid:position_opening_order');
+        }
+        $source = $predecessor->order->requireLineageContext();
+        if ($predecessor->context->toArray() !== $source->toArray()) {
+            throw new LineageContextException('canonical_identity_mismatch:position_order_predecessor');
+        }
+        if ($predecessor->fill !== null) {
+            if ($predecessor->fill->getSide() !== $predecessor->order->getSide()
+                || $predecessor->fill->requireLineageContext()->toArray() !== $source->toArray()
+            ) {
+                throw new LineageContextException('canonical_identity_mismatch:position_fill_predecessor');
+            }
+        }
+        $source->assertTradeBoundary($this->symbol, $this->side, $this->exchange, $this->marketType);
+        if ($this->canonicalExchangePositionId !== null
+            && $this->canonicalExchangePositionId !== $predecessor->exchangePositionId
+        ) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_position_id');
+        }
+        if ($this->openingOrder !== null && $this->openingOrder !== $predecessor->order) {
+            throw new LineageContextException('canonical_identity_mismatch:position_order_predecessor');
+        }
+        if ($this->openingFill !== null && $predecessor->fill !== null && $this->openingFill !== $predecessor->fill) {
+            throw new LineageContextException('canonical_identity_mismatch:position_fill_predecessor');
+        }
+
+        $this->projectCanonicalLineage($source, 'position');
+        $this->canonicalExchangePositionId = $predecessor->exchangePositionId;
+        $this->openingOrder = $predecessor->order;
+        $this->openingFill ??= $predecessor->fill;
+
+        return $this->touch();
+    }
+
+    public function requireLineageContext(): LineageContext
+    {
+        $context = $this->requireProjectedLineageContext();
+        $context->assertTradeBoundary($this->symbol, $this->side, $this->exchange, $this->marketType);
+        if ($this->canonicalExchangePositionId === null || trim($this->canonicalExchangePositionId) === '') {
+            throw new LineageContextException('canonical_identity_missing:exchange_position_id');
+        }
+        if (!$this->openingOrder instanceof FuturesOrder) {
+            throw new LineageContextException('canonical_identity_missing:position_order_predecessor');
+        }
+        if ($this->openingOrder->requireLineageContext()->toArray() !== $context->toArray()) {
+            throw new LineageContextException('canonical_identity_mismatch:position_order_predecessor');
+        }
+        if ($this->openingFill instanceof FuturesOrderTrade
+            && $this->openingFill->requireLineageContext()->toArray() !== $context->toArray()
+        ) {
+            throw new LineageContextException('canonical_identity_mismatch:position_fill_predecessor');
+        }
+
+        return $context;
+    }
+
+    public function getCanonicalExchangePositionId(): ?string { return $this->canonicalExchangePositionId; }
+    public function getOpeningOrder(): ?FuturesOrder { return $this->openingOrder; }
+    public function getOpeningFill(): ?FuturesOrderTrade { return $this->openingFill; }
+
+    protected function hasAdditionalProjectedCanonicalField(): bool
+    {
+        return $this->canonicalExchangePositionId !== null
+            || $this->openingOrder !== null
+            || $this->openingFill !== null;
+    }
+
     public function getSize(): ?string
     {
         return $this->size;
@@ -165,11 +254,13 @@ class Position
         return $this->touch();
     }
 
+    /** @return array<string,mixed> */
     public function getPayload(): array
     {
         return $this->payload;
     }
 
+    /** @param array<string,mixed> $payload */
     public function mergePayload(array $payload): self
     {
         $this->payload = array_replace($this->payload, $payload);
@@ -192,4 +283,3 @@ class Position
         return $this;
     }
 }
-

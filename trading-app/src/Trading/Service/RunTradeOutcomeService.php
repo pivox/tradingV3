@@ -81,6 +81,11 @@ final class RunTradeOutcomeService
             ]);
         }
 
+        $canonicalRows = array_values(array_filter(
+            $rows,
+            static fn (PositionTradeAnalysisV2 $row): bool => $row->hasCanonicalLineage(),
+        ));
+
         return [
             'run_id' => $originalRunId,
             'correlation_run_id' => $correlationRunId,
@@ -99,6 +104,22 @@ final class RunTradeOutcomeService
             'by_profile' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getMtfProfile(), $truncated),
             'by_exchange' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getExchange(), $truncated),
             'by_symbol' => $this->group($rows, static fn (PositionTradeAnalysisV2 $r) => $r->getSymbol(), $truncated),
+            'by_mode' => $this->group($canonicalRows, static fn (PositionTradeAnalysisV2 $r) => $r->getModeId(), $truncated),
+            'by_setup' => $this->group($canonicalRows, static fn (PositionTradeAnalysisV2 $r) => $r->getSetupId(), $truncated),
+            'by_side' => $this->group($canonicalRows, static fn (PositionTradeAnalysisV2 $r) => $r->getCanonicalSide(), $truncated),
+            'by_market_type' => $this->group($canonicalRows, static fn (PositionTradeAnalysisV2 $r) => $r->getMarketType(), $truncated),
+            'by_market_data_venue' => $this->group($canonicalRows, static fn (PositionTradeAnalysisV2 $r) => $r->getMarketDataVenue(), $truncated),
+            'by_certification_cell' => $this->group(
+                $canonicalRows,
+                static fn (PositionTradeAnalysisV2 $r): string => implode('|', [
+                    $r->getPaperNetwork() ?? 'unknown',
+                    $r->getMarketDataVenue() ?? 'unknown',
+                    $r->getModeId() ?? 'unknown',
+                    $r->getSetupId() ?? 'unknown',
+                    $r->getCanonicalSide() ?? 'unknown',
+                ]),
+                $truncated,
+            ),
         ];
     }
 
@@ -138,12 +159,16 @@ final class RunTradeOutcomeService
     private function aggregate(array $rows, bool $forceIncomplete = false): array
     {
         $tradeCount = count($rows);
-        $matchedClosed = array_values(array_filter(
+        $canonicalRows = array_values(array_filter(
             $rows,
+            static fn (PositionTradeAnalysisV2 $row): bool => $row->hasCanonicalLineage(),
+        ));
+        $matchedClosed = array_values(array_filter(
+            $canonicalRows,
             static fn (PositionTradeAnalysisV2 $r): bool => $r->isMatchedClosed()
         ));
         $matchedClosedCount = count($matchedClosed);
-        $unmatchedCount = $tradeCount - $matchedClosedCount;
+        $unmatchedCount = count($canonicalRows) - $matchedClosedCount;
 
         // Winrate : trades clôturés ET rapprochés disposant d'un PnL enregistré uniquement.
         $winCount = 0;
@@ -162,10 +187,10 @@ final class RunTradeOutcomeService
         $decided = $winCount + $lossCount;
         $winRate = $decided > 0 ? round($winCount / $decided, 6) : null;
 
-        $recordedPnl = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getRecordedPnlUsdt());
-        $pnlR = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getPnlR());
+        $recordedPnl = $this->sum($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getRecordedPnlUsdt());
+        $pnlR = $this->sum($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getPnlR());
         // Somme d'ESTIMATIONS (best-effort), jamais présentée comme nette certifiée.
-        $estimatedNet = $this->sum($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getEstimatedNetPnlUsdt());
+        $estimatedNet = $this->sum($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getEstimatedNetPnlUsdt());
         $certifiedNetRows = array_values(array_filter(
             $matchedClosed,
             static fn (PositionTradeAnalysisV2 $r): bool => $r->hasCertifiedNetPnl()
@@ -187,17 +212,25 @@ final class RunTradeOutcomeService
         $netDecided = $netWinCount + $netLossCount;
         $netCertifiedCount = count($certifiedNetRows);
 
-        $mfeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
-        $maeValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
-        $holdValues = $this->values($rows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getHoldingTimeSec());
+        $mfeValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
+        $maeValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
+        $holdValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getHoldingTimeSec());
+
+        $canonicalCount = count($canonicalRows);
+        $legacyCount = count(array_filter($rows, static fn (PositionTradeAnalysisV2 $r): bool => $r->getLineageClassification() === 'legacy'));
+        $incompleteCount = $tradeCount - $canonicalCount - $legacyCount;
 
         return [
             'trade_count' => $tradeCount,
+            'canonical_count' => $canonicalCount,
+            'legacy_count' => $legacyCount,
+            'incomplete_count' => $incompleteCount,
+            'excluded_incomplete_identity_count' => $tradeCount - $canonicalCount,
             // unmatched n'est JAMAIS compté comme position ouverte confirmée.
             'matched_closed_count' => $matchedClosedCount,
             'unmatched_count' => $unmatchedCount,
             'confirmed_open_count' => 0,
-            'unknown_state_count' => $unmatchedCount,
+            'unknown_state_count' => $unmatchedCount + ($tradeCount - $canonicalCount),
             'win_count' => $winCount,
             'loss_count' => $lossCount,
             'win_rate_closed' => $winRate,
@@ -214,7 +247,7 @@ final class RunTradeOutcomeService
             'win_rate_net_certified' => $netDecided > 0 ? round($netWinCount / $netDecided, 6) : null,
             'expectancy_net_pnl_usdt' => $netCertifiedCount > 0 && $netPnl !== null ? round($netPnl / $netCertifiedCount, 8) : null,
             'pnl_definition' => 'certified_net_v1',
-            'cost_completeness' => $this->aggregateCostCompleteness($rows),
+            'cost_completeness' => $this->aggregateCostCompleteness($canonicalRows),
             'data_complete' => !$forceIncomplete && $this->isDataComplete($rows),
             'mfe_pct_avg' => $this->avg($mfeValues),
             'mfe_pct_median' => $this->median($mfeValues),
@@ -258,6 +291,9 @@ final class RunTradeOutcomeService
     private function isDataComplete(array $rows): bool
     {
         foreach ($rows as $row) {
+            if (!$row->hasCanonicalLineage()) {
+                return false;
+            }
             if (!$row->isMatchedClosed()) {
                 return false;
             }

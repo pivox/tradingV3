@@ -21,11 +21,38 @@ class PositionRepository extends ServiceEntityRepository
 
     public function findOneBySymbolSide(string $symbol, string $side, ?ExchangeContext $context = null): ?Position
     {
+        $matches = $this->createQueryBuilder('position')
+            ->where('position.exchange = :exchange')
+            ->andWhere('position.marketType = :marketType')
+            ->andWhere('position.symbol = :symbol')
+            ->andWhere('position.side = :side')
+            ->andWhere('position.status = :status')
+            ->setParameter('exchange', ExchangeContext::exchangeValue($context))
+            ->setParameter('marketType', ExchangeContext::marketTypeValue($context))
+            ->setParameter('symbol', strtoupper($symbol))
+            ->setParameter('side', strtoupper($side))
+            ->setParameter('status', 'OPEN')
+            ->setMaxResults(2)
+            ->getQuery()
+            ->getResult();
+        if (count($matches) > 1) {
+            throw new \App\Trading\Lineage\LineageContextException('canonical_identity_mismatch:ambiguous_open_position');
+        }
+
+        return $matches[0] ?? null;
+    }
+
+    public function findOpenBySymbolSide(string $symbol, string $side, ?ExchangeContext $context = null): ?Position
+    {
+        return $this->findOneBySymbolSide($symbol, $side, $context);
+    }
+
+    public function findOneByCanonicalExchangePositionId(string $positionId, ?ExchangeContext $context = null): ?Position
+    {
         return $this->findOneBy([
             'exchange' => ExchangeContext::exchangeValue($context),
             'marketType' => ExchangeContext::marketTypeValue($context),
-            'symbol' => strtoupper($symbol),
-            'side' => strtoupper($side),
+            'canonicalExchangePositionId' => $positionId,
         ]);
     }
 
@@ -100,4 +127,3 @@ class PositionRepository extends ServiceEntityRepository
         return $qb->getQuery()->getResult();
     }
 }
-

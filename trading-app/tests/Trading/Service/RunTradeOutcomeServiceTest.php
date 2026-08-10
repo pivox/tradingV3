@@ -158,6 +158,42 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertSame([], $out['by_symbol']);
     }
 
+    public function testIncompleteAndLegacyIdentityNeverEnterCertifiedMetricsOrCells(): void
+    {
+        $canonical = $this->row([
+            'symbol' => 'BTCUSDT', 'lineageClassification' => 'canonical',
+            'modeId' => 'scalping', 'setupId' => 'scalping.pullback.long', 'canonicalSide' => 'LONG',
+            'exchange' => 'fake', 'marketType' => 'perpetual', 'paperNetwork' => 'testnet', 'marketDataVenue' => 'fake', 'closeEventId' => 10,
+            'analysisStatus' => 'matched_closed', 'closeMatchStatus' => 'matched',
+            'costCompleteness' => 'complete', 'recordedPnlUsdt' => 5.0, 'netPnlUsdt' => 4.0,
+        ]);
+        $incomplete = $this->row([
+            'symbol' => 'ETHUSDT', 'lineageClassification' => 'incomplete',
+            'modeId' => 'scalping', 'setupId' => 'scalping.pullback.long', 'canonicalSide' => 'LONG',
+            'exchange' => 'fake', 'marketType' => 'perpetual', 'closeEventId' => 11,
+            'analysisStatus' => 'matched_closed', 'closeMatchStatus' => 'matched',
+            'costCompleteness' => 'complete', 'recordedPnlUsdt' => 100.0, 'netPnlUsdt' => 90.0,
+        ]);
+        $legacy = $this->row([
+            'symbol' => 'SOLUSDT', 'lineageClassification' => 'legacy',
+            'closeEventId' => 12, 'analysisStatus' => 'matched_closed', 'closeMatchStatus' => 'matched',
+            'costCompleteness' => 'complete', 'recordedPnlUsdt' => 200.0, 'netPnlUsdt' => 180.0,
+        ]);
+
+        $out = (new RunTradeOutcomeService($this->reader([$canonical, $incomplete, $legacy])))->buildOutcome('run-1');
+        $summary = $out['summary'];
+
+        self::assertFalse($out['data_complete']);
+        self::assertSame(1, $summary['canonical_count']);
+        self::assertSame(1, $summary['legacy_count']);
+        self::assertSame(1, $summary['incomplete_count']);
+        self::assertSame(2, $summary['excluded_incomplete_identity_count']);
+        self::assertSame(5.0, $summary['recorded_pnl_usdt']);
+        self::assertSame(4.0, $summary['net_pnl_usdt']);
+        self::assertCount(1, $out['by_certification_cell']);
+        self::assertSame('testnet|fake|scalping|scalping.pullback.long|LONG', $out['by_certification_cell'][0]['key']);
+    }
+
     public function testSourceUnavailableThrowsAndIsNeverAnEmptyAggregate(): void
     {
         $reader = new class implements PositionTradeAnalysisReaderInterface {
@@ -336,6 +372,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
             'closeMatchedBy' => 'unmatched',
             'analysisStatus' => 'unmatched',
             'costCompleteness' => 'not_applicable',
+            'lineageClassification' => 'canonical',
         ];
         $data = array_merge($defaults, $overrides);
 

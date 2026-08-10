@@ -50,7 +50,7 @@ final class MtfRunnerRequestDtoTest extends TestCase
 
         self::assertSame('scalping', $dto->lineageContext->modeId);
         self::assertSame('scalping.pullback.long', $dto->lineageContext->setupId);
-        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+        self::assertNull($dto->lineageContext->symbol);
         self::assertSame('set-1', $dto->lineageContext->orchestrationSetId);
         self::assertArrayNotHasKey('profile', $dto->lineageContext->toArray());
     }
@@ -153,6 +153,76 @@ final class MtfRunnerRequestDtoTest extends TestCase
         ]);
     }
 
+    #[DataProvider('malformedLineageContextInputs')]
+    public function testRejectsEveryExplicitMalformedLineageContext(mixed $lineageContext): void
+    {
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunnerRequestDto::fromArray(['lineage_context' => $lineageContext]);
+    }
+
+    /** @return iterable<string,array{mixed}> */
+    public static function malformedLineageContextInputs(): iterable
+    {
+        yield 'null' => [null];
+        yield 'string' => ['truncated'];
+        yield 'empty' => [[]];
+        yield 'truncated object' => [['truncated' => true]];
+        yield 'blank markers' => [['origin' => '   ', 'contract_kind' => '']];
+        yield 'unknown origin' => [['origin' => 'external', 'contract_kind' => 'modern']];
+        yield 'unknown contract' => [['origin' => 'orchestrator', 'contract_kind' => 'future']];
+    }
+
+    public function testRejectsTwoSimultaneousCanonicalEnvelopes(): void
+    {
+        $lineage = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($lineage['symbol']);
+        $lineage['dry_run'] = true;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:multiple_envelopes');
+
+        MtfRunnerRequestDto::fromArray(self::canonicalRequest(self::canonicalTradingIdentity()) + [
+            'lineage_context' => $lineage,
+        ]);
+    }
+
+    public function testNormalizesModernTopLevelRuntimeFieldsFromExplicitEnvelope(): void
+    {
+        $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($data['symbol']);
+        $data['dry_run'] = true;
+
+        $dto = MtfRunnerRequestDto::fromArray(['lineage_context' => $data]);
+
+        self::assertTrue($dto->dryRun);
+        self::assertSame(Exchange::FAKE, $dto->exchange);
+        self::assertSame(MarketType::PERPETUAL, $dto->marketType);
+        self::assertSame('scalping', $dto->profile);
+        self::assertSame('run-fixture', $dto->originalRunId);
+        self::assertSame('run-fixture', $dto->correlationRunId);
+        self::assertSame('set-fixture', $dto->setId);
+    }
+
+    public function testRejectsTopLevelRuntimeFieldsThatConflictWithExplicitEnvelope(): void
+    {
+        $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        unset($data['symbol']);
+        $data['dry_run'] = false;
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_mismatch:dry_run');
+
+        MtfRunnerRequestDto::fromArray([
+            'dry_run' => true,
+            'exchange' => 'bitmart',
+            'market_type' => 'spot',
+            'mtf_profile' => 'regular',
+            'lineage_context' => $data,
+        ]);
+    }
+
     public function testFullyValidatesPartialCanonicalIdentityBeforeLegacyLineageContext(): void
     {
         $this->expectException(LineageContextException::class);
@@ -172,14 +242,14 @@ final class MtfRunnerRequestDtoTest extends TestCase
         ]);
     }
 
-    public function testNormalizesCanonicalBindingSymbolBeforeStrictValidation(): void
+    public function testKeepsCanonicalRequestIdentityUnboundAfterValidatingSymbols(): void
     {
         $dto = MtfRunnerRequestDto::fromArray(self::canonicalRequest(
             self::canonicalTradingIdentity(),
             ['  btcusdt  '],
         ));
 
-        self::assertSame('BTCUSDT', $dto->lineageContext->symbol);
+        self::assertNull($dto->lineageContext->symbol);
     }
 
     public function testNormalizesBlankCanonicalBindingSymbolToNull(): void

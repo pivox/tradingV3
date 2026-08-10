@@ -15,6 +15,42 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(MtfRunRequestDto::class)]
 final class MtfRunRequestDtoTest extends TestCase
 {
+    public function testRejectsExplicitEmptyLineageContext(): void
+    {
+        $this->expectException(\App\Trading\Lineage\LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunRequestDto::fromArray(['lineage_context' => []]);
+    }
+
+    public function testRejectsExplicitTruncatedLineageContext(): void
+    {
+        $this->expectException(\App\Trading\Lineage\LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunRequestDto::fromArray(['lineage_context' => ['truncated' => true]]);
+    }
+
+    /** @dataProvider invalidLineageMarkers */
+    public function testRejectsInvalidExplicitLineageMarkers(string $origin, string $contractKind): void
+    {
+        $this->expectException(\App\Trading\Lineage\LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:lineage_context');
+
+        MtfRunRequestDto::fromArray(['lineage_context' => [
+            'origin' => $origin,
+            'contract_kind' => $contractKind,
+        ]]);
+    }
+
+    /** @return iterable<string,array{string,string}> */
+    public static function invalidLineageMarkers(): iterable
+    {
+        yield 'blank' => ['   ', ''];
+        yield 'unknown origin' => ['external', 'modern'];
+        yield 'unknown contract' => ['orchestrator', 'future'];
+    }
+
     public function testParsesRequestIdAndOrchestrationLineage(): void
     {
         $dto = MtfRunRequestDto::fromArray([

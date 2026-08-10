@@ -363,14 +363,16 @@ final readonly class FakeExchangeAdapter implements
             symbol: $order->symbol,
             exchangeOrderId: $order->exchangeOrderId,
             clientOrderId: $order->clientOrderId,
-            fillId: 'fake-fill-' . substr(hash('sha256', implode(':', [
-                (string)($event->payload['event_sequence'] ?? $index),
-                $event->type,
-                $order->exchangeOrderId,
-                $event->occurredAt->format('U.u'),
-                (string)$fillQuantity,
-                (string)$fillPrice,
-            ])), 0, 32),
+            fillId: is_string($event->payload['fill_id'] ?? null) && trim($event->payload['fill_id']) !== ''
+                ? trim($event->payload['fill_id'])
+                : 'fake-fill-' . substr(hash('sha256', implode(':', [
+                    (string)($event->payload['event_sequence'] ?? $index),
+                    $event->type,
+                    $order->exchangeOrderId,
+                    $event->occurredAt->format('U.u'),
+                    (string)$fillQuantity,
+                    (string)$fillPrice,
+                ])), 0, 32),
             side: $order->side,
             positionSide: $order->positionSide,
             quantity: $fillQuantity,

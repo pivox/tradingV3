@@ -132,6 +132,8 @@ final class TradingStateSyncRunner
                             extra: ['market_type' => $context->marketType->value]
                         ));
                     }
+                } catch (\App\Trading\Lineage\LineageContextException $e) {
+                    throw $e;
                 } catch (\Throwable $e) {
                     $this->logger?->error('[TradingStateSync] Failed to sync position', [
                         'symbol' => $providerPosition->symbol ?? 'unknown',
@@ -366,7 +368,11 @@ final class TradingStateSyncRunner
                     'trades_count' => count($trades),
                     'transactions_count' => count($transactions),
                     'total_filled_size' => $totalFilledSize->__toString(),
-                ])
+                ]),
+                exchangePositionId: $localPos->exchangePositionId,
+                exchangeOrderId: $localPos->exchangeOrderId,
+                clientOrderId: $localPos->clientOrderId,
+                exchangeFillId: $localPos->exchangeFillId,
             );
         } catch (\Throwable $e) {
             $this->logger?->error('[TradingStateSync] Failed to create history from API data', [

@@ -22,6 +22,9 @@ use App\Trading\Pnl\FillCostLedgerIngestionService;
 use App\Exchange\Value\ExactOrderQuantities;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\Persistence\CanonicalPositionEvidence;
+use App\Trading\Lineage\Persistence\CanonicalPositionRecoveryService;
 
 #[AsAlias(id: ExchangeLocalProjectionStoreInterface::class)]
 final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLocalProjectionStoreInterface
@@ -32,6 +35,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
         private PositionRepository $positions,
         private EntityManagerInterface $entityManager,
         private FillCostLedgerIngestionService $fillCostLedger,
+        private ?CanonicalPositionRecoveryService $canonicalPositionRecovery = null,
     ) {
     }
 
@@ -238,6 +242,7 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
             'market_type' => $fill->marketType->value,
             'trade_id' => $this->projectionFillId($fill),
             'order_id' => $fill->exchangeOrderId,
+            'client_order_id' => $fill->clientOrderId,
             'symbol' => $fill->symbol,
             'side' => $this->numericSide($fill->side, $fill->positionSide),
             'price' => (string)$fill->price,
@@ -289,10 +294,42 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
     private function projectPosition(AbstractExchangePositionEvent $event): void
     {
         $context = new ExchangeContext($event->exchange(), $event->marketType());
-        $position = $this->positions->findOneBySymbolSide($event->symbol(), $event->side()->value, $context);
+        $dto = $event->position();
+        $evidence = $event->canonicalEvidence();
+        $position = $evidence->exchangePositionId !== null
+            ? $this->positions->findOneByCanonicalExchangePositionId($evidence->exchangePositionId, $context)
+            : $this->positions->findOneBySymbolSide($event->symbol(), $event->side()->value, $context);
 
         if (!$position instanceof Position) {
             $position = new Position($event->symbol(), $event->side()->value, $event->exchange(), $event->marketType());
+        }
+
+        if ($position->getSymbol() !== strtoupper($event->symbol())
+            || $position->getSide() !== strtoupper($event->side()->value)
+            || $position->getExchange() !== $context->exchange->value
+            || $position->getMarketType() !== $context->marketType->value
+        ) {
+            throw new LineageContextException('canonical_identity_mismatch:position_boundary');
+        }
+        $classification = $position->lineageClassification();
+        if ($classification === 'incomplete') {
+            throw new LineageContextException('canonical_identity_incomplete:position');
+        }
+        $predecessor = $this->canonicalPositionRecovery?->resolve($evidence, $context);
+        if ($classification === 'canonical') {
+            $stored = $position->requireLineageContext();
+            if ($evidence->exchangePositionId === null
+                || $predecessor === null
+                || $predecessor->context->toArray() !== $stored->toArray()
+                || $predecessor->exchangePositionId !== $position->getCanonicalExchangePositionId()
+            ) {
+                throw new LineageContextException('canonical_identity_mismatch:position_predecessor');
+            }
+        } elseif ($predecessor !== null) {
+            if (!\in_array($predecessor->order->getSide(), [1, 4], true)) {
+                throw new LineageContextException('canonical_identity_invalid:position_opening_order');
+            }
+            $position->applyCanonicalPredecessor($predecessor);
         }
 
         if ($event instanceof ExchangePositionClosed) {
@@ -301,7 +338,6 @@ final readonly class DoctrineExchangeLocalProjectionStore implements ExchangeLoc
                 ->setSize('0')
                 ->mergePayload($this->positionPayload($event, null));
         } else {
-            $dto = $event->position();
             $position
                 ->setStatus('OPEN')
                 ->setSize((string)$event->size())

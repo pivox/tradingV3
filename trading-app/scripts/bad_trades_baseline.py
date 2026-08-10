@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROFILES = ("regular", "scalper", "scalper_micro")
+MODERN_MODES = ("day_trading", "scalping", "micro_scalping")
+CERTIFICATION_CELL_FIELDS = ("paper_network", "market_data_venue", "mode_id", "setup_id", "canonical_side")
+MIN_CERTIFIED_CELL_TRADES = 50
 TRADES_PER_SIMULATION = 100
 CAPITAL_USDT = 100.0
 
@@ -110,6 +112,9 @@ def is_certified(row: dict[str, str]) -> bool:
 
     return (
         declared_ok
+        and row.get("lineage_classification") == "canonical"
+        and row.get("mode_id") in MODERN_MODES
+        and all(str(row.get(field) or "").strip() for field in CERTIFICATION_CELL_FIELDS)
         and row.get("analysis_status") == "matched_closed"
         and row.get("close_match_status") == "matched"
         and row.get("cost_completeness") == "complete"
@@ -122,6 +127,13 @@ def is_certified(row: dict[str, str]) -> bool:
 
 def exclusion_reasons(row: dict[str, str]) -> list[str]:
     reasons: list[str] = []
+    if row.get("lineage_classification") != "canonical":
+        reasons.append(f"lineage_classification:{row.get('lineage_classification') or 'missing'}")
+    if row.get("mode_id") not in MODERN_MODES:
+        reasons.append(f"mode_id:{row.get('mode_id') or 'missing'}")
+    for field in CERTIFICATION_CELL_FIELDS:
+        if not str(row.get(field) or "").strip():
+            reasons.append(f"missing_certification_cell_field:{field}")
     if row.get("analysis_status") != "matched_closed":
         reasons.append(f"analysis_status:{row.get('analysis_status') or 'unknown'}")
     if row.get("close_match_status") != "matched":
@@ -247,21 +259,21 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, Any]:
 def summarize_population(rows: list[dict[str, str]], certified: list[dict[str, str]]) -> dict[str, Any]:
     excluded = [row for row in rows if row not in certified]
     excluded_reasons = Counter(reason for row in excluded for reason in exclusion_reasons(row))
-    profiles: dict[str, dict[str, int]] = {}
-    for profile in PROFILES:
-        profile_rows = [row for row in rows if row.get("mtf_profile") == profile]
-        profile_certified = [row for row in certified if row.get("mtf_profile") == profile]
-        profiles[profile] = {
-            "total_rows": len(profile_rows),
-            "certified_rows": len(profile_certified),
-            "excluded_rows": len(profile_rows) - len(profile_certified),
+    modes: dict[str, dict[str, int]] = {}
+    for mode in MODERN_MODES:
+        mode_rows = [row for row in rows if row.get("mode_id") == mode]
+        mode_certified = [row for row in certified if row.get("mode_id") == mode]
+        modes[mode] = {
+            "total_rows": len(mode_rows),
+            "certified_rows": len(mode_certified),
+            "excluded_rows": len(mode_rows) - len(mode_certified),
         }
     return {
         "total_rows": len(rows),
         "certified_rows": len(certified),
         "excluded_rows": len(excluded),
         "excluded_by_reason": dict(sorted(excluded_reasons.items())),
-        "profiles": profiles,
+        "modes": modes,
     }
 
 
@@ -329,23 +341,37 @@ def simulate_group(rows: list[dict[str, str]], seed: int, runs: int) -> dict[str
     }
 
 
-def build_baseline(input_csv: Path, seed: int = 132, monte_carlo_runs: int = 1000) -> dict[str, Any]:
+def certification_cell_key(row: dict[str, str]) -> str:
+    return "|".join(str(row.get(field) or "") for field in CERTIFICATION_CELL_FIELDS)
+
+
+def build_baseline(
+    input_csv: Path,
+    seed: int = 132,
+    monte_carlo_runs: int = 1000,
+    min_cell_size: int = MIN_CERTIFIED_CELL_TRADES,
+) -> dict[str, Any]:
     with input_csv.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
     certified = [row for row in rows if is_certified(row)]
+    cell_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in certified:
+        cell_rows[certification_cell_key(row)].append(row)
+    eligible_cells = {key: value for key, value in cell_rows.items() if len(value) >= min_cell_size}
+    under_sampled_cells = {key: len(value) for key, value in cell_rows.items() if len(value) < min_cell_size}
+    aggregate_eligible = [row for values in eligible_cells.values() for row in values]
     groups = {
-        "profile": grouped(certified, "mtf_profile"),
-        "direction": grouped(certified, "direction"),
-        "symbol": grouped(certified, "symbol"),
-        "timeframe": grouped(certified, "timeframe"),
-        "profile_symbol": group_by_tuple(certified, ("mtf_profile", "symbol")),
-        "profile_direction": group_by_tuple(certified, ("mtf_profile", "direction")),
-        "profile_timeframe": group_by_tuple(certified, ("mtf_profile", "timeframe")),
+        "mode": grouped(aggregate_eligible, "mode_id"),
+        "setup": grouped(aggregate_eligible, "setup_id"),
+        "side": grouped(aggregate_eligible, "canonical_side"),
+        "symbol": grouped(aggregate_eligible, "symbol"),
+        "timeframe": grouped(aggregate_eligible, "timeframe"),
+        "certification_cell": {key: summarize_rows(value) for key, value in sorted(eligible_cells.items())},
     }
-    simulation_profiles = {
-        profile: simulate_group([row for row in certified if row.get("mtf_profile") == profile], seed, monte_carlo_runs)
-        for profile in PROFILES
+    simulation_modes = {
+        mode: simulate_group([row for row in aggregate_eligible if row.get("mode_id") == mode], seed, monte_carlo_runs)
+        for mode in MODERN_MODES
     }
 
     return {
@@ -354,10 +380,16 @@ def build_baseline(input_csv: Path, seed: int = 132, monte_carlo_runs: int = 100
             "contract": "certified export rows only; source may be v2 or ledger when the SQL marks cost_completeness complete",
         },
         "population": summarize_population(rows, certified),
+        "certification_cells": {
+            "minimum_trades": min_cell_size,
+            "eligible_cell_count": len(eligible_cells),
+            "eligible_trade_count": len(aggregate_eligible),
+            "under_sampled": dict(sorted(under_sampled_cells.items())),
+        },
         "groups": groups,
         "simulation": {
-            "profile": simulation_profiles,
-            "all_certified": simulate_group(certified, seed, monte_carlo_runs),
+            "mode": simulation_modes,
+            "all_certified": simulate_group(aggregate_eligible, seed, monte_carlo_runs),
         },
         "coverage_gaps": [
             "direction/side is certified only when a unique order_intent is matched by internal_trade_id and exact exchange/market/symbol scope.",
@@ -434,22 +466,22 @@ def render_markdown(result: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Metriques par profil",
+            "## Metriques par mode",
             "",
-            "| Profil | Trades | Winrate | Wilson 95% | Net expectancy USDT | Profit factor | Max DD USDT | Mean R net | Median R net | Loss causes |",
+            "| Mode | Trades | Winrate | Wilson 95% | Net expectancy USDT | Profit factor | Max DD USDT | Mean R net | Median R net | Loss causes |",
             "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
-    for profile in PROFILES:
-        metrics = result["groups"]["profile"].get(profile)
+    for mode in MODERN_MODES:
+        metrics = result["groups"]["mode"].get(mode)
         if metrics is None:
-            lines.append(f"| `{profile}` | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+            lines.append(f"| `{mode}` | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
             continue
         wilson = metrics["wilson_95"]
         causes = ", ".join(f"{key}={value}" for key, value in metrics["loss_causes"].items()) or "n/a"
         lines.append(
-            "| `{profile}` | {rows} | {winrate} | {low}..{high} | {expectancy} | {pf} | {dd} | {mean_r} | {median_r} | {causes} |".format(
-                profile=profile,
+            "| `{mode}` | {rows} | {winrate} | {low}..{high} | {expectancy} | {pf} | {dd} | {mean_r} | {median_r} | {causes} |".format(
+                mode=mode,
                 rows=metrics["rows"],
                 winrate=render_metric(metrics["winrate"]),
                 low=render_metric(wilson["low"]),
@@ -463,7 +495,9 @@ def render_markdown(result: dict[str, Any]) -> str:
             )
         )
 
-    append_group_table(lines, "Metriques par direction", result["groups"]["direction"])
+    append_group_table(lines, "Metriques par setup", result["groups"]["setup"])
+    append_group_table(lines, "Metriques par side", result["groups"]["side"])
+    append_group_table(lines, "Cellules certifiees", result["groups"]["certification_cell"])
     append_group_table(lines, "Metriques par timeframe", result["groups"]["timeframe"])
     append_group_table(lines, "Metriques par symbole", result["groups"]["symbol"])
 
@@ -472,12 +506,12 @@ def render_markdown(result: dict[str, Any]) -> str:
             "",
             "## Simulation 100 trades",
             "",
-            "| Profil | Capital | Compounding OFF p05/p50/p95 | Max DD p50 | Compounding ON | Duree estimee jours |",
+            "| Mode | Capital | Compounding OFF p05/p50/p95 | Max DD p50 | Compounding ON | Duree estimee jours |",
             "| --- | ---: | --- | ---: | --- | ---: |",
         ]
     )
-    for profile in PROFILES:
-        simulation = result["simulation"]["profile"][profile]
+    for mode in MODERN_MODES:
+        simulation = result["simulation"]["mode"][mode]
         off = simulation.get("compounding_off", {})
         if simulation.get("status"):
             off_label = simulation["status"]
@@ -490,7 +524,7 @@ def render_markdown(result: dict[str, Any]) -> str:
             )
             dd = render_metric(off.get("p50_max_drawdown_usdt"))
         lines.append(
-            f"| `{profile}` | {render_metric(simulation['capital_usdt'])} | {off_label} | {dd} | {simulation.get('compounding_on', {}).get('status', 'n/a')} | {render_metric(simulation.get('estimated_duration_days'))} |"
+            f"| `{mode}` | {render_metric(simulation['capital_usdt'])} | {off_label} | {dd} | {simulation.get('compounding_on', {}).get('status', 'n/a')} | {render_metric(simulation.get('estimated_duration_days'))} |"
         )
 
     lines.extend(
@@ -524,9 +558,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-json", required=True, type=Path, help="Machine-readable JSON summary path")
     parser.add_argument("--seed", type=int, default=132, help="Deterministic Monte Carlo seed")
     parser.add_argument("--monte-carlo-runs", type=int, default=1000, help="Number of Monte Carlo paths")
+    parser.add_argument("--min-cell-size", type=int, default=MIN_CERTIFIED_CELL_TRADES, help="Minimum certified trades per exact cell")
     args = parser.parse_args(argv)
 
-    result = build_baseline(args.input, seed=args.seed, monte_carlo_runs=args.monte_carlo_runs)
+    result = build_baseline(args.input, seed=args.seed, monte_carlo_runs=args.monte_carlo_runs, min_cell_size=args.min_cell_size)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_md.write_text(render_markdown(result), encoding="utf-8")

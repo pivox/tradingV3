@@ -82,6 +82,32 @@ final class PositionTradeAnalysisReportingServiceTest extends TestCase
         self::assertContains('cost_partial', $result->rows[0]->qualityFlags);
     }
 
+    public function testLegacyV2IdentityNeverDisplaysNetPnlAsCertified(): void
+    {
+        $service = new PositionTradeAnalysisReportingService(
+            new RecordingLegacyReader([]),
+            new RecordingCertifiedReader([$this->v2Row([
+                'lineageClassification' => 'legacy',
+                'recordedPnlUsdt' => 8.0,
+                'netPnlUsdt' => 7.0,
+                'costCompleteness' => 'complete',
+                'closeEventId' => 302,
+                'closeMatchStatus' => 'matched',
+                'closeMatchedBy' => 'matched_internal_trade_id',
+                'analysisStatus' => 'matched_closed',
+            ])]),
+            'v2',
+        );
+
+        $row = $service->search([], [], 200)->rows[0];
+
+        self::assertNull($row->pnlUsdt);
+        self::assertSame(8.0, $row->recordedPnlUsdt);
+        self::assertFalse($row->netCertified);
+        self::assertFalse($row->dataComplete);
+        self::assertContains('net_pnl_not_certified', $row->qualityFlags);
+    }
+
     public function testRollbackSourceUsesLegacyRowsWithoutTouchingUnavailableV2(): void
     {
         $legacyReader = new RecordingLegacyReader([$this->legacyRow([
@@ -243,6 +269,7 @@ final class PositionTradeAnalysisReportingServiceTest extends TestCase
             'closeMatchedBy' => 'unmatched',
             'analysisStatus' => 'unmatched',
             'costCompleteness' => 'not_applicable',
+            'lineageClassification' => 'canonical',
         ];
 
         return $this->hydrate(PositionTradeAnalysisV2::class, array_merge($defaults, $overrides));

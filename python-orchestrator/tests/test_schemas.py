@@ -355,24 +355,40 @@ def test_environment_enum_exposes_canonical_fake_environments():
     assert Environment.TEST.value == "test"
 
 
-@pytest.mark.parametrize("schema", [SetCreate, SetUpdate])
-@pytest.mark.parametrize("trading_identity", [None, {}])
-def test_persisted_set_schema_rejects_canonical_identity_until_lot_2b(
-    schema, trading_identity
-):
-    payload = {"trading_identity": trading_identity}
-    if schema is SetCreate:
-        payload.update(
-            set_id="pending-identity",
-            exchange="fake",
-            environment="test",
-            symbols=["BTCUSDT"],
-        )
+def test_set_create_accepts_legacy_row_without_canonical_identity():
+    created = SetCreate.model_validate(
+        {
+            "set_id": "legacy",
+            "exchange": "fake",
+            "environment": "test",
+            "symbols": ["BTCUSDT"],
+        }
+    )
 
-    with pytest.raises(
-        ValidationError, match="canonical_persisted_identity_pending_lot_2b"
-    ):
-        schema.model_validate(payload)
+    assert created.trading_identity is None
+
+
+def test_set_create_and_update_accept_typed_canonical_identity():
+    identity = _canonical_identity_payload()
+    created = SetCreate.model_validate(
+        {
+            "set_id": "canonical",
+            "exchange": "fake",
+            "environment": "test",
+            "mtf_profile": "scalping",
+            "symbols": ["BTCUSDT"],
+            "trading_identity": identity,
+        }
+    )
+    updated = SetUpdate.model_validate({"trading_identity": identity})
+
+    assert created.trading_identity == updated.trading_identity
+    assert created.trading_identity.mode_id == "scalping"
+
+
+def test_set_update_rejects_null_canonical_identity():
+    with pytest.raises(ValidationError, match="trading_identity.*ne peut pas être null"):
+        SetUpdate.model_validate({"trading_identity": None})
 
 
 def test_okx_live_is_forbidden():

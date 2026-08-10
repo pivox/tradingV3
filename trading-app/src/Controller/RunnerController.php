@@ -42,7 +42,9 @@ class RunnerController extends AbstractController
             // Parse JSON request body for POST or query parameters for GET
             $data = [];
             if ($request->getMethod() === 'POST') {
-                $data = json_decode($request->getContent(), true) ?? [];
+                $content = $request->getContent();
+                self::assertUnambiguousEffectiveConfigJson(json_decode($content));
+                $data = json_decode($content, true) ?? [];
             } else {
                 // For GET requests, get parameters from query string
                 $data = $request->query->all();
@@ -292,5 +294,62 @@ class RunnerController extends AbstractController
 
             return $this->json($errorResponse, Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    private static function assertUnambiguousEffectiveConfigJson(mixed $payload): void
+    {
+        if (!\is_object($payload)
+            || !\is_object($payload->trading_identity ?? null)
+            || !\is_object($payload->trading_identity->effective_config_snapshot ?? null)
+        ) {
+            return;
+        }
+
+        self::assertNoAmbiguousJsonObject(
+            $payload->trading_identity->effective_config_snapshot->config ?? null,
+        );
+    }
+
+    private static function assertNoAmbiguousJsonObject(mixed $value): void
+    {
+        if (\is_array($value)) {
+            foreach ($value as $item) {
+                self::assertNoAmbiguousJsonObject($item);
+            }
+            return;
+        }
+        if (!\is_object($value)) {
+            return;
+        }
+
+        $properties = get_object_vars($value);
+        // Associative decoding collapses both {} and objects keyed 0..n-1 into PHP lists.
+        // Reject those shapes before decoding so canonical identity remains fail-closed.
+        if (self::hasContiguousZeroBasedJsonObjectKeys(array_keys($properties))) {
+            throw new LineageContextException('canonical_identity_invalid:effective_config_structure');
+        }
+        foreach ($properties as $item) {
+            self::assertNoAmbiguousJsonObject($item);
+        }
+    }
+
+    /** @param array<int,int|string> $keys */
+    private static function hasContiguousZeroBasedJsonObjectKeys(array $keys): bool
+    {
+        if ($keys === []) {
+            return true;
+        }
+
+        $expected = [];
+        for ($index = 0, $count = \count($keys); $index < $count; ++$index) {
+            $expected[(string) $index] = true;
+        }
+        foreach ($keys as $key) {
+            if (!isset($expected[(string) $key])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

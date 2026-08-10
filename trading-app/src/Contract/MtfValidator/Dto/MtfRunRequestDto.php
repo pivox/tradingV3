@@ -139,6 +139,26 @@ final class MtfRunRequestDto
      */
     private static function buildLineageContext(array $data, array $symbols, ?Exchange $exchange, ?MarketType $marketType, ?string $profile): LineageContext
     {
+        if (\array_key_exists('lineage_context', $data)) {
+            if (!\is_array($data['lineage_context'])
+                || $data['lineage_context'] === []
+                || !\in_array($data['lineage_context']['origin'] ?? null, [
+                    LineageContext::ORIGIN_ORCHESTRATOR,
+                    LineageContext::ORIGIN_LEGACY,
+                    LineageContext::ORIGIN_MANUAL,
+                    LineageContext::ORIGIN_REPLAY,
+                ], true)
+                || !\in_array($data['lineage_context']['contract_kind'] ?? null, [
+                    LineageContext::CONTRACT_LEGACY,
+                    LineageContext::CONTRACT_MODERN,
+                ], true)
+            ) {
+                throw new \App\Trading\Lineage\LineageContextException('canonical_identity_invalid:lineage_context');
+            }
+
+            return LineageContext::fromArray($data['lineage_context']);
+        }
+
         $hasOrchestratorLineage = self::nonEmptyString($data['request_id'] ?? $data['requestId'] ?? $data['orchestration_run_id'] ?? null) !== null
             || self::nonEmptyString($data['set_id'] ?? $data['orchestration_set_id'] ?? null) !== null
             || self::nonEmptyString($data['dashboard_id'] ?? $data['orchestration_dashboard_id'] ?? null) !== null;

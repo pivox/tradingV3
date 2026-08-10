@@ -7,6 +7,9 @@ namespace App\Entity;
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\FuturesOrderRepository;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\Persistence\CanonicalLineageProjection;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
@@ -19,6 +22,10 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_futures_order_client_order_id', columns: ['client_order_id'])]
 class FuturesOrder
 {
+    use CanonicalLineageProjection {
+        requireLineageContext as private requireProjectedLineageContext;
+    }
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column(type: Types::BIGINT)]
@@ -29,6 +36,10 @@ class FuturesOrder
 
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $clientOrderId = null;
+
+    #[ORM\ManyToOne(targetEntity: OrderIntent::class)]
+    #[ORM\JoinColumn(name: 'order_intent_id', referencedColumnName: 'id', nullable: true, onDelete: 'SET NULL')]
+    private ?OrderIntent $orderIntent = null;
 
     #[ORM\Column(type: Types::STRING, length: 32, options: ['default' => 'bitmart'])]
     private string $exchange = 'bitmart';
@@ -135,6 +146,79 @@ class FuturesOrder
     {
         $this->clientOrderId = $clientOrderId;
         return $this->touch();
+    }
+
+    public function getOrderIntent(): ?OrderIntent
+    {
+        return $this->orderIntent;
+    }
+
+    public function applyOrderIntentLineage(OrderIntent $intent): self
+    {
+        $source = $intent->requireExecutionLineageContext();
+        if ($this->clientOrderId === null || $this->clientOrderId !== $intent->getClientOrderId()) {
+            throw new LineageContextException('canonical_identity_mismatch:client_order_id');
+        }
+        if ($this->orderId === null || trim($this->orderId) === '') {
+            throw new LineageContextException('canonical_identity_missing:exchange_order_id');
+        }
+        if ($intent->getExchangeOrderId() !== null && $intent->getExchangeOrderId() !== $this->orderId) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
+        }
+
+        $source->assertTradeBoundary(
+            $this->symbol,
+            self::canonicalSide($this->side),
+            $this->exchange,
+            $this->marketType,
+        );
+        $successor = $source->withExecution(
+            $this->orderId,
+            $source->positionId,
+            $source->tradeId,
+        );
+        $this->projectCanonicalLineage($successor, 'futures_order');
+        $this->orderIntent = $intent;
+
+        return $this->touch();
+    }
+
+    public function requireLineageContext(): LineageContext
+    {
+        $context = $this->requireProjectedLineageContext();
+        if (!$this->orderIntent instanceof OrderIntent) {
+            throw new LineageContextException('canonical_identity_missing:order_intent_predecessor');
+        }
+
+        $context->assertTradeBoundary(
+            $this->symbol,
+            self::canonicalSide($this->side),
+            $this->exchange,
+            $this->marketType,
+        );
+        if ($this->orderId === null || $context->orderId !== $this->orderId) {
+            throw new LineageContextException('canonical_identity_mismatch:exchange_order_id');
+        }
+        if ($this->clientOrderId === null || $context->clientOrderId !== $this->clientOrderId) {
+            throw new LineageContextException('canonical_identity_mismatch:client_order_id');
+        }
+
+        $source = $this->orderIntent->requireExecutionLineageContext();
+        $expected = $source->withExecution($this->orderId, $source->positionId, $source->tradeId);
+        if ($expected->toArray() !== $context->toArray()) {
+            throw new LineageContextException('canonical_identity_mismatch:order_intent_predecessor');
+        }
+
+        return $context;
+    }
+
+    private static function canonicalSide(?int $side): string
+    {
+        return match ($side) {
+            1, 2 => 'LONG',
+            3, 4 => 'SHORT',
+            default => throw new LineageContextException('canonical_identity_invalid:side'),
+        };
     }
 
     public function getExchange(): string

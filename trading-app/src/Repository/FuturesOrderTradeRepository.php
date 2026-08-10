@@ -8,11 +8,12 @@ use App\Entity\FuturesOrderTrade;
 use App\Provider\Context\ExchangeContext;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
+use App\Trading\Lineage\Persistence\FuturesOrderTradeRecoverySource;
 
 /**
  * @extends ServiceEntityRepository<FuturesOrderTrade>
  */
-final class FuturesOrderTradeRepository extends ServiceEntityRepository
+final class FuturesOrderTradeRepository extends ServiceEntityRepository implements FuturesOrderTradeRecoverySource
 {
     public function __construct(ManagerRegistry $registry)
     {

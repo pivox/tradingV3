@@ -67,7 +67,7 @@ final class CanonicalPolicyRejectionTest extends TestCase
         $identity = $this->identity();
         $messageHandler = new MtfTradingDecisionMessageHandler($this->handler($indicator, $audit, $logger), $logger);
 
-        $messageHandler(new MtfTradingDecisionMessage('run-policy', $this->runDto(), $this->mtfResult(), $identity));
+        $messageHandler(new MtfTradingDecisionMessage('run-fixture', $this->runDto(), $this->mtfResult(), $identity));
 
         self::assertTrue($logger->hasMessage('[MTF Messenger] Canonical policy rejection acknowledged'));
         self::assertSame('canonical_risk_pct_pending_304', $logger->contextFor('[MTF Messenger] Canonical policy rejection acknowledged')['reason'] ?? null);
@@ -98,7 +98,28 @@ final class CanonicalPolicyRejectionTest extends TestCase
 
     private function runDto(): MtfRunDto
     {
-        return new MtfRunDto('BTCUSDT', 'scalping', options: ['exchange' => 'fake', 'market_type' => 'perpetual'], lineageContext: $this->identity());
+        $identity = $this->identity();
+        return new MtfRunDto(
+            'BTCUSDT',
+            'scalping',
+            requestId: 'run-fixture',
+            options: [
+                'dry_run' => false,
+                'exchange' => 'fake',
+                'market_type' => 'perpetual',
+                'correlation_run_id' => 'run-fixture',
+                'orchestration_run_id' => 'run-fixture',
+                'orchestration_dashboard_id' => null,
+                'orchestration_set_id' => 'set-fixture',
+                'origin' => 'orchestrator',
+                'replay_of_run_id' => null,
+                'replay_of_correlation_id' => null,
+                'attempt_number' => 1,
+                'config_hash' => $identity->configHash,
+                'lineage_context' => $identity->toArray(),
+            ],
+            lineageContext: $identity,
+        );
     }
 
     private function mtfResult(): MtfResultDto
@@ -108,7 +129,10 @@ final class CanonicalPolicyRejectionTest extends TestCase
 
     private function identity(): \App\Trading\Lineage\LineageContext
     {
-        return CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config());
+        $data = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
+        $data['dry_run'] = false;
+
+        return \App\Trading\Lineage\LineageContext::fromArray($data);
     }
 
     /**

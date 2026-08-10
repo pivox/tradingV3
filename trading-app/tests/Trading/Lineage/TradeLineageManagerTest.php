@@ -217,7 +217,8 @@ final class TradeLineageManagerTest extends KernelTestCase
         ]);
 
         self::assertSame('legacy-config-v1', $intent->getConfigHash());
-        self::assertFalse($intent->hasAnyCanonicalIdentity());
+        self::assertTrue($intent->hasAnyCanonicalIdentity());
+        self::assertFalse($intent->hasCanonicalContractMarkers());
         self::assertTrue($retry->blocked);
         self::assertSame('idempotent_client_order_id_replay', $retry->reason);
         self::assertSame($intent->getId(), $retry->intent->getId());

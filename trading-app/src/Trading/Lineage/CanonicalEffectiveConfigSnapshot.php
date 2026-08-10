@@ -124,8 +124,26 @@ final readonly class CanonicalEffectiveConfigSnapshot
             if ($value === null || \is_scalar($value)) { return $value; }
             throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
         }
-        if (!array_is_list($value)) { ksort($value, SORT_STRING); }
+        if (!array_is_list($value)) {
+            if (self::hasContiguousZeroBasedIntegerKeySet($value)) {
+                throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot.ambiguous_integer_key_map');
+            }
+            ksort($value, SORT_STRING);
+        }
         foreach ($value as $key => $item) { $value[$key] = self::canonicalize($item, $normalizeIntegralFloats); }
         return $value;
+    }
+
+    /** @param array<array-key,mixed> $value */
+    private static function hasContiguousZeroBasedIntegerKeySet(array $value): bool
+    {
+        $keyCount = \count($value);
+        foreach (array_keys($value) as $key) {
+            if (!\is_int($key) || $key < 0 || $key >= $keyCount) {
+                return false;
+            }
+        }
+
+        return $keyCount > 0;
     }
 }

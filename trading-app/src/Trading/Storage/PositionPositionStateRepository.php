@@ -11,12 +11,15 @@ use App\Trading\Dto\PositionDto;
 use App\Trading\Dto\PositionHistoryEntryDto;
 use Brick\Math\BigDecimal;
 use Doctrine\ORM\EntityManagerInterface;
+use App\Trading\Lineage\LineageContextException;
+use App\Trading\Lineage\Persistence\CanonicalPositionRecoveryService;
 
 final class PositionPositionStateRepository implements PositionStateRepositoryInterface
 {
     public function __construct(
         private readonly PositionRepository $repository,
         private readonly EntityManagerInterface $em,
+        private readonly ?CanonicalPositionRecoveryService $canonicalRecovery = null,
     ) {}
 
     public function findLocalOpenPosition(
@@ -70,14 +73,17 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
 
     public function saveOpenPosition(PositionDto $position): void
     {
-        /** @var Position|null $entity */
         $context = $this->resolveContext($position->raw);
-        $entity = $this->repository->findOneBySymbolSide($position->symbol, $position->side->value, $context);
+        $evidence = $position->canonicalEvidence();
+        $entity = $evidence->exchangePositionId !== null
+            ? $this->repository->findOneByCanonicalExchangePositionId($evidence->exchangePositionId, $context)
+            : $this->repository->findOneBySymbolSide($position->symbol, $position->side->value, $context);
 
         if ($entity === null) {
             $entity = new Position($position->symbol, $position->side->value, $context->exchange, $context->marketType);
         }
 
+        $this->applyCanonicalRecovery($entity, $evidence, $context, $position->symbol, $position->side->value);
         $this->mapDtoToOpenEntity($position, $entity);
         $this->em->persist($entity);
         $this->em->flush();
@@ -85,13 +91,23 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
 
     public function saveClosedPosition(PositionHistoryEntryDto $history): void
     {
-        /** @var Position|null $entity */
         $context = $this->resolveContext($history->raw);
-        $entity = $this->repository->findOneBySymbolSide($history->symbol, $history->side->value, $context);
+        $evidence = $history->canonicalEvidence();
+        $entity = $evidence->exchangePositionId !== null
+            ? $this->repository->findOneByCanonicalExchangePositionId($evidence->exchangePositionId, $context)
+            : $this->repository->findOpenBySymbolSide($history->symbol, $history->side->value, $context);
 
         if ($entity === null) {
             $entity = new Position($history->symbol, $history->side->value, $context->exchange, $context->marketType);
         }
+
+        $this->applyCanonicalRecovery(
+            $entity,
+            $evidence,
+            $context,
+            $history->symbol,
+            $history->side->value,
+        );
 
         $entity->setStatus('CLOSED');
         $entity->setSize($history->size->__toString());
@@ -106,6 +122,45 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
 
         $this->em->persist($entity);
         $this->em->flush();
+    }
+
+    private function applyCanonicalRecovery(
+        Position $entity,
+        \App\Trading\Lineage\Persistence\CanonicalPositionEvidence $evidence,
+        ExchangeContext $context,
+        string $symbol,
+        string $side,
+    ): void {
+        $classification = $entity->lineageClassification();
+        if ($entity->getSymbol() !== strtoupper($symbol)
+            || $entity->getSide() !== strtoupper($side)
+            || $entity->getExchange() !== $context->exchange->value
+            || $entity->getMarketType() !== $context->marketType->value
+        ) {
+            throw new LineageContextException('canonical_identity_mismatch:position_boundary');
+        }
+        if ($classification === 'incomplete') {
+            throw new LineageContextException('canonical_identity_incomplete:position');
+        }
+        $predecessor = $this->canonicalRecovery?->resolve($evidence, $context);
+        if ($classification === 'canonical') {
+            $stored = $entity->requireLineageContext();
+            if ($evidence->exchangePositionId === null
+                || $predecessor === null
+                || $predecessor->context->toArray() !== $stored->toArray()
+                || $predecessor->exchangePositionId !== $entity->getCanonicalExchangePositionId()
+            ) {
+                throw new LineageContextException('canonical_identity_mismatch:position_predecessor');
+            }
+
+            return;
+        }
+        if ($predecessor !== null) {
+            if (!\in_array($predecessor->order->getSide(), [1, 4], true)) {
+                throw new LineageContextException('canonical_identity_invalid:position_opening_order');
+            }
+            $entity->applyCanonicalPredecessor($predecessor);
+        }
     }
 
     /**
@@ -148,10 +203,7 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
 
         $result = [];
         foreach ($entities as $entity) {
-            $history = $this->mapEntityToHistoryDto($entity);
-            if ($history !== null) {
-                $result[] = $history;
-            }
+            $result[] = $this->mapEntityToHistoryDto($entity);
         }
 
         return $result;
@@ -185,7 +237,11 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
             raw: array_replace($payload, [
                 'exchange' => $entity->getExchange(),
                 'market_type' => $entity->getMarketType(),
-            ])
+            ]),
+            exchangePositionId: $entity->getCanonicalExchangePositionId(),
+            exchangeOrderId: $entity->getOpeningOrder()?->getOrderId(),
+            clientOrderId: $entity->getOpeningOrder()?->getClientOrderId(),
+            exchangeFillId: $entity->getOpeningFill()?->getTradeId(),
         );
     }
 
@@ -213,7 +269,7 @@ final class PositionPositionStateRepository implements PositionStateRepositoryIn
         return ExchangeContext::fromArray($raw);
     }
 
-    private function mapEntityToHistoryDto(Position $entity): ?PositionHistoryEntryDto
+    private function mapEntityToHistoryDto(Position $entity): PositionHistoryEntryDto
     {
         $payload = $entity->getPayload();
         $exitPrice = $payload['exit_price'] ?? $entity->getAvgEntryPrice() ?? '0';

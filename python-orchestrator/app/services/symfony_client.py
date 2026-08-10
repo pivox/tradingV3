@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
-from app.schemas import MAX_WORKERS_PER_SET, OrchestratorSet
+from app.schemas import CanonicalTradingIdentity, MAX_WORKERS_PER_SET, OrchestratorSet
 from app.services.correlation import canonical_correlation_id
 
 # Clé de cache d'un snapshot : (exchange, market_type).
@@ -282,7 +282,14 @@ def _base_mtf_payload(
     if symbols:
         payload["symbols"] = list(symbols)
     if trading_identity is not None:
-        payload["trading_identity"] = trading_identity.model_dump(exclude_none=True)
+        identity = (
+            trading_identity
+            if isinstance(trading_identity, CanonicalTradingIdentity)
+            else CanonicalTradingIdentity.model_validate(trading_identity)
+        )
+        payload["trading_identity"] = identity.model_dump(
+            mode="json", exclude_none=True
+        )
     return payload
 
 
@@ -383,6 +390,7 @@ def generate_set_payload(a_set: Any) -> Optional[Dict[str, Any]]:
         market_type=_enum_value(a_set.market_type),
         mtf_profile=_enum_value(a_set.mtf_profile),
         symbols=symbols,
+        trading_identity=getattr(a_set, "trading_identity", None),
     )
 
 
@@ -550,6 +558,10 @@ async def run_persisted_set(
     que d'envoyer un ``/api/mtf/run`` sans ``symbols`` (qui exécuterait tout
     l'univers actif).
     """
+    normalized_run_id = run_id.strip() if run_id is not None else None
+    if getattr(orm_set, "trading_identity", None) is not None and not normalized_run_id:
+        raise ValueError("canonical_lineage_missing:run_id")
+
     # Allow-list : repart des colonnes ORM, jamais du JSON stocké (anti control-flag
     # et anti-divergence). Forme + clamp workers délégués à `effective_set_payload`,
     # la fonction canonique partagée avec `SetRead.effective_payload` (PY-007) : la
@@ -577,7 +589,7 @@ async def run_persisted_set(
         base_url,
         orm_set.set_id,
         payload,
-        run_id=run_id,
+        run_id=normalized_run_id,
         dashboard_id=getattr(orm_set, "dashboard_id", None),
     )
     result["payload_sent"] = payload

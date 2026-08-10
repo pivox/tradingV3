@@ -151,6 +151,10 @@ final readonly class FakeAccountProvider implements AccountProviderInterface
                 'source' => 'fake_exchange',
                 'updated_at' => $position->updatedAt?->format(\DateTimeInterface::ATOM),
             ],
+            exchangePositionId: $position->exchangePositionId,
+            exchangeOrderId: $position->exchangeOrderId,
+            clientOrderId: $position->clientOrderId,
+            exchangeFillId: $position->exchangeFillId,
         );
     }
 }

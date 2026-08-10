@@ -1326,6 +1326,10 @@ class FakeExchangeStateStore
             'leverage' => $position->leverage,
             'opened_at' => $position->openedAt?->format(\DateTimeInterface::ATOM),
             'updated_at' => $position->updatedAt?->format(\DateTimeInterface::ATOM),
+            'exchange_position_id' => $position->exchangePositionId,
+            'exchange_order_id' => $position->exchangeOrderId,
+            'client_order_id' => $position->clientOrderId,
+            'exchange_fill_id' => $position->exchangeFillId,
             'metadata' => $position->metadata,
         ];
     }

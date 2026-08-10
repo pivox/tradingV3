@@ -825,6 +825,10 @@ final class BitmartExchangeAdapter implements ExchangeAdapterInterface, Exchange
             openedAt: $position->openedAt,
             updatedAt: $position->closedAt,
             metadata: $position->metadata,
+            exchangePositionId: $position->exchangePositionId,
+            exchangeOrderId: $position->exchangeOrderId,
+            clientOrderId: $position->clientOrderId,
+            exchangeFillId: $position->exchangeFillId,
         );
     }
 

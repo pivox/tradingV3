@@ -24,7 +24,11 @@ final class PositionDto extends BaseDto
         public readonly BigDecimal $leverage,
         public readonly \DateTimeImmutable $openedAt,
         public readonly ?\DateTimeImmutable $closedAt = null,
-        public readonly array $metadata = []
+        public readonly array $metadata = [],
+        public readonly ?string $exchangePositionId = null,
+        public readonly ?string $exchangeOrderId = null,
+        public readonly ?string $clientOrderId = null,
+        public readonly ?string $exchangeFillId = null,
     ) {}
 
     public static function fromArray(array $data): self
@@ -87,8 +91,31 @@ final class PositionDto extends BaseDto
             leverage: BigDecimal::of($leverage),
             openedAt: $openedAt,
             closedAt: $closedAt,
-            metadata: \is_array($data['metadata'] ?? null) ? array_replace($data, $data['metadata']) : $data
+            metadata: \is_array($data['metadata'] ?? null) ? array_replace($data, $data['metadata']) : $data,
+            exchangePositionId: self::identifier($data['position_id'] ?? $data['exchange_position_id'] ?? null),
+            exchangeOrderId: self::identifier($data['order_id'] ?? $data['exchange_order_id'] ?? null),
+            clientOrderId: self::identifier($data['client_order_id'] ?? null),
+            exchangeFillId: self::identifier($data['trade_id'] ?? $data['fill_id'] ?? null),
+        );
+    }
+
+    private static function identifier(mixed $value): ?string
+    {
+        if (!\is_string($value) && !\is_int($value)) {
+            return null;
+        }
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
+    public function canonicalEvidence(): \App\Trading\Lineage\Persistence\CanonicalPositionEvidence
+    {
+        return new \App\Trading\Lineage\Persistence\CanonicalPositionEvidence(
+            $this->exchangePositionId,
+            $this->exchangeOrderId,
+            $this->clientOrderId,
+            $this->exchangeFillId,
         );
     }
 }
-

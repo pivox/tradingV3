@@ -57,6 +57,37 @@ def test_symbols_jsonb_round_trip(db_session):
     assert reloaded.payload == {"action": "mtf_run", "dry_run": True}
 
 
+def test_canonical_identity_jsonb_round_trip_and_partial_update_preserves_it(db_session):
+    dashboard = _make_dashboard(db_session)
+    identity = {
+        "mode_id": "scalping",
+        "mode_version": "1.0.0",
+        "setup_id": "scalping.pullback.long",
+        "opaque_nested_snapshot": {"ordered": ["base", "mode", "setup"]},
+    }
+    a_set = repo.create_set(
+        db_session,
+        dashboard.id,
+        fields={
+            "set_id": "canonical",
+            "exchange": "fake",
+            "symbols": ["BTCUSDT"],
+            "trading_identity": identity,
+        },
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    reloaded = repo.get_set(db_session, dashboard.id, "canonical")
+    assert reloaded.trading_identity == identity
+
+    repo.update_set(db_session, reloaded, fields={"priority": 9})
+    db_session.commit()
+    db_session.expire_all()
+
+    assert repo.get_set(db_session, dashboard.id, "canonical").trading_identity == identity
+
+
 def test_record_run_and_run_set_then_cascade(db_session):
     dashboard = _make_dashboard(db_session)
     db_session.commit()
