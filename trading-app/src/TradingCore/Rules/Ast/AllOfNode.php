@@ -6,9 +6,12 @@ namespace App\TradingCore\Rules\Ast;
 
 final readonly class AllOfNode implements RuleNode
 {
-    /** @param non-empty-list<RuleNode> $children */
+    /** @param list<RuleNode> $children */
     public function __construct(public array $children, public string $provenance)
     {
+        if ($children === []) {
+            throw new \InvalidArgumentException('all_of children must not be empty.');
+        }
     }
 
     public function toArray(): array
