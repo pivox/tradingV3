@@ -368,6 +368,8 @@ ne puisse jamais annuler le risque deja charge par un fill precedent.
 La decision d'admission possede un constructeur prive. Sa seule factory publique
 rejoue l'evaluateur canonique avec la request complete ; un appelant ne peut donc
 pas fabriquer une reservation en recopiant seulement le plan et une state version.
+Sa serialisation et son hydration PHP sont interdites explicitement pour que
+`unserialize()` ne puisse pas contourner cette frontiere readonly.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme

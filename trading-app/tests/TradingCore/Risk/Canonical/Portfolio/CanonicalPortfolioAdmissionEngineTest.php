@@ -25,6 +25,26 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
         self::assertTrue($constructor->isPrivate());
     }
 
+    public function testReservationDecisionCannotBeSerializedForLaterHydration(): void
+    {
+        $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))
+            ->admit($this->request());
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_admission_serialization_forbidden');
+        serialize($decision);
+    }
+
+    public function testForgedSerializedReservationDecisionCannotBeHydrated(): void
+    {
+        $class = CanonicalPortfolioReservationDecision::class;
+        $payload = sprintf('O:%d:"%s":0:{}', strlen($class), $class);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_admission_serialization_forbidden');
+        unserialize($payload);
+    }
+
     public function testAcceptsAgainstMostRestrictiveDailyCapAndBuildsStableReservation(): void
     {
         $request = $this->request();

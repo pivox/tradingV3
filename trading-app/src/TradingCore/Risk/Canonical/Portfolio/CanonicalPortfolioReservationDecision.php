@@ -34,4 +34,16 @@ final readonly class CanonicalPortfolioReservationDecision
     ): self {
         return new self(...$engine->evaluate($request));
     }
+
+    /** @return never */
+    public function __serialize(): array
+    {
+        throw new CanonicalPortfolioException('canonical_portfolio_admission_serialization_forbidden');
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new CanonicalPortfolioException('canonical_portfolio_admission_serialization_forbidden');
+    }
 }
