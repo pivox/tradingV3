@@ -20,6 +20,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTargetCostSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
@@ -211,6 +212,21 @@ final class CanonicalNetREngineTest extends TestCase
                 $costs->stopSlippageRate,
                 $costs->fundingRate,
                 intdiv($policy->holdingWindowSeconds - 1, $policy->costContract->fundingIntervalSeconds) + 1,
+            ),
+            instrument: new CanonicalInstrumentSnapshot(
+                $policy->riskPolicy->exchange,
+                $policy->riskPolicy->environment,
+                $protection->symbol,
+                $protection->marketType,
+                1.0,
+                0.001,
+                0.001,
+                100.0,
+                100.0,
+                5.0,
+                5.0,
+                new \DateTimeImmutable('2026-08-10T11:59:40+00:00'),
+                'sha256:' . str_repeat('7', 64),
             ),
         ));
     }

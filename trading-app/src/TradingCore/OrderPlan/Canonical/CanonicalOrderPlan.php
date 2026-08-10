@@ -106,7 +106,13 @@ final readonly class CanonicalOrderPlan
             throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
         }
         if (
-            $request->protection->oldestObservedAt > $now
+            $request->riskRequest->instrument->observedAt > $now
+            || CanonicalOrderPlanTime::isOlderThan(
+                $request->riskRequest->instrument->observedAt,
+                $now,
+                $request->policy->entryZone->maximumInputAgeSeconds,
+            )
+            || $request->protection->oldestObservedAt > $now
             || CanonicalOrderPlanTime::isOlderThan(
                 $request->protection->oldestObservedAt,
                 $now,
@@ -171,6 +177,7 @@ final readonly class CanonicalOrderPlan
         $inputHashes = array_values(array_unique([
             ...$zone->inputHashes,
             ...$request->protection->inputHashes,
+            $request->riskRequest->instrument->inputHash,
             $request->netR->costInputHash,
         ]));
         $values = [
@@ -231,7 +238,10 @@ final readonly class CanonicalOrderPlan
             'fundingCost' => $risk->fundingCost,
             'fundingIntervals' => $request->netR->fundingIntervals,
             'maximumInputAgeSeconds' => $policy->entryZone->maximumInputAgeSeconds,
-            'inputObservedAt' => $request->protection->oldestObservedAt,
+            'inputObservedAt' => min(
+                $request->protection->oldestObservedAt,
+                $request->riskRequest->instrument->observedAt,
+            ),
             'observedAt' => $zone->observedAt,
             'costObservedAt' => $costs->observedAt,
             'zoneComputedAt' => $zone->computedAt,

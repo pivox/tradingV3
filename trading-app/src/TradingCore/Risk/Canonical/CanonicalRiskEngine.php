@@ -153,6 +153,7 @@ final class CanonicalRiskEngine
             stopPrice: $request->stopPrice,
             contractSize: $request->contractSize,
             costs: $request->costs,
+            instrument: $request->instrument,
         );
     }
 

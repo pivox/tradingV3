@@ -20,6 +20,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTargetCostSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
@@ -43,6 +44,7 @@ final class CanonicalOrderPlanPipelineFixture
     public static function accepted(
         string $side = 'long',
         string $costObservedAt = '2026-08-10T11:59:50+00:00',
+        string $instrumentObservedAt = '2026-08-10T11:59:40+00:00',
     ): array
     {
         $policy = CanonicalExecutionPolicyFixture::policy($side);
@@ -106,6 +108,21 @@ final class CanonicalOrderPlanPipelineFixture
             5.0,
             5.0,
             new CanonicalCostSnapshot('taker', 'taker', 0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 1),
+            new CanonicalInstrumentSnapshot(
+                'fake',
+                'test',
+                'BTCUSDT',
+                'perpetual',
+                1.0,
+                0.001,
+                0.001,
+                100.0,
+                100.0,
+                5.0,
+                5.0,
+                new \DateTimeImmutable($instrumentObservedAt),
+                'sha256:' . str_repeat('7', 64),
+            ),
         );
         $risk = (new CanonicalRiskEngine())->calculate($riskRequest);
         $netR = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));

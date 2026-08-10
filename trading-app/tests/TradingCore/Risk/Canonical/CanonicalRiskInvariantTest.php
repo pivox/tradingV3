@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Risk\Canonical;
 
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskEngine;
@@ -180,6 +181,21 @@ final class CanonicalRiskInvariantTest extends TestCase
             exchangeLeverageCap: $exchangeCap,
             symbolLeverageCap: $symbolCap,
             costs: $costs ?? new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
+            instrument: new CanonicalInstrumentSnapshot(
+                $policy->exchange,
+                $policy->environment,
+                'BTCUSDT',
+                'perpetual',
+                1.0,
+                $step,
+                $step,
+                1_000_000.0,
+                1_000_000.0,
+                $exchangeCap,
+                $symbolCap,
+                new \DateTimeImmutable('2026-08-10T11:59:40+00:00'),
+                'sha256:' . str_repeat('7', 64),
+            ),
         );
     }
 

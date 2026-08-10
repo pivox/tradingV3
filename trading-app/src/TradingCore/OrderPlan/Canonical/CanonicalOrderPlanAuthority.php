@@ -52,6 +52,7 @@ final readonly class CanonicalOrderPlanAuthority
             || $request->risk->side !== $zone->side
             || $request->risk->entryPrice !== $zone->entryPrice
             || $request->risk->stopPrice !== $protection->stopPrice
+            || $request->risk->instrument != $request->riskRequest->instrument
             || $protection->entryPrice !== $zone->entryPrice
             || $request->netR->configHash !== $policy->configHash
         ) {

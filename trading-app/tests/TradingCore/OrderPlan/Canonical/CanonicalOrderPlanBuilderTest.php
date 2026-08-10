@@ -16,6 +16,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionTarget;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -47,6 +48,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertCount(2, $plan->targets);
         self::assertGreaterThanOrEqual($plan->minimumNetR, $plan->targets[0]->netR);
         self::assertSame('sha256:', substr($plan->planHash, 0, 7));
+        self::assertContains($components['riskRequest']->instrument->inputHash, $plan->inputHashes);
         self::assertSame($plan, $validator->validate($plan));
     }
 
@@ -118,11 +120,27 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
     }
 
+    public function testBuildRejectsInstrumentMetadataStaleAtExecutionTime(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            instrumentObservedAt: '2026-08-10T11:58:59+00:00',
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_input_stale');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
     public function testAuthorityRejectsRiskSizingFromDifferentMarketType(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
         $riskRequestArguments = get_object_vars($components['riskRequest']);
         $riskRequestArguments['marketType'] = 'spot';
+        $instrumentArguments = get_object_vars($components['riskRequest']->instrument);
+        $instrumentArguments['marketType'] = 'spot';
+        $riskRequestArguments['instrument'] = new CanonicalInstrumentSnapshot(...$instrumentArguments);
         $riskArguments = get_object_vars($components['risk']);
         $riskArguments['marketType'] = 'spot';
         $components['riskRequest'] = new CanonicalRiskCalculationRequest(...$riskRequestArguments);

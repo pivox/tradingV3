@@ -26,6 +26,7 @@ final readonly class CanonicalRiskCalculationRequest
         public float $exchangeLeverageCap,
         public ?float $symbolLeverageCap,
         public CanonicalCostSnapshot $costs,
+        public CanonicalInstrumentSnapshot $instrument,
     ) {
         if (trim($symbol) === '') {
             throw new CanonicalRiskException('canonical_risk_symbol_invalid');
@@ -76,6 +77,21 @@ final readonly class CanonicalRiskCalculationRequest
             || ($symbolLeverageCap !== null && (!\is_finite($symbolLeverageCap) || $symbolLeverageCap < 1.0))
         ) {
             throw new CanonicalRiskException('canonical_leverage_cap_invalid');
+        }
+        if (
+            $instrument->exchange !== $policy->exchange
+            || $instrument->environment !== $policy->environment
+            || $instrument->symbol !== $symbol
+            || $instrument->marketType !== $marketType
+            || $instrument->contractSize !== $contractSize
+            || $instrument->quantityStep !== $quantityStep
+            || $instrument->minQuantity !== $minQuantity
+            || $instrument->maxQuantity !== $maxQuantity
+            || $instrument->marketMaxQuantity !== $marketMaxQuantity
+            || $instrument->exchangeLeverageCap !== $exchangeLeverageCap
+            || $instrument->symbolLeverageCap !== $symbolLeverageCap
+        ) {
+            throw new CanonicalRiskException('canonical_instrument_identity_mismatch');
         }
     }
 }

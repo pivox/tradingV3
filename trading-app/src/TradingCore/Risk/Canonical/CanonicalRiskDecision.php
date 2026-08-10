@@ -33,6 +33,7 @@ final readonly class CanonicalRiskDecision
         public float $stopPrice,
         public float $contractSize,
         public CanonicalCostSnapshot $costs,
+        public CanonicalInstrumentSnapshot $instrument,
     ) {
     }
 }

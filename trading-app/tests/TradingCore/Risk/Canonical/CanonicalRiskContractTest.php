@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Risk\Canonical;
 
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
+use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskPolicy;
@@ -155,10 +156,34 @@ final class CanonicalRiskContractTest extends TestCase
         self::assertSame('short', $short->policy->side);
     }
 
+    public function testRejectsInstrumentSnapshotThatDoesNotMatchRequestedMetadata(): void
+    {
+        $arguments = $this->requestArguments('long');
+        $arguments['instrument'] = new CanonicalInstrumentSnapshot(
+            'fake',
+            'test',
+            'BTCUSDT',
+            'perpetual',
+            2.0,
+            0.001,
+            0.001,
+            100.0,
+            50.0,
+            20.0,
+            10.0,
+            new \DateTimeImmutable('2026-08-10T11:59:40+00:00'),
+            'sha256:' . str_repeat('7', 64),
+        );
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_instrument_identity_mismatch');
+        new CanonicalRiskCalculationRequest(...$arguments);
+    }
+
     /** @return array<string, int|float|string|null> */
     private function costArguments(): array
     {
-        return [
+        $arguments = [
             'entryLiquidityRole' => 'maker',
             'stopLiquidityRole' => 'taker',
             'entrySpreadRate' => 0.0002,
@@ -168,12 +193,14 @@ final class CanonicalRiskContractTest extends TestCase
             'fundingRate' => 0.0,
             'fundingIntervals' => 0,
         ];
+
+        return $arguments;
     }
 
     /** @return array<string, mixed> */
     private function requestArguments(string $side): array
     {
-        return [
+        $arguments = [
             'policy' => $this->policy($side),
             'symbol' => 'BTCUSDT',
             'marketType' => 'perpetual',
@@ -191,6 +218,24 @@ final class CanonicalRiskContractTest extends TestCase
             'symbolLeverageCap' => 10.0,
             'costs' => new CanonicalCostSnapshot(...$this->costArguments()),
         ];
+
+        $arguments['instrument'] = new CanonicalInstrumentSnapshot(
+            'fake',
+            'test',
+            'BTCUSDT',
+            'perpetual',
+            1.0,
+            0.001,
+            0.001,
+            100.0,
+            50.0,
+            20.0,
+            10.0,
+            new \DateTimeImmutable('2026-08-10T11:59:40+00:00'),
+            'sha256:' . str_repeat('7', 64),
+        );
+
+        return $arguments;
     }
 
     private function policy(string $side): CanonicalRiskPolicy
