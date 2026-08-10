@@ -54,7 +54,7 @@ context:
             provenance: 'validations.scalper.yaml:323-325'
             nodes:
               - { condition: macd_hist_gt_eps, timeframe: 5m, provenance: 'validations.scalper.yaml:324' }
-              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, provenance: 'validations.scalper.yaml:325' }
+              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0006, cool_down_bars: 2, require_prev_below: true }, provenance: 'validations.scalper.yaml:325' }
           - { condition: close_above_vwap_or_ma9_relaxed, timeframe: 5m, provenance: 'validations.scalper.yaml:326' }
           - { condition: rsi_lt_70, timeframe: 5m, parameters: { rsi_lt_70_threshold: 72 }, provenance: 'validations.scalper.yaml:327' }
           - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:328' }
@@ -83,7 +83,7 @@ data_condition_contract: &data
   required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'Full setup duration absent.' }
 governance: &governance

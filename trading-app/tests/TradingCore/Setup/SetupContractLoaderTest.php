@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Setup;
 
 use App\TradingCore\Setup\Exception\SetupContractException;
-use App\TradingCore\Setup\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -19,7 +20,6 @@ use Symfony\Component\Yaml\Yaml;
 #[CoversClass(SetupContractLoader::class)]
 #[CoversClass(SetupContractValidator::class)]
 #[CoversClass(SetupCompiler::class)]
-#[CoversClass(ConditionCatalog::class)]
 #[CoversClass(SetupContractException::class)]
 final class SetupContractLoaderTest extends TestCase
 {
@@ -51,6 +51,21 @@ final class SetupContractLoaderTest extends TestCase
             self::assertSame($status, $contract->status);
             self::assertFalse($contract->isExecutable());
         }
+    }
+
+    public function testStableHashTracksCanonicalSetupContentRatherThanMappingOrder(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+        $document = $contract->toArray();
+        $reordered = $document;
+        krsort($reordered, SORT_STRING);
+
+        self::assertSame($contract->stableHash(), SetupContract::fromDocument($reordered)->stableHash());
+
+        $changed = $document;
+        $changed['thesis'] .= ' Semantic change.';
+        self::assertNotSame($contract->stableHash(), SetupContract::fromDocument($changed)->stableHash());
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $contract->stableHash());
     }
 
     public function testCatalogContainsNoSwingOrNinthCrashPullbackSetup(): void
@@ -104,15 +119,19 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame('any_of', $confirmations['op']);
         self::assertCount(2, $confirmations['nodes']);
         self::assertSame(
-            ['crash_context_ok', 'crash_short_pattern_5m'],
-            array_column($confirmations['nodes'][0]['nodes'], 'condition'),
+            'crash_short_pattern_5m',
+            $confirmations['nodes'][0]['condition'],
         );
-        self::assertSame('execution_variant=5m_default', $confirmations['nodes'][0]['provenance']);
-        self::assertSame('execution_variant=1m_extreme', $confirmations['nodes'][1]['provenance']);
+        self::assertStringContainsString('execution_variant=5m_default', $confirmations['nodes'][0]['provenance']);
+        self::assertStringContainsString('execution_variant=1m_extreme', $confirmations['nodes'][1]['provenance']);
         self::assertStringNotContainsString(
             'crash_short_entry_1m',
             json_encode($snapshot->ast, JSON_THROW_ON_ERROR),
         );
+        self::assertSame(1, substr_count(json_encode($snapshot->ast, JSON_THROW_ON_ERROR), 'crash_context_ok'));
+        $catalog = $this->catalog();
+        self::assertSame(['1h'], $catalog->definition('crash_context_ok')->timeframes);
+        self::assertSame('blocked', $catalog->definition('crash_short_entry_1m')->status);
     }
 
     public function testCrashDecisionIsCompleteButFailsClosedOnUnknownExecutionAndRiskInputs(): void
@@ -147,7 +166,7 @@ final class SetupContractLoaderTest extends TestCase
         $document = (new SetupContractLoader($this->root))->load('crash_short', '1.1.0')->toArray();
         $sources = array_column($document['provenance'], 'source', 'path');
 
-        foreach (['mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters', 'no_trade_rules'] as $path) {
+        foreach (['mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters'] as $path) {
             self::assertStringContainsString('validations.crash.yaml:', $sources[$path]);
         }
         foreach (['execution.entry_zone', 'execution.stop', 'execution.targets', 'execution.minimum_net_r', 'execution.invalidation', 'execution.time_stop', 'execution.cost_contract', 'execution.order_policy', 'execution.risk_boundary', 'validity_window'] as $path) {
@@ -302,11 +321,54 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testUnknownConditionIsACompilationFailure(): void
     {
-        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $document['context']['trigger']['nodes'][0]['condition'] = 'invented_condition';
 
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Unknown condition "invented_condition"');
-        (new SetupCompiler())->compile($contract, new ConditionCatalog(['invented_condition']));
+        (new SetupContractValidator())->validate($document);
+    }
+
+    public function testSetupSchemaConditionEnumMatchesPublicCatalogSurface(): void
+    {
+        $schema = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($schema);
+        $schemaConditionIds = $schema['$defs']['condition']['enum'] ?? null;
+        self::assertIsArray($schemaConditionIds);
+        sort($schemaConditionIds, SORT_STRING);
+
+        $internalCompositeDependencies = [
+            'close_above_ma_9', 'close_above_vwap', 'close_below_ma_9',
+            'ema_20_gt_50', 'ema_20_slope_pos', 'ma9_cross_up_ma21',
+        ];
+        $publicConditionIds = array_values(array_diff($this->catalog()->conditionIds(), $internalCompositeDependencies));
+
+        self::assertSame($publicConditionIds, $schemaConditionIds);
+    }
+
+    public function testSetupSchemaParameterKeysMatchCanonicalCatalog(): void
+    {
+        $schema = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($schema);
+        $schemaParameterKeys = array_keys($schema['$defs']['parameters']['properties'] ?? []);
+        sort($schemaParameterKeys, SORT_STRING);
+        $catalogParameterKeys = [];
+        $catalog = $this->catalog();
+        foreach ($catalog->conditionIds() as $conditionId) {
+            $catalogParameterKeys = array_merge($catalogParameterKeys, array_keys($catalog->definition($conditionId)->parameters));
+        }
+        $catalogParameterKeys = array_values(array_unique($catalogParameterKeys));
+        sort($catalogParameterKeys, SORT_STRING);
+
+        self::assertSame($catalogParameterKeys, $schemaParameterKeys);
     }
 
     public function testImmutableSnapshotHasStableHashesVersionsAndProvenanceByKey(): void
@@ -321,7 +383,7 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame(['scalping' => '1.0.0'], $first->modeVersions);
         self::assertSame([$contract->toArray()['source_origin']], $first->sourceOrigins);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->configHash);
-        self::assertNull($first->conditionCatalogHash);
+        self::assertSame($this->catalog()->stableHash(), $first->conditionCatalogHash);
         self::assertFalse($first->publishable);
         self::assertArrayHasKey('context.trigger', $first->provenanceByKey);
     }
@@ -341,6 +403,28 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame([], $crash['compatible_modes']);
         self::assertSame('unresolved', $crash['mode_compatibility']['state']);
         self::assertSame('#310', $crash['mode_compatibility']['issue']);
+    }
+
+    public function testCrashRsiFloorIsAMandatoryFilterNotAnInvertedNoTradeMatch(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        foreach (['1.0.0', '1.1.0'] as $version) {
+            $document = $loader->load('crash_short', $version)->toArray();
+
+            self::assertSame([], $document['no_trade_rules']);
+            self::assertContains('rsi_5m_gt_floor', array_column($document['filters'], 'condition'));
+        }
+    }
+
+    public function testUnsupportedTemporalAndTimeframeContractsRemainFailClosed(): void
+    {
+        $catalog = $this->catalog();
+        self::assertSame('blocked', $catalog->definition('pullback_confirmed')->status);
+        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_long')->timeframes);
+        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_short')->timeframes);
+
+        $short = (new SetupContractLoader($this->root))->load('scalping.trend_momentum.short', '1.0.0')->toArray();
+        self::assertNotContains('price_regime_ok_short', array_column($short['context']['context']['nodes'], 'condition'));
     }
 
     public function testDraft202012SchemaHasParityWithPhpValidator(): void
@@ -460,7 +544,7 @@ final class SetupContractLoaderTest extends TestCase
         )->ast;
         self::assertSame('any_of', $crash['confirmations']['op']);
         self::assertCount(2, $crash['confirmations']['nodes']);
-        self::assertSame('crash_short_entry_1m', $crash['confirmations']['nodes'][1]['nodes'][1]['condition']);
+        self::assertSame('crash_short_entry_1m', $crash['confirmations']['nodes'][1]['condition']);
     }
 
     public function testSourceOriginRangesCoverEveryRuleProvenanceRange(): void
@@ -529,7 +613,7 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testConditionCatalogHashIsSpecializedAndVerifiedDuringCompilation(): void
     {
-        $catalog = new ConditionCatalog(SetupContractValidator::CONDITION_IDS);
+        $catalog = $this->catalog();
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
         $document['data_condition_contract']['condition_catalog_hash'] = [
             'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
@@ -590,7 +674,7 @@ final class SetupContractLoaderTest extends TestCase
         self::assertEquals([$document['source_origin']], $payload['source_origins']);
         self::assertSame($snapshot->provenanceByKey, $payload['contract_provenance']);
         self::assertSame($snapshot->configHash, $payload['contract_hash']);
-        self::assertContains('condition_catalog_hash_unresolved', $payload['blockers']);
+        self::assertNotContains('condition_catalog_hash_unresolved', $payload['blockers']);
         self::assertFalse($payload['publishable']);
     }
 
@@ -647,15 +731,19 @@ final class SetupContractLoaderTest extends TestCase
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Supplied condition catalog is missing:');
         $this->expectExceptionMessage('pullback_confirmed');
-        (new SetupCompiler())->compile($contract, new ConditionCatalog(['near_vwap']));
+        $document = Yaml::parseFile(dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml');
+        self::assertIsArray($document);
+        $document['conditions'] = array_values(array_filter(
+            $document['conditions'],
+            static fn (array $row): bool => ($row['id'] ?? null) === 'near_vwap',
+        ));
+        (new SetupCompiler())->compile($contract, (new ConditionCatalogLoader())->load($document));
     }
 
     public function testExternalSafetyDependencyIsExcludedFromConditionCatalogCoverage(): void
     {
         $contract = (new SetupContractLoader($this->root))->load('crash_short', '1.0.0');
-        $catalogIds = array_values(array_diff(SetupContractValidator::CONDITION_IDS, ['lev_bounds']));
-
-        $snapshot = (new SetupCompiler())->compile($contract, new ConditionCatalog($catalogIds));
+        $snapshot = (new SetupCompiler())->compile($contract, $this->catalog());
 
         self::assertFalse($snapshot->publishable);
         self::assertContains('data_condition_contract.external_dependencies.0', $contract->unresolvedPaths());
@@ -713,5 +801,12 @@ final class SetupContractLoaderTest extends TestCase
         self::assertIsObject($object);
 
         return $object;
+    }
+
+    private function catalog(): ConditionCatalog
+    {
+        return (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
     }
 }

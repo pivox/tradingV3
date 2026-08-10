@@ -96,7 +96,7 @@
   ],
   "$defs": {
     "nonEmpty": { "type": "string", "minLength": 1, "pattern": ".*\\S.*" },
-    "condition": { "enum": ["adx_min_for_trend", "adx_min_for_trend_1h", "atr_rel_in_range_15m", "atr_rel_in_range_5m", "atr_volatility_ok", "close_above_ema_200", "close_above_vwap_and_ma9", "close_above_vwap_or_ma9", "close_above_vwap_or_ma9_relaxed", "close_below_ema_200", "close_below_vwap", "close_below_vwap_or_ma9", "crash_context_ok", "crash_short_entry_1m", "crash_short_pattern_15m", "crash_short_pattern_5m", "crash_short_pattern_1m", "ema20_over_50_with_tolerance", "ema20_over_50_with_tolerance_moderate", "ema200_slope_neg", "ema200_slope_pos", "ema_20_lt_50", "ema_50_gt_200", "ema_50_lt_200", "ema_above_200_with_tolerance", "ema_below_200_with_tolerance", "lev_bounds", "macd_hist_decreasing_n", "macd_hist_gt_eps", "macd_hist_increasing_n", "macd_hist_lt_eps", "macd_hist_slope_neg", "macd_hist_slope_pos", "macd_line_above_signal", "macd_line_below_signal", "macd_line_cross_down_with_hysteresis", "macd_line_cross_up_with_hysteresis", "near_vwap", "order_flow_imbalance_gte", "order_flow_imbalance_lte", "price_lte_ma21_plus_k_atr", "price_regime_ok_long", "price_regime_ok_short", "pullback_confirmed", "pullback_confirmed_ma9_21", "pullback_confirmed_vwap", "rsi_bearish", "rsi_bullish", "rsi_gt_30", "rsi_gt_softfloor", "rsi_lt_70", "rsi_1m_lt_extreme", "rsi_5m_gt_floor", "spread_bps_lte", "volume_ratio_ok"] },
+    "condition": { "enum": ["adx_min_for_trend", "adx_min_for_trend_1h", "atr_rel_in_range_15m", "atr_rel_in_range_5m", "atr_volatility_ok", "close_above_ema_200", "close_above_vwap_and_ma9", "close_above_vwap_or_ma9", "close_above_vwap_or_ma9_relaxed", "close_below_ema_200", "close_below_vwap", "close_below_vwap_or_ma9", "crash_context_ok", "crash_short_entry_1m", "crash_short_pattern_15m", "crash_short_pattern_5m", "crash_short_pattern_1m", "ema20_over_50_with_tolerance", "ema20_over_50_with_tolerance_moderate", "ema200_slope_neg", "ema200_slope_pos", "ema_20_lt_50", "ema_50_gt_200", "ema_50_lt_200", "ema_above_200_with_tolerance", "ema_below_200_with_tolerance", "lev_bounds", "macd_hist_decreasing_n", "macd_hist_gt_eps", "macd_hist_increasing_n", "macd_hist_lt_eps", "macd_hist_slope_neg", "macd_hist_slope_pos", "macd_line_above_signal", "macd_line_below_signal", "macd_line_cross_down_with_hysteresis", "macd_line_cross_up_with_hysteresis", "near_vwap", "order_flow_imbalance_gte", "order_flow_imbalance_lte", "price_lte_ma21_plus_k_atr", "price_regime_ok_long", "price_regime_ok_short", "pullback_confirmed", "pullback_confirmed_ma9_21", "pullback_confirmed_vwap", "rsi_bearish", "rsi_bullish", "rsi_gt_30", "rsi_gt_softfloor", "rsi_lt_70", "rsi_5m_gt_floor", "spread_bps_lte", "volume_ratio_ok"] },
     "sourceOrigin": {
       "type": "object", "additionalProperties": false, "required": ["file", "line_range", "content_sha256", "commit"],
       "properties": { "file": { "$ref": "#/$defs/nonEmpty" }, "line_range": { "type": "string", "pattern": "^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$" }, "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" } }
@@ -136,19 +136,24 @@
         "provenance": { "$ref": "#/$defs/nonEmpty" }
       },
       "allOf": [
-        { "if": { "properties": { "parameters": { "required": ["threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "adx_min_for_trend" } } } },
-        { "if": { "properties": { "parameters": { "anyOf": [{ "required": ["min_atr_pct"] }, { "required": ["max_atr_pct"] }] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "atr_volatility_ok" } } } },
+        { "if": { "properties": { "parameters": { "required": ["threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["adx_min_for_trend", "adx_min_for_trend_1h"] } } } },
+        { "if": { "properties": { "parameters": { "anyOf": [{ "required": ["min_atr_pct"] }, { "required": ["max_atr_pct"] }] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["atr_volatility_ok", "atr_rel_in_range_15m", "atr_rel_in_range_5m", "close_above_vwap_or_ma9_relaxed", "crash_short_entry_1m", "crash_short_pattern_15m", "crash_short_pattern_1m", "crash_short_pattern_5m"] } } } },
         { "if": { "properties": { "parameters": { "required": ["macd_hist_increasing_n"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "macd_hist_increasing_n" } } } },
-        { "if": { "properties": { "parameters": { "required": ["near_vwap_tolerance"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "near_vwap" } } } },
+        { "if": { "properties": { "parameters": { "required": ["near_vwap_tolerance"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["near_vwap", "close_above_vwap_or_ma9_relaxed"] } } } },
         { "if": { "properties": { "parameters": { "required": ["min_ofi"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "order_flow_imbalance_gte" } } } },
         { "if": { "properties": { "parameters": { "required": ["max_ofi"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "order_flow_imbalance_lte" } } } },
-        { "if": { "properties": { "parameters": { "anyOf": [{ "required": ["validity_bars"] }, { "required": ["direction"] }] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "pullback_confirmed" } } } },
+        { "if": { "properties": { "parameters": { "required": ["validity_bars"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "pullback_confirmed" } } } },
+        { "if": { "properties": { "parameters": { "required": ["tolerance_ratio"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["ema20_over_50_with_tolerance", "ema20_over_50_with_tolerance_moderate", "ema_above_200_with_tolerance", "ema_below_200_with_tolerance", "price_regime_ok_long", "price_regime_ok_short"] } } } },
+        { "if": { "properties": { "parameters": { "required": ["rsi_extreme_max"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["crash_short_pattern_1m", "crash_short_entry_1m"] } } } },
+        { "if": { "properties": { "parameters": { "required": ["rsi_threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["rsi_bullish", "rsi_bearish", "rsi_gt_30"] } } } },
+        { "if": { "properties": { "parameters": { "required": ["volume_ratio_threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["volume_ratio_ok", "crash_short_entry_1m", "crash_short_pattern_1m", "crash_short_pattern_5m"] } } } },
         { "if": { "properties": { "parameters": { "required": ["rsi_softfloor_threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "rsi_gt_softfloor" } } } },
         { "if": { "properties": { "parameters": { "required": ["rsi_lt_70_threshold"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "rsi_lt_70" } } } },
         { "if": { "properties": { "parameters": { "required": ["gt"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "rsi_5m_gt_floor" } } } },
         { "if": { "properties": { "parameters": { "required": ["max_spread_bps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "spread_bps_lte" } } } },
         { "if": { "properties": { "parameters": { "required": ["n"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "macd_hist_decreasing_n" } } } },
-        { "if": { "properties": { "parameters": { "required": ["eps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_hist_gt_eps", "macd_hist_lt_eps", "macd_hist_decreasing_n"] } } } }
+        { "if": { "properties": { "parameters": { "required": ["eps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_hist_gt_eps", "macd_hist_lt_eps", "macd_hist_decreasing_n"] } } } },
+        { "if": { "properties": { "parameters": { "anyOf": [{ "required": ["min_gap"] }, { "required": ["cool_down_bars"] }, { "required": ["require_prev_below"] }, { "required": ["require_prev_above"] }] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_line_cross_up_with_hysteresis", "macd_line_cross_down_with_hysteresis"] } } } }
       ]
     },
     "parameters": {
@@ -157,8 +162,9 @@
         "threshold": { "type": "number" }, "min_atr_pct": { "type": "number" }, "max_atr_pct": { "type": "number" },
         "n": { "type": "integer" }, "eps": { "type": "number" }, "macd_hist_increasing_n": { "type": "integer" },
         "near_vwap_tolerance": { "type": "number" }, "min_ofi": { "type": "number" }, "max_ofi": { "type": "number" },
-        "validity_bars": { "type": "integer" }, "direction": { "$ref": "#/$defs/nonEmpty" }, "rsi_softfloor_threshold": { "type": "number" },
-        "rsi_lt_70_threshold": { "type": "number" }, "gt": { "type": "number" }, "max_spread_bps": { "type": "number" }
+        "validity_bars": { "type": "integer" }, "tolerance_ratio": { "type": "number" }, "rsi_extreme_max": { "type": "number" }, "rsi_threshold": { "type": "number" }, "volume_ratio_threshold": { "type": "number" }, "rsi_softfloor_threshold": { "type": "number" },
+        "rsi_lt_70_threshold": { "type": "number" }, "gt": { "type": "number" }, "max_spread_bps": { "type": "number" },
+        "min_gap": { "type": "number" }, "cool_down_bars": { "type": "integer" }, "require_prev_below": { "type": "boolean" }, "require_prev_above": { "type": "boolean" }
       }
     },
     "externalDependency": {

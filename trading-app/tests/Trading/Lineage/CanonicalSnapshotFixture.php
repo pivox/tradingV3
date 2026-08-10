@@ -6,6 +6,7 @@ namespace App\Tests\Trading\Lineage;
 
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 
 final class CanonicalSnapshotFixture
 {
@@ -47,9 +48,12 @@ final class CanonicalSnapshotFixture
     }
 
     /** @param array<string,mixed> $config */
-    public static function lineage(array $config): LineageContext
+    public static function lineage(array $config, ?string $catalogDigest = null): LineageContext
     {
-        $catalog = 'sha256:' . str_repeat('b', 64);
+        $catalogDigest ??= (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        )->stableHash();
+        $catalog = 'sha256:' . $catalogDigest;
         $hash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalog);
         $snapshot = CanonicalSnapshotMetadataFixture::enrich([
             'request' => ['mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback.long', 'setup_version' => '1.0.0', 'exchange' => 'fake', 'environment' => 'test', 'side' => 'long'],

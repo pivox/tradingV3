@@ -32,6 +32,14 @@ final readonly class SetupContract
             && $this->document['data_condition_contract']['missing_conditions'] === [];
     }
 
+    public function stableHash(): string
+    {
+        return hash('sha256', json_encode(
+            self::canonicalize($this->document),
+            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+        ));
+    }
+
     /** @return list<string> */
     public function unresolvedPaths(): array
     {
@@ -55,5 +63,22 @@ final readonly class SetupContract
     public function toArray(): array
     {
         return $this->document;
+    }
+
+    private static function canonicalize(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            return array_map(self::canonicalize(...), $value);
+        }
+
+        ksort($value, SORT_STRING);
+        foreach ($value as $key => $item) {
+            $value[$key] = self::canonicalize($item);
+        }
+
+        return $value;
     }
 }

@@ -22,66 +22,105 @@ final class MacdHistIncreasingNCondition extends AbstractCondition
 
     public function getName(): string { return 'macd_hist_increasing_n'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
-        $series = $context['macd_hist_last3'] ?? null;
-        $n = $context['macd_hist_increasing_n'] ?? $this->defaultN;
-        if (!is_array($series)) {
-            $this->logFailure($context, null, (float) $n, 'missing_data');
-            return $this->result($this->getName(), false, null, (float) $n, $this->baseMeta($context, [
-                'missing_data' => true,
-                'source' => 'MACD',
-            ]));
-        }
-        $count = count($series);
-        if ($count < 2) {
-            $this->logFailure($context, null, (float) $n, 'insufficient_points', [
-                'points_considered' => $count,
+        $nRaw = $context['macd_hist_increasing_n'] ?? $this->defaultN;
+        $n = is_numeric($nRaw) ? max(1, min(50, (int) $nRaw)) : $this->defaultN;
+        $seriesOrder = $context['series_order'] ?? null;
+        if ($seriesOrder !== 'oldest_to_newest') {
+            return $this->failMissing($context, $n, 'invalid_series_order', [
+                'series_order' => $seriesOrder,
+                'required_series_order' => 'oldest_to_newest',
             ]);
-            return $this->result($this->getName(), false, null, (float) $n, $this->baseMeta($context, [
-                'insufficient_points' => true,
-            ]));
         }
-        // Vérifier les dernières n hausses consécutives
-        $required = max(1, (int) $n);
-        $inc = 0;
-        for ($i = $count - 2; $i >= 0 && $inc < $required; $i--) {
-            if (!is_float($series[$i]) || !is_float($series[$i+1])) {
+        $rawSeries = $context['macd_hist_series'] ?? null;
+        if (!is_array($rawSeries)) {
+            return $this->failMissing($context, $n, 'missing_series', [
+                'series_type' => get_debug_type($rawSeries),
+            ]);
+        }
+        $series = array_values($rawSeries);
+        if (count($series) < $n + 1) {
+            return $this->failMissing($context, $n, 'insufficient_points', [
+                'series_count' => count($series),
+                'required' => $n + 1,
+            ]);
+        }
+        $slice = array_slice($series, -($n + 1));
+        $normalized = [];
+        foreach ($slice as $index => $value) {
+            if (!is_int($value) && !is_float($value)) {
+                return $this->failMissing($context, $n, 'non_numeric', [
+                    'idx' => $index,
+                    'value_type' => get_debug_type($value),
+                ]);
+            }
+            $value = (float) $value;
+            if (!is_finite($value)) {
+                return $this->failMissing($context, $n, 'non_finite', ['idx' => $index]);
+            }
+            $normalized[] = $value;
+        }
+
+        $passed = true;
+        $failedAt = null;
+        for ($index = 1; $index <= $n; $index++) {
+            if (!($normalized[$index] > $normalized[$index - 1])) {
+                $passed = false;
+                $failedAt = $index;
                 break;
             }
-            if ($series[$i+1] > $series[$i]) {
-                $inc++;
-            } else {
-                break;
-            }
         }
-        $passed = ($inc >= $required);
-        $latest = $count >= 1 ? ($series[$count - 1] ?? null) : null;
-        $previous = $count >= 2 ? ($series[$count - 2] ?? null) : null;
-        $lastStep = (is_float($latest) && is_float($previous)) ? ($latest - $previous) : null;
-        $result = $this->result($this->getName(), $passed, $lastStep, (float) $required, $this->baseMeta($context, [
-            'points_considered' => $count,
-            'required_increases' => $required,
+        $latest = $normalized[$n];
+        $previous = $normalized[$n - 1];
+        $lastStep = $latest - $previous;
+        $result = $this->result($this->getName(), $passed, $lastStep, 0.0, $this->baseMeta($context, [
+            'points_considered' => count($normalized),
+            'required_increases' => $n,
+            'series_order' => $seriesOrder,
             'latest' => $latest,
             'previous' => $previous,
             'last_step' => $lastStep,
-            'latest_e' => is_float($latest) ? sprintf('%.18e', $latest) : null,
-            'previous_e' => is_float($previous) ? sprintf('%.18e', $previous) : null,
-            'last_step_e' => is_float($lastStep) ? sprintf('%.18e', $lastStep) : null,
+            'failed_at' => $failedAt,
+            'latest_e' => sprintf('%.18e', $latest),
+            'previous_e' => sprintf('%.18e', $previous),
+            'last_step_e' => sprintf('%.18e', $lastStep),
         ]));
 
         if (!$passed) {
-            $this->logFailure($context, $lastStep, (float) $required, 'not_increasing_enough', [
-                'points_considered' => $count,
-                'required_increases' => $required,
+            $this->logFailure($context, $lastStep, 0.0, 'not_increasing_enough', [
+                'points_considered' => count($normalized),
+                'required_increases' => $n,
                 'latest' => $latest,
                 'previous' => $previous,
+                'failed_at' => $failedAt,
             ]);
         }
 
         return $result;
     }
 
+    /**
+     * @param array<string, mixed> $context
+     * @param array<string, mixed> $extra
+     */
+    private function failMissing(array $context, int $n, string $reason, array $extra): ConditionResult
+    {
+        $this->logFailure($context, null, 0.0, $reason, $extra);
+
+        return $this->result($this->getName(), false, null, 0.0, $this->baseMeta($context, array_merge([
+            'missing_data' => true,
+            'reason' => $reason,
+            'required_increases' => $n,
+            'source' => 'MACD',
+        ], $extra)));
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     * @param array<string, mixed> $extra
+     */
     private function logFailure(array $context, ?float $value, ?float $threshold, string $reason, array $extra = []): void
     {
         $this->conditionsLogger->info('[Condition] macd_hist_increasing_n failed', array_merge([

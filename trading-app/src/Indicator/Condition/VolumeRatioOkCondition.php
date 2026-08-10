@@ -28,6 +28,7 @@ final class VolumeRatioOkCondition extends AbstractCondition
         return self::NAME;
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $threshold = $this->resolveThreshold($context);
@@ -59,9 +60,10 @@ final class VolumeRatioOkCondition extends AbstractCondition
         ]));
     }
 
+    /** @param array<string, mixed> $context */
     private function resolveThreshold(array $context): float
     {
-        $override = $context['volume_ratio_ok_threshold'] ?? $context['volume_ratio_threshold'] ?? null;
+        $override = $context['volume_ratio_threshold'] ?? null;
         if (\is_numeric($override)) {
             return (float) $override;
         }

@@ -29,6 +29,7 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         return 'Histogramme MACD décroissant sur N pas (bougies clôturées). Anti-bruit via eps.';
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $rawSeries = $context['macd_hist_series'] ?? null;
@@ -38,9 +39,13 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         // eps = diminution minimale par pas (anti-bruit). eps=0 => "strictement décroissant".
         $eps = $this->asFloat($context['eps'] ?? $context['macd_hist_decreasing_eps'] ?? 0.0, 0.0, 0.0, 1e9);
 
-        // Si ton indicateur renvoie oldest-first, mets series_order=oldest_first côté moteur/YAML.
-        $seriesOrder = (string)($context['series_order'] ?? $context['macd_hist_series_order'] ?? 'latest_first');
-        $seriesOrder = \in_array($seriesOrder, ['latest_first', 'oldest_first'], true) ? $seriesOrder : 'latest_first';
+        $seriesOrder = $context['series_order'] ?? null;
+        if ($seriesOrder !== 'oldest_to_newest') {
+            return $this->failMissing($context, $n, $eps, 'invalid_series_order', [
+                'series_order' => $seriesOrder,
+                'required_series_order' => 'oldest_to_newest',
+            ]);
+        }
 
         if (!\is_array($rawSeries)) {
             return $this->failMissing($context, $n, $eps, 'missing_series', [
@@ -49,9 +54,6 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         }
 
         $series = \array_values($rawSeries);
-        if ($seriesOrder === 'oldest_first') {
-            $series = \array_reverse($series);
-        }
 
         if (\count($series) < ($n + 1)) {
             return $this->failMissing($context, $n, $eps, 'missing_data', [
@@ -62,7 +64,7 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         }
 
         // Normaliser uniquement ce qu'on consomme (n+1 points)
-        $slice = \array_slice($series, 0, $n + 1);
+        $slice = \array_slice($series, -($n + 1));
         $norm = [];
         foreach ($slice as $i => $v) {
             if (!\is_numeric($v)) {
@@ -82,11 +84,11 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         $failedB = null;
         $failedDelta = null;
 
-        // latest-first : on veut a < b - eps  <=>  delta = a - b < -eps
-        for ($i = 0; $i < $n; $i++) {
-            $a = $norm[$i];
-            $b = $norm[$i + 1];
-            $delta = $a - $b;
+        // oldest-to-newest: every newer observation must be below its predecessor by eps.
+        for ($i = 1; $i <= $n; $i++) {
+            $a = $norm[$i - 1];
+            $b = $norm[$i];
+            $delta = $b - $a;
 
             if (!($delta < -$eps)) {
                 $passed = false;
@@ -98,8 +100,8 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
             }
         }
 
-        $avgStep = ($norm[0] - $norm[$n]) / \max(1, $n);
-        $lastStep = $norm[0] - $norm[1];
+        $avgStep = ($norm[$n] - $norm[0]) / \max(1, $n);
+        $lastStep = $norm[$n] - $norm[$n - 1];
 
         $meta = $this->baseMeta($context, [
             'n' => $n,
@@ -109,9 +111,9 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
             'avg_step' => $avgStep,
             'last_step' => $lastStep,
 
-            'latest' => $norm[0],
-            'previous' => $norm[1],
-            'nth' => $norm[$n],
+            'latest' => $norm[$n],
+            'previous' => $norm[$n - 1],
+            'oldest' => $norm[0],
 
             'failed_at' => $failedAt,
             'failed_a' => $failedA,
@@ -149,6 +151,10 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
         return $result;
     }
 
+    /**
+     * @param array<string, mixed> $context
+     * @param array<string, mixed> $extra
+     */
     private function failMissing(array $context, int $n, float $eps, string $reason, array $extra): ConditionResult
     {
         $this->conditionsLogger->info('[Condition] macd_hist_decreasing_n failed', \array_merge([
@@ -161,6 +167,7 @@ final class MacdHistDecreasingNCondition extends AbstractCondition
 
         return $this->result(self::NAME, false, null, $eps, $this->baseMeta($context, \array_merge([
             'missing_data' => true,
+            'reason' => $reason,
             'n' => $n,
             'eps' => $eps,
             'source' => 'MACD',

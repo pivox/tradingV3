@@ -12,6 +12,10 @@ use App\Trading\Lineage\LineageContextException;
 
 final class CanonicalMtfPolicyPreflight
 {
+    public function __construct(private readonly ?CanonicalRulePolicyPreflight $rulePolicy = null)
+    {
+    }
+
     public function reject(LineageContext $identity): ?CanonicalMtfPolicyRejection
     {
         if (!$identity->isModern()) {
@@ -22,10 +26,10 @@ final class CanonicalMtfPolicyPreflight
             CanonicalTradeRuntimePolicyValidator::assertReady(
                 CanonicalTradeEntryConfigFactory::fromLineage($identity),
             );
-            $blockers = [[
-                'code' => 'canonical_mtf_evaluator_pending_303',
-                'path' => 'runtime.mtf.condition_evaluator',
-            ]];
+            $blockers = ($this->rulePolicy ?? new CanonicalRulePolicyPreflight())->blockers($identity);
+            if ($blockers === []) {
+                return null;
+            }
         } catch (CanonicalRuntimePolicyException $exception) {
             $blockers = $exception->blockers;
         } catch (LineageContextException $exception) {

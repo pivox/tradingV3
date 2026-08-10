@@ -88,6 +88,16 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
 
         self::assertSame(250.0, $result['1m']['close'] ?? null);
         self::assertSame('2026-05-31 12:04:00', $result['1m']['kline_time'] ?? null);
+        self::assertSame('oldest_to_newest', $result['1m']['series_order'] ?? null);
+        self::assertSame([9, 20, 21, 50, 200], array_keys($result['1m']['ema'] ?? []));
+        self::assertSame([9, 20, 21, 50, 200], array_keys($result['1m']['ema_prev'] ?? []));
+        self::assertSame(['macd', 'signal', 'hist'], array_keys($result['1m']['macd'] ?? []));
+        self::assertSame([14, 15], array_keys($result['1m']['adx'] ?? []));
+        self::assertIsFloat($result['1m']['adx'][14] ?? null);
+        self::assertCount(60, $result['1m']['macd_hist_series'] ?? []);
+        self::assertIsFloat($result['1m']['volume_ratio'] ?? null);
+        self::assertIsFloat($result['1m']['ema_200_slope'] ?? null);
+        self::assertIsFloat($result['1m']['ma_21_plus_k_atr'] ?? null);
     }
 
     public function testFakeContextUsesFakeKlinesWithoutCallingLegacyFallback(): void

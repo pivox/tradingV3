@@ -29,7 +29,7 @@ context:
             nodes:
               - { condition: ema_below_200_with_tolerance, timeframe: 4h, provenance: 'validations.regular.yaml:259' }
               - { condition: ema_50_lt_200, timeframe: 4h, provenance: 'validations.regular.yaml:259' }
-      - { condition: price_regime_ok_short, timeframe: 4h, provenance: 'validations.regular.yaml:260' }
+              - { condition: price_regime_ok_short, timeframe: 4h, parameters: { tolerance_ratio: 0.0025 }, provenance: 'validations.regular.yaml:260' }
   context:
     op: all_of
     provenance: 'validations.regular.yaml:275-285'
@@ -50,10 +50,10 @@ context:
       - op: any_of
         provenance: 'validations.regular.yaml:280-284 evidence variants'
         nodes:
-          - { condition: macd_line_cross_down_with_hysteresis, timeframe: 1h, provenance: 'validations.regular.yaml:281-282' }
+          - { condition: macd_line_cross_down_with_hysteresis, timeframe: 1h, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:281-282' }
           - { condition: macd_hist_decreasing_n, timeframe: 1h, provenance: 'validations.regular.yaml:283' }
           - { condition: macd_hist_slope_neg, timeframe: 1h, provenance: 'validations.regular.yaml:284' }
-      - { condition: price_regime_ok_short, timeframe: 1h, provenance: 'validations.regular.yaml:285' }
+      - { condition: price_regime_ok_short, timeframe: 1h, parameters: { tolerance_ratio: 0.0025 }, provenance: 'validations.regular.yaml:285' }
   trigger:
     op: all_of
     provenance: 'validations.regular.yaml:299-308'
@@ -64,7 +64,7 @@ context:
           - op: all_of
             provenance: 'validations.regular.yaml:302-303'
             nodes:
-              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 15m, provenance: 'validations.regular.yaml:303' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 15m, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:303' }
           - op: all_of
             provenance: 'validations.regular.yaml:304'
             nodes:
@@ -73,7 +73,7 @@ context:
       - { condition: ema_20_lt_50, timeframe: 15m, provenance: 'validations.regular.yaml:305' }
       - { condition: rsi_gt_softfloor, timeframe: 15m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:306' }
       - { condition: close_below_vwap, timeframe: 15m, provenance: 'validations.regular.yaml:307' }
-      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.regular.yaml:308' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, parameters: { min_atr_pct: 0.0008, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:308' }
   confirmations:
     op: all_of
     provenance: 'validations.regular.yaml:322-349 common confirmations'
@@ -84,7 +84,7 @@ context:
           - op: any_of
             provenance: 'validations.regular.yaml:324-327'
             nodes:
-              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.regular.yaml:326' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:326' }
               - op: all_of
                 provenance: 'validations.regular.yaml:327'
                 nodes:
@@ -93,7 +93,7 @@ context:
           - { condition: ema_20_lt_50, timeframe: 5m, provenance: 'validations.regular.yaml:328' }
           - { condition: rsi_gt_softfloor, timeframe: 5m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:329' }
           - { condition: close_below_vwap, timeframe: 5m, provenance: 'validations.regular.yaml:330' }
-          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.regular.yaml:331' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:331' }
       - op: all_of
         provenance: 'validations.regular.yaml:342-349'
         nodes:
@@ -102,7 +102,7 @@ context:
           - { condition: rsi_gt_softfloor, timeframe: 1m, parameters: { rsi_softfloor_threshold: 28 }, provenance: 'validations.regular.yaml:346' }
           - { condition: close_below_vwap, timeframe: 1m, provenance: 'validations.regular.yaml:347' }
           - { condition: macd_hist_slope_neg, timeframe: 1m, provenance: 'validations.regular.yaml:348' }
-          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.regular.yaml:349' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:349' }
 filters:
   - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243 bullish global filter retained exactly' }
   - { condition: adx_min_for_trend_1h, timeframe: 1h, provenance: 'validations.regular.yaml:240' }
@@ -124,7 +124,7 @@ data_condition_contract:
   required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Full setup duration absent.' }
 governance:

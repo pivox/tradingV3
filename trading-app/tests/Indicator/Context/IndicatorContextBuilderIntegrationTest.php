@@ -3,32 +3,26 @@
 namespace App\Tests\Indicator\Context;
 
 use App\Indicator\Context\IndicatorContextBuilder;
-use App\Indicator\Core\AtrCalculator;
-use App\Indicator\Core\Momentum\Macd;
-use App\Indicator\Core\Momentum\Rsi;
-use App\Indicator\Core\Trend\Adx;
-use App\Indicator\Core\Trend\Ema;
-use App\Indicator\Core\Volume\Vwap;
 use App\Indicator\Registry\ConditionRegistry;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\CoversNothing;
+use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
-class IndicatorContextBuilderIntegrationTest extends TestCase
+#[CoversNothing]
+class IndicatorContextBuilderIntegrationTest extends KernelTestCase
 {
     private IndicatorContextBuilder $contextBuilder;
     private ConditionRegistry $conditionRegistry;
 
     protected function setUp(): void
     {
-        // Créer les dépendances nécessaires
-        $rsi = new Rsi();
-        $macd = new Macd();
-        $ema = new Ema();
-        $adx = new Adx();
-        $vwap = new Vwap();
-        $atrCalc = new AtrCalculator();
+        self::bootKernel();
+        $this->contextBuilder = self::getContainer()->get(IndicatorContextBuilder::class);
+        $this->conditionRegistry = self::getContainer()->get(ConditionRegistry::class);
+    }
 
-        $this->contextBuilder = new IndicatorContextBuilder($rsi, $macd, $ema, $adx, $vwap, $atrCalc);
-        $this->conditionRegistry = new ConditionRegistry();
+    protected static function getKernelClass(): string
+    {
+        return \App\Kernel::class;
     }
 
     public function testBuildContextWithRealisticData(): void
@@ -115,10 +109,8 @@ class IndicatorContextBuilderIntegrationTest extends TestCase
         // Vérifier que les EMAs sont calculées
         $this->assertArrayHasKey(20, $context['ema']);
         $this->assertArrayHasKey(50, $context['ema']);
-        $this->assertArrayHasKey(200, $context['ema']);
         $this->assertIsFloat($context['ema'][20]);
         $this->assertIsFloat($context['ema'][50]);
-        $this->assertIsFloat($context['ema'][200]);
 
         // Vérifier que le MACD est calculé
         $this->assertArrayHasKey('macd', $context['macd']);
@@ -219,8 +211,9 @@ class IndicatorContextBuilderIntegrationTest extends TestCase
             $this->assertIsArray($result['meta'], "Le champ 'meta' de '$conditionName' doit être un tableau");
         }
 
-        // Afficher un résumé pour debug
-        $this->displayResultsSummary($results);
+        if (getenv('SHOW_CONDITION_SUMMARY')) {
+            $this->displayResultsSummary($results);
+        }
     }
 
     public function testContextWithInsufficientData(): void
@@ -242,13 +235,14 @@ class IndicatorContextBuilderIntegrationTest extends TestCase
         $this->assertEquals('1d', $context['timeframe']);
         $this->assertEquals(1.4, $context['close']);
 
-        // Les indicateurs qui nécessitent plus de données devraient être null
-        $this->assertNull($context['ema']); // Pas assez de données pour EMA 20/50/200
-        $this->assertNull($context['macd']); // Pas assez de données pour MACD
-        $this->assertNull($context['rsi']); // Pas assez de données pour RSI
-        $this->assertNull($context['adx']); // Pas assez de données pour ADX
+        // Null indicators are intentionally omitted from the normalized context.
+        $this->assertArrayNotHasKey('ema', $context);
+        $this->assertArrayNotHasKey('macd', $context);
+        $this->assertArrayNotHasKey('rsi', $context);
+        $this->assertArrayNotHasKey('adx', $context);
     }
 
+    /** @param array<string, array<string, mixed>> $results */
     private function displayResultsSummary(array $results): void
     {
         $total = count($results);
@@ -275,4 +269,3 @@ class IndicatorContextBuilderIntegrationTest extends TestCase
         echo "==========================================\n";
     }
 }
-

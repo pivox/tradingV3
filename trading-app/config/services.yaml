@@ -101,6 +101,7 @@ services:
             - '../src/Provider/'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenario.php'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenarioFixtures.php'
+            - '../src/TradingCore/Rules/'
             - '../src/Trading/Paper/Okx/Live/OkxPaperPublicLiveSource.php'
             - '../src/Trading/Paper/Okx/Live/OkxPaperLiveCheckpointStore.php'
             - '../src/Trading/Paper/Okx/Live/PawlOkxPaperPublicWebSocketTransport.php'
@@ -785,7 +786,6 @@ services:
         arguments:
             $rsi: '@App\Indicator\Core\Momentum\Rsi'
             $macd: '@App\Indicator\Core\Momentum\Macd'
-            $ema: '@App\Indicator\Core\Trend\Ema'
             $adx: '@App\Indicator\Core\Trend\Adx'
             $vwap: '@App\Indicator\Core\Volume\Vwap'
             $atrCalc: '@App\Indicator\Core\AtrCalculator'

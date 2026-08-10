@@ -28,6 +28,7 @@ final class RsiBearishCondition extends AbstractCondition
         return self::NAME;
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $rsi = $context['rsi'] ?? null;
@@ -39,9 +40,7 @@ final class RsiBearishCondition extends AbstractCondition
             ]));
         }
 
-        $threshold = $context['threshold']
-            ?? $context['rsi_bearish_threshold']
-            ?? self::DEFAULT_THRESHOLD;
+        $threshold = $context['rsi_threshold'] ?? self::DEFAULT_THRESHOLD;
         $threshold = (float) $threshold;
 
         $passed = $rsi < $threshold;
@@ -55,6 +54,7 @@ final class RsiBearishCondition extends AbstractCondition
         ]));
     }
 
+    /** @param array<string, mixed> $context */
     private function logFailure(array $context, ?float $value, ?float $threshold, string $reason): void
     {
         $this->conditionsLogger->info('[Condition] rsi_bearish failed', [

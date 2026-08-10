@@ -4,30 +4,33 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Setup;
 
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupCompiler
 {
     public function compile(SetupContract $contract, ?ConditionCatalog $conditionCatalog = null): CompiledSetupSnapshot
     {
+        $conditionCatalog ??= (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
         $document = $contract->toArray();
-        if ($conditionCatalog !== null) {
-            $referencedConditions = [];
-            foreach (['regime', 'context', 'trigger', 'confirmations'] as $role) {
-                $this->collectConditions($document['context'][$role], $referencedConditions);
-            }
-            $this->collectConditions($document['filters'], $referencedConditions);
-            $this->collectConditions($document['no_trade_rules'], $referencedConditions);
-            $externalDependencies = array_column($document['data_condition_contract']['external_dependencies'], 'dependency_id');
-            $missingConditions = array_values(array_diff(
-                array_keys($referencedConditions),
-                $conditionCatalog->conditionIds,
-                $externalDependencies,
-            ));
-            sort($missingConditions, SORT_STRING);
-            if ($missingConditions !== []) {
-                throw new SetupContractException('Supplied condition catalog is missing: ' . implode(', ', $missingConditions) . '.');
-            }
+        $referencedConditions = [];
+        foreach (['regime', 'context', 'trigger', 'confirmations'] as $role) {
+            $this->collectConditions($document['context'][$role], $referencedConditions);
+        }
+        $this->collectConditions($document['filters'], $referencedConditions);
+        $this->collectConditions($document['no_trade_rules'], $referencedConditions);
+        $externalDependencies = array_column($document['data_condition_contract']['external_dependencies'], 'dependency_id');
+        $missingConditions = array_values(array_diff(
+            array_keys($referencedConditions),
+            $conditionCatalog->conditionIds(),
+            $externalDependencies,
+        ));
+        sort($missingConditions, SORT_STRING);
+        if ($missingConditions !== []) {
+            throw new SetupContractException('Supplied condition catalog is missing: ' . implode(', ', $missingConditions) . '.');
         }
         $modeVersions = [];
         foreach ($document['compatible_modes'] as $mode) {
@@ -44,9 +47,6 @@ final class SetupCompiler
         $catalogDecision = $document['data_condition_contract']['condition_catalog_hash'];
         $catalogHash = $catalogDecision['state'] === 'defined' ? $catalogDecision['value'] : null;
         if ($catalogHash !== null) {
-            if ($conditionCatalog === null) {
-                throw new SetupContractException('Defined condition catalog hash requires a supplied typed condition catalog.');
-            }
             if (!hash_equals($catalogHash, $conditionCatalog->stableHash())) {
                 throw new SetupContractException('Condition catalog hash mismatch; compilation fails closed.');
             }

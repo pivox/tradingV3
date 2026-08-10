@@ -17,7 +17,6 @@ final class RsiBullishCondition extends AbstractCondition
 {
     private const NAME = 'rsi_bullish';
     private const DEFAULT_THRESHOLD = 52.0;
-    private const RELAXED_THRESHOLD_5M = 49.0;
 
     public function __construct(
         #[Autowire(service: 'monolog.logger.conditionsLogger')]
@@ -29,6 +28,7 @@ final class RsiBullishCondition extends AbstractCondition
         return self::NAME;
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $rsi = $context['rsi'] ?? null;
@@ -40,19 +40,8 @@ final class RsiBullishCondition extends AbstractCondition
             ]));
         }
 
-        $threshold = $context['threshold']
-            ?? $context['rsi_bullish_threshold']
-            ?? self::DEFAULT_THRESHOLD;
+        $threshold = $context['rsi_threshold'] ?? self::DEFAULT_THRESHOLD;
         $threshold = (float) $threshold;
-
-        $timeframe = $context['timeframe'] ?? null;
-        if (
-            $timeframe === '5m'
-            && !isset($context['threshold'], $context['rsi_bullish_threshold'])
-            && abs($threshold - self::DEFAULT_THRESHOLD) < 1e-6
-        ) {
-            $threshold = self::RELAXED_THRESHOLD_5M;
-        }
 
         $passed = $rsi > $threshold;
 
@@ -65,6 +54,7 @@ final class RsiBullishCondition extends AbstractCondition
         ]));
     }
 
+    /** @param array<string, mixed> $context */
     private function logFailure(array $context, ?float $value, ?float $threshold, string $reason): void
     {
         $this->conditionsLogger->info('[Condition] rsi_bullish failed', [

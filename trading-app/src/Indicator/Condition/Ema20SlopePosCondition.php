@@ -8,7 +8,7 @@ use App\Indicator\Attribute\AsIndicatorCondition;
 use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AsIndicatorCondition(timeframes: ['15m', '5m'], side: 'long', name: self::NAME)]
+#[AsIndicatorCondition(timeframes: ['15m', '5m', '1m'], side: 'long', name: self::NAME)]
 #[AutoconfigureTag('app.indicator.condition')]
 #[AsTaggedItem(index: self::NAME)]
 final class Ema20SlopePosCondition extends AbstractCondition
@@ -22,6 +22,7 @@ final class Ema20SlopePosCondition extends AbstractCondition
         return "Pente EMA20 positive (accélération haussière de court terme).";
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $ema = $context['ema'][20] ?? null;

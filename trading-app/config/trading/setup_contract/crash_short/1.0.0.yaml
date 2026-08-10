@@ -26,38 +26,19 @@ context:
     op: all_of
     provenance: 'validations.crash.yaml:271-285'
     nodes:
-      - op: all_of
-        provenance: 'validations.crash.yaml:274-276'
-        nodes:
-          - { condition: crash_context_ok, timeframe: 15m, provenance: 'validations.crash.yaml:275' }
-          - { condition: crash_short_pattern_15m, timeframe: 15m, provenance: 'validations.crash.yaml:178-184,276' }
-      - op: any_of
-        provenance: 'validations.crash.yaml:281-285'
-        nodes:
-          - op: all_of
-            provenance: 'validations.crash.yaml:283-285'
-            nodes:
-              - { condition: crash_context_ok, timeframe: 5m, provenance: 'validations.crash.yaml:284' }
-              - { condition: crash_short_pattern_5m, timeframe: 5m, provenance: 'validations.crash.yaml:186-194,285' }
+      - { condition: crash_short_pattern_15m, timeframe: 15m, provenance: 'validations.crash.yaml:178-184,276' }
+      - { condition: crash_short_pattern_5m, timeframe: 5m, provenance: 'validations.crash.yaml:186-194,285' }
   confirmations:
     op: any_of
     provenance: 'validations.crash.yaml:293-305; redundant subset retained in AST'
     nodes:
-      - op: all_of
-        provenance: 'validations.crash.yaml:297-300 normal branch'
-        nodes:
-          - { condition: crash_context_ok, timeframe: 1m, provenance: 'validations.crash.yaml:299' }
-          - { condition: crash_short_pattern_1m, timeframe: 1m, provenance: 'validations.crash.yaml:196-203,300' }
-      - op: all_of
-        provenance: 'validations.crash.yaml:302-305 redundant pullback subset'
-        nodes:
-          - { condition: crash_context_ok, timeframe: 1m, provenance: 'validations.crash.yaml:304' }
-          - { condition: crash_short_entry_1m, timeframe: 1m, provenance: 'validations.crash.yaml:205-214,305' }
+      - { condition: crash_short_pattern_1m, timeframe: 1m, provenance: 'validations.crash.yaml:196-203,297-300 normal branch' }
+      - { condition: crash_short_entry_1m, timeframe: 1m, provenance: 'validations.crash.yaml:205-214,302-305 redundant pullback subset' }
 filters:
   - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
   - { condition: lev_bounds, timeframe: global, provenance: 'validations.crash.yaml:164-167,247-249; values remain externally owned' }
-no_trade_rules:
-  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 anti-last-tick guard' }
+  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 mandatory anti-last-tick guard' }
+no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
 execution:
   side: short
@@ -73,7 +54,7 @@ data_condition_contract:
   missing_conditions: []
   external_dependencies:
     - { dependency_id: lev_bounds, state: unresolved, owner: mode_or_exchange, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Legacy bounds cannot become setup-owned leverage policy; authoritative modern limits are unresolved.', failure_policy: reject }
-  condition_catalog_hash: { state: unresolved, value: null, unit: sha256, source: 'condition catalog artifact not yet versioned', justification: 'No hash fabricated.' }
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.crash.yaml', justification: 'Full duration absent.' }
 governance:
