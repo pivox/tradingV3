@@ -148,6 +148,7 @@ final class CanonicalRiskEngine
             policy: $request->policy,
             symbol: $request->symbol,
             marketType: $request->marketType,
+            quoteCurrency: $request->quoteCurrency,
             side: $request->side,
             entryPrice: $request->entryPrice,
             stopPrice: $request->stopPrice,

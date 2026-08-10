@@ -45,9 +45,10 @@ final class CanonicalOrderPlanPipelineFixture
         string $side = 'long',
         string $costObservedAt = '2026-08-10T11:59:50+00:00',
         string $instrumentObservedAt = '2026-08-10T11:59:40+00:00',
+        ?CanonicalExecutionPolicy $executionPolicy = null,
     ): array
     {
-        $policy = CanonicalExecutionPolicyFixture::policy($side);
+        $policy = $executionPolicy ?? CanonicalExecutionPolicyFixture::policy($side);
         $observed = new \DateTimeImmutable('2026-08-10T11:59:30+00:00');
         $candidate = $side === 'long' ? 100.1 : 100.39;
         $zoneRequest = new CanonicalEntryZoneRequest(
@@ -95,6 +96,7 @@ final class CanonicalOrderPlanPipelineFixture
             $policy->riskPolicy,
             'BTCUSDT',
             'perpetual',
+            'USDT',
             $side,
             1000.0,
             1000.0,
@@ -113,6 +115,7 @@ final class CanonicalOrderPlanPipelineFixture
                 'test',
                 'BTCUSDT',
                 'perpetual',
+                'USDT',
                 1.0,
                 0.001,
                 0.001,

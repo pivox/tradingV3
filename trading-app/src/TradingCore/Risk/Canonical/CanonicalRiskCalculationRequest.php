@@ -13,6 +13,7 @@ final readonly class CanonicalRiskCalculationRequest
         public CanonicalRiskPolicy $policy,
         public string $symbol,
         public string $marketType,
+        public string $quoteCurrency,
         public string $side,
         public float $equityQuote,
         public float $availableBalanceQuote,
@@ -33,6 +34,9 @@ final readonly class CanonicalRiskCalculationRequest
         }
         if (preg_match('/\A[a-z0-9][a-z0-9_.-]*\z/D', $marketType) !== 1) {
             throw new CanonicalRiskException('canonical_risk_market_type_invalid');
+        }
+        if (preg_match('/\A[A-Z][A-Z0-9]{2,11}\z/D', $quoteCurrency) !== 1) {
+            throw new CanonicalRiskException('canonical_risk_quote_currency_invalid');
         }
         if (!\in_array($side, ['long', 'short'], true)) {
             throw new CanonicalRiskException('canonical_risk_side_invalid');
@@ -83,6 +87,7 @@ final readonly class CanonicalRiskCalculationRequest
             || $instrument->environment !== $policy->environment
             || $instrument->symbol !== $symbol
             || $instrument->marketType !== $marketType
+            || $instrument->quoteCurrency !== $quoteCurrency
             || $instrument->contractSize !== $contractSize
             || $instrument->quantityStep !== $quantityStep
             || $instrument->minQuantity !== $minQuantity

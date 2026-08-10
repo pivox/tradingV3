@@ -281,10 +281,10 @@ short. Les pas de quantite inferieurs a `1e-12` ou non representables avec au
 plus 12 decimales sont rejetes. Les minima et tous les caps
 sont reverifies apres quantification sur une grille entiere mise a l'echelle.
 
-Le Lot A n'est pas encore branche au runtime TradeEntry. Les blockers modernes
-restent donc en place jusqu'aux Lots B (EntryZone, protection, net R et
-OrderPlan) et C (caps portefeuille, partial fills et parite). Mainnet reste
-public/read-only et aucune execution privee mainnet n'est activee.
+Les autorites pures des Lots A, B et C ne sont pas encore branchees au runtime
+TradeEntry. Les blockers modernes restent donc en place jusqu'aux versions de
+mode resolues et a leur integration explicite. Mainnet reste public/read-only
+et aucune execution privee mainnet n'est activee.
 
 ## #304 Lot B - EntryZone et OrderPlan canoniques
 
@@ -329,5 +329,65 @@ polarite, budget de risque, caps de levier/notional et minimum de R net.
 Ce Lot B est une autorite pure et non branchee : il ne depend pas de
 `TradeEntryConfig`, `ExecutionBox`, des mappers legacy, de Doctrine, Messenger
 ou d'un provider. Il ne rend aucun setup actuellement non resolu executable,
-ne retire aucun blocker portefeuille du Lot C et n'active aucune execution
-mainnet.
+ne retire aucun blocker portefeuille tant que le contrat correspondant reste
+non resolu et n'active aucune execution mainnet.
+
+## #304 Lot C - portefeuille, reservations et partial fills
+
+Le namespace `App\TradingCore\Risk\Canonical\Portfolio` compile une politique
+portefeuille uniquement lorsque le contrat effectif definit explicitement les
+deux caps journaliers, la devise quote, la timezone et la frontiere du jour,
+le traitement de l'unrealized, la concurrence incluant ou non les ordres en
+attente, et le cap d'exposition du mode. Les contrats `1.0.0` actuels ne
+possedent pas toutes ces decisions : ils restent bloques et aucune valeur par
+defaut n'est inferee.
+
+Le snapshot atomique est scope par reseau, venue, environnement, compte, mode
+et devise. Il conserve sa source/version, son horodatage, son hash et sa version
+d'etat. L'admission utilise le plus restrictif du cap journalier en pourcentage
+et du cap absolu, ajoute le risque deja reserve, compte les positions et entrees
+pending selon le contrat, puis projette l'exposition du plan. Le plan, son
+equity et sa devise doivent correspondre exactement au snapshot frais.
+
+Une admission acceptee produit une reservation liee au `decisionKey`, au
+`configHash`, au `planHash`, au hash portefeuille et a sa version compare-and-
+swap. Le store de reference recoit la request complete, revalide plan, inputs et
+fraicheur au moment exact du commit, puis persiste plan et reservation dans la
+meme operation.
+Chaque fill est lie au meme scope et recalcule en decimal exact risque rempli,
+risque residuel, notionals, frais et quantite protegee. Un reliquat hors budget
+est reduit ou annule ; une quantite remplie non protegee ou deja hors budget
+demande la compensation et interdit tout fill supplementaire. Cancel et close
+liberent les reservations de facon idempotente. La quantite encore ouverte sur
+la venue reste distincte du reliquat autorise jusqu'a l'accuse de reduction :
+les fills recus pendant cette fenetre sont donc toujours comptabilises. Chaque
+transition porte le hash exact de son etat precedent avant le compare-and-swap.
+Un fill confirme ayant deja traverse le stop est lui aussi comptabilise, puis
+force immediatement la compensation ; il n'est jamais ignore comme input invalide.
+La distance brute au stop est accumulee fill par fill afin qu'un fill traverse
+ne puisse jamais annuler le risque deja charge par un fill precedent.
+
+La decision d'admission possede un constructeur prive. Sa seule factory publique
+rejoue l'evaluateur canonique avec la request complete ; un appelant ne peut donc
+pas fabriquer une reservation en recopiant seulement le plan et une state version.
+Sa serialisation et son hydration PHP sont interdites explicitement pour que
+`unserialize()` ne puisse pas contourner cette frontiere readonly.
+
+Le store n'accepte jamais un etat `next` fourni par l'appelant : il applique
+lui-meme fill, cancel, reduction ou close a l'etat CAS effectivement persiste.
+Il recompose aussi le hash de l'etat attendu et du nouvel etat avant commit.
+Une hydration PHP modifiant un plan ou une reservation sans mettre a jour sa
+lineage deterministe est donc rejetee fail-closed.
+
+Avant toute nouvelle reservation, le store derive de ses reservations du scope
+les minima de risque reserve, notionals ouverts/pending, positions, entrees
+pending et decision keys actives. La snapshot d'admission doit couvrir tous ces
+engagements ; une snapshot a la bonne state version mais qui omet un commit est
+rejetee. En revanche, un retry de la meme identite deja committée est retourne
+avant le controle de fraicheur, ce qui conserve l'idempotence apres timeout.
+
+Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
+et deleguent tous au meme
+moteur et au meme store atomique. Les golden tests imposent des hashes d'admission
+et d'etat identiques, ainsi que les memes reason codes, pour des inputs identiques.
+Ils n'importent aucune couche legacy ni port d'execution prive mainnet.
