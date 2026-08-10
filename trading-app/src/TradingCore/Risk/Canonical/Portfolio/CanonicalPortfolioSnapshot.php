@@ -62,4 +62,30 @@ final readonly class CanonicalPortfolioSnapshot
             }
         }
     }
+
+    public function identityHash(): string
+    {
+        $activeDecisionKeys = $this->activeDecisionKeys;
+        sort($activeDecisionKeys);
+
+        return 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode([
+            'scope' => $this->scope->toArray(),
+            'source' => $this->source,
+            'source_version' => $this->sourceVersion,
+            'policy_day_start' => $this->policyDayStart->format('Y-m-d\TH:i:s.uP'),
+            'policy_day_end' => $this->policyDayEnd->format('Y-m-d\TH:i:s.uP'),
+            'observed_at' => $this->observedAt->format('Y-m-d\TH:i:s.uP'),
+            'equity_quote' => $this->equityQuote,
+            'realized_net_pnl_quote' => $this->realizedNetPnlQuote,
+            'unrealized_net_pnl_quote' => $this->unrealizedNetPnlQuote,
+            'open_positions' => $this->openPositions,
+            'pending_entries' => $this->pendingEntries,
+            'open_notional_quote' => $this->openNotionalQuote,
+            'pending_notional_quote' => $this->pendingNotionalQuote,
+            'reserved_risk_quote' => $this->reservedRiskQuote,
+            'active_decision_keys' => $activeDecisionKeys,
+            'state_version' => $this->stateVersion,
+            'input_hash' => $this->inputHash,
+        ], 'canonical_portfolio_state_hash_invalid'));
+    }
 }

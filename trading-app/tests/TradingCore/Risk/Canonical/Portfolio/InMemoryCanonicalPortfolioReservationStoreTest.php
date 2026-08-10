@@ -7,6 +7,7 @@ namespace App\Tests\TradingCore\Risk\Canonical\Portfolio;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioFill;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore;
@@ -114,6 +115,43 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
         self::assertSame($committed, $store->reserve($request, $engine));
     }
 
+    public function testCommittedRetryRejectsDifferentSnapshotIdentityWithSameInputHash(): void
+    {
+        [$request, $engine] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $store->reserve($request, $engine);
+        $differentSnapshot = new CanonicalPortfolioSnapshot(
+            $request->scope,
+            'reconstructed_fixture',
+            '1.0.1',
+            $request->snapshot->policyDayStart,
+            $request->snapshot->policyDayEnd,
+            $request->snapshot->observedAt,
+            $request->snapshot->equityQuote,
+            $request->snapshot->realizedNetPnlQuote,
+            $request->snapshot->unrealizedNetPnlQuote,
+            $request->snapshot->openPositions,
+            $request->snapshot->pendingEntries,
+            $request->snapshot->openNotionalQuote,
+            $request->snapshot->pendingNotionalQuote,
+            $request->snapshot->reservedRiskQuote,
+            $request->snapshot->activeDecisionKeys,
+            $request->snapshot->stateVersion,
+            $request->snapshot->inputHash,
+        );
+        $retry = new CanonicalPortfolioAdmissionRequest(
+            $request->policy,
+            $request->plan,
+            $request->scope,
+            $differentSnapshot,
+            $request->decisionKey,
+        );
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_reservation_identity_conflict');
+        $store->reserve($retry, $engine);
+    }
+
     public function testNewReservationCannotOmitCommittedScopeState(): void
     {
         [$first, $firstEngine] = $this->admission('decision-1', 1);
@@ -162,6 +200,65 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
 
         self::assertSame('decision-2', $reserved->decisionKey);
         self::assertSame(3, $store->scopeVersion($first->scope));
+    }
+
+    public function testAcknowledgedReductionReleasesOriginalRiskFloor(): void
+    {
+        [$first, $engine, $clock] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $reservation = $store->reserve($first, $engine);
+        $filled = $store->applyFill($reservation, new CanonicalPortfolioFill(
+            $reservation->scope,
+            $reservation->decisionKey,
+            $reservation->planHash,
+            $reservation->admissionHash,
+            'fill-1',
+            1.0,
+            $first->plan->entryPrice + 0.4,
+            0.1,
+            1.0,
+            round($first->plan->quantity - 1.0, 3),
+            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+            'sha256:' . str_repeat('9', 64),
+        ));
+        self::assertSame('reduce_residual', $filled->requiredAction);
+        $acknowledged = $store->acknowledgeResidualReduction(
+            $filled,
+            $filled->remainingQuantity,
+            new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+            'sha256:' . str_repeat('a', 64),
+        );
+        $releasedRisk = $acknowledged->filledRiskQuote + $acknowledged->residualRiskQuote;
+        self::assertLessThan($acknowledged->reservedRiskQuote, $releasedRisk);
+        $clock->sleep(2);
+        $snapshot = new CanonicalPortfolioSnapshot(
+            $first->scope,
+            'golden_fixture',
+            '1.0.0',
+            $first->snapshot->policyDayStart,
+            $first->snapshot->policyDayEnd,
+            new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
+            1000.0,
+            0.0,
+            0.0,
+            1,
+            1,
+            $acknowledged->filledNotionalQuote,
+            $acknowledged->residualNotionalQuote + 1e-9,
+            $releasedRisk + 1e-9,
+            [$acknowledged->decisionKey],
+            4,
+            'sha256:' . str_repeat('6', 64),
+        );
+        $second = new CanonicalPortfolioAdmissionRequest(
+            $first->policy,
+            $first->plan,
+            $first->scope,
+            $snapshot,
+            'decision-2',
+        );
+
+        self::assertSame('decision-2', $store->reserve($second, $engine)->decisionKey);
     }
 
     public function testReserveRejectsHydratedPlanWhoseContentNoLongerMatchesItsHash(): void
