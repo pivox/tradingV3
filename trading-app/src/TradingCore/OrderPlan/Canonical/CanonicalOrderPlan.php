@@ -21,6 +21,7 @@ final readonly class CanonicalOrderPlan
         public string $exchange,
         public string $environment,
         public string $symbol,
+        public string $marketType,
         public string $side,
         public string $orderType,
         public float $quantity,
@@ -95,7 +96,11 @@ final readonly class CanonicalOrderPlan
         }
         if (
             $request->costs->observedAt > $now
-            || ($now->getTimestamp() - $request->costs->observedAt->getTimestamp()) > $request->policy->entryZone->maximumInputAgeSeconds
+            || CanonicalOrderPlanTime::isOlderThan(
+                $request->costs->observedAt,
+                $now,
+                $request->policy->entryZone->maximumInputAgeSeconds,
+            )
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
         }
@@ -165,6 +170,7 @@ final readonly class CanonicalOrderPlan
             'exchange' => $riskPolicy->exchange,
             'environment' => $riskPolicy->environment,
             'symbol' => $zone->symbol,
+            'marketType' => $zone->marketType,
             'side' => $riskPolicy->side,
             'orderType' => 'limit',
             'quantity' => $risk->quantity,

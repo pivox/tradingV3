@@ -93,6 +93,19 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
     }
 
+    public function testBuildRejectsCostsStaleBySubsecondPrecision(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            costObservedAt: '2026-08-10T11:59:59.000001+00:00',
+        );
+        $clock = new MockClock('2026-08-10T12:00:59.999999+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_cost_stale');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
     public function testFinalValidatorRejectsPlanWhenRetainedCostsBecomeStale(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();

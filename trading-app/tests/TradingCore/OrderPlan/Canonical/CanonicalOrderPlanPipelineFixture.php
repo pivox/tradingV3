@@ -40,7 +40,10 @@ final class CanonicalOrderPlanPipelineFixture
      *   costs: CanonicalExecutionCostSnapshot
      * }
      */
-    public static function accepted(string $side = 'long'): array
+    public static function accepted(
+        string $side = 'long',
+        string $costObservedAt = '2026-08-10T11:59:50+00:00',
+    ): array
     {
         $policy = CanonicalExecutionPolicyFixture::policy($side);
         $observed = new \DateTimeImmutable('2026-08-10T11:59:30+00:00');
@@ -65,6 +68,7 @@ final class CanonicalOrderPlanPipelineFixture
             'fake',
             'test',
             'BTCUSDT',
+            'perpetual',
             $policy->configHash,
             'taker',
             'taker',
@@ -82,7 +86,7 @@ final class CanonicalOrderPlanPipelineFixture
                 new CanonicalTargetCostSnapshot('tp1', 'order_book', 0.0001, 'execution_model', 0.0001),
                 new CanonicalTargetCostSnapshot('tp2', 'order_book', 0.0001, 'execution_model', 0.0001),
             ],
-            new \DateTimeImmutable('2026-08-10T11:59:50+00:00'),
+            new \DateTimeImmutable($costObservedAt),
             'sha256:' . str_repeat('6', 64),
         );
         $riskRequest = new CanonicalRiskCalculationRequest(

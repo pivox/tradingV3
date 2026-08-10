@@ -16,6 +16,7 @@ final readonly class CanonicalEntryZone
         public string $environment,
         public string $side,
         public string $symbol,
+        public string $marketType,
         public float $lowerPrice,
         public float $upperPrice,
         public float $entryPrice,

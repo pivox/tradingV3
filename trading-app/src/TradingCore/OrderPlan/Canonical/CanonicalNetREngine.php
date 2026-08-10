@@ -36,6 +36,7 @@ final class CanonicalNetREngine
             $costs->exchange !== $policy->riskPolicy->exchange
             || $costs->environment !== $policy->riskPolicy->environment
             || $costs->symbol !== $protection->symbol
+            || $costs->marketType !== $protection->marketType
             || $costs->configHash !== $policy->configHash
         ) {
             throw new CanonicalOrderPlanException('canonical_net_r_cost_identity_mismatch');
@@ -62,7 +63,7 @@ final class CanonicalNetREngine
         if ($costs->observedAt > $protection->computedAt) {
             throw new CanonicalOrderPlanException('canonical_net_r_cost_future');
         }
-        if (($protection->computedAt->getTimestamp() - $costs->observedAt->getTimestamp()) > $policy->entryZone->maximumInputAgeSeconds) {
+        if (CanonicalOrderPlanTime::isOlderThan($costs->observedAt, $protection->computedAt, $policy->entryZone->maximumInputAgeSeconds)) {
             throw new CanonicalOrderPlanException('canonical_net_r_cost_stale');
         }
 

@@ -90,6 +90,7 @@ final class CanonicalProtectionEngine
             environment: $risk->environment,
             side: $risk->side,
             symbol: $zone->symbol,
+            marketType: $zone->marketType,
             entryPrice: $entry->toFloat(),
             stopPrice: $stop->toFloat(),
             riskDistance: $riskDistance->toFloat(),
@@ -135,7 +136,7 @@ final class CanonicalProtectionEngine
         if ($input->observedAt > $zone->computedAt) {
             throw new CanonicalOrderPlanException('canonical_protection_input_future');
         }
-        if (($zone->computedAt->getTimestamp() - $input->observedAt->getTimestamp()) > $policy->entryZone->maximumInputAgeSeconds) {
+        if (CanonicalOrderPlanTime::isOlderThan($input->observedAt, $zone->computedAt, $policy->entryZone->maximumInputAgeSeconds)) {
             throw new CanonicalOrderPlanException('canonical_protection_input_stale');
         }
     }

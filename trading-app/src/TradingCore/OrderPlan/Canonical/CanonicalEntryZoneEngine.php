@@ -67,7 +67,7 @@ final readonly class CanonicalEntryZoneEngine
             if ($input->observedAt > $now) {
                 throw new CanonicalOrderPlanException('canonical_entry_zone_input_future');
             }
-            if (($now->getTimestamp() - $input->observedAt->getTimestamp()) > $zonePolicy->maximumInputAgeSeconds) {
+            if (CanonicalOrderPlanTime::isOlderThan($input->observedAt, $now, $zonePolicy->maximumInputAgeSeconds)) {
                 throw new CanonicalOrderPlanException('canonical_entry_zone_input_stale');
             }
             if ($input->observedAt > $observedAt) {
@@ -114,6 +114,7 @@ final readonly class CanonicalEntryZoneEngine
             environment: $risk->environment,
             side: $risk->side,
             symbol: $request->symbol,
+            marketType: $request->market->marketType,
             lowerPrice: $lower->toFloat(),
             upperPrice: $upper->toFloat(),
             entryPrice: $entry->toFloat(),

@@ -27,6 +27,9 @@ final readonly class CanonicalOrderPlanValidator
         if ($plan->orderType !== 'limit') {
             throw new CanonicalOrderPlanException('canonical_order_plan_type_invalid');
         }
+        if (preg_match('/\A[a-z0-9][a-z0-9_.-]*\z/D', $plan->marketType) !== 1) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_market_type_invalid');
+        }
         if ($plan->zoneComputedAt > $plan->createdAt || $plan->createdAt > $now || $plan->expiresAt < $now) {
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
@@ -34,7 +37,7 @@ final readonly class CanonicalOrderPlanValidator
             $plan->maximumInputAgeSeconds <= 0
             || $plan->costObservedAt > $plan->createdAt
             || $plan->costObservedAt > $now
-            || ($now->getTimestamp() - $plan->costObservedAt->getTimestamp()) > $plan->maximumInputAgeSeconds
+            || CanonicalOrderPlanTime::isOlderThan($plan->costObservedAt, $now, $plan->maximumInputAgeSeconds)
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
         }

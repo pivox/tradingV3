@@ -98,6 +98,17 @@ final class CanonicalNetREngineTest extends TestCase
         (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
     }
 
+    public function testRejectsCostsObservedForAnotherMarketType(): void
+    {
+        [$policy, $protection] = $this->protection();
+        $costs = $this->executionCosts($policy, 0.0001, marketType: 'spot');
+        $risk = $this->riskDecision($policy, $protection, $costs);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_net_r_cost_identity_mismatch');
+        (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
+    }
+
     public function testFundingIntervalCeilingDoesNotOverflowAtMaximumHoldingWindow(): void
     {
         [$policy, $protection] = $this->protection('PT2562047788015215H30M7S');
@@ -139,12 +150,14 @@ final class CanonicalNetREngineTest extends TestCase
         string $entrySpreadSource = 'order_book',
         string $symbol = 'BTCUSDT',
         float $fundingRate = 0.0001,
+        string $marketType = 'perpetual',
     ): CanonicalExecutionCostSnapshot
     {
         return new CanonicalExecutionCostSnapshot(
             exchange: 'fake',
             environment: 'test',
             symbol: $symbol,
+            marketType: $marketType,
             configHash: $policy->configHash,
             entryLiquidityRole: 'taker',
             stopLiquidityRole: 'taker',

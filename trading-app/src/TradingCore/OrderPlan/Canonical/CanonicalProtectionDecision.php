@@ -19,6 +19,7 @@ final readonly class CanonicalProtectionDecision
         public string $environment,
         public string $side,
         public string $symbol,
+        public string $marketType,
         public float $entryPrice,
         public float $stopPrice,
         public float $riskDistance,
