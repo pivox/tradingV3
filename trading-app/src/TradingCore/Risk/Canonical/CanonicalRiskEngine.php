@@ -39,7 +39,7 @@ final class CanonicalRiskEngine
             throw new CanonicalRiskException('canonical_risk_budget_invalid');
         }
 
-        $lossPerQuantityDecimal = $this->decimalComponents($request, 1.0)['total'];
+        $lossPerQuantityDecimal = $this->decimalComponents($request, BigDecimal::of('1'))['total'];
         if ($lossPerQuantityDecimal->isLessThanOrEqualTo(0)) {
             throw new CanonicalRiskException('canonical_risk_stop_path_invalid');
         }
@@ -47,7 +47,7 @@ final class CanonicalRiskEngine
         $rawQuantity = $riskBudgetDecimal->dividedBy($lossPerQuantityDecimal, 18, RoundingMode::DOWN)->toFloat();
         $quantityCaps = [
             $this->quantizeDecimalRatioDown($riskBudgetDecimal, $lossPerQuantityDecimal, $request->quantityStep),
-            $this->quantizeDown($request->maxQuantity, $request->quantityStep),
+            $this->quantizeDownDecimal($request->maxQuantity, $request->quantityStep),
             $this->quantizeRatioDown(
                 [$request->policy->exchangeMaxNotional],
                 [$request->entryPrice, $request->contractSize],
@@ -65,29 +65,35 @@ final class CanonicalRiskEngine
             ),
         ];
         if ($request->marketMaxQuantity !== null) {
-            $quantityCaps[] = $this->quantizeDown($request->marketMaxQuantity, $request->quantityStep);
+            $quantityCaps[] = $this->quantizeDownDecimal($request->marketMaxQuantity, $request->quantityStep);
         }
 
-        $quantity = min($quantityCaps);
+        $quantityDecimal = array_reduce(
+            $quantityCaps,
+            static fn (?BigDecimal $minimum, BigDecimal $cap): BigDecimal => $minimum === null || $cap->isLessThan($minimum) ? $cap : $minimum,
+        );
+        if (!$quantityDecimal instanceof BigDecimal) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
         foreach ($quantityCaps as $quantityCap) {
-            if ($quantity > $quantityCap) {
+            if ($quantityDecimal->isGreaterThan($quantityCap)) {
                 throw new CanonicalRiskException('canonical_risk_post_quantization_cap_breach');
             }
         }
-        if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
+        if ($quantityDecimal->isLessThanOrEqualTo(0) || $quantityDecimal->isLessThan($this->decimal($request->minQuantity))) {
             throw new CanonicalRiskException('canonical_risk_quantity_below_minimum', [
                 'raw_quantity' => $rawQuantity,
                 'minimum_quantity' => $request->minQuantity,
             ]);
         }
 
-        $decimalComponents = $this->decimalComponents($request, $quantity);
+        $decimalComponents = $this->decimalComponents($request, $quantityDecimal);
         if ($decimalComponents['total']->isGreaterThan($riskBudgetDecimal)) {
-            $quantity = $this->subtractOneStep($quantity, $request->quantityStep);
-            if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
+            $quantityDecimal = $quantityDecimal->minus($this->decimal($request->quantityStep));
+            if ($quantityDecimal->isLessThanOrEqualTo(0) || $quantityDecimal->isLessThan($this->decimal($request->minQuantity))) {
                 throw new CanonicalRiskException('canonical_risk_quantity_below_minimum');
             }
-            $decimalComponents = $this->decimalComponents($request, $quantity);
+            $decimalComponents = $this->decimalComponents($request, $quantityDecimal);
         }
         $components = $this->floatComponents($decimalComponents);
         if ($decimalComponents['total']->isGreaterThan($riskBudgetDecimal)) {
@@ -97,7 +103,7 @@ final class CanonicalRiskEngine
             ]);
         }
 
-        $positionNotionalDecimal = $this->decimalProduct([$request->entryPrice, $request->contractSize, $quantity]);
+        $positionNotionalDecimal = $this->decimalProduct([$request->entryPrice, $request->contractSize])->multipliedBy($quantityDecimal);
         $positionNotional = $positionNotionalDecimal->toFloat();
         if ($positionNotionalDecimal->isLessThan($this->decimal($request->policy->exchangeMinNotional))) {
             throw new CanonicalRiskException('canonical_risk_notional_below_minimum', [
@@ -116,6 +122,7 @@ final class CanonicalRiskEngine
                 'effective_cap' => $effectiveLeverageCap,
             ]);
         }
+        $quantity = $this->exactFloat($quantityDecimal);
 
         return new CanonicalRiskDecision(
             riskBudgetQuote: $riskBudgetQuote,
@@ -162,15 +169,16 @@ final class CanonicalRiskEngine
     }
 
     /** @return array{gross:BigDecimal,entry_fee:BigDecimal,stop_exit_fee:BigDecimal,entry_spread:BigDecimal,stop_spread:BigDecimal,entry_slippage:BigDecimal,stop_slippage:BigDecimal,funding:BigDecimal,total:BigDecimal} */
-    private function decimalComponents(CanonicalRiskCalculationRequest $request, float $quantity): array
+    private function decimalComponents(CanonicalRiskCalculationRequest $request, BigDecimal $quantity): array
     {
         $costs = $request->costs;
-        $entryNotional = $this->decimalProduct([$request->entryPrice, $request->contractSize, $quantity]);
-        $stopNotional = $this->decimalProduct([$request->stopPrice, $request->contractSize, $quantity]);
+        $entryNotional = $this->decimalProduct([$request->entryPrice, $request->contractSize])->multipliedBy($quantity);
+        $stopNotional = $this->decimalProduct([$request->stopPrice, $request->contractSize])->multipliedBy($quantity);
         $gross = $this->decimal($request->entryPrice)
             ->minus($this->decimal($request->stopPrice))
             ->abs()
-            ->multipliedBy($this->decimalProduct([$request->contractSize, $quantity]));
+            ->multipliedBy($this->decimal($request->contractSize))
+            ->multipliedBy($quantity);
         $entryFee = $entryNotional->multipliedBy($this->decimal($this->feeRateFor((string) $costs->entryLiquidityRole, $request->policy)));
         $stopExitFee = $stopNotional->multipliedBy($this->decimal($this->feeRateFor((string) $costs->stopLiquidityRole, $request->policy)));
         $entrySpread = $entryNotional->multipliedBy($this->decimal((float) $costs->entrySpreadRate));
@@ -205,41 +213,40 @@ final class CanonicalRiskEngine
         return array_map(static fn (BigDecimal $component): float => $component->toFloat(), $components);
     }
 
-    private function quantizeDown(float $quantity, float $step): float
+    private function quantizeDownDecimal(float $quantity, float $step): BigDecimal
     {
         if (!\is_finite($quantity) || $quantity <= 0.0) {
-            return 0.0;
+            return BigDecimal::of('0');
         }
 
         $decimalPlaces = $this->decimalPlaces($step);
-        $scale = 10 ** $decimalPlaces;
         $quantityUnits = $this->scaledFloorUnits($quantity, $decimalPlaces);
         $stepUnits = $this->scaledFloorUnits($step, $decimalPlaces);
         if ($stepUnits < 1) {
             throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
-        $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
+        $steps = intdiv($quantityUnits, $stepUnits);
 
-        return round($quantizedUnits / $scale, $decimalPlaces);
+        return $this->decimal($step)->multipliedBy((string) $steps);
     }
 
     /**
      * @param non-empty-list<float> $numeratorFactors
      * @param non-empty-list<float> $denominatorFactors
      */
-    private function quantizeRatioDown(array $numeratorFactors, array $denominatorFactors, float $step): float
+    private function quantizeRatioDown(array $numeratorFactors, array $denominatorFactors, float $step): BigDecimal
     {
         $numerator = BigDecimal::of('1');
         foreach ($numeratorFactors as $factor) {
             if (!\is_finite($factor) || $factor <= 0.0) {
-                return 0.0;
+                return BigDecimal::of('0');
             }
             $numerator = $numerator->multipliedBy(BigDecimal::of($this->canonicalDecimal($factor)));
         }
         $denominator = BigDecimal::of('1');
         foreach ($denominatorFactors as $factor) {
             if (!\is_finite($factor) || $factor <= 0.0) {
-                return 0.0;
+                return BigDecimal::of('0');
             }
             $denominator = $denominator->multipliedBy(BigDecimal::of($this->canonicalDecimal($factor)));
         }
@@ -247,7 +254,7 @@ final class CanonicalRiskEngine
         return $this->quantizeDecimalRatioDown($numerator, $denominator, $step);
     }
 
-    private function quantizeDecimalRatioDown(BigDecimal $numerator, BigDecimal $denominator, float $step): float
+    private function quantizeDecimalRatioDown(BigDecimal $numerator, BigDecimal $denominator, float $step): BigDecimal
     {
         $stepDecimal = BigDecimal::of($this->canonicalDecimal($step));
         $steps = $numerator->dividedBy(
@@ -255,12 +262,7 @@ final class CanonicalRiskEngine
             0,
             RoundingMode::FLOOR,
         );
-        $quantity = $stepDecimal->multipliedBy($steps)->toFloat();
-        if (!\is_finite($quantity) || $quantity < 0.0) {
-            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
-        }
-
-        return $quantity;
+        return $stepDecimal->multipliedBy($steps);
     }
 
     /** @param non-empty-list<float> $factors */
@@ -355,17 +357,14 @@ final class CanonicalRiskEngine
         return $decimal;
     }
 
-    private function subtractOneStep(float $quantity, float $step): float
+    private function exactFloat(BigDecimal $value): float
     {
-        $decimalPlaces = $this->decimalPlaces($step);
-        $scale = 10 ** $decimalPlaces;
-        $quantityUnits = $this->scaledFloorUnits($quantity, $decimalPlaces);
-        $stepUnits = $this->scaledFloorUnits($step, $decimalPlaces);
-        if ($quantityUnits < $stepUnits || $stepUnits < 1) {
-            return 0.0;
+        $float = $value->toFloat();
+        if (!\is_finite($float) || !$this->decimal($float)->isEqualTo($value)) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
 
-        return round(($quantityUnits - $stepUnits) / $scale, $decimalPlaces);
+        return $float;
     }
 
     private function decimalPlaces(float $step): int

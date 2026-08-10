@@ -418,6 +418,29 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertSame(0.07, $decision->positionNotional);
     }
 
+    public function testRejectsFinalQuantityThatCannotRoundTripWithoutExceedingDecimalCap(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_precision_unsupported');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 9_007_199_254_740_991.0,
+                environmentMaxNotional: 10_000_000_000_000_000.0,
+            ),
+            'equityQuote' => 10_000_000_000_000_000.0,
+            'availableBalanceQuote' => 10_000_000_000_000_000.0,
+            'entryPrice' => 1_000_000_000_000.0,
+            'stopPrice' => 999_999_999_999.0,
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'maxQuantity' => 9_007.199254740992,
+            'marketMaxQuantity' => 9_007.199254740992,
+        ]));
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);
