@@ -36,27 +36,26 @@ final class CanonicalRiskEngine
         }
 
         $costs = $request->costs;
-        $entryFeeRate = $costs->entryFeeRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $stopExitFeeRate = $costs->stopExitFeeRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $spreadRate = $costs->spreadRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $slippageRate = $costs->slippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $entryLiquidityRole = $costs->entryLiquidityRole ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $stopLiquidityRole = $costs->stopLiquidityRole ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $entrySpreadRate = $costs->entrySpreadRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $stopSpreadRate = $costs->stopSpreadRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $entrySlippageRate = $costs->entrySlippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        $stopSlippageRate = $costs->stopSlippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
         $fundingRate = $costs->fundingRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
         $fundingIntervals = $costs->fundingIntervals ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        foreach ([$entryFeeRate, $stopExitFeeRate] as $feeRate) {
-            if (!$this->matchesFeeSchedule($feeRate, $request->policy)) {
-                throw new CanonicalRiskException('canonical_market_fee_rate_mismatch');
-            }
-        }
+        $entryFeeRate = $this->feeRateFor($entryLiquidityRole, $request->policy);
+        $stopExitFeeRate = $this->feeRateFor($stopLiquidityRole, $request->policy);
 
         $entryNotionalPerQuantity = $request->entryPrice * $request->contractSize;
         $stopNotionalPerQuantity = $request->stopPrice * $request->contractSize;
         $grossPerQuantity = abs($request->entryPrice - $request->stopPrice) * $request->contractSize;
         $costPerQuantity = $entryNotionalPerQuantity * (
             $entryFeeRate
-            + $spreadRate
-            + $slippageRate
-            + max(0.0, $fundingRate) * $fundingIntervals
-        ) + $stopNotionalPerQuantity * $stopExitFeeRate;
+            + $entrySpreadRate
+            + $entrySlippageRate
+            + $this->adverseFundingRate($request->side, $fundingRate) * $fundingIntervals
+        ) + $stopNotionalPerQuantity * ($stopExitFeeRate + $stopSpreadRate + $stopSlippageRate);
         $lossPerQuantity = $grossPerQuantity + $costPerQuantity;
         if (!\is_finite($lossPerQuantity) || $lossPerQuantity <= 0.0) {
             throw new CanonicalRiskException('canonical_risk_stop_path_invalid');
@@ -75,6 +74,11 @@ final class CanonicalRiskEngine
         }
 
         $quantity = $this->quantizeDown(min($quantityCaps), $request->quantityStep);
+        foreach ($quantityCaps as $quantityCap) {
+            if ($quantity > $quantityCap + self::EPSILON) {
+                throw new CanonicalRiskException('canonical_risk_post_quantization_cap_breach');
+            }
+        }
         if ($quantity + self::EPSILON < $request->minQuantity) {
             throw new CanonicalRiskException('canonical_risk_quantity_below_minimum', [
                 'raw_quantity' => $rawQuantity,
@@ -120,8 +124,10 @@ final class CanonicalRiskEngine
             grossStopLoss: $components['gross'],
             entryFee: $components['entry_fee'],
             stopExitFee: $components['stop_exit_fee'],
-            spreadCost: $components['spread'],
-            slippageCost: $components['slippage'],
+            entrySpreadCost: $components['entry_spread'],
+            stopSpreadCost: $components['stop_spread'],
+            entrySlippageCost: $components['entry_slippage'],
+            stopSlippageCost: $components['stop_slippage'],
             fundingCost: $components['funding'],
             totalStopLoss: $components['total'],
             rawQuantity: $rawQuantity,
@@ -154,27 +160,34 @@ final class CanonicalRiskEngine
         return $effectiveCap;
     }
 
-    /** @return array{gross:float,entry_fee:float,stop_exit_fee:float,spread:float,slippage:float,funding:float,total:float} */
+    /** @return array{gross:float,entry_fee:float,stop_exit_fee:float,entry_spread:float,stop_spread:float,entry_slippage:float,stop_slippage:float,funding:float,total:float} */
     private function components(CanonicalRiskCalculationRequest $request, float $quantity): array
     {
         $costs = $request->costs;
         $entryNotional = $request->entryPrice * $request->contractSize * $quantity;
         $stopNotional = $request->stopPrice * $request->contractSize * $quantity;
         $gross = abs($request->entryPrice - $request->stopPrice) * $request->contractSize * $quantity;
-        $entryFee = $entryNotional * (float) $costs->entryFeeRate;
-        $stopExitFee = $stopNotional * (float) $costs->stopExitFeeRate;
-        $spread = $entryNotional * (float) $costs->spreadRate;
-        $slippage = $entryNotional * (float) $costs->slippageRate;
-        $funding = $entryNotional * max(0.0, (float) $costs->fundingRate) * (int) $costs->fundingIntervals;
+        $entryFee = $entryNotional * $this->feeRateFor((string) $costs->entryLiquidityRole, $request->policy);
+        $stopExitFee = $stopNotional * $this->feeRateFor((string) $costs->stopLiquidityRole, $request->policy);
+        $entrySpread = $entryNotional * (float) $costs->entrySpreadRate;
+        $stopSpread = $stopNotional * (float) $costs->stopSpreadRate;
+        $entrySlippage = $entryNotional * (float) $costs->entrySlippageRate;
+        $stopSlippage = $stopNotional * (float) $costs->stopSlippageRate;
+        $funding = $entryNotional
+            * $this->adverseFundingRate($request->side, (float) $costs->fundingRate)
+            * (int) $costs->fundingIntervals;
 
         return [
             'gross' => $gross,
             'entry_fee' => $entryFee,
             'stop_exit_fee' => $stopExitFee,
-            'spread' => $spread,
-            'slippage' => $slippage,
+            'entry_spread' => $entrySpread,
+            'stop_spread' => $stopSpread,
+            'entry_slippage' => $entrySlippage,
+            'stop_slippage' => $stopSlippage,
             'funding' => $funding,
-            'total' => $gross + $entryFee + $stopExitFee + $spread + $slippage + $funding,
+            'total' => $gross + $entryFee + $stopExitFee
+                + $entrySpread + $stopSpread + $entrySlippage + $stopSlippage + $funding,
         ];
     }
 
@@ -196,10 +209,18 @@ final class CanonicalRiskEngine
         return $point === false ? 0 : strlen($normalized) - $point - 1;
     }
 
-    private function matchesFeeSchedule(float $feeRate, CanonicalRiskPolicy $policy): bool
+    private function feeRateFor(string $liquidityRole, CanonicalRiskPolicy $policy): float
     {
-        return abs($feeRate - $policy->makerFeeRate) <= self::EPSILON
-            || abs($feeRate - $policy->takerFeeRate) <= self::EPSILON;
+        return match ($liquidityRole) {
+            'maker' => $policy->makerFeeRate,
+            'taker' => $policy->takerFeeRate,
+            default => throw new CanonicalRiskException('canonical_market_liquidity_role_invalid'),
+        };
+    }
+
+    private function adverseFundingRate(string $side, float $fundingRate): float
+    {
+        return $side === 'long' ? max(0.0, $fundingRate) : max(0.0, -$fundingRate);
     }
 
     /** @return list<string> */

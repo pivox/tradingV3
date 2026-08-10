@@ -41,10 +41,10 @@ The pure kernel receives:
 - side, entry price, stop price, target prices, contract size, tick size, quantity step, minimum and maximum quantity;
 - one mode-owned per-trade `riskRate`;
 - exchange, mode, symbol, and environment leverage caps;
-- maker/taker choice and complete conservative costs for entry, stop, and target paths;
+- explicit maker/taker role for each execution and complete conservative costs for entry, stop, and target paths;
 - the immutable policy identity and input snapshot time.
 
-Unknown critical inputs reject. Perpetual funding is required when the maximum holding window can cross a funding boundary. A cost model cannot silently assume zero.
+Unknown critical inputs reject. Entry and stop fee rates are derived from their explicit liquidity roles and the authenticated exchange schedule; callers cannot supply an independent fee rate. Entry and stop spread/slippage are distinct mandatory inputs. Perpetual funding is required when the maximum holding window can cross a funding boundary: positive rates are adverse to longs and negative rates are adverse to shorts. A cost model cannot silently assume zero.
 
 ### Sizing
 
@@ -58,7 +58,7 @@ risk_budget_quote = equity * riskRate
 maximum_notional = risk_budget_quote / (stop_distance_rate + stop_path_cost_rate)
 ```
 
-Quantity is derived from `maximum_notional`, then rounded down to the exchange quantity step. Minimum quantity is never rounded up if doing so breaches the budget; such an order rejects. Maximum quantity, market maximum quantity, available-margin capacity, and every leverage cap are applied before a final quantity is selected.
+Quantity is derived from `maximum_notional`, then rounded down to the exchange quantity step. Steps below the supported `1e-12` precision reject, and every cap is revalidated after quantization. Minimum quantity or minimum notional is never reached by rounding up; such an order rejects. Maximum quantity, market maximum quantity, available-margin capacity, and every leverage cap are applied before a final quantity is selected.
 
 The engine recalculates stop-path loss from the final price, quantity, contract size, and costs. It emits an executable decision only when:
 
@@ -75,7 +75,7 @@ Required leverage is derived from final notional and the canonical collateral ba
 
 ### Output
 
-The immutable result records requested budget, final quantity/notional, final leverage, every cap, gross stop loss, each cost component, total stop loss, quantization deltas, input timestamps, and policy identity. Failed invariants return stable rejection codes and never a partially executable plan.
+The immutable result records requested budget, final quantity/notional, final leverage, every cap, gross stop loss, separate entry/stop cost components, total stop loss, quantization deltas, input timestamps, and policy identity. Policy construction is private and accepts only an effective snapshot whose canonical payload hash has been recomputed successfully. Failed invariants return stable rejection codes and never a partially executable plan.
 
 ## Lot B: EntryZone, protection, OrderPlan, and net R
 

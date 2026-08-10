@@ -113,15 +113,17 @@ git commit -m "feat(risk): compile canonical risk policy units"
 
 - [x] **Step 1: Write failing contract validation tests**
 
-Assert that missing spread, slippage, funding, entry fee, or stop-exit fee is rejected; negative steps/prices/equity are rejected; long/short stop polarity is enforced; and `fundingIntervals=0` with an explicit `fundingRate=0.0` is accepted. Use stable codes such as `canonical_market_cost_unknown`, `canonical_risk_quantity_step_invalid`, and `canonical_risk_stop_side_invalid`.
+Assert that missing entry/stop liquidity roles, spread, slippage, or funding is rejected; negative steps/prices/equity are rejected; long/short stop polarity is enforced; and `fundingIntervals=0` with an explicit `fundingRate=0.0` is accepted. Use stable codes such as `canonical_market_cost_unknown`, `canonical_market_liquidity_role_invalid`, `canonical_risk_quantity_step_invalid`, and `canonical_risk_stop_side_invalid`.
 
 ```php
 $this->expectExceptionMessage('canonical_market_cost_unknown');
 new CanonicalCostSnapshot(
-    entryFeeRate: 0.001,
-    stopExitFeeRate: 0.001,
-    spreadRate: null,
-    slippageRate: 0.0005,
+    entryLiquidityRole: 'maker',
+    stopLiquidityRole: 'taker',
+    entrySpreadRate: null,
+    stopSpreadRate: 0.0002,
+    entrySlippageRate: 0.0005,
+    stopSlippageRate: 0.0008,
     fundingRate: 0.0,
     fundingIntervals: 0,
 );
@@ -139,10 +141,12 @@ Use these fields without percentage aliases or multipliers:
 final readonly class CanonicalCostSnapshot
 {
     public function __construct(
-        public ?float $entryFeeRate,
-        public ?float $stopExitFeeRate,
-        public ?float $spreadRate,
-        public ?float $slippageRate,
+        public ?string $entryLiquidityRole,
+        public ?string $stopLiquidityRole,
+        public ?float $entrySpreadRate,
+        public ?float $stopSpreadRate,
+        public ?float $entrySlippageRate,
+        public ?float $stopSlippageRate,
         public ?float $fundingRate,
         public ?int $fundingIntervals,
     ) {}
@@ -180,8 +184,10 @@ final readonly class CanonicalRiskDecision
         public float $grossStopLoss,
         public float $entryFee,
         public float $stopExitFee,
-        public float $spreadCost,
-        public float $slippageCost,
+        public float $entrySpreadCost,
+        public float $stopSpreadCost,
+        public float $entrySlippageCost,
+        public float $stopSlippageCost,
         public float $fundingCost,
         public float $totalStopLoss,
         public float $rawQuantity,
@@ -246,9 +252,11 @@ $grossPerQuantity = abs($request->entryPrice - $request->stopPrice) * $request->
 $entryNotionalPerQuantity = $request->entryPrice * $request->contractSize;
 $stopNotionalPerQuantity = $request->stopPrice * $request->contractSize;
 $costPerQuantity = $entryNotionalPerQuantity * (
-    $costs->entryFeeRate + $costs->spreadRate + $costs->slippageRate
-    + max(0.0, $costs->fundingRate) * $costs->fundingIntervals
-) + $stopNotionalPerQuantity * $costs->stopExitFeeRate;
+    $compiledEntryFeeRate + $costs->entrySpreadRate + $costs->entrySlippageRate
+    + $sideAdverseFundingRate * $costs->fundingIntervals
+) + $stopNotionalPerQuantity * (
+    $compiledStopFeeRate + $costs->stopSpreadRate + $costs->stopSlippageRate
+);
 $rawQuantity = $riskBudget / ($grossPerQuantity + $costPerQuantity);
 ```
 

@@ -6,6 +6,7 @@ namespace App\Tests\TradingCore\Risk\Canonical;
 
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskPolicyCompiler;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -27,7 +28,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         self::assertSame('fake', $policy->exchange);
         self::assertSame('test', $policy->environment);
         self::assertSame('long', $policy->side);
-        self::assertSame('sha256:' . str_repeat('a', 64), $policy->configHash);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $policy->configHash);
         self::assertSame(3.0, $policy->modeLeverageCap);
         self::assertSame(0.0002, $policy->makerFeeRate);
         self::assertSame(0.0005, $policy->takerFeeRate);
@@ -148,6 +149,18 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         (new CanonicalRiskPolicyCompiler())->compile($snapshot);
     }
 
+    public function testRejectsConfigHashThatDoesNotAuthenticatePayload(): void
+    {
+        $payload = $this->payload();
+        $snapshot = $this->snapshot($payload);
+        $payload['mode']['risk']['trade_budget']['value'] = 40.0;
+        $tampered = $this->snapshot($payload, configHash: $snapshot->configHash);
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_policy_hash_mismatch');
+        (new CanonicalRiskPolicyCompiler())->compile($tampered);
+    }
+
     /**
      * @param array<string, mixed>|null $payload
      * @param list<string> $blockers
@@ -156,7 +169,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         ?array $payload = null,
         bool $executable = true,
         array $blockers = [],
-        string $configHash = 'sha256:' . 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        ?string $configHash = null,
     ): EffectiveTradingConfigSnapshot {
         $request = new EffectiveTradingConfigRequest(
             'micro_scalping',
@@ -168,11 +181,21 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
             'long',
         );
 
+        $effectivePayload = $payload ?? $this->payload();
+        $conditionCatalogHash = 'sha256:' . str_repeat('b', 64);
+        if ($configHash === null) {
+            try {
+                $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($effectivePayload, $conditionCatalogHash);
+            } catch (\InvalidArgumentException) {
+                $configHash = 'sha256:' . str_repeat('a', 64);
+            }
+        }
+
         return new EffectiveTradingConfigSnapshot(
             request: $request,
-            payload: $payload ?? $this->payload(),
+            payload: $effectivePayload,
             configHash: $configHash,
-            conditionCatalogHash: 'sha256:' . str_repeat('b', 64),
+            conditionCatalogHash: $conditionCatalogHash,
             layers: [],
             provenance: [],
             executable: $executable,

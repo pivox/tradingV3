@@ -7,18 +7,22 @@ namespace App\TradingCore\Risk\Canonical;
 final readonly class CanonicalCostSnapshot
 {
     public function __construct(
-        public ?float $entryFeeRate,
-        public ?float $stopExitFeeRate,
-        public ?float $spreadRate,
-        public ?float $slippageRate,
+        public ?string $entryLiquidityRole,
+        public ?string $stopLiquidityRole,
+        public ?float $entrySpreadRate,
+        public ?float $stopSpreadRate,
+        public ?float $entrySlippageRate,
+        public ?float $stopSlippageRate,
         public ?float $fundingRate,
         public ?int $fundingIntervals,
     ) {
         foreach ([
-            'entry_fee_rate' => $entryFeeRate,
-            'stop_exit_fee_rate' => $stopExitFeeRate,
-            'spread_rate' => $spreadRate,
-            'slippage_rate' => $slippageRate,
+            'entry_liquidity_role' => $entryLiquidityRole,
+            'stop_liquidity_role' => $stopLiquidityRole,
+            'entry_spread_rate' => $entrySpreadRate,
+            'stop_spread_rate' => $stopSpreadRate,
+            'entry_slippage_rate' => $entrySlippageRate,
+            'stop_slippage_rate' => $stopSlippageRate,
             'funding_rate' => $fundingRate,
             'funding_intervals' => $fundingIntervals,
         ] as $field => $value) {
@@ -27,7 +31,12 @@ final readonly class CanonicalCostSnapshot
             }
         }
 
-        foreach ([$entryFeeRate, $stopExitFeeRate, $spreadRate, $slippageRate] as $rate) {
+        foreach ([$entryLiquidityRole, $stopLiquidityRole] as $role) {
+            if (!\in_array($role, ['maker', 'taker'], true)) {
+                throw new CanonicalRiskException('canonical_market_liquidity_role_invalid');
+            }
+        }
+        foreach ([$entrySpreadRate, $stopSpreadRate, $entrySlippageRate, $stopSlippageRate] as $rate) {
             if (!\is_finite($rate) || $rate < 0.0 || $rate >= 1.0) {
                 throw new CanonicalRiskException('canonical_market_cost_rate_invalid');
             }

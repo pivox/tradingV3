@@ -28,7 +28,16 @@ final class CanonicalRiskContractTest extends TestCase
     /** @return iterable<string, array{callable(array<string, mixed>): array<string, mixed>}> */
     public static function unknownCostProvider(): iterable
     {
-        foreach (['entryFeeRate', 'stopExitFeeRate', 'spreadRate', 'slippageRate', 'fundingRate', 'fundingIntervals'] as $field) {
+        foreach ([
+            'entryLiquidityRole',
+            'stopLiquidityRole',
+            'entrySpreadRate',
+            'stopSpreadRate',
+            'entrySlippageRate',
+            'stopSlippageRate',
+            'fundingRate',
+            'fundingIntervals',
+        ] as $field) {
             yield $field => [static function (array $arguments) use ($field): array {
                 $arguments[$field] = null;
                 return $arguments;
@@ -42,6 +51,8 @@ final class CanonicalRiskContractTest extends TestCase
 
         self::assertSame(0.0, $costs->fundingRate);
         self::assertSame(0, $costs->fundingIntervals);
+        self::assertSame('maker', $costs->entryLiquidityRole);
+        self::assertSame('taker', $costs->stopLiquidityRole);
     }
 
     #[DataProvider('invalidRateProvider')]
@@ -58,12 +69,22 @@ final class CanonicalRiskContractTest extends TestCase
     /** @return iterable<string, array{string, int|float}> */
     public static function invalidRateProvider(): iterable
     {
-        yield 'negative fee' => ['entryFeeRate', -0.001];
-        yield 'fee at one' => ['stopExitFeeRate', 1.0];
-        yield 'infinite spread' => ['spreadRate', INF];
-        yield 'negative slippage' => ['slippageRate', -0.001];
+        yield 'infinite entry spread' => ['entrySpreadRate', INF];
+        yield 'negative stop spread' => ['stopSpreadRate', -0.001];
+        yield 'entry slippage at one' => ['entrySlippageRate', 1.0];
+        yield 'negative stop slippage' => ['stopSlippageRate', -0.001];
         yield 'funding at one' => ['fundingRate', 1.0];
         yield 'funding at minus one' => ['fundingRate', -1.0];
+    }
+
+    public function testRejectsUnknownLiquidityRole(): void
+    {
+        $arguments = $this->costArguments();
+        $arguments['stopLiquidityRole'] = 'unknown';
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_market_liquidity_role_invalid');
+        new CanonicalCostSnapshot(...$arguments);
     }
 
     public function testRejectsNegativeFundingIntervals(): void
@@ -102,6 +123,7 @@ final class CanonicalRiskContractTest extends TestCase
         yield 'short stop below entry' => ['canonical_risk_stop_side_invalid', 'short', ['stopPrice' => 99.0]];
         yield 'zero contract' => ['canonical_risk_contract_size_invalid', 'long', ['contractSize' => 0.0]];
         yield 'zero step' => ['canonical_risk_quantity_step_invalid', 'long', ['quantityStep' => 0.0]];
+        yield 'unsupported sub-picounit step' => ['canonical_risk_quantity_step_invalid', 'long', ['quantityStep' => 1.0e-17]];
         yield 'minimum below step' => ['canonical_risk_quantity_bounds_invalid', 'long', ['minQuantity' => 0.0005]];
         yield 'maximum below minimum' => ['canonical_risk_quantity_bounds_invalid', 'long', ['maxQuantity' => 0.0005]];
         yield 'market maximum below minimum' => ['canonical_risk_quantity_bounds_invalid', 'long', ['marketMaxQuantity' => 0.0005]];
@@ -131,14 +153,16 @@ final class CanonicalRiskContractTest extends TestCase
         self::assertSame('short', $short->policy->side);
     }
 
-    /** @return array<string, int|float|null> */
+    /** @return array<string, int|float|string|null> */
     private function costArguments(): array
     {
         return [
-            'entryFeeRate' => 0.001,
-            'stopExitFeeRate' => 0.001,
-            'spreadRate' => 0.0002,
-            'slippageRate' => 0.0005,
+            'entryLiquidityRole' => 'maker',
+            'stopLiquidityRole' => 'taker',
+            'entrySpreadRate' => 0.0002,
+            'stopSpreadRate' => 0.0003,
+            'entrySlippageRate' => 0.0005,
+            'stopSlippageRate' => 0.0007,
             'fundingRate' => 0.0,
             'fundingIntervals' => 0,
         ];
@@ -168,22 +192,6 @@ final class CanonicalRiskContractTest extends TestCase
 
     private function policy(string $side): CanonicalRiskPolicy
     {
-        return new CanonicalRiskPolicy(
-            modeId: 'day_trading',
-            modeVersion: '1.0.0',
-            setupId: 'day_trading.trend_continuation.' . $side,
-            setupVersion: '1.0.0',
-            exchange: 'fake',
-            environment: 'test',
-            side: $side,
-            configHash: 'sha256:' . str_repeat('a', 64),
-            riskRate: 0.01,
-            modeLeverageCap: 5.0,
-            makerFeeRate: 0.0,
-            takerFeeRate: 0.0,
-            exchangeMinNotional: 1.0,
-            exchangeMaxNotional: 1000.0,
-            environmentMaxNotional: 500.0,
-        );
+        return CanonicalRiskTestFactory::policy($side);
     }
 }

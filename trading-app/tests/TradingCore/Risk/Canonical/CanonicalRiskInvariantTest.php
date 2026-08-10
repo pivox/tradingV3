@@ -35,7 +35,7 @@ final class CanonicalRiskInvariantTest extends TestCase
     /** @return iterable<string, array{float, float, float, string}> */
     public static function invalidDirectPolicyProvider(): iterable
     {
-        yield 'mode leverage below one' => [0.9, 1000.0, 500.0, 'canonical_leverage_cap_invalid'];
+        yield 'mode leverage below one' => [0.9, 1000.0, 500.0, 'canonical_policy_mode_leverage_invalid'];
         yield 'zero exchange notional' => [5.0, 0.0, 500.0, 'canonical_policy_notional_cap_invalid'];
         yield 'negative environment notional' => [5.0, 1000.0, -1.0, 'canonical_policy_notional_cap_invalid'];
         yield 'infinite environment notional' => [5.0, 1000.0, INF, 'canonical_policy_notional_cap_invalid'];
@@ -61,21 +61,25 @@ final class CanonicalRiskInvariantTest extends TestCase
             $symbolCap = mt_rand(10, 120) / 10.0;
             $notionalCeiling = $equity * 20.0;
             $costs = new CanonicalCostSnapshot(
-                entryFeeRate: mt_rand(0, 10) / 10000.0,
-                stopExitFeeRate: mt_rand(0, 10) / 10000.0,
-                spreadRate: mt_rand(0, 20) / 10000.0,
-                slippageRate: mt_rand(0, 20) / 10000.0,
+                entryLiquidityRole: $case % 3 === 0 ? 'taker' : 'maker',
+                stopLiquidityRole: 'taker',
+                entrySpreadRate: mt_rand(0, 20) / 10000.0,
+                stopSpreadRate: mt_rand(0, 20) / 10000.0,
+                entrySlippageRate: mt_rand(0, 20) / 10000.0,
+                stopSlippageRate: mt_rand(0, 20) / 10000.0,
                 fundingRate: mt_rand(-10, 20) / 10000.0,
                 fundingIntervals: mt_rand(0, 3),
             );
+            $makerFeeRate = mt_rand(0, 10) / 10000.0;
+            $takerFeeRate = mt_rand(0, 10) / 10000.0;
             $policy = $this->policy(
                 $side,
                 $riskRate,
                 $modeCap,
                 $notionalCeiling,
                 $notionalCeiling,
-                (float) $costs->entryFeeRate,
-                (float) $costs->stopExitFeeRate,
+                $makerFeeRate,
+                $takerFeeRate,
             );
             $request = $this->request(
                 side: $side,
@@ -139,6 +143,14 @@ final class CanonicalRiskInvariantTest extends TestCase
         }
     }
 
+    public function testCanonicalPolicyCannotBeConstructedWithoutCompilerAuthority(): void
+    {
+        $constructor = (new \ReflectionClass(CanonicalRiskPolicy::class))->getConstructor();
+
+        self::assertNotNull($constructor);
+        self::assertTrue($constructor->isPrivate());
+    }
+
     private function request(
         string $side,
         CanonicalRiskPolicy $policy,
@@ -166,7 +178,7 @@ final class CanonicalRiskInvariantTest extends TestCase
             marketMaxQuantity: 1_000_000.0,
             exchangeLeverageCap: $exchangeCap,
             symbolLeverageCap: $symbolCap,
-            costs: $costs ?? new CanonicalCostSnapshot(0.0, 0.0, 0.0, 0.0, 0.0, 0),
+            costs: $costs ?? new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
         );
     }
 
@@ -179,15 +191,8 @@ final class CanonicalRiskInvariantTest extends TestCase
         float $makerFeeRate = 0.0,
         float $takerFeeRate = 0.0,
     ): CanonicalRiskPolicy {
-        return new CanonicalRiskPolicy(
-            modeId: 'day_trading',
-            modeVersion: '1.0.0',
-            setupId: 'day_trading.trend_continuation.' . $side,
-            setupVersion: '1.0.0',
-            exchange: 'fake',
-            environment: 'test',
+        return CanonicalRiskTestFactory::policy(
             side: $side,
-            configHash: 'sha256:' . str_repeat('a', 64),
             riskRate: $riskRate,
             modeLeverageCap: $modeLeverageCap,
             makerFeeRate: $makerFeeRate,

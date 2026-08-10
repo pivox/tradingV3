@@ -36,7 +36,7 @@ final class CanonicalRiskEngineTest extends TestCase
         $entry = 100.0;
         $stop = 98.0;
         $contractSize = 1.0;
-        $costs = new CanonicalCostSnapshot(0.001, 0.001, 0.0002, 0.0005, 0.0001, 2);
+        $costs = new CanonicalCostSnapshot('maker', 'taker', 0.0002, 0.0003, 0.0005, 0.0007, 0.0001, 2);
         $request = $this->request([
             'policy' => $this->policy('long', makerFeeRate: 0.001, takerFeeRate: 0.001),
             'costs' => $costs,
@@ -47,7 +47,7 @@ final class CanonicalRiskEngineTest extends TestCase
         $decision = (new CanonicalRiskEngine())->calculate($request);
         $grossPerUnit = abs($entry - $stop) * $contractSize;
         $costPerUnit = $entry * $contractSize * (0.001 + 0.0002 + 0.0005 + 0.0001 * 2)
-            + $stop * $contractSize * 0.001;
+            + $stop * $contractSize * (0.001 + 0.0003 + 0.0007);
         $expectedRaw = 10.0 / ($grossPerUnit + $costPerUnit);
 
         self::assertEqualsWithDelta($expectedRaw, $decision->rawQuantity, 1e-12);
@@ -55,12 +55,15 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertEqualsWithDelta($decision->quantity * 2.0, $decision->grossStopLoss, 1e-12);
         self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.001, $decision->entryFee, 1e-12);
         self::assertEqualsWithDelta($decision->quantity * 98.0 * 0.001, $decision->stopExitFee, 1e-12);
-        self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.0002, $decision->spreadCost, 1e-12);
-        self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.0005, $decision->slippageCost, 1e-12);
+        self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.0002, $decision->entrySpreadCost, 1e-12);
+        self::assertEqualsWithDelta($decision->quantity * 98.0 * 0.0003, $decision->stopSpreadCost, 1e-12);
+        self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.0005, $decision->entrySlippageCost, 1e-12);
+        self::assertEqualsWithDelta($decision->quantity * 98.0 * 0.0007, $decision->stopSlippageCost, 1e-12);
         self::assertEqualsWithDelta($decision->quantity * 100.0 * 0.0001 * 2, $decision->fundingCost, 1e-12);
         self::assertEqualsWithDelta(
             $decision->grossStopLoss + $decision->entryFee + $decision->stopExitFee
-                + $decision->spreadCost + $decision->slippageCost + $decision->fundingCost,
+                + $decision->entrySpreadCost + $decision->stopSpreadCost
+                + $decision->entrySlippageCost + $decision->stopSlippageCost + $decision->fundingCost,
             $decision->totalStopLoss,
             1e-12,
         );
@@ -69,7 +72,7 @@ final class CanonicalRiskEngineTest extends TestCase
 
     public function testUsesShortStopNotionalForShortStopExitCost(): void
     {
-        $costs = new CanonicalCostSnapshot(0.0, 0.001, 0.0, 0.0, 0.0, 0);
+        $costs = new CanonicalCostSnapshot('maker', 'taker', 0.0, 0.0, 0.0, 0.0, 0.0, 0);
         $decision = (new CanonicalRiskEngine())->calculate($this->request([
             'policy' => $this->policy('short', makerFeeRate: 0.0, takerFeeRate: 0.001),
             'side' => 'short',
@@ -79,6 +82,29 @@ final class CanonicalRiskEngineTest extends TestCase
 
         self::assertEqualsWithDelta($decision->quantity * 102.0 * 0.001, $decision->stopExitFee, 1e-12);
         self::assertLessThanOrEqual($decision->riskBudgetQuote + 1e-12, $decision->totalStopLoss);
+    }
+
+    public function testFundingChargesOnlyTheAdverseRateForEachSide(): void
+    {
+        $shortPaying = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy('short'),
+            'side' => 'short',
+            'stopPrice' => 102.0,
+            'costs' => new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, -0.001, 1),
+        ]));
+        $shortReceiving = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy('short'),
+            'side' => 'short',
+            'stopPrice' => 102.0,
+            'costs' => new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.001, 1),
+        ]));
+        $longPaying = (new CanonicalRiskEngine())->calculate($this->request([
+            'costs' => new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.001, 1),
+        ]));
+
+        self::assertGreaterThan(0.0, $shortPaying->fundingCost);
+        self::assertSame(0.0, $shortReceiving->fundingCost);
+        self::assertGreaterThan(0.0, $longPaying->fundingCost);
     }
 
     public function testMostRestrictiveQuantityAndNotionalCapsWin(): void
@@ -140,14 +166,15 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
-    public function testRejectsFeeRatesOutsideCompiledMakerTakerSchedule(): void
+    public function testDerivesEachFeeFromItsCompiledLiquidityRole(): void
     {
-        $this->expectException(CanonicalRiskException::class);
-        $this->expectExceptionMessage('canonical_market_fee_rate_mismatch');
-        (new CanonicalRiskEngine())->calculate($this->request([
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
             'policy' => $this->policy('long', makerFeeRate: 0.001, takerFeeRate: 0.002),
-            'costs' => new CanonicalCostSnapshot(0.0001, 0.002, 0.0, 0.0, 0.0, 0),
+            'costs' => new CanonicalCostSnapshot('maker', 'taker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
         ]));
+
+        self::assertEqualsWithDelta($decision->positionNotional * 0.001, $decision->entryFee, 1e-12);
+        self::assertEqualsWithDelta($decision->quantity * 98.0 * 0.002, $decision->stopExitFee, 1e-12);
     }
 
     /** @param array<string, mixed> $overrides */
@@ -168,7 +195,7 @@ final class CanonicalRiskEngineTest extends TestCase
             'marketMaxQuantity' => 100.0,
             'exchangeLeverageCap' => 20.0,
             'symbolLeverageCap' => 10.0,
-            'costs' => new CanonicalCostSnapshot(0.0, 0.0, 0.0, 0.0, 0.0, 0),
+            'costs' => new CanonicalCostSnapshot('maker', 'maker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
         ];
 
         return new CanonicalRiskCalculationRequest(...array_replace($arguments, $overrides));
@@ -184,15 +211,8 @@ final class CanonicalRiskEngineTest extends TestCase
         float $exchangeMaxNotional = 1000.0,
         float $environmentMaxNotional = 500.0,
     ): CanonicalRiskPolicy {
-        return new CanonicalRiskPolicy(
-            modeId: 'day_trading',
-            modeVersion: '1.0.0',
-            setupId: 'day_trading.trend_continuation.' . $side,
-            setupVersion: '1.0.0',
-            exchange: 'fake',
-            environment: 'test',
+        return CanonicalRiskTestFactory::policy(
             side: $side,
-            configHash: 'sha256:' . str_repeat('a', 64),
             riskRate: $riskRate,
             modeLeverageCap: $modeLeverageCap,
             makerFeeRate: $makerFeeRate,

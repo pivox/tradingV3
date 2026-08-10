@@ -243,7 +243,10 @@ chemin moderne. Les classes historiques `PositionSizer`, `LeverageCalculator`
 et `RiskConfigInterpreter` restent reservees au chemin legacy explicite ; elles
 ne sont ni adaptees ni utilisees comme fallback par le moteur canonique.
 
-`CanonicalRiskPolicyCompiler` lit exclusivement le snapshot effectif immuable.
+`CanonicalRiskPolicyCompiler` lit exclusivement le snapshot effectif immuable,
+recalcule son hash canonique avec le hash du catalogue de conditions et rejette
+toute divergence. Le constructeur de la politique est prive : aucun appelant
+ne peut injecter directement un taux interne sans passer par cette compilation.
 Il exige `risk.trade_budget` avec l'unite
 `percent_equity_per_trade`, puis convertit les points de pourcentage une seule
 fois : `0.4` devient le taux interne `0.004`. Les alias historiques et toute
@@ -269,10 +272,13 @@ inferieure ou egale au budget et si le levier entier final reste inferieur ou
 egal a chacun des caps applicables. Aucun multiplicateur de timeframe,
 confiance ou liquidite n'existe dans ce contrat.
 
-Les couts inconnus sont rejetes ; une valeur nulle doit etre fournie
-explicitement lorsqu'un cout vaut reellement zero. Les appels directs au moteur
-conservent des gardes locales contre des caps invalides, meme s'ils contournent
-le compilateur.
+Les couts inconnus sont rejetes ; une valeur zero doit etre fournie
+explicitement lorsqu'un cout vaut reellement zero. Les roles maker/taker de
+l'entree et du stop sont explicites et les taux de frais sont derives du bareme
+compile. Spread et slippage sont comptabilises separement a l'entree et a la
+sortie stop. Le funding positif est adverse au long, le funding negatif au
+short. Les pas de quantite inferieurs a `1e-12` sont rejetes et tous les caps
+sont reverifies apres quantification.
 
 Le Lot A n'est pas encore branche au runtime TradeEntry. Les blockers modernes
 restent donc en place jusqu'aux Lots B (EntryZone, protection, net R et
