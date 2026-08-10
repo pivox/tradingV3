@@ -124,6 +124,7 @@ final class CanonicalRiskContractTest extends TestCase
         yield 'zero contract' => ['canonical_risk_contract_size_invalid', 'long', ['contractSize' => 0.0]];
         yield 'zero step' => ['canonical_risk_quantity_step_invalid', 'long', ['quantityStep' => 0.0]];
         yield 'unsupported sub-picounit step' => ['canonical_risk_quantity_step_invalid', 'long', ['quantityStep' => 1.0e-17]];
+        yield 'step beyond twelve-decimal grid' => ['canonical_risk_quantity_step_invalid', 'long', ['quantityStep' => 1.234567890123e-12]];
         yield 'minimum below step' => ['canonical_risk_quantity_bounds_invalid', 'long', ['minQuantity' => 0.0005]];
         yield 'maximum below minimum' => ['canonical_risk_quantity_bounds_invalid', 'long', ['maxQuantity' => 0.0005]];
         yield 'market maximum below minimum' => ['canonical_risk_quantity_bounds_invalid', 'long', ['marketMaxQuantity' => 0.0005]];

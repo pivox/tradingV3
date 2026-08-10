@@ -97,9 +97,9 @@ final class CanonicalRiskInvariantTest extends TestCase
             try {
                 $decision = $engine->calculate($request);
             } catch (CanonicalRiskException $exception) {
-                self::assertSame(
-                    'canonical_risk_quantity_below_minimum',
+                self::assertContains(
                     $exception->reasonCode,
+                    ['canonical_risk_quantity_below_minimum', 'canonical_leverage_post_quantization_breach'],
                     sprintf('Unexpected rejection in deterministic case %d', $case),
                 );
                 continue;

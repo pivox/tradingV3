@@ -7,6 +7,7 @@ namespace App\TradingCore\Risk\Canonical;
 final readonly class CanonicalRiskCalculationRequest
 {
     public const MIN_QUANTITY_STEP = 1.0e-12;
+    public const MAX_QUANTITY_DECIMALS = 12;
 
     public function __construct(
         public CanonicalRiskPolicy $policy,
@@ -49,7 +50,11 @@ final readonly class CanonicalRiskCalculationRequest
         if (!\is_finite($contractSize) || $contractSize <= 0.0) {
             throw new CanonicalRiskException('canonical_risk_contract_size_invalid');
         }
-        if (!\is_finite($quantityStep) || $quantityStep < self::MIN_QUANTITY_STEP) {
+        if (
+            !\is_finite($quantityStep)
+            || $quantityStep < self::MIN_QUANTITY_STEP
+            || round($quantityStep, self::MAX_QUANTITY_DECIMALS) !== $quantityStep
+        ) {
             throw new CanonicalRiskException('canonical_risk_quantity_step_invalid');
         }
         if (

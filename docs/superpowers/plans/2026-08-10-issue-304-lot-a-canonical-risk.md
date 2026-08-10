@@ -297,7 +297,7 @@ Run only `CanonicalRiskInvariantTest`. Expected: any float-boundary or cap-order
 
 - [x] **Step 3: Apply the minimal conservative correction**
 
-Compute the effective integer leverage cap as `floor(min(all configured caps))`. Cap notional to `availableBalanceQuote * effectiveCap`, then quantize quantity down. Derive final leverage as `max(1, ceil(positionNotional / availableBalanceQuote - 1e-12))`. If a floating boundary still breaches risk, subtract exactly one quantity step and recompute all components; reject if the result falls below minimum quantity.
+Compute the effective integer leverage cap as `floor(min(all configured caps))`. Cap notional to `availableBalanceQuote * effectiveCap`, then quantize quantity down. Accept only decimal quantity steps representable with at most 12 fractional digits, derive final leverage as `max(1, ceil(positionNotional / availableBalanceQuote))`, and enforce quantity, minimum notional, risk, and leverage boundaries without an absolute epsilon. If a floating boundary still breaches risk, subtract exactly one quantity step and recompute all components; reject if the result falls below minimum quantity.
 
 - [x] **Step 4: Run invariant, canonical, and legacy risk suites**
 

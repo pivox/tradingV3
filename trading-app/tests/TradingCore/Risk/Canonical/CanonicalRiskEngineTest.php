@@ -175,6 +175,44 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
+    public function testRejectsPositiveQuantizedQuantityBelowMinimumWithoutAbsoluteTolerance(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_below_minimum');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.5e-10,
+            ),
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => 2.0e-12,
+            'maxQuantity' => 2.0e-12,
+            'marketMaxQuantity' => 2.0e-12,
+        ]));
+    }
+
+    public function testRejectsPositionBelowTinyExchangeMinimumNotional(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_notional_below_minimum');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                exchangeMinNotional: 2.0e-12,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'entryPrice' => 1.0,
+            'stopPrice' => 0.5,
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'maxQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'marketMaxQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+        ]));
+    }
+
     public function testRejectsBelowExchangeMinimumNotionalWithoutRoundingUp(): void
     {
         $this->expectException(CanonicalRiskException::class);

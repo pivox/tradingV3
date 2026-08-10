@@ -6,8 +6,6 @@ namespace App\TradingCore\Risk\Canonical;
 
 final class CanonicalRiskEngine
 {
-    private const EPSILON = 1.0e-12;
-
     public function calculate(CanonicalRiskCalculationRequest $request): CanonicalRiskDecision
     {
         if (
@@ -75,11 +73,11 @@ final class CanonicalRiskEngine
 
         $quantity = $this->quantizeDown(min($quantityCaps), $request->quantityStep);
         foreach ($quantityCaps as $quantityCap) {
-            if ($quantity > $quantityCap + self::EPSILON) {
+            if ($quantity > $quantityCap) {
                 throw new CanonicalRiskException('canonical_risk_post_quantization_cap_breach');
             }
         }
-        if ($quantity <= 0.0 || $quantity + self::EPSILON < $request->minQuantity) {
+        if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
             throw new CanonicalRiskException('canonical_risk_quantity_below_minimum', [
                 'raw_quantity' => $rawQuantity,
                 'minimum_quantity' => $request->minQuantity,
@@ -87,14 +85,14 @@ final class CanonicalRiskEngine
         }
 
         $components = $this->components($request, $quantity);
-        if ($components['total'] > $riskBudgetQuote + self::EPSILON) {
+        if ($components['total'] > $riskBudgetQuote) {
             $quantity = $this->quantizeDown($quantity - $request->quantityStep, $request->quantityStep);
-            if ($quantity <= 0.0 || $quantity + self::EPSILON < $request->minQuantity) {
+            if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
                 throw new CanonicalRiskException('canonical_risk_quantity_below_minimum');
             }
             $components = $this->components($request, $quantity);
         }
-        if ($components['total'] > $riskBudgetQuote + self::EPSILON) {
+        if ($components['total'] > $riskBudgetQuote) {
             throw new CanonicalRiskException('canonical_risk_post_quantization_breach', [
                 'risk_budget_quote' => $riskBudgetQuote,
                 'total_stop_loss' => $components['total'],
@@ -102,13 +100,13 @@ final class CanonicalRiskEngine
         }
 
         $positionNotional = $request->entryPrice * $request->contractSize * $quantity;
-        if ($positionNotional + self::EPSILON < $request->policy->exchangeMinNotional) {
+        if ($positionNotional < $request->policy->exchangeMinNotional) {
             throw new CanonicalRiskException('canonical_risk_notional_below_minimum', [
                 'position_notional' => $positionNotional,
                 'exchange_min_notional' => $request->policy->exchangeMinNotional,
             ]);
         }
-        $finalLeverage = max(1, (int) ceil($positionNotional / $request->availableBalanceQuote - self::EPSILON));
+        $finalLeverage = max(1, (int) ceil($positionNotional / $request->availableBalanceQuote));
         if ($finalLeverage > $effectiveLeverageCap) {
             throw new CanonicalRiskException('canonical_leverage_post_quantization_breach', [
                 'final_leverage' => $finalLeverage,
@@ -197,13 +195,13 @@ final class CanonicalRiskEngine
             return 0.0;
         }
 
-        $steps = floor($quantity / $step + self::EPSILON);
+        $steps = floor($quantity / $step);
         return round($steps * $step, $this->decimalPlaces($step));
     }
 
     private function decimalPlaces(float $step): int
     {
-        $normalized = rtrim(rtrim(sprintf('%.16F', $step), '0'), '.');
+        $normalized = rtrim(rtrim(sprintf('%.12F', $step), '0'), '.');
         $point = strpos($normalized, '.');
 
         return $point === false ? 0 : strlen($normalized) - $point - 1;

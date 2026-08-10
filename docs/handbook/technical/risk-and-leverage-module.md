@@ -277,7 +277,8 @@ explicitement lorsqu'un cout vaut reellement zero. Les roles maker/taker de
 l'entree et du stop sont explicites et les taux de frais sont derives du bareme
 compile. Spread et slippage sont comptabilises separement a l'entree et a la
 sortie stop. Le funding positif est adverse au long, le funding negatif au
-short. Les pas de quantite inferieurs a `1e-12` sont rejetes et tous les caps
+short. Les pas de quantite inferieurs a `1e-12` ou non representables avec au
+plus 12 decimales sont rejetes. Les minima et tous les caps
 sont reverifies apres quantification.
 
 Le Lot A n'est pas encore branche au runtime TradeEntry. Les blockers modernes
