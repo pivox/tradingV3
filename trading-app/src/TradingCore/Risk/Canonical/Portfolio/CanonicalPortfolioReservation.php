@@ -168,12 +168,9 @@ final readonly class CanonicalPortfolioReservation
         }
 
         $fillQuantity = self::decimal($fill->quantity);
-        if (
+        $fillCrossesStop =
             ($this->side === 'long' && $fill->price <= $this->stopPrice)
-            || ($this->side === 'short' && $fill->price >= $this->stopPrice)
-        ) {
-            throw new CanonicalPortfolioException('canonical_portfolio_fill_stop_polarity_invalid');
-        }
+            || ($this->side === 'short' && $fill->price >= $this->stopPrice);
         $authorizedRemainingBefore = BigDecimal::of($this->remainingQuantityDecimal);
         $venueRemainingBefore = BigDecimal::of($this->venueRemainingQuantityDecimal);
         $step = self::decimal($this->quantityStep);
@@ -237,6 +234,10 @@ final readonly class CanonicalPortfolioReservation
         if ($this->status === 'compensation_required') {
             $allowedRemaining = BigDecimal::zero();
             $requiredAction = $this->requiredAction;
+            $status = 'compensation_required';
+        } elseif ($fillCrossesStop) {
+            $allowedRemaining = BigDecimal::zero();
+            $requiredAction = 'compensate_stop_crossed_fill';
             $status = 'compensation_required';
         } elseif ($protectedQuantity->isLessThan($filledQuantity)) {
             $allowedRemaining = BigDecimal::zero();

@@ -245,13 +245,11 @@ final class CanonicalPortfolioReservationTest extends TestCase
         ));
     }
 
-    public function testRejectsFillWhosePriceCrossesTheProtectedStop(): void
+    public function testAccountsForFillWhosePriceCrossesStopAndRequiresCompensation(): void
     {
         [$reservation, $plan] = $this->reservation();
 
-        $this->expectException(CanonicalPortfolioException::class);
-        $this->expectExceptionMessage('canonical_portfolio_fill_stop_polarity_invalid');
-        $reservation->applyFill($this->fill(
+        $next = $reservation->applyFill($this->fill(
             $reservation,
             quantity: 1.0,
             price: $plan->stopPrice,
@@ -259,6 +257,12 @@ final class CanonicalPortfolioReservationTest extends TestCase
             protectedQuantityAfter: 1.0,
             remainingOrderQuantity: round($plan->quantity - 1.0, 3),
         ));
+
+        self::assertSame(1.0, $next->filledQuantity);
+        self::assertGreaterThan(0.0, $next->filledRiskQuote);
+        self::assertSame('compensation_required', $next->status);
+        self::assertSame('compensate_stop_crossed_fill', $next->requiredAction);
+        self::assertSame(0.0, $next->remainingQuantity);
     }
 
     public function testCancelAndCloseReleaseRiskIdempotently(): void

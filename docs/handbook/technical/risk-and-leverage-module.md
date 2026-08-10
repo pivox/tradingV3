@@ -360,6 +360,8 @@ liberent les reservations de facon idempotente. La quantite encore ouverte sur
 la venue reste distincte du reliquat autorise jusqu'a l'accuse de reduction :
 les fills recus pendant cette fenetre sont donc toujours comptabilises. Chaque
 transition porte le hash exact de son etat precedent avant le compare-and-swap.
+Un fill confirme ayant deja traverse le stop est lui aussi comptabilise, puis
+force immediatement la compensation ; il n'est jamais ignore comme input invalide.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme
