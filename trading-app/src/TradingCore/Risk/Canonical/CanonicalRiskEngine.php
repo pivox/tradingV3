@@ -132,6 +132,7 @@ final class CanonicalRiskEngine
             quantity: $quantity,
             positionNotional: $positionNotional,
             finalLeverage: $finalLeverage,
+            effectiveLeverageCap: $effectiveLeverageCap,
             grossStopLoss: $components['gross'],
             entryFee: $components['entry_fee'],
             stopExitFee: $components['stop_exit_fee'],

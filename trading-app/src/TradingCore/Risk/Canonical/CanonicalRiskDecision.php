@@ -12,6 +12,7 @@ final readonly class CanonicalRiskDecision
         public float $quantity,
         public float $positionNotional,
         public int $finalLeverage,
+        public int $effectiveLeverageCap,
         public float $grossStopLoss,
         public float $entryFee,
         public float $stopExitFee,
