@@ -384,7 +384,14 @@ les minima de risque reserve, notionals ouverts/pending, positions, entrees
 pending et decision keys actives. La snapshot d'admission doit couvrir tous ces
 engagements ; une snapshot a la bonne state version mais qui omet un commit est
 rejetee. En revanche, un retry de la meme identite deja committée est retourne
-avant le controle de fraicheur, ce qui conserve l'idempotence apres timeout.
+avant le controle de fraicheur, ce qui conserve l'idempotence apres timeout. Son
+identite inclut le contenu canonique complet de la snapshot, sa source/version
+et sa state version, pas seulement le `inputHash` fourni.
+
+Le plancher du risque initial reste reserve seulement pendant la fenetre ou la
+quantite encore ouverte sur la venue depasse le reliquat autorise. Des que la
+reduction est accusee et que les deux quantites convergent, seul le risque exact
+filled plus residuel continue de consommer le portefeuille.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme

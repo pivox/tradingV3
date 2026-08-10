@@ -31,6 +31,25 @@ final class CanonicalPortfolioPolicyCompilerTest extends TestCase
         self::assertSame('test', $policy->environment);
     }
 
+    public function testCompiledPolicyCannotCrossPhpSerializationBoundary(): void
+    {
+        $policy = (new CanonicalPortfolioPolicyCompiler())->compile(CanonicalPortfolioFixture::snapshot());
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_policy_serialization_forbidden');
+        serialize($policy);
+    }
+
+    public function testForgedSerializedPolicyCannotBeHydrated(): void
+    {
+        $class = \App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy::class;
+        $payload = sprintf('O:%d:"%s":0:{}', strlen($class), $class);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_policy_serialization_forbidden');
+        unserialize($payload);
+    }
+
     /** @param array<string, mixed> $replacement */
     #[DataProvider('invalidPolicyProvider')]
     public function testRejectsUnresolvedOrAmbiguousPortfolioPolicy(array $replacement, string $reasonCode): void
