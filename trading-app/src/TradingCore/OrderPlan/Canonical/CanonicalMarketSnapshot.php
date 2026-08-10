@@ -10,6 +10,7 @@ final readonly class CanonicalMarketSnapshot
         public string $exchange,
         public string $environment,
         public string $symbol,
+        public string $marketType,
         public string $source,
         public float $candidatePrice,
         public \DateTimeImmutable $observedAt,

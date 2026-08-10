@@ -44,7 +44,19 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame(1800, $policy->holdingWindowSeconds);
         self::assertSame(28_800, $policy->costContract->fundingIntervalSeconds);
         self::assertSame('order_book', $policy->costContract->entrySpreadSource);
+        self::assertSame(['BTCUSDT'], $policy->allowedSymbols);
+        self::assertSame(['perpetual'], $policy->allowedMarkets);
         self::assertSame($policy->riskPolicy->configHash, $policy->configHash);
+    }
+
+    public function testRejectsEnvironmentWithoutCanonicalAllowlists(): void
+    {
+        $payload = $this->payload();
+        unset($payload['environment']['allowed_symbols']);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_environment_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
     }
 
     public function testRejectsUnresolvedExecutionDecision(): void

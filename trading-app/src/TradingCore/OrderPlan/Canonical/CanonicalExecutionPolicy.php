@@ -14,6 +14,8 @@ final readonly class CanonicalExecutionPolicy
 {
     /**
      * @param non-empty-list<CanonicalTargetPolicy> $targets
+     * @param list<string>                           $allowedSymbols
+     * @param list<string>                           $allowedMarkets
      */
     private function __construct(
         public CanonicalRiskPolicy $riskPolicy,
@@ -23,6 +25,8 @@ final readonly class CanonicalExecutionPolicy
         public float $minimumNetR,
         public int $holdingWindowSeconds,
         public CanonicalCostContract $costContract,
+        public array $allowedSymbols,
+        public array $allowedMarkets,
         public string $configHash,
     ) {
     }
@@ -67,6 +71,12 @@ final readonly class CanonicalExecutionPolicy
         self::invalidation(self::decision($execution, 'invalidation', 'invalidation_policy'));
         $holdingWindowSeconds = self::durationSeconds(self::decision($execution, 'time_stop', 'duration'));
         $costContract = self::costContract(self::decision($execution, 'cost_contract', 'cost_policy'));
+        $environment = self::mapping($payload, 'environment', 'canonical_execution_policy_environment_invalid');
+        $allowedSymbols = self::stringList($environment['allowed_symbols'] ?? null, 'canonical_execution_policy_environment_invalid');
+        $allowedMarkets = self::stringList($environment['allowed_markets'] ?? null, 'canonical_execution_policy_environment_invalid');
+        if ($allowedSymbols === [] && $allowedMarkets === []) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_environment_invalid');
+        }
 
         return new self(
             riskPolicy: $riskPolicy,
@@ -76,6 +86,8 @@ final readonly class CanonicalExecutionPolicy
             minimumNetR: $minimumNetR,
             holdingWindowSeconds: $holdingWindowSeconds,
             costContract: $costContract,
+            allowedSymbols: $allowedSymbols,
+            allowedMarkets: $allowedMarkets,
             configHash: $snapshot->configHash,
         );
     }
@@ -270,6 +282,26 @@ final readonly class CanonicalExecutionPolicy
             || ($units['notional'] ?? null) !== 'quote_notional'
         ) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_root_schema_invalid');
+        }
+        $environment = self::mapping($payload, 'environment', 'canonical_execution_policy_environment_invalid');
+        self::requireExactKeys($environment, [
+            'id',
+            'allowed_symbols',
+            'allowed_markets',
+            'max_notional',
+            'dry_run',
+            'write_enabled',
+            'kill_switch_enabled',
+            'require_stop_loss',
+        ], 'canonical_execution_policy_environment_invalid');
+        if (
+            ($environment['id'] ?? null) !== $snapshot->request->environment
+            || !\is_bool($environment['dry_run'] ?? null)
+            || ($environment['write_enabled'] ?? null) !== false
+            || ($environment['kill_switch_enabled'] ?? null) !== true
+            || ($environment['require_stop_loss'] ?? null) !== true
+        ) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_environment_invalid');
         }
 
         $setup = self::mapping($payload, 'setup', 'canonical_execution_policy_setup_schema_invalid');
@@ -477,5 +509,26 @@ final readonly class CanonicalExecutionPolicy
         }
 
         return $value;
+    }
+
+    /** @return list<string> */
+    private static function stringList(mixed $value, string $reasonCode): array
+    {
+        if (!\is_array($value) || !array_is_list($value)) {
+            throw new CanonicalOrderPlanException($reasonCode);
+        }
+        $result = [];
+        foreach ($value as $item) {
+            if (!\is_string($item) || preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.-]*\z/D', $item) !== 1) {
+                throw new CanonicalOrderPlanException($reasonCode);
+            }
+            $identifier = $item;
+            if (\in_array($identifier, $result, true)) {
+                throw new CanonicalOrderPlanException($reasonCode);
+            }
+            $result[] = $identifier;
+        }
+
+        return $result;
     }
 }

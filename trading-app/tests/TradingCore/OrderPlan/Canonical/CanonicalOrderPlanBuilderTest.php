@@ -82,6 +82,29 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:03:01+00:00')))->validate($plan);
     }
 
+    public function testBuildRejectsCostsStaleAtExecutionTime(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $clock = new MockClock('2026-08-10T12:01:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_cost_stale');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
+    public function testFinalValidatorRejectsPlanWhenRetainedCostsBecomeStale(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $buildClock = new MockClock('2026-08-10T12:00:00+00:00');
+        $plan = (new CanonicalOrderPlanBuilder($buildClock, new CanonicalOrderPlanValidator($buildClock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_cost_stale');
+        (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:01:00+00:00')))->validate($plan);
+    }
+
     public function testBuilderRejectsFabricatedEntryZoneBounds(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
@@ -245,14 +268,16 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
     {
         $previous = ini_get('serialize_precision');
         self::assertIsString($previous);
-        self::assertNotFalse(ini_set('serialize_precision', '14'));
+        self::assertNotFalse(ini_set('serialize_precision', '-1'));
         try {
             $components = CanonicalOrderPlanPipelineFixture::accepted();
             $clock = new MockClock('2026-08-10T12:00:00+00:00');
             $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
                 ->build(new CanonicalOrderPlanBuildRequest(...$components));
 
+            self::assertNotFalse(ini_set('serialize_precision', '14'));
             self::assertSame($components['risk']->totalStopLoss, $plan->totalStopLoss);
+            self::assertSame($plan, (new CanonicalOrderPlanValidator($clock))->validate($plan));
         } finally {
             ini_set('serialize_precision', $previous);
         }

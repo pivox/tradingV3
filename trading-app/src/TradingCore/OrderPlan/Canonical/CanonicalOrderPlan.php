@@ -69,7 +69,9 @@ final readonly class CanonicalOrderPlan
         public float $stopSlippageCost,
         public float $fundingCost,
         public int $fundingIntervals,
+        public int $maximumInputAgeSeconds,
         public \DateTimeImmutable $observedAt,
+        public \DateTimeImmutable $costObservedAt,
         public \DateTimeImmutable $zoneComputedAt,
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $expiresAt,
@@ -90,6 +92,12 @@ final readonly class CanonicalOrderPlan
         $now = $clock->now();
         if ($request->zone->computedAt > $now || $request->zone->expiresAt < $now) {
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
+        }
+        if (
+            $request->costs->observedAt > $now
+            || ($now->getTimestamp() - $request->costs->observedAt->getTimestamp()) > $request->policy->entryZone->maximumInputAgeSeconds
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
         }
 
         return $validator->validate(self::fromAcceptedComponents($request, $now));
@@ -205,7 +213,9 @@ final readonly class CanonicalOrderPlan
             'stopSlippageCost' => $risk->stopSlippageCost,
             'fundingCost' => $risk->fundingCost,
             'fundingIntervals' => $request->netR->fundingIntervals,
+            'maximumInputAgeSeconds' => $policy->entryZone->maximumInputAgeSeconds,
             'observedAt' => $zone->observedAt,
+            'costObservedAt' => $costs->observedAt,
             'zoneComputedAt' => $zone->computedAt,
             'createdAt' => $createdAt,
             'expiresAt' => $zone->expiresAt,
@@ -234,7 +244,7 @@ final readonly class CanonicalOrderPlan
             static fn (CanonicalOrderPlanTarget $target): array => $target->toArray(),
             $values['targets'],
         );
-        foreach (['observedAt', 'zoneComputedAt', 'createdAt', 'expiresAt'] as $field) {
+        foreach (['observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt'] as $field) {
             $timestamp = $values[$field];
             if (!$timestamp instanceof \DateTimeImmutable) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_timestamp_invalid');
@@ -242,6 +252,9 @@ final readonly class CanonicalOrderPlan
             $values[$field] = $timestamp->format('Y-m-d\TH:i:s.uP');
         }
 
-        return 'sha256:' . hash('sha256', json_encode($values, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES));
+        return 'sha256:' . hash('sha256', CanonicalOrderPlanDecimal::encodeCanonicalJson(
+            $values,
+            'canonical_order_plan_hash_encoding_invalid',
+        ));
     }
 }

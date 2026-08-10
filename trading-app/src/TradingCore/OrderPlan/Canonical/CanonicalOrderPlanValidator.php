@@ -30,6 +30,14 @@ final readonly class CanonicalOrderPlanValidator
         if ($plan->zoneComputedAt > $plan->createdAt || $plan->createdAt > $now || $plan->expiresAt < $now) {
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
+        if (
+            $plan->maximumInputAgeSeconds <= 0
+            || $plan->costObservedAt > $plan->createdAt
+            || $plan->costObservedAt > $now
+            || ($now->getTimestamp() - $plan->costObservedAt->getTimestamp()) > $plan->maximumInputAgeSeconds
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_cost_stale');
+        }
         foreach ([
             $plan->quantity,
             $plan->quantityStep,

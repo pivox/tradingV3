@@ -134,7 +134,16 @@ final class CanonicalExecutionPolicyFixture
             ],
             'setup' => $setup,
             'exchange' => ['id' => 'fake', 'fees' => ['maker_rate' => 0.0002, 'taker_rate' => 0.0005], 'limits' => ['min_notional' => 5.0, 'max_notional' => 1000.0]],
-            'environment' => ['id' => 'test', 'max_notional' => 250.0, 'write_enabled' => false, 'kill_switch_enabled' => true, 'require_stop_loss' => true],
+            'environment' => [
+                'id' => 'test',
+                'allowed_symbols' => ['BTCUSDT'],
+                'allowed_markets' => ['perpetual'],
+                'max_notional' => 250.0,
+                'dry_run' => true,
+                'write_enabled' => false,
+                'kill_switch_enabled' => true,
+                'require_stop_loss' => true,
+            ],
         ];
     }
 

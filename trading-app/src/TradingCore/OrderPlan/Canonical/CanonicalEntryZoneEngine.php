@@ -28,6 +28,12 @@ final readonly class CanonicalEntryZoneEngine
             throw new CanonicalOrderPlanException('canonical_entry_zone_market_identity_mismatch');
         }
         if (
+            ($policy->allowedSymbols !== [] && !\in_array($request->symbol, $policy->allowedSymbols, true))
+            || ($policy->allowedMarkets !== [] && !\in_array($request->market->marketType, $policy->allowedMarkets, true))
+        ) {
+            throw new CanonicalOrderPlanException('canonical_entry_zone_environment_scope_mismatch');
+        }
+        if (
             $request->anchor->exchange !== $risk->exchange
             || $request->atr->exchange !== $risk->exchange
             || $request->market->exchange !== $risk->exchange

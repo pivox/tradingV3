@@ -122,7 +122,7 @@ final class CanonicalEntryZoneEngineTest extends TestCase
             $request->symbol,
             $request->anchor,
             $request->atr,
-            new CanonicalMarketSnapshot('other', 'test', $request->symbol, 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
+            new CanonicalMarketSnapshot('other', 'test', $request->symbol, 'perpetual', 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
             $request->tick,
         ));
     }
@@ -138,9 +138,23 @@ final class CanonicalEntryZoneEngineTest extends TestCase
             $request->symbol,
             $request->anchor,
             $request->atr,
-            new CanonicalMarketSnapshot('fake', 'production', $request->symbol, 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
+            new CanonicalMarketSnapshot('fake', 'production', $request->symbol, 'perpetual', 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
             $request->tick,
         ));
+    }
+
+    public function testRejectsSymbolOutsideEnvironmentScope(): void
+    {
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_environment_scope_mismatch');
+        $this->engine()->calculate($this->request(symbol: 'ETHUSDT'));
+    }
+
+    public function testRejectsMarketOutsideEnvironmentScope(): void
+    {
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_environment_scope_mismatch');
+        $this->engine()->calculate($this->request(marketType: 'spot'));
     }
 
     private function engine(): CanonicalEntryZoneEngine
@@ -157,17 +171,19 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         string $observedAt = '2026-08-10T11:59:30+00:00',
         string $anchorSource = 'vwap',
         string $atrTimeframe = '5m',
+        string $symbol = 'BTCUSDT',
+        string $marketType = 'perpetual',
     ): CanonicalEntryZoneRequest {
         $policy = CanonicalExecutionPolicyFixture::policy($side);
         $observed = new \DateTimeImmutable($observedAt);
 
         return new CanonicalEntryZoneRequest(
             policy: $policy,
-            symbol: 'BTCUSDT',
-            anchor: new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
-            atr: new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
-            market: new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'order_book', $candidatePrice, new \DateTimeImmutable('2026-08-10T11:59:45+00:00'), 'sha256:' . str_repeat('3', 64)),
-            tick: new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
+            symbol: $symbol,
+            anchor: new CanonicalPriceObservation('fake', 'test', $symbol, $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
+            atr: new CanonicalPriceObservation('fake', 'test', $symbol, 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
+            market: new CanonicalMarketSnapshot('fake', 'test', $symbol, $marketType, 'order_book', $candidatePrice, new \DateTimeImmutable('2026-08-10T11:59:45+00:00'), 'sha256:' . str_repeat('3', 64)),
+            tick: new CanonicalTickSnapshot('fake', 'test', $symbol, $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
         );
     }
 }
