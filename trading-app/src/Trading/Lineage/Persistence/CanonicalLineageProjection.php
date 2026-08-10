@@ -95,7 +95,7 @@ trait CanonicalLineageProjection
         $payload = $context->toArray();
         if ($this->canonicalIdentity !== null) {
             $this->requireLineageContext();
-            if ($this->canonicalIdentity !== $payload) {
+            if (self::normalizeCanonicalIdentity($this->canonicalIdentity) !== self::normalizeCanonicalIdentity($payload)) {
                 throw new LineageContextException('canonical_identity_mismatch:' . $owner);
             }
         }
@@ -217,6 +217,22 @@ trait CanonicalLineageProjection
         }
 
         return false;
+    }
+
+    private static function normalizeCanonicalIdentity(mixed $value): mixed
+    {
+        if (!\is_array($value)) {
+            return $value;
+        }
+
+        foreach ($value as $key => $item) {
+            $value[$key] = self::normalizeCanonicalIdentity($item);
+        }
+        if (!array_is_list($value)) {
+            ksort($value);
+        }
+
+        return $value;
     }
 
     protected function hasAdditionalProjectedCanonicalField(): bool

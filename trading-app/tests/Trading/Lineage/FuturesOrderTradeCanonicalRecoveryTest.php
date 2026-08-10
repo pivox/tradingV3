@@ -38,6 +38,20 @@ final class FuturesOrderTradeCanonicalRecoveryTest extends TestCase
         self::assertSame($first, $fill->requireLineageContext()->toArray());
     }
 
+    public function testDuplicateFillRecoveryIgnoresJsonbObjectKeyOrder(): void
+    {
+        $order = $this->order();
+        $fill = $this->fill()->applyFuturesOrderLineage($order);
+        $identity = new \ReflectionProperty(FuturesOrderTrade::class, 'canonicalIdentity');
+        /** @var array<string,mixed> $persisted */
+        $persisted = $identity->getValue($fill);
+        $identity->setValue($fill, $this->reverseObjectKeys($persisted));
+
+        $fill->applyFuturesOrderLineage($order);
+
+        self::assertSame($order->requireLineageContext()->toArray(), $fill->requireLineageContext()->toArray());
+    }
+
     /** @dataProvider boundaryMutations */
     public function testRejectsFillBoundaryConflict(string $setter, mixed $value, string $error): void
     {
@@ -127,5 +141,22 @@ final class FuturesOrderTradeCanonicalRecoveryTest extends TestCase
             ->setPrice('100')
             ->setSize(1)
             ->setTradeTime(1);
+    }
+
+    /**
+     * Mimics JSONB object-key reordering while preserving list order and scalar types.
+     *
+     * @param array<mixed> $value
+     * @return array<mixed>
+     */
+    private function reverseObjectKeys(array $value): array
+    {
+        foreach ($value as $key => $item) {
+            if (\is_array($item)) {
+                $value[$key] = $this->reverseObjectKeys($item);
+            }
+        }
+
+        return array_is_list($value) ? $value : array_reverse($value, true);
     }
 }
