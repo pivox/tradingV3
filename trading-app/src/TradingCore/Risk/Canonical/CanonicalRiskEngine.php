@@ -10,6 +10,11 @@ final class CanonicalRiskEngine
 
     public function calculate(CanonicalRiskCalculationRequest $request): CanonicalRiskDecision
     {
+        foreach ([$request->policy->exchangeMaxNotional, $request->policy->environmentMaxNotional] as $notionalCap) {
+            if (!\is_finite($notionalCap) || $notionalCap <= 0.0) {
+                throw new CanonicalRiskException('canonical_policy_notional_cap_invalid');
+            }
+        }
         if ($request->availableBalanceQuote <= 0.0) {
             throw new CanonicalRiskException('canonical_risk_available_balance_exhausted');
         }
