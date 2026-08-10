@@ -6,7 +6,7 @@ namespace App\TradingCore\Risk\Canonical;
 
 final class CanonicalRiskEngine
 {
-    private const MAX_EXACT_FLOAT_INTEGER = 9_007_199_254_740_992.0;
+    private const MAX_EXACT_FLOAT_INTEGER_DECIMAL = '9007199254740992';
 
     public function calculate(CanonicalRiskCalculationRequest $request): CanonicalRiskDecision
     {
@@ -199,42 +199,62 @@ final class CanonicalRiskEngine
 
         $decimalPlaces = $this->decimalPlaces($step);
         $scale = 10 ** $decimalPlaces;
-        $scaledQuantity = $quantity * $scale;
-        $scaledStep = $step * $scale;
-        if (
-            !\is_finite($scaledQuantity)
-            || $scaledQuantity > self::MAX_EXACT_FLOAT_INTEGER
-            || !\is_finite($scaledStep)
-            || $scaledStep < 1.0
-            || $scaledStep > self::MAX_EXACT_FLOAT_INTEGER
-        ) {
+        $quantityUnits = $this->scaledFloorUnits($quantity, $decimalPlaces);
+        $stepUnits = $this->scaledFloorUnits($step, $decimalPlaces);
+        if ($stepUnits < 1) {
             throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
-
-        $nearestInteger = round($scaledQuantity);
-        $ulpTolerance = min(0.5, $this->ulpAt($scaledQuantity));
-        if (
-            $scaledQuantity < $nearestInteger
-            && $nearestInteger - $scaledQuantity <= $ulpTolerance
-        ) {
-            $scaledQuantity = $nearestInteger;
-        }
-        $quantityUnits = (int) floor($scaledQuantity);
-        $stepUnits = (int) round($scaledStep);
         $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
 
         return round($quantizedUnits / $scale, $decimalPlaces);
     }
 
-    private function ulpAt(float $value): float
+    private function scaledFloorUnits(float $value, int $decimalPlaces): int
     {
-        if ($value === 0.0) {
-            return PHP_FLOAT_MIN;
+        $decimal = json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+        if (
+            !\is_string($decimal)
+            || preg_match('/\A(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?\z/D', $decimal, $matches) !== 1
+        ) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
 
-        $binaryExponent = (int) floor(log(abs($value), 2.0));
+        $fraction = $matches[2] ?? '';
+        $exponent = isset($matches[3]) ? (int) $matches[3] : 0;
+        $digits = ltrim($matches[1] . $fraction, '0');
+        if ($digits === '') {
+            return 0;
+        }
 
-        return 2.0 ** ($binaryExponent - 52);
+        $power = $exponent - strlen($fraction) + $decimalPlaces;
+        if ($power >= 0) {
+            if (strlen($digits) + $power > strlen(self::MAX_EXACT_FLOAT_INTEGER_DECIMAL)) {
+                throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+            }
+            $scaled = $digits . str_repeat('0', $power);
+        } else {
+            $keptLength = strlen($digits) + $power;
+            if ($keptLength <= 0) {
+                return 0;
+            }
+            $scaled = substr($digits, 0, $keptLength);
+        }
+
+        $scaled = ltrim($scaled, '0');
+        if ($scaled === '') {
+            return 0;
+        }
+        if (
+            strlen($scaled) > strlen(self::MAX_EXACT_FLOAT_INTEGER_DECIMAL)
+            || (
+                strlen($scaled) === strlen(self::MAX_EXACT_FLOAT_INTEGER_DECIMAL)
+                && strcmp($scaled, self::MAX_EXACT_FLOAT_INTEGER_DECIMAL) > 0
+            )
+        ) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        return (int) $scaled;
     }
 
     private function decimalPlaces(float $step): int

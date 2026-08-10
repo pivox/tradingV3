@@ -196,7 +196,7 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
-    public function testUlpCorrectionNeverAddsAScaledGridUnit(): void
+    public function testExactDecimalGridNeverAddsAScaledGridUnit(): void
     {
         $decision = (new CanonicalRiskEngine())->calculate($this->request([
             'policy' => $this->policy(
@@ -217,7 +217,7 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertSame(2_000.0, $decision->quantity);
     }
 
-    public function testUlpCorrectionDoesNotPromoteGenuinelyFractionalScaledQuantity(): void
+    public function testExactDecimalGridDoesNotPromoteGenuinelyFractionalScaledQuantity(): void
     {
         $decision = (new CanonicalRiskEngine())->calculate($this->request([
             'policy' => $this->policy(
@@ -236,6 +236,29 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
 
         self::assertSame(1_000.0, $decision->quantity);
+    }
+
+    public function testQuantizationDoesNotPromoteExactHalfScaledUnit(): void
+    {
+        $fractionalCap = ((2.0 ** 51) + 0.5) / 1.0e12;
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 300_000.0,
+                environmentMaxNotional: 300_000.0,
+            ),
+            'equityQuote' => 1_000_000_000.0,
+            'availableBalanceQuote' => 1_000_000_000.0,
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'maxQuantity' => $fractionalCap,
+            'marketMaxQuantity' => $fractionalCap,
+        ]));
+
+        self::assertSame((2.0 ** 51) / 1.0e12, $decision->quantity);
+        self::assertLessThanOrEqual($fractionalCap, $decision->quantity);
     }
 
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
