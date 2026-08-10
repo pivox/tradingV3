@@ -33,7 +33,7 @@ final class CanonicalPortfolioAdapterParityTest extends TestCase
         $fillStateHashes = [];
         foreach ($this->adapters() as $adapter) {
             $decision = $adapter->admit($request);
-            $reservation = $adapter->reserve($decision, $request->plan);
+            $reservation = $adapter->reserve($request);
             $fill = new CanonicalPortfolioFill(
                 $reservation->scope,
                 $reservation->decisionKey,
@@ -79,7 +79,8 @@ final class CanonicalPortfolioAdapterParityTest extends TestCase
         $cancelHashes = [];
         $closeHashes = [];
         foreach ($this->adapters() as $adapter) {
-            $reservation = $adapter->reserve($adapter->admit($request), $request->plan);
+            $adapter->admit($request);
+            $reservation = $adapter->reserve($request);
             $cancelled = $adapter->cancelResidual(
                 $reservation,
                 new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),

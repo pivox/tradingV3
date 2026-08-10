@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Risk\Canonical\Portfolio\Adapter;
 
-use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioFill;
@@ -26,19 +25,16 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
     }
 
     final public function reserve(
-        CanonicalPortfolioReservationDecision $decision,
-        CanonicalOrderPlan $plan,
+        CanonicalPortfolioAdmissionRequest $request,
     ): CanonicalPortfolioReservation {
-        return $this->reservationStore->reserve($decision, $plan);
+        return $this->reservationStore->reserve($request, $this->admissionEngine);
     }
 
     final public function applyFill(
         CanonicalPortfolioReservation $reservation,
         CanonicalPortfolioFill $fill,
     ): CanonicalPortfolioReservation {
-        $next = $reservation->applyFill($fill);
-
-        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+        return $this->reservationStore->applyFill($reservation, $fill);
     }
 
     final public function cancelResidual(
@@ -46,9 +42,7 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
         \DateTimeImmutable $observedAt,
         string $inputHash,
     ): CanonicalPortfolioReservation {
-        $next = $reservation->cancelResidual($observedAt, $inputHash);
-
-        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+        return $this->reservationStore->cancelResidual($reservation, $observedAt, $inputHash);
     }
 
     final public function acknowledgeResidualReduction(
@@ -57,9 +51,12 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
         \DateTimeImmutable $observedAt,
         string $inputHash,
     ): CanonicalPortfolioReservation {
-        $next = $reservation->acknowledgeResidualReduction($venueRemainingQuantity, $observedAt, $inputHash);
-
-        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+        return $this->reservationStore->acknowledgeResidualReduction(
+            $reservation,
+            $venueRemainingQuantity,
+            $observedAt,
+            $inputHash,
+        );
     }
 
     final public function close(
@@ -67,8 +64,6 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
         \DateTimeImmutable $observedAt,
         string $inputHash,
     ): CanonicalPortfolioReservation {
-        $next = $reservation->close($observedAt, $inputHash);
-
-        return $next === $reservation ? $reservation : $this->reservationStore->save($reservation, $next);
+        return $this->reservationStore->close($reservation, $observedAt, $inputHash);
     }
 }

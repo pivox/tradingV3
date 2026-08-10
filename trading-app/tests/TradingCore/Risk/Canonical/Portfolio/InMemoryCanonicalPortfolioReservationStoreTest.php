@@ -19,83 +19,136 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
 {
     public function testReserveIsAtomicAndSameDecisionIsIdempotent(): void
     {
-        [$decision, $plan] = $this->admission('decision-1', 1);
+        [$request, $engine] = $this->admission('decision-1', 1);
         $store = new InMemoryCanonicalPortfolioReservationStore();
 
-        $first = $store->reserve($decision, $plan);
-        $second = $store->reserve($decision, $plan);
+        $first = $store->reserve($request, $engine);
+        $second = $store->reserve($request, $engine);
 
         self::assertSame($first, $second);
-        self::assertSame($plan, $store->plan($decision->scope, $decision->decisionKey));
-        self::assertSame(2, $store->scopeVersion($decision->scope));
+        self::assertSame($request->plan, $store->plan($request->scope, $request->decisionKey));
+        self::assertSame(2, $store->scopeVersion($request->scope));
     }
 
     public function testEquivalentReconstructedPlanIsAnIdempotentRetry(): void
     {
-        [$decision, $plan] = $this->admission('decision-1', 1);
-        $copy = unserialize(serialize($plan));
-        self::assertNotSame($plan, $copy);
+        [$request, $engine] = $this->admission('decision-1', 1);
+        $copy = unserialize(serialize($request->plan));
+        self::assertNotSame($request->plan, $copy);
+        $retry = new CanonicalPortfolioAdmissionRequest(
+            $request->policy,
+            $copy,
+            $request->scope,
+            $request->snapshot,
+            $request->decisionKey,
+        );
         $store = new InMemoryCanonicalPortfolioReservationStore();
 
-        $first = $store->reserve($decision, $plan);
+        $first = $store->reserve($request, $engine);
 
-        self::assertSame($first, $store->reserve($decision, $copy));
+        self::assertSame($first, $store->reserve($retry, $engine));
     }
 
     public function testStaleAdmissionCannotRaceACommittedReservation(): void
     {
-        [$first, $firstPlan] = $this->admission('decision-1', 1);
-        [$stale, $stalePlan] = $this->admission('decision-2', 1);
+        [$first, $firstEngine] = $this->admission('decision-1', 1);
+        [$stale, $staleEngine] = $this->admission('decision-2', 1);
         $store = new InMemoryCanonicalPortfolioReservationStore();
-        $store->reserve($first, $firstPlan);
+        $store->reserve($first, $firstEngine);
 
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
-        $store->reserve($stale, $stalePlan);
+        $store->reserve($stale, $staleEngine);
     }
 
     public function testTransitionSaveUsesReservationCompareAndSwap(): void
     {
-        [$decision, $plan] = $this->admission('decision-1', 1);
+        [$request, $engine] = $this->admission('decision-1', 1);
         $store = new InMemoryCanonicalPortfolioReservationStore();
-        $current = $store->reserve($decision, $plan);
-        $next = $current->cancelResidual(
+        $current = $store->reserve($request, $engine);
+        $next = $store->cancelResidual(
+            $current,
             new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
             'sha256:' . str_repeat('a', 64),
         );
 
-        self::assertSame($next, $store->save($current, $next));
-        self::assertSame(3, $store->scopeVersion($decision->scope));
+        self::assertSame(3, $store->scopeVersion($request->scope));
 
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
-        $store->save($current, $next);
-    }
-
-    public function testTransitionCannotReplaceCommittedHistoryWithAnotherBranch(): void
-    {
-        [$decision, $plan] = $this->admission('decision-1', 1);
-        $store = new InMemoryCanonicalPortfolioReservationStore();
-        $current = $store->reserve($decision, $plan);
-        $committed = $current->cancelResidual(
-            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
-            'sha256:' . str_repeat('a', 64),
-        );
-        $foreignBranch = $current->cancelResidual(
-            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
-            'sha256:' . str_repeat('b', 64),
-        )->close(
+        $store->cancelResidual(
+            $current,
             new \DateTimeImmutable('2026-08-10T12:00:02+00:00'),
-            'sha256:' . str_repeat('c', 64),
+            'sha256:' . str_repeat('b', 64),
         );
-        $store->save($current, $committed);
+    }
+
+    public function testStoreDoesNotExposeArbitraryNextStatePersistence(): void
+    {
+        $methods = array_map(
+            static fn (\ReflectionMethod $method): string => $method->getName(),
+            (new \ReflectionClass(InMemoryCanonicalPortfolioReservationStore::class))->getMethods(\ReflectionMethod::IS_PUBLIC),
+        );
+
+        self::assertNotContains('save', $methods);
+    }
+
+    public function testReserveRevalidatesFreshnessAtCommitTime(): void
+    {
+        [$request, $engine, $clock] = $this->admission('decision-1', 1);
+        $engine->admit($request);
+        $clock->sleep(600);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_plan_invalid');
+        (new InMemoryCanonicalPortfolioReservationStore())->reserve($request, $engine);
+    }
+
+    public function testReserveRejectsHydratedPlanWhoseContentNoLongerMatchesItsHash(): void
+    {
+        [$request, $engine] = $this->admission('decision-1', 1);
+        $serialized = serialize($request->plan);
+        $tamperedPayload = str_replace('d:' . $request->plan->quantity . ';', 'd:1.497;', $serialized, $replacements);
+        self::assertGreaterThan(0, $replacements);
+        $tamperedPlan = unserialize($tamperedPayload);
+        $tamperedRequest = new CanonicalPortfolioAdmissionRequest(
+            $request->policy,
+            $tamperedPlan,
+            $request->scope,
+            $request->snapshot,
+            $request->decisionKey,
+        );
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_plan_invalid');
+        (new InMemoryCanonicalPortfolioReservationStore())->reserve($tamperedRequest, $engine);
+    }
+
+    public function testTransitionRejectsHydratedExpectedStateWhoseHashWasNotRecomputed(): void
+    {
+        [$request, $engine] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $current = $store->reserve($request, $engine);
+        $serialized = serialize($current);
+        $tamperedPayload = str_replace(
+            'd:' . $current->reservedRiskQuote . ';',
+            'd:0;',
+            $serialized,
+            $replacements,
+        );
+        self::assertGreaterThan(0, $replacements);
+        $tampered = unserialize($tamperedPayload);
 
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
-        $store->save($committed, $foreignBranch);
+        $store->cancelResidual(
+            $tampered,
+            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+            'sha256:' . str_repeat('a', 64),
+        );
     }
 
-    /** @return array{\App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservationDecision, \App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan} */
+    /** @return array{CanonicalPortfolioAdmissionRequest, CanonicalPortfolioAdmissionEngine, MockClock} */
     private function admission(string $decisionKey, int $stateVersion): array
     {
         $policy = CanonicalPortfolioFixture::policy();
@@ -120,9 +173,10 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
             $stateVersion,
             'sha256:' . str_repeat('8', 64),
         );
-        $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))
-            ->admit(new CanonicalPortfolioAdmissionRequest($policy, $plan, $scope, $snapshot, $decisionKey));
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $engine = new CanonicalPortfolioAdmissionEngine($clock);
+        $request = new CanonicalPortfolioAdmissionRequest($policy, $plan, $scope, $snapshot, $decisionKey);
 
-        return [$decision, $plan];
+        return [$request, $engine, $clock];
     }
 }

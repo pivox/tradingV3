@@ -435,7 +435,22 @@ final readonly class CanonicalPortfolioReservation
     private static function create(array $values): self
     {
         unset($values['stateHash']);
-        $hashValues = $values;
+        $values['stateHash'] = self::hashValues($values);
+
+        return new self(...$values);
+    }
+
+    public function expectedStateHash(): string
+    {
+        $values = $this->values();
+        unset($values['stateHash']);
+
+        return self::hashValues($values);
+    }
+
+    /** @param array<string, mixed> $hashValues */
+    private static function hashValues(array $hashValues): string
+    {
         $scope = $hashValues['scope'] ?? null;
         $observedAt = $hashValues['observedAt'] ?? null;
         if (!$scope instanceof CanonicalPortfolioScope || !$observedAt instanceof \DateTimeImmutable) {
@@ -443,12 +458,10 @@ final readonly class CanonicalPortfolioReservation
         }
         $hashValues['scope'] = $scope->toArray();
         $hashValues['observedAt'] = $observedAt->format('Y-m-d\TH:i:s.uP');
-        $values['stateHash'] = 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode(
+        return 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode(
             $hashValues,
             'canonical_portfolio_reservation_hash_invalid',
         ));
-
-        return new self(...$values);
     }
 
     /** @return array<string, mixed> */

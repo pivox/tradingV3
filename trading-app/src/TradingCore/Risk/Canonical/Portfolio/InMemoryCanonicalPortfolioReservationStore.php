@@ -18,9 +18,11 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
     private array $scopeVersions = [];
 
     public function reserve(
-        CanonicalPortfolioReservationDecision $decision,
-        CanonicalOrderPlan $plan,
+        CanonicalPortfolioAdmissionRequest $request,
+        CanonicalPortfolioAdmissionEngine $engine,
     ): CanonicalPortfolioReservation {
+        $decision = $engine->admit($request);
+        $plan = $request->plan;
         $scopeKey = $this->scopeKey($decision->scope);
         $reservationKey = $scopeKey . '|' . $decision->decisionKey;
         $existing = $this->reservations[$reservationKey] ?? null;
@@ -48,21 +50,62 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
         return $reservation;
     }
 
-    public function save(
+    public function applyFill(
         CanonicalPortfolioReservation $expected,
-        CanonicalPortfolioReservation $next,
+        CanonicalPortfolioFill $fill,
     ): CanonicalPortfolioReservation {
+        return $this->transition($expected, static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->applyFill($fill));
+    }
+
+    public function cancelResidual(
+        CanonicalPortfolioReservation $expected,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        return $this->transition($expected, static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->cancelResidual($observedAt, $inputHash));
+    }
+
+    public function acknowledgeResidualReduction(
+        CanonicalPortfolioReservation $expected,
+        float $venueRemainingQuantity,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        return $this->transition($expected, static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->acknowledgeResidualReduction($venueRemainingQuantity, $observedAt, $inputHash));
+    }
+
+    public function close(
+        CanonicalPortfolioReservation $expected,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        return $this->transition($expected, static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->close($observedAt, $inputHash));
+    }
+
+    /** @param \Closure(CanonicalPortfolioReservation): CanonicalPortfolioReservation $transition */
+    private function transition(CanonicalPortfolioReservation $expected, \Closure $transition): CanonicalPortfolioReservation
+    {
         $scopeKey = $this->scopeKey($expected->scope);
         $reservationKey = $scopeKey . '|' . $expected->decisionKey;
         $stored = $this->reservations[$reservationKey] ?? null;
         if (
             !$stored instanceof CanonicalPortfolioReservation
+            || !hash_equals($expected->expectedStateHash(), $expected->stateHash)
             || !hash_equals($stored->stateHash, $expected->stateHash)
-            || $next->scope != $expected->scope
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_conflict');
+        }
+        $next = $transition($stored);
+        if ($next === $stored) {
+            return $stored;
+        }
+        if (
+            $next->scope != $expected->scope
             || $next->decisionKey !== $expected->decisionKey
             || $next->admissionHash !== $expected->admissionHash
             || $next->version !== $expected->version + 1
             || $next->previousStateHash !== $expected->stateHash
+            || !hash_equals($next->expectedStateHash(), $next->stateHash)
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_conflict');
         }

@@ -351,7 +351,9 @@ equity et sa devise doivent correspondre exactement au snapshot frais.
 
 Une admission acceptee produit une reservation liee au `decisionKey`, au
 `configHash`, au `planHash`, au hash portefeuille et a sa version compare-and-
-swap. Le store de reference persiste plan et reservation dans la meme operation.
+swap. Le store de reference recoit la request complete, revalide plan, inputs et
+fraicheur au moment exact du commit, puis persiste plan et reservation dans la
+meme operation.
 Chaque fill est lie au meme scope et recalcule en decimal exact risque rempli,
 risque residuel, notionals, frais et quantite protegee. Un reliquat hors budget
 est reduit ou annule ; une quantite remplie non protegee ou deja hors budget
@@ -370,6 +372,12 @@ rejoue l'evaluateur canonique avec la request complete ; un appelant ne peut don
 pas fabriquer une reservation en recopiant seulement le plan et une state version.
 Sa serialisation et son hydration PHP sont interdites explicitement pour que
 `unserialize()` ne puisse pas contourner cette frontiere readonly.
+
+Le store n'accepte jamais un etat `next` fourni par l'appelant : il applique
+lui-meme fill, cancel, reduction ou close a l'etat CAS effectivement persiste.
+Il recompose aussi le hash de l'etat attendu et du nouvel etat avant commit.
+Une hydration PHP modifiant un plan ou une reservation sans mettre a jour sa
+lineage deterministe est donc rejetee fail-closed.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme

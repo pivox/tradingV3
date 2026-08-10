@@ -9,13 +9,32 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 interface CanonicalPortfolioReservationStoreInterface
 {
     public function reserve(
-        CanonicalPortfolioReservationDecision $decision,
-        CanonicalOrderPlan $plan,
+        CanonicalPortfolioAdmissionRequest $request,
+        CanonicalPortfolioAdmissionEngine $engine,
     ): CanonicalPortfolioReservation;
 
-    public function save(
+    public function applyFill(
         CanonicalPortfolioReservation $expected,
-        CanonicalPortfolioReservation $next,
+        CanonicalPortfolioFill $fill,
+    ): CanonicalPortfolioReservation;
+
+    public function cancelResidual(
+        CanonicalPortfolioReservation $expected,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
+
+    public function acknowledgeResidualReduction(
+        CanonicalPortfolioReservation $expected,
+        float $venueRemainingQuantity,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
+
+    public function close(
+        CanonicalPortfolioReservation $expected,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
     ): CanonicalPortfolioReservation;
 
     public function scopeVersion(CanonicalPortfolioScope $scope): int;
