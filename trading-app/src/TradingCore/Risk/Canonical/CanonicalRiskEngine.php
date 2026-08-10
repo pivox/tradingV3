@@ -33,40 +33,20 @@ final class CanonicalRiskEngine
         }
 
         $effectiveLeverageCap = $this->effectiveLeverageCap($request);
-        $riskBudgetQuote = $request->equityQuote * $request->policy->riskRate;
+        $riskBudgetDecimal = $this->decimal($request->equityQuote)->multipliedBy($this->decimal($request->policy->riskRate));
+        $riskBudgetQuote = $riskBudgetDecimal->toFloat();
         if (!\is_finite($riskBudgetQuote) || $riskBudgetQuote <= 0.0) {
             throw new CanonicalRiskException('canonical_risk_budget_invalid');
         }
 
-        $costs = $request->costs;
-        $entryLiquidityRole = $costs->entryLiquidityRole ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $stopLiquidityRole = $costs->stopLiquidityRole ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $entrySpreadRate = $costs->entrySpreadRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $stopSpreadRate = $costs->stopSpreadRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $entrySlippageRate = $costs->entrySlippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $stopSlippageRate = $costs->stopSlippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $fundingRate = $costs->fundingRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $fundingIntervals = $costs->fundingIntervals ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
-        $entryFeeRate = $this->feeRateFor($entryLiquidityRole, $request->policy);
-        $stopExitFeeRate = $this->feeRateFor($stopLiquidityRole, $request->policy);
-
-        $entryNotionalPerQuantity = $request->entryPrice * $request->contractSize;
-        $stopNotionalPerQuantity = $request->stopPrice * $request->contractSize;
-        $grossPerQuantity = abs($request->entryPrice - $request->stopPrice) * $request->contractSize;
-        $costPerQuantity = $entryNotionalPerQuantity * (
-            $entryFeeRate
-            + $entrySpreadRate
-            + $entrySlippageRate
-            + $this->adverseFundingRate($request->side, $fundingRate) * $fundingIntervals
-        ) + $stopNotionalPerQuantity * ($stopExitFeeRate + $stopSpreadRate + $stopSlippageRate);
-        $lossPerQuantity = $grossPerQuantity + $costPerQuantity;
-        if (!\is_finite($lossPerQuantity) || $lossPerQuantity <= 0.0) {
+        $lossPerQuantityDecimal = $this->decimalComponents($request, 1.0)['total'];
+        if ($lossPerQuantityDecimal->isLessThanOrEqualTo(0)) {
             throw new CanonicalRiskException('canonical_risk_stop_path_invalid');
         }
 
-        $rawQuantity = $riskBudgetQuote / $lossPerQuantity;
+        $rawQuantity = $riskBudgetDecimal->dividedBy($lossPerQuantityDecimal, 18, RoundingMode::DOWN)->toFloat();
         $quantityCaps = [
-            $this->quantizeRatioDown([$riskBudgetQuote], [$lossPerQuantity], $request->quantityStep),
+            $this->quantizeDecimalRatioDown($riskBudgetDecimal, $lossPerQuantityDecimal, $request->quantityStep),
             $this->quantizeDown($request->maxQuantity, $request->quantityStep),
             $this->quantizeRatioDown(
                 [$request->policy->exchangeMaxNotional],
@@ -101,29 +81,35 @@ final class CanonicalRiskEngine
             ]);
         }
 
-        $components = $this->components($request, $quantity);
-        if ($components['total'] > $riskBudgetQuote) {
+        $decimalComponents = $this->decimalComponents($request, $quantity);
+        if ($decimalComponents['total']->isGreaterThan($riskBudgetDecimal)) {
             $quantity = $this->subtractOneStep($quantity, $request->quantityStep);
             if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
                 throw new CanonicalRiskException('canonical_risk_quantity_below_minimum');
             }
-            $components = $this->components($request, $quantity);
+            $decimalComponents = $this->decimalComponents($request, $quantity);
         }
-        if ($components['total'] > $riskBudgetQuote) {
+        $components = $this->floatComponents($decimalComponents);
+        if ($decimalComponents['total']->isGreaterThan($riskBudgetDecimal)) {
             throw new CanonicalRiskException('canonical_risk_post_quantization_breach', [
                 'risk_budget_quote' => $riskBudgetQuote,
                 'total_stop_loss' => $components['total'],
             ]);
         }
 
-        $positionNotional = $request->entryPrice * $request->contractSize * $quantity;
-        if ($positionNotional < $request->policy->exchangeMinNotional) {
+        $positionNotionalDecimal = $this->decimalProduct([$request->entryPrice, $request->contractSize, $quantity]);
+        $positionNotional = $positionNotionalDecimal->toFloat();
+        if ($positionNotionalDecimal->isLessThan($this->decimal($request->policy->exchangeMinNotional))) {
             throw new CanonicalRiskException('canonical_risk_notional_below_minimum', [
                 'position_notional' => $positionNotional,
                 'exchange_min_notional' => $request->policy->exchangeMinNotional,
             ]);
         }
-        $finalLeverage = max(1, (int) ceil($positionNotional / $request->availableBalanceQuote));
+        $finalLeverage = max(1, $positionNotionalDecimal->dividedBy(
+            $this->decimal($request->availableBalanceQuote),
+            0,
+            RoundingMode::CEILING,
+        )->toInt());
         if ($finalLeverage > $effectiveLeverageCap) {
             throw new CanonicalRiskException('canonical_leverage_post_quantization_breach', [
                 'final_leverage' => $finalLeverage,
@@ -175,22 +161,27 @@ final class CanonicalRiskEngine
         return $effectiveCap;
     }
 
-    /** @return array{gross:float,entry_fee:float,stop_exit_fee:float,entry_spread:float,stop_spread:float,entry_slippage:float,stop_slippage:float,funding:float,total:float} */
-    private function components(CanonicalRiskCalculationRequest $request, float $quantity): array
+    /** @return array{gross:BigDecimal,entry_fee:BigDecimal,stop_exit_fee:BigDecimal,entry_spread:BigDecimal,stop_spread:BigDecimal,entry_slippage:BigDecimal,stop_slippage:BigDecimal,funding:BigDecimal,total:BigDecimal} */
+    private function decimalComponents(CanonicalRiskCalculationRequest $request, float $quantity): array
     {
         $costs = $request->costs;
-        $entryNotional = $request->entryPrice * $request->contractSize * $quantity;
-        $stopNotional = $request->stopPrice * $request->contractSize * $quantity;
-        $gross = abs($request->entryPrice - $request->stopPrice) * $request->contractSize * $quantity;
-        $entryFee = $entryNotional * $this->feeRateFor((string) $costs->entryLiquidityRole, $request->policy);
-        $stopExitFee = $stopNotional * $this->feeRateFor((string) $costs->stopLiquidityRole, $request->policy);
-        $entrySpread = $entryNotional * (float) $costs->entrySpreadRate;
-        $stopSpread = $stopNotional * (float) $costs->stopSpreadRate;
-        $entrySlippage = $entryNotional * (float) $costs->entrySlippageRate;
-        $stopSlippage = $stopNotional * (float) $costs->stopSlippageRate;
+        $entryNotional = $this->decimalProduct([$request->entryPrice, $request->contractSize, $quantity]);
+        $stopNotional = $this->decimalProduct([$request->stopPrice, $request->contractSize, $quantity]);
+        $gross = $this->decimal($request->entryPrice)
+            ->minus($this->decimal($request->stopPrice))
+            ->abs()
+            ->multipliedBy($this->decimalProduct([$request->contractSize, $quantity]));
+        $entryFee = $entryNotional->multipliedBy($this->decimal($this->feeRateFor((string) $costs->entryLiquidityRole, $request->policy)));
+        $stopExitFee = $stopNotional->multipliedBy($this->decimal($this->feeRateFor((string) $costs->stopLiquidityRole, $request->policy)));
+        $entrySpread = $entryNotional->multipliedBy($this->decimal((float) $costs->entrySpreadRate));
+        $stopSpread = $stopNotional->multipliedBy($this->decimal((float) $costs->stopSpreadRate));
+        $entrySlippage = $entryNotional->multipliedBy($this->decimal((float) $costs->entrySlippageRate));
+        $stopSlippage = $stopNotional->multipliedBy($this->decimal((float) $costs->stopSlippageRate));
         $funding = $entryNotional
-            * $this->adverseFundingRate($request->side, (float) $costs->fundingRate)
-            * (int) $costs->fundingIntervals;
+            ->multipliedBy($this->decimal($this->adverseFundingRate($request->side, (float) $costs->fundingRate)))
+            ->multipliedBy((string) (int) $costs->fundingIntervals);
+        $total = $gross->plus($entryFee)->plus($stopExitFee)
+            ->plus($entrySpread)->plus($stopSpread)->plus($entrySlippage)->plus($stopSlippage)->plus($funding);
 
         return [
             'gross' => $gross,
@@ -201,9 +192,17 @@ final class CanonicalRiskEngine
             'entry_slippage' => $entrySlippage,
             'stop_slippage' => $stopSlippage,
             'funding' => $funding,
-            'total' => $gross + $entryFee + $stopExitFee
-                + $entrySpread + $stopSpread + $entrySlippage + $stopSlippage + $funding,
+            'total' => $total,
         ];
+    }
+
+    /**
+     * @param array{gross:BigDecimal,entry_fee:BigDecimal,stop_exit_fee:BigDecimal,entry_spread:BigDecimal,stop_spread:BigDecimal,entry_slippage:BigDecimal,stop_slippage:BigDecimal,funding:BigDecimal,total:BigDecimal} $components
+     * @return array{gross:float,entry_fee:float,stop_exit_fee:float,entry_spread:float,stop_spread:float,entry_slippage:float,stop_slippage:float,funding:float,total:float}
+     */
+    private function floatComponents(array $components): array
+    {
+        return array_map(static fn (BigDecimal $component): float => $component->toFloat(), $components);
     }
 
     private function quantizeDown(float $quantity, float $step): float
@@ -245,6 +244,11 @@ final class CanonicalRiskEngine
             $denominator = $denominator->multipliedBy(BigDecimal::of($this->canonicalDecimal($factor)));
         }
 
+        return $this->quantizeDecimalRatioDown($numerator, $denominator, $step);
+    }
+
+    private function quantizeDecimalRatioDown(BigDecimal $numerator, BigDecimal $denominator, float $step): float
+    {
         $stepDecimal = BigDecimal::of($this->canonicalDecimal($step));
         $steps = $numerator->dividedBy(
             $denominator->multipliedBy($stepDecimal),
@@ -257,6 +261,22 @@ final class CanonicalRiskEngine
         }
 
         return $quantity;
+    }
+
+    /** @param non-empty-list<float> $factors */
+    private function decimalProduct(array $factors): BigDecimal
+    {
+        $product = BigDecimal::of('1');
+        foreach ($factors as $factor) {
+            $product = $product->multipliedBy($this->decimal($factor));
+        }
+
+        return $product;
+    }
+
+    private function decimal(float $value): BigDecimal
+    {
+        return BigDecimal::of($this->canonicalDecimal($value));
     }
 
     private function scaledFloorUnits(float $value, int $decimalPlaces): int

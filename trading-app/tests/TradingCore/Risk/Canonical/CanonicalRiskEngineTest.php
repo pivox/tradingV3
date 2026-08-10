@@ -341,6 +341,83 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertEqualsWithDelta(100.02, $decision->positionNotional, 1.0e-12);
     }
 
+    public function testRiskCapUsesOriginalDecimalBudgetAndLossFactors(): void
+    {
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 0.01,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'equityQuote' => 0.03,
+            'availableBalanceQuote' => 1.0,
+            'entryPrice' => 0.01,
+            'stopPrice' => 0.007,
+            'contractSize' => 0.1,
+            'quantityStep' => 0.1,
+            'minQuantity' => 1.0,
+            'maxQuantity' => 1.0,
+            'marketMaxQuantity' => 1.0,
+        ]));
+
+        self::assertSame(1.0, $decision->quantity);
+        self::assertSame(0.0003, $decision->riskBudgetQuote);
+        self::assertSame(0.0003, $decision->totalStopLoss);
+    }
+
+    public function testFinalLeverageUsesExactDecimalDivision(): void
+    {
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                modeLeverageCap: 5.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'equityQuote' => 1.0,
+            'availableBalanceQuote' => 0.0006,
+            'entryPrice' => 0.01,
+            'stopPrice' => 0.009,
+            'quantityStep' => 0.1,
+            'minQuantity' => 0.3,
+            'maxQuantity' => 0.3,
+            'marketMaxQuantity' => 0.3,
+            'exchangeLeverageCap' => 5.0,
+            'symbolLeverageCap' => 5.0,
+        ]));
+
+        self::assertSame(0.3, $decision->quantity);
+        self::assertSame(5, $decision->finalLeverage);
+    }
+
+    public function testMinimumNotionalUsesExactDecimalProduct(): void
+    {
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.07,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'equityQuote' => 1.0,
+            'availableBalanceQuote' => 1.0,
+            'entryPrice' => 0.7,
+            'stopPrice' => 0.6,
+            'quantityStep' => 0.1,
+            'minQuantity' => 0.1,
+            'maxQuantity' => 0.1,
+            'marketMaxQuantity' => 0.1,
+        ]));
+
+        self::assertSame(0.1, $decision->quantity);
+        self::assertSame(0.07, $decision->positionNotional);
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);
