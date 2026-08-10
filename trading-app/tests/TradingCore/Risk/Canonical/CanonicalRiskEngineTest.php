@@ -175,6 +175,27 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertSame(0.3, $decision->quantity);
     }
 
+    public function testRejectsScaledQuantityBeyondExactIntegerCapacity(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_precision_unsupported');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 1.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1_000_000.0,
+                environmentMaxNotional: 1_000_000.0,
+            ),
+            'equityQuote' => 1_000_000_000.0,
+            'availableBalanceQuote' => 1_000_000_000.0,
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'maxQuantity' => 10_000.0,
+            'marketMaxQuantity' => 10_000.0,
+        ]));
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);

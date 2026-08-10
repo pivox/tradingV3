@@ -6,6 +6,8 @@ namespace App\TradingCore\Risk\Canonical;
 
 final class CanonicalRiskEngine
 {
+    private const MAX_EXACT_FLOAT_INTEGER = 9_007_199_254_740_992.0;
+
     public function calculate(CanonicalRiskCalculationRequest $request): CanonicalRiskDecision
     {
         if (
@@ -201,10 +203,10 @@ final class CanonicalRiskEngine
         $scaledStep = $step * $scale;
         if (
             !\is_finite($scaledQuantity)
-            || $scaledQuantity > (float) PHP_INT_MAX
+            || $scaledQuantity > self::MAX_EXACT_FLOAT_INTEGER
             || !\is_finite($scaledStep)
             || $scaledStep < 1.0
-            || $scaledStep > (float) PHP_INT_MAX
+            || $scaledStep > self::MAX_EXACT_FLOAT_INTEGER
         ) {
             throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
