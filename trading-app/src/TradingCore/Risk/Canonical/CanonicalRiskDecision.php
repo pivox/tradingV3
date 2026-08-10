@@ -28,6 +28,7 @@ final readonly class CanonicalRiskDecision
         public CanonicalRiskPolicy $policy,
         public string $symbol,
         public string $marketType,
+        public string $quoteCurrency,
         public string $side,
         public float $entryPrice,
         public float $stopPrice,

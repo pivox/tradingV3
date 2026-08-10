@@ -11,6 +11,7 @@ final readonly class CanonicalInstrumentSnapshot
         public string $environment,
         public string $symbol,
         public string $marketType,
+        public string $quoteCurrency,
         public float $contractSize,
         public float $quantityStep,
         public float $minQuantity,
@@ -26,6 +27,7 @@ final readonly class CanonicalInstrumentSnapshot
             || trim($environment) === ''
             || preg_match('/\A[A-Z0-9][A-Z0-9_.-]*\z/D', $symbol) !== 1
             || preg_match('/\A[a-z0-9][a-z0-9_.-]*\z/D', $marketType) !== 1
+            || preg_match('/\A[A-Z][A-Z0-9]{2,11}\z/D', $quoteCurrency) !== 1
             || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $inputHash) !== 1
         ) {
             throw new CanonicalRiskException('canonical_instrument_identity_invalid');

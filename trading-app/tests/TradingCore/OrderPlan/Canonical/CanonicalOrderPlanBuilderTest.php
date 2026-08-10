@@ -36,6 +36,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertSame('limit', $plan->orderType);
         self::assertSame('day_trading', $plan->modeId);
         self::assertSame('BTCUSDT', $plan->symbol);
+        self::assertSame('USDT', $plan->quoteCurrency);
         self::assertSame('long', $plan->side);
         self::assertSame($components['risk']->quantity, $plan->quantity);
         self::assertSame($components['zone']->entryPrice, $plan->entryPrice);
