@@ -68,6 +68,30 @@ final class PublishedConditionBoundaryMatrixTest extends KernelTestCase
         self::assertFalse($condition->evaluate([])->passed, $conditionId . ' must reject missing data.');
     }
 
+    public function testMacdHysteresisUsesCanonicalSeriesAcrossTheFullCooldownWindow(): void
+    {
+        self::bootKernel();
+        $registry = self::getContainer()->get(ConditionRegistry::class);
+        self::assertInstanceOf(ConditionRegistry::class, $registry);
+
+        $up = $registry->get('macd_line_cross_up_with_hysteresis');
+        $down = $registry->get('macd_line_cross_down_with_hysteresis');
+        self::assertNotNull($up);
+        self::assertNotNull($down);
+        self::assertTrue($up->evaluate([
+            'macd_hist_series' => [-0.002, 0.002, 0.003, 0.004, 0.005],
+            'min_gap' => 0.001,
+            'cool_down_bars' => 3,
+            'require_prev_below' => true,
+        ])->passed);
+        self::assertTrue($down->evaluate([
+            'macd_hist_series' => [0.002, -0.002, -0.003, -0.004, -0.005],
+            'min_gap' => 0.001,
+            'cool_down_bars' => 3,
+            'require_prev_above' => true,
+        ])->passed);
+    }
+
     /**
      * @return iterable<string, array{
      *   string, array<string, mixed>, array<string, mixed>, array<string, mixed>, array{bool, bool, bool}

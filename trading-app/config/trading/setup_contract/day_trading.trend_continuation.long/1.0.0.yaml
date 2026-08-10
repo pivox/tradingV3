@@ -129,7 +129,7 @@ data_condition_contract:
   required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: defined, value: a80656808ee1ec65d3f4f2ab485a0e13dcc72bc77a7fbc20eadcbb588b334ae4, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: 30f8f0d025e16c6e5bf5e84f9d327a0f3f132aea6fb2c084b5d76b0ca53bd8ae, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Legacy validity_bars is local to pullback_confirmed, not full setup duration.' }
 governance: &governance

@@ -22,13 +22,14 @@ final class MacdLineCrossUpWithHysteresisCondition extends AbstractCondition
         return "Croisement haussier robuste MACD au-dessus de la ligne de signal avec hystérésis (anti-bruit).";
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $minGap = $context['min_gap'] ?? 0.0003;
         $coolDownBars = (int)($context['cool_down_bars'] ?? 2);
         $requirePrevBelow = $context['require_prev_below'] ?? true;
 
-        $macdHist = $context['macd_hist_last3'] ?? null; // oldest..latest
+        $macdHist = $context['macd_hist_series'] ?? $context['macd_hist_last3'] ?? null; // oldest..latest
         if (!\is_array($macdHist) || count($macdHist) < 2) {
             return $this->result(self::NAME, false, null, (float)$minGap, $this->baseMeta($context, [
                 'missing_data' => true,

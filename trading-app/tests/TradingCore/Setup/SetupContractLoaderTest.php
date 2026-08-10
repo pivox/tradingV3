@@ -119,15 +119,19 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame('any_of', $confirmations['op']);
         self::assertCount(2, $confirmations['nodes']);
         self::assertSame(
-            ['crash_context_ok', 'crash_short_pattern_5m'],
-            array_column($confirmations['nodes'][0]['nodes'], 'condition'),
+            'crash_short_pattern_5m',
+            $confirmations['nodes'][0]['condition'],
         );
-        self::assertSame('execution_variant=5m_default', $confirmations['nodes'][0]['provenance']);
-        self::assertSame('execution_variant=1m_extreme', $confirmations['nodes'][1]['provenance']);
+        self::assertStringContainsString('execution_variant=5m_default', $confirmations['nodes'][0]['provenance']);
+        self::assertStringContainsString('execution_variant=1m_extreme', $confirmations['nodes'][1]['provenance']);
         self::assertStringNotContainsString(
             'crash_short_entry_1m',
             json_encode($snapshot->ast, JSON_THROW_ON_ERROR),
         );
+        self::assertSame(1, substr_count(json_encode($snapshot->ast, JSON_THROW_ON_ERROR), 'crash_context_ok'));
+        $catalog = $this->catalog();
+        self::assertSame(['1h'], $catalog->definition('crash_context_ok')->timeframes);
+        self::assertSame('blocked', $catalog->definition('crash_short_entry_1m')->status);
     }
 
     public function testCrashDecisionIsCompleteButFailsClosedOnUnknownExecutionAndRiskInputs(): void
@@ -529,7 +533,7 @@ final class SetupContractLoaderTest extends TestCase
         )->ast;
         self::assertSame('any_of', $crash['confirmations']['op']);
         self::assertCount(2, $crash['confirmations']['nodes']);
-        self::assertSame('crash_short_entry_1m', $crash['confirmations']['nodes'][1]['nodes'][1]['condition']);
+        self::assertSame('crash_short_entry_1m', $crash['confirmations']['nodes'][1]['condition']);
     }
 
     public function testSourceOriginRangesCoverEveryRuleProvenanceRange(): void
