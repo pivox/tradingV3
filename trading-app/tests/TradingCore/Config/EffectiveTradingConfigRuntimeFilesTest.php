@@ -29,4 +29,35 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         yield 'OKX demo' => ['okx', 'demo'];
         yield 'Hyperliquid testnet' => ['hyperliquid', 'testnet'];
     }
+
+    /** @dataProvider dayTradingShadowTargetProvider */
+    public function testDayTradingShadowResolvesThroughSixRealModernLayers(string $exchange, string $environment): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            $exchange, $environment, 'long',
+        ));
+
+        self::assertSame(
+            ['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'],
+            array_column($snapshot->orderedLayers(), 'type'),
+        );
+        self::assertFalse($snapshot->payload()['environment']['write_enabled']);
+        self::assertTrue($snapshot->payload()['environment']['dry_run']);
+        self::assertSame($exchange, $snapshot->payload()['exchange']['id']);
+        self::assertMatchesRegularExpression('/^sha256:[a-f0-9]{64}$/', $snapshot->configHash);
+        self::assertStringNotContainsString(
+            'config/trading/mode/regular.yaml',
+            json_encode([$snapshot->orderedLayers(), $snapshot->provenance()], JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /** @return iterable<string,array{string,string}> */
+    public static function dayTradingShadowTargetProvider(): iterable
+    {
+        yield 'Fake local' => ['fake', 'local'];
+        yield 'Fake test' => ['fake', 'test'];
+        yield 'OKX demo Paper' => ['okx', 'demo'];
+        yield 'Hyperliquid testnet Paper' => ['hyperliquid', 'testnet'];
+    }
 }

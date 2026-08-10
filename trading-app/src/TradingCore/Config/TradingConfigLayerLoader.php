@@ -84,7 +84,7 @@ final readonly class TradingConfigLayerLoader
 
     private function root(): string
     {
-        return $this->configRoot ?? dirname(__DIR__, 3) . '/config/trading';
+        return $this->configRoot ?? dirname(__DIR__, 3) . '/config/trading/runtime';
     }
 
     private function assertSafeLayerName(string $type, string $name): void
