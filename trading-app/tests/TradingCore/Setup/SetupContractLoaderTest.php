@@ -53,6 +53,21 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
+    public function testStableHashTracksCanonicalSetupContentRatherThanMappingOrder(): void
+    {
+        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+        $document = $contract->toArray();
+        $reordered = $document;
+        krsort($reordered, SORT_STRING);
+
+        self::assertSame($contract->stableHash(), SetupContract::fromDocument($reordered)->stableHash());
+
+        $changed = $document;
+        $changed['thesis'] .= ' Semantic change.';
+        self::assertNotSame($contract->stableHash(), SetupContract::fromDocument($changed)->stableHash());
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $contract->stableHash());
+    }
+
     public function testCatalogContainsNoSwingOrNinthCrashPullbackSetup(): void
     {
         $paths = glob($this->root . '/*/1.0.0.yaml') ?: [];

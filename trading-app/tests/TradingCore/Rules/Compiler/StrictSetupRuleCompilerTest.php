@@ -25,9 +25,11 @@ final class StrictSetupRuleCompilerTest extends TestCase
         foreach (glob($setupRoot . '/*/*.yaml') ?: [] as $path) {
             $setupId = basename(dirname($path));
             $setupVersion = basename($path, '.yaml');
-            $plan = $compiler->compile($loader->load($setupId, $setupVersion));
+            $contract = $loader->load($setupId, $setupVersion);
+            $plan = $compiler->compile($contract);
             $plans[$setupId . '@' . $setupVersion] = $plan;
             self::assertSame($catalog->stableHash(), $plan->catalogHash, $path);
+            self::assertSame($contract->stableHash(), $plan->setupHash, $path);
             self::assertSame($setupId, $plan->setupId, $path);
             self::assertSame($setupVersion, $plan->setupVersion, $path);
             self::assertNotSame([], $plan->sections, $path);

@@ -32,6 +32,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         self::assertSame('canonical-setup-rule-runtime.v1', $result->trace['schema_version']);
         self::assertSame('scalping.pullback.long', $result->trace['setup_id']);
         self::assertSame('1.0.0', $result->trace['setup_version']);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $result->trace['setup_hash']);
         self::assertArrayHasKey('regime', $result->trace['sections']);
         self::assertStringNotContainsString('fallback', json_encode($result->trace, JSON_THROW_ON_ERROR));
     }
@@ -66,6 +67,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         self::assertFalse($first->trace['plan_cache_hit']);
         self::assertTrue($second->trace['plan_cache_hit']);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->trace['plan_cache_key']);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->trace['setup_hash']);
         self::assertSame($first->trace['plan_cache_key'], $second->trace['plan_cache_key']);
     }
 }

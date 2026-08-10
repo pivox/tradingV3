@@ -56,10 +56,12 @@ final class CanonicalSetupRuleRuntime
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
         }
         $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
+        $setupHash = $contract->stableHash();
         $planCacheKey = hash('sha256', json_encode([
             'catalog_hash' => $this->catalog->stableHash(),
             'setup_id' => $identity->setupId,
             'setup_version' => $identity->setupVersion,
+            'setup_hash' => $setupHash,
             'config_hash' => $identity->configHash,
         ], JSON_THROW_ON_ERROR));
         $planCacheHit = isset($this->planCache[$planCacheKey]);
@@ -91,6 +93,7 @@ final class CanonicalSetupRuleRuntime
             'schema_version' => 'canonical-setup-rule-runtime.v1',
             'setup_id' => $plan->setupId,
             'setup_version' => $plan->setupVersion,
+            'setup_hash' => $plan->setupHash,
             'side' => $plan->side,
             'catalog_version' => $plan->catalogVersion,
             'catalog_hash' => $plan->catalogHash,

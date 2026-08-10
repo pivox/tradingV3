@@ -58,6 +58,7 @@ final readonly class StrictSetupRuleCompiler
             'compiled-rule-plan.v1',
             $contract->setupId,
             $contract->setupVersion,
+            $contract->stableHash(),
             $contract->side,
             $this->catalog->catalogVersion,
             $this->catalog->stableHash(),
