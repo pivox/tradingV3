@@ -223,14 +223,10 @@ class IndicatorContextBuilder
             // histSeries supposé oldest-first (même ordre que closes)
             $histFloats = array_values(array_map('floatval', $histSeries));
 
-            // On garde uniquement la fin de série (ex: 60 derniers points)
+            // Canonical order is oldest-to-newest, identical to the closed kline input.
             $tail = array_slice($histFloats, -60);
-
-            // latest-first pour la condition
-            $macdHistSeries = array_reverse($tail);
-
-            // last3 = 3 plus récents => indices 0..2 (puisque latest-first)
-            $macdHistLast3 = array_slice($macdHistSeries, 0, 3);
+            $macdHistSeries = $tail;
+            $macdHistLast3 = array_slice($tail, -3);
         }
 
         $highSeries = null;
@@ -243,9 +239,8 @@ class IndicatorContextBuilder
             $highTail = array_slice($highFloats, -60);
             $lowTail  = array_slice($lowFloats, -60);
 
-            // latest-first pour cohérence avec macd_hist_series (conditions "N")
-            $highSeries = array_reverse($highTail);
-            $lowSeries  = array_reverse($lowTail);
+            $highSeries = $highTail;
+            $lowSeries  = $lowTail;
         }
 
 
@@ -266,6 +261,7 @@ class IndicatorContextBuilder
             ] : null,
             'macd_hist_last3' => $macdHistLast3,
             'macd_hist_series' => $macdHistSeries,
+            'series_order' => 'oldest_to_newest',
             'vwap' => $vwapVal,
             'volume_ratio' => $volumeRatio,
             'atr' => $atr,

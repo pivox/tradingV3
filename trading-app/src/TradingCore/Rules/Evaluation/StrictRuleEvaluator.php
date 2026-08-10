@@ -103,7 +103,7 @@ final readonly class StrictRuleEvaluator
         }
         $conditionContext = $snapshot->values + $node->parameters + [
             'timeframe' => $node->timeframe,
-            'series_order' => $definition->seriesOrder === 'oldest_to_newest' ? 'oldest_first' : $definition->seriesOrder,
+            'series_order' => $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
         ];
