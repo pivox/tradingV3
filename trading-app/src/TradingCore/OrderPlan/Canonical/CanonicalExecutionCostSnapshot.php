@@ -8,6 +8,10 @@ final readonly class CanonicalExecutionCostSnapshot
 {
     /** @param list<CanonicalTargetCostSnapshot> $targets */
     public function __construct(
+        public string $exchange,
+        public string $environment,
+        public string $symbol,
+        public string $configHash,
         public ?string $entryLiquidityRole,
         public ?string $stopLiquidityRole,
         public ?string $entrySpreadSource,
@@ -24,6 +28,14 @@ final readonly class CanonicalExecutionCostSnapshot
         public \DateTimeImmutable $observedAt,
         public string $inputHash,
     ) {
+        if (
+            trim($exchange) === ''
+            || trim($environment) === ''
+            || preg_match('/\A[A-Z0-9][A-Z0-9_.-]*\z/D', $symbol) !== 1
+            || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $configHash) !== 1
+        ) {
+            throw new CanonicalOrderPlanException('canonical_net_r_cost_identity_invalid');
+        }
         foreach ([
             $entryLiquidityRole,
             $stopLiquidityRole,

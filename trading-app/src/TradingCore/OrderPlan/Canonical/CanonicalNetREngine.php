@@ -32,6 +32,14 @@ final class CanonicalNetREngine
         ) {
             throw new CanonicalOrderPlanException('canonical_net_r_risk_identity_mismatch');
         }
+        if (
+            $costs->exchange !== $policy->riskPolicy->exchange
+            || $costs->environment !== $policy->riskPolicy->environment
+            || $costs->symbol !== $protection->symbol
+            || $costs->configHash !== $policy->configHash
+        ) {
+            throw new CanonicalOrderPlanException('canonical_net_r_cost_identity_mismatch');
+        }
 
         $this->validateCostSources($policy, $costs);
         $fundingIntervals = intdiv(

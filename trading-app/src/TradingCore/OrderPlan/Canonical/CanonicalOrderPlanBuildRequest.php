@@ -14,6 +14,7 @@ final readonly class CanonicalOrderPlanBuildRequest
         public CanonicalProtectionDecision $protection,
         public CanonicalRiskDecision $risk,
         public CanonicalNetRDecision $netR,
+        public CanonicalExecutionCostSnapshot $costs,
     ) {
     }
 }

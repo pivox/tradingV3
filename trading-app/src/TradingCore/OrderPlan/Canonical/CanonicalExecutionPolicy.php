@@ -37,6 +37,7 @@ final readonly class CanonicalExecutionPolicy
         if (!hash_equals($expectedHash, $snapshot->configHash)) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_hash_mismatch');
         }
+        self::validateCanonicalSchema($payload, $snapshot);
 
         $riskPolicy = (new CanonicalRiskPolicyCompiler())->compile($snapshot);
         $setup = self::mapping($payload, 'setup', 'canonical_execution_policy_shape_invalid');
@@ -247,6 +248,120 @@ final readonly class CanonicalExecutionPolicy
             fundingSource: self::identifier($contract['funding_source'], 'canonical_cost_contract_invalid'),
             fundingIntervalSeconds: self::positiveInteger($contract['funding_interval_seconds'], 'canonical_cost_contract_invalid'),
         );
+    }
+
+    /** @param array<string, mixed> $payload */
+    private static function validateCanonicalSchema(array $payload, EffectiveTradingConfigSnapshot $snapshot): void
+    {
+        self::requireExactKeys(
+            $payload,
+            ['schema_version', 'units', 'safety', 'mode', 'setup', 'exchange', 'environment'],
+            'canonical_execution_policy_root_schema_invalid',
+        );
+        if (($payload['schema_version'] ?? null) !== 'effective-trading-config.v2') {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_root_schema_invalid');
+        }
+        $units = self::mapping($payload, 'units', 'canonical_execution_policy_root_schema_invalid');
+        self::requireExactKeys($units, ['percent', 'duration', 'price', 'notional'], 'canonical_execution_policy_root_schema_invalid');
+        if (
+            ($units['percent'] ?? null) !== 'percentage_points'
+            || ($units['duration'] ?? null) !== 'iso8601'
+            || ($units['price'] ?? null) !== 'quote_price'
+            || ($units['notional'] ?? null) !== 'quote_notional'
+        ) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_root_schema_invalid');
+        }
+
+        $setup = self::mapping($payload, 'setup', 'canonical_execution_policy_setup_schema_invalid');
+        self::requireExactKeys($setup, [
+            'schema_version',
+            'setup_id',
+            'setup_version',
+            'status',
+            'executable',
+            'publishable',
+            'family',
+            'side',
+            'thesis',
+            'hypothesis',
+            'mode_versions',
+            'mode_compatibility',
+            'ast',
+            'missing_data_policy',
+            'data_condition_contract',
+            'validity_window',
+            'governance',
+            'known_defects',
+            'ownership_model',
+            'source_origins',
+            'contract_provenance',
+            'contract_hash',
+            'condition_catalog_hash',
+            'blockers',
+            'payload_hash',
+        ], 'canonical_execution_policy_setup_schema_invalid');
+        $catalogHash = $snapshot->conditionCatalogHash;
+        if (
+            ($setup['schema_version'] ?? null) !== 'compiled-setup.v1'
+            || ($setup['executable'] ?? null) !== true
+            || ($setup['publishable'] ?? null) !== true
+            || ($setup['blockers'] ?? null) !== []
+            || !\is_string($catalogHash)
+            || ($setup['condition_catalog_hash'] ?? null) !== substr($catalogHash, 7)
+            || !\is_string($setup['contract_hash'] ?? null)
+            || preg_match('/\A[a-f0-9]{64}\z/D', $setup['contract_hash']) !== 1
+            || !\is_string($setup['payload_hash'] ?? null)
+            || preg_match('/\A[a-f0-9]{64}\z/D', $setup['payload_hash']) !== 1
+        ) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_setup_schema_invalid');
+        }
+        $modeVersions = self::mapping($setup, 'mode_versions', 'canonical_execution_policy_setup_schema_invalid');
+        $provenance = self::mapping($setup, 'contract_provenance', 'canonical_execution_policy_setup_schema_invalid');
+        if (
+            ($modeVersions[$snapshot->request->modeId] ?? null) !== $snapshot->request->modeVersion
+            || !\is_array($setup['source_origins'])
+            || !array_is_list($setup['source_origins'])
+            || $setup['source_origins'] === []
+            || $provenance === []
+        ) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_setup_schema_invalid');
+        }
+        $setupForHash = $setup;
+        $claimedPayloadHash = $setupForHash['payload_hash'];
+        unset($setupForHash['payload_hash']);
+        if (!hash_equals($claimedPayloadHash, self::canonicalHash($setupForHash))) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_setup_integrity_invalid');
+        }
+
+        $ast = self::mapping($setup, 'ast', 'canonical_execution_policy_ast_schema_invalid');
+        self::requireExactKeys(
+            $ast,
+            ['kind', 'side', 'regime', 'context', 'trigger', 'confirmations', 'filters', 'no_trade_rules', 'execution'],
+            'canonical_execution_policy_ast_schema_invalid',
+        );
+        if (($ast['kind'] ?? null) !== 'setup' || ($ast['side'] ?? null) !== $snapshot->request->side) {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_ast_schema_invalid');
+        }
+    }
+
+    /** @param array<string, mixed> $value */
+    private static function canonicalHash(array $value): string
+    {
+        $canonicalize = static function (mixed $node) use (&$canonicalize): mixed {
+            if (!\is_array($node)) {
+                return $node;
+            }
+            if (!array_is_list($node)) {
+                ksort($node, SORT_STRING);
+            }
+            foreach ($node as $key => $child) {
+                $node[$key] = $canonicalize($child);
+            }
+
+            return $node;
+        };
+
+        return hash('sha256', json_encode($canonicalize($value), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION));
     }
 
     /**

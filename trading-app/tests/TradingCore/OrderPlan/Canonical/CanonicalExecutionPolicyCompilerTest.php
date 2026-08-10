@@ -68,6 +68,36 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
     }
 
+    public function testRejectsUnknownCanonicalRootKey(): void
+    {
+        $payload = $this->payload();
+        $payload['legacy_defaults'] = [];
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_root_schema_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
+    public function testRejectsIncompleteCompiledSetupEnvelope(): void
+    {
+        $payload = $this->payload();
+        unset($payload['setup']['publishable']);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_setup_schema_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
+    public function testRejectsIncompleteCanonicalAst(): void
+    {
+        $payload = $this->payload();
+        unset($payload['setup']['ast']['filters']);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_ast_schema_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
     public function testRejectsAmbiguousStopSource(): void
     {
         $payload = $this->payload();
@@ -161,7 +191,7 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
             'test',
             'long',
         );
-        $payload ??= $this->payload();
+        $payload = CanonicalExecutionPolicyFixture::rehashSetup($payload ?? $this->payload());
         $conditionCatalogHash = 'sha256:' . str_repeat('b', 64);
         $configHash ??= CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, $conditionCatalogHash);
 
@@ -178,76 +208,6 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
     /** @return array<string, mixed> */
     private function payload(): array
     {
-        $decision = static fn (mixed $value, string $unit): array => [
-            'state' => 'defined',
-            'value' => $value,
-            'unit' => $unit,
-            'source' => 'test-fixture',
-            'justification' => 'canonical Lot B test fixture',
-        ];
-
-        return [
-            'schema_version' => 'effective-trading-config.v2',
-            'units' => ['percent' => 'percentage_points', 'duration' => 'iso8601', 'price' => 'quote_price', 'notional' => 'quote_notional'],
-            'safety' => ['mainnet_write_enabled' => false, 'demo_testnet_write_enabled' => false, 'require_stop_loss' => true, 'kill_switch_enabled' => true],
-            'mode' => [
-                'mode_id' => 'day_trading',
-                'mode_version' => '1.0.0',
-                'risk' => ['trade_budget' => ['state' => 'defined', 'value' => 1.0, 'unit' => 'percent_equity_per_trade']],
-                'leverage' => ['state' => 'defined', 'value' => 5.0, 'unit' => 'leverage_multiple'],
-            ],
-            'setup' => [
-                'setup_id' => 'day_trading.trend_continuation.long',
-                'setup_version' => '1.0.0',
-                'side' => 'long',
-                'ast' => [
-                    'execution' => [
-                        'side' => 'long',
-                        'entry_zone' => $decision([
-                            'anchor_source' => 'vwap',
-                            'anchor_timeframe' => '5m',
-                            'atr_timeframe' => '5m',
-                            'atr_multiplier' => 0.5,
-                            'minimum_half_width_rate' => 0.001,
-                            'maximum_half_width_rate' => 0.01,
-                            'asymmetry_rate' => 0.2,
-                            'ttl_seconds' => 180,
-                            'maximum_input_age_seconds' => 60,
-                            'quantize_outward' => true,
-                        ], 'price_zone_policy'),
-                        'stop' => $decision([
-                            'kind' => 'atr',
-                            'timeframe' => '5m',
-                            'atr_multiplier' => 1.5,
-                            'pivot_id' => null,
-                            'buffer_rate' => 0.001,
-                        ], 'stop_policy'),
-                        'targets' => $decision([
-                            ['id' => 'tp1', 'risk_multiple' => 1.5, 'liquidity_role' => 'taker'],
-                            ['id' => 'tp2', 'risk_multiple' => 2.0, 'liquidity_role' => 'taker'],
-                        ], 'target_policy'),
-                        'minimum_net_r' => $decision(1.2, 'net_r_multiple'),
-                        'invalidation' => $decision(['kind' => 'close_beyond_stop'], 'invalidation_policy'),
-                        'time_stop' => $decision('PT30M', 'duration'),
-                        'cost_contract' => $decision([
-                            'entry_spread_source' => 'order_book',
-                            'entry_slippage_source' => 'execution_model',
-                            'stop_spread_source' => 'order_book',
-                            'stop_slippage_source' => 'execution_model',
-                            'target_spread_source' => 'order_book',
-                            'target_slippage_source' => 'execution_model',
-                            'funding_source' => 'venue_schedule',
-                            'funding_interval_seconds' => 28_800,
-                        ], 'cost_policy'),
-                    ],
-                ],
-            ],
-            'exchange' => [
-                'id' => 'fake',
-                'fees' => ['maker_rate' => 0.0002, 'taker_rate' => 0.0005],
-                'limits' => ['min_notional' => 5.0, 'max_notional' => 1000.0],
-            ],
-            'environment' => ['id' => 'test', 'max_notional' => 250.0, 'write_enabled' => false, 'kill_switch_enabled' => true, 'require_stop_loss' => true],
-        ];
+        return CanonicalExecutionPolicyFixture::payload();
     }
 }

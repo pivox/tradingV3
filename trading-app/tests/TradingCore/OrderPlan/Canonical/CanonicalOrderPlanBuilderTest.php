@@ -9,6 +9,8 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
+use App\TradingCore\OrderPlan\Canonical\CanonicalNetRDecision;
+use App\TradingCore\OrderPlan\Canonical\CanonicalNetRTargetDecision;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -57,6 +59,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             $short['protection'],
             $long['risk'],
             $long['netR'],
+            $long['costs'],
         ));
     }
 
@@ -70,6 +73,48 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_order_plan_expired');
         (new CanonicalOrderPlanValidator(new MockClock('2026-08-10T12:03:01+00:00')))->validate($plan);
+    }
+
+    public function testBuilderRejectsInternallyConsistentButFabricatedNetRDecision(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $forgedTargets = array_map(
+            static fn (CanonicalNetRTargetDecision $target): CanonicalNetRTargetDecision => new CanonicalNetRTargetDecision(
+                id: $target->id,
+                price: $target->price,
+                grossReward: $target->grossReward,
+                entryFee: 0.0,
+                targetFee: 0.0,
+                entrySpreadCost: 0.0,
+                entrySlippageCost: 0.0,
+                targetSpreadCost: 0.0,
+                targetSlippageCost: 0.0,
+                fundingCost: 0.0,
+                netReward: $target->grossReward,
+                netRisk: $target->netRisk,
+                netR: $target->grossReward / $target->netRisk,
+            ),
+            $components['netR']->targets,
+        );
+        $forged = new CanonicalNetRDecision(
+            $forgedTargets,
+            $components['netR']->minimumNetR,
+            $components['netR']->fundingIntervals,
+            $components['netR']->configHash,
+            $components['netR']->costInputHash,
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_net_r_mismatch');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))->build(new CanonicalOrderPlanBuildRequest(
+            $components['policy'],
+            $components['zone'],
+            $components['protection'],
+            $components['risk'],
+            $forged,
+            $components['costs'],
+        ));
     }
 
     public function testPlanConstructorIsPrivate(): void

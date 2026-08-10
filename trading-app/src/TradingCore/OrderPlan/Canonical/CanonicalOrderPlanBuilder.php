@@ -11,6 +11,7 @@ final readonly class CanonicalOrderPlanBuilder
     public function __construct(
         private ClockInterface $clock,
         private CanonicalOrderPlanValidator $validator,
+        private CanonicalNetREngine $netREngine = new CanonicalNetREngine(),
     ) {
     }
 
@@ -21,7 +22,7 @@ final readonly class CanonicalOrderPlanBuilder
         $zone = $request->zone;
         $protection = $request->protection;
         $risk = $request->risk;
-        $netR = $request->netR;
+        $suppliedNetR = $request->netR;
         foreach ([$zone, $protection] as $component) {
             if (
                 $component->modeId !== $riskPolicy->modeId
@@ -44,9 +45,18 @@ final readonly class CanonicalOrderPlanBuilder
             || $risk->entryPrice !== $zone->entryPrice
             || $risk->stopPrice !== $protection->stopPrice
             || $protection->entryPrice !== $zone->entryPrice
-            || $netR->configHash !== $policy->configHash
+            || $suppliedNetR->configHash !== $policy->configHash
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_identity_mismatch');
+        }
+        $netR = $this->netREngine->calculate(new CanonicalNetRRequest(
+            $policy,
+            $protection,
+            $risk,
+            $request->costs,
+        ));
+        if ($netR != $suppliedNetR) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_net_r_mismatch');
         }
         if (count($protection->targets) !== count($netR->targets)) {
             throw new CanonicalOrderPlanException('canonical_order_plan_target_mismatch');
@@ -82,6 +92,15 @@ final readonly class CanonicalOrderPlanBuilder
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
 
-        return $this->validator->validate(CanonicalOrderPlan::fromAcceptedComponents($request, $targets, $inputHashes, $now));
+        $acceptedRequest = new CanonicalOrderPlanBuildRequest(
+            $policy,
+            $zone,
+            $protection,
+            $risk,
+            $netR,
+            $request->costs,
+        );
+
+        return $this->validator->validate(CanonicalOrderPlan::fromAcceptedComponents($acceptedRequest, $targets, $inputHashes, $now));
     }
 }

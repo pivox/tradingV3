@@ -34,7 +34,7 @@ final class CanonicalNetREngineTest extends TestCase
     public function testCalculatesCostInclusiveNetRForEveryTarget(): void
     {
         [$policy, $protection] = $this->protection();
-        $costs = $this->executionCosts(0.0001);
+        $costs = $this->executionCosts($policy, 0.0001);
         $risk = $this->riskDecision($policy, $protection, $costs);
 
         $decision = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
@@ -50,7 +50,7 @@ final class CanonicalNetREngineTest extends TestCase
     public function testRejectsWhenGrossRPassesButCostInclusiveNetRFails(): void
     {
         [$policy, $protection] = $this->protection();
-        $costs = $this->executionCosts(0.005);
+        $costs = $this->executionCosts($policy, 0.005);
         $risk = $this->riskDecision($policy, $protection, $costs);
 
         $this->expectException(CanonicalOrderPlanException::class);
@@ -61,7 +61,7 @@ final class CanonicalNetREngineTest extends TestCase
     public function testRejectsCostSourceMismatch(): void
     {
         [$policy, $protection] = $this->protection();
-        $costs = $this->executionCosts(0.0001, entrySpreadSource: 'reference_price');
+        $costs = $this->executionCosts($policy, 0.0001, entrySpreadSource: 'reference_price');
         $risk = $this->riskDecision($policy, $protection, $costs);
 
         $this->expectException(CanonicalOrderPlanException::class);
@@ -72,7 +72,7 @@ final class CanonicalNetREngineTest extends TestCase
     public function testRejectsRiskDecisionBuiltForDifferentEntry(): void
     {
         [$policy, $protection] = $this->protection();
-        $costs = $this->executionCosts(0.0001);
+        $costs = $this->executionCosts($policy, 0.0001);
         $risk = $this->riskDecision($policy, $protection, $costs, entryPrice: 100.0);
 
         $this->expectException(CanonicalOrderPlanException::class);
@@ -85,6 +85,17 @@ final class CanonicalNetREngineTest extends TestCase
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_net_r_cost_unknown');
         new CanonicalTargetCostSnapshot('tp1', null, 0.0001, 'execution_model', 0.0001);
+    }
+
+    public function testRejectsCostsObservedForAnotherSymbol(): void
+    {
+        [$policy, $protection] = $this->protection();
+        $costs = $this->executionCosts($policy, 0.0001, symbol: 'ETHUSDT');
+        $risk = $this->riskDecision($policy, $protection, $costs);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_net_r_cost_identity_mismatch');
+        (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
     }
 
     /** @return array{0: CanonicalExecutionPolicy, 1: CanonicalProtectionDecision} */
@@ -110,9 +121,18 @@ final class CanonicalNetREngineTest extends TestCase
         return [$policy, $protection];
     }
 
-    private function executionCosts(float $rate, string $entrySpreadSource = 'order_book'): CanonicalExecutionCostSnapshot
+    private function executionCosts(
+        CanonicalExecutionPolicy $policy,
+        float $rate,
+        string $entrySpreadSource = 'order_book',
+        string $symbol = 'BTCUSDT',
+    ): CanonicalExecutionCostSnapshot
     {
         return new CanonicalExecutionCostSnapshot(
+            exchange: 'fake',
+            environment: 'test',
+            symbol: $symbol,
+            configHash: $policy->configHash,
             entryLiquidityRole: 'taker',
             stopLiquidityRole: 'taker',
             entrySpreadSource: $entrySpreadSource,

@@ -33,7 +33,8 @@ final class CanonicalOrderPlanPipelineFixture
      *   zone: CanonicalEntryZone,
      *   protection: CanonicalProtectionDecision,
      *   risk: CanonicalRiskDecision,
-     *   netR: CanonicalNetRDecision
+     *   netR: CanonicalNetRDecision,
+     *   costs: CanonicalExecutionCostSnapshot
      * }
      */
     public static function accepted(string $side = 'long'): array
@@ -56,6 +57,10 @@ final class CanonicalOrderPlanPipelineFixture
             null,
         ));
         $costs = new CanonicalExecutionCostSnapshot(
+            'fake',
+            'test',
+            'BTCUSDT',
+            $policy->configHash,
             'taker',
             'taker',
             'order_book',
@@ -94,6 +99,6 @@ final class CanonicalOrderPlanPipelineFixture
         ));
         $netR = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
 
-        return ['policy' => $policy, 'zone' => $zone, 'protection' => $protection, 'risk' => $risk, 'netR' => $netR];
+        return ['policy' => $policy, 'zone' => $zone, 'protection' => $protection, 'risk' => $risk, 'netR' => $netR, 'costs' => $costs];
     }
 }
