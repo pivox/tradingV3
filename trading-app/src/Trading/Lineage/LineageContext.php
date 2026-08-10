@@ -20,15 +20,15 @@ final readonly class LineageContext
     public const ORIGIN_MANUAL = 'manual';
     public const ORIGIN_REPLAY = 'replay';
 
-    /** @var array<string, array{mode:string,side:string,version:string}> */
+    /** @var array<string, array{mode:string,side:string,versions:list<string>}> */
     private const MODERN_SETUPS = [
-        'day_trading.trend_continuation.long' => ['mode' => 'day_trading', 'side' => 'LONG', 'version' => '1.0.0'],
-        'day_trading.trend_continuation.short' => ['mode' => 'day_trading', 'side' => 'SHORT', 'version' => '1.0.0'],
-        'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'version' => '1.0.0'],
-        'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'version' => '1.0.0'],
-        'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
-        'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'version' => '1.0.0'],
-        'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'version' => '1.0.0'],
+        'day_trading.trend_continuation.long' => ['mode' => 'day_trading', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
+        'day_trading.trend_continuation.short' => ['mode' => 'day_trading', 'side' => 'SHORT', 'versions' => ['1.0.0']],
+        'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
+        'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
+        'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'versions' => ['1.0.0']],
+        'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
+        'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'versions' => ['1.0.0']],
     ];
 
     /** @var string[] */
@@ -534,10 +534,12 @@ final readonly class LineageContext
         if (self::normalizeSide(self::string($payload['side'] ?? null)) !== $setup['side']) {
             throw new LineageContextException('canonical_identity_mismatch:side');
         }
-        if (($payload['mode_version'] ?? null) !== '1.0.0') {
+        $modeVersion = self::string($payload['mode_version'] ?? null);
+        $setupVersion = self::string($payload['setup_version'] ?? null);
+        if ($modeVersion === null || !in_array($modeVersion, $setup['versions'], true)) {
             throw new LineageContextException('canonical_identity_invalid:mode_version');
         }
-        if (($payload['setup_version'] ?? null) !== $setup['version']) {
+        if ($setupVersion === null || $setupVersion !== $modeVersion || !in_array($setupVersion, $setup['versions'], true)) {
             throw new LineageContextException('canonical_identity_invalid:setup_version');
         }
         foreach (['config_hash', 'condition_catalog_hash'] as $hashField) {
