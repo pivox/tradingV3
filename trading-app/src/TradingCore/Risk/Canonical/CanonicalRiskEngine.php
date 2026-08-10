@@ -211,15 +211,30 @@ final class CanonicalRiskEngine
             throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
 
-        $ulpTolerance = min(
-            0.5,
-            PHP_FLOAT_EPSILON * max(1.0, abs($scaledQuantity)) * 4.0,
-        );
-        $quantityUnits = (int) floor($scaledQuantity + $ulpTolerance);
+        $nearestInteger = round($scaledQuantity);
+        $ulpTolerance = min(0.5, $this->ulpAt($scaledQuantity));
+        if (
+            $scaledQuantity < $nearestInteger
+            && $nearestInteger - $scaledQuantity <= $ulpTolerance
+        ) {
+            $scaledQuantity = $nearestInteger;
+        }
+        $quantityUnits = (int) floor($scaledQuantity);
         $stepUnits = (int) round($scaledStep);
         $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
 
         return round($quantizedUnits / $scale, $decimalPlaces);
+    }
+
+    private function ulpAt(float $value): float
+    {
+        if ($value === 0.0) {
+            return PHP_FLOAT_MIN;
+        }
+
+        $binaryExponent = (int) floor(log(abs($value), 2.0));
+
+        return 2.0 ** ($binaryExponent - 52);
     }
 
     private function decimalPlaces(float $step): int
