@@ -19,6 +19,7 @@ final class PriceRegimeOkShortCondition extends AbstractCondition
 
     public function getName(): string { return 'price_regime_ok_short'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $close  = $context['close'] ?? null;

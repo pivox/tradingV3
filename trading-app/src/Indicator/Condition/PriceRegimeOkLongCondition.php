@@ -19,6 +19,7 @@ final class PriceRegimeOkLongCondition extends AbstractCondition
 
     public function getName(): string { return 'price_regime_ok_long'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $close  = $context['close'] ?? null;
@@ -27,10 +28,6 @@ final class PriceRegimeOkLongCondition extends AbstractCondition
         $adx    = $context['adx'][$this->adxPeriodKey] ?? $context['adx'] ?? null;
 
         if (!is_float($close) || !is_float($ema50) || !is_float($ema200) || !is_float($adx)) {
-            dd(
-                !is_float($ema200), $ema200 ,
-                !is_float($adx),  $adx,
-                $context);
             return $this->result($this->getName(), false, null, null,
                 $this->baseMeta($context, ['missing_data' => true]));
         }
