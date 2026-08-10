@@ -12,7 +12,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 
 final class CanonicalExecutionPolicyFixture
 {
-    public static function policy(string $side = 'long'): CanonicalExecutionPolicy
+    public static function policy(string $side = 'long', string $stopKind = 'atr'): CanonicalExecutionPolicy
     {
         $decision = static fn (mixed $value, string $unit): array => [
             'state' => 'defined',
@@ -50,7 +50,13 @@ final class CanonicalExecutionPolicyFixture
                         'maximum_input_age_seconds' => 60,
                         'quantize_outward' => true,
                     ], 'price_zone_policy'),
-                    'stop' => $decision(['kind' => 'atr', 'timeframe' => '5m', 'atr_multiplier' => 1.5, 'pivot_id' => null, 'buffer_rate' => 0.001], 'stop_policy'),
+                    'stop' => $decision([
+                        'kind' => $stopKind,
+                        'timeframe' => '5m',
+                        'atr_multiplier' => $stopKind === 'atr' ? 1.5 : null,
+                        'pivot_id' => $stopKind === 'pivot' ? 's1' : null,
+                        'buffer_rate' => 0.001,
+                    ], 'stop_policy'),
                     'targets' => $decision([
                         ['id' => 'tp1', 'risk_multiple' => 1.5, 'liquidity_role' => 'taker'],
                         ['id' => 'tp2', 'risk_multiple' => 2.0, 'liquidity_role' => 'taker'],

@@ -100,6 +100,7 @@ final readonly class CanonicalEntryZoneEngine
             lowerPrice: $lower->toFloat(),
             upperPrice: $upper->toFloat(),
             entryPrice: $entry->toFloat(),
+            tickSize: $request->tick->tickSize,
             anchorSource: $zonePolicy->anchorSource,
             anchorTimeframe: $zonePolicy->anchorTimeframe,
             atrTimeframe: $zonePolicy->atrTimeframe,

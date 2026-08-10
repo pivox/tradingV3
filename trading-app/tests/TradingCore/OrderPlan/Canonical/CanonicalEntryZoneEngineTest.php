@@ -28,6 +28,7 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         self::assertSame(99.4, $zone->lowerPrice);
         self::assertSame(100.4, $zone->upperPrice);
         self::assertSame(100.1, $zone->entryPrice);
+        self::assertSame(0.1, $zone->tickSize);
         self::assertSame('long', $zone->side);
         self::assertSame('BTCUSDT', $zone->symbol);
         self::assertSame('vwap', $zone->anchorSource);

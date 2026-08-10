@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace App\TradingCore\OrderPlan\Canonical;
 
-final readonly class CanonicalEntryZone
+final readonly class CanonicalProtectionDecision
 {
-    /** @param list<string> $inputHashes */
+    /**
+     * @param non-empty-list<CanonicalProtectionTarget> $targets
+     * @param non-empty-list<string>                    $inputHashes
+     */
     public function __construct(
         public string $modeId,
         public string $modeVersion,
@@ -16,23 +19,13 @@ final readonly class CanonicalEntryZone
         public string $environment,
         public string $side,
         public string $symbol,
-        public float $lowerPrice,
-        public float $upperPrice,
         public float $entryPrice,
-        public float $tickSize,
-        public string $anchorSource,
-        public string $anchorTimeframe,
-        public string $atrTimeframe,
-        public \DateTimeImmutable $observedAt,
+        public float $stopPrice,
+        public float $riskDistance,
+        public array $targets,
         public \DateTimeImmutable $computedAt,
-        public \DateTimeImmutable $expiresAt,
         public string $configHash,
         public array $inputHashes,
     ) {
-    }
-
-    public function contains(float $price): bool
-    {
-        return $price >= $this->lowerPrice && $price <= $this->upperPrice;
     }
 }
