@@ -416,6 +416,17 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
+    public function testUnsupportedTemporalAndTimeframeContractsRemainFailClosed(): void
+    {
+        $catalog = $this->catalog();
+        self::assertSame('blocked', $catalog->definition('pullback_confirmed')->status);
+        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_long')->timeframes);
+        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_short')->timeframes);
+
+        $short = (new SetupContractLoader($this->root))->load('scalping.trend_momentum.short', '1.0.0')->toArray();
+        self::assertNotContains('price_regime_ok_short', array_column($short['context']['context']['nodes'], 'condition'));
+    }
+
     public function testDraft202012SchemaHasParityWithPhpValidator(): void
     {
         $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');

@@ -27,7 +27,6 @@ context:
     op: all_of
     provenance: 'validations.scalper.yaml:306-318'
     nodes:
-      - { condition: price_regime_ok_short, timeframe: 15m, provenance: 'validations.scalper.yaml:308' }
       - op: any_of
         provenance: 'validations.scalper.yaml:309-311'
         nodes:
@@ -86,7 +85,7 @@ data_condition_contract:
   required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: defined, value: 30f8f0d025e16c6e5bf5e84f9d327a0f3f132aea6fb2c084b5d76b0ca53bd8ae, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'Full setup duration absent.' }
 governance:

@@ -92,6 +92,23 @@ final class PublishedConditionBoundaryMatrixTest extends KernelTestCase
         ])->passed);
     }
 
+    public function testAtrRangeServicesAcceptCatalogNumberParametersEncodedAsIntegers(): void
+    {
+        self::bootKernel();
+        $registry = self::getContainer()->get(ConditionRegistry::class);
+        self::assertInstanceOf(ConditionRegistry::class, $registry);
+        foreach (['atr_rel_in_range_15m', 'atr_rel_in_range_5m'] as $conditionId) {
+            $condition = $registry->get($conditionId);
+            self::assertNotNull($condition);
+            self::assertTrue($condition->evaluate([
+                'atr' => 50.0,
+                'close' => 100.0,
+                'min_atr_pct' => 0.0005,
+                'max_atr_pct' => 1,
+            ])->passed);
+        }
+    }
+
     /**
      * @return iterable<string, array{
      *   string, array<string, mixed>, array<string, mixed>, array<string, mixed>, array{bool, bool, bool}

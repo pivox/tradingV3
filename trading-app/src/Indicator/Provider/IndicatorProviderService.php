@@ -644,6 +644,10 @@ final class IndicatorProviderService implements IndicatorProviderInterface
             return null;
         }
 
+    /**
+     * @param list<string> $timeframes
+     * @return array<string, array<string, mixed>>
+     */
     public function getIndicatorsForSymbolAndTimeframes(
         string $symbol,
         array $timeframes,
@@ -679,12 +683,34 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 }
 
                 $closes = [];
+                $highs = [];
+                $lows = [];
+                $volumes = [];
                 foreach ($klines as $k) {
                     $closes[] = (float) $k->close->toFloat();
+                    $highs[] = (float) $k->high->toFloat();
+                    $lows[] = (float) $k->low->toFloat();
+                    $volumes[] = (float) $k->volume->toFloat();
                 }
                 $lastClose = $closes ? (float) end($closes) : null;
+                $previousCloses = array_slice($closes, 0, -1);
+                $ema = [];
+                $emaPrev = [];
+                foreach ([9, 20, 21, 50, 200] as $period) {
+                    $ema[$period] = $this->emaService->calculate($closes, $period);
+                    $emaPrev[$period] = $this->emaService->calculate($previousCloses, $period);
+                }
+                $macd = $this->macdService->calculate($closes, 12, 26, 9);
+                $macdFull = $this->macdService->calculateFull($closes, 12, 26, 9);
+                $macdHistSeries = array_slice(array_values(array_map(
+                    'floatval',
+                    array_filter($macdFull['hist'], static fn (mixed $value): bool => is_numeric($value) && is_finite((float) $value)),
+                )), -60);
+                $volumeRatio = $this->volumeRatio($volumes);
+                $atr = $snapshot->atr?->toFloat();
+                $ma21 = $snapshot->ma21?->toFloat();
 
-                $klineTime = $snapshot->klineTime ?? $at;
+                $klineTime = $snapshot->klineTime ?? \DateTimeImmutable::createFromInterface($at);
 
                 $result[$tf] = [
                     'close'        => $lastClose,
@@ -702,7 +728,15 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'bb_middle'    => $snapshot->bbMiddle?->toFloat(),
                     'bb_lower'     => $snapshot->bbLower?->toFloat(),
                     'kline_time'   => $klineTime->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s'),
-                    // tu peux y rajouter volume, stoch_rsi, volume_ratio si tu les stockes dans meta
+                    'ema'          => $ema,
+                    'ema_prev'     => $emaPrev,
+                    'ema_200_slope' => $ema[200] - $emaPrev[200],
+                    'macd'         => $macd,
+                    'macd_hist_series' => $macdHistSeries,
+                    'macd_hist_last3' => array_slice($macdHistSeries, -3),
+                    'series_order' => 'oldest_to_newest',
+                    'volume_ratio' => $volumeRatio,
+                    'ma_21_plus_k_atr' => $ma21 !== null && $atr !== null ? $ma21 + (1.3 * $atr) : null,
                 ];
             } catch (\Throwable $e) {
                 $this->logger->warning('IndicatorProvider: failed to fetch indicators', [
@@ -718,6 +752,23 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         }
 
         return $result;
+    }
+
+    /** @param list<float> $volumes */
+    private function volumeRatio(array $volumes): ?float
+    {
+        if (count($volumes) < 3) {
+            return null;
+        }
+        $current = (float) end($volumes);
+        $history = array_slice($volumes, -21, 20);
+        $history = array_values(array_filter($history, static fn (float $volume): bool => $volume > 0.0));
+        if ($current <= 0.0 || $history === []) {
+            return null;
+        }
+        $average = array_sum($history) / count($history);
+
+        return $average > 0.0 ? $current / $average : null;
     }
 
 

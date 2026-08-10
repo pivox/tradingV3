@@ -29,11 +29,17 @@ final class AtrRelInRange15mCondition extends AbstractCondition
         $min = $context['min_atr_pct'] ?? self::DEFAULT_MIN;
         $max = $context['max_atr_pct'] ?? self::DEFAULT_MAX;
 
-        if (!is_float($atr) || !is_float($price) || $price <= 0.0 || !is_float($min) || !is_float($max) || $min <= 0.0 || $max <= $min) {
+        if (!is_float($atr) || !is_float($price) || $price <= 0.0
+            || (!is_int($min) && !is_float($min)) || (!is_int($max) && !is_float($max))) {
             return $this->result(self::NAME, false, null, null, $this->baseMeta($context, [
                 'missing_data' => true,
                 'source' => 'ATR',
             ]));
+        }
+        $min = (float) $min;
+        $max = (float) $max;
+        if ($min <= 0.0 || $max <= $min) {
+            return $this->result(self::NAME, false, null, null, $this->baseMeta($context, ['missing_data' => true, 'source' => 'ATR']));
         }
 
         $ratio = $atr / $price;
