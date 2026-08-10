@@ -17,13 +17,6 @@ final readonly class CanonicalOrderPlanBuilder
 
     public function build(CanonicalOrderPlanBuildRequest $request): CanonicalOrderPlan
     {
-        $acceptedRequest = $this->authority->verify($request);
-        $zone = $acceptedRequest->zone;
-        $now = $this->clock->now();
-        if ($zone->computedAt > $now || $zone->expiresAt < $now) {
-            throw new CanonicalOrderPlanException('canonical_order_plan_expired');
-        }
-
-        return $this->validator->validate(CanonicalOrderPlan::fromAcceptedComponents($acceptedRequest, $now));
+        return CanonicalOrderPlan::build($request, $this->clock, $this->validator, $this->authority);
     }
 }

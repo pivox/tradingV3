@@ -134,7 +134,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         ));
     }
 
-    public function testDirectPlanFactoryRejectsFabricatedTargetCosts(): void
+    public function testPublicBuildPathRejectsFabricatedTargetCosts(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
         $request = new CanonicalOrderPlanBuildRequest(
@@ -151,10 +151,11 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
 
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_order_plan_net_r_mismatch');
-        CanonicalOrderPlan::fromAcceptedComponents($request, new \DateTimeImmutable('2026-08-10T12:00:00+00:00'));
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        CanonicalOrderPlan::build($request, $clock, new CanonicalOrderPlanValidator($clock));
     }
 
-    public function testDirectPlanFactoryRejectsEmptyProtectionTargets(): void
+    public function testPublicBuildPathRejectsEmptyProtectionTargets(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
         $protectionArguments = get_object_vars($components['protection']);
@@ -163,9 +164,11 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
 
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_order_plan_protection_mismatch');
-        CanonicalOrderPlan::fromAcceptedComponents(
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        CanonicalOrderPlan::build(
             new CanonicalOrderPlanBuildRequest(...$components),
-            new \DateTimeImmutable('2026-08-10T12:00:00+00:00'),
+            $clock,
+            new CanonicalOrderPlanValidator($clock),
         );
     }
 
@@ -192,7 +195,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         ));
     }
 
-    public function testDirectPlanFactoryRejectsFabricatedRiskDecision(): void
+    public function testPublicBuildPathRejectsFabricatedRiskDecision(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();
         $arguments = get_object_vars($components['risk']);
@@ -219,7 +222,8 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
 
         $this->expectException(CanonicalOrderPlanException::class);
         $this->expectExceptionMessage('canonical_order_plan_risk_mismatch');
-        CanonicalOrderPlan::fromAcceptedComponents($request, new \DateTimeImmutable('2026-08-10T12:00:00+00:00'));
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        CanonicalOrderPlan::build($request, $clock, new CanonicalOrderPlanValidator($clock));
     }
 
     public function testPlanConstructorIsPrivate(): void
@@ -228,6 +232,13 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
 
         self::assertNotNull($constructor);
         self::assertTrue($constructor->isPrivate());
+    }
+
+    public function testAcceptedComponentsFactoryIsPrivate(): void
+    {
+        $factory = new \ReflectionMethod(CanonicalOrderPlan::class, 'fromAcceptedComponents');
+
+        self::assertTrue($factory->isPrivate());
     }
 
     public function testExactRevalidationIsIndependentFromSerializePrecision(): void

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\OrderPlan\Canonical;
 
+use Psr\Clock\ClockInterface;
+
 final readonly class CanonicalOrderPlan
 {
     /**
@@ -78,11 +80,25 @@ final readonly class CanonicalOrderPlan
     ) {
     }
 
-    public static function fromAcceptedComponents(
+    public static function build(
+        CanonicalOrderPlanBuildRequest $request,
+        ClockInterface $clock,
+        CanonicalOrderPlanValidator $validator,
+        CanonicalOrderPlanAuthority $authority = new CanonicalOrderPlanAuthority(),
+    ): self {
+        $request = $authority->verify($request);
+        $now = $clock->now();
+        if ($request->zone->computedAt > $now || $request->zone->expiresAt < $now) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_expired');
+        }
+
+        return $validator->validate(self::fromAcceptedComponents($request, $now));
+    }
+
+    private static function fromAcceptedComponents(
         CanonicalOrderPlanBuildRequest $request,
         \DateTimeImmutable $createdAt,
     ): self {
-        $request = (new CanonicalOrderPlanAuthority())->verify($request);
         $policy = $request->policy;
         $riskPolicy = $policy->riskPolicy;
         $risk = $request->risk;
