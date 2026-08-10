@@ -157,6 +157,24 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
+    public function testPreservesAnExactDecimalGridPointDuringQuantization(): void
+    {
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 100.0,
+                environmentMaxNotional: 30.0,
+            ),
+            'quantityStep' => 0.1,
+            'minQuantity' => 0.3,
+            'maxQuantity' => 0.3,
+            'marketMaxQuantity' => 0.3,
+        ]));
+
+        self::assertSame(0.3, $decision->quantity);
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);

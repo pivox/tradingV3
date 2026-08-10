@@ -195,8 +195,26 @@ final class CanonicalRiskEngine
             return 0.0;
         }
 
-        $steps = floor($quantity / $step);
-        return round($steps * $step, $this->decimalPlaces($step));
+        $decimalPlaces = $this->decimalPlaces($step);
+        $scale = 10 ** $decimalPlaces;
+        $scaledQuantity = $quantity * $scale;
+        $scaledStep = $step * $scale;
+        if (
+            !\is_finite($scaledQuantity)
+            || $scaledQuantity > (float) PHP_INT_MAX
+            || !\is_finite($scaledStep)
+            || $scaledStep < 1.0
+            || $scaledStep > (float) PHP_INT_MAX
+        ) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        $ulpTolerance = PHP_FLOAT_EPSILON * max(1.0, abs($scaledQuantity)) * 4.0;
+        $quantityUnits = (int) floor($scaledQuantity + $ulpTolerance);
+        $stepUnits = (int) round($scaledStep);
+        $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
+
+        return round($quantizedUnits / $scale, $decimalPlaces);
     }
 
     private function decimalPlaces(float $step): int
