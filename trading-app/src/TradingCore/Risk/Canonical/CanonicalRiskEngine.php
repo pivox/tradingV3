@@ -211,7 +211,10 @@ final class CanonicalRiskEngine
             throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
         }
 
-        $ulpTolerance = PHP_FLOAT_EPSILON * max(1.0, abs($scaledQuantity)) * 4.0;
+        $ulpTolerance = min(
+            0.5,
+            PHP_FLOAT_EPSILON * max(1.0, abs($scaledQuantity)) * 4.0,
+        );
         $quantityUnits = (int) floor($scaledQuantity + $ulpTolerance);
         $stepUnits = (int) round($scaledStep);
         $quantizedUnits = intdiv($quantityUnits, $stepUnits) * $stepUnits;
