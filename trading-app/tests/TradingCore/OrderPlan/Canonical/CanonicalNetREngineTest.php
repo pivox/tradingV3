@@ -98,10 +98,22 @@ final class CanonicalNetREngineTest extends TestCase
         (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
     }
 
-    /** @return array{0: CanonicalExecutionPolicy, 1: CanonicalProtectionDecision} */
-    private function protection(): array
+    public function testFundingIntervalCeilingDoesNotOverflowAtMaximumHoldingWindow(): void
     {
-        $policy = CanonicalExecutionPolicyFixture::policy('long');
+        [$policy, $protection] = $this->protection('PT2562047788015215H30M7S');
+        self::assertSame(PHP_INT_MAX, $policy->holdingWindowSeconds);
+        $costs = $this->executionCosts($policy, 0.0001, fundingRate: 0.0);
+        $risk = $this->riskDecision($policy, $protection, $costs);
+
+        $decision = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
+
+        self::assertSame(intdiv(PHP_INT_MAX - 1, 28_800) + 1, $decision->fundingIntervals);
+    }
+
+    /** @return array{0: CanonicalExecutionPolicy, 1: CanonicalProtectionDecision} */
+    private function protection(string $timeStop = 'PT30M'): array
+    {
+        $policy = CanonicalExecutionPolicyFixture::policy('long', 'atr', $timeStop);
         $observed = new \DateTimeImmutable('2026-08-10T11:59:30+00:00');
         $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate(new CanonicalEntryZoneRequest(
             $policy,
@@ -126,6 +138,7 @@ final class CanonicalNetREngineTest extends TestCase
         float $rate,
         string $entrySpreadSource = 'order_book',
         string $symbol = 'BTCUSDT',
+        float $fundingRate = 0.0001,
     ): CanonicalExecutionCostSnapshot
     {
         return new CanonicalExecutionCostSnapshot(
@@ -144,7 +157,7 @@ final class CanonicalNetREngineTest extends TestCase
             stopSlippageSource: 'execution_model',
             stopSlippageRate: $rate,
             fundingSource: 'venue_schedule',
-            fundingRate: 0.0001,
+            fundingRate: $fundingRate,
             targets: [
                 new CanonicalTargetCostSnapshot('tp1', 'order_book', $rate, 'execution_model', $rate),
                 new CanonicalTargetCostSnapshot('tp2', 'order_book', $rate, 'execution_model', $rate),
@@ -183,7 +196,7 @@ final class CanonicalNetREngineTest extends TestCase
                 $costs->entrySlippageRate,
                 $costs->stopSlippageRate,
                 $costs->fundingRate,
-                1,
+                intdiv($policy->holdingWindowSeconds - 1, $policy->costContract->fundingIntervalSeconds) + 1,
             ),
         ));
     }

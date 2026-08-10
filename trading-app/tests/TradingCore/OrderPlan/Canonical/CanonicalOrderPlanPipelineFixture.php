@@ -32,6 +32,7 @@ final class CanonicalOrderPlanPipelineFixture
      *   policy: CanonicalExecutionPolicy,
      *   zone: CanonicalEntryZone,
      *   protection: CanonicalProtectionDecision,
+     *   riskRequest: CanonicalRiskCalculationRequest,
      *   risk: CanonicalRiskDecision,
      *   netR: CanonicalNetRDecision,
      *   costs: CanonicalExecutionCostSnapshot
@@ -80,7 +81,7 @@ final class CanonicalOrderPlanPipelineFixture
             new \DateTimeImmutable('2026-08-10T11:59:50+00:00'),
             'sha256:' . str_repeat('6', 64),
         );
-        $risk = (new CanonicalRiskEngine())->calculate(new CanonicalRiskCalculationRequest(
+        $riskRequest = new CanonicalRiskCalculationRequest(
             $policy->riskPolicy,
             'BTCUSDT',
             $side,
@@ -96,9 +97,10 @@ final class CanonicalOrderPlanPipelineFixture
             5.0,
             5.0,
             new CanonicalCostSnapshot('taker', 'taker', 0.0001, 0.0001, 0.0001, 0.0001, 0.0001, 1),
-        ));
+        );
+        $risk = (new CanonicalRiskEngine())->calculate($riskRequest);
         $netR = (new CanonicalNetREngine())->calculate(new CanonicalNetRRequest($policy, $protection, $risk, $costs));
 
-        return ['policy' => $policy, 'zone' => $zone, 'protection' => $protection, 'risk' => $risk, 'netR' => $netR, 'costs' => $costs];
+        return ['policy' => $policy, 'zone' => $zone, 'protection' => $protection, 'riskRequest' => $riskRequest, 'risk' => $risk, 'netR' => $netR, 'costs' => $costs];
     }
 }

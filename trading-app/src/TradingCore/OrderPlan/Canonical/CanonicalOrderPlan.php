@@ -31,6 +31,9 @@ final readonly class CanonicalOrderPlan
         public float $zoneUpperPrice,
         public array $targets,
         public float $minimumNetR,
+        public float $equityQuote,
+        public float $availableBalanceQuote,
+        public float $riskRate,
         public float $riskBudgetQuote,
         public float $grossStopLoss,
         public float $totalStopLoss,
@@ -38,9 +41,24 @@ final readonly class CanonicalOrderPlan
         public int $finalLeverage,
         public int $effectiveLeverageCap,
         public float $modeLeverageCap,
+        public float $exchangeLeverageCap,
+        public ?float $symbolLeverageCap,
+        public float $minQuantity,
+        public float $maxQuantity,
+        public ?float $marketMaxQuantity,
+        public float $exchangeMinNotional,
         public float $exchangeMaxNotional,
         public float $environmentMaxNotional,
         public array $capsApplied,
+        public float $makerFeeRate,
+        public float $takerFeeRate,
+        public string $entryLiquidityRole,
+        public string $stopLiquidityRole,
+        public float $entrySpreadRate,
+        public float $stopSpreadRate,
+        public float $entrySlippageRate,
+        public float $stopSlippageRate,
+        public float $fundingRate,
         public float $entryFee,
         public float $stopExitFee,
         public float $entrySpreadCost,
@@ -60,20 +78,60 @@ final readonly class CanonicalOrderPlan
     ) {
     }
 
-    /**
-     * @param non-empty-list<CanonicalOrderPlanTarget> $targets
-     * @param non-empty-list<string>                  $inputHashes
-     */
     public static function fromAcceptedComponents(
         CanonicalOrderPlanBuildRequest $request,
-        array $targets,
-        array $inputHashes,
         \DateTimeImmutable $createdAt,
     ): self {
         $policy = $request->policy;
         $riskPolicy = $policy->riskPolicy;
         $risk = $request->risk;
+        $riskRequest = $request->riskRequest;
+        $costs = $request->costs;
         $zone = $request->zone;
+        if (count($request->protection->targets) !== count($request->netR->targets)) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_target_mismatch');
+        }
+        $costsByTarget = [];
+        foreach ($costs->targets as $targetCost) {
+            $costsByTarget[$targetCost->targetId] = $targetCost;
+        }
+        $targets = [];
+        foreach ($request->protection->targets as $index => $protectionTarget) {
+            $netTarget = $request->netR->targets[$index] ?? null;
+            $targetCost = $costsByTarget[$protectionTarget->id] ?? null;
+            if (
+                !$netTarget instanceof CanonicalNetRTargetDecision
+                || !$targetCost instanceof CanonicalTargetCostSnapshot
+                || $netTarget->id !== $protectionTarget->id
+                || $netTarget->price !== $protectionTarget->price
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_target_mismatch');
+            }
+            $targets[] = new CanonicalOrderPlanTarget(
+                id: $protectionTarget->id,
+                price: $protectionTarget->price,
+                riskMultiple: $protectionTarget->riskMultiple,
+                liquidityRole: $protectionTarget->liquidityRole,
+                spreadRate: (float) $targetCost->spreadRate,
+                slippageRate: (float) $targetCost->slippageRate,
+                grossReward: $netTarget->grossReward,
+                entryFee: $netTarget->entryFee,
+                targetFee: $netTarget->targetFee,
+                entrySpreadCost: $netTarget->entrySpreadCost,
+                entrySlippageCost: $netTarget->entrySlippageCost,
+                targetSpreadCost: $netTarget->targetSpreadCost,
+                targetSlippageCost: $netTarget->targetSlippageCost,
+                fundingCost: $netTarget->fundingCost,
+                netReward: $netTarget->netReward,
+                netRisk: $netTarget->netRisk,
+                netR: $netTarget->netR,
+            );
+        }
+        $inputHashes = array_values(array_unique([
+            ...$zone->inputHashes,
+            ...$request->protection->inputHashes,
+            $request->netR->costInputHash,
+        ]));
         $values = [
             'modeId' => $riskPolicy->modeId,
             'modeVersion' => $riskPolicy->modeVersion,
@@ -94,6 +152,9 @@ final readonly class CanonicalOrderPlan
             'zoneUpperPrice' => $zone->upperPrice,
             'targets' => $targets,
             'minimumNetR' => $policy->minimumNetR,
+            'equityQuote' => $riskRequest->equityQuote,
+            'availableBalanceQuote' => $riskRequest->availableBalanceQuote,
+            'riskRate' => $riskPolicy->riskRate,
             'riskBudgetQuote' => $risk->riskBudgetQuote,
             'grossStopLoss' => $risk->grossStopLoss,
             'totalStopLoss' => $risk->totalStopLoss,
@@ -101,9 +162,24 @@ final readonly class CanonicalOrderPlan
             'finalLeverage' => $risk->finalLeverage,
             'effectiveLeverageCap' => $risk->effectiveLeverageCap,
             'modeLeverageCap' => $riskPolicy->modeLeverageCap,
+            'exchangeLeverageCap' => $riskRequest->exchangeLeverageCap,
+            'symbolLeverageCap' => $riskRequest->symbolLeverageCap,
+            'minQuantity' => $riskRequest->minQuantity,
+            'maxQuantity' => $riskRequest->maxQuantity,
+            'marketMaxQuantity' => $riskRequest->marketMaxQuantity,
+            'exchangeMinNotional' => $riskPolicy->exchangeMinNotional,
             'exchangeMaxNotional' => $riskPolicy->exchangeMaxNotional,
             'environmentMaxNotional' => $riskPolicy->environmentMaxNotional,
             'capsApplied' => $risk->capsApplied,
+            'makerFeeRate' => $riskPolicy->makerFeeRate,
+            'takerFeeRate' => $riskPolicy->takerFeeRate,
+            'entryLiquidityRole' => (string) $costs->entryLiquidityRole,
+            'stopLiquidityRole' => (string) $costs->stopLiquidityRole,
+            'entrySpreadRate' => (float) $costs->entrySpreadRate,
+            'stopSpreadRate' => (float) $costs->stopSpreadRate,
+            'entrySlippageRate' => (float) $costs->entrySlippageRate,
+            'stopSlippageRate' => (float) $costs->stopSlippageRate,
+            'fundingRate' => (float) $costs->fundingRate,
             'entryFee' => $risk->entryFee,
             'stopExitFee' => $risk->stopExitFee,
             'entrySpreadCost' => $risk->entrySpreadCost,
@@ -123,7 +199,7 @@ final readonly class CanonicalOrderPlan
         $planHash = self::hashValues($values);
         $values['planHash'] = $planHash;
 
-        return new self(...$values);
+        return CanonicalOrderPlanValidator::validateAt(new self(...$values), $createdAt);
     }
 
     public function expectedPlanHash(): string

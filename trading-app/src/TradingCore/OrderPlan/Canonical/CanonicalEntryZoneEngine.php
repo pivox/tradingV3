@@ -136,7 +136,7 @@ final readonly class CanonicalEntryZoneEngine
 
     private static function decimal(float $value): BigDecimal
     {
-        return BigDecimal::of((string) $value);
+        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_entry_zone_value_invalid');
     }
 
     private static function quantize(BigDecimal $value, BigDecimal $tick, int $roundingMode): BigDecimal

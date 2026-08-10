@@ -12,10 +12,10 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 
 final class CanonicalExecutionPolicyFixture
 {
-    public static function policy(string $side = 'long', string $stopKind = 'atr'): CanonicalExecutionPolicy
+    public static function policy(string $side = 'long', string $stopKind = 'atr', string $timeStop = 'PT30M'): CanonicalExecutionPolicy
     {
         $setupId = 'day_trading.trend_continuation.' . $side;
-        $payload = self::payload($side, $stopKind);
+        $payload = self::payload($side, $stopKind, $timeStop);
         $catalogHash = 'sha256:' . str_repeat('b', 64);
         $snapshot = new EffectiveTradingConfigSnapshot(
             new EffectiveTradingConfigRequest('day_trading', '1.0.0', $setupId, '1.0.0', 'fake', 'test', $side),
@@ -30,7 +30,7 @@ final class CanonicalExecutionPolicyFixture
     }
 
     /** @return array<string, mixed> */
-    public static function payload(string $side = 'long', string $stopKind = 'atr'): array
+    public static function payload(string $side = 'long', string $stopKind = 'atr', string $timeStop = 'PT30M'): array
     {
         $decision = static fn (mixed $value, string $unit): array => [
             'state' => 'defined',
@@ -89,7 +89,7 @@ final class CanonicalExecutionPolicyFixture
                     ], 'target_policy'),
                     'minimum_net_r' => $decision(1.2, 'net_r_multiple'),
                     'invalidation' => $decision(['kind' => 'close_beyond_stop'], 'invalidation_policy'),
-                    'time_stop' => $decision('PT30M', 'duration'),
+                    'time_stop' => $decision($timeStop, 'duration'),
                     'cost_contract' => $decision([
                         'entry_spread_source' => 'order_book',
                         'entry_slippage_source' => 'execution_model',

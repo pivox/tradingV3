@@ -145,7 +145,7 @@ final class CanonicalProtectionEngine
 
     private static function decimal(float $value): BigDecimal
     {
-        return BigDecimal::of((string) $value);
+        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_protection_value_invalid');
     }
 
     private static function quantize(BigDecimal $value, BigDecimal $tick, int $roundingMode): BigDecimal

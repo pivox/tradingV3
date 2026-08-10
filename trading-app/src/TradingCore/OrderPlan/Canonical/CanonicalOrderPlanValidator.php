@@ -16,13 +16,17 @@ final readonly class CanonicalOrderPlanValidator
 
     public function validate(CanonicalOrderPlan $plan): CanonicalOrderPlan
     {
+        return self::validateAt($plan, $this->clock->now());
+    }
+
+    public static function validateAt(CanonicalOrderPlan $plan, \DateTimeImmutable $now): CanonicalOrderPlan
+    {
         if (!hash_equals($plan->expectedPlanHash(), $plan->planHash)) {
             throw new CanonicalOrderPlanException('canonical_order_plan_hash_mismatch');
         }
         if ($plan->orderType !== 'limit') {
             throw new CanonicalOrderPlanException('canonical_order_plan_type_invalid');
         }
-        $now = $this->clock->now();
         if ($plan->zoneComputedAt > $plan->createdAt || $plan->createdAt > $now || $plan->expiresAt < $now) {
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
@@ -37,7 +41,14 @@ final readonly class CanonicalOrderPlanValidator
             $plan->zoneUpperPrice,
             $plan->positionNotional,
             $plan->grossStopLoss,
+            $plan->equityQuote,
+            $plan->availableBalanceQuote,
+            $plan->riskRate,
             $plan->modeLeverageCap,
+            $plan->exchangeLeverageCap,
+            $plan->minQuantity,
+            $plan->maxQuantity,
+            $plan->exchangeMinNotional,
             $plan->exchangeMaxNotional,
             $plan->environmentMaxNotional,
         ] as $value) {
@@ -67,41 +78,80 @@ final readonly class CanonicalOrderPlanValidator
                 throw new CanonicalOrderPlanException('canonical_order_plan_price_tick_invalid');
             }
         }
-        if (
-            !\is_finite($plan->totalStopLoss)
-            || !\is_finite($plan->riskBudgetQuote)
-            || $plan->totalStopLoss <= 0.0
-            || $plan->totalStopLoss > $plan->riskBudgetQuote
-        ) {
-            throw new CanonicalOrderPlanException('canonical_order_plan_risk_budget_breach');
-        }
         $quantity = self::decimal($plan->quantity);
         $contractSize = self::decimal($plan->contractSize);
         $entry = self::decimal($plan->entryPrice);
+        $stop = self::decimal($plan->stopPrice);
         $expectedNotional = $entry->multipliedBy($contractSize)->multipliedBy($quantity);
-        if (!$expectedNotional->isEqualTo(self::decimal($plan->positionNotional))) {
+        $stopNotional = $stop->multipliedBy($contractSize)->multipliedBy($quantity);
+        $expectedRiskBudget = self::decimal($plan->equityQuote)->multipliedBy(self::decimal($plan->riskRate));
+        $expectedGrossStopLoss = $entry->minus($stop)->abs()->multipliedBy($contractSize)->multipliedBy($quantity);
+        $expectedEntryFee = $expectedNotional->multipliedBy(self::decimal(self::feeRate($plan->entryLiquidityRole, $plan)));
+        $expectedStopFee = $stopNotional->multipliedBy(self::decimal(self::feeRate($plan->stopLiquidityRole, $plan)));
+        $expectedEntrySpread = $expectedNotional->multipliedBy(self::decimal($plan->entrySpreadRate));
+        $expectedStopSpread = $stopNotional->multipliedBy(self::decimal($plan->stopSpreadRate));
+        $expectedEntrySlippage = $expectedNotional->multipliedBy(self::decimal($plan->entrySlippageRate));
+        $expectedStopSlippage = $stopNotional->multipliedBy(self::decimal($plan->stopSlippageRate));
+        $expectedFunding = $expectedNotional
+            ->multipliedBy(self::decimal(self::adverseFundingRate($plan->side, $plan->fundingRate)))
+            ->multipliedBy((string) $plan->fundingIntervals);
+        $expectedStopLoss = $expectedGrossStopLoss
+            ->plus($expectedEntryFee)
+            ->plus($expectedStopFee)
+            ->plus($expectedEntrySpread)
+            ->plus($expectedStopSpread)
+            ->plus($expectedEntrySlippage)
+            ->plus($expectedStopSlippage)
+            ->plus($expectedFunding);
+        if ($expectedNotional->toFloat() !== $plan->positionNotional) {
             throw new CanonicalOrderPlanException('canonical_order_plan_notional_mismatch');
         }
-        $expectedStopLoss = self::decimal($plan->grossStopLoss)
-            ->plus(self::decimal($plan->entryFee))
-            ->plus(self::decimal($plan->stopExitFee))
-            ->plus(self::decimal($plan->entrySpreadCost))
-            ->plus(self::decimal($plan->stopSpreadCost))
-            ->plus(self::decimal($plan->entrySlippageCost))
-            ->plus(self::decimal($plan->stopSlippageCost))
-            ->plus(self::decimal($plan->fundingCost));
-        if (!$expectedStopLoss->isEqualTo(self::decimal($plan->totalStopLoss))) {
+        if (
+            $expectedRiskBudget->toFloat() !== $plan->riskBudgetQuote
+            || $expectedGrossStopLoss->toFloat() !== $plan->grossStopLoss
+            || $expectedEntryFee->toFloat() !== $plan->entryFee
+            || $expectedStopFee->toFloat() !== $plan->stopExitFee
+            || $expectedEntrySpread->toFloat() !== $plan->entrySpreadCost
+            || $expectedStopSpread->toFloat() !== $plan->stopSpreadCost
+            || $expectedEntrySlippage->toFloat() !== $plan->entrySlippageCost
+            || $expectedStopSlippage->toFloat() !== $plan->stopSlippageCost
+            || $expectedFunding->toFloat() !== $plan->fundingCost
+            || $expectedStopLoss->toFloat() !== $plan->totalStopLoss
+        ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_risk_components_mismatch');
         }
+        if ($expectedStopLoss->isLessThanOrEqualTo(BigDecimal::zero()) || $expectedStopLoss->isGreaterThan($expectedRiskBudget)) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_risk_budget_breach');
+        }
+        $leverageCaps = [$plan->modeLeverageCap, $plan->exchangeLeverageCap];
+        if ($plan->symbolLeverageCap !== null) {
+            $leverageCaps[] = $plan->symbolLeverageCap;
+        }
+        $expectedLeverageCap = (int) floor(min($leverageCaps));
+        $expectedLeverage = max(1, $expectedNotional->dividedBy(
+            self::decimal($plan->availableBalanceQuote),
+            0,
+            RoundingMode::CEILING,
+        )->toInt());
         if (
             $plan->finalLeverage < 1
             || $plan->effectiveLeverageCap < 1
+            || $plan->effectiveLeverageCap !== $expectedLeverageCap
+            || $plan->finalLeverage !== $expectedLeverage
             || $plan->finalLeverage > $plan->effectiveLeverageCap
             || $plan->finalLeverage > $plan->modeLeverageCap
         ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_leverage_breach');
         }
-        if ($plan->positionNotional > $plan->exchangeMaxNotional || $plan->positionNotional > $plan->environmentMaxNotional) {
+        if (
+            $plan->quantity < $plan->minQuantity
+            || $plan->quantity > $plan->maxQuantity
+            || ($plan->marketMaxQuantity !== null && $plan->quantity > $plan->marketMaxQuantity)
+            || $plan->positionNotional < $plan->exchangeMinNotional
+            || $plan->positionNotional > $plan->exchangeMaxNotional
+            || $plan->positionNotional > $plan->environmentMaxNotional
+            || $expectedNotional->isGreaterThan(self::decimal($plan->availableBalanceQuote)->multipliedBy((string) $expectedLeverageCap))
+        ) {
             throw new CanonicalOrderPlanException('canonical_order_plan_notional_breach');
         }
         $ids = [];
@@ -125,18 +175,30 @@ final readonly class CanonicalOrderPlanValidator
                 ->abs()
                 ->multipliedBy($contractSize)
                 ->multipliedBy($quantity);
+            $targetNotional = self::decimal($target->price)->multipliedBy($contractSize)->multipliedBy($quantity);
+            $expectedTargetFee = $targetNotional->multipliedBy(self::decimal(self::feeRate($target->liquidityRole, $plan)));
+            $expectedTargetSpread = $targetNotional->multipliedBy(self::decimal($target->spreadRate));
+            $expectedTargetSlippage = $targetNotional->multipliedBy(self::decimal($target->slippageRate));
             $expectedNetReward = $expectedGrossReward
-                ->minus(self::decimal($target->entryFee))
-                ->minus(self::decimal($target->targetFee))
-                ->minus(self::decimal($target->entrySpreadCost))
-                ->minus(self::decimal($target->entrySlippageCost))
-                ->minus(self::decimal($target->targetSpreadCost))
-                ->minus(self::decimal($target->targetSlippageCost))
-                ->minus(self::decimal($target->fundingCost));
-            $expectedNetR = $expectedNetReward->dividedBy(self::decimal($target->netRisk), 18, RoundingMode::DOWN);
+                ->minus($expectedEntryFee)
+                ->minus($expectedTargetFee)
+                ->minus($expectedEntrySpread)
+                ->minus($expectedEntrySlippage)
+                ->minus($expectedTargetSpread)
+                ->minus($expectedTargetSlippage)
+                ->minus($expectedFunding);
+            $expectedNetR = $expectedNetReward->dividedBy($expectedStopLoss, 18, RoundingMode::DOWN);
             if (
                 $expectedGrossReward->toFloat() !== $target->grossReward
+                || $expectedEntryFee->toFloat() !== $target->entryFee
+                || $expectedTargetFee->toFloat() !== $target->targetFee
+                || $expectedEntrySpread->toFloat() !== $target->entrySpreadCost
+                || $expectedEntrySlippage->toFloat() !== $target->entrySlippageCost
+                || $expectedTargetSpread->toFloat() !== $target->targetSpreadCost
+                || $expectedTargetSlippage->toFloat() !== $target->targetSlippageCost
+                || $expectedFunding->toFloat() !== $target->fundingCost
                 || $expectedNetReward->toFloat() !== $target->netReward
+                || $expectedStopLoss->toFloat() !== $target->netRisk
                 || $expectedNetR->toFloat() !== $target->netR
             ) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_target_cost_mismatch');
@@ -157,11 +219,25 @@ final readonly class CanonicalOrderPlanValidator
 
     private static function decimal(float $value): BigDecimal
     {
-        return BigDecimal::of((string) $value);
+        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_order_plan_value_invalid');
     }
 
     private static function aligned(float $value, float $step): bool
     {
         return self::decimal($value)->remainder(self::decimal($step))->isZero();
+    }
+
+    private static function feeRate(string $role, CanonicalOrderPlan $plan): float
+    {
+        return match ($role) {
+            'maker' => $plan->makerFeeRate,
+            'taker' => $plan->takerFeeRate,
+            default => throw new CanonicalOrderPlanException('canonical_order_plan_liquidity_role_invalid'),
+        };
+    }
+
+    private static function adverseFundingRate(string $side, float $fundingRate): float
+    {
+        return $side === 'long' ? max(0.0, $fundingRate) : max(0.0, -$fundingRate);
     }
 }

@@ -43,9 +43,9 @@ final class CanonicalNetREngine
 
         $this->validateCostSources($policy, $costs);
         $fundingIntervals = intdiv(
-            $policy->holdingWindowSeconds + $policy->costContract->fundingIntervalSeconds - 1,
+            $policy->holdingWindowSeconds - 1,
             $policy->costContract->fundingIntervalSeconds,
-        );
+        ) + 1;
         $riskCosts = $risk->costs;
         if (
             $riskCosts->entryLiquidityRole !== $costs->entryLiquidityRole
@@ -160,10 +160,6 @@ final class CanonicalNetREngine
 
     private static function decimal(float $value): BigDecimal
     {
-        if (!\is_finite($value)) {
-            throw new CanonicalOrderPlanException('canonical_net_r_value_invalid');
-        }
-
-        return BigDecimal::of((string) $value);
+        return CanonicalOrderPlanDecimal::fromFloat($value, 'canonical_net_r_value_invalid');
     }
 }

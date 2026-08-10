@@ -11,6 +11,8 @@ final readonly class CanonicalOrderPlanTarget
         public float $price,
         public float $riskMultiple,
         public string $liquidityRole,
+        public float $spreadRate,
+        public float $slippageRate,
         public float $grossReward,
         public float $entryFee,
         public float $targetFee,
