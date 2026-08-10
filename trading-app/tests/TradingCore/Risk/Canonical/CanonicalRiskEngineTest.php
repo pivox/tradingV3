@@ -157,6 +157,24 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
+    public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_below_minimum');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 5.0e-11,
+            ),
+            'quantityStep' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'minQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'maxQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+            'marketMaxQuantity' => CanonicalRiskCalculationRequest::MIN_QUANTITY_STEP,
+        ]));
+    }
+
     public function testRejectsBelowExchangeMinimumNotionalWithoutRoundingUp(): void
     {
         $this->expectException(CanonicalRiskException::class);

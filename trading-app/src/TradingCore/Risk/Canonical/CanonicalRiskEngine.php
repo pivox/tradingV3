@@ -79,7 +79,7 @@ final class CanonicalRiskEngine
                 throw new CanonicalRiskException('canonical_risk_post_quantization_cap_breach');
             }
         }
-        if ($quantity + self::EPSILON < $request->minQuantity) {
+        if ($quantity <= 0.0 || $quantity + self::EPSILON < $request->minQuantity) {
             throw new CanonicalRiskException('canonical_risk_quantity_below_minimum', [
                 'raw_quantity' => $rawQuantity,
                 'minimum_quantity' => $request->minQuantity,
@@ -89,7 +89,7 @@ final class CanonicalRiskEngine
         $components = $this->components($request, $quantity);
         if ($components['total'] > $riskBudgetQuote + self::EPSILON) {
             $quantity = $this->quantizeDown($quantity - $request->quantityStep, $request->quantityStep);
-            if ($quantity + self::EPSILON < $request->minQuantity) {
+            if ($quantity <= 0.0 || $quantity + self::EPSILON < $request->minQuantity) {
                 throw new CanonicalRiskException('canonical_risk_quantity_below_minimum');
             }
             $components = $this->components($request, $quantity);
