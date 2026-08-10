@@ -84,4 +84,3 @@ Lot B exposes the canonical pipeline and serializer but does not remove the
 portfolio blockers owned by Lot C or make unresolved setup contracts
 executable. Fake/Paper/demo-testnet adapters may consume the pipeline in later
 mode issues. Mainnet remains public/read-only.
-

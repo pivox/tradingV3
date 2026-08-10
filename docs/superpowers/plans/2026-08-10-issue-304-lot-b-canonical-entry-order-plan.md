@@ -63,4 +63,3 @@ Keep all unresolved setup contracts blocked.
 - Update the risk/order-plan handbook with Lot B boundaries.
 - Push a draft PR referencing #304, request iterative Codex review, resolve all
   findings, pass CI, then merge before starting Lot C.
-
