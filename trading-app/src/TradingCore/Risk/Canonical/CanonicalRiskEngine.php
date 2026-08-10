@@ -88,7 +88,7 @@ final class CanonicalRiskEngine
 
         $components = $this->components($request, $quantity);
         if ($components['total'] > $riskBudgetQuote) {
-            $quantity = $this->quantizeDown($quantity - $request->quantityStep, $request->quantityStep);
+            $quantity = $this->subtractOneStep($quantity, $request->quantityStep);
             if ($quantity <= 0.0 || $quantity < $request->minQuantity) {
                 throw new CanonicalRiskException('canonical_risk_quantity_below_minimum');
             }
@@ -211,7 +211,7 @@ final class CanonicalRiskEngine
 
     private function scaledFloorUnits(float $value, int $decimalPlaces): int
     {
-        $decimal = json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+        $decimal = $this->canonicalDecimal($value);
         if (
             !\is_string($decimal)
             || preg_match('/\A(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?\z/D', $decimal, $matches) !== 1
@@ -255,6 +255,47 @@ final class CanonicalRiskEngine
         }
 
         return (int) $scaled;
+    }
+
+    private function canonicalDecimal(float $value): string
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        if ($previousPrecision === false) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        $changed = $previousPrecision !== '-1';
+        if ($changed && ini_set('serialize_precision', '-1') === false) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        $decimal = false;
+        $restored = true;
+        try {
+            $decimal = json_encode($value, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR);
+        } finally {
+            if ($changed) {
+                $restored = ini_set('serialize_precision', $previousPrecision) !== false;
+            }
+        }
+        if (!\is_string($decimal) || !$restored) {
+            throw new CanonicalRiskException('canonical_risk_quantity_precision_unsupported');
+        }
+
+        return $decimal;
+    }
+
+    private function subtractOneStep(float $quantity, float $step): float
+    {
+        $decimalPlaces = $this->decimalPlaces($step);
+        $scale = 10 ** $decimalPlaces;
+        $quantityUnits = $this->scaledFloorUnits($quantity, $decimalPlaces);
+        $stepUnits = $this->scaledFloorUnits($step, $decimalPlaces);
+        if ($quantityUnits < $stepUnits || $stepUnits < 1) {
+            return 0.0;
+        }
+
+        return round(($quantityUnits - $stepUnits) / $scale, $decimalPlaces);
     }
 
     private function decimalPlaces(float $step): int

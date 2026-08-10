@@ -261,6 +261,62 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertLessThanOrEqual($fractionalCap, $decision->quantity);
     }
 
+    public function testRiskCorrectionSubtractsExactlyOneScaledIntegerStep(): void
+    {
+        $lossPerQuantity = 0.001 * 0.001 + 0.003 * 0.001 * 0.0007;
+        $riskBudget = $lossPerQuantity * 0.3;
+        $decision = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy(
+                'long',
+                riskRate: 0.01,
+                makerFeeRate: 0.0007,
+                takerFeeRate: 0.0,
+                exchangeMinNotional: 0.0,
+                exchangeMaxNotional: 1.0,
+                environmentMaxNotional: 1.0,
+            ),
+            'equityQuote' => $riskBudget / 0.01,
+            'availableBalanceQuote' => 1.0,
+            'entryPrice' => 0.003,
+            'stopPrice' => 0.002,
+            'contractSize' => 0.001,
+            'quantityStep' => 0.1,
+            'minQuantity' => 0.2,
+            'maxQuantity' => 0.3,
+            'marketMaxQuantity' => 0.3,
+            'costs' => new CanonicalCostSnapshot('maker', 'taker', 0.0, 0.0, 0.0, 0.0, 0.0, 0),
+        ]));
+
+        self::assertSame(0.2, $decision->quantity);
+        self::assertLessThanOrEqual($decision->riskBudgetQuote, $decision->totalStopLoss);
+    }
+
+    public function testCanonicalDecimalParsingIsIndependentOfIniSerializePrecision(): void
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        self::assertNotFalse($previousPrecision);
+        self::assertNotFalse(ini_set('serialize_precision', '17'));
+
+        try {
+            $decision = (new CanonicalRiskEngine())->calculate($this->request([
+                'policy' => $this->policy(
+                    'long',
+                    exchangeMinNotional: 0.0,
+                    exchangeMaxNotional: 100.0,
+                    environmentMaxNotional: 30.0,
+                ),
+                'quantityStep' => 0.1,
+                'minQuantity' => 0.3,
+                'maxQuantity' => 0.3,
+                'marketMaxQuantity' => 0.3,
+            ]));
+        } finally {
+            ini_set('serialize_precision', $previousPrecision);
+        }
+
+        self::assertSame(0.3, $decision->quantity);
+    }
+
     public function testRejectsZeroQuantityAtMinimumSupportedStep(): void
     {
         $this->expectException(CanonicalRiskException::class);

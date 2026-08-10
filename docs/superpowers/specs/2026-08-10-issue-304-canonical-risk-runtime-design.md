@@ -58,7 +58,7 @@ risk_budget_quote = equity * riskRate
 maximum_notional = risk_budget_quote / (stop_distance_rate + stop_path_cost_rate)
 ```
 
-Quantity is derived from `maximum_notional`, then rounded down to the exchange quantity step on a scaled-integer decimal grid. Steps below `1e-12` or not representable on the supported 12-decimal grid reject, as does a scaled-integer overflow. Every cap is revalidated after quantization with hard fail-closed bounds rather than an absolute epsilon. Minimum quantity or minimum notional is never reached by rounding up; such an order rejects. Maximum quantity, market maximum quantity, available-margin capacity, and every leverage cap are applied before a final quantity is selected.
+Quantity is derived from `maximum_notional`, then rounded down to the exchange quantity step on a scaled-integer decimal grid whose canonical float parsing is independent of the process `serialize_precision`. Steps below `1e-12` or not representable on the supported 12-decimal grid reject, as does a scaled-integer overflow. Every cap is revalidated after quantization with hard fail-closed bounds rather than an absolute epsilon. Any one-step risk correction is also subtracted in scaled integer units. Minimum quantity or minimum notional is never reached by rounding up; such an order rejects. Maximum quantity, market maximum quantity, available-margin capacity, and every leverage cap are applied before a final quantity is selected.
 
 The engine recalculates stop-path loss from the final price, quantity, contract size, and costs. It emits an executable decision only when:
 
