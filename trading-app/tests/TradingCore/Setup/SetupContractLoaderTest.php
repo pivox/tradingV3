@@ -325,7 +325,7 @@ final class SetupContractLoaderTest extends TestCase
         (new SetupContractValidator())->validate($document);
     }
 
-    public function testSetupSchemaConditionEnumMatchesCanonicalCatalog(): void
+    public function testSetupSchemaConditionEnumMatchesPublicCatalogSurface(): void
     {
         $schema = json_decode(
             (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
@@ -337,7 +337,13 @@ final class SetupContractLoaderTest extends TestCase
         self::assertIsArray($schemaConditionIds);
         sort($schemaConditionIds, SORT_STRING);
 
-        self::assertSame($this->catalog()->conditionIds(), $schemaConditionIds);
+        $internalCompositeDependencies = [
+            'close_above_ma_9', 'close_above_vwap', 'close_below_ma_9',
+            'ema_20_gt_50', 'ema_20_slope_pos', 'ma9_cross_up_ma21',
+        ];
+        $publicConditionIds = array_values(array_diff($this->catalog()->conditionIds(), $internalCompositeDependencies));
+
+        self::assertSame($publicConditionIds, $schemaConditionIds);
     }
 
     public function testSetupSchemaParameterKeysMatchCanonicalCatalog(): void

@@ -6,7 +6,7 @@ use App\Indicator\Attribute\AsIndicatorCondition;
 use Symfony\Component\DependencyInjection\Attribute\AsTaggedItem;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
-#[AsIndicatorCondition(timeframes: ['1m'], side: 'long', name: 'ema_20_gt_50')]
+#[AsIndicatorCondition(timeframes: ['1m', '5m', '15m'], side: 'long', name: 'ema_20_gt_50')]
 #[AutoconfigureTag('app.indicator.condition')]
 #[AsTaggedItem(index: 'ema_20_gt_50')]
 
@@ -14,6 +14,7 @@ final class Ema20Gt50Condition extends AbstractCondition
 {
     public function getName(): string { return 'ema_20_gt_50'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
         $ema20 = $context['ema'][20] ?? null;

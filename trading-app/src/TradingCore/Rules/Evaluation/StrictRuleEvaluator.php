@@ -85,11 +85,54 @@ final readonly class StrictRuleEvaluator
         if ($definition->status === 'blocked') {
             return [false, 'condition_blocked', $base];
         }
+        if ($node->timeframe === 'global' && $definition->contextSource === 'indicator_snapshot') {
+            $snapshots = $context->snapshotsForSource($definition->contextSource);
+            if ($snapshots === []) {
+                return [false, 'missing_timeframe_snapshot', $base + [
+                    'aggregation' => 'all_available_timeframes',
+                    'children' => [],
+                ]];
+            }
+            $children = [];
+            $passed = true;
+            foreach ($snapshots as $snapshot) {
+                [$childPassed, $childReason, $childTrace] = $this->evaluateConditionAgainstSnapshot($node, $context, $snapshot);
+                $passed = $passed && $childPassed;
+                $children[] = $childTrace + ['reason_code' => $childReason, 'passed' => $childPassed];
+            }
+
+            return [$passed, $passed ? 'condition_passed' : 'condition_failed', $base + [
+                'aggregation' => 'all_available_timeframes',
+                'children' => $children,
+            ]];
+        }
         $snapshot = $context->snapshot($node->timeframe, $definition->contextSource);
         if ($snapshot === null) {
             return [false, 'missing_timeframe_snapshot', $base];
         }
+
+        return $this->evaluateConditionAgainstSnapshot($node, $context, $snapshot);
+    }
+
+    /** @return array{bool, string, array<string, mixed>} */
+    private function evaluateConditionAgainstSnapshot(
+        ConditionNode $node,
+        RuleEvaluationContext $context,
+        RuleInputSnapshot $snapshot,
+    ): array {
+        $definition = $this->catalog->definition($node->conditionId);
+        $base = [
+            'kind' => 'condition',
+            'condition_id' => $node->conditionId,
+            'timeframe' => $snapshot->timeframe,
+            'requested_timeframe' => $node->timeframe,
+            'side' => $node->side,
+            'parameters' => $node->parameters,
+            'provenance' => $node->provenance,
+            'implementation' => $definition->implementation,
+        ];
         $base['input_source'] = $snapshot->source;
+        $base['input_freshness_seconds'] = $this->catalog->freshnessSeconds($snapshot->source, $snapshot->timeframe);
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
         if (!$snapshot->isValidAt($context->evaluatedAt)) {
@@ -101,14 +144,15 @@ final readonly class StrictRuleEvaluator
             return [false, 'condition_implementation_missing', $base];
         }
         $conditionContext = array_replace($snapshot->values, $node->parameters, [
-            'timeframe' => $node->timeframe,
+            'timeframe' => $snapshot->timeframe,
+            'side' => $node->side,
             'series_order' => $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
         ]);
         try {
             $result = $isCompiledExpression
-                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry))->evaluate($node->conditionId, $conditionContext)
+                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry, $this->catalog))->evaluate($node->conditionId, $conditionContext)
                 : $condition->evaluate($conditionContext);
         } catch (\Throwable $exception) {
             return [false, 'condition_error', $base + ['exception' => $exception::class]];

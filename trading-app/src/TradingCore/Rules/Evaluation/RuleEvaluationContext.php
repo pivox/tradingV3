@@ -35,6 +35,15 @@ final readonly class RuleEvaluationContext
         return $this->snapshotsByIdentity[self::identity($timeframe, $source)] ?? null;
     }
 
+    /** @return list<RuleInputSnapshot> */
+    public function snapshotsForSource(string $source): array
+    {
+        return array_values(array_filter(
+            $this->snapshotsByIdentity,
+            static fn (RuleInputSnapshot $snapshot): bool => $snapshot->source === $source,
+        ));
+    }
+
     private static function identity(string $timeframe, string $source): string
     {
         return $timeframe . "\0" . $source;

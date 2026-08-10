@@ -6,6 +6,7 @@ namespace App\Tests\TradingCore\Rules\Catalog;
 
 use App\TradingCore\Rules\Catalog\ConditionCatalogException;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Evaluation\StrictCompiledExpressionEvaluator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Yaml;
@@ -35,8 +36,9 @@ final class ConditionCatalogLoaderTest extends TestCase
 
         self::assertSame('condition-catalog.v1', $catalog->schemaVersion);
         self::assertSame('1.0.0', $catalog->catalogVersion);
-        self::assertCount(54, $catalog->conditionIds());
-        self::assertSame($referenced, $catalog->conditionIds());
+        self::assertCount(60, $catalog->conditionIds());
+        self::assertSame([], array_values(array_diff($referenced, $catalog->conditionIds())));
+        self::assertSame([], array_values(array_diff(StrictCompiledExpressionEvaluator::referencedConditionIds(), $catalog->conditionIds())));
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $catalog->stableHash());
         self::assertSame($catalog->stableHash(), (new ConditionCatalogLoader())->loadFile($this->catalogPath)->stableHash());
     }
@@ -51,6 +53,10 @@ final class ConditionCatalogLoaderTest extends TestCase
         $reordered['conditions'][0]['parameters'] = array_reverse($reordered['conditions'][0]['parameters'], true);
 
         self::assertSame($loader->load($document)->stableHash(), $loader->load($reordered)->stableHash());
+
+        $changedFreshness = $document;
+        $changedFreshness['input_freshness_seconds']['indicator_snapshot']['15m']++;
+        self::assertNotSame($loader->load($document)->stableHash(), $loader->load($changedFreshness)->stableHash());
     }
 
     public function testEveryReferencedYamlCompositeUsesTheCompiledAuthority(): void
@@ -100,6 +106,14 @@ final class ConditionCatalogLoaderTest extends TestCase
         $unsafe = $this->validDocument();
         $unsafe['conditions'][0]['missing_data_policy'] = 'pass';
         $this->assertRejected($unsafe, 'missing_data_policy must be reject');
+
+        $missingFreshness = $this->validDocument();
+        $missingFreshness['input_freshness_seconds']['indicator_snapshot'] = ['5m' => 480];
+        $this->assertRejected($missingFreshness, 'has no freshness contract');
+
+        $invalidFreshness = $this->validDocument();
+        $invalidFreshness['input_freshness_seconds']['indicator_snapshot']['15m'] = -1;
+        $this->assertRejected($invalidFreshness, 'must be a non-negative integer');
     }
 
     public function testRejectsAmbiguousSeriesAndInvalidParameterSchema(): void
@@ -113,6 +127,14 @@ final class ConditionCatalogLoaderTest extends TestCase
         $parameter = $this->validDocument();
         $parameter['conditions'][0]['parameters']['threshold']['type'] = 'floatish';
         $this->assertRejected($parameter, 'Unsupported parameter type');
+
+        $defaultBelowMin = $this->validDocument();
+        $defaultBelowMin['conditions'][0]['parameters']['threshold']['default'] = -1.0;
+        $this->assertRejected($defaultBelowMin, 'default is below minimum');
+
+        $defaultOutsideEnum = $this->validDocument();
+        $defaultOutsideEnum['conditions'][0]['parameters']['threshold']['values'] = [60.0, 80.0];
+        $this->assertRejected($defaultOutsideEnum, 'default is outside its enum');
     }
 
     /** @return array<string, mixed> */
@@ -121,6 +143,10 @@ final class ConditionCatalogLoaderTest extends TestCase
         return [
             'schema_version' => 'condition-catalog.v1',
             'catalog_version' => '1.0.0',
+            'input_freshness_seconds' => [
+                'indicator_snapshot' => ['15m' => 1_200],
+                'timestamped_order_book' => ['1m' => 5],
+            ],
             'conditions' => [
                 [
                     'id' => 'rsi_lt_70',

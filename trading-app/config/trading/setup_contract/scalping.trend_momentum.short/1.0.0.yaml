@@ -57,7 +57,7 @@ context:
             provenance: 'validations.scalper.yaml:333-335'
             nodes:
               - { condition: macd_hist_decreasing_n, timeframe: 5m, provenance: 'validations.scalper.yaml:334' }
-              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.scalper.yaml:335' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0012, cool_down_bars: 3, require_prev_above: true }, provenance: 'validations.scalper.yaml:335' }
           - { condition: close_below_vwap, timeframe: 5m, provenance: 'validations.scalper.yaml:336' }
           - { condition: rsi_gt_softfloor, timeframe: 5m, parameters: { rsi_softfloor_threshold: 18 }, provenance: 'validations.scalper.yaml:337' }
           - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:338' }
@@ -86,7 +86,7 @@ data_condition_contract:
   required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: defined, value: a5dff2b2d727870b75df39bd34ab5e6a4653a5840e022c0723023d4844e22159, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: a80656808ee1ec65d3f4f2ab485a0e13dcc72bc77a7fbc20eadcbb588b334ae4, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.scalper.yaml', justification: 'Full setup duration absent.' }
 governance:

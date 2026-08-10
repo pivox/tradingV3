@@ -123,7 +123,7 @@ final class CanonicalSetupRuleRuntime
                 $timeframe,
                 'indicator_snapshot',
                 $observedAt,
-                $observedAt->modify('+' . $this->validitySeconds($timeframe) . ' seconds'),
+                $observedAt->modify('+' . $this->catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
                 $indicators,
             );
         }
@@ -133,7 +133,7 @@ final class CanonicalSetupRuleRuntime
                 'global',
                 'effective_config',
                 $evaluatedAt,
-                new \DateTimeImmutable('9999-12-31T23:59:59+00:00'),
+                $evaluatedAt->modify('+' . $this->catalog->freshnessSeconds('effective_config', 'global') . ' seconds'),
                 $config,
             );
         }
@@ -161,15 +161,4 @@ final class CanonicalSetupRuleRuntime
         return null;
     }
 
-    private function validitySeconds(string $timeframe): int
-    {
-        return match ($timeframe) {
-            '4h' => 18_000,
-            '1h' => 4_500,
-            '15m' => 1_200,
-            '5m' => 480,
-            '1m' => 180,
-            default => 0,
-        };
-    }
 }

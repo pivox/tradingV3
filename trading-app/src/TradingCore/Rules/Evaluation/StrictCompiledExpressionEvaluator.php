@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\TradingCore\Rules\Evaluation;
 
 use App\Indicator\Condition\ConditionResult;
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 
 final readonly class StrictCompiledExpressionEvaluator
 {
+    private ConditionCatalog $catalog;
+
     private const IDS = [
         'adx_min_for_trend_1h',
         'close_above_vwap_and_ma9',
@@ -31,14 +36,33 @@ final readonly class StrictCompiledExpressionEvaluator
         'rsi_5m_gt_floor',
     ];
 
-    public function __construct(private StrictConditionRegistry $registry)
+    private const REFERENCED_CONDITION_IDS = [
+        'adx_min_for_trend', 'atr_rel_in_range_15m', 'atr_rel_in_range_5m',
+        'close_above_ema_200', 'close_above_ma_9', 'close_above_vwap',
+        'close_above_vwap_or_ma9', 'close_below_ema_200', 'close_below_ma_9', 'close_below_vwap',
+        'crash_short_pattern_1m', 'ema200_slope_neg', 'ema200_slope_pos', 'ema_20_gt_50',
+        'ema_20_lt_50', 'ema_20_slope_pos', 'ema_50_gt_200', 'ema_50_lt_200',
+        'ema_above_200_with_tolerance', 'ema_below_200_with_tolerance', 'ma9_cross_up_ma21',
+        'macd_hist_decreasing_n', 'near_vwap', 'price_regime_ok_short', 'rsi_5m_gt_floor', 'volume_ratio_ok',
+    ];
+
+    public function __construct(private StrictConditionRegistry $registry, ?ConditionCatalog $catalog = null)
     {
+        $this->catalog = $catalog ?? (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 4) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
     }
 
     /** @return list<string> */
     public static function supportedIds(): array
     {
         return self::IDS;
+    }
+
+    /** @return list<string> */
+    public static function referencedConditionIds(): array
+    {
+        return self::REFERENCED_CONDITION_IDS;
     }
 
     /** @param array<string, mixed> $context */
@@ -74,7 +98,7 @@ final readonly class StrictCompiledExpressionEvaluator
     /** @param array<string, mixed> $context */
     private function relaxedCloseAbove(array $context): ConditionResult
     {
-        $strict = $this->evaluate('close_above_vwap_or_ma9', $context);
+        $strict = $this->child('close_above_vwap_or_ma9', $context);
         $atr = $this->child('atr_rel_in_range_5m', $context);
         $near = $this->child('near_vwap', $context);
         $passed = $strict->passed || ($atr->passed && $near->passed);
@@ -125,7 +149,7 @@ final readonly class StrictCompiledExpressionEvaluator
         $emaRelation = $long ? 'ema_50_gt_200' : 'ema_50_lt_200';
         $closeRelation = $long ? 'close_above_ema_200' : 'close_below_ema_200';
         $slope = $long ? 'ema200_slope_pos' : 'ema200_slope_neg';
-        $first = $this->evaluate($tolerance, $context);
+        $first = $this->child($tolerance, $context);
         $second = $this->child($emaRelation, $context);
         $third = $this->child($closeRelation, $context);
         $fourth = $this->child($slope, $context);
@@ -175,7 +199,7 @@ final readonly class StrictCompiledExpressionEvaluator
     /** @param array<string, mixed> $context */
     private function crashEntry1m(array $context): ConditionResult
     {
-        $pattern = $this->crashPattern1m($context);
+        $pattern = $this->child('crash_short_pattern_1m', $context);
         $pullback = $this->anyChildren('crash_pullback_ready', ['ma9_cross_up_ma21', 'near_vwap'], $context);
 
         return $this->result('crash_short_entry_1m', $pattern->passed && $pullback->passed, null, null, [
@@ -220,8 +244,39 @@ final readonly class StrictCompiledExpressionEvaluator
     /** @param array<string, mixed> $context */
     private function child(string $conditionId, array $context): ConditionResult
     {
+        try {
+            $definition = $this->catalog->definition($conditionId);
+        } catch (ConditionCatalogException) {
+            return $this->result($conditionId, false, null, null, ['missing_catalog_definition' => true]);
+        }
+        if ($definition->status !== 'executable') {
+            return $this->result($conditionId, false, null, null, ['blocked_catalog_definition' => true]);
+        }
+        if (isset($context['_input_source']) && $context['_input_source'] !== $definition->contextSource) {
+            return $this->result($conditionId, false, null, null, ['incompatible_input_source' => true]);
+        }
+        if (isset($context['timeframe']) && !in_array($context['timeframe'], $definition->timeframes, true)) {
+            return $this->result($conditionId, false, null, null, ['incompatible_timeframe' => true]);
+        }
+        if (isset($context['side']) && !in_array($context['side'], $definition->sides, true)) {
+            return $this->result($conditionId, false, null, null, ['incompatible_side' => true]);
+        }
+        foreach ($definition->parameters as $name => $parameter) {
+            if (!array_key_exists($name, $context)) {
+                if ($parameter->required) {
+                    return $this->result($conditionId, false, null, null, ['missing_catalog_parameter' => $name]);
+                }
+                $context[$name] = $parameter->default;
+            }
+        }
+        $authority = [
+            'catalog_implementation' => $definition->implementation,
+            'catalog_provenance' => $definition->provenance,
+        ];
         if (in_array($conditionId, self::IDS, true)) {
-            return $this->evaluate($conditionId, $context);
+            $result = $this->evaluate($conditionId, $context);
+
+            return new ConditionResult($result->name, $result->passed, $result->value, $result->threshold, $authority + $result->meta);
         }
         $condition = $this->registry->get($conditionId);
         if ($condition === null) {
@@ -236,7 +291,7 @@ final readonly class StrictCompiledExpressionEvaluator
             return $this->result($conditionId, false, null, null, ['invalid_result' => true]);
         }
 
-        return $result;
+        return new ConditionResult($result->name, $result->passed, $result->value, $result->threshold, $authority + $result->meta);
     }
 
     private function numberComparison(string $name, mixed $raw, float $threshold, string $operator): ConditionResult

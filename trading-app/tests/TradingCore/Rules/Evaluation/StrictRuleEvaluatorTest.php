@@ -104,6 +104,51 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertSame('condition_passed', $result->reasonCode);
     }
 
+    public function testGlobalIndicatorConditionAggregatesEveryAvailableTimeframeFailClosed(): void
+    {
+        $condition = new class implements ConditionInterface {
+            public function getName(): string { return 'rsi_lt_70'; }
+            /** @param array<string, mixed> $context */
+            public function evaluate(array $context): ConditionResult
+            {
+                $rsi = $context['rsi'] ?? null;
+
+                return new ConditionResult($this->getName(), is_float($rsi) && $rsi < 70.0, is_float($rsi) ? $rsi : null, 70.0, [
+                    'evaluated_timeframe' => $context['timeframe'] ?? null,
+                ]);
+            }
+        };
+        $now = new \DateTimeImmutable('2026-08-10T10:00:00+00:00');
+        $context = new RuleEvaluationContext('config-hash', $now, [
+            new RuleInputSnapshot('5m', 'indicator_snapshot', $now, $now->modify('+480 seconds'), ['rsi' => 65.0]),
+            new RuleInputSnapshot('1h', 'indicator_snapshot', $now, $now->modify('+4500 seconds'), ['rsi' => 75.0]),
+        ]);
+
+        $result = $this->evaluator([$condition])->evaluate(
+            new ConditionNode('rsi_lt_70', 'global', 'long', [], 'fixture:global'),
+            $context,
+        );
+
+        self::assertFalse($result->passed);
+        self::assertSame('condition_failed', $result->reasonCode);
+        self::assertSame('all_available_timeframes', $result->trace['aggregation']);
+        self::assertSame(['1h', '5m'], array_column($result->trace['children'], 'timeframe'));
+        self::assertSame(['1h', '5m'], array_column(array_column($result->trace['children'], 'meta'), 'evaluated_timeframe'));
+        self::assertSame([false, true], array_column($result->trace['children'], 'passed'));
+        self::assertSame([4_500, 480], array_column($result->trace['children'], 'input_freshness_seconds'));
+    }
+
+    public function testGlobalIndicatorConditionRejectsWhenNoIndicatorSnapshotExists(): void
+    {
+        $result = $this->evaluator([])->evaluate(
+            new ConditionNode('rsi_lt_70', 'global', 'long', [], 'fixture:global'),
+            new RuleEvaluationContext('config-hash', new \DateTimeImmutable('2026-08-10T10:00:00+00:00'), []),
+        );
+
+        self::assertFalse($result->passed);
+        self::assertSame('missing_timeframe_snapshot', $result->reasonCode);
+    }
+
     /** @param list<ConditionInterface> $conditions */
     private function evaluator(array $conditions): StrictRuleEvaluator
     {
@@ -132,11 +177,16 @@ final class StrictRuleEvaluatorTest extends TestCase
                 $timeframe,
                 'indicator_snapshot',
                 $stale ? $now->modify('-2 seconds') : $now,
-                $stale ? $now->modify('-1 second') : $now->modify('+1 hour'),
+                $stale ? $now->modify('-1 second') : $now->modify('+' . $this->freshnessSeconds($timeframe) . ' seconds'),
                 $values,
             ),
         ] : [];
 
         return new RuleEvaluationContext('config-hash', $now, $snapshots);
+    }
+
+    private function freshnessSeconds(string $timeframe): int
+    {
+        return ['4h' => 18_000, '1h' => 4_500, '15m' => 1_200, '5m' => 480, '1m' => 180][$timeframe];
     }
 }

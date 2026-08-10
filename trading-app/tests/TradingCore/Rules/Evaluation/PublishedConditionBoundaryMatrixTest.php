@@ -135,6 +135,18 @@ final class PublishedConditionBoundaryMatrixTest extends KernelTestCase
             ['macd' => ['hist' => 0.100001], 'eps' => 0.1],
             [true, true, false],
         ];
+        yield 'macd-cross-up-gap-inclusive' => ['macd_line_cross_up_with_hysteresis',
+            ['macd_hist_last3' => [-0.001, 0.000999], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_below' => true],
+            ['macd_hist_last3' => [-0.001, 0.001], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_below' => true],
+            ['macd_hist_last3' => [-0.001, 0.001001], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_below' => true],
+            [false, true, true],
+        ];
+        yield 'macd-cross-down-gap-inclusive' => ['macd_line_cross_down_with_hysteresis',
+            ['macd_hist_last3' => [0.001, -0.001001], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_above' => true],
+            ['macd_hist_last3' => [0.001, -0.001], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_above' => true],
+            ['macd_hist_last3' => [0.001, -0.000999], 'min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_above' => true],
+            [true, true, false],
+        ];
         $nearThreshold = abs((100.4 / 100.0) - 1.0);
         yield 'near-vwap-inclusive' => ['near_vwap',
             ['close' => 100.3999, 'vwap' => 100.0, 'near_vwap_tolerance' => $nearThreshold],

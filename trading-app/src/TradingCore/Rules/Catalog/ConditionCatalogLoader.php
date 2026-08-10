@@ -8,7 +8,7 @@ use Symfony\Component\Yaml\Yaml;
 
 final class ConditionCatalogLoader
 {
-    private const TOP_KEYS = ['schema_version', 'catalog_version', 'conditions'];
+    private const TOP_KEYS = ['schema_version', 'catalog_version', 'input_freshness_seconds', 'conditions'];
     private const CONDITION_KEYS = [
         'id', 'implementation', 'metric', 'unit', 'value_type', 'timeframes', 'sides',
         'context_source', 'series_order', 'missing_data_policy', 'parameters', 'provenance', 'status',
@@ -58,8 +58,56 @@ final class ConditionCatalogLoader
             $definitions[$definition->id] = $definition;
         }
         ksort($definitions, SORT_STRING);
+        $freshness = $this->freshness($document['input_freshness_seconds'] ?? null);
+        foreach ($definitions as $definition) {
+            $timeframes = $definition->timeframes;
+            if ($definition->contextSource === 'indicator_snapshot' && in_array('global', $timeframes, true)) {
+                $timeframes = array_values(array_filter($timeframes, static fn (string $timeframe): bool => $timeframe !== 'global'));
+                if ($timeframes === []) {
+                    $timeframes = array_keys($freshness['indicator_snapshot'] ?? []);
+                }
+            }
+            foreach ($timeframes as $timeframe) {
+                if (!isset($freshness[$definition->contextSource][$timeframe])) {
+                    throw new ConditionCatalogException(sprintf(
+                        'Condition "%s" has no freshness contract for %s/%s.',
+                        $definition->id,
+                        $definition->contextSource,
+                        $timeframe,
+                    ));
+                }
+            }
+        }
 
-        return new ConditionCatalog('condition-catalog.v1', '1.0.0', $definitions);
+        return new ConditionCatalog('condition-catalog.v1', '1.0.0', $freshness, $definitions);
+    }
+
+    /** @return array<string, array<string, int>> */
+    private function freshness(mixed $value): array
+    {
+        if (!is_array($value) || array_is_list($value) || $value === []) {
+            throw new ConditionCatalogException('input_freshness_seconds must be a non-empty mapping.');
+        }
+        $result = [];
+        foreach ($value as $source => $timeframes) {
+            if (!is_string($source) || preg_match('/^[a-z][a-z0-9_]*$/', $source) !== 1
+                || !is_array($timeframes) || array_is_list($timeframes) || $timeframes === []) {
+                throw new ConditionCatalogException('input_freshness_seconds contains an invalid source mapping.');
+            }
+            foreach ($timeframes as $timeframe => $seconds) {
+                if (!is_string($timeframe) || !in_array($timeframe, self::TIMEFRAMES, true)) {
+                    throw new ConditionCatalogException(sprintf('Freshness timeframe for %s is unsupported.', $source));
+                }
+                if (!is_int($seconds) || $seconds < 0) {
+                    throw new ConditionCatalogException(sprintf('Freshness for %s/%s must be a non-negative integer.', $source, $timeframe));
+                }
+                $result[$source][$timeframe] = $seconds;
+            }
+            ksort($result[$source], SORT_STRING);
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
     }
 
     /** @param array<string, mixed> $row */
@@ -137,6 +185,22 @@ final class ConditionCatalogLoader
             $values = $row['values'] ?? [];
             if (!is_array($values) || !array_is_list($values)) {
                 throw new ConditionCatalogException(sprintf('%s.%s.values must be a list.', $path, $name));
+            }
+            foreach ($values as $enumValue) {
+                if (!$this->matchesType($enumValue, $row['type'])) {
+                    throw new ConditionCatalogException(sprintf('%s.%s.values contains a value of the wrong type.', $path, $name));
+                }
+            }
+            if (array_key_exists('default', $row)) {
+                if ((is_int($default) || is_float($default)) && $min !== null && $default < $min) {
+                    throw new ConditionCatalogException(sprintf('%s.%s.default is below minimum.', $path, $name));
+                }
+                if ((is_int($default) || is_float($default)) && $max !== null && $default > $max) {
+                    throw new ConditionCatalogException(sprintf('%s.%s.default is above maximum.', $path, $name));
+                }
+                if ($values !== [] && !in_array($default, $values, true)) {
+                    throw new ConditionCatalogException(sprintf('%s.%s.default is outside its enum.', $path, $name));
+                }
             }
             $result[$name] = new ConditionParameterDefinition($row['type'], $row['required'], $default, $min, $max, $values);
         }

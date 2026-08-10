@@ -50,7 +50,7 @@ context:
       - op: any_of
         provenance: 'validations.regular.yaml:280-284 evidence variants'
         nodes:
-          - { condition: macd_line_cross_down_with_hysteresis, timeframe: 1h, provenance: 'validations.regular.yaml:281-282' }
+          - { condition: macd_line_cross_down_with_hysteresis, timeframe: 1h, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:281-282' }
           - { condition: macd_hist_decreasing_n, timeframe: 1h, provenance: 'validations.regular.yaml:283' }
           - { condition: macd_hist_slope_neg, timeframe: 1h, provenance: 'validations.regular.yaml:284' }
       - { condition: price_regime_ok_short, timeframe: 1h, parameters: { tolerance_ratio: 0.0025 }, provenance: 'validations.regular.yaml:285' }
@@ -64,7 +64,7 @@ context:
           - op: all_of
             provenance: 'validations.regular.yaml:302-303'
             nodes:
-              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 15m, provenance: 'validations.regular.yaml:303' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 15m, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:303' }
           - op: all_of
             provenance: 'validations.regular.yaml:304'
             nodes:
@@ -84,7 +84,7 @@ context:
           - op: any_of
             provenance: 'validations.regular.yaml:324-327'
             nodes:
-              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, provenance: 'validations.regular.yaml:326' }
+              - { condition: macd_line_cross_down_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0018, cool_down_bars: 4, require_prev_above: true }, provenance: 'validations.regular.yaml:326' }
               - op: all_of
                 provenance: 'validations.regular.yaml:327'
                 nodes:
@@ -124,7 +124,7 @@ data_condition_contract:
   required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap]
   missing_conditions: []
   external_dependencies: []
-  condition_catalog_hash: { state: defined, value: a5dff2b2d727870b75df39bd34ab5e6a4653a5840e022c0723023d4844e22159, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: a80656808ee1ec65d3f4f2ab485a0e13dcc72bc77a7fbc20eadcbb588b334ae4, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.regular.yaml', justification: 'Full setup duration absent.' }
 governance:

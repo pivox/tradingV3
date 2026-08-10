@@ -152,7 +152,8 @@
         { "if": { "properties": { "parameters": { "required": ["gt"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "rsi_5m_gt_floor" } } } },
         { "if": { "properties": { "parameters": { "required": ["max_spread_bps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "spread_bps_lte" } } } },
         { "if": { "properties": { "parameters": { "required": ["n"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "const": "macd_hist_decreasing_n" } } } },
-        { "if": { "properties": { "parameters": { "required": ["eps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_hist_gt_eps", "macd_hist_lt_eps", "macd_hist_decreasing_n"] } } } }
+        { "if": { "properties": { "parameters": { "required": ["eps"] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_hist_gt_eps", "macd_hist_lt_eps", "macd_hist_decreasing_n"] } } } },
+        { "if": { "properties": { "parameters": { "anyOf": [{ "required": ["min_gap"] }, { "required": ["cool_down_bars"] }, { "required": ["require_prev_below"] }, { "required": ["require_prev_above"] }] } }, "required": ["parameters"] }, "then": { "properties": { "condition": { "enum": ["macd_line_cross_up_with_hysteresis", "macd_line_cross_down_with_hysteresis"] } } } }
       ]
     },
     "parameters": {
@@ -162,7 +163,8 @@
         "n": { "type": "integer" }, "eps": { "type": "number" }, "macd_hist_increasing_n": { "type": "integer" },
         "near_vwap_tolerance": { "type": "number" }, "min_ofi": { "type": "number" }, "max_ofi": { "type": "number" },
         "validity_bars": { "type": "integer" }, "tolerance_ratio": { "type": "number" }, "rsi_extreme_max": { "type": "number" }, "rsi_threshold": { "type": "number" }, "volume_ratio_threshold": { "type": "number" }, "rsi_softfloor_threshold": { "type": "number" },
-        "rsi_lt_70_threshold": { "type": "number" }, "gt": { "type": "number" }, "max_spread_bps": { "type": "number" }
+        "rsi_lt_70_threshold": { "type": "number" }, "gt": { "type": "number" }, "max_spread_bps": { "type": "number" },
+        "min_gap": { "type": "number" }, "cool_down_bars": { "type": "integer" }, "require_prev_below": { "type": "boolean" }, "require_prev_above": { "type": "boolean" }
       }
     },
     "externalDependency": {
