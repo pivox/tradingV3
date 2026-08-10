@@ -25,6 +25,10 @@ final readonly class CanonicalExecutionPolicy
         public float $minimumNetR,
         public int $holdingWindowSeconds,
         public CanonicalCostContract $costContract,
+        public ?string $executionTimeframe,
+        public array $mandatoryConfirmations,
+        public ?CanonicalOrderPolicy $orderPolicy,
+        public array $holdingHorizon,
         public array $allowedSymbols,
         public array $allowedMarkets,
         public string $configHash,
@@ -47,7 +51,8 @@ final readonly class CanonicalExecutionPolicy
         $setup = self::mapping($payload, 'setup', 'canonical_execution_policy_shape_invalid');
         $ast = self::mapping($setup, 'ast', 'canonical_execution_policy_shape_invalid');
         $execution = self::mapping($ast, 'execution', 'canonical_execution_policy_shape_invalid');
-        self::requireExactKeys($execution, [
+        $shadow = $snapshot->request->modeId === 'day_trading' && $snapshot->request->modeVersion === '1.1.0';
+        $executionKeys = [
             'side',
             'entry_zone',
             'stop',
@@ -56,7 +61,11 @@ final readonly class CanonicalExecutionPolicy
             'invalidation',
             'time_stop',
             'cost_contract',
-        ], 'canonical_execution_policy_shape_invalid');
+        ];
+        if ($shadow) {
+            $executionKeys = ['side', 'execution_timeframe', 'mandatory_confirmations', ...array_slice($executionKeys, 1), 'order_policy'];
+        }
+        self::requireExactKeys($execution, $executionKeys, 'canonical_execution_policy_shape_invalid');
         if (!\in_array($riskPolicy->side, ['long', 'short'], true) || ($execution['side'] ?? null) !== $riskPolicy->side) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_side_mismatch');
         }
@@ -70,7 +79,24 @@ final readonly class CanonicalExecutionPolicy
         );
         self::invalidation(self::decision($execution, 'invalidation', 'invalidation_policy'));
         $holdingWindowSeconds = self::durationSeconds(self::decision($execution, 'time_stop', 'duration'));
-        $costContract = self::costContract(self::decision($execution, 'cost_contract', 'cost_policy'));
+        $costContract = self::costContract(self::decision($execution, 'cost_contract', 'cost_policy'), $shadow);
+        $executionTimeframe = null;
+        $mandatoryConfirmations = [];
+        $orderPolicy = null;
+        if ($shadow) {
+            $executionTimeframe = self::identifier(self::decision($execution, 'execution_timeframe', 'timeframe'), 'canonical_execution_timeframe_invalid');
+            $mandatoryConfirmations = self::stringList(self::decision($execution, 'mandatory_confirmations', 'timeframes'), 'canonical_mandatory_confirmations_invalid');
+            if ($executionTimeframe !== '15m' || $mandatoryConfirmations !== ['5m', '1m']) {
+                throw new CanonicalOrderPlanException('canonical_execution_timeframe_invalid');
+            }
+            $orderPolicy = self::orderPolicy(self::decision($execution, 'order_policy', 'order_policy'));
+        }
+        $holdingHorizon = [];
+        if ($shadow) {
+            $mode = self::mapping($payload, 'mode', 'canonical_holding_boundary_invalid');
+            $holdingHorizon = self::objectValue(self::decision($mode, 'horizon', 'holding_horizon_policy'), 'canonical_holding_boundary_invalid');
+            CanonicalHoldingBoundary::expiresAt(new \DateTimeImmutable('2026-08-10T12:00:00Z'), $holdingWindowSeconds, $holdingHorizon);
+        }
         $environment = self::mapping($payload, 'environment', 'canonical_execution_policy_environment_invalid');
         $allowedSymbols = self::stringList($environment['allowed_symbols'] ?? null, 'canonical_execution_policy_environment_invalid');
         $allowedMarkets = self::stringList($environment['allowed_markets'] ?? null, 'canonical_execution_policy_environment_invalid');
@@ -86,6 +112,10 @@ final readonly class CanonicalExecutionPolicy
             minimumNetR: $minimumNetR,
             holdingWindowSeconds: $holdingWindowSeconds,
             costContract: $costContract,
+            executionTimeframe: $executionTimeframe,
+            mandatoryConfirmations: $mandatoryConfirmations,
+            orderPolicy: $orderPolicy,
+            holdingHorizon: $holdingHorizon,
             allowedSymbols: $allowedSymbols,
             allowedMarkets: $allowedMarkets,
             configHash: $snapshot->configHash,
@@ -236,10 +266,10 @@ final readonly class CanonicalExecutionPolicy
         return $duration->toInt();
     }
 
-    private static function costContract(mixed $value): CanonicalCostContract
+    private static function costContract(mixed $value, bool $withRoles): CanonicalCostContract
     {
         $contract = self::objectValue($value, 'canonical_cost_contract_shape_invalid');
-        self::requireExactKeys($contract, [
+        $keys = [
             'entry_spread_source',
             'entry_slippage_source',
             'stop_spread_source',
@@ -248,7 +278,17 @@ final readonly class CanonicalExecutionPolicy
             'target_slippage_source',
             'funding_source',
             'funding_interval_seconds',
-        ], 'canonical_cost_contract_shape_invalid');
+        ];
+        if ($withRoles) {
+            $keys = ['entry_liquidity_role', 'stop_liquidity_role', ...$keys];
+        }
+        self::requireExactKeys($contract, $keys, 'canonical_cost_contract_shape_invalid');
+
+        $entryRole = $withRoles ? $contract['entry_liquidity_role'] ?? null : null;
+        $stopRole = $withRoles ? $contract['stop_liquidity_role'] ?? null : null;
+        if ($withRoles && ($entryRole !== 'maker' || $stopRole !== 'taker')) {
+            throw new CanonicalOrderPlanException('canonical_cost_contract_invalid');
+        }
 
         return new CanonicalCostContract(
             entrySpreadSource: self::identifier($contract['entry_spread_source'], 'canonical_cost_contract_invalid'),
@@ -259,6 +299,24 @@ final readonly class CanonicalExecutionPolicy
             targetSlippageSource: self::identifier($contract['target_slippage_source'], 'canonical_cost_contract_invalid'),
             fundingSource: self::identifier($contract['funding_source'], 'canonical_cost_contract_invalid'),
             fundingIntervalSeconds: self::positiveInteger($contract['funding_interval_seconds'], 'canonical_cost_contract_invalid'),
+            entryLiquidityRole: $entryRole,
+            stopLiquidityRole: $stopRole,
+        );
+    }
+
+    private static function orderPolicy(mixed $value): CanonicalOrderPolicy
+    {
+        $policy = self::objectValue($value, 'canonical_day_trading_order_policy_invalid');
+        self::requireExactKeys($policy, ['type', 'liquidity_role', 'ttl_seconds', 'cancel_after_seconds', 'market_fallback', 'maximum_spread_bps', 'maximum_slippage_bps'], 'canonical_day_trading_order_policy_invalid');
+
+        return new CanonicalOrderPolicy(
+            self::identifier($policy['type'], 'canonical_day_trading_order_policy_invalid'),
+            self::identifier($policy['liquidity_role'], 'canonical_day_trading_order_policy_invalid'),
+            self::positiveInteger($policy['ttl_seconds'], 'canonical_day_trading_order_policy_invalid'),
+            self::positiveInteger($policy['cancel_after_seconds'], 'canonical_day_trading_order_policy_invalid'),
+            $policy['market_fallback'] ?? true,
+            self::positiveNumber($policy['maximum_spread_bps'], 'canonical_day_trading_order_policy_invalid'),
+            self::positiveNumber($policy['maximum_slippage_bps'], 'canonical_day_trading_order_policy_invalid'),
         );
     }
 

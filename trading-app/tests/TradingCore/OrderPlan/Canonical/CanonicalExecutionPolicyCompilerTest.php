@@ -7,6 +7,8 @@ namespace App\Tests\TradingCore\OrderPlan\Canonical;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
@@ -17,6 +19,29 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalExecutionPolicy::class)]
 final class CanonicalExecutionPolicyCompilerTest extends TestCase
 {
+    public function testCompilesPublishedDayTradingShadowOrderAndCostPolicy(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('15m', $policy->executionTimeframe);
+        self::assertSame(['5m', '1m'], $policy->mandatoryConfirmations);
+        self::assertSame('limit', $policy->orderPolicy->type);
+        self::assertSame('maker', $policy->orderPolicy->liquidityRole);
+        self::assertSame(90, $policy->orderPolicy->ttlSeconds);
+        self::assertSame(120, $policy->orderPolicy->cancelAfterSeconds);
+        self::assertFalse($policy->orderPolicy->marketFallback);
+        self::assertSame(6.0, $policy->orderPolicy->maximumSpreadBps);
+        self::assertSame(8.0, $policy->orderPolicy->maximumSlippageBps);
+        self::assertSame('maker', $policy->costContract->entryLiquidityRole);
+        self::assertSame('taker', $policy->costContract->stopLiquidityRole);
+        self::assertSame(28_800, $policy->holdingWindowSeconds);
+        self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
+    }
+
     public function testCompilesStrictExecutionPolicyFromAuthenticatedSnapshot(): void
     {
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot());

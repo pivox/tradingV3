@@ -15,6 +15,8 @@ final readonly class CanonicalCostContract
         public string $targetSlippageSource,
         public string $fundingSource,
         public int $fundingIntervalSeconds,
+        public ?string $entryLiquidityRole = null,
+        public ?string $stopLiquidityRole = null,
     ) {
     }
 }

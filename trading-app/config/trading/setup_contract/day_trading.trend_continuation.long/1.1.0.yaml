@@ -144,7 +144,7 @@ execution:
   cost_contract:
     state: defined
     value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }
-    unit: net_cost_model
+    unit: cost_policy
     source: 'GitHub issue #306 decision 2026-08-10'
     justification: 'Fees are exchange-owned; spread, slippage and funding require their exact live/model sources.'
   order_policy:
