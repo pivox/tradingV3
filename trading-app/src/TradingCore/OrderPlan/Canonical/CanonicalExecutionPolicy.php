@@ -51,7 +51,7 @@ final readonly class CanonicalExecutionPolicy
             'time_stop',
             'cost_contract',
         ], 'canonical_execution_policy_shape_invalid');
-        if (($execution['side'] ?? null) !== $riskPolicy->side) {
+        if (!\in_array($riskPolicy->side, ['long', 'short'], true) || ($execution['side'] ?? null) !== $riskPolicy->side) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_side_mismatch');
         }
 
