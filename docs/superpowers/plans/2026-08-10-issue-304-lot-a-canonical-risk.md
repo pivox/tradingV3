@@ -73,6 +73,7 @@ final readonly class CanonicalRiskPolicy
         public float $modeLeverageCap,
         public float $makerFeeRate,
         public float $takerFeeRate,
+        public float $exchangeMinNotional,
         public float $exchangeMaxNotional,
         public float $environmentMaxNotional,
     ) {}
@@ -89,7 +90,7 @@ The compiler must require `snapshot->executable === true`, no blockers, exact re
 ]
 ```
 
-Convert with `$riskRate = (float) $value / 100.0`. Reject any legacy risk key instead of selecting precedence. Validate all numeric values with `is_finite`, require `0 < riskRate <= 1`, `modeLeverageCap >= 1`, rates in `[0, 1)`, and positive notional caps.
+Convert with `$riskRate = (float) $value / 100.0`. Reject any legacy risk key instead of selecting precedence. Validate all numeric values with `is_finite`, require `0 < riskRate <= 1`, `modeLeverageCap >= 1`, rates in `[0, 1)`, a non-negative exchange minimum notional, and positive maximum notional caps.
 
 - [x] **Step 4: Run compiler tests and verify GREEN**
 
@@ -218,7 +219,7 @@ git commit -m "feat(risk): add explicit canonical calculation snapshots"
 
 - [x] **Step 1: Write failing deterministic sizing tests**
 
-Cover long and short examples, non-zero fees/spread/slippage/funding, quantity-step rounding, minimum quantity rejection, max/market quantity caps, exchange/environment notional caps, and explicit zero available balance. Assert the recomputed component sum and `totalStopLoss <= riskBudgetQuote`.
+Cover long and short examples, non-zero fees/spread/slippage/funding, quantity-step rounding, minimum quantity and minimum notional rejection, max/market quantity caps, exchange/environment notional caps, and explicit zero available balance. Assert the recomputed component sum and `totalStopLoss <= riskBudgetQuote`. Fee rates must match the compiled exchange maker/taker schedule.
 
 For a no-cost baseline with equity `1000`, risk rate `0.01`, entry `100`, stop `98`, and step `0.001`, assert budget `10`, quantity `5`, notional `500`, and gross/total stop loss `10`.
 

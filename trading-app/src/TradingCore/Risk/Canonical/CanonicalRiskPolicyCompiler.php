@@ -13,6 +13,9 @@ final class CanonicalRiskPolicyCompiler
         if (!$snapshot->executable || $snapshot->blockers !== []) {
             throw new CanonicalRiskException('canonical_policy_snapshot_not_executable');
         }
+        if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $snapshot->configHash) !== 1) {
+            throw new CanonicalRiskException('canonical_policy_hash_invalid');
+        }
 
         $payload = $snapshot->payload();
         $mode = $this->mapping($payload, 'mode', 'canonical_policy_shape_invalid');
@@ -82,8 +85,12 @@ final class CanonicalRiskPolicyCompiler
         $takerFeeRate = $this->rate($fees['taker_rate'] ?? null);
 
         $limits = $this->mapping($exchange, 'limits', 'canonical_policy_notional_cap_invalid');
+        $exchangeMinNotional = $this->nonNegativeNumber($limits['min_notional'] ?? null, 'canonical_policy_notional_cap_invalid');
         $exchangeMaxNotional = $this->positiveNumber($limits['max_notional'] ?? null, 'canonical_policy_notional_cap_invalid');
         $environmentMaxNotional = $this->positiveNumber($environment['max_notional'] ?? null, 'canonical_policy_notional_cap_invalid');
+        if ($exchangeMinNotional > $exchangeMaxNotional) {
+            throw new CanonicalRiskException('canonical_policy_notional_cap_invalid');
+        }
 
         return new CanonicalRiskPolicy(
             modeId: $request->modeId,
@@ -98,6 +105,7 @@ final class CanonicalRiskPolicyCompiler
             modeLeverageCap: $modeLeverageCap,
             makerFeeRate: $makerFeeRate,
             takerFeeRate: $takerFeeRate,
+            exchangeMinNotional: $exchangeMinNotional,
             exchangeMaxNotional: $exchangeMaxNotional,
             environmentMaxNotional: $environmentMaxNotional,
         );
@@ -130,6 +138,16 @@ final class CanonicalRiskPolicyCompiler
     {
         $number = $this->finiteNumber($value, $reasonCode);
         if ($number <= 0.0) {
+            throw new CanonicalRiskException($reasonCode);
+        }
+
+        return $number;
+    }
+
+    private function nonNegativeNumber(mixed $value, string $reasonCode): float
+    {
+        $number = $this->finiteNumber($value, $reasonCode);
+        if ($number < 0.0) {
             throw new CanonicalRiskException($reasonCode);
         }
 

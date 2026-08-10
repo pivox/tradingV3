@@ -10,6 +10,13 @@ final class CanonicalRiskEngine
 
     public function calculate(CanonicalRiskCalculationRequest $request): CanonicalRiskDecision
     {
+        if (
+            !\is_finite($request->policy->exchangeMinNotional)
+            || $request->policy->exchangeMinNotional < 0.0
+            || $request->policy->exchangeMinNotional > $request->policy->exchangeMaxNotional
+        ) {
+            throw new CanonicalRiskException('canonical_policy_notional_cap_invalid');
+        }
         foreach ([$request->policy->exchangeMaxNotional, $request->policy->environmentMaxNotional] as $notionalCap) {
             if (!\is_finite($notionalCap) || $notionalCap <= 0.0) {
                 throw new CanonicalRiskException('canonical_policy_notional_cap_invalid');
@@ -35,6 +42,11 @@ final class CanonicalRiskEngine
         $slippageRate = $costs->slippageRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
         $fundingRate = $costs->fundingRate ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
         $fundingIntervals = $costs->fundingIntervals ?? throw new CanonicalRiskException('canonical_market_cost_unknown');
+        foreach ([$entryFeeRate, $stopExitFeeRate] as $feeRate) {
+            if (!$this->matchesFeeSchedule($feeRate, $request->policy)) {
+                throw new CanonicalRiskException('canonical_market_fee_rate_mismatch');
+            }
+        }
 
         $entryNotionalPerQuantity = $request->entryPrice * $request->contractSize;
         $stopNotionalPerQuantity = $request->stopPrice * $request->contractSize;
@@ -86,6 +98,12 @@ final class CanonicalRiskEngine
         }
 
         $positionNotional = $request->entryPrice * $request->contractSize * $quantity;
+        if ($positionNotional + self::EPSILON < $request->policy->exchangeMinNotional) {
+            throw new CanonicalRiskException('canonical_risk_notional_below_minimum', [
+                'position_notional' => $positionNotional,
+                'exchange_min_notional' => $request->policy->exchangeMinNotional,
+            ]);
+        }
         $finalLeverage = max(1, (int) ceil($positionNotional / $request->availableBalanceQuote - self::EPSILON));
         if ($finalLeverage > $effectiveLeverageCap) {
             throw new CanonicalRiskException('canonical_leverage_post_quantization_breach', [
@@ -176,6 +194,12 @@ final class CanonicalRiskEngine
         $point = strpos($normalized, '.');
 
         return $point === false ? 0 : strlen($normalized) - $point - 1;
+    }
+
+    private function matchesFeeSchedule(float $feeRate, CanonicalRiskPolicy $policy): bool
+    {
+        return abs($feeRate - $policy->makerFeeRate) <= self::EPSILON
+            || abs($feeRate - $policy->takerFeeRate) <= self::EPSILON;
     }
 
     /** @return list<string> */

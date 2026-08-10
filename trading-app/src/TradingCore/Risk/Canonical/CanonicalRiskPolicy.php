@@ -19,6 +19,7 @@ final readonly class CanonicalRiskPolicy
         public float $modeLeverageCap,
         public float $makerFeeRate,
         public float $takerFeeRate,
+        public float $exchangeMinNotional,
         public float $exchangeMaxNotional,
         public float $environmentMaxNotional,
     ) {

@@ -181,6 +181,7 @@ final class CanonicalRiskContractTest extends TestCase
             modeLeverageCap: 5.0,
             makerFeeRate: 0.0,
             takerFeeRate: 0.0,
+            exchangeMinNotional: 1.0,
             exchangeMaxNotional: 1000.0,
             environmentMaxNotional: 500.0,
         );

@@ -38,6 +38,7 @@ final class CanonicalRiskEngineTest extends TestCase
         $contractSize = 1.0;
         $costs = new CanonicalCostSnapshot(0.001, 0.001, 0.0002, 0.0005, 0.0001, 2);
         $request = $this->request([
+            'policy' => $this->policy('long', makerFeeRate: 0.001, takerFeeRate: 0.001),
             'costs' => $costs,
             'quantityStep' => 0.01,
             'minQuantity' => 0.01,
@@ -70,7 +71,7 @@ final class CanonicalRiskEngineTest extends TestCase
     {
         $costs = new CanonicalCostSnapshot(0.0, 0.001, 0.0, 0.0, 0.0, 0);
         $decision = (new CanonicalRiskEngine())->calculate($this->request([
-            'policy' => $this->policy('short'),
+            'policy' => $this->policy('short', makerFeeRate: 0.0, takerFeeRate: 0.001),
             'side' => 'short',
             'stopPrice' => 102.0,
             'costs' => $costs,
@@ -130,6 +131,25 @@ final class CanonicalRiskEngineTest extends TestCase
         ]));
     }
 
+    public function testRejectsBelowExchangeMinimumNotionalWithoutRoundingUp(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_notional_below_minimum');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy('long', exchangeMinNotional: 600.0),
+        ]));
+    }
+
+    public function testRejectsFeeRatesOutsideCompiledMakerTakerSchedule(): void
+    {
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_market_fee_rate_mismatch');
+        (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->policy('long', makerFeeRate: 0.001, takerFeeRate: 0.002),
+            'costs' => new CanonicalCostSnapshot(0.0001, 0.002, 0.0, 0.0, 0.0, 0),
+        ]));
+    }
+
     /** @param array<string, mixed> $overrides */
     private function request(array $overrides = []): CanonicalRiskCalculationRequest
     {
@@ -158,6 +178,9 @@ final class CanonicalRiskEngineTest extends TestCase
         string $side,
         float $riskRate = 0.01,
         float $modeLeverageCap = 5.0,
+        float $makerFeeRate = 0.0,
+        float $takerFeeRate = 0.0,
+        float $exchangeMinNotional = 1.0,
         float $exchangeMaxNotional = 1000.0,
         float $environmentMaxNotional = 500.0,
     ): CanonicalRiskPolicy {
@@ -172,8 +195,9 @@ final class CanonicalRiskEngineTest extends TestCase
             configHash: 'sha256:' . str_repeat('a', 64),
             riskRate: $riskRate,
             modeLeverageCap: $modeLeverageCap,
-            makerFeeRate: 0.0,
-            takerFeeRate: 0.0,
+            makerFeeRate: $makerFeeRate,
+            takerFeeRate: $takerFeeRate,
+            exchangeMinNotional: $exchangeMinNotional,
             exchangeMaxNotional: $exchangeMaxNotional,
             environmentMaxNotional: $environmentMaxNotional,
         );

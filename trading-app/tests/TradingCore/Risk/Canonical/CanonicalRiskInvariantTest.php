@@ -68,7 +68,15 @@ final class CanonicalRiskInvariantTest extends TestCase
                 fundingRate: mt_rand(-10, 20) / 10000.0,
                 fundingIntervals: mt_rand(0, 3),
             );
-            $policy = $this->policy($side, $riskRate, $modeCap, $notionalCeiling, $notionalCeiling);
+            $policy = $this->policy(
+                $side,
+                $riskRate,
+                $modeCap,
+                $notionalCeiling,
+                $notionalCeiling,
+                (float) $costs->entryFeeRate,
+                (float) $costs->stopExitFeeRate,
+            );
             $request = $this->request(
                 side: $side,
                 policy: $policy,
@@ -168,6 +176,8 @@ final class CanonicalRiskInvariantTest extends TestCase
         float $modeLeverageCap,
         float $exchangeMaxNotional,
         float $environmentMaxNotional,
+        float $makerFeeRate = 0.0,
+        float $takerFeeRate = 0.0,
     ): CanonicalRiskPolicy {
         return new CanonicalRiskPolicy(
             modeId: 'day_trading',
@@ -180,8 +190,9 @@ final class CanonicalRiskInvariantTest extends TestCase
             configHash: 'sha256:' . str_repeat('a', 64),
             riskRate: $riskRate,
             modeLeverageCap: $modeLeverageCap,
-            makerFeeRate: 0.0,
-            takerFeeRate: 0.0,
+            makerFeeRate: $makerFeeRate,
+            takerFeeRate: $takerFeeRate,
+            exchangeMinNotional: 1.0,
             exchangeMaxNotional: $exchangeMaxNotional,
             environmentMaxNotional: $environmentMaxNotional,
         );

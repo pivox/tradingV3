@@ -260,7 +260,10 @@ total_stop_loss = gross_stop_loss
 ```
 
 La quantite est bornee par les caps de volume, de notional et de levier, puis
-arrondie vers le bas au pas exchange. Tous les composants sont recalcules avec
+arrondie vers le bas au pas exchange. Le minimum notional exchange n'est jamais
+atteint en arrondissant la quantite vers le haut : le plan est rejete. Les taux
+de frais d'entree et de sortie doivent correspondre au bareme maker/taker du
+snapshot compile. Tous les composants sont recalcules avec
 la quantite finale. Une decision n'est produite que si la perte finale reste
 inferieure ou egale au budget et si le levier entier final reste inferieur ou
 egal a chacun des caps applicables. Aucun multiplicateur de timeframe,

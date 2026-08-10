@@ -31,6 +31,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         self::assertSame(3.0, $policy->modeLeverageCap);
         self::assertSame(0.0002, $policy->makerFeeRate);
         self::assertSame(0.0005, $policy->takerFeeRate);
+        self::assertSame(5.0, $policy->exchangeMinNotional);
         self::assertSame(1000.0, $policy->exchangeMaxNotional);
         self::assertSame(250.0, $policy->environmentMaxNotional);
     }
@@ -138,6 +139,15 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         (new CanonicalRiskPolicyCompiler())->compile($snapshot);
     }
 
+    public function testRejectsInvalidConfigHashAuthority(): void
+    {
+        $snapshot = $this->snapshot(configHash: 'not-a-hash');
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_policy_hash_invalid');
+        (new CanonicalRiskPolicyCompiler())->compile($snapshot);
+    }
+
     /**
      * @param array<string, mixed>|null $payload
      * @param list<string> $blockers
@@ -146,6 +156,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         ?array $payload = null,
         bool $executable = true,
         array $blockers = [],
+        string $configHash = 'sha256:' . 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     ): EffectiveTradingConfigSnapshot {
         $request = new EffectiveTradingConfigRequest(
             'micro_scalping',
@@ -160,7 +171,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
         return new EffectiveTradingConfigSnapshot(
             request: $request,
             payload: $payload ?? $this->payload(),
-            configHash: 'sha256:' . str_repeat('a', 64),
+            configHash: $configHash,
             conditionCatalogHash: 'sha256:' . str_repeat('b', 64),
             layers: [],
             provenance: [],
@@ -210,7 +221,7 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
             'exchange' => [
                 'id' => 'fake',
                 'fees' => ['maker_rate' => 0.0002, 'taker_rate' => 0.0005],
-                'limits' => ['max_notional' => 1000.0],
+                'limits' => ['min_notional' => 5.0, 'max_notional' => 1000.0],
             ],
             'environment' => [
                 'id' => 'test',
