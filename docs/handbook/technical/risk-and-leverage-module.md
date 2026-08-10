@@ -362,6 +362,12 @@ les fills recus pendant cette fenetre sont donc toujours comptabilises. Chaque
 transition porte le hash exact de son etat precedent avant le compare-and-swap.
 Un fill confirme ayant deja traverse le stop est lui aussi comptabilise, puis
 force immediatement la compensation ; il n'est jamais ignore comme input invalide.
+La distance brute au stop est accumulee fill par fill afin qu'un fill traverse
+ne puisse jamais annuler le risque deja charge par un fill precedent.
+
+La decision d'admission possede un constructeur prive. Sa seule factory publique
+rejoue l'evaluateur canonique avec la request complete ; un appelant ne peut donc
+pas fabriquer une reservation en recopiant seulement le plan et une state version.
 
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme

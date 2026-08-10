@@ -7,6 +7,7 @@ namespace App\Tests\TradingCore\Risk\Canonical\Portfolio;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservationDecision;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -16,6 +17,14 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(CanonicalPortfolioAdmissionEngine::class)]
 final class CanonicalPortfolioAdmissionEngineTest extends TestCase
 {
+    public function testReservationDecisionCannotBeConstructedOutsideAdmissionAuthority(): void
+    {
+        $constructor = (new \ReflectionClass(CanonicalPortfolioReservationDecision::class))->getConstructor();
+
+        self::assertNotNull($constructor);
+        self::assertTrue($constructor->isPrivate());
+    }
+
     public function testAcceptsAgainstMostRestrictiveDailyCapAndBuildsStableReservation(): void
     {
         $request = $this->request();

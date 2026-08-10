@@ -6,7 +6,7 @@ namespace App\TradingCore\Risk\Canonical\Portfolio;
 
 final readonly class CanonicalPortfolioReservationDecision
 {
-    public function __construct(
+    private function __construct(
         public CanonicalPortfolioScope $scope,
         public string $decisionKey,
         public string $configHash,
@@ -26,5 +26,12 @@ final readonly class CanonicalPortfolioReservationDecision
         public \DateTimeImmutable $createdAt,
         public string $reservationHash,
     ) {
+    }
+
+    public static function fromAdmission(
+        CanonicalPortfolioAdmissionRequest $request,
+        CanonicalPortfolioAdmissionEngine $engine,
+    ): self {
+        return new self(...$engine->evaluate($request));
     }
 }

@@ -41,6 +41,7 @@ final readonly class CanonicalPortfolioReservation
         public float $venueRemainingQuantity,
         public float $filledEntryNotionalQuote,
         public float $accumulatedEntryFeeQuote,
+        public float $accumulatedGrossStopLossQuote,
         public float $filledRiskQuote,
         public float $residualRiskQuote,
         public float $filledNotionalQuote,
@@ -51,6 +52,7 @@ final readonly class CanonicalPortfolioReservation
         public string $venueRemainingQuantityDecimal,
         public string $filledEntryNotionalDecimal,
         public string $accumulatedEntryFeeDecimal,
+        public string $accumulatedGrossStopLossDecimal,
         public string $filledRiskDecimal,
         public string $residualRiskDecimal,
         public string $filledNotionalDecimal,
@@ -112,6 +114,7 @@ final readonly class CanonicalPortfolioReservation
             'venueRemainingQuantity' => $plan->quantity,
             'filledEntryNotionalQuote' => 0.0,
             'accumulatedEntryFeeQuote' => 0.0,
+            'accumulatedGrossStopLossQuote' => 0.0,
             'filledRiskQuote' => 0.0,
             'residualRiskQuote' => $decision->reservedRiskQuote,
             'filledNotionalQuote' => 0.0,
@@ -122,6 +125,7 @@ final readonly class CanonicalPortfolioReservation
             'venueRemainingQuantityDecimal' => self::decimal($plan->quantity)->__toString(),
             'filledEntryNotionalDecimal' => '0',
             'accumulatedEntryFeeDecimal' => '0',
+            'accumulatedGrossStopLossDecimal' => '0',
             'filledRiskDecimal' => '0',
             'residualRiskDecimal' => self::decimal($decision->reservedRiskQuote)->__toString(),
             'filledNotionalDecimal' => '0',
@@ -205,7 +209,11 @@ final readonly class CanonicalPortfolioReservation
         $filledContractQuantity = $filledQuantity->multipliedBy(self::decimal($this->contractSize));
         $stopPrice = self::decimal($this->stopPrice);
         $stopNotional = $stopPrice->multipliedBy($filledContractQuantity);
-        $grossStopLoss = $filledEntryNotional->minus($stopNotional)->abs();
+        $fillStopNotional = $stopPrice
+            ->multipliedBy($fillQuantity)
+            ->multipliedBy(self::decimal($this->contractSize));
+        $grossStopLoss = BigDecimal::of($this->accumulatedGrossStopLossDecimal)
+            ->plus($fillNotional->minus($fillStopNotional)->abs());
         $filledFundingCost = self::decimal($this->plannedFundingCostQuote)
             ->multipliedBy($filledEntryNotional)
             ->dividedBy(self::decimal($this->reservedNotionalQuote), 24, RoundingMode::UP);
@@ -298,6 +306,7 @@ final readonly class CanonicalPortfolioReservation
             'venueRemainingQuantity' => self::float($expectedVenueRemaining),
             'filledEntryNotionalQuote' => self::float($filledEntryNotional),
             'accumulatedEntryFeeQuote' => self::float($accumulatedEntryFee),
+            'accumulatedGrossStopLossQuote' => self::float($grossStopLoss),
             'filledRiskQuote' => self::float($filledRisk),
             'residualRiskQuote' => self::float($residualRisk),
             'filledNotionalQuote' => self::float($filledEntryNotional),
@@ -308,6 +317,7 @@ final readonly class CanonicalPortfolioReservation
             'venueRemainingQuantityDecimal' => $expectedVenueRemaining->__toString(),
             'filledEntryNotionalDecimal' => $filledEntryNotional->__toString(),
             'accumulatedEntryFeeDecimal' => $accumulatedEntryFee->__toString(),
+            'accumulatedGrossStopLossDecimal' => $grossStopLoss->__toString(),
             'filledRiskDecimal' => $filledRisk->__toString(),
             'residualRiskDecimal' => $residualRisk->__toString(),
             'filledNotionalDecimal' => $filledEntryNotional->__toString(),

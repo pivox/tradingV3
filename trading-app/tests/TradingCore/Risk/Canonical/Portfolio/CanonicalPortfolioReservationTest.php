@@ -265,6 +265,33 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertSame(0.0, $next->remainingQuantity);
     }
 
+    public function testStopCrossedFillCannotReduceRiskAlreadyChargedByEarlierFill(): void
+    {
+        [$reservation, $plan] = $this->reservation();
+        $first = $reservation->applyFill($this->fill(
+            $reservation,
+            quantity: 1.0,
+            price: $plan->stopPrice + 1.0,
+            entryFeeQuote: 0.05,
+            protectedQuantityAfter: 1.0,
+            remainingOrderQuantity: round($plan->quantity - 1.0, 3),
+        ));
+        $crossed = $first->applyFill($this->fill(
+            $first,
+            fillId: 'fill-2',
+            quantity: 1.0,
+            price: $plan->stopPrice - 1.0,
+            entryFeeQuote: 0.05,
+            protectedQuantityAfter: 2.0,
+            remainingOrderQuantity: round($plan->quantity - 2.0, 3),
+        ));
+
+        self::assertGreaterThan($first->filledRiskQuote, $crossed->filledRiskQuote);
+        self::assertEqualsWithDelta(2.0 * $plan->contractSize, $crossed->accumulatedGrossStopLossQuote, 1e-12);
+        self::assertSame('compensation_required', $crossed->status);
+        self::assertSame('compensate_stop_crossed_fill', $crossed->requiredAction);
+    }
+
     public function testCancelAndCloseReleaseRiskIdempotently(): void
     {
         [$reservation, $plan] = $this->reservation();

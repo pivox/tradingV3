@@ -18,6 +18,12 @@ final readonly class CanonicalPortfolioAdmissionEngine
 
     public function admit(CanonicalPortfolioAdmissionRequest $request): CanonicalPortfolioReservationDecision
     {
+        return CanonicalPortfolioReservationDecision::fromAdmission($request, $this);
+    }
+
+    /** @return array<string, mixed> Authenticated constructor arguments for the private decision boundary. */
+    public function evaluate(CanonicalPortfolioAdmissionRequest $request): array
+    {
         $policy = $request->policy;
         $plan = $request->plan;
         $snapshot = $request->snapshot;
@@ -130,26 +136,26 @@ final readonly class CanonicalPortfolioAdmissionEngine
             'canonical_portfolio_reservation_hash_invalid',
         ));
 
-        return new CanonicalPortfolioReservationDecision(
-            $scope,
-            $request->decisionKey,
-            $policy->configHash,
-            $plan->planHash,
-            $snapshot->inputHash,
-            $snapshot->source,
-            $snapshot->sourceVersion,
-            $snapshot->stateVersion,
-            $effectiveDailyCapFloat,
-            $consumedDailyLossFloat,
-            $remainingDailyLossFloat,
-            $candidateRiskFloat,
-            $plan->positionNotional,
-            $modeExposureCapFloat,
-            $projectedModeExposureFloat,
-            $projectedConcurrent,
-            $now,
-            $reservationHash,
-        );
+        return [
+            'scope' => $scope,
+            'decisionKey' => $request->decisionKey,
+            'configHash' => $policy->configHash,
+            'planHash' => $plan->planHash,
+            'portfolioInputHash' => $snapshot->inputHash,
+            'portfolioSource' => $snapshot->source,
+            'portfolioSourceVersion' => $snapshot->sourceVersion,
+            'expectedStateVersion' => $snapshot->stateVersion,
+            'effectiveDailyLossCapQuote' => $effectiveDailyCapFloat,
+            'consumedDailyLossQuote' => $consumedDailyLossFloat,
+            'remainingDailyLossBeforeCandidateQuote' => $remainingDailyLossFloat,
+            'reservedRiskQuote' => $candidateRiskFloat,
+            'reservedNotionalQuote' => $plan->positionNotional,
+            'modeExposureCapQuote' => $modeExposureCapFloat,
+            'projectedModeExposureQuote' => $projectedModeExposureFloat,
+            'projectedConcurrentPositions' => $projectedConcurrent,
+            'createdAt' => $now,
+            'reservationHash' => $reservationHash,
+        ];
     }
 
     private function decimal(float $value): BigDecimal
