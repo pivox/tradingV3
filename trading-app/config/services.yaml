@@ -101,6 +101,7 @@ services:
             - '../src/Provider/'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenario.php'
             - '../src/TradingCore/Execution/Fake/FakeExecutionScenarioFixtures.php'
+            - '../src/TradingCore/Rules/'
             - '../src/Trading/Paper/Okx/Live/OkxPaperPublicLiveSource.php'
             - '../src/Trading/Paper/Okx/Live/OkxPaperLiveCheckpointStore.php'
             - '../src/Trading/Paper/Okx/Live/PawlOkxPaperPublicWebSocketTransport.php'

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Setup;
 
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupContractValidator
@@ -20,50 +22,7 @@ final class SetupContractValidator
         'scalping.trend_continuation.long', 'scalping.pullback.long', 'scalping.trend_momentum.short',
         'micro_scalping.momentum_ofi.long', 'micro_scalping.momentum_ofi.short', 'crash_short',
     ];
-    public const CONDITION_IDS = [
-        'adx_min_for_trend', 'atr_rel_in_range_15m', 'atr_rel_in_range_5m', 'atr_volatility_ok',
-        'close_above_vwap_and_ma9', 'close_above_vwap_or_ma9', 'close_above_vwap_or_ma9_relaxed',
-        'close_below_vwap', 'close_below_vwap_or_ma9', 'crash_context_ok', 'crash_short_pattern_15m',
-        'crash_short_pattern_5m', 'crash_short_pattern_1m', 'ema20_over_50_with_tolerance',
-        'ema20_over_50_with_tolerance_moderate', 'ema_20_lt_50', 'ema_50_lt_200',
-        'macd_hist_decreasing_n', 'macd_hist_gt_eps', 'macd_hist_increasing_n', 'macd_hist_lt_eps',
-        'macd_hist_slope_neg', 'macd_hist_slope_pos', 'macd_line_above_signal', 'macd_line_below_signal',
-        'macd_line_cross_down_with_hysteresis', 'macd_line_cross_up_with_hysteresis', 'near_vwap',
-        'order_flow_imbalance_gte', 'order_flow_imbalance_lte', 'price_regime_ok_long',
-        'price_regime_ok_short', 'pullback_confirmed', 'rsi_bearish', 'rsi_bullish', 'rsi_gt_30',
-        'rsi_gt_softfloor', 'rsi_lt_70', 'rsi_1m_lt_extreme', 'rsi_5m_gt_floor',
-        'spread_bps_lte', 'volume_ratio_ok',
-        'ema_50_gt_200', 'ema_above_200_with_tolerance', 'ema_below_200_with_tolerance',
-        'close_above_ema_200', 'close_below_ema_200', 'ema200_slope_pos', 'ema200_slope_neg',
-        'pullback_confirmed_ma9_21', 'pullback_confirmed_vwap', 'price_lte_ma21_plus_k_atr',
-        'crash_short_entry_1m', 'adx_min_for_trend_1h', 'lev_bounds',
-    ];
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m', 'global'];
-    /** @var array<string, list<string>> */
-    private const PARAMETER_KEYS = [
-        'adx_min_for_trend' => ['threshold'],
-        'atr_volatility_ok' => ['min_atr_pct', 'max_atr_pct'],
-        'macd_hist_decreasing_n' => ['n', 'eps'],
-        'macd_hist_gt_eps' => ['eps'],
-        'macd_hist_increasing_n' => ['macd_hist_increasing_n'],
-        'macd_hist_lt_eps' => ['eps'],
-        'near_vwap' => ['near_vwap_tolerance'],
-        'order_flow_imbalance_gte' => ['min_ofi'],
-        'order_flow_imbalance_lte' => ['max_ofi'],
-        'pullback_confirmed' => ['validity_bars', 'direction'],
-        'rsi_gt_softfloor' => ['rsi_softfloor_threshold'],
-        'rsi_lt_70' => ['rsi_lt_70_threshold'],
-        'rsi_5m_gt_floor' => ['gt'],
-        'spread_bps_lte' => ['max_spread_bps'],
-    ];
-    /** @var array<string, 'number'|'integer'|'string'> */
-    private const PARAMETER_TYPES = [
-        'threshold' => 'number', 'min_atr_pct' => 'number', 'max_atr_pct' => 'number',
-        'n' => 'integer', 'eps' => 'number', 'macd_hist_increasing_n' => 'integer',
-        'near_vwap_tolerance' => 'number', 'min_ofi' => 'number', 'max_ofi' => 'number',
-        'validity_bars' => 'integer', 'direction' => 'string', 'rsi_softfloor_threshold' => 'number',
-        'rsi_lt_70_threshold' => 'number', 'gt' => 'number', 'max_spread_bps' => 'number',
-    ];
     private const STATUSES = ['draft', 'blocked', 'shadow', 'paper', 'candidate', 'active', 'retired'];
     private const CRASH_DECISION_SOURCE_ORIGINS = [
         [
@@ -95,6 +54,15 @@ final class SetupContractValidator
         'micro_scalping.momentum_ofi.short' => ['blocked', 'short', 'micro_scalping'],
         'crash_short' => ['draft', 'short', null],
     ];
+
+    private ConditionCatalog $conditionCatalog;
+
+    public function __construct(?ConditionCatalog $conditionCatalog = null)
+    {
+        $this->conditionCatalog = $conditionCatalog ?? (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
+    }
 
     /** @param array<string, mixed> $document */
     public function validate(array $document): void
@@ -214,7 +182,7 @@ final class SetupContractValidator
         $missing = $this->strings($this->list($data, 'missing_conditions', true, 'data_condition_contract'), 'missing_conditions');
         $this->assertUniqueStrings($missing, 'data_condition_contract.missing_conditions');
         foreach ($missing as $condition) {
-            if (!in_array($condition, self::CONDITION_IDS, true)) {
+            if (!in_array($condition, $this->conditionCatalog->conditionIds(), true)) {
                 throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
             }
         }
@@ -323,7 +291,7 @@ final class SetupContractValidator
         $this->string($expression, 'timeframe', $path);
         $this->string($expression, 'provenance', $path);
         $condition = $expression['condition'];
-        if (!in_array($condition, self::CONDITION_IDS, true)) {
+        if (!in_array($condition, $this->conditionCatalog->conditionIds(), true)) {
             throw new SetupContractException(sprintf('Unknown condition "%s".', $condition));
         }
         if (!in_array($expression['timeframe'], self::TIMEFRAMES, true)) {
@@ -336,17 +304,20 @@ final class SetupContractValidator
         if (!is_array($parameters) || array_is_list($parameters)) {
             throw new SetupContractException($path . '.parameters must be a mapping.');
         }
-        $allowed = self::PARAMETER_KEYS[$condition] ?? [];
+        $parameterDefinitions = $this->conditionCatalog->definition($condition)->parameters;
+        $allowed = array_keys($parameterDefinitions);
         $extra = array_diff(array_keys($parameters), $allowed);
         if ($extra !== []) {
             throw new SetupContractException(sprintf('Unknown parameter "%s" for condition "%s".', reset($extra), $condition));
         }
         foreach ($parameters as $key => $value) {
-            $type = self::PARAMETER_TYPES[$key];
+            $type = $parameterDefinitions[$key]->type;
             $valid = match ($type) {
                 'number' => (is_int($value) || is_float($value)) && is_finite((float) $value),
                 'integer' => is_int($value),
                 'string' => is_string($value) && trim($value) !== '',
+                'boolean' => is_bool($value),
+                default => false,
             };
             if (!$valid) {
                 throw new SetupContractException(sprintf('Parameter "%s" for condition "%s" must be a finite %s.', $key, $condition, $type));

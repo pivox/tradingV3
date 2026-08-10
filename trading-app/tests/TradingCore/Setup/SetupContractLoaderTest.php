@@ -7,7 +7,6 @@ namespace App\Tests\TradingCore\Setup;
 use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
-use App\TradingCore\Setup\ConditionCatalog as LegacyConditionCatalog;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -21,7 +20,6 @@ use Symfony\Component\Yaml\Yaml;
 #[CoversClass(SetupContractLoader::class)]
 #[CoversClass(SetupContractValidator::class)]
 #[CoversClass(SetupCompiler::class)]
-#[CoversClass(LegacyConditionCatalog::class)]
 #[CoversClass(SetupContractException::class)]
 final class SetupContractLoaderTest extends TestCase
 {
@@ -304,11 +302,27 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testUnknownConditionIsACompilationFailure(): void
     {
-        $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
+        $document['context']['trigger']['nodes'][0]['condition'] = 'invented_condition';
 
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Unknown condition "invented_condition"');
-        new LegacyConditionCatalog(['invented_condition']);
+        (new SetupContractValidator())->validate($document);
+    }
+
+    public function testSetupSchemaConditionEnumMatchesCanonicalCatalog(): void
+    {
+        $schema = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($schema);
+        $schemaConditionIds = $schema['$defs']['condition']['enum'] ?? null;
+        self::assertIsArray($schemaConditionIds);
+        sort($schemaConditionIds, SORT_STRING);
+
+        self::assertSame($this->catalog()->conditionIds(), $schemaConditionIds);
     }
 
     public function testImmutableSnapshotHasStableHashesVersionsAndProvenanceByKey(): void

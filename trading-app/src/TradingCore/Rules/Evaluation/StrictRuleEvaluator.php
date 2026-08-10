@@ -18,6 +18,7 @@ final readonly class StrictRuleEvaluator
     public function __construct(
         private ConditionCatalog $catalog,
         private StrictConditionRegistry $registry,
+        private ?StrictCompiledExpressionEvaluator $compiledExpressions = null,
     ) {
     }
 
@@ -95,7 +96,8 @@ final readonly class StrictRuleEvaluator
             return [false, 'stale_input', $base];
         }
         $condition = $this->registry->get($node->conditionId);
-        if ($condition === null) {
+        $isCompiledExpression = str_starts_with($definition->implementation, 'compiled_expression:');
+        if ($condition === null && !$isCompiledExpression) {
             return [false, 'condition_implementation_missing', $base];
         }
         $conditionContext = $snapshot->values + $node->parameters + [
@@ -105,7 +107,9 @@ final readonly class StrictRuleEvaluator
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
         ];
         try {
-            $result = $condition->evaluate($conditionContext);
+            $result = $isCompiledExpression
+                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry))->evaluate($node->conditionId, $conditionContext)
+                : $condition->evaluate($conditionContext);
         } catch (\Throwable $exception) {
             return [false, 'condition_error', $base + ['exception' => $exception::class]];
         }
