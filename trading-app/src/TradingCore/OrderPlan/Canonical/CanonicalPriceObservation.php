@@ -8,6 +8,7 @@ final readonly class CanonicalPriceObservation
 {
     public function __construct(
         public string $exchange,
+        public string $environment,
         public string $symbol,
         public string $source,
         public string $timeframe,

@@ -80,9 +80,42 @@ final class CanonicalNetREngine
         $quantity = self::decimal($risk->quantity);
         $contractSize = self::decimal($risk->contractSize);
         $entry = self::decimal($protection->entryPrice);
-        $netRisk = self::decimal($risk->totalStopLoss);
+        $stop = self::decimal($protection->stopPrice);
+        $entryNotional = $entry->multipliedBy($contractSize)->multipliedBy($quantity);
+        $stopNotional = $stop->multipliedBy($contractSize)->multipliedBy($quantity);
+        $grossRisk = $entry->minus($stop)->abs()->multipliedBy($contractSize)->multipliedBy($quantity);
+        $entryFee = $entryNotional->multipliedBy(self::decimal($this->feeRate($costs->entryLiquidityRole, $policy)));
+        $stopFee = $stopNotional->multipliedBy(self::decimal($this->feeRate($costs->stopLiquidityRole, $policy)));
+        $entrySpread = $entryNotional->multipliedBy(self::decimal($costs->entrySpreadRate));
+        $stopSpread = $stopNotional->multipliedBy(self::decimal($costs->stopSpreadRate));
+        $entrySlippage = $entryNotional->multipliedBy(self::decimal($costs->entrySlippageRate));
+        $stopSlippage = $stopNotional->multipliedBy(self::decimal($costs->stopSlippageRate));
+        $funding = $entryNotional
+            ->multipliedBy(self::decimal($this->adverseFundingRate($protection->side, $costs->fundingRate)))
+            ->multipliedBy((string) $fundingIntervals);
+        $netRisk = $grossRisk
+            ->plus($entryFee)
+            ->plus($stopFee)
+            ->plus($entrySpread)
+            ->plus($stopSpread)
+            ->plus($entrySlippage)
+            ->plus($stopSlippage)
+            ->plus($funding);
         if ($quantity->isLessThanOrEqualTo(0) || $contractSize->isLessThanOrEqualTo(0) || $netRisk->isLessThanOrEqualTo(0)) {
             throw new CanonicalOrderPlanException('canonical_net_r_risk_invalid');
+        }
+        if (
+            $grossRisk->toFloat() !== $risk->grossStopLoss
+            || $entryFee->toFloat() !== $risk->entryFee
+            || $stopFee->toFloat() !== $risk->stopExitFee
+            || $entrySpread->toFloat() !== $risk->entrySpreadCost
+            || $stopSpread->toFloat() !== $risk->stopSpreadCost
+            || $entrySlippage->toFloat() !== $risk->entrySlippageCost
+            || $stopSlippage->toFloat() !== $risk->stopSlippageCost
+            || $funding->toFloat() !== $risk->fundingCost
+            || $netRisk->toFloat() !== $risk->totalStopLoss
+        ) {
+            throw new CanonicalOrderPlanException('canonical_net_r_risk_cost_mismatch');
         }
 
         $decisions = [];
@@ -101,13 +134,13 @@ final class CanonicalNetREngine
             $targetSpread = $targetNotional->multipliedBy(self::decimal((float) $targetCost->spreadRate));
             $targetSlippage = $targetNotional->multipliedBy(self::decimal((float) $targetCost->slippageRate));
             $netReward = $grossReward
-                ->minus(self::decimal($risk->entryFee))
+                ->minus($entryFee)
                 ->minus($targetFee)
-                ->minus(self::decimal($risk->entrySpreadCost))
-                ->minus(self::decimal($risk->entrySlippageCost))
+                ->minus($entrySpread)
+                ->minus($entrySlippage)
                 ->minus($targetSpread)
                 ->minus($targetSlippage)
-                ->minus(self::decimal($risk->fundingCost));
+                ->minus($funding);
             $netR = $netReward->dividedBy($netRisk, 18, RoundingMode::DOWN);
             if ($netR->isLessThan(self::decimal($policy->minimumNetR))) {
                 throw new CanonicalOrderPlanException('canonical_minimum_net_r_not_met', [
@@ -120,15 +153,15 @@ final class CanonicalNetREngine
                 id: $target->id,
                 price: $target->price,
                 grossReward: $grossReward->toFloat(),
-                entryFee: $risk->entryFee,
+                entryFee: $entryFee->toFloat(),
                 targetFee: $targetFee->toFloat(),
-                entrySpreadCost: $risk->entrySpreadCost,
-                entrySlippageCost: $risk->entrySlippageCost,
+                entrySpreadCost: $entrySpread->toFloat(),
+                entrySlippageCost: $entrySlippage->toFloat(),
                 targetSpreadCost: $targetSpread->toFloat(),
                 targetSlippageCost: $targetSlippage->toFloat(),
-                fundingCost: $risk->fundingCost,
+                fundingCost: $funding->toFloat(),
                 netReward: $netReward->toFloat(),
-                netRisk: $risk->totalStopLoss,
+                netRisk: $netRisk->toFloat(),
                 netR: $netR->toFloat(),
             );
         }
@@ -156,6 +189,11 @@ final class CanonicalNetREngine
             'taker' => $policy->riskPolicy->takerFeeRate,
             default => throw new CanonicalOrderPlanException('canonical_net_r_liquidity_role_invalid'),
         };
+    }
+
+    private function adverseFundingRate(string $side, float $fundingRate): float
+    {
+        return $side === 'long' ? max(0.0, $fundingRate) : max(0.0, -$fundingRate);
     }
 
     private static function decimal(float $value): BigDecimal

@@ -122,7 +122,23 @@ final class CanonicalEntryZoneEngineTest extends TestCase
             $request->symbol,
             $request->anchor,
             $request->atr,
-            new CanonicalMarketSnapshot('other', $request->symbol, 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
+            new CanonicalMarketSnapshot('other', 'test', $request->symbol, 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
+            $request->tick,
+        ));
+    }
+
+    public function testRejectsMarketEnvironmentMismatch(): void
+    {
+        $request = $this->request();
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_entry_zone_market_identity_mismatch');
+        $this->engine()->calculate(new CanonicalEntryZoneRequest(
+            $request->policy,
+            $request->symbol,
+            $request->anchor,
+            $request->atr,
+            new CanonicalMarketSnapshot('fake', 'production', $request->symbol, 'order_book', 100.1, $request->market->observedAt, $request->market->inputHash),
             $request->tick,
         ));
     }
@@ -148,10 +164,10 @@ final class CanonicalEntryZoneEngineTest extends TestCase
         return new CanonicalEntryZoneRequest(
             policy: $policy,
             symbol: 'BTCUSDT',
-            anchor: new CanonicalPriceObservation('fake', 'BTCUSDT', $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
-            atr: new CanonicalPriceObservation('fake', 'BTCUSDT', 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
-            market: new CanonicalMarketSnapshot('fake', 'BTCUSDT', 'order_book', $candidatePrice, new \DateTimeImmutable('2026-08-10T11:59:45+00:00'), 'sha256:' . str_repeat('3', 64)),
-            tick: new CanonicalTickSnapshot('fake', 'BTCUSDT', $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
+            anchor: new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', $anchorSource, '5m', $anchorPrice, $observed, 'sha256:' . str_repeat('1', 64)),
+            atr: new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', $atrTimeframe, $atr, $observed, 'sha256:' . str_repeat('2', 64)),
+            market: new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'order_book', $candidatePrice, new \DateTimeImmutable('2026-08-10T11:59:45+00:00'), 'sha256:' . str_repeat('3', 64)),
+            tick: new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', $tickSize, $observed, 'sha256:' . str_repeat('4', 64)),
         );
     }
 }

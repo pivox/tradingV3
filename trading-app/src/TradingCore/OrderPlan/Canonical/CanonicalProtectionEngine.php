@@ -117,7 +117,11 @@ final class CanonicalProtectionEngine
     {
         $policy = $request->policy;
         $zone = $request->entryZone;
-        if ($input->exchange !== $policy->riskPolicy->exchange || $input->symbol !== $zone->symbol) {
+        if (
+            $input->exchange !== $policy->riskPolicy->exchange
+            || $input->environment !== $policy->riskPolicy->environment
+            || $input->symbol !== $zone->symbol
+        ) {
             throw new CanonicalOrderPlanException('canonical_protection_input_identity_mismatch');
         }
         $expectedSource = $policy->stop->kind === 'atr' ? 'atr' : $policy->stop->pivotId;

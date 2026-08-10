@@ -32,6 +32,10 @@ final readonly class CanonicalEntryZoneEngine
             || $request->atr->exchange !== $risk->exchange
             || $request->market->exchange !== $risk->exchange
             || $request->tick->exchange !== $risk->exchange
+            || $request->anchor->environment !== $risk->environment
+            || $request->atr->environment !== $risk->environment
+            || $request->market->environment !== $risk->environment
+            || $request->tick->environment !== $risk->environment
             || $request->anchor->symbol !== $request->symbol
             || $request->atr->symbol !== $request->symbol
             || $request->market->symbol !== $request->symbol

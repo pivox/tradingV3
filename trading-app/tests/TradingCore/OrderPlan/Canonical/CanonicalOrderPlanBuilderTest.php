@@ -154,6 +154,21 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         CanonicalOrderPlan::fromAcceptedComponents($request, new \DateTimeImmutable('2026-08-10T12:00:00+00:00'));
     }
 
+    public function testDirectPlanFactoryRejectsEmptyProtectionTargets(): void
+    {
+        $components = CanonicalOrderPlanPipelineFixture::accepted();
+        $protectionArguments = get_object_vars($components['protection']);
+        $protectionArguments['targets'] = [];
+        $components['protection'] = new CanonicalProtectionDecision(...$protectionArguments);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_protection_mismatch');
+        CanonicalOrderPlan::fromAcceptedComponents(
+            new CanonicalOrderPlanBuildRequest(...$components),
+            new \DateTimeImmutable('2026-08-10T12:00:00+00:00'),
+        );
+    }
+
     public function testBuilderRejectsFabricatedRiskDecision(): void
     {
         $components = CanonicalOrderPlanPipelineFixture::accepted();

@@ -8,6 +8,7 @@ final readonly class CanonicalTickSnapshot
 {
     public function __construct(
         public string $exchange,
+        public string $environment,
         public string $symbol,
         public float $tickSize,
         public \DateTimeImmutable $observedAt,

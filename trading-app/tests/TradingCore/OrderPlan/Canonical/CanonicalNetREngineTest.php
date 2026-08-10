@@ -118,15 +118,15 @@ final class CanonicalNetREngineTest extends TestCase
         $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate(new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
-            new CanonicalPriceObservation('fake', 'BTCUSDT', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
-            new CanonicalPriceObservation('fake', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
-            new CanonicalMarketSnapshot('fake', 'BTCUSDT', 'order_book', 100.1, $observed, 'sha256:' . str_repeat('3', 64)),
-            new CanonicalTickSnapshot('fake', 'BTCUSDT', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
+            new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'order_book', 100.1, $observed, 'sha256:' . str_repeat('3', 64)),
+            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
         ));
         $protection = (new CanonicalProtectionEngine())->calculate(new CanonicalProtectionRequest(
             $policy,
             $zone,
-            new CanonicalPriceObservation('fake', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
+            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
             null,
         ));
 
