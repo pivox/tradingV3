@@ -57,7 +57,7 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
         $store->reserve($first, $firstEngine);
 
         $this->expectException(CanonicalPortfolioException::class);
-        $this->expectExceptionMessage('canonical_portfolio_reservation_state_conflict');
+        $this->expectExceptionMessage('canonical_portfolio_state_unreconciled');
         $store->reserve($stale, $staleEngine);
     }
 
@@ -102,6 +102,66 @@ final class InMemoryCanonicalPortfolioReservationStoreTest extends TestCase
         $this->expectException(CanonicalPortfolioException::class);
         $this->expectExceptionMessage('canonical_portfolio_plan_invalid');
         (new InMemoryCanonicalPortfolioReservationStore())->reserve($request, $engine);
+    }
+
+    public function testCommittedRetryReturnsExistingReservationAfterFreshnessDeadline(): void
+    {
+        [$request, $engine, $clock] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $committed = $store->reserve($request, $engine);
+        $clock->sleep(600);
+
+        self::assertSame($committed, $store->reserve($request, $engine));
+    }
+
+    public function testNewReservationCannotOmitCommittedScopeState(): void
+    {
+        [$first, $firstEngine] = $this->admission('decision-1', 1);
+        [$omittingCommitted, $secondEngine] = $this->admission('decision-2', 2);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $store->reserve($first, $firstEngine);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_state_unreconciled');
+        $store->reserve($omittingCommitted, $secondEngine);
+    }
+
+    public function testNewReservationAcceptsSnapshotThatCoversCommittedScopeState(): void
+    {
+        [$first, $engine] = $this->admission('decision-1', 1);
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $committed = $store->reserve($first, $engine);
+        $snapshot = new CanonicalPortfolioSnapshot(
+            $first->scope,
+            'golden_fixture',
+            '1.0.0',
+            $first->snapshot->policyDayStart,
+            $first->snapshot->policyDayEnd,
+            $first->snapshot->observedAt,
+            1000.0,
+            0.0,
+            0.0,
+            0,
+            1,
+            0.0,
+            $committed->reservedNotionalQuote,
+            $committed->reservedRiskQuote,
+            [$committed->decisionKey],
+            2,
+            'sha256:' . str_repeat('7', 64),
+        );
+        $second = new CanonicalPortfolioAdmissionRequest(
+            $first->policy,
+            $first->plan,
+            $first->scope,
+            $snapshot,
+            'decision-2',
+        );
+
+        $reserved = $store->reserve($second, $engine);
+
+        self::assertSame('decision-2', $reserved->decisionKey);
+        self::assertSame(3, $store->scopeVersion($first->scope));
     }
 
     public function testReserveRejectsHydratedPlanWhoseContentNoLongerMatchesItsHash(): void

@@ -379,6 +379,13 @@ Il recompose aussi le hash de l'etat attendu et du nouvel etat avant commit.
 Une hydration PHP modifiant un plan ou une reservation sans mettre a jour sa
 lineage deterministe est donc rejetee fail-closed.
 
+Avant toute nouvelle reservation, le store derive de ses reservations du scope
+les minima de risque reserve, notionals ouverts/pending, positions, entrees
+pending et decision keys actives. La snapshot d'admission doit couvrir tous ces
+engagements ; une snapshot a la bonne state version mais qui omet un commit est
+rejetee. En revanche, un retry de la meme identite deja committée est retourne
+avant le controle de fraicheur, ce qui conserve l'idempotence apres timeout.
+
 Les adapters minces runtime, Fake, Paper et backtest consomment le meme snapshot
 et deleguent tous au meme
 moteur et au meme store atomique. Les golden tests imposent des hashes d'admission

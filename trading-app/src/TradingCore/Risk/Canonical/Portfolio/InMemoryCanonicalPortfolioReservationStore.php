@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\TradingCore\Risk\Canonical\Portfolio;
 
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
+use Brick\Math\BigDecimal;
+use Brick\Math\RoundingMode;
 
 final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortfolioReservationStoreInterface
 {
@@ -21,15 +23,22 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
         CanonicalPortfolioAdmissionRequest $request,
         CanonicalPortfolioAdmissionEngine $engine,
     ): CanonicalPortfolioReservation {
-        $decision = $engine->admit($request);
         $plan = $request->plan;
-        $scopeKey = $this->scopeKey($decision->scope);
-        $reservationKey = $scopeKey . '|' . $decision->decisionKey;
+        $scopeKey = $this->scopeKey($request->scope);
+        $reservationKey = $scopeKey . '|' . $request->decisionKey;
         $existing = $this->reservations[$reservationKey] ?? null;
         if ($existing instanceof CanonicalPortfolioReservation) {
+            try {
+                $expectedPlanHash = $plan->expectedPlanHash();
+            } catch (\Throwable $exception) {
+                throw new CanonicalPortfolioException('canonical_portfolio_reservation_identity_conflict', [], $exception);
+            }
             if (
-                $existing->admissionHash !== $decision->reservationHash
+                !hash_equals($expectedPlanHash, $plan->planHash)
                 || $existing->planHash !== $plan->planHash
+                || $existing->configHash !== $request->policy->configHash
+                || $existing->portfolioInputHash !== $request->snapshot->inputHash
+                || $existing->scope != $request->scope
                 || !isset($this->plans[$reservationKey])
                 || $this->plans[$reservationKey]->planHash !== $plan->planHash
             ) {
@@ -38,6 +47,8 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
 
             return $existing;
         }
+        $this->assertSnapshotIncludesCommittedState($request->snapshot);
+        $decision = $engine->admit($request);
         if ($decision->expectedStateVersion !== ($this->scopeVersions[$scopeKey] ?? 1)) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_conflict');
         }
@@ -132,5 +143,77 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
             $scope->toArray(),
             'canonical_portfolio_scope_hash_invalid',
         ));
+    }
+
+    private function assertSnapshotIncludesCommittedState(CanonicalPortfolioSnapshot $snapshot): void
+    {
+        $scopeKey = $this->scopeKey($snapshot->scope);
+        $reservedRisk = BigDecimal::zero();
+        $openNotional = BigDecimal::zero();
+        $pendingNotional = BigDecimal::zero();
+        $openPositions = 0;
+        $pendingEntries = 0;
+        $activeDecisionKeys = [];
+        foreach ($this->reservations as $reservationKey => $reservation) {
+            if (!str_starts_with($reservationKey, $scopeKey . '|') || $reservation->status === 'closed') {
+                continue;
+            }
+            $filledRisk = BigDecimal::of($reservation->filledRiskDecimal);
+            $residualRisk = BigDecimal::of($reservation->residualRiskDecimal);
+            $originalRisk = CanonicalPortfolioDecimal::fromFloat(
+                $reservation->reservedRiskQuote,
+                'canonical_portfolio_state_unreconciled',
+            );
+            $committedRisk = $filledRisk->plus($residualRisk);
+            $riskToReserve = $reservation->venueRemainingQuantity > 0.0 && $originalRisk->isGreaterThan($committedRisk)
+                ? $originalRisk
+                : $committedRisk;
+            $filledNotional = BigDecimal::of($reservation->filledNotionalDecimal);
+            if ($riskToReserve->isZero() && $filledNotional->isZero() && $reservation->venueRemainingQuantity === 0.0) {
+                continue;
+            }
+            $reservedRisk = $reservedRisk->plus(
+                $riskToReserve,
+            );
+            $openNotional = $openNotional->plus($filledNotional);
+            if ($reservation->filledQuantity > 0.0) {
+                ++$openPositions;
+            }
+            if ($reservation->venueRemainingQuantity > 0.0) {
+                ++$pendingEntries;
+                $pendingNotional = $pendingNotional->plus(
+                    CanonicalPortfolioDecimal::fromFloat(
+                        $reservation->reservedNotionalQuote,
+                        'canonical_portfolio_state_unreconciled',
+                    )
+                        ->multipliedBy(BigDecimal::of($reservation->venueRemainingQuantityDecimal))
+                        ->dividedBy(
+                            CanonicalPortfolioDecimal::fromFloat(
+                                $reservation->plannedQuantity,
+                                'canonical_portfolio_state_unreconciled',
+                            ),
+                            24,
+                            RoundingMode::UP,
+                        ),
+                );
+            }
+            $activeDecisionKeys[] = $reservation->decisionKey;
+        }
+
+        $snapshotKeys = array_fill_keys($snapshot->activeDecisionKeys, true);
+        foreach ($activeDecisionKeys as $decisionKey) {
+            if (!isset($snapshotKeys[$decisionKey])) {
+                throw new CanonicalPortfolioException('canonical_portfolio_state_unreconciled');
+            }
+        }
+        if (
+            $snapshot->openPositions < $openPositions
+            || $snapshot->pendingEntries < $pendingEntries
+            || CanonicalPortfolioDecimal::fromFloat($snapshot->reservedRiskQuote, 'canonical_portfolio_state_unreconciled')->isLessThan($reservedRisk)
+            || CanonicalPortfolioDecimal::fromFloat($snapshot->openNotionalQuote, 'canonical_portfolio_state_unreconciled')->isLessThan($openNotional)
+            || CanonicalPortfolioDecimal::fromFloat($snapshot->pendingNotionalQuote, 'canonical_portfolio_state_unreconciled')->isLessThan($pendingNotional)
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_state_unreconciled');
+        }
     }
 }
