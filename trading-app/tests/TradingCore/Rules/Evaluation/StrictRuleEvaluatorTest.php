@@ -101,7 +101,7 @@ final class StrictRuleEvaluatorTest extends TestCase
     {
         $now = new \DateTimeImmutable('2026-08-10T10:00:00+00:00');
         $snapshots = $include ? [
-            $timeframe => new RuleInputSnapshot(
+            new RuleInputSnapshot(
                 $timeframe,
                 'indicator_snapshot',
                 $stale ? $now->modify('-2 seconds') : $now,

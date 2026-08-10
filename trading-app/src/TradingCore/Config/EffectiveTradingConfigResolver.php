@@ -8,7 +8,7 @@ use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
 use App\TradingCore\Mode\Exception\ModeContractException;
 use App\TradingCore\Mode\ModeContractLoader;
-use App\TradingCore\Setup\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -22,7 +22,7 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
         private ?ModeContractLoader $modeContracts = null,
         private ?SetupContractLoader $setupContracts = null,
         private ?SetupCompiler $setupCompiler = null,
-        private mixed $conditionCatalog = null,
+        private ?ConditionCatalog $conditionCatalog = null,
         private ?EffectiveTradingConfigComposer $composer = null,
     ) {
     }
@@ -61,9 +61,6 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
         }
 
         try {
-            if ($this->conditionCatalog !== null && !$this->conditionCatalog instanceof ConditionCatalog) {
-                throw new TradingConfigException('Configured condition catalog must be a typed ConditionCatalog.');
-            }
             $compiled = ($this->setupCompiler ?? new SetupCompiler())->compile($setup, $this->conditionCatalog);
         } catch (SetupContractException $exception) {
             throw new TradingConfigException($exception->getMessage(), previous: $exception);

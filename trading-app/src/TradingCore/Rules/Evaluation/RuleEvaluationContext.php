@@ -6,24 +6,37 @@ namespace App\TradingCore\Rules\Evaluation;
 
 final readonly class RuleEvaluationContext
 {
-    /** @param array<string, RuleInputSnapshot> $snapshotsByTimeframe */
+    /** @var array<string, RuleInputSnapshot> */
+    private array $snapshotsByIdentity;
+
+    /** @param list<RuleInputSnapshot> $snapshots */
     public function __construct(
         public string $configHash,
         public \DateTimeImmutable $evaluatedAt,
-        private array $snapshotsByTimeframe,
+        array $snapshots,
     ) {
         if ($configHash === '') {
             throw new \InvalidArgumentException('Effective config hash must be non-empty.');
         }
-        foreach ($snapshotsByTimeframe as $timeframe => $snapshot) {
-            if ($timeframe !== $snapshot->timeframe) {
-                throw new \InvalidArgumentException('Rule input snapshot key/timeframe mismatch.');
+        $indexed = [];
+        foreach ($snapshots as $snapshot) {
+            $identity = self::identity($snapshot->timeframe, $snapshot->source);
+            if (isset($indexed[$identity])) {
+                throw new \InvalidArgumentException('Duplicate rule input timeframe/source snapshot.');
             }
+            $indexed[$identity] = $snapshot;
         }
+        ksort($indexed, SORT_STRING);
+        $this->snapshotsByIdentity = $indexed;
     }
 
-    public function snapshot(string $timeframe): ?RuleInputSnapshot
+    public function snapshot(string $timeframe, string $source): ?RuleInputSnapshot
     {
-        return $this->snapshotsByTimeframe[$timeframe] ?? null;
+        return $this->snapshotsByIdentity[self::identity($timeframe, $source)] ?? null;
+    }
+
+    private static function identity(string $timeframe, string $source): string
+    {
+        return $timeframe . "\0" . $source;
     }
 }

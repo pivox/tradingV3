@@ -84,16 +84,13 @@ final readonly class StrictRuleEvaluator
         if ($definition->status === 'blocked') {
             return [false, 'condition_blocked', $base];
         }
-        $snapshot = $context->snapshot($node->timeframe);
+        $snapshot = $context->snapshot($node->timeframe, $definition->contextSource);
         if ($snapshot === null) {
             return [false, 'missing_timeframe_snapshot', $base];
         }
         $base['input_source'] = $snapshot->source;
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
-        if ($snapshot->source !== $definition->contextSource) {
-            return [false, 'input_source_mismatch', $base];
-        }
         if (!$snapshot->isValidAt($context->evaluatedAt)) {
             return [false, 'stale_input', $base];
         }

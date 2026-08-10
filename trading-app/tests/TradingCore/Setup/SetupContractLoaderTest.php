@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Setup;
 
 use App\TradingCore\Setup\Exception\SetupContractException;
-use App\TradingCore\Setup\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Setup\ConditionCatalog as LegacyConditionCatalog;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
@@ -19,7 +21,7 @@ use Symfony\Component\Yaml\Yaml;
 #[CoversClass(SetupContractLoader::class)]
 #[CoversClass(SetupContractValidator::class)]
 #[CoversClass(SetupCompiler::class)]
-#[CoversClass(ConditionCatalog::class)]
+#[CoversClass(LegacyConditionCatalog::class)]
 #[CoversClass(SetupContractException::class)]
 final class SetupContractLoaderTest extends TestCase
 {
@@ -306,7 +308,7 @@ final class SetupContractLoaderTest extends TestCase
 
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Unknown condition "invented_condition"');
-        (new SetupCompiler())->compile($contract, new ConditionCatalog(['invented_condition']));
+        new LegacyConditionCatalog(['invented_condition']);
     }
 
     public function testImmutableSnapshotHasStableHashesVersionsAndProvenanceByKey(): void
@@ -321,7 +323,7 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame(['scalping' => '1.0.0'], $first->modeVersions);
         self::assertSame([$contract->toArray()['source_origin']], $first->sourceOrigins);
         self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $first->configHash);
-        self::assertNull($first->conditionCatalogHash);
+        self::assertSame($this->catalog()->stableHash(), $first->conditionCatalogHash);
         self::assertFalse($first->publishable);
         self::assertArrayHasKey('context.trigger', $first->provenanceByKey);
     }
@@ -529,7 +531,7 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testConditionCatalogHashIsSpecializedAndVerifiedDuringCompilation(): void
     {
-        $catalog = new ConditionCatalog(SetupContractValidator::CONDITION_IDS);
+        $catalog = $this->catalog();
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
         $document['data_condition_contract']['condition_catalog_hash'] = [
             'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
@@ -590,7 +592,7 @@ final class SetupContractLoaderTest extends TestCase
         self::assertEquals([$document['source_origin']], $payload['source_origins']);
         self::assertSame($snapshot->provenanceByKey, $payload['contract_provenance']);
         self::assertSame($snapshot->configHash, $payload['contract_hash']);
-        self::assertContains('condition_catalog_hash_unresolved', $payload['blockers']);
+        self::assertNotContains('condition_catalog_hash_unresolved', $payload['blockers']);
         self::assertFalse($payload['publishable']);
     }
 
@@ -647,15 +649,19 @@ final class SetupContractLoaderTest extends TestCase
         $this->expectException(SetupContractException::class);
         $this->expectExceptionMessage('Supplied condition catalog is missing:');
         $this->expectExceptionMessage('pullback_confirmed');
-        (new SetupCompiler())->compile($contract, new ConditionCatalog(['near_vwap']));
+        $document = Yaml::parseFile(dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml');
+        self::assertIsArray($document);
+        $document['conditions'] = array_values(array_filter(
+            $document['conditions'],
+            static fn (array $row): bool => ($row['id'] ?? null) === 'near_vwap',
+        ));
+        (new SetupCompiler())->compile($contract, (new ConditionCatalogLoader())->load($document));
     }
 
     public function testExternalSafetyDependencyIsExcludedFromConditionCatalogCoverage(): void
     {
         $contract = (new SetupContractLoader($this->root))->load('crash_short', '1.0.0');
-        $catalogIds = array_values(array_diff(SetupContractValidator::CONDITION_IDS, ['lev_bounds']));
-
-        $snapshot = (new SetupCompiler())->compile($contract, new ConditionCatalog($catalogIds));
+        $snapshot = (new SetupCompiler())->compile($contract, $this->catalog());
 
         self::assertFalse($snapshot->publishable);
         self::assertContains('data_condition_contract.external_dependencies.0', $contract->unresolvedPaths());
@@ -713,5 +719,12 @@ final class SetupContractLoaderTest extends TestCase
         self::assertIsObject($object);
 
         return $object;
+    }
+
+    private function catalog(): ConditionCatalog
+    {
+        return (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        );
     }
 }
