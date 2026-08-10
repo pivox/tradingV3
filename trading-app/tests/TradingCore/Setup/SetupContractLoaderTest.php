@@ -162,7 +162,7 @@ final class SetupContractLoaderTest extends TestCase
         $document = (new SetupContractLoader($this->root))->load('crash_short', '1.1.0')->toArray();
         $sources = array_column($document['provenance'], 'source', 'path');
 
-        foreach (['mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters', 'no_trade_rules'] as $path) {
+        foreach (['mode_compatibility', 'context.regime', 'context.context', 'context.trigger', 'context.confirmations', 'filters'] as $path) {
             self::assertStringContainsString('validations.crash.yaml:', $sources[$path]);
         }
         foreach (['execution.entry_zone', 'execution.stop', 'execution.targets', 'execution.minimum_net_r', 'execution.invalidation', 'execution.time_stop', 'execution.cost_contract', 'execution.order_policy', 'execution.risk_boundary', 'validity_window'] as $path) {
@@ -399,6 +399,17 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame([], $crash['compatible_modes']);
         self::assertSame('unresolved', $crash['mode_compatibility']['state']);
         self::assertSame('#310', $crash['mode_compatibility']['issue']);
+    }
+
+    public function testCrashRsiFloorIsAMandatoryFilterNotAnInvertedNoTradeMatch(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        foreach (['1.0.0', '1.1.0'] as $version) {
+            $document = $loader->load('crash_short', $version)->toArray();
+
+            self::assertSame([], $document['no_trade_rules']);
+            self::assertContains('rsi_5m_gt_floor', array_column($document['filters'], 'condition'));
+        }
     }
 
     public function testDraft202012SchemaHasParityWithPhpValidator(): void

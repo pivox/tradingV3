@@ -56,8 +56,8 @@ context:
 filters:
   - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
   - { condition: lev_bounds, timeframe: global, provenance: 'validations.crash.yaml:164-167,247-249; values remain externally owned' }
-no_trade_rules:
-  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 anti-last-tick guard' }
+  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194 mandatory anti-last-tick guard' }
+no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
 execution:
   side: short

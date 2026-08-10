@@ -50,8 +50,8 @@ context:
 filters:
   - { condition: rsi_lt_70, timeframe: global, provenance: 'validations.crash.yaml:247-249' }
   - { condition: lev_bounds, timeframe: global, provenance: 'validations.crash.yaml:164-167,247-249; values remain externally owned' }
-no_trade_rules:
-  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194; terminal-wick guard' }
+  - { condition: rsi_5m_gt_floor, timeframe: 5m, parameters: { gt: 20 }, provenance: 'validations.crash.yaml:136-137,194; mandatory terminal-wick guard' }
+no_trade_rules: []
 missing_data_policy: { absent: reject, stale: reject, critical: reject }
 execution:
   side: short
@@ -92,9 +92,8 @@ provenance:
   - { path: context.context, source: 'src/MtfValidator/config/validations.crash.yaml:265-269', justification: 'Strict 1h crash context.' }
   - { path: context.trigger, source: 'src/MtfValidator/config/validations.crash.yaml:271-276', justification: '15m bearish confirmation.' }
   - { path: context.confirmations, source: 'src/MtfValidator/config/validations.crash.yaml:278-305', justification: 'Observable 5m-default and 1m-extreme execution variants.' }
-  - { path: filters, source: 'src/MtfValidator/config/validations.crash.yaml:244-249', justification: 'Global RSI and leverage filters.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.crash.yaml:136-137,186-194,244-249', justification: 'Global RSI, leverage and mandatory 5m RSI terminal-wick guards.' }
   - { path: filters.lev_bounds, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Safety dependency stays external and unresolved.' }
-  - { path: no_trade_rules, source: 'src/MtfValidator/config/validations.crash.yaml:136-137,186-194', justification: '5m RSI floor is the sourced terminal-wick guard.' }
   - { path: execution.entry_zone, source: 'config/app/trade_entry.crash.yaml:189-205', justification: 'Legacy proposal inventories the source but is not promoted as certified.' }
   - { path: execution.stop, source: 'config/app/trade_entry.crash.yaml:34-42', justification: 'Legacy pivot/ATR proposal remains unresolved.' }
   - { path: execution.targets, source: 'config/app/trade_entry.crash.yaml:30-49,79-85', justification: 'Legacy target proposals conflict and lack net evidence.' }
