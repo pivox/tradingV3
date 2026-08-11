@@ -181,6 +181,10 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'condition_catalog_hash' => 'catalog-hash', 'side' => 'LONG', 'decision_id' => 'decision-1',
             'decision_key' => 'decision-key-1', 'intent_id' => 'intent-1', 'order_id' => 'order-1',
             'paper_network' => 'testnet',
+            'internal_trade_id' => 'internal-trade-1',
+            'paper_execution_cell_id' => 'sha256:' . str_repeat('a', 64),
+            'configuration_snapshot_id' => 'sha256:' . str_repeat('b', 64),
+            'paper_eligibility' => 'reference_only',
         ];
         foreach ([2700, 2701] as $id) {
             $sets = implode(', ', array_map(static fn (string $field): string => "$field = :$field", array_keys($contract)));
@@ -623,12 +627,12 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         self::assertSame('partial', $bySymbol['DOGEUSDT']['cost_completeness']);
         self::assertNull($bySymbol['DOGEUSDT']['net_pnl_usdt']);
-        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $bySymbol['DOGEUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('missing_paper_provenance', (string) $bySymbol['DOGEUSDT']['pnl_quality_flags']);
         self::assertStringContainsString('missing_entry_fee', (string) $bySymbol['DOGEUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['ADAUSDT']['cost_completeness']);
         self::assertNull($bySymbol['ADAUSDT']['net_pnl_usdt']);
-        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $bySymbol['ADAUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('missing_paper_provenance', (string) $bySymbol['ADAUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['BTCUSDT']['cost_completeness']);
         self::assertSame('fake_paper_fill_ledger_v1', $bySymbol['BTCUSDT']['pnl_source']);
@@ -639,7 +643,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($bySymbol['BTCUSDT']['net_pnl_usdt']);
         self::assertNull($bySymbol['BTCUSDT']['realized_net_pnl_r']);
         self::assertNull($bySymbol['BTCUSDT']['position_fully_closed']);
-        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $bySymbol['BTCUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('missing_paper_provenance', (string) $bySymbol['BTCUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['ETHUSDT']['cost_completeness']);
         self::assertNull($bySymbol['ETHUSDT']['net_pnl_usdt']);
@@ -654,7 +658,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         self::assertSame('partial', $bySymbol['XRPUSDT']['cost_completeness']);
         self::assertNull($bySymbol['XRPUSDT']['net_pnl_usdt']);
-        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $bySymbol['XRPUSDT']['pnl_quality_flags']);
+        self::assertStringContainsString('missing_paper_provenance', (string) $bySymbol['XRPUSDT']['pnl_quality_flags']);
 
         self::assertSame('partial', $bySymbol['LTCUSDT']['cost_completeness']);
         self::assertNull($bySymbol['LTCUSDT']['net_pnl_usdt']);
@@ -1272,6 +1276,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('quantity_mismatch', $row['quantity_status']);
         self::assertNull($row['net_pnl_usdt']);
         self::assertContains('quantity_mismatch', $row['pnl_quality_flags']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
     }
 
     public function testLedgerCertificationRejectsLedgerQualityFlag(): void
@@ -1294,6 +1299,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $row = $this->analysisRow(2930);
         self::assertNull($row['net_pnl_usdt']);
         self::assertContains('ledger_quality_invalid', $row['pnl_quality_flags']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
     }
 
     public function testCanonicalEntryCloseLineageMismatchCannotCertifyLedgerNet(): void
@@ -1319,6 +1325,127 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($row['net_pnl_usdt']);
         self::assertNull($row['canonical_net_pnl_usdt']);
         self::assertContains('ledger_lifecycle_identity_mismatch', $row['pnl_quality_flags']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testMissingInternalTradeIdentityCannotCertifyLedgerEvidence(): void
+    {
+        $internalTradeId = 'itd-ledger-identity-removed';
+        $positionId = 'position-ledger-identity-removed';
+        $this->entry('DOTUSDT', 'run-ledger-identity-removed', 'identity-removed', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:36:00+00', 2942, 'hyperliquid');
+        $this->close('DOTUSDT', 'run-ledger-identity-removed', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:37:00+00', 2943, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2942, 2943, $internalTradeId, $positionId, 'trade-ledger-identity-removed');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('DOTUSDT', $internalTradeId, $positionId, 'identity-removed-' . $role, $role, $price, 1.0, '2026-08-11 15:3' . ($role === 'entry' ? '6' : '7') . ':30+00', [
+                'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+                'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->conn->executeStatement(
+            "UPDATE trade_lifecycle_event SET internal_trade_id = NULL, extra = extra - 'internal_trade_id' WHERE id IN (2942, 2943)",
+        );
+        $this->conn->executeStatement('UPDATE fill_cost_ledger SET internal_trade_id = NULL WHERE internal_trade_id = ?', [$internalTradeId]);
+
+        $row = $this->analysisRow(2942);
+        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertContains('missing_internal_trade_identity', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testMissingPaperProvenanceCannotCertifyLedgerEvidence(): void
+    {
+        $internalTradeId = 'itd-ledger-paper-missing';
+        $positionId = 'position-ledger-paper-missing';
+        $this->entry('LINKUSDT', 'run-ledger-paper-missing', 'paper-missing', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:38:00+00', 2944, 'hyperliquid');
+        $this->close('LINKUSDT', 'run-ledger-paper-missing', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:39:00+00', 2945, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2944, 2945, $internalTradeId, $positionId, 'trade-ledger-paper-missing');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('LINKUSDT', $internalTradeId, $positionId, 'paper-missing-' . $role, $role, $price, 1.0, '2026-08-11 15:3' . ($role === 'entry' ? '8' : '9') . ':30+00', [
+                'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+                'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->conn->executeStatement('UPDATE trade_lifecycle_event SET configuration_snapshot_id = NULL WHERE id IN (2944, 2945)');
+        $this->conn->executeStatement('UPDATE fill_cost_ledger SET configuration_snapshot_id = NULL WHERE internal_trade_id = ?', [$internalTradeId]);
+
+        $row = $this->analysisRow(2944);
+        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertContains('missing_paper_provenance', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testLedgerCertificationRequiresSideOnEveryEntryAndExitFill(): void
+    {
+        $internalTradeId = 'itd-ledger-side-missing';
+        $positionId = 'position-ledger-side-missing';
+        $this->entry('UNIUSDT', 'run-ledger-side-missing', 'side-missing', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:39:10+00', 2946, 'hyperliquid');
+        $this->close('UNIUSDT', 'run-ledger-side-missing', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:39:50+00', 2947, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2946, 2947, $internalTradeId, $positionId, 'trade-ledger-side-missing');
+        $this->ledgerFill('UNIUSDT', $internalTradeId, $positionId, 'side-present-entry', 'entry', 100.0, 0.5, '2026-08-11 15:39:11+00', [
+            'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('UNIUSDT', $internalTradeId, $positionId, 'side-missing-entry', 'entry', 100.0, 0.5, '2026-08-11 15:39:12+00', [
+            'side' => null, 'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('UNIUSDT', $internalTradeId, $positionId, 'side-present-exit', 'exit', 101.0, 1.0, '2026-08-11 15:39:50+00', [
+            'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+
+        $helper = $this->conn->fetchAssociative(
+            'SELECT to_jsonb(h) AS aggregate
+             FROM position_trade_ledger_aggregate_v1 h WHERE internal_trade_id = ?',
+            [$internalTradeId],
+        );
+        self::assertIsArray($helper);
+        $aggregate = json_decode((string) $helper['aggregate'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($aggregate);
+        self::assertSame(2, (int) $aggregate['entry_fill_count']);
+        self::assertArrayHasKey('entry_side_present_count', $aggregate);
+        self::assertSame(1, (int) $aggregate['entry_side_present_count']);
+        self::assertSame(1, (int) $aggregate['exit_fill_count']);
+        self::assertArrayHasKey('exit_side_present_count', $aggregate);
+        self::assertSame(1, (int) $aggregate['exit_side_present_count']);
+
+        $row = $this->analysisRow(2946);
+        self::assertContains('ledger_side_missing', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testBlankMarketIdentityCannotCertifyLedgerEvidence(): void
+    {
+        $internalTradeId = 'itd-ledger-market-blank';
+        $positionId = 'position-ledger-market-blank';
+        $this->entry('NEARUSDT', 'run-ledger-market-blank', 'market-blank', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:39:51+00', 2948, 'hyperliquid');
+        $this->close('NEARUSDT', 'run-ledger-market-blank', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:39:59+00', 2949, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2948, 2949, $internalTradeId, $positionId, 'trade-ledger-market-blank');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('NEARUSDT', $internalTradeId, $positionId, 'market-blank-' . $role, $role, $price, 1.0, '2026-08-11 15:39:' . ($role === 'entry' ? '52' : '58') . '+00', [
+                'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+                'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->conn->executeStatement("UPDATE trade_lifecycle_event SET exchange = '' WHERE id IN (2948, 2949)");
+        $this->conn->executeStatement("UPDATE fill_cost_ledger SET exchange = '' WHERE internal_trade_id = ?", [$internalTradeId]);
+
+        $row = $this->analysisRow(2948);
+        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertContains('ledger_market_identity_mismatch', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
     }
 
     public function testSignedFundingSettlementRowOverridesCloseFallback(): void
@@ -1399,6 +1526,32 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNull($this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2_pre_ledger')::text"));
         self::assertNull($this->conn->fetchOne("SELECT to_regclass('position_trade_ledger_aggregate_v1')::text"));
 
+        $this->entry('ATOMUSDT', 'run-down-wrapper-contract', 'down-wrapper', 'scalper', 'fake', 'paper', [
+            'trade_id' => 'trade-down-wrapper-contract',
+        ], '2026-08-11 16:10:00+00', 2970, 'hyperliquid');
+        $this->close('ATOMUSDT', 'run-down-wrapper-contract', [
+            'trade_id' => 'trade-down-wrapper-contract',
+        ], 'position-down-wrapper-contract', '2026-08-11 16:11:00+00', 2971, 'fake', 'paper', 'hyperliquid');
+        $legacy302Identity = [
+            'correlation_run_id' => 'correlation-down', 'orchestration_run_id' => 'orchestration-down',
+            'orchestration_set_id' => 'set-down', 'orchestration_dashboard_id' => 'dashboard-down',
+            'mode_id' => 'scalping', 'mode_version' => '1.0.0', 'setup_id' => 'scalping.pullback',
+            'setup_version' => '1.0.0', 'config_hash' => 'config-down',
+            'condition_catalog_hash' => 'catalog-down', 'side' => 'LONG', 'decision_id' => 'decision-down',
+            'decision_key' => 'decision-key-down', 'intent_id' => 'intent-down', 'order_id' => 'order-down',
+            'position_id' => 'position-down-wrapper-contract', 'trade_id' => 'trade-down-wrapper-contract',
+            'paper_network' => 'testnet',
+        ];
+        $sets = implode(', ', array_map(static fn (string $field): string => "$field = :$field", array_keys($legacy302Identity)));
+        foreach ([2970, 2971] as $id) {
+            $this->conn->executeStatement("UPDATE trade_lifecycle_event SET $sets WHERE id = :id", $legacy302Identity + ['id' => $id]);
+        }
+        self::assertSame(
+            'canonical',
+            $this->conn->fetchOne('SELECT lineage_classification FROM position_trade_analysis_v2 WHERE entry_event_id = 2970'),
+            'down restores the exact pre-ledger #302 classification contract',
+        );
+
         $up = new Version20260811120000($this->conn, new NullLogger());
         $up->up(new Schema());
         foreach ($up->getSql() as $query) {
@@ -1409,6 +1562,11 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('position_trade_analysis_v2_legacy_source', $this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2_legacy_source')::text"));
         self::assertSame('position_trade_analysis_v2_pre_ledger', $this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2_pre_ledger')::text"));
         self::assertSame('position_trade_ledger_aggregate_v1', $this->conn->fetchOne("SELECT to_regclass('position_trade_ledger_aggregate_v1')::text"));
+        self::assertSame(
+            'incomplete',
+            $this->conn->fetchOne('SELECT lineage_classification FROM position_trade_analysis_v2 WHERE entry_event_id = 2970'),
+            'up tightens canonical publication to the ledger identity and Paper provenance contract',
+        );
     }
 
     public function testMalformedLegacyFinancialValuesDoNotBreakViewRead(): void
@@ -1539,7 +1697,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(1.6, (float) $row['mfe_r'], 1e-9);
         self::assertEqualsWithDelta(-0.6, (float) $row['mae_r'], 1e-9);
         self::assertSame('complete', $row['mfe_mae_data_quality']);
-        self::assertStringContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
+        self::assertStringContainsString('missing_paper_provenance', (string) $row['pnl_quality_flags']);
     }
 
     public function testNegativeRuntimeMfeDoesNotBecomePositiveR(): void
@@ -2315,6 +2473,26 @@ SQL, ['entry_event_id' => $entryEventId]);
         self::assertIsArray($row);
 
         return $row;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private function assertCoreLedgerFinancialEvidenceMasked(array $row, float $expectedRecordedPnl): void
+    {
+        self::assertEqualsWithDelta($expectedRecordedPnl, (float) $row['recorded_pnl_usdt'], 1e-9);
+        foreach ([
+            'gross_realized_pnl_usdt',
+            'entry_fee_usdt',
+            'exit_fee_usdt',
+            'funding_usdt',
+            'spread_cost_usdt',
+            'slippage_cost_usdt',
+            'borrow_cost_usdt',
+            'liquidation_fee_usdt',
+        ] as $field) {
+            self::assertNull($row[$field], "core-invalid ledger evidence must mask `$field`");
+        }
     }
 
     /**

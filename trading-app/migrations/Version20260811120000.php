@@ -130,8 +130,10 @@ WITH eligible_ledger AS (
         SUM(liquidation_fee_usdt) FILTER (WHERE liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS liquidation_fee_usdt,
 
         COUNT(DISTINCT side) FILTER (WHERE normalized_fill_role = 'entry' AND side IS NOT NULL) AS entry_side_cardinality,
+        COUNT(NULLIF(btrim(side), '')) FILTER (WHERE normalized_fill_role = 'entry') AS entry_side_present_count,
         array_agg(DISTINCT side ORDER BY side) FILTER (WHERE normalized_fill_role = 'entry' AND side IS NOT NULL) AS entry_sides,
         COUNT(DISTINCT side) FILTER (WHERE normalized_fill_role = 'exit' AND side IS NOT NULL) AS exit_side_cardinality,
+        COUNT(NULLIF(btrim(side), '')) FILTER (WHERE normalized_fill_role = 'exit') AS exit_side_present_count,
         array_agg(DISTINCT side ORDER BY side) FILTER (WHERE normalized_fill_role = 'exit' AND side IS NOT NULL) AS exit_sides,
         COUNT(DISTINCT side) FILTER (WHERE side IS NOT NULL) AS side_cardinality,
         array_agg(DISTINCT side ORDER BY side) FILTER (WHERE side IS NOT NULL) AS sides
@@ -200,12 +202,12 @@ SELECT
             'entry_ma21', trading_v3_safe_numeric(snapshot.values->> 'ma21'),
             'entry_vwap', COALESCE(ledger.entry_vwap, trading_v3_safe_numeric(snapshot.values->> 'vwap')),
             'gross_realized_pnl_usdt', financial.gross_realized_pnl_usdt,
-            'entry_fee_usdt', ledger.entry_fee_usdt,
-            'exit_fee_usdt', ledger.exit_fee_usdt,
+            'entry_fee_usdt', financial.entry_fee_usdt,
+            'exit_fee_usdt', financial.exit_fee_usdt,
             'other_trading_fees_usdt', financial.other_trading_fees_usdt,
             'funding_usdt', financial.funding_usdt,
-            'spread_cost_usdt', ledger.spread_cost_usdt,
-            'slippage_cost_usdt', ledger.slippage_cost_usdt,
+            'spread_cost_usdt', financial.spread_cost_usdt,
+            'slippage_cost_usdt', financial.slippage_cost_usdt,
             'borrow_cost_usdt', financial.borrow_cost_usdt,
             'liquidation_fee_usdt', financial.liquidation_fee_usdt,
             'total_known_cost_usdt', certified.total_known_cost_usdt,
@@ -286,6 +288,19 @@ LEFT JOIN LATERAL (
 ) probe ON true
 CROSS JOIN LATERAL (
     SELECT
+        NULLIF(btrim(old.internal_trade_id), '') IS NOT NULL
+        AND NULLIF(btrim(COALESCE(entry_event.internal_trade_id, entry_event.extra->> 'internal_trade_id')), '') IS NOT NULL
+        AND NULLIF(btrim(COALESCE(close_event.internal_trade_id, close_event.extra->> 'internal_trade_id')), '') IS NOT NULL
+        AND COALESCE(NULLIF(entry_event.internal_trade_id, ''), NULLIF(entry_event.extra->> 'internal_trade_id', '')) IS NOT DISTINCT FROM old.internal_trade_id
+        AND COALESCE(NULLIF(close_event.internal_trade_id, ''), NULLIF(close_event.extra->> 'internal_trade_id', '')) IS NOT DISTINCT FROM old.internal_trade_id AS internal_trade_identity_complete,
+        NULLIF(btrim(old.exchange), '') IS NOT NULL
+        AND NULLIF(btrim(old.market_type), '') IS NOT NULL
+        AND NULLIF(btrim(old.symbol), '') IS NOT NULL
+        AND NULLIF(btrim(old.market_data_venue), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.exchange), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.market_type), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.symbol), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.market_data_venue), '') IS NOT NULL AS market_identity_complete,
         close_event.id IS NOT NULL
         AND COALESCE(NULLIF(close_event.internal_trade_id, ''), NULLIF(close_event.extra->> 'internal_trade_id', '')) IS NOT DISTINCT FROM old.internal_trade_id
         AND close_event.exchange IS NOT DISTINCT FROM old.exchange
@@ -297,6 +312,31 @@ CROSS JOIN LATERAL (
         AND close_event.configuration_snapshot_id IS NOT DISTINCT FROM entry_event.configuration_snapshot_id
         AND close_event.paper_network IS NOT DISTINCT FROM entry_event.paper_network
         AND close_event.paper_eligibility IS NOT DISTINCT FROM entry_event.paper_eligibility AS paper_provenance_coherent,
+        NULLIF(btrim(entry_event.market_data_venue), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.paper_network), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.paper_execution_cell_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.configuration_snapshot_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.paper_eligibility), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.market_data_venue), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.paper_network), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.paper_execution_cell_id), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.configuration_snapshot_id), '') IS NOT NULL
+        AND NULLIF(btrim(close_event.paper_eligibility), '') IS NOT NULL AS paper_provenance_complete,
+        NULLIF(btrim(entry_event.mode_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.mode_version), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.setup_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.setup_version), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.config_hash), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.condition_catalog_hash), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.side), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.decision_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.decision_key), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.intent_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.correlation_run_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.orchestration_run_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.orchestration_set_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.orchestration_dashboard_id), '') IS NOT NULL
+        AND NULLIF(btrim(entry_event.order_id), '') IS NOT NULL AS lifecycle_identity_complete,
         close_event.id IS NOT NULL
         AND close_event.mode_id IS NOT DISTINCT FROM entry_event.mode_id
         AND close_event.mode_version IS NOT DISTINCT FROM entry_event.mode_version
@@ -316,6 +356,38 @@ CROSS JOIN LATERAL (
         AND close_event.position_id IS NOT NULL
         AND close_event.trade_id IS NOT NULL AS lifecycle_identity_coherent
 ) identity
+CROSS JOIN LATERAL (
+    SELECT
+        ledger.ledger_row_count IS NOT NULL
+        AND ledger.entry_side_present_count = ledger.entry_fill_count
+        AND ledger.exit_side_present_count = ledger.exit_fill_count AS side_presence_complete,
+        (
+            (upper(entry_event.side) = 'LONG'
+                AND ledger.entry_side_cardinality = 1 AND upper(ledger.entry_sides[1]) = 'BUY'
+                AND ledger.exit_side_cardinality = 1 AND upper(ledger.exit_sides[1]) = 'SELL')
+            OR (upper(entry_event.side) = 'SHORT'
+                AND ledger.entry_side_cardinality = 1 AND upper(ledger.entry_sides[1]) = 'SELL'
+                AND ledger.exit_side_cardinality = 1 AND upper(ledger.exit_sides[1]) = 'BUY')
+        ) AS side_coherent
+) side_evidence
+CROSS JOIN LATERAL (
+    SELECT
+        old.close_event_id IS NOT NULL
+        AND close_event.id IS NOT NULL
+        AND ledger.ledger_row_count IS NOT NULL
+        AND identity.internal_trade_identity_complete
+        AND identity.market_identity_complete
+        AND identity.market_identity_coherent
+        AND identity.paper_provenance_complete
+        AND identity.paper_provenance_coherent
+        AND identity.lifecycle_identity_complete
+        AND identity.lifecycle_identity_coherent
+        AND ledger.quantity_status = 'complete'
+        AND ledger.position_fully_closed IS TRUE
+        AND ledger.ledger_quality_valid IS TRUE
+        AND side_evidence.side_presence_complete
+        AND side_evidence.side_coherent IS TRUE AS valid
+) core_evidence
 CROSS JOIN LATERAL (
     SELECT
         CASE
@@ -340,19 +412,49 @@ CROSS JOIN LATERAL (
             WHEN trading_v3_safe_numeric(close_event.extra->> 'liquidation_fee_usdt') >= 0
                 THEN trading_v3_safe_numeric(close_event.extra->> 'liquidation_fee_usdt')
         END AS liquidation_fee_usdt
+) raw_financial
+CROSS JOIN LATERAL (
+    SELECT
+        CASE WHEN core_evidence.valid THEN raw_financial.gross_realized_pnl_usdt END AS gross_realized_pnl_usdt,
+        CASE WHEN core_evidence.valid THEN ledger.entry_fee_usdt END AS entry_fee_usdt,
+        CASE WHEN core_evidence.valid THEN ledger.exit_fee_usdt END AS exit_fee_usdt,
+        raw_financial.other_trading_fees_usdt,
+        CASE
+            WHEN ledger.funding_explicit_count > 0 AND core_evidence.valid THEN raw_financial.funding_usdt
+            WHEN COALESCE(ledger.funding_explicit_count, 0) = 0 THEN raw_financial.funding_usdt
+        END AS funding_usdt,
+        CASE WHEN core_evidence.valid THEN ledger.spread_cost_usdt END AS spread_cost_usdt,
+        CASE WHEN core_evidence.valid THEN ledger.slippage_cost_usdt END AS slippage_cost_usdt,
+        CASE
+            WHEN ledger.borrow_cost_explicit_count > 0 AND core_evidence.valid THEN raw_financial.borrow_cost_usdt
+            WHEN COALESCE(ledger.borrow_cost_explicit_count, 0) = 0 THEN raw_financial.borrow_cost_usdt
+        END AS borrow_cost_usdt,
+        CASE
+            WHEN ledger.liquidation_fee_explicit_count > 0 AND core_evidence.valid THEN raw_financial.liquidation_fee_usdt
+            WHEN COALESCE(ledger.liquidation_fee_explicit_count, 0) = 0 THEN raw_financial.liquidation_fee_usdt
+        END AS liquidation_fee_usdt
 ) financial
 CROSS JOIN LATERAL (
     SELECT ARRAY_REMOVE(ARRAY[
         CASE WHEN old.close_event_id IS NULL THEN 'unmatched' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL AND (
-            identity.market_identity_coherent IS NOT TRUE OR probe.market_identity_mismatch
+        CASE WHEN old.close_event_id IS NOT NULL AND identity.internal_trade_identity_complete IS NOT TRUE
+            THEN 'missing_internal_trade_identity' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND identity.paper_provenance_complete IS NOT TRUE
+            THEN 'missing_paper_provenance' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND (
+            identity.market_identity_complete IS NOT TRUE
+            OR (ledger.ledger_row_count IS NULL AND (
+                identity.market_identity_coherent IS NOT TRUE OR probe.market_identity_mismatch
+            ))
         ) THEN 'ledger_market_identity_mismatch' END,
         CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
+            AND identity.market_identity_complete
             AND identity.market_identity_coherent
             AND NOT probe.market_identity_mismatch
             AND (identity.paper_provenance_coherent IS NOT TRUE OR probe.paper_provenance_mismatch)
             THEN 'ledger_paper_provenance_mismatch' END,
         CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
+            AND identity.market_identity_complete
             AND identity.market_identity_coherent
             AND identity.paper_provenance_coherent
             AND NOT probe.market_identity_mismatch
@@ -364,24 +466,24 @@ CROSS JOIN LATERAL (
         CASE WHEN ledger.quantity_status = 'quantity_mismatch' THEN 'quantity_mismatch' END,
         CASE WHEN ledger.quantity_status = 'partial_exit' THEN 'partial_exit' END,
         CASE WHEN ledger.ledger_row_count IS NOT NULL AND ledger.ledger_quality_valid IS NOT TRUE THEN 'ledger_quality_invalid' END,
-        CASE WHEN ledger.ledger_row_count IS NOT NULL AND identity.lifecycle_identity_coherent IS NOT TRUE THEN 'ledger_lifecycle_identity_mismatch' END,
-        CASE WHEN ledger.ledger_row_count IS NOT NULL AND NOT (
-            (upper(entry_event.side) = 'LONG'
-                AND ledger.entry_side_cardinality = 1 AND upper(ledger.entry_sides[1]) = 'BUY'
-                AND ledger.exit_side_cardinality = 1 AND upper(ledger.exit_sides[1]) = 'SELL')
-            OR (upper(entry_event.side) = 'SHORT'
-                AND ledger.entry_side_cardinality = 1 AND upper(ledger.entry_sides[1]) = 'SELL'
-                AND ledger.exit_side_cardinality = 1 AND upper(ledger.exit_sides[1]) = 'BUY')
-        ) THEN 'ledger_side_mismatch' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND financial.gross_realized_pnl_usdt IS NULL THEN 'missing_gross_pnl' END,
+        CASE WHEN ledger.ledger_row_count IS NOT NULL AND (
+            identity.lifecycle_identity_complete IS NOT TRUE OR identity.lifecycle_identity_coherent IS NOT TRUE
+        ) THEN 'ledger_lifecycle_identity_mismatch' END,
+        CASE WHEN ledger.ledger_row_count IS NOT NULL AND side_evidence.side_presence_complete IS NOT TRUE
+            THEN 'ledger_side_missing' END,
+        CASE WHEN ledger.ledger_row_count IS NOT NULL
+            AND side_evidence.side_presence_complete
+            AND side_evidence.side_coherent IS NOT TRUE
+            THEN 'ledger_side_mismatch' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND raw_financial.gross_realized_pnl_usdt IS NULL THEN 'missing_gross_pnl' END,
         CASE WHEN old.close_event_id IS NOT NULL AND (
             ledger.ledger_row_count IS NULL OR ledger.entry_fee_usdt_complete IS NOT TRUE
         ) THEN 'missing_entry_fee' END,
         CASE WHEN old.close_event_id IS NOT NULL AND (
             ledger.ledger_row_count IS NULL OR ledger.exit_fee_usdt_complete IS NOT TRUE
         ) THEN 'missing_exit_fee' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND financial.other_trading_fees_usdt IS NULL THEN 'missing_other_trading_fees' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND financial.funding_usdt IS NULL THEN 'missing_funding' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND raw_financial.other_trading_fees_usdt IS NULL THEN 'missing_other_trading_fees' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND raw_financial.funding_usdt IS NULL THEN 'missing_funding' END,
         CASE WHEN old.close_event_id IS NOT NULL AND (ledger.ledger_row_count IS NULL OR NOT (
             ledger.entry_spread_cost_explicit_count = ledger.entry_fill_count
             AND ledger.exit_spread_cost_explicit_count = ledger.exit_fill_count
@@ -390,52 +492,52 @@ CROSS JOIN LATERAL (
             ledger.entry_slippage_cost_explicit_count = ledger.entry_fill_count
             AND ledger.exit_slippage_cost_explicit_count = ledger.exit_fill_count
         )) THEN 'missing_slippage_cost' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND financial.borrow_cost_usdt IS NULL THEN 'missing_borrow_cost' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND financial.liquidation_fee_usdt IS NULL THEN 'missing_liquidation_fee' END
+        CASE WHEN old.close_event_id IS NOT NULL AND raw_financial.borrow_cost_usdt IS NULL THEN 'missing_borrow_cost' END,
+        CASE WHEN old.close_event_id IS NOT NULL AND raw_financial.liquidation_fee_usdt IS NULL THEN 'missing_liquidation_fee' END
     ], NULL)::text[] AS flags
 ) quality
 CROSS JOIN LATERAL (
     SELECT
-        CASE WHEN quality.flags = ARRAY[]::text[] THEN
-            ledger.entry_fee_usdt
-              + ledger.exit_fee_usdt
+        CASE WHEN core_evidence.valid AND quality.flags = ARRAY[]::text[] THEN
+            financial.entry_fee_usdt
+              + financial.exit_fee_usdt
               + financial.other_trading_fees_usdt
               - financial.funding_usdt
-              + ledger.spread_cost_usdt
-              + ledger.slippage_cost_usdt
+              + financial.spread_cost_usdt
+              + financial.slippage_cost_usdt
               + financial.borrow_cost_usdt
               + financial.liquidation_fee_usdt
         END AS total_known_cost_usdt,
-        CASE WHEN quality.flags = ARRAY[]::text[] THEN
+        CASE WHEN core_evidence.valid AND quality.flags = ARRAY[]::text[] THEN
             financial.gross_realized_pnl_usdt
-              - ledger.entry_fee_usdt
-              - ledger.exit_fee_usdt
+              - financial.entry_fee_usdt
+              - financial.exit_fee_usdt
               - financial.other_trading_fees_usdt
               + financial.funding_usdt
-              - ledger.spread_cost_usdt
-              - ledger.slippage_cost_usdt
+              - financial.spread_cost_usdt
+              - financial.slippage_cost_usdt
               - financial.borrow_cost_usdt
               - financial.liquidation_fee_usdt
         END AS net_pnl_usdt,
         CASE WHEN financial.gross_realized_pnl_usdt IS NOT NULL AND old.risk_usdt_at_entry > 0
             THEN financial.gross_realized_pnl_usdt / old.risk_usdt_at_entry
         END AS realized_gross_pnl_r,
-        CASE WHEN quality.flags = ARRAY[]::text[] AND old.risk_usdt_at_entry > 0 THEN
+        CASE WHEN core_evidence.valid AND quality.flags = ARRAY[]::text[] AND old.risk_usdt_at_entry > 0 THEN
             (
                 financial.gross_realized_pnl_usdt
-                  - ledger.entry_fee_usdt
-                  - ledger.exit_fee_usdt
+                  - financial.entry_fee_usdt
+                  - financial.exit_fee_usdt
                   - financial.other_trading_fees_usdt
                   + financial.funding_usdt
-                  - ledger.spread_cost_usdt
-                  - ledger.slippage_cost_usdt
+                  - financial.spread_cost_usdt
+                  - financial.slippage_cost_usdt
                   - financial.borrow_cost_usdt
                   - financial.liquidation_fee_usdt
             ) / old.risk_usdt_at_entry
         END AS realized_net_pnl_r,
         CASE
             WHEN old.close_event_id IS NULL THEN 'not_applicable'
-            WHEN quality.flags = ARRAY[]::text[] THEN 'complete'
+            WHEN core_evidence.valid AND quality.flags = ARRAY[]::text[] THEN 'complete'
             WHEN ledger.ledger_row_count IS NULL
              AND financial.gross_realized_pnl_usdt IS NULL
              AND financial.other_trading_fees_usdt IS NULL
@@ -455,13 +557,37 @@ SQL);
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
         $this->addSql('ALTER VIEW position_trade_analysis_v2_pre_ledger RENAME TO position_trade_analysis_v2_legacy_source');
-        $this->addCanonicalWrapperSql();
+        $this->addCanonicalWrapperSql(false);
         $this->addSql('DROP VIEW IF EXISTS position_trade_ledger_aggregate_v1');
     }
 
-    private function addCanonicalWrapperSql(): void
+    private function addCanonicalWrapperSql(bool $requireLedgerIdentity = true): void
     {
-        $this->addSql(<<<'SQL'
+        $entryIdentityRequirements = $requireLedgerIdentity ? <<<'SQL'
+      OR NULLIF(btrim(COALESCE(e.internal_trade_id, e.extra->> 'internal_trade_id')), '') IS NULL
+      OR NULLIF(btrim(e.exchange), '') IS NULL
+      OR NULLIF(btrim(e.market_type), '') IS NULL
+      OR NULLIF(btrim(e.symbol), '') IS NULL
+      OR NULLIF(btrim(e.market_data_venue), '') IS NULL
+      OR NULLIF(btrim(e.paper_network), '') IS NULL
+      OR NULLIF(btrim(e.paper_execution_cell_id), '') IS NULL
+      OR NULLIF(btrim(e.configuration_snapshot_id), '') IS NULL
+      OR NULLIF(btrim(e.paper_eligibility), '') IS NULL
+SQL : <<<'SQL'
+      OR e.paper_network IS NULL OR e.market_data_venue IS NULL
+SQL;
+        $closeIdentityRequirements = $requireLedgerIdentity ? <<<'SQL'
+      OR c.paper_execution_cell_id IS DISTINCT FROM e.paper_execution_cell_id
+      OR c.configuration_snapshot_id IS DISTINCT FROM e.configuration_snapshot_id
+      OR c.paper_eligibility IS DISTINCT FROM e.paper_eligibility
+      OR COALESCE(NULLIF(c.internal_trade_id, ''), NULLIF(c.extra->> 'internal_trade_id', ''))
+          IS DISTINCT FROM COALESCE(NULLIF(e.internal_trade_id, ''), NULLIF(e.extra->> 'internal_trade_id', ''))
+      OR c.exchange IS DISTINCT FROM e.exchange
+      OR c.market_type IS DISTINCT FROM e.market_type
+      OR c.symbol IS DISTINCT FROM e.symbol
+SQL : '';
+
+        $this->addSql(<<<SQL
 CREATE VIEW position_trade_analysis_v2 AS
 SELECT
   legacy.*,
@@ -509,7 +635,7 @@ CROSS JOIN LATERAL (
       OR e.correlation_run_id IS NULL OR e.orchestration_run_id IS NULL
       OR e.orchestration_set_id IS NULL OR e.orchestration_dashboard_id IS NULL
       OR e.order_id IS NULL
-      OR e.paper_network IS NULL OR e.market_data_venue IS NULL
+{$entryIdentityRequirements}
     THEN 'incomplete'
     WHEN c.id IS NOT NULL AND (
       c.mode_id IS DISTINCT FROM e.mode_id OR c.mode_version IS DISTINCT FROM e.mode_version
@@ -524,6 +650,7 @@ CROSS JOIN LATERAL (
       OR c.orchestration_dashboard_id IS DISTINCT FROM e.orchestration_dashboard_id
       OR c.paper_network IS DISTINCT FROM e.paper_network
       OR c.market_data_venue IS DISTINCT FROM e.market_data_venue
+{$closeIdentityRequirements}
       OR c.order_id IS DISTINCT FROM e.order_id
       OR c.position_id IS NULL OR c.trade_id IS NULL
     ) THEN 'incomplete'
