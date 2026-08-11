@@ -452,22 +452,47 @@ final class ModeContractValidator
             throw new ModeContractException('scalping 1.1.0 data contract differs from the frozen shadow contract.');
         }
 
-        if ($document['risk']['trade_budget']['source'] !== 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307'
-            || $document['risk']['trade_budget']['justification'] !== 'The approved two-percent Shadow budget deliberately replaces the legacy seven-percent default.'
-            || $document['leverage']['source'] !== 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307'
-            || $document['leverage']['justification'] !== 'The approved three-times mode cap is independent of exchange capability.'
-            || ($document['provenance'][4] ?? null) !== [
-                'path' => 'risk',
-                'source' => 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307',
-                'unit' => 'canonical_risk_policy',
-                'justification' => 'The two-percent budget deliberately replaces the legacy seven-percent default; remaining risk limits are explicit Shadow decisions.',
-            ]
-            || ($document['provenance'][5] ?? null) !== [
-                'path' => 'leverage',
-                'source' => 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307',
-                'unit' => 'leverage_multiple',
-                'justification' => 'The approved three-times mode cap is independent of exchange capability.',
-            ]) {
+        $decisions = [
+            'horizon' => $document['horizon'],
+            'session_policy' => $document['session_policy'],
+            'cadence.evaluation' => $document['cadence']['evaluation'],
+            'cadence.validity_window' => $document['cadence']['validity_window'],
+            'risk.trade_budget' => $document['risk']['trade_budget'],
+            'risk.daily_loss_cap' => $document['risk']['daily_loss_cap'],
+            'risk.max_concurrent_positions' => $document['risk']['max_concurrent_positions'],
+            'risk.mode_exposure_cap' => $document['risk']['mode_exposure_cap'],
+            'leverage' => $document['leverage'],
+            'order_policy' => $document['order_policy'],
+        ];
+        $expectedMetadata = [
+            'horizon' => ['GitHub issue #307 approved decision 2026-08-11', 'Each position is limited to two hours and must be closed before the UTC daily boundary.'],
+            'session_policy' => ['GitHub issue #307 approved decision 2026-08-11', 'Shadow evaluation is continuous for crypto while all daily accounting is in UTC.'],
+            'cadence.evaluation' => ['GitHub issue #307 approved decision 2026-08-11', 'The immutable shadow contract evaluates on the five-minute execution cadence.'],
+            'cadence.validity_window' => ['GitHub issue #307 approved decision 2026-08-11', 'A decision expires at the next five-minute evaluation boundary.'],
+            'risk.trade_budget' => ['config/app/trade_entry.scalper.yaml:73-78 pinned by #307', 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.'],
+            'risk.daily_loss_cap' => ['GitHub issue #307 approved decision 2026-08-11', 'The lower of six percent equity and 40 USDT applies in UTC to realized and unrealized loss.'],
+            'risk.max_concurrent_positions' => ['GitHub issue #307 approved decision 2026-08-11', 'Three positions is the cap and pending entries reserve a concurrency slot before filling.'],
+            'risk.mode_exposure_cap' => ['GitHub issue #307 approved decision 2026-08-11', 'Aggregate scalping notional is capped at 75 percent of equity.'],
+            'leverage' => ['config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307', 'Conservative venue envelope copied without legacy runtime loading.'],
+            'order_policy' => ['GitHub issue #307 approved decision 2026-08-11', 'Only isolated limit orders are admissible; market fallback is prohibited.'],
+        ];
+        foreach ($expectedMetadata as $path => [$source, $justification]) {
+            if ($decisions[$path]['source'] !== $source || $decisions[$path]['justification'] !== $justification) {
+                throw new ModeContractException(sprintf('scalping 1.1.0 %s metadata differs from the frozen shadow contract.', $path));
+            }
+        }
+
+        if ($document['provenance'] !== [
+            ['path' => 'horizon', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'holding_horizon_policy', 'justification' => 'PT2H maximum duration and a 00:00 UTC close boundary are explicit decisions.'],
+            ['path' => 'session_policy', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'session_policy', 'justification' => 'Continuous crypto session with UTC accounting is explicit.'],
+            ['path' => 'timeframes', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'timeframe_roles', 'justification' => '1h/15m/5m/5m/1m are the approved regime, context, trigger, execution and confirmation roles.'],
+            ['path' => 'cadence', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'duration', 'justification' => 'Evaluation and validity are both fixed at PT5M.'],
+            ['path' => 'risk', 'source' => 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307', 'unit' => 'canonical_risk_policy', 'justification' => 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.'],
+            ['path' => 'leverage', 'source' => 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307', 'unit' => 'leverage_multiple', 'justification' => 'Conservative venue envelope copied without legacy runtime loading.'],
+            ['path' => 'order_policy', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'policy', 'justification' => 'Isolated limit intent has no market fallback.'],
+            ['path' => 'compatible_setup_ids', 'source' => 'GitHub issue #300 catalog for #301', 'unit' => 'setup_id', 'justification' => 'The immutable contract uses the existing three-setup scalping catalog.'],
+            ['path' => 'data_contract.required_inputs', 'source' => 'GitHub issue #307 approved decision 2026-08-11', 'unit' => 'required_market_data', 'justification' => 'Candles for all approved timeframes and a five-minute order book are fail-closed inputs.'],
+        ]) {
             throw new ModeContractException('scalping 1.1.0 decision metadata differs from the frozen shadow contract.');
         }
     }

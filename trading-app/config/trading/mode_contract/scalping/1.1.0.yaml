@@ -42,7 +42,7 @@ risk:
     value: 2.0
     unit: percent_equity_per_trade
     source: 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307'
-    justification: 'The approved two-percent Shadow budget deliberately replaces the legacy seven-percent default.'
+    justification: 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.'
   daily_loss_cap:
     state: defined
     value: { percent_equity: 6.0, absolute_quote: 40.0, quote_currency: USDT, day_timezone: UTC, day_boundary_local: '00:00:00', include_unrealized_loss: true }
@@ -66,7 +66,7 @@ leverage:
   value: 3.0
   unit: leverage_multiple
   source: 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307'
-  justification: 'The approved three-times mode cap is independent of exchange capability.'
+  justification: 'Conservative venue envelope copied without legacy runtime loading.'
 order_policy:
   state: defined
   value: { margin_mode: isolated, preferred_type: limit, market_fallback: false }
@@ -101,8 +101,8 @@ provenance:
   - { path: session_policy, source: 'GitHub issue #307 approved decision 2026-08-11', unit: session_policy, justification: 'Continuous crypto session with UTC accounting is explicit.' }
   - { path: timeframes, source: 'GitHub issue #307 approved decision 2026-08-11', unit: timeframe_roles, justification: '1h/15m/5m/5m/1m are the approved regime, context, trigger, execution and confirmation roles.' }
   - { path: cadence, source: 'GitHub issue #307 approved decision 2026-08-11', unit: duration, justification: 'Evaluation and validity are both fixed at PT5M.' }
-  - { path: risk, source: 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307', unit: canonical_risk_policy, justification: 'The two-percent budget deliberately replaces the legacy seven-percent default; remaining risk limits are explicit Shadow decisions.' }
-  - { path: leverage, source: 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307', unit: leverage_multiple, justification: 'The approved three-times mode cap is independent of exchange capability.' }
+  - { path: risk, source: 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307', unit: canonical_risk_policy, justification: 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.' }
+  - { path: leverage, source: 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307', unit: leverage_multiple, justification: 'Conservative venue envelope copied without legacy runtime loading.' }
   - { path: order_policy, source: 'GitHub issue #307 approved decision 2026-08-11', unit: policy, justification: 'Isolated limit intent has no market fallback.' }
   - { path: compatible_setup_ids, source: 'GitHub issue #300 catalog for #301', unit: setup_id, justification: 'The immutable contract uses the existing three-setup scalping catalog.' }
   - { path: data_contract.required_inputs, source: 'GitHub issue #307 approved decision 2026-08-11', unit: required_market_data, justification: 'Candles for all approved timeframes and a five-minute order book are fail-closed inputs.' }

@@ -124,6 +124,8 @@ final class ModeContractLoaderTest extends TestCase
         $mutations = [];
         $mutations['horizon'] = $document;
         $mutations['horizon']['horizon']['value']['maximum_duration'] = 'PT3H';
+        $mutations['horizon source'] = $document;
+        $mutations['horizon source']['horizon']['source'] = 'synthetic-test';
         $mutations['missing confirmations'] = $document;
         unset($mutations['missing confirmations']['timeframes']['confirmations']);
         $mutations['daily cap'] = $document;
@@ -148,10 +150,22 @@ final class ModeContractLoaderTest extends TestCase
         $mutations['data contract field']['data_contract']['required_inputs'][1]['fields'][2] = 'order_flow_imbalance';
         $mutations['trade budget source'] = $document;
         $mutations['trade budget source']['risk']['trade_budget']['source'] = 'synthetic-test';
+        $mutations['trade budget justification'] = $document;
+        $mutations['trade budget justification']['risk']['trade_budget']['justification'] = 'synthetic-test';
         $mutations['leverage source'] = $document;
         $mutations['leverage source']['leverage']['source'] = 'synthetic-test';
+        $mutations['leverage justification'] = $document;
+        $mutations['leverage justification']['leverage']['justification'] = 'synthetic-test';
+        $mutations['order policy source'] = $document;
+        $mutations['order policy source']['order_policy']['source'] = 'synthetic-test';
         $mutations['risk provenance'] = $document;
         $mutations['risk provenance']['provenance'][4]['source'] = 'synthetic-test';
+        $mutations['missing provenance'] = $document;
+        array_pop($mutations['missing provenance']['provenance']);
+        $mutations['extra provenance'] = $document;
+        $mutations['extra provenance']['provenance'][] = $document['provenance'][0];
+        $mutations['provenance order'] = $document;
+        [$mutations['provenance order']['provenance'][0], $mutations['provenance order']['provenance'][1]] = [$document['provenance'][1], $document['provenance'][0]];
 
         foreach ($mutations as $label => $mutation) {
             try {
