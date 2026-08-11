@@ -272,6 +272,36 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
+    public function testConditionCatalogVersionIsForbiddenOutsideScalpingOneOne(): void
+    {
+        $mutations = [];
+        foreach ([
+            'legacy scalping' => 'scalping.pullback.long/1.0.0.yaml',
+            'day trading shadow' => 'day_trading.trend_continuation.long/1.1.0.yaml',
+            'crash decision' => 'crash_short/1.1.0.yaml',
+        ] as $label => $relativePath) {
+            $document = $this->yaml($this->root . '/' . $relativePath);
+            $document['data_condition_contract']['condition_catalog_version'] = '1.0.0';
+            $mutations[$label] = $document;
+        }
+
+        foreach ($mutations as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label . ' catalog version');
+        }
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            (new SetupContractValidator())->validate($document);
+            $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $setupId);
+        }
+    }
+
     public function testScalpingShadowPhpAndSchemaRejectMutableProofFields(): void
     {
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
