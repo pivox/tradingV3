@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -20,24 +23,80 @@ def load_module():
     return module
 
 
-def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> None:
+def write_minimum_eligible_fixture(tmp_path: Path, filename: str = "eligible.csv") -> Path:
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        assert reader.fieldnames is not None
+        fieldnames = reader.fieldnames
+        rows = list(reader)
+
+    expanded: list[dict[str, str]] = []
+    for row in rows:
+        repeat_count = 50 if row["is_certified"].lower() == "true" else 1
+        for index in range(repeat_count):
+            copy = dict(row)
+            copy["entry_event_id"] = f"{row['entry_event_id']}{index:02d}"
+            offset = timedelta(days=index)
+            for field in ("entry_time", "close_time"):
+                if copy[field]:
+                    copy[field] = (datetime.fromisoformat(copy[field]) + offset).isoformat()
+            expanded.append(copy)
+
+    destination = tmp_path / filename
+    with destination.open("w", newline="", encoding="utf-8") as target:
+        writer = csv.DictWriter(target, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(expanded)
+
+    return destination
+
+
+def test_build_baseline_rejects_cell_minimum_below_global_contract() -> None:
     module = load_module()
 
-    result = module.build_baseline(FIXTURE, seed=132, monte_carlo_runs=20, min_cell_size=1)
+    with pytest.raises(ValueError, match="min_cell_size must be at least 50"):
+        module.build_baseline(FIXTURE, min_cell_size=1)
 
-    assert result["population"]["total_rows"] == 6
-    assert result["population"]["certified_rows"] == 5
+
+def test_cli_rejects_cell_minimum_below_global_contract(tmp_path: Path) -> None:
+    module = load_module()
+
+    with pytest.raises(SystemExit) as error:
+        module.main(
+            [
+                "--input",
+                str(FIXTURE),
+                "--output-md",
+                str(tmp_path / "baseline.md"),
+                "--output-json",
+                str(tmp_path / "baseline.json"),
+                "--min-cell-size",
+                "1",
+            ]
+        )
+
+    assert error.value.code == 2
+
+
+def test_build_baseline_segments_certified_rows_and_computes_core_metrics(tmp_path: Path) -> None:
+    module = load_module()
+    eligible_fixture = write_minimum_eligible_fixture(tmp_path)
+
+    result = module.build_baseline(eligible_fixture, seed=132, monte_carlo_runs=20)
+
+    assert result["population"]["total_rows"] == 251
+    assert result["population"]["certified_rows"] == 250
     assert result["population"]["excluded_rows"] == 1
     assert result["population"]["excluded_by_reason"]["cost_completeness:partial"] == 1
-    assert result["population"]["modes"]["day_trading"]["certified_rows"] == 2
-    assert result["population"]["modes"]["scalping"]["certified_rows"] == 2
-    assert result["population"]["modes"]["micro_scalping"]["certified_rows"] == 1
+    assert result["population"]["modes"]["day_trading"]["certified_rows"] == 100
+    assert result["population"]["modes"]["scalping"]["certified_rows"] == 100
+    assert result["population"]["modes"]["micro_scalping"]["certified_rows"] == 50
     assert result["certification_cells"]["eligible_cell_count"] == 4
-    assert result["certification_cells"]["eligible_trade_count"] == 5
+    assert result["certification_cells"]["eligible_trade_count"] == 250
 
     day_trading = result["groups"]["mode"]["day_trading"]
-    assert day_trading["wins"] == 1
-    assert day_trading["losses"] == 1
+    assert day_trading["wins"] == 50
+    assert day_trading["losses"] == 50
     assert day_trading["winrate"] == 0.5
     assert day_trading["net_expectancy_usdt"] == 0.5
     assert day_trading["profit_factor"] == 2.0
@@ -48,12 +107,12 @@ def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> N
     assert day_trading["liquidity"] == {
         "status": "unavailable_not_exposed_by_position_trade_analysis_v2"
     }
-    assert result["groups"]["side"]["LONG"]["rows"] == 4
-    assert result["groups"]["side"]["SHORT"]["rows"] == 1
+    assert result["groups"]["side"]["LONG"]["rows"] == 200
+    assert result["groups"]["side"]["SHORT"]["rows"] == 50
 
     scalping = result["groups"]["mode"]["scalping"]
-    assert scalping["loss_causes"]["costs_destroy_edge"] == 2
-    assert scalping["loss_causes"]["entry_momentum_extreme_candidate"] == 1
+    assert scalping["loss_causes"]["costs_destroy_edge"] == 100
+    assert scalping["loss_causes"]["entry_momentum_extreme_candidate"] == 50
 
     simulation = result["simulation"]["mode"]["day_trading"]
     assert simulation["capital_usdt"] == 100.0
@@ -64,13 +123,14 @@ def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> N
 
 def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
     module = load_module()
+    eligible_fixture = write_minimum_eligible_fixture(tmp_path)
     output_md = tmp_path / "baseline.md"
     output_json = tmp_path / "baseline.json"
 
     exit_code = module.main(
         [
             "--input",
-            str(FIXTURE),
+            str(eligible_fixture),
             "--output-md",
             str(output_md),
             "--output-json",
@@ -79,8 +139,6 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
             "132",
             "--monte-carlo-runs",
             "20",
-            "--min-cell-size",
-            "1",
         ]
     )
 
@@ -92,7 +150,7 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
     assert "unique autorite de certification" in rendered
     assert "fill_cost_ledger" not in rendered
     payload = json.loads(output_json.read_text(encoding="utf-8"))
-    assert payload["population"]["certified_rows"] == 5
+    assert payload["population"]["certified_rows"] == 250
     assert payload["source"]["contract"] == (
         "position_trade_analysis_v2 is the sole certification authority; KPI PnL uses "
         "canonical_net_pnl_usdt and canonical_realized_net_pnl_r only"
@@ -102,6 +160,7 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
 
 def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp_path: Path) -> None:
     module = load_module()
+    eligible_fixture = write_minimum_eligible_fixture(tmp_path, "eligible-source.csv")
     liquidity_fields = {
         "maker_fill_count",
         "taker_fill_count",
@@ -110,7 +169,7 @@ def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp
     sql = EXPORT_SQL.read_text(encoding="utf-8")
     assert not any(field in sql for field in liquidity_fields)
 
-    with FIXTURE.open(newline="", encoding="utf-8") as source:
+    with eligible_fixture.open(newline="", encoding="utf-8") as source:
         reader = csv.DictReader(source)
         assert reader.fieldnames is not None
         fieldnames = [field for field in reader.fieldnames if field not in liquidity_fields]
@@ -122,7 +181,7 @@ def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp
         writer.writeheader()
         writer.writerows(rows)
 
-    result = module.build_baseline(exported, seed=132, monte_carlo_runs=20, min_cell_size=1)
+    result = module.build_baseline(exported, seed=132, monte_carlo_runs=20)
 
     assert result["groups"]["mode"]["day_trading"]["liquidity"] == {
         "status": "unavailable_not_exposed_by_position_trade_analysis_v2"

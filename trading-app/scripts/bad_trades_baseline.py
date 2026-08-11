@@ -336,12 +336,27 @@ def certification_cell_key(row: dict[str, str]) -> str:
     return "|".join(str(row.get(field) or "") for field in CERTIFICATION_CELL_FIELDS)
 
 
+def parse_min_cell_size(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("min_cell_size must be an integer") from error
+    if parsed < MIN_CERTIFIED_CELL_TRADES:
+        raise argparse.ArgumentTypeError(
+            f"min_cell_size must be at least {MIN_CERTIFIED_CELL_TRADES}"
+        )
+    return parsed
+
+
 def build_baseline(
     input_csv: Path,
     seed: int = 132,
     monte_carlo_runs: int = 1000,
     min_cell_size: int = MIN_CERTIFIED_CELL_TRADES,
 ) -> dict[str, Any]:
+    if min_cell_size < MIN_CERTIFIED_CELL_TRADES:
+        raise ValueError(f"min_cell_size must be at least {MIN_CERTIFIED_CELL_TRADES}")
+
     with input_csv.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
@@ -553,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-json", required=True, type=Path, help="Machine-readable JSON summary path")
     parser.add_argument("--seed", type=int, default=132, help="Deterministic Monte Carlo seed")
     parser.add_argument("--monte-carlo-runs", type=int, default=1000, help="Number of Monte Carlo paths")
-    parser.add_argument("--min-cell-size", type=int, default=MIN_CERTIFIED_CELL_TRADES, help="Minimum certified trades per exact cell")
+    parser.add_argument("--min-cell-size", type=parse_min_cell_size, default=MIN_CERTIFIED_CELL_TRADES, help="Minimum certified trades per exact cell (cannot be below 50)")
     args = parser.parse_args(argv)
 
     result = build_baseline(args.input, seed=args.seed, monte_carlo_runs=args.monte_carlo_runs, min_cell_size=args.min_cell_size)

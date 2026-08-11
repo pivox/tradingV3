@@ -1,6 +1,6 @@
 # Baseline bad trades #132
 
-Ce rapport fixe la methode de baseline factuelle pour les trades perdants ou destructeurs d'edge sur les profils `regular`, `scalper` et `scalper_micro`.
+Ce rapport fixe la methode de baseline factuelle pour les trades perdants ou destructeurs d'edge sur les modes modernes `day_trading`, `scalping` et `micro_scalping`.
 
 Statut au 26 juin 2026 : l'extraction de production n'a pas pu etre executee localement, car Docker/PostgreSQL n'etait pas disponible. Aucun chiffre de trading reel n'est donc invente dans cette page. L'evidence locale est conservee dans `reports/evidence/bad-trades-baseline-local-blocked-2026-06-26.json`.
 
@@ -42,7 +42,9 @@ python3 trading-app/scripts/bad_trades_baseline.py \
 
 ## Axes couverts
 
-Le script produit les agregats par profil, symbole, direction, timeframe, profil/symbole, profil/direction et profil/timeframe. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates. La liquidite maker/taker est explicitement `unavailable_not_exposed_by_position_trade_analysis_v2` : une colonne absente ne devient jamais un faux zero.
+Le script produit les agregats par mode, setup, side canonique, symbole, timeframe et cellule de certification exacte. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates. La liquidite maker/taker est explicitement `unavailable_not_exposed_by_position_trade_analysis_v2` : une colonne absente ne devient jamais un faux zero.
+
+Une cellule est le tuple exact `paper_network x market_data_venue x mode_id x setup_id x canonical_side`. Elle doit contenir au moins 50 trades certifies pour contribuer a un agregat ou a une simulation. Ce minimum global ne peut pas etre abaisse par l'API Python ni par la CLI ; `--min-cell-size` permet uniquement de demander un seuil superieur.
 
 L'export peut enrichir le diagnostic, sans modifier la certification fournie par v2 :
 
@@ -63,7 +65,7 @@ Les causes suffixees `_candidate` sont des correlations a valider, pas des preuv
 
 Points non couverts tant que l'extraction reelle n'a pas ete executee :
 
-- population certifiee des trois profils sur une periode donnee ;
+- population certifiee des trois modes modernes sur une periode donnee ;
 - classement final des causes frequentes ;
 - child issues quantifies par frequence ;
 - decision de modification strategy/YAML, explicitement hors scope de ce rapport.
