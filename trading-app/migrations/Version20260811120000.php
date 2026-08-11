@@ -23,25 +23,36 @@ WITH eligible_ledger AS (
         ledger.*,
         lower(ledger.fill_role) AS normalized_fill_role,
         CASE
-            WHEN ledger.quantity > 0
+            WHEN ledger.quantity <> 'NaN'::numeric
+             AND ledger.quantity > 0
+             AND ledger.price <> 'NaN'::numeric
              AND ledger.price > 0
-             AND (ledger.notional IS NULL OR ledger.notional > 0)
+             AND (ledger.notional IS NULL OR (ledger.notional <> 'NaN'::numeric AND ledger.notional > 0))
             THEN ledger.quantity
         END AS valid_quantity,
         CASE
-            WHEN ledger.quantity > 0
+            WHEN ledger.quantity <> 'NaN'::numeric
+             AND ledger.quantity > 0
+             AND ledger.price <> 'NaN'::numeric
              AND ledger.price > 0
-             AND (ledger.notional IS NULL OR ledger.notional > 0)
+             AND (ledger.notional IS NULL OR (ledger.notional <> 'NaN'::numeric AND ledger.notional > 0))
             THEN COALESCE(ledger.notional, ledger.price * ledger.quantity)
         END AS valid_notional,
         CASE
-            WHEN ledger.fee_usdt >= 0 THEN ledger.fee_usdt
+            WHEN ledger.fee_usdt <> 'NaN'::numeric AND ledger.fee_usdt >= 0 THEN ledger.fee_usdt
         END AS normalized_fee_usdt,
-        ledger.quality_flags IN ('[]'::jsonb, '{}'::jsonb, 'null'::jsonb)
-            AND (ledger.spread_cost_usdt IS NULL OR ledger.spread_cost_usdt >= 0)
-            AND (ledger.slippage_cost_usdt IS NULL OR ledger.slippage_cost_usdt >= 0) AS row_quality_valid
+        jsonb_typeof(ledger.quality_flags) = 'array'
+            AND ledger.quality_flags = '[]'::jsonb
+            AND (ledger.spread_cost_usdt IS NULL OR (ledger.spread_cost_usdt <> 'NaN'::numeric AND ledger.spread_cost_usdt >= 0))
+            AND (ledger.slippage_cost_usdt IS NULL OR (ledger.slippage_cost_usdt <> 'NaN'::numeric AND ledger.slippage_cost_usdt >= 0))
+            AND (ledger.funding_usdt IS NULL OR ledger.funding_usdt <> 'NaN'::numeric)
+            AND (ledger.borrow_cost_usdt IS NULL OR (ledger.borrow_cost_usdt <> 'NaN'::numeric AND ledger.borrow_cost_usdt >= 0))
+            AND (ledger.liquidation_fee_usdt IS NULL OR (ledger.liquidation_fee_usdt <> 'NaN'::numeric AND ledger.liquidation_fee_usdt >= 0)) AS row_quality_valid
     FROM fill_cost_ledger ledger
-    WHERE NOT (ledger.quality_flags ?| ARRAY['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided'])
+    WHERE NOT (
+        jsonb_typeof(ledger.quality_flags) = 'array'
+        AND ledger.quality_flags ?| ARRAY['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided']
+    )
 ), ledger_aggregate AS (
     SELECT
         internal_trade_id,
@@ -80,43 +91,43 @@ WITH eligible_ledger AS (
         SUM(normalized_fee_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_fee_usdt,
         COUNT(normalized_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_fee_usdt_count,
         SUM(normalized_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_fee_usdt,
-        COUNT(normalized_fee_usdt) AS fee_usdt_count,
-        SUM(normalized_fee_usdt) AS fee_usdt,
+        COUNT(normalized_fee_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit')) AS fee_usdt_count,
+        SUM(normalized_fee_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit')) AS fee_usdt,
 
-        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt >= 0) AS entry_spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt >= 0) AS entry_spread_cost_usdt,
-        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt >= 0) AS exit_spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt >= 0) AS exit_spread_cost_usdt,
-        COUNT(spread_cost_usdt) FILTER (WHERE spread_cost_usdt >= 0) AS spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE spread_cost_usdt >= 0) AS spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS entry_spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS entry_spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS exit_spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS exit_spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE spread_cost_usdt <> 'NaN'::numeric AND spread_cost_usdt >= 0) AS spread_cost_usdt,
 
-        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt >= 0) AS entry_slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt >= 0) AS entry_slippage_cost_usdt,
-        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt >= 0) AS exit_slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt >= 0) AS exit_slippage_cost_usdt,
-        COUNT(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt >= 0) AS slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt >= 0) AS slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS entry_slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS entry_slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS exit_slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS exit_slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt <> 'NaN'::numeric AND slippage_cost_usdt >= 0) AS slippage_cost_usdt,
 
-        COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_funding_explicit_count,
-        SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_funding_usdt,
-        COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_funding_explicit_count,
-        SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_funding_usdt,
-        COUNT(funding_usdt) AS funding_explicit_count,
-        SUM(funding_usdt) AS funding_usdt,
+        COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND funding_usdt <> 'NaN'::numeric) AS entry_funding_explicit_count,
+        SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND funding_usdt <> 'NaN'::numeric) AS entry_funding_usdt,
+        COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND funding_usdt <> 'NaN'::numeric) AS exit_funding_explicit_count,
+        SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND funding_usdt <> 'NaN'::numeric) AS exit_funding_usdt,
+        COUNT(funding_usdt) FILTER (WHERE funding_usdt <> 'NaN'::numeric) AS funding_explicit_count,
+        SUM(funding_usdt) FILTER (WHERE funding_usdt <> 'NaN'::numeric) AS funding_usdt,
 
-        COUNT(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_borrow_cost_explicit_count,
-        SUM(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_borrow_cost_usdt,
-        COUNT(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_borrow_cost_explicit_count,
-        SUM(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_borrow_cost_usdt,
-        COUNT(borrow_cost_usdt) AS borrow_cost_explicit_count,
-        SUM(borrow_cost_usdt) AS borrow_cost_usdt,
+        COUNT(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS entry_borrow_cost_explicit_count,
+        SUM(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS entry_borrow_cost_usdt,
+        COUNT(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS exit_borrow_cost_explicit_count,
+        SUM(borrow_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS exit_borrow_cost_usdt,
+        COUNT(borrow_cost_usdt) FILTER (WHERE borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS borrow_cost_explicit_count,
+        SUM(borrow_cost_usdt) FILTER (WHERE borrow_cost_usdt <> 'NaN'::numeric AND borrow_cost_usdt >= 0) AS borrow_cost_usdt,
 
-        COUNT(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_liquidation_fee_explicit_count,
-        SUM(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_liquidation_fee_usdt,
-        COUNT(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_liquidation_fee_explicit_count,
-        SUM(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_liquidation_fee_usdt,
-        COUNT(liquidation_fee_usdt) AS liquidation_fee_explicit_count,
-        SUM(liquidation_fee_usdt) AS liquidation_fee_usdt,
+        COUNT(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS entry_liquidation_fee_explicit_count,
+        SUM(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS entry_liquidation_fee_usdt,
+        COUNT(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS exit_liquidation_fee_explicit_count,
+        SUM(liquidation_fee_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS exit_liquidation_fee_usdt,
+        COUNT(liquidation_fee_usdt) FILTER (WHERE liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS liquidation_fee_explicit_count,
+        SUM(liquidation_fee_usdt) FILTER (WHERE liquidation_fee_usdt <> 'NaN'::numeric AND liquidation_fee_usdt >= 0) AS liquidation_fee_usdt,
 
         COUNT(DISTINCT side) FILTER (WHERE normalized_fill_role = 'entry' AND side IS NOT NULL) AS entry_side_cardinality,
         array_agg(DISTINCT side ORDER BY side) FILTER (WHERE normalized_fill_role = 'entry' AND side IS NOT NULL) AS entry_sides,
@@ -166,8 +177,8 @@ SELECT
         ELSE exit_fee_usdt_count = exit_fill_count
     END AS exit_fee_usdt_complete,
     CASE
-        WHEN ledger_row_count = 0 THEN NULL
-        ELSE fee_usdt_count = ledger_row_count
+        WHEN entry_fill_count + exit_fill_count = 0 THEN NULL
+        ELSE fee_usdt_count = entry_fill_count + exit_fill_count
     END AS fee_usdt_complete,
     quantity_status = 'complete' AS position_fully_closed
 FROM classified
