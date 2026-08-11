@@ -15,6 +15,7 @@ use DoctrineMigrations\Version20260625020000;
 use DoctrineMigrations\Version20260626000000;
 use DoctrineMigrations\Version20260719130000;
 use DoctrineMigrations\Version20260808114000;
+use DoctrineMigrations\Version20260811120000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -38,6 +39,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260626000000::class)]
 #[CoversClass(Version20260719130000::class)]
 #[CoversClass(Version20260808114000::class)]
+#[CoversClass(Version20260811120000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -66,6 +68,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
     protected function tearDown(): void
     {
         if (isset($this->conn)) {
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_ledger_aggregate_v1');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
@@ -743,6 +746,135 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertNotContains('ledger_quantity_aggregate_missing', $row['pnl_quality_flags']);
     }
 
+    public function testLedgerAggregateHelperProjectsCompleteExactFillEvidence(): void
+    {
+        $internalTradeId = 'itd-helper-complete';
+
+        $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-entry-a', 'entry', 100.0, 0.4, '2026-08-11 10:00:01+00', [
+            'fee_usdt' => 0.02, 'funding_usdt' => 0.10, 'spread_cost_usdt' => 0.01,
+            'slippage_cost_usdt' => 0.02, 'borrow_cost_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-entry-b', 'entry', 101.0, 0.6, '2026-08-11 10:00:20+00', [
+            'fee_amount' => 0.03, 'fee_currency' => 'USDT', 'fee_usdt' => null,
+            'funding_usdt' => -0.05, 'spread_cost_usdt' => 0.01,
+            'slippage_cost_usdt' => 0.03, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-exit-a', 'exit', 110.0, 0.5, '2026-08-11 10:10:00+00', [
+            'fee_usdt' => 0.04, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.02,
+            'slippage_cost_usdt' => 0.03, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-exit-b', 'exit', 108.0, 0.5, '2026-08-11 10:20:00+00', [
+            'fee_usdt' => 0.05, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.01,
+            'slippage_cost_usdt' => 0.02, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        foreach (['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided'] as $index => $excludedFlag) {
+            $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-excluded-' . $excludedFlag, 'exit', 999.0, 99.0, '2026-08-11 10:2' . ($index + 1) . ':00+00', [
+                'fee_usdt' => 99.0, 'quality_flags' => [$excludedFlag],
+            ]);
+        }
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT * FROM position_trade_ledger_aggregate_v1 WHERE internal_trade_id = ?',
+            [$internalTradeId],
+        );
+        self::assertIsArray($row);
+        self::assertSame(4, (int) $row['ledger_row_count']);
+        self::assertTrue(filter_var($row['ledger_quality_valid'], FILTER_VALIDATE_BOOLEAN));
+        self::assertSame(2, (int) $row['entry_fill_count']);
+        self::assertSame(2, (int) $row['entry_valid_fill_count']);
+        self::assertStringContainsString('10:00:01', (string) $row['entry_first_fill_at']);
+        self::assertStringContainsString('10:00:20', (string) $row['entry_last_fill_at']);
+        self::assertEqualsWithDelta(1.0, (float) $row['entry_qty'], 1e-9);
+        self::assertEqualsWithDelta(100.6, (float) $row['entry_notional'], 1e-9);
+        self::assertEqualsWithDelta(100.6, (float) $row['entry_vwap'], 1e-9);
+        self::assertSame(2, (int) $row['exit_fill_count']);
+        self::assertSame(2, (int) $row['exit_valid_fill_count']);
+        self::assertStringContainsString('10:10:00', (string) $row['exit_first_fill_at']);
+        self::assertStringContainsString('10:20:00', (string) $row['exit_last_fill_at']);
+        self::assertEqualsWithDelta(1.0, (float) $row['exit_qty'], 1e-9);
+        self::assertEqualsWithDelta(109.0, (float) $row['exit_notional'], 1e-9);
+        self::assertEqualsWithDelta(109.0, (float) $row['exit_vwap'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $row['entry_fee_usdt'], 1e-9);
+        self::assertTrue(filter_var($row['entry_fee_usdt_complete'], FILTER_VALIDATE_BOOLEAN));
+        self::assertEqualsWithDelta(0.09, (float) $row['exit_fee_usdt'], 1e-9);
+        self::assertTrue(filter_var($row['exit_fee_usdt_complete'], FILTER_VALIDATE_BOOLEAN));
+        self::assertSame(4, (int) $row['spread_cost_explicit_count']);
+        self::assertEqualsWithDelta(0.05, (float) $row['spread_cost_usdt'], 1e-9);
+        self::assertSame(4, (int) $row['slippage_cost_explicit_count']);
+        self::assertEqualsWithDelta(0.10, (float) $row['slippage_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $row['funding_usdt'], 1e-9, 'funding remains signed');
+        self::assertEqualsWithDelta(0.0, (float) $row['borrow_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['liquidation_fee_usdt'], 1e-9);
+        self::assertSame(1, (int) $row['entry_side_cardinality']);
+        self::assertSame('{BUY}', $row['entry_sides']);
+        self::assertSame(1, (int) $row['exit_side_cardinality']);
+        self::assertSame('{SELL}', $row['exit_sides']);
+        self::assertEqualsWithDelta(0.0, (float) $row['remaining_qty'], 1e-9);
+        self::assertSame('complete', $row['quantity_status']);
+        self::assertTrue(filter_var($row['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
+    }
+
+    public function testLedgerAggregateHelperPreservesMissingExitAndCostApplicability(): void
+    {
+        $internalTradeId = 'itd-helper-open';
+        $this->ledgerFill('ETHUSDT', $internalTradeId, 'position-helper-open', 'helper-open-entry', 'entry', 100.0, 1.0, '2026-08-11 11:00:01+00');
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT * FROM position_trade_ledger_aggregate_v1 WHERE internal_trade_id = ?',
+            [$internalTradeId],
+        );
+        self::assertIsArray($row);
+        self::assertSame(1, (int) $row['entry_fill_count']);
+        self::assertSame(0, (int) $row['exit_fill_count']);
+        self::assertNull($row['exit_first_fill_at']);
+        self::assertNull($row['exit_qty']);
+        self::assertNull($row['exit_vwap']);
+        self::assertFalse(filter_var($row['entry_fee_usdt_complete'], FILTER_VALIDATE_BOOLEAN));
+        self::assertNull($row['entry_fee_usdt']);
+        self::assertNull($row['exit_fee_usdt_complete']);
+        self::assertNull($row['exit_fee_usdt']);
+        self::assertNull($row['spread_cost_usdt']);
+        self::assertNull($row['slippage_cost_usdt']);
+        self::assertNull($row['funding_usdt']);
+        self::assertNull($row['borrow_cost_usdt']);
+        self::assertNull($row['liquidation_fee_usdt']);
+        self::assertEqualsWithDelta(1.0, (float) $row['remaining_qty'], 1e-9);
+        self::assertSame('open_position', $row['quantity_status']);
+        self::assertFalse(filter_var($row['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
+    }
+
+    public function testLedgerAggregateHelperKeepsMismatchedProvenanceInSeparateIdentityGroups(): void
+    {
+        $internalTradeId = 'itd-helper-provenance';
+        foreach ([['entry', 100.0], ['exit', 102.0]] as [$role, $price]) {
+            $this->ledgerFill('SOLUSDT', $internalTradeId, 'position-helper-provenance', 'helper-canonical-' . $role, $role, $price, 1.0, '2026-08-11 12:0' . ($role === 'entry' ? '1' : '4') . ':00+00', ['fee_usdt' => 0.01]);
+            $this->ledgerFill('SOLUSDT', $internalTradeId, 'position-helper-provenance', 'helper-wrong-venue-' . $role, $role, $price, 1.0, '2026-08-11 12:1' . ($role === 'entry' ? '1' : '4') . ':00+00', [
+                'market_data_venue' => 'okx', 'fee_usdt' => 0.01,
+            ]);
+            $this->ledgerFill('SOLUSDT', $internalTradeId, 'position-helper-provenance', 'helper-wrong-cell-' . $role, $role, $price, 1.0, '2026-08-11 12:2' . ($role === 'entry' ? '1' : '4') . ':00+00', [
+                'paper_execution_cell_id' => 'sha256:' . str_repeat('f', 64), 'fee_usdt' => 0.01,
+                'quality_flags' => $role === 'entry' ? ['manual_review_required'] : [],
+            ]);
+        }
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT market_data_venue, paper_execution_cell_id, ledger_row_count, ledger_quality_valid, quantity_status
+             FROM position_trade_ledger_aggregate_v1 WHERE internal_trade_id = ?
+             ORDER BY market_data_venue, paper_execution_cell_id',
+            [$internalTradeId],
+        );
+        self::assertCount(3, $rows);
+        self::assertSame(['hyperliquid', 'hyperliquid', 'okx'], array_column($rows, 'market_data_venue'));
+        self::assertSame('sha256:' . str_repeat('a', 64), $rows[0]['paper_execution_cell_id']);
+        self::assertSame('sha256:' . str_repeat('f', 64), $rows[1]['paper_execution_cell_id']);
+        self::assertSame('sha256:' . str_repeat('a', 64), $rows[2]['paper_execution_cell_id']);
+        self::assertSame([2, 2, 2], array_map('intval', array_column($rows, 'ledger_row_count')));
+        self::assertTrue(filter_var($rows[0]['ledger_quality_valid'], FILTER_VALIDATE_BOOLEAN));
+        self::assertFalse(filter_var($rows[1]['ledger_quality_valid'], FILTER_VALIDATE_BOOLEAN), 'any other non-empty quality flag blocks ledger validity');
+        self::assertTrue(filter_var($rows[2]['ledger_quality_valid'], FILTER_VALIDATE_BOOLEAN));
+        self::assertSame(['complete', 'complete', 'complete'], array_column($rows, 'quantity_status'));
+    }
+
     public function testLedgerCertificationFailsClosedWhenExitEvidenceIsMissing(): void
     {
         $run = 'run_ledger_missing_exit';
@@ -1417,6 +1549,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
     private function createMinimalSchema(): void
     {
+        $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_ledger_aggregate_v1');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
@@ -1546,8 +1679,11 @@ SQL);
         if (!class_exists(Version20260808114000::class, false)) {
             require_once \dirname(__DIR__, 3) . '/migrations/Version20260808114000.php';
         }
+        if (!class_exists(Version20260811120000::class, false)) {
+            require_once \dirname(__DIR__, 3) . '/migrations/Version20260811120000.php';
+        }
 
-        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class, Version20260808114000::class] as $migrationClass) {
+        foreach ([Version20260622000000::class, Version20260623010000::class, Version20260625000000::class, Version20260625020000::class, Version20260626000000::class, Version20260719130000::class, Version20260808114000::class, Version20260811120000::class] as $migrationClass) {
             $migration = new $migrationClass($this->conn, new NullLogger());
             $migration->up(new Schema());
             foreach ($migration->getSql() as $query) {
