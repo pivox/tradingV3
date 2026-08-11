@@ -24,6 +24,7 @@ use App\MtfValidator\Repository\MtfSwitchRepository;
 use App\Provider\Repository\ContractRepository;
 use App\Repository\PositionRepository;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -82,6 +83,9 @@ final class MtfRunnerServiceCanonicalPreflightTest extends TestCase
         $payload = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
         $payload['effective_config_snapshot']['executable'] = false;
         $payload['effective_config_snapshot']['blockers'] = ['mode.status:draft'];
+        $payload['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $payload['effective_config_snapshot'],
+        );
         $identity = LineageContext::fromArray($payload);
         $blockers = [[
             'code' => 'canonical_contract_not_executable',

@@ -91,6 +91,70 @@ final class LineageContextTest extends TestCase
         self::assertArrayNotHasKey('config_effective_version', $identity->toArray());
     }
 
+    public function testCanonicalIntegrityRevalidatesSerializedInstanceThroughCanonicalAuthority(): void
+    {
+        $identity = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+        self::assertSame($identity, $identity->assertCanonicalIntegrity());
+
+        $serialized = serialize($identity);
+        $from = serialize('decisionKey') . serialize($identity->decisionKey);
+        $to = serialize('decisionKey') . serialize('bad decision key');
+        $position = strpos($serialized, $from);
+        self::assertNotFalse($position);
+        $forged = unserialize(
+            substr_replace($serialized, $to, $position, strlen($from)),
+            ['allowed_classes' => true],
+        );
+        self::assertInstanceOf(LineageContext::class, $forged);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:decision_key');
+        $forged->assertCanonicalIntegrity();
+    }
+
+    public function testEffectiveSnapshotHashCoversCapabilityMetadataAndIsPrecisionIndependent(): void
+    {
+        $payload = $this->canonicalPayload();
+        self::assertIsArray($payload['effective_config_snapshot']);
+        $snapshot = $payload['effective_config_snapshot'];
+        $snapshot['request']['execution_capability'] = 'fake';
+        $snapshot['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash($snapshot);
+        $payload['effective_config_snapshot'] = $snapshot;
+        $baseline = LineageContext::fromOrchestratorPayload($payload);
+        self::assertNotNull($baseline->effectiveConfigSnapshot);
+        self::assertSame($snapshot['snapshot_hash'], $baseline->effectiveConfigSnapshot->toArray()['snapshot_hash']);
+
+        $originalPrecision = ini_get('serialize_precision');
+        self::assertNotFalse($originalPrecision);
+        self::assertNotFalse(ini_set('serialize_precision', '3'));
+        try {
+            self::assertSame(
+                $snapshot['snapshot_hash'],
+                CanonicalEffectiveConfigSnapshot::calculateSnapshotHash($snapshot),
+            );
+        } finally {
+            self::assertNotFalse(ini_set('serialize_precision', $originalPrecision));
+        }
+
+        foreach (['capability', 'coordinated paths'] as $case) {
+            $forged = $snapshot;
+            if ($case === 'capability') {
+                $forged['request']['execution_capability'] = 'paper';
+            } else {
+                $forged['ordered_layers'][2]['path'] = '/setup-mutated.yaml';
+                $forged['ordered_files'][2] = '/setup-mutated.yaml';
+                $forged['provenance']['fixture.value']['path'] = '/setup-mutated.yaml';
+            }
+            $payload['effective_config_snapshot'] = $forged;
+            try {
+                LineageContext::fromOrchestratorPayload($payload);
+                self::fail('Snapshot metadata mutation without a new envelope hash was accepted.');
+            } catch (LineageContextException $exception) {
+                self::assertSame('canonical_identity_mismatch:snapshot_hash', $exception->getMessage());
+            }
+        }
+    }
+
     public function testRequestStageCanonicalIdentityWithoutSymbolRoundTrips(): void
     {
         $payload = $this->canonicalPayload();

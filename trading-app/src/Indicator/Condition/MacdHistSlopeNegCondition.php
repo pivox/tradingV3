@@ -22,9 +22,10 @@ final class MacdHistSlopeNegCondition extends AbstractCondition
         return "Pente de l'histogramme MACD négative (MACD en dégradation).";
     }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
-        $last3 = $context['macd_hist_last3'] ?? null; // oldest..latest
+        $last3 = $context['macd_hist_series'] ?? $context['macd_hist_last3'] ?? null; // oldest..latest
         if (!\is_array($last3) || count($last3) < 2) {
             return $this->result(self::NAME, false, null, 0.0, $this->baseMeta($context, ['missing_data' => true]));
         }

@@ -1,0 +1,117 @@
+schema_version: '1.0.0'
+setup_id: scalping.pullback.long
+setup_version: '1.1.0'
+status: shadow
+executable: true
+family: pullback
+side: long
+thesis: 'A bullish 1h regime followed by the distinct 15m scenario-B dynamic-support pullback may resume upward.'
+source_origin: { file: 'src/MtfValidator/config/validations.scalper.yaml', line_range: '6-14,157-161,216-356', content_sha256: 5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2, commit: 6c42d14d20798f6fee9d55b306ccaa0539af5e79 }
+compatible_modes: [{ mode_id: scalping, mode_version: '1.1.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Exact compatibility with scalping@1.1.0; no legacy alias or version range.' }
+hypothesis: 'Scenario B predicts resumption after the sourced 15m pullback confirmation under the fixed #307 Shadow execution policy; scenario A cannot rescue it.'
+context:
+  side: long
+  regime:
+    op: all_of
+    provenance: 'validations.scalper.yaml:271-278'
+    nodes:
+      - { condition: price_regime_ok_long, timeframe: 1h, provenance: 'validations.scalper.yaml:274' }
+      - op: any_of
+        provenance: 'validations.scalper.yaml:275-277'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1h, provenance: 'validations.scalper.yaml:276' }
+          - { condition: macd_hist_slope_pos, timeframe: 1h, provenance: 'validations.scalper.yaml:277' }
+      - { condition: adx_min_for_trend, timeframe: 1h, parameters: { threshold: 18 }, provenance: 'validations.scalper.yaml:278' }
+  context:
+    op: all_of
+    provenance: 'validations.scalper.yaml:299-304 scenario B'
+    nodes:
+      - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, provenance: 'validations.scalper.yaml:302' }
+  trigger:
+    op: all_of
+    provenance: 'validations.scalper.yaml:157-161,299-304 scenario B'
+    nodes:
+      - { condition: pullback_confirmed, timeframe: 15m, parameters: { validity_bars: 3 }, provenance: 'validations.scalper.yaml:157-161,301' }
+      - { condition: ema20_over_50_with_tolerance_moderate, timeframe: 15m, provenance: 'validations.scalper.yaml:302' }
+      - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 70 }, provenance: 'validations.scalper.yaml:303' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, provenance: 'validations.scalper.yaml:304' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.scalper.yaml:320-348 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.scalper.yaml:320-329'
+        nodes:
+          - op: any_of
+            provenance: 'validations.scalper.yaml:323-325'
+            nodes:
+              - { condition: macd_hist_gt_eps, timeframe: 5m, provenance: 'validations.scalper.yaml:324' }
+              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0006, cool_down_bars: 2, require_prev_below: true }, provenance: 'validations.scalper.yaml:325' }
+          - { condition: close_above_vwap_or_ma9_relaxed, timeframe: 5m, provenance: 'validations.scalper.yaml:326' }
+          - { condition: rsi_lt_70, timeframe: 5m, parameters: { rsi_lt_70_threshold: 72 }, provenance: 'validations.scalper.yaml:327' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, provenance: 'validations.scalper.yaml:328' }
+          - { condition: volume_ratio_ok, timeframe: 5m, provenance: 'validations.scalper.yaml:329' }
+      - op: all_of
+        provenance: 'validations.scalper.yaml:341-348'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1m, provenance: 'validations.scalper.yaml:344' }
+          - { condition: close_above_vwap_and_ma9, timeframe: 1m, provenance: 'validations.scalper.yaml:345' }
+          - { condition: rsi_lt_70, timeframe: 1m, parameters: { rsi_lt_70_threshold: 68 }, provenance: 'validations.scalper.yaml:346' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, provenance: 'validations.scalper.yaml:347' }
+          - { condition: volume_ratio_ok, timeframe: 1m, provenance: 'validations.scalper.yaml:348' }
+filters: []
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: long
+  execution_timeframe: { state: defined, value: 5m, unit: timeframe, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Fixed 5m execution with no selector descent.' }
+  mandatory_confirmations: { state: defined, value: ['1m'], unit: timeframes, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'The 1m confirmation is mandatory and cannot be substituted.' }
+  entry_zone:
+    state: defined
+    value: { anchor_source: vwap, anchor_timeframe: 5m, atr_timeframe: 5m, atr_multiplier: 0.22, minimum_half_width_rate: 0.0004, maximum_half_width_rate: 0.0065, asymmetry_rate: 0.0, ttl_seconds: 150, maximum_input_age_seconds: 30, quantize_outward: true }
+    unit: price_zone_policy
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'Versioned symmetric VWAP/ATR scalping Shadow zone.'
+  stop: { state: defined, value: { kind: atr, timeframe: 5m, atr_multiplier: 1.5, pivot_id: null, buffer_rate: 0.0 }, unit: stop_policy, source: 'config/app/trade_entry.scalper.yaml pinned by #307', justification: 'Single ATR stop source without pivot fallback.' }
+  targets: { state: defined, value: [{ id: tp1, risk_multiple: 1.8, liquidity_role: taker }], unit: target_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'One target at exactly 1.8 gross R.' }
+  minimum_net_r: { state: defined, value: 1.3, unit: net_r_multiple, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Every target must retain this R after all venue costs.' }
+  invalidation: { state: defined, value: { kind: close_beyond_stop }, unit: invalidation_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'The stop is the sole price invalidation boundary.' }
+  time_stop: { state: defined, value: PT2H, unit: duration, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Two-hour maximum duration, additionally bounded by the UTC day boundary.' }
+  cost_contract: { state: defined, value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }, unit: cost_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Fees are exchange-owned; spread, slippage and funding require exact sources.' }
+  order_policy: { state: defined, value: { type: limit, liquidity_role: maker, ttl_seconds: 45, cancel_after_seconds: 75, market_fallback: false, maximum_spread_bps: 6.0, maximum_slippage_bps: 8.0 }, unit: order_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Limit-only Shadow policy with fixed expiry and live-cost guards.' }
+data_condition_contract:
+  condition_catalog_version: '1.1.0'
+  required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio, order_book, fee_schedule, funding_schedule]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: defined, value: b3e4ba74f3eacb219b37d0554634a7b85689cce23aecdaafba1d6cda8043544c, unit: sha256, source: 'config/trading/condition_catalog/1.1.0.yaml', justification: 'Pinned to the additive canonical #307 catalogue.' }
+  unknown_condition_policy: reject
+validity_window: { state: defined, value: PT5M, unit: duration, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'No decision carry-forward or implicit fallback.' }
+governance:
+  shadow: ['capture complete identity and typed decision trace', 'reject every missing or stale critical input', 'use canonical #304 plan and reservation']
+  paper: ['pass deterministic Shadow fixtures', 'run Paper with exact venue costs and no tuning']
+  promotion: ['#132 certified net baseline attached', 'at least 50 certified trades per executable cell', 'independent risk review', 'publish a new semantic version']
+  suspension: ['critical data or cost absent or stale', 'condition contract breach', 'trace or risk invariant gap']
+  rollback: ['certified net baseline regression', 'schema or provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects: []
+provenance:
+  - { path: mode_compatibility, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Pinned exclusively to scalping@1.1.0.' }
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.scalper.yaml:271-278', justification: 'Copied 1h bullish regime AST.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.scalper.yaml:299-304', justification: 'Scenario B remains separate from scenario A.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.scalper.yaml:157-161,299-304', justification: 'Copied pullback trigger AST with canonical age input.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.scalper.yaml:320-356 plus GitHub issue #307', justification: 'Copied 5m/1m branches; 1m is a mandatory execution confirmation.' }
+  - { path: execution.execution_timeframe, source: 'GitHub issue #307 approved decision 2026-08-11', justification: '5m only; no selector.' }
+  - { path: execution.mandatory_confirmations, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Exact 1m confirmation contract.' }
+  - { path: execution.entry_zone, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Canonical VWAP/ATR Shadow zone.' }
+  - { path: execution.stop, source: 'config/app/trade_entry.scalper.yaml pinned by #307', justification: 'Canonical ATR-only stop.' }
+  - { path: execution.targets, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Single 1.8R gross target.' }
+  - { path: execution.minimum_net_r, source: 'GitHub issue #307 approved decision 2026-08-11', justification: '1.3R net acceptance floor.' }
+  - { path: execution.invalidation, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Close beyond stop.' }
+  - { path: execution.time_stop, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'PT2H plus UTC boundary.' }
+  - { path: execution.cost_contract, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Exact venue/live/model cost sources.' }
+  - { path: execution.order_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Limit-only timing and cost guards.' }
+  - { path: validity_window, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'PT5M validity.' }
+ownership_model: setup-contract-ownership-v1

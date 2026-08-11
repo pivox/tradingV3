@@ -5,17 +5,20 @@ declare(strict_types=1);
 namespace App\TradingCore\Setup;
 
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
-use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupCompiler
 {
     public function compile(SetupContract $contract, ?ConditionCatalog $conditionCatalog = null): CompiledSetupSnapshot
     {
-        $conditionCatalog ??= (new ConditionCatalogLoader())->loadFile(
-            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
-        );
         $document = $contract->toArray();
+        try {
+            $conditionCatalog = (new ConditionCatalogResolver())->forSetupDocument($document, $conditionCatalog);
+        } catch (ConditionCatalogException $exception) {
+            throw new SetupContractException($exception->getMessage(), previous: $exception);
+        }
         $referencedConditions = [];
         foreach (['regime', 'context', 'trigger', 'confirmations'] as $role) {
             $this->collectConditions($document['context'][$role], $referencedConditions);

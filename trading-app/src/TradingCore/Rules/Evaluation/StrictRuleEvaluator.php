@@ -15,11 +15,15 @@ final readonly class StrictRuleEvaluator
 {
     private const TRACE_SCHEMA = 'strict-rule-trace.v1';
 
+    private CanonicalSeriesChronologyValidator $seriesChronology;
+
     public function __construct(
         private ConditionCatalog $catalog,
         private StrictConditionRegistry $registry,
         private ?StrictCompiledExpressionEvaluator $compiledExpressions = null,
+        ?CanonicalSeriesChronologyValidator $seriesChronology = null,
     ) {
+        $this->seriesChronology = $seriesChronology ?? new CanonicalSeriesChronologyValidator();
     }
 
     public function evaluate(RuleNode $node, RuleEvaluationContext $context): RuleEvaluationResult
@@ -135,8 +139,23 @@ final readonly class StrictRuleEvaluator
         $base['input_freshness_seconds'] = $this->catalog->freshnessSeconds($snapshot->source, $snapshot->timeframe);
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
+        $base['parameter_source'] = $node->parameterSources;
+        $base['series_order'] = $definition->seriesOrder;
+        $base['reported_series_order'] = $snapshot->values['series_order'] ?? null;
+        $seriesTimestampKey = $definition->metric . '_timestamps';
+        $base['reported_series_timestamps'] = $snapshot->values[$seriesTimestampKey] ?? null;
         if (!$snapshot->isValidAt($context->evaluatedAt)) {
             return [false, 'stale_input', $base];
+        }
+        if (str_starts_with($definition->valueType, 'series<')
+            && ($snapshot->values['series_order'] ?? null) !== 'oldest_to_newest'
+        ) {
+            return [false, 'invalid_series_order', $base];
+        }
+        if ($this->seriesChronology->requiresProof($definition)
+            && !$this->seriesChronology->isCanonical($definition, $snapshot->values, $snapshot->timeframe)
+        ) {
+            return [false, 'invalid_series_chronology', $base];
         }
         $condition = $this->registry->get($node->conditionId);
         $isCompiledExpression = str_starts_with($definition->implementation, 'compiled_expression:');
@@ -146,13 +165,13 @@ final readonly class StrictRuleEvaluator
         $conditionContext = array_replace($snapshot->values, $node->parameters, [
             'timeframe' => $snapshot->timeframe,
             'side' => $node->side,
-            'series_order' => $definition->seriesOrder,
+            'series_order' => $snapshot->values['series_order'] ?? $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
         ]);
         try {
             $result = $isCompiledExpression
-                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry, $this->catalog))->evaluate($node->conditionId, $conditionContext)
+                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry, $this->catalog, $this->seriesChronology))->evaluate($node->conditionId, $conditionContext)
                 : $condition->evaluate($conditionContext);
         } catch (\Throwable $exception) {
             return [false, 'condition_error', $base + ['exception' => $exception::class]];
@@ -184,4 +203,5 @@ final readonly class StrictRuleEvaluator
             'meta' => $result->meta,
         ];
     }
+
 }

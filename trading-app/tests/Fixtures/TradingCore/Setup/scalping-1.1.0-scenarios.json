@@ -1,0 +1,47 @@
+{
+  "schema_version": "scalping-shadow-scenarios.v1",
+  "scenarios": [
+    {
+      "id": "continuation_long_pass",
+      "setup_id": "scalping.trend_continuation.long",
+      "side": "long",
+      "expectation": "pass",
+      "evidence": ["all scenario-A conditions pass", "fresh 5m order book", "mandatory 1m confirmation passes"]
+    },
+    {
+      "id": "pullback_long_pass",
+      "setup_id": "scalping.pullback.long",
+      "side": "long",
+      "expectation": "pass",
+      "evidence": ["pullback_age_bars is within three bars", "fresh 5m order book", "mandatory 1m confirmation passes"]
+    },
+    {
+      "id": "short_momentum_pass",
+      "setup_id": "scalping.trend_momentum.short",
+      "side": "short",
+      "expectation": "pass",
+      "evidence": ["all bearish momentum conditions pass", "fresh 5m order book", "mandatory 1m confirmation passes"]
+    },
+    {
+      "id": "scenario_a_cannot_rescue_pullback",
+      "setup_id": "scalping.pullback.long",
+      "side": "long",
+      "expectation": "no_trade",
+      "evidence": ["scenario A passes", "pullback_confirmed fails", "cross-setup rescue is forbidden"]
+    },
+    {
+      "id": "scenario_b_cannot_rescue_continuation",
+      "setup_id": "scalping.trend_continuation.long",
+      "side": "long",
+      "expectation": "no_trade",
+      "evidence": ["scenario B passes", "scenario-A trigger fails", "cross-setup rescue is forbidden"]
+    },
+    {
+      "id": "missing_1m",
+      "setup_id": "scalping.trend_momentum.short",
+      "side": "short",
+      "expectation": "no_trade",
+      "evidence": ["1m confirmation data is absent", "missing data policy rejects", "no timeframe fallback is permitted"]
+    }
+  ]
+}

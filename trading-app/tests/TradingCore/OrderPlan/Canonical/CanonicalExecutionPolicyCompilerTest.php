@@ -13,6 +13,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(CanonicalExecutionPolicyCompiler::class)]
@@ -40,6 +41,115 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame('taker', $policy->costContract->stopLiquidityRole);
         self::assertSame(28_800, $policy->holdingWindowSeconds);
         self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
+    }
+
+    #[DataProvider('scalpingIdentities')]
+    public function testCompilesOnlyTheExactPublishedScalpingShadowEnvelope(string $setupId, string $side): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
+        ));
+
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('5m', $policy->executionTimeframe);
+        self::assertSame(['1m'], $policy->mandatoryConfirmations);
+        self::assertNotNull($policy->orderPolicy);
+        self::assertSame('limit', $policy->orderPolicy->type);
+        self::assertSame('maker', $policy->orderPolicy->liquidityRole);
+        self::assertSame(45, $policy->orderPolicy->ttlSeconds);
+        self::assertSame(75, $policy->orderPolicy->cancelAfterSeconds);
+        self::assertFalse($policy->orderPolicy->marketFallback);
+        self::assertSame(7200, $policy->holdingWindowSeconds);
+        self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
+        self::assertSame(0.02, $policy->riskPolicy->riskRate);
+        self::assertSame(3.0, $policy->riskPolicy->modeLeverageCap);
+        self::assertSame(25.0, $policy->riskPolicy->exchangeMaxNotional);
+        self::assertSame(1.3, $policy->minimumNetR);
+        self::assertCount(1, $policy->targets);
+        self::assertSame(1.8, $policy->targets[0]->riskMultiple);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function scalpingIdentities(): iterable
+    {
+        yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
+        yield 'pullback long' => ['scalping.pullback.long', 'long'];
+        yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
+    }
+
+    public function testLegacyIdentityCannotOptIntoModernShadowExecutionDecisions(): void
+    {
+        $payload = $this->payload();
+        $execution = &$payload['setup']['ast']['execution'];
+        $execution['execution_timeframe'] = self::decision('15m', 'timeframe');
+        $execution['mandatory_confirmations'] = self::decision(['5m', '1m'], 'timeframes');
+        $execution['order_policy'] = self::decision([
+            'type' => 'limit',
+            'liquidity_role' => 'maker',
+            'ttl_seconds' => 90,
+            'cancel_after_seconds' => 120,
+            'market_fallback' => false,
+            'maximum_spread_bps' => 6.0,
+            'maximum_slippage_bps' => 8.0,
+        ], 'order_policy');
+        unset($execution);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_shape_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
+    public function testRejectsCrossModeShadowOrderAndHoldingPoliciesAfterReauthentication(): void
+    {
+        $resolver = new EffectiveTradingConfigResolver();
+        $scalping = $resolver->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $dayTrading = $resolver->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+
+        foreach ([
+            [$scalping, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['order_policy']['value']['ttl_seconds'] = 90;
+                $payload['setup']['ast']['execution']['order_policy']['value']['cancel_after_seconds'] = 120;
+            }],
+            [$scalping, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['time_stop']['value'] = 'PT8H';
+                $payload['mode']['horizon']['value']['maximum_duration'] = 'PT8H';
+            }],
+            [$dayTrading, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['order_policy']['value']['ttl_seconds'] = 45;
+                $payload['setup']['ast']['execution']['order_policy']['value']['cancel_after_seconds'] = 75;
+            }],
+            [$dayTrading, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['time_stop']['value'] = 'PT2H';
+                $payload['mode']['horizon']['value']['maximum_duration'] = 'PT2H';
+            }],
+        ] as [$snapshot, $mutate]) {
+            $payload = $snapshot->payload();
+            $mutate($payload);
+            $payload = CanonicalExecutionPolicyFixture::rehashSetup($payload);
+            $forged = new EffectiveTradingConfigSnapshot(
+                $snapshot->request,
+                $payload,
+                CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, (string) $snapshot->conditionCatalogHash),
+                $snapshot->conditionCatalogHash,
+                $snapshot->orderedLayers(),
+                $snapshot->provenance(),
+            );
+
+            try {
+                (new CanonicalExecutionPolicyCompiler())->compile($forged);
+                self::fail('Cross-mode Shadow timing policy was accepted.');
+            } catch (CanonicalOrderPlanException $exception) {
+                self::assertSame('canonical_shadow_identity_policy_mismatch', $exception->reasonCode);
+            }
+        }
     }
 
     public function testCompilesStrictExecutionPolicyFromAuthenticatedSnapshot(): void
@@ -257,5 +367,17 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
     private function payload(): array
     {
         return CanonicalExecutionPolicyFixture::payload();
+    }
+
+    /** @return array{state:string,value:mixed,unit:string,source:string,justification:string} */
+    private static function decision(mixed $value, string $unit): array
+    {
+        return [
+            'state' => 'defined',
+            'value' => $value,
+            'unit' => $unit,
+            'source' => 'test fixture',
+            'justification' => 'Proves that legacy identities cannot enable modern Shadow fields.',
+        ];
     }
 }

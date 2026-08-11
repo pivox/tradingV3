@@ -242,6 +242,59 @@ final class CanonicalEffectiveTradingConfigTest extends TestCase
         }
     }
 
+    public function testExchangeMaxNotionalOverrideMayOnlyTightenWithinTheCurrentExchangeEnvelope(): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $layers = $this->layers($request);
+        $exchange = $layers[3]->config;
+        $exchange['exchange']['limits'] = ['max_orders' => 10, 'min_notional' => 5.0, 'max_notional' => 1000.0];
+        $layers[3] = new TradingConfigLayer('exchange', 'fake', '/exchange.yaml', true, $exchange);
+        $environment = $layers[5]->config;
+        $environment['environment']['max_notional'] = 250.0;
+        $layers[5] = new TradingConfigLayer('environment', 'test', '/test.yaml', true, $environment);
+        $layers[4] = new TradingConfigLayer('mode_exchange', 'scalping.1.0.0.fake', '/pair.yaml', true, [
+            'mode_id' => 'scalping', 'mode_version' => '1.0.0', 'exchange' => 'fake',
+            'overrides' => ['exchange.limits.max_notional' => 25.0],
+        ]);
+
+        $snapshot = (new EffectiveTradingConfigComposer())->compose($request, $layers, str_repeat('a', 64));
+
+        self::assertSame(25.0, $snapshot->payload()['exchange']['limits']['max_notional']);
+        self::assertSame('mode_exchange', $snapshot->provenance()['exchange.limits.max_notional']['type']);
+    }
+
+    /** @dataProvider invalidExchangeMaxNotionalOverrideProvider */
+    public function testExchangeMaxNotionalOverrideRejectsInvalidTypeRangeAndWeakening(mixed $value, string $message): void
+    {
+        $request = new EffectiveTradingConfigRequest('scalping', '1.0.0', 'scalping.pullback.long', '1.0.0', 'fake', 'test', 'long');
+        $layers = $this->layers($request);
+        $exchange = $layers[3]->config;
+        $exchange['exchange']['limits'] = ['max_orders' => 10, 'min_notional' => 5.0, 'max_notional' => 1000.0];
+        $layers[3] = new TradingConfigLayer('exchange', 'fake', '/exchange.yaml', true, $exchange);
+        $layers[4] = new TradingConfigLayer('mode_exchange', 'scalping.1.0.0.fake', '/pair.yaml', true, [
+            'mode_id' => 'scalping', 'mode_version' => '1.0.0', 'exchange' => 'fake',
+            'overrides' => ['exchange.limits.max_notional' => $value],
+        ]);
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage($message);
+        (new EffectiveTradingConfigComposer())->compose($request, $layers, str_repeat('a', 64));
+    }
+
+    /** @return iterable<string,array{mixed,string}> */
+    public static function invalidExchangeMaxNotionalOverrideProvider(): iterable
+    {
+        yield 'below current minimum' => [1.0, 'greater than or equal to exchange.limits.min_notional'];
+        yield 'weakening base maximum' => [1001.0, 'tighten'];
+        yield 'zero' => [0.0, 'positive'];
+        yield 'negative' => [-1.0, 'positive'];
+        yield 'NaN' => [NAN, 'finite'];
+        yield 'infinity' => [INF, 'finite'];
+        yield 'numeric string is forbidden' => ['25', 'type mismatch'];
+        yield 'null is forbidden' => [null, 'type mismatch'];
+        yield 'mapping is forbidden' => [['value' => 25.0], 'type mismatch'];
+    }
+
     /** @dataProvider invalidLayerProvider */
     public function testRejectsMissingMisorderedWrongOwnerUnknownAndTypeMismatchedLayers(callable $mutate, string $message): void
     {

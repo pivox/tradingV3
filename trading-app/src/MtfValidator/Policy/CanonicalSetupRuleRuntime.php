@@ -7,22 +7,26 @@ namespace App\MtfValidator\Policy;
 use App\Indicator\Condition\ConditionInterface;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
-use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Rules\Compiler\StrictSetupRuleCompiler;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationContext;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationResult;
 use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
+use App\TradingCore\Mode\ModeContractLoader;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
+use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
 
 final class CanonicalSetupRuleRuntime
 {
-    private ConditionCatalog $catalog;
+    private ?ConditionCatalog $suppliedCatalog;
     private SetupContractLoader $contracts;
-    private StrictSetupRuleCompiler $compiler;
-    private StrictRuleEvaluator $evaluator;
+    private ModeContractLoader $modes;
+    private StrictConditionRegistry $registry;
     /** @var array<string, \App\TradingCore\Rules\Compiler\CompiledSetupRulePlan> */
     private array $planCache = [];
 
@@ -32,16 +36,15 @@ final class CanonicalSetupRuleRuntime
         iterable $conditions,
         ?ConditionCatalog $catalog = null,
         ?SetupContractLoader $contracts = null,
+        ?ModeContractLoader $modes = null,
     ) {
-        $this->catalog = $catalog ?? (new ConditionCatalogLoader())->loadFile(
-            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
-        );
+        $this->suppliedCatalog = $catalog;
         $this->contracts = $contracts ?? new SetupContractLoader();
-        $this->compiler = new StrictSetupRuleCompiler($this->catalog);
-        $this->evaluator = new StrictRuleEvaluator($this->catalog, new StrictConditionRegistry($conditions));
+        $this->modes = $modes ?? new ModeContractLoader();
+        $this->registry = new StrictConditionRegistry($conditions);
     }
 
-    /** @param array<string, array<string, mixed>> $indicatorsByTimeframe */
+    /** @param array<string, mixed> $indicatorsByTimeframe */
     public function evaluate(
         LineageContext $identity,
         array $indicatorsByTimeframe,
@@ -50,60 +53,113 @@ final class CanonicalSetupRuleRuntime
         if (!$identity->isModern()) {
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_identity_required', []);
         }
-        $identityCatalogHash = (string) $identity->conditionCatalogHash;
-        $identityCatalogHash = str_starts_with($identityCatalogHash, 'sha256:') ? substr($identityCatalogHash, 7) : $identityCatalogHash;
-        if (!hash_equals($this->catalog->stableHash(), $identityCatalogHash)) {
+        $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
+        try {
+            $catalog = (new ConditionCatalogResolver())->forSetupDocument(
+                $contract->toArray(),
+                $this->suppliedCatalog,
+            );
+        } catch (ConditionCatalogException) {
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
         }
-        $dayTradingShadow = $identity->modeId === 'day_trading' && $identity->modeVersion === '1.1.0'
-            && $identity->setupId === 'day_trading.trend_continuation.long' && $identity->setupVersion === '1.1.0';
-        if ($dayTradingShadow) {
-            foreach (['4h', '1h', '15m', '5m', '1m'] as $timeframe) {
-                if (!isset($indicatorsByTimeframe[$timeframe])) {
+        $identityCatalogHash = (string) $identity->conditionCatalogHash;
+        $identityCatalogHash = str_starts_with($identityCatalogHash, 'sha256:') ? substr($identityCatalogHash, 7) : $identityCatalogHash;
+        if (!hash_equals($catalog->stableHash(), $identityCatalogHash)) {
+            return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
+        }
+        $shadowTimeframes = $this->shadowTimeframes($identity, $contract);
+        if ($shadowTimeframes !== null) {
+            foreach ($shadowTimeframes['required'] as $timeframe) {
+                if (!array_key_exists($timeframe, $indicatorsByTimeframe)
+                    || !\is_array($indicatorsByTimeframe[$timeframe])
+                ) {
                     return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
-                        'schema_version' => 'canonical-setup-rule-runtime.v1',
-                        'mode_id' => $identity->modeId,
-                        'mode_version' => $identity->modeVersion,
-                        'setup_id' => $identity->setupId,
-                        'setup_version' => $identity->setupVersion,
-                        'side' => strtolower((string) $identity->side),
-                        'config_hash' => $identity->configHash,
-                        'catalog_hash' => $identity->conditionCatalogHash,
-                        'evaluated_at' => $evaluatedAt->format(DATE_ATOM),
-                        'execution_timeframe' => '15m',
-                        'mandatory_confirmations' => ['5m', '1m'],
-                        'rejection' => ['timeframe' => $timeframe],
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'timeframe_mapping_missing',
+                        ],
+                    ]);
+                }
+                $observedAt = $this->instant($indicatorsByTimeframe[$timeframe]['kline_time'] ?? null);
+                if ($observedAt === null) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'kline_time_missing_or_invalid',
+                        ],
+                    ]);
+                }
+                $snapshotIdentityData = $indicatorsByTimeframe[$timeframe]['snapshot_identity'] ?? null;
+                $snapshotIdentity = \is_array($snapshotIdentityData)
+                    ? CanonicalIndicatorSnapshotIdentity::tryFromArray($snapshotIdentityData)
+                    : null;
+                $expectedSnapshotIdentity = new CanonicalIndicatorSnapshotIdentity(
+                    $timeframe,
+                    (string) $identity->symbol,
+                    (string) $identity->exchange,
+                    (string) $identity->environment,
+                    (string) $identity->marketType,
+                );
+                if ($snapshotIdentity === null || !$snapshotIdentity->matches(
+                    $expectedSnapshotIdentity->timeframe,
+                    $expectedSnapshotIdentity->symbol,
+                    $expectedSnapshotIdentity->exchange,
+                    $expectedSnapshotIdentity->environment,
+                    $expectedSnapshotIdentity->marketType,
+                )) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'indicator_snapshot_identity_mismatch', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => $snapshotIdentity === null ? 'identity_missing_or_invalid' : 'identity_mismatch',
+                            'expected_identity' => $expectedSnapshotIdentity->toArray(),
+                            'observed_identity' => $snapshotIdentity?->toArray(),
+                        ],
+                    ]);
+                }
+                $validUntil = $observedAt->modify(
+                    '+' . $catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds',
+                );
+                if ($observedAt > $evaluatedAt || $validUntil < $evaluatedAt) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_stale', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'outside_freshness_window',
+                        ],
                     ]);
                 }
             }
         }
-        $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
         $setupHash = $contract->stableHash();
         $planCacheKey = hash('sha256', json_encode([
-            'catalog_hash' => $this->catalog->stableHash(),
+            'catalog_hash' => $catalog->stableHash(),
             'setup_id' => $identity->setupId,
             'setup_version' => $identity->setupVersion,
             'setup_hash' => $setupHash,
             'config_hash' => $identity->configHash,
         ], JSON_THROW_ON_ERROR));
         $planCacheHit = isset($this->planCache[$planCacheKey]);
-        $plan = $this->planCache[$planCacheKey] ??= $this->compiler->compile($contract);
+        $plan = $this->planCache[$planCacheKey] ??= (new StrictSetupRuleCompiler($catalog))->compile($contract);
+        $evaluator = new StrictRuleEvaluator($catalog, $this->registry);
         $context = new RuleEvaluationContext(
             (string) $identity->configHash,
             $evaluatedAt,
-            $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt),
+            $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt, $catalog),
         );
         $sectionResults = [];
         foreach ($plan->sections as $name => $node) {
-            $sectionResults[$name] = $this->evaluator->evaluate($node, $context);
+            $sectionResults[$name] = $evaluator->evaluate($node, $context);
         }
-        $filterResults = array_map(fn ($node): RuleEvaluationResult => $this->evaluator->evaluate($node, $context), $plan->filters);
-        $noTradeResults = array_map(fn ($node): RuleEvaluationResult => $this->evaluator->evaluate($node, $context), $plan->noTradeRules);
+        $filterResults = array_map(fn ($node): RuleEvaluationResult => $evaluator->evaluate($node, $context), $plan->filters);
+        $noTradeResults = array_map(fn ($node): RuleEvaluationResult => $evaluator->evaluate($node, $context), $plan->noTradeRules);
         $sectionsPassed = !in_array(false, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $sectionResults), true);
         $filtersPassed = !in_array(false, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $filterResults), true);
         $noTradeMatched = in_array(true, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $noTradeResults), true);
         $passed = $plan->blockers === [] && $sectionsPassed && $filtersPassed && !$noTradeMatched;
-        $staleInput = $dayTradingShadow && $this->containsReasonCode([
+        $staleInput = $shadowTimeframes !== null && $this->containsReasonCode([
             ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $sectionResults),
             ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
             ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),
@@ -129,8 +185,8 @@ final class CanonicalSetupRuleRuntime
             'catalog_hash' => $plan->catalogHash,
             'config_hash' => $identity->configHash,
             'evaluated_at' => $evaluatedAt->format(DATE_ATOM),
-            'execution_timeframe' => $dayTradingShadow ? '15m' : null,
-            'mandatory_confirmations' => $dayTradingShadow ? ['5m', '1m'] : [],
+            'execution_timeframe' => $shadowTimeframes['execution'] ?? null,
+            'mandatory_confirmations' => $shadowTimeframes['confirmations'] ?? [],
             'plan_cache_key' => $planCacheKey,
             'plan_cache_hit' => $planCacheHit,
             'blockers' => $plan->blockers,
@@ -138,6 +194,73 @@ final class CanonicalSetupRuleRuntime
             'filters' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
             'no_trade_rules' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),
         ]);
+    }
+
+    /** @return array{required:list<string>,execution:string,confirmations:list<string>}|null */
+    private function shadowTimeframes(LineageContext $identity, SetupContract $setup): ?array
+    {
+        if (!$setup->isExecutable() || $setup->status !== 'shadow') {
+            return null;
+        }
+        $mode = $this->modes->load((string) $identity->modeId, (string) $identity->modeVersion);
+        if (!$mode->isExecutable()
+            || $mode->lifecycleStatus !== 'shadow'
+            || !\in_array($setup->setupId, $mode->compatibleSetupIds(), true)
+        ) {
+            return null;
+        }
+
+        $document = $setup->toArray();
+        $execution = $document['execution'] ?? null;
+        $executionTimeframe = $execution['execution_timeframe'] ?? null;
+        $confirmations = $execution['mandatory_confirmations'] ?? null;
+        if (!\is_array($execution)
+            || !\is_array($executionTimeframe)
+            || ($executionTimeframe['state'] ?? null) !== 'defined'
+            || !\is_string($executionTimeframe['value'] ?? null)
+            || !\is_array($confirmations)
+            || ($confirmations['state'] ?? null) !== 'defined'
+            || !\is_array($confirmations['value'] ?? null)
+            || !array_is_list($confirmations['value'])
+        ) {
+            return null;
+        }
+
+        $required = [];
+        foreach ($mode->timeframeRoles() as $timeframes) {
+            foreach ($timeframes as $timeframe) {
+                if (!\in_array($timeframe, $required, true)) {
+                    $required[] = $timeframe;
+                }
+            }
+        }
+
+        return [
+            'required' => $required,
+            'execution' => $executionTimeframe['value'],
+            'confirmations' => $confirmations['value'],
+        ];
+    }
+
+    /**
+     * @param array{required:list<string>,execution:string,confirmations:list<string>} $timeframes
+     * @return array<string, mixed>
+     */
+    private function traceIdentity(LineageContext $identity, \DateTimeImmutable $evaluatedAt, array $timeframes): array
+    {
+        return [
+            'schema_version' => 'canonical-setup-rule-runtime.v1',
+            'mode_id' => $identity->modeId,
+            'mode_version' => $identity->modeVersion,
+            'setup_id' => $identity->setupId,
+            'setup_version' => $identity->setupVersion,
+            'side' => strtolower((string) $identity->side),
+            'config_hash' => $identity->configHash,
+            'catalog_hash' => $identity->conditionCatalogHash,
+            'evaluated_at' => $evaluatedAt->format(DATE_ATOM),
+            'execution_timeframe' => $timeframes['execution'],
+            'mandatory_confirmations' => $timeframes['confirmations'],
+        ];
     }
 
     private function containsReasonCode(mixed $value, string $reasonCode): bool
@@ -158,13 +281,21 @@ final class CanonicalSetupRuleRuntime
     }
 
     /**
-     * @param array<string, array<string, mixed>> $indicatorsByTimeframe
+     * @param array<string, mixed> $indicatorsByTimeframe
      * @return list<RuleInputSnapshot>
      */
-    private function snapshots(LineageContext $identity, array $indicatorsByTimeframe, \DateTimeImmutable $evaluatedAt): array
+    private function snapshots(
+        LineageContext $identity,
+        array $indicatorsByTimeframe,
+        \DateTimeImmutable $evaluatedAt,
+        ConditionCatalog $catalog,
+    ): array
     {
         $snapshots = [];
         foreach ($indicatorsByTimeframe as $timeframe => $indicators) {
+            if (!is_array($indicators)) {
+                continue;
+            }
             $observedAt = $this->instant($indicators['kline_time'] ?? null);
             if ($observedAt === null) {
                 continue;
@@ -173,7 +304,7 @@ final class CanonicalSetupRuleRuntime
                 $timeframe,
                 'indicator_snapshot',
                 $observedAt,
-                $observedAt->modify('+' . $this->catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
+                $observedAt->modify('+' . $catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
                 $indicators,
             );
         }
@@ -183,7 +314,7 @@ final class CanonicalSetupRuleRuntime
                 'global',
                 'effective_config',
                 $evaluatedAt,
-                $evaluatedAt->modify('+' . $this->catalog->freshnessSeconds('effective_config', 'global') . ' seconds'),
+                $evaluatedAt->modify('+' . $catalog->freshnessSeconds('effective_config', 'global') . ' seconds'),
                 $config,
             );
         }

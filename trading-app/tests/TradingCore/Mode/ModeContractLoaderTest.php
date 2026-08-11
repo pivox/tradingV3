@@ -74,6 +74,137 @@ final class ModeContractLoaderTest extends TestCase
         self::assertFalse($document['order_policy']['value']['market_fallback']);
     }
 
+    public function testLoadsExecutableScalpingShadowVersionWithExactDecisions(): void
+    {
+        $contract = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.1.0');
+        $document = $contract->toArray();
+
+        self::assertSame('1.1.0', $contract->modeVersion);
+        self::assertSame('shadow', $contract->lifecycleStatus);
+        self::assertTrue($contract->isExecutable());
+        self::assertSame([
+            'maximum_duration' => 'PT2H',
+            'daily_boundary_time' => '00:00:00',
+            'daily_boundary_timezone' => 'UTC',
+            'close_before_boundary' => true,
+        ], $document['horizon']['value']);
+        self::assertSame(['1h'], $contract->timeframeRoles()['regime']);
+        self::assertSame(['15m'], $contract->timeframeRoles()['context']);
+        self::assertSame(['5m'], $contract->timeframeRoles()['trigger']);
+        self::assertSame(['5m'], $contract->timeframeRoles()['execution']);
+        self::assertSame(['1m'], $contract->timeframeRoles()['confirmations']);
+        self::assertSame('PT5M', $document['cadence']['evaluation']['value']);
+        self::assertSame('PT5M', $document['cadence']['validity_window']['value']);
+        self::assertSame(2.0, $document['risk']['trade_budget']['value']);
+        self::assertSame([
+            'percent_equity' => 6.0,
+            'absolute_quote' => 40.0,
+            'quote_currency' => 'USDT',
+            'day_timezone' => 'UTC',
+            'day_boundary_local' => '00:00:00',
+            'include_unrealized_loss' => true,
+        ], $document['risk']['daily_loss_cap']['value']);
+        self::assertSame([
+            'limit' => 3,
+            'include_pending_entries' => true,
+        ], $document['risk']['max_concurrent_positions']['value']);
+        self::assertSame(75.0, $document['risk']['mode_exposure_cap']['value']);
+        self::assertSame(3.0, $document['leverage']['value']);
+        self::assertSame([
+            'margin_mode' => 'isolated',
+            'preferred_type' => 'limit',
+            'market_fallback' => false,
+        ], $document['order_policy']['value']);
+    }
+
+    public function testScalpingShadowMutationsFailInPhpAndJsonSchema(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.1.0')->toArray();
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $mutations = [];
+        $mutations['horizon'] = $document;
+        $mutations['horizon']['horizon']['value']['maximum_duration'] = 'PT3H';
+        $mutations['horizon source'] = $document;
+        $mutations['horizon source']['horizon']['source'] = 'synthetic-test';
+        $mutations['missing confirmations'] = $document;
+        unset($mutations['missing confirmations']['timeframes']['confirmations']);
+        $mutations['daily cap'] = $document;
+        $mutations['daily cap']['risk']['daily_loss_cap']['value']['absolute_quote'] = 41.0;
+        $mutations['concurrency'] = $document;
+        $mutations['concurrency']['risk']['max_concurrent_positions']['value']['limit'] = 4;
+        $mutations['trade budget'] = $document;
+        $mutations['trade budget']['risk']['trade_budget']['value'] = 3.0;
+        $mutations['exposure'] = $document;
+        $mutations['exposure']['risk']['mode_exposure_cap']['value'] = 76.0;
+        $mutations['leverage'] = $document;
+        $mutations['leverage']['leverage']['value'] = 4.0;
+        $mutations['execution'] = $document;
+        $mutations['execution']['timeframes']['execution'] = ['1m'];
+        $mutations['confirmation'] = $document;
+        $mutations['confirmation']['timeframes']['confirmations'] = ['5m'];
+        $mutations['market fallback'] = $document;
+        $mutations['market fallback']['order_policy']['value']['market_fallback'] = true;
+        $mutations['data contract'] = $document;
+        array_pop($mutations['data contract']['data_contract']['required_inputs']);
+        $mutations['data contract field'] = $document;
+        $mutations['data contract field']['data_contract']['required_inputs'][1]['fields'][2] = 'order_flow_imbalance';
+        $mutations['trade budget source'] = $document;
+        $mutations['trade budget source']['risk']['trade_budget']['source'] = 'synthetic-test';
+        $mutations['trade budget justification'] = $document;
+        $mutations['trade budget justification']['risk']['trade_budget']['justification'] = 'synthetic-test';
+        $mutations['leverage source'] = $document;
+        $mutations['leverage source']['leverage']['source'] = 'synthetic-test';
+        $mutations['leverage justification'] = $document;
+        $mutations['leverage justification']['leverage']['justification'] = 'synthetic-test';
+        $mutations['order policy source'] = $document;
+        $mutations['order policy source']['order_policy']['source'] = 'synthetic-test';
+        $mutations['risk provenance'] = $document;
+        $mutations['risk provenance']['provenance'][4]['source'] = 'synthetic-test';
+        $mutations['missing provenance'] = $document;
+        array_pop($mutations['missing provenance']['provenance']);
+        $mutations['extra provenance'] = $document;
+        $mutations['extra provenance']['provenance'][] = $document['provenance'][0];
+        $mutations['provenance order'] = $document;
+        [$mutations['provenance order']['provenance'][0], $mutations['provenance order']['provenance'][1]] = [$document['provenance'][1], $document['provenance'][0]];
+
+        foreach ($mutations as $label => $mutation) {
+            try {
+                (new ModeContractValidator())->validate($mutation);
+                self::fail('PHP accepted mutation: ' . $label);
+            } catch (ModeContractException) {
+                self::addToAssertionCount(1);
+            }
+            $object = json_decode(json_encode($mutation, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertFalse((new JsonSchemaValidator())->validate($object, $schema)->isValid(), 'schema accepted mutation: ' . $label);
+        }
+    }
+
+    public function testFrozenShadowNumericLeavesHavePhpJsonSchemaParity(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $documents = [];
+        $documents['scalping'] = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.1.0')->toArray();
+        $documents['scalping']['risk']['trade_budget']['value'] = 2;
+        $documents['scalping']['risk']['daily_loss_cap']['value']['percent_equity'] = 6;
+        $documents['scalping']['risk']['daily_loss_cap']['value']['absolute_quote'] = 40;
+        $documents['scalping']['risk']['max_concurrent_positions']['value']['limit'] = 3.0;
+        $documents['scalping']['risk']['mode_exposure_cap']['value'] = 75;
+        $documents['scalping']['leverage']['value'] = 3;
+        $documents['day trading'] = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0')->toArray();
+        $documents['day trading']['risk']['trade_budget']['value'] = 5;
+        $documents['day trading']['risk']['daily_loss_cap']['value']['percent_equity'] = 6;
+        $documents['day trading']['risk']['daily_loss_cap']['value']['absolute_quote'] = 30;
+        $documents['day trading']['risk']['max_concurrent_positions']['value']['limit'] = 4.0;
+        $documents['day trading']['risk']['mode_exposure_cap']['value'] = 100;
+        $documents['day trading']['leverage']['value'] = 2;
+
+        foreach ($documents as $label => $document) {
+            (new ModeContractValidator())->validate($document);
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $label);
+        }
+    }
+
     public function testDayTradingShadowMutationsFailInPhpAndJsonSchema(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0')->toArray();

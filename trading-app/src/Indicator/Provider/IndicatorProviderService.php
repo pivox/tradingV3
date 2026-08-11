@@ -12,8 +12,10 @@ use App\Contract\Indicator\Dto\ListIndicatorDto;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
+use App\Indicator\Exception\InvalidKlineChronologyException;
 use Brick\Math\RoundingMode;
 use App\Indicator\Condition\ConditionInterface;
+use App\Indicator\Context\CanonicalPullbackAgeCalculator;
 use App\Indicator\Context\EvaluationContext;
 use App\Indicator\Core\AtrCalculator as CoreAtr;
 use App\Indicator\Core\Momentum\Macd as CoreMacd;
@@ -28,6 +30,7 @@ use App\Indicator\Registry\ConditionRegistry;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Fake\FakeKlineProvider;
 use App\Repository\IndicatorSnapshotRepository;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -61,6 +64,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         private readonly LoggerInterface $logger,
         #[Autowire(service: FakeKlineProvider::class)]
         private readonly KlineProviderInterface $fakeKlineProvider,
+        private readonly ?CanonicalPullbackAgeCalculator $pullbackAgeCalculator = null,
         ) {}
 
         /**
@@ -653,6 +657,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         array $timeframes,
         \DateTimeInterface $at,
         ?ExchangeContext $context = null,
+        ?string $environment = null,
     ): array {
         $context = ExchangeContext::resolve($context);
         $result = [];
@@ -686,11 +691,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $highs = [];
                 $lows = [];
                 $volumes = [];
+                $seriesTimestamps = [];
                 foreach ($klines as $k) {
                     $closes[] = (float) $k->close->toFloat();
                     $highs[] = (float) $k->high->toFloat();
                     $lows[] = (float) $k->low->toFloat();
                     $volumes[] = (float) $k->volume->toFloat();
+                    $seriesTimestamps[] = $k->openTime->getTimestamp();
                 }
                 $lastClose = $closes ? (float) end($closes) : null;
                 $previousCloses = array_slice($closes, 0, -1);
@@ -706,6 +713,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'floatval',
                     array_filter($macdFull['hist'], static fn (mixed $value): bool => is_numeric($value) && is_finite((float) $value)),
                 )), -60);
+                $pullbackAgeBars = $this->canonicalPullbackAge($closes, $highs, $lows, $volumes);
                 $adx = [
                     14 => $this->adxService->calculate($highs, $lows, $closes, 14),
                     15 => $this->adxService->calculate($highs, $lows, $closes, 15),
@@ -717,6 +725,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $klineTime = $snapshot->klineTime ?? \DateTimeImmutable::createFromInterface($at);
 
                 $result[$tf] = [
+                    ...($environment === null ? [] : ['snapshot_identity' => (new CanonicalIndicatorSnapshotIdentity(
+                        (string) $tf,
+                        $symbol,
+                        $context->exchange->value,
+                        $environment,
+                        $context->marketType->value,
+                    ))->toArray()]),
                     'close'        => $lastClose,
                     'rsi'          => $snapshot->rsi,
                     'ema_20'       => $snapshot->ema20?->toFloat(),
@@ -735,10 +750,21 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'ema'          => $ema,
                     'ema_prev'     => $emaPrev,
                     'ema_200_slope' => $ema[200] - $emaPrev[200],
+                    'ema_200_series' => [(float) $emaPrev[200], (float) $ema[200]],
+                    'ema_200_series_timestamps' => array_slice($seriesTimestamps, -2),
                     'macd'         => $macd,
                     'macd_hist_series' => $macdHistSeries,
+                    'macd_hist_series_timestamps' => $macdHistSeries === []
+                        ? []
+                        : array_slice($seriesTimestamps, -count($macdHistSeries)),
+                    'macd_line_signal_series' => $macdHistSeries,
+                    'macd_line_signal_series_timestamps' => $macdHistSeries === []
+                        ? []
+                        : array_slice($seriesTimestamps, -count($macdHistSeries)),
                     'macd_hist_last3' => array_slice($macdHistSeries, -3),
                     'series_order' => 'oldest_to_newest',
+                    'series_timestamps' => $seriesTimestamps,
+                    'pullback_age_bars' => $pullbackAgeBars,
                     'volume_ratio' => $volumeRatio,
                     'ma_21_plus_k_atr' => $ma21 !== null && $atr !== null ? $ma21 + (1.3 * $atr) : null,
                 ];
@@ -756,6 +782,40 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         }
 
         return $result;
+    }
+
+    /**
+     * @param list<float> $closes
+     * @param list<float> $highs
+     * @param list<float> $lows
+     * @param list<float> $volumes
+     */
+    private function canonicalPullbackAge(array $closes, array $highs, array $lows, array $volumes): ?int
+    {
+        $rawCount = count($closes);
+        if ($rawCount < 2
+            || count($highs) !== $rawCount
+            || count($lows) !== $rawCount
+            || count($volumes) !== $rawCount
+        ) {
+            return null;
+        }
+        $ema9 = array_values(array_map('floatval', $this->emaService->calculateSeries($closes, 9)));
+        $ema21 = array_values(array_map('floatval', $this->emaService->calculateSeries($closes, 21)));
+        $vwaps = array_values(array_map('floatval', $this->vwapService->calculateFull($highs, $lows, $closes, $volumes)));
+        $alignedCount = min(count($closes), count($ema9), count($ema21), count($vwaps));
+        if ($alignedCount < 2) {
+            return null;
+        }
+
+        return ($this->pullbackAgeCalculator ?? new CanonicalPullbackAgeCalculator())->age(
+            array_slice($ema9, -$alignedCount),
+            array_slice($ema21, -$alignedCount),
+            array_values(array_map('floatval', array_slice($closes, -$alignedCount))),
+            array_slice($vwaps, -$alignedCount),
+            100,
+            0.0015,
+        );
     }
 
     /** @param list<float> $volumes */
@@ -870,10 +930,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         $lastClosedOpenTs = $this->lastClosedKlineOpenTime($at, $timeframe)->getTimestamp();
         $closed = [];
         $hasOpenTime = false;
+        $missingOpenTime = false;
 
         foreach ($klines as $kline) {
             $openTime = $this->extractKlineOpenTime($kline);
             if ($openTime === null) {
+                $missingOpenTime = true;
                 continue;
             }
 
@@ -890,11 +952,36 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         if (!$hasOpenTime) {
             return \array_slice(\array_slice($klines, 0, max(0, \count($klines) - 1)), -$windowSize);
         }
+        if ($missingOpenTime) {
+            throw new InvalidKlineChronologyException($timeframe->value, 'missing_timestamp');
+        }
 
         \usort(
             $closed,
             static fn (array $a, array $b): int => $a['open_ts'] <=> $b['open_ts'],
         );
+        $step = $timeframe->getStepInSeconds();
+        for ($index = 1, $count = count($closed); $index < $count; ++$index) {
+            $previousTimestamp = $closed[$index - 1]['open_ts'];
+            $currentTimestamp = $closed[$index]['open_ts'];
+            $delta = $currentTimestamp - $previousTimestamp;
+            if ($delta === 0) {
+                throw new InvalidKlineChronologyException(
+                    $timeframe->value,
+                    'duplicate_timestamp',
+                    $previousTimestamp,
+                    $currentTimestamp,
+                );
+            }
+            if ($delta !== $step) {
+                throw new InvalidKlineChronologyException(
+                    $timeframe->value,
+                    'timestamp_gap',
+                    $previousTimestamp,
+                    $currentTimestamp,
+                );
+            }
+        }
 
         return \array_map(
             static fn (array $row): mixed => $row['kline'],

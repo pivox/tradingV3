@@ -86,20 +86,37 @@
     "provenance": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/provenance" } }
   },
   "allOf": [
-    { "if": { "properties": { "mode_id": { "const": "day_trading" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } } },
-    { "if": { "properties": { "mode_version": { "const": "1.1.0" } }, "required": ["mode_version"] }, "then": {
+    { "if": { "properties": { "mode_id": { "const": "day_trading" } }, "required": ["mode_id"] }, "then": { "properties": { "mode_version": { "enum": ["1.0.0", "1.1.0"] }, "compatible_setup_ids": { "const": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } } },
+    { "if": { "properties": { "mode_id": { "const": "scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "mode_version": { "enum": ["1.0.0", "1.1.0"] }, "compatible_setup_ids": { "const": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } } },
+    { "if": { "properties": { "mode_id": { "const": "micro_scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "mode_version": { "const": "1.0.0" }, "compatible_setup_ids": { "const": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } } },
+    { "if": { "properties": { "mode_id": { "const": "day_trading" }, "mode_version": { "const": "1.1.0" } }, "required": ["mode_id", "mode_version"] }, "then": {
       "properties": {
-        "mode_id": { "const": "day_trading" },
         "lifecycle": { "properties": { "status": { "const": "shadow" }, "executable": { "const": true } } },
+        "horizon": { "required": ["state", "value", "unit"], "properties": { "state": { "const": "defined" }, "value": { "const": { "maximum_duration": "PT8H", "daily_boundary_time": "00:00:00", "daily_boundary_timezone": "UTC", "close_before_boundary": true } }, "unit": { "const": "holding_horizon_policy" } } },
+        "session_policy": { "required": ["state", "value", "unit"], "properties": { "state": { "const": "defined" }, "value": { "const": { "calendar": "continuous_crypto", "timezone": "UTC" } }, "unit": { "const": "session_policy" } } },
         "timeframes": { "required": ["regime", "context", "trigger", "execution", "confirmations"], "properties": { "regime": { "const": ["4h"] }, "context": { "const": ["1h"] }, "trigger": { "const": ["15m"] }, "execution": { "const": ["15m"] }, "confirmations": { "const": ["5m", "1m"] } } },
         "cadence": { "properties": { "evaluation": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT15M" } } }, "validity_window": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT15M" } } } } },
-        "risk": { "properties": { "trade_budget": { "properties": { "state": { "const": "defined" }, "value": { "const": 5.0 }, "unit": { "const": "percent_equity_per_trade" } } }, "mode_exposure_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": 100.0 } } } } },
-        "leverage": { "properties": { "state": { "const": "defined" }, "value": { "const": 2.0 } } }
+        "risk": { "properties": { "trade_budget": { "properties": { "state": { "const": "defined" }, "value": { "const": 5.0 }, "unit": { "const": "percent_equity_per_trade" } } }, "daily_loss_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": { "percent_equity": 6.0, "absolute_quote": 30.0, "quote_currency": "USDT", "day_timezone": "UTC", "day_boundary_local": "00:00:00", "include_unrealized_loss": true } } } }, "max_concurrent_positions": { "properties": { "state": { "const": "defined" }, "value": { "const": { "limit": 4, "include_pending_entries": true } } } }, "mode_exposure_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": 100.0 } } } } },
+        "leverage": { "properties": { "state": { "const": "defined" }, "value": { "const": 2.0 } } },
+        "order_policy": { "properties": { "state": { "const": "defined" }, "value": { "const": { "margin_mode": "isolated", "preferred_type": "limit", "market_fallback": false } } } }
+      }
+    } },
+    { "if": { "properties": { "mode_id": { "const": "scalping" }, "mode_version": { "const": "1.1.0" } }, "required": ["mode_id", "mode_version"] }, "then": {
+      "properties": {
+        "lifecycle": { "properties": { "status": { "const": "shadow" }, "executable": { "const": true } } },
+        "horizon": { "const": { "state": "defined", "value": { "maximum_duration": "PT2H", "daily_boundary_time": "00:00:00", "daily_boundary_timezone": "UTC", "close_before_boundary": true }, "unit": "holding_horizon_policy", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "Each position is limited to two hours and must be closed before the UTC daily boundary." } },
+        "session_policy": { "const": { "state": "defined", "value": { "calendar": "continuous_crypto", "timezone": "UTC" }, "unit": "session_policy", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "Shadow evaluation is continuous for crypto while all daily accounting is in UTC." } },
+        "timeframes": { "required": ["regime", "context", "trigger", "execution", "confirmations"], "properties": { "regime": { "const": ["1h"] }, "context": { "const": ["15m"] }, "trigger": { "const": ["5m"] }, "execution": { "const": ["5m"] }, "confirmations": { "const": ["1m"] } } },
+        "cadence": { "const": { "evaluation": { "state": "defined", "value": "PT5M", "unit": "duration", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "The immutable shadow contract evaluates on the five-minute execution cadence." }, "validity_window": { "state": "defined", "value": "PT5M", "unit": "duration", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "A decision expires at the next five-minute evaluation boundary." } } },
+        "risk": { "properties": { "trade_budget": { "const": { "state": "defined", "value": 2.0, "unit": "percent_equity_per_trade", "source": "config/app/trade_entry.scalper.yaml:73-78 pinned by #307", "justification": "The lower explicit fixed-risk authority replaces the conflicting 7-percent request." } }, "daily_loss_cap": { "const": { "state": "defined", "value": { "percent_equity": 6.0, "absolute_quote": 40.0, "quote_currency": "USDT", "day_timezone": "UTC", "day_boundary_local": "00:00:00", "include_unrealized_loss": true }, "unit": "compound_percent_equity_and_quote_per_day", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "The lower of six percent equity and 40 USDT applies in UTC to realized and unrealized loss." } }, "max_concurrent_positions": { "const": { "state": "defined", "value": { "limit": 3, "include_pending_entries": true }, "unit": "positions", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "Three positions is the cap and pending entries reserve a concurrency slot before filling." } }, "mode_exposure_cap": { "const": { "state": "defined", "value": 75.0, "unit": "percent_equity_notional", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "Aggregate scalping notional is capped at 75 percent of equity." } } } },
+        "leverage": { "const": { "state": "defined", "value": 3.0, "unit": "leverage_multiple", "source": "config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307", "justification": "Conservative venue envelope copied without legacy runtime loading." } },
+        "order_policy": { "const": { "state": "defined", "value": { "margin_mode": "isolated", "preferred_type": "limit", "market_fallback": false }, "unit": "policy", "source": "GitHub issue #307 approved decision 2026-08-11", "justification": "Only isolated limit orders are admissible; market fallback is prohibited." } },
+        "data_contract": { "const": { "required_inputs": [{ "kind": "candles", "timeframes": ["1h", "15m", "5m", "1m"], "fields": ["open", "high", "low", "close", "volume"] }, { "kind": "order_book", "timeframes": ["5m"], "fields": ["best_bid", "best_ask", "spread_bps"] }], "missing_data_policy": "reject" } },
+        "provenance": { "const": [{ "path": "horizon", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "holding_horizon_policy", "justification": "PT2H maximum duration and a 00:00 UTC close boundary are explicit decisions." }, { "path": "session_policy", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "session_policy", "justification": "Continuous crypto session with UTC accounting is explicit." }, { "path": "timeframes", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "timeframe_roles", "justification": "1h/15m/5m/5m/1m are the approved regime, context, trigger, execution and confirmation roles." }, { "path": "cadence", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "duration", "justification": "Evaluation and validity are both fixed at PT5M." }, { "path": "risk", "source": "config/app/trade_entry.scalper.yaml:73-78 pinned by #307", "unit": "canonical_risk_policy", "justification": "The lower explicit fixed-risk authority replaces the conflicting 7-percent request." }, { "path": "leverage", "source": "config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307", "unit": "leverage_multiple", "justification": "Conservative venue envelope copied without legacy runtime loading." }, { "path": "order_policy", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "policy", "justification": "Isolated limit intent has no market fallback." }, { "path": "compatible_setup_ids", "source": "GitHub issue #300 catalog for #301", "unit": "setup_id", "justification": "The immutable contract uses the existing three-setup scalping catalog." }, { "path": "data_contract.required_inputs", "source": "GitHub issue #307 approved decision 2026-08-11", "unit": "required_market_data", "justification": "Candles for all approved timeframes and a five-minute order book are fail-closed inputs." }] }
       }
     } },
     { "if": { "properties": { "mode_version": { "const": "1.0.0" } }, "required": ["mode_version"] }, "then": { "properties": { "timeframes": { "not": { "required": ["confirmations"] } } } } },
-    { "if": { "properties": { "mode_id": { "const": "scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } } },
-    { "if": { "properties": { "mode_id": { "const": "micro_scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } } }
+    { "if": { "properties": { "mode_version": { "const": "1.1.0" } }, "required": ["mode_version"] }, "then": { "properties": { "timeframes": { "required": ["confirmations"] } } } }
   ],
   "$defs": {
     "nonEmptyString": { "type": "string", "pattern": "\\S" },
@@ -141,7 +158,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["maximum_duration", "daily_boundary_time", "daily_boundary_timezone", "close_before_boundary"],
       "properties": {
-        "maximum_duration": { "const": "PT8H" },
+        "maximum_duration": { "enum": ["PT8H", "PT2H"] },
         "daily_boundary_time": { "const": "00:00:00" },
         "daily_boundary_timezone": { "const": "UTC" },
         "close_before_boundary": { "const": true }
@@ -179,7 +196,7 @@
     "shadowConcurrency": {
       "type": "object", "additionalProperties": false,
       "required": ["limit", "include_pending_entries"],
-      "properties": { "limit": { "const": 4 }, "include_pending_entries": { "const": true } }
+      "properties": { "limit": { "enum": [3, 4] }, "include_pending_entries": { "const": true } }
     },
     "dailyCapDecision": {
       "allOf": [
@@ -215,8 +232,8 @@
         "type": "object", "additionalProperties": false,
         "required": ["percent_equity", "absolute_quote", "quote_currency", "day_timezone", "day_boundary_local", "include_unrealized_loss"],
         "properties": {
-          "percent_equity": { "const": 6.0 },
-          "absolute_quote": { "const": 30.0 },
+          "percent_equity": { "type": "number", "exclusiveMinimum": 0 },
+          "absolute_quote": { "type": "number", "exclusiveMinimum": 0 },
           "quote_currency": { "const": "USDT" },
           "day_timezone": { "const": "UTC" },
           "day_boundary_local": { "const": "00:00:00" },

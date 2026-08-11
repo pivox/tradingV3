@@ -269,7 +269,7 @@
             "state": "unresolved",
             "value": null,
             "unit": "sha256",
-            "source": "condition catalog artifact not yet versioned",
+            "source": "config/trading/condition_catalog/1.0.0.yaml",
             "justification": "No hash fabricated."
         },
         "unknown_condition_policy": "reject"

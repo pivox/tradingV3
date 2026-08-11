@@ -6,6 +6,7 @@ namespace App\Tests\TradingCore\Rules\Catalog;
 
 use App\TradingCore\Rules\Catalog\ConditionCatalogException;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Rules\Evaluation\StrictCompiledExpressionEvaluator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -15,13 +16,65 @@ use Symfony\Component\Yaml\Yaml;
 final class ConditionCatalogLoaderTest extends TestCase
 {
     private string $catalogPath;
+    private string $catalogOneOnePath;
     private string $setupRoot;
 
     protected function setUp(): void
     {
         $root = dirname(__DIR__, 4);
         $this->catalogPath = $root . '/config/trading/condition_catalog/1.0.0.yaml';
+        $this->catalogOneOnePath = $root . '/config/trading/condition_catalog/1.1.0.yaml';
         $this->setupRoot = $root . '/config/trading/setup_contract';
+    }
+
+    public function testPublishedOneZeroCatalogRemainsByteForByteImmutable(): void
+    {
+        self::assertSame(
+            'a67eb207c2c98029d22f26c01093f25958dd19a7277161aaa04ad8d38984895a',
+            hash_file('sha256', $this->catalogPath),
+        );
+    }
+
+    public function testLoadsOnlyExactPublishedCatalogVersionsWithoutAliasOrFallback(): void
+    {
+        $loader = new ConditionCatalogLoader();
+
+        self::assertSame('1.0.0', $loader->loadVersion('1.0.0')->catalogVersion);
+        self::assertSame('1.1.0', $loader->loadVersion('1.1.0')->catalogVersion);
+        self::assertSame(
+            'executable',
+            $loader->loadFile($this->catalogOneOnePath)->definition('pullback_confirmed')->status,
+        );
+        self::assertSame(
+            'blocked',
+            $loader->loadFile($this->catalogPath)->definition('pullback_confirmed')->status,
+        );
+
+        $this->expectException(ConditionCatalogException::class);
+        $this->expectExceptionMessage('Unsupported exact condition catalog version "1.0.1"');
+        $loader->loadVersion('1.0.1');
+    }
+
+    public function testResolverBindsVersionSourceAndHashWithoutCrossVersionFallback(): void
+    {
+        $catalog = (new ConditionCatalogLoader())->loadVersion('1.1.0');
+        $document = [
+            'data_condition_contract' => [
+                'condition_catalog_version' => '1.1.0',
+                'condition_catalog_hash' => [
+                    'state' => 'defined',
+                    'value' => $catalog->stableHash(),
+                    'source' => 'config/trading/condition_catalog/1.1.0.yaml',
+                ],
+            ],
+        ];
+
+        self::assertSame('1.1.0', (new ConditionCatalogResolver())->forSetupDocument($document)->catalogVersion);
+
+        $document['data_condition_contract']['condition_catalog_hash']['source'] = 'config/trading/condition_catalog/1.0.0.yaml';
+        $this->expectException(ConditionCatalogException::class);
+        $this->expectExceptionMessage('version/source mismatch');
+        (new ConditionCatalogResolver())->forSetupDocument($document);
     }
 
     public function testRealCatalogExactlyCoversConditionsReferencedByPublishedSetups(): void

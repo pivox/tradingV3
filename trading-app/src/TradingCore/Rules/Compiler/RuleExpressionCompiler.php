@@ -87,20 +87,24 @@ final readonly class RuleExpressionCompiler
             throw new RuleCompilationException(sprintf('Unknown parameter "%s" for condition "%s".', reset($unknown), $conditionId));
         }
         $parameters = [];
+        $parameterSources = [];
         foreach ($definition->parameters as $name => $parameter) {
             if (!array_key_exists($name, $provided)) {
                 if ($parameter->required) {
                     throw new RuleCompilationException(sprintf('Missing required parameter "%s" for condition "%s".', $name, $conditionId));
                 }
                 $parameters[$name] = $parameter->default;
+                $parameterSources[$name] = 'condition_catalog_default';
                 continue;
             }
             $parameters[$name] = $this->validateParameter($provided[$name], $parameter, $name, $conditionId);
+            $parameterSources[$name] = 'setup_contract';
         }
         ksort($parameters, SORT_STRING);
+        ksort($parameterSources, SORT_STRING);
 
         /** @var array<string, bool|int|float|string> $parameters */
-        return new ConditionNode($conditionId, $timeframe, $side, $parameters, $provenance);
+        return new ConditionNode($conditionId, $timeframe, $side, $parameters, $provenance, $parameterSources);
     }
 
     private function validateParameter(mixed $value, ConditionParameterDefinition $definition, string $name, string $conditionId): bool|int|float|string

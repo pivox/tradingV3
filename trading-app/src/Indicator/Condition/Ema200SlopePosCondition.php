@@ -14,10 +14,11 @@ final class Ema200SlopePosCondition extends AbstractCondition
 {
     public function getName(): string { return 'ema200_slope_pos'; }
 
+    /** @param array<string, mixed> $context */
     public function evaluate(array $context): ConditionResult
     {
-        $slope = $context['ema_200_slope'] ?? null;
-        if (!is_float($slope)) {
+        $slope = $this->slope($context);
+        if ($slope === null) {
             return $this->result($this->getName(), false, null, 0.0, $this->baseMeta($context, [
                 'missing_data' => true,
                 'source' => 'EMA',
@@ -28,6 +29,27 @@ final class Ema200SlopePosCondition extends AbstractCondition
             'source' => 'EMA',
         ]));
     }
+
+    /** @param array<string, mixed> $context */
+    private function slope(array $context): ?float
+    {
+        if (array_key_exists('ema_200_series', $context)) {
+            $series = $context['ema_200_series'];
+            if (!is_array($series) || !array_is_list($series) || count($series) < 2) {
+                return null;
+            }
+            $previous = $series[count($series) - 2];
+            $current = $series[count($series) - 1];
+            if ((!is_int($previous) && !is_float($previous)) || (!is_int($current) && !is_float($current))) {
+                return null;
+            }
+            $slope = (float) $current - (float) $previous;
+
+            return is_finite($slope) ? $slope : null;
+        }
+
+        $legacySlope = $context['ema_200_slope'] ?? null;
+
+        return is_float($legacySlope) && is_finite($legacySlope) ? $legacySlope : null;
+    }
 }
-
-

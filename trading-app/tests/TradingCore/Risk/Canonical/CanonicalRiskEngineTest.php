@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Risk\Canonical;
 
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\Risk\Canonical\CanonicalCostSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
@@ -138,6 +142,78 @@ final class CanonicalRiskEngineTest extends TestCase
         self::assertSame(2, $decision->finalLeverage);
         self::assertContains('mode_leverage_cap', $decision->capsApplied);
         self::assertContains('symbol_leverage_cap', $decision->capsApplied);
+    }
+
+    public function testScalpingRejectsMinimumOrderAtTwentyFiveUsdtAndOneCent(): void
+    {
+        $request = $this->request([
+            'policy' => $this->scalpingPolicy(),
+            'entryPrice' => 100.04,
+            'stopPrice' => 99.04,
+            'quantityStep' => 0.001,
+            'minQuantity' => 0.25,
+            'maxQuantity' => 100.0,
+            'marketMaxQuantity' => 100.0,
+        ]);
+        self::assertSame(25.01, $request->entryPrice * $request->minQuantity);
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_below_minimum');
+        (new CanonicalRiskEngine())->calculate($request);
+    }
+
+    public function testScalpingAcceptsExactTwentyFiveUsdtAndThreeTimesLeverageEdges(): void
+    {
+        $notional = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->scalpingPolicy(),
+            'entryPrice' => 100.0,
+            'stopPrice' => 99.0,
+            'quantityStep' => 0.001,
+            'minQuantity' => 0.001,
+            'maxQuantity' => 100.0,
+            'marketMaxQuantity' => 100.0,
+        ]));
+        $leverage = (new CanonicalRiskEngine())->calculate($this->request([
+            'policy' => $this->scalpingPolicy(),
+            'availableBalanceQuote' => 5.0,
+            'entryPrice' => 100.0,
+            'stopPrice' => 99.0,
+            'quantityStep' => 0.001,
+            'minQuantity' => 0.001,
+            'maxQuantity' => 0.15,
+            'marketMaxQuantity' => 0.15,
+            'exchangeLeverageCap' => 10.0,
+            'symbolLeverageCap' => 10.0,
+        ]));
+
+        self::assertSame(25.0, $notional->positionNotional);
+        self::assertSame(15.0, $leverage->positionNotional);
+        self::assertSame(3, $leverage->finalLeverage);
+        self::assertSame(3, $leverage->effectiveLeverageCap);
+    }
+
+    public function testScalpingRejectsMinimumOrderThatWouldRequireLeverageAboveThree(): void
+    {
+        $request = $this->request([
+            'policy' => $this->scalpingPolicy(),
+            'availableBalanceQuote' => 5.0,
+            'entryPrice' => 100.0,
+            'stopPrice' => 99.0,
+            'quantityStep' => 0.001,
+            'minQuantity' => 0.16,
+            'maxQuantity' => 100.0,
+            'marketMaxQuantity' => 100.0,
+            'exchangeLeverageCap' => 10.0,
+            'symbolLeverageCap' => 10.0,
+        ]);
+        self::assertSame(4, (int) ceil(
+            ($request->entryPrice * $request->contractSize * $request->minQuantity)
+            / $request->availableBalanceQuote,
+        ));
+
+        $this->expectException(CanonicalRiskException::class);
+        $this->expectExceptionMessage('canonical_risk_quantity_below_minimum');
+        (new CanonicalRiskEngine())->calculate($request);
     }
 
     public function testRejectsExplicitZeroAvailableBalance(): void
@@ -614,5 +690,15 @@ final class CanonicalRiskEngineTest extends TestCase
             exchangeMaxNotional: $exchangeMaxNotional,
             environmentMaxNotional: $environmentMaxNotional,
         );
+    }
+
+    private function scalpingPolicy(): CanonicalRiskPolicy
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+
+        return (new CanonicalExecutionPolicyCompiler())->compile($snapshot)->riskPolicy;
     }
 }

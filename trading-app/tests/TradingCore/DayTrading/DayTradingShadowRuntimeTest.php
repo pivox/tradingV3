@@ -8,6 +8,7 @@ use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionResult;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanPipelineFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
@@ -55,6 +56,173 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame('2026-08-10T12:01:30+00:00', $outcome->evidence['entry_expires_at']);
         self::assertSame('2026-08-10T12:02:00+00:00', $outcome->evidence['cancel_after_at']);
         self::assertSame('2026-08-10T20:00:00+00:00', $outcome->evidence['holding_expires_at']);
+        self::assertSame([
+            'config_hash',
+            'plan_hash',
+            'reservation_hash',
+            'entry_expires_at',
+            'cancel_after_at',
+            'holding_expires_at',
+            'rules',
+        ], array_keys($outcome->evidence));
+        self::assertSame($outcome->lineage->configHash, $outcome->evidence['config_hash']);
+        self::assertSame($outcome->orderPlan->planHash, $outcome->evidence['plan_hash']);
+        self::assertSame($outcome->reservation->stateHash, $outcome->evidence['reservation_hash']);
+        self::assertSame('sha256:b3976b712e505ddc129e0139eeaa43817f0879aa8933dbae81e948e249a3bc68', $outcome->evidence['config_hash']);
+        self::assertSame('sha256:d3c6fa5352473511a16b7dd7992a17705319286d828298c72588ce9159f1f6b0', $outcome->evidence['plan_hash']);
+        self::assertSame('sha256:fbccd332bc743ea8f2d7ef0663f58211177b911df9475e23a181a1000eb60d35', $outcome->evidence['reservation_hash']);
+        self::assertSame('sha256:351f0e9361725441f3e2cd1b0a3f36a3c492dbb19fe8ee2c2b2eebad785f8361', $outcome->reservation->admissionHash);
+    }
+
+    public function testUnsupportedIdentityAndForbiddenCapabilitiesKeepExactFacadeReasons(): void
+    {
+        $request = self::fixtureRequest();
+        $unsupported = new DayTradingShadowRequest(
+            new EffectiveTradingConfigRequest(
+                'day_trading',
+                '1.1.0',
+                'day_trading.trend_continuation.long',
+                '1.1.0',
+                'fake',
+                'test',
+                'short',
+                ShadowExecutionCapability::Fake,
+            ),
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+        $missingCapability = self::withCapability($request, null);
+        $privateMainnet = self::withCapability($request, ShadowExecutionCapability::PrivateMainnet);
+
+        self::assertSame('day_trading_shadow_identity_unsupported', self::fixtureRuntime()->run($unsupported)->reasonCode);
+        self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($missingCapability)->reasonCode);
+        self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($privateMainnet)->reasonCode);
+    }
+
+    public function testLineageCapabilityMismatchRejectsEveryShadowCapabilityPairWithoutStoreMutation(): void
+    {
+        $capabilities = [
+            ShadowExecutionCapability::Fake,
+            ShadowExecutionCapability::Paper,
+            ShadowExecutionCapability::Backtest,
+        ];
+
+        foreach ($capabilities as $lineageCapability) {
+            foreach ($capabilities as $requestCapability) {
+                if ($lineageCapability === $requestCapability) {
+                    continue;
+                }
+
+                $request = self::withCapability(
+                    self::fixtureRequest(capability: $lineageCapability),
+                    $requestCapability,
+                );
+                [$selector, $stores] = self::fixtureSelectorWithStores();
+                $outcome = self::fixtureRuntime($selector)->run($request);
+                $pair = $lineageCapability->value . ' -> ' . $requestCapability->value;
+
+                self::assertSame('no_trade', $outcome->status, $pair);
+                self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode, $pair);
+                self::assertNull($outcome->orderPlan, $pair);
+                self::assertNull($outcome->reservation, $pair);
+                foreach ($stores as $store) {
+                    self::assertSame(1, $store->scopeVersion($request->portfolioScope), $pair);
+                    self::assertNull($store->plan($request->portfolioScope, $request->decisionKey), $pair);
+                }
+            }
+        }
+    }
+
+    public function testMissingLineageSnapshotCapabilityRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        self::assertIsArray($lineageData['effective_config_snapshot']);
+        unset($lineageData['effective_config_snapshot']['request']['execution_capability']);
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:'
+            . $lineageData['effective_config_snapshot']['snapshot_hash'];
+        $request = self::withLineage($request, LineageContext::fromArray($lineageData));
+        [$selector, $stores] = self::fixtureSelectorWithStores();
+
+        $outcome = self::fixtureRuntime($selector)->run($request);
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+        foreach ($stores as $store) {
+            self::assertSame(1, $store->scopeVersion($request->portfolioScope));
+            self::assertNull($store->plan($request->portfolioScope, $request->decisionKey));
+        }
+    }
+
+    public function testBlockedLineageSnapshotRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        self::assertIsArray($lineageData['effective_config_snapshot']);
+        $lineageData['effective_config_snapshot']['executable'] = false;
+        $lineageData['effective_config_snapshot']['blockers'] = ['manual_blocker'];
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:'
+            . $lineageData['effective_config_snapshot']['snapshot_hash'];
+
+        self::assertLineageRejectedWithoutStoreMutation($request, $lineageData, 'blocked');
+    }
+
+    public function testMisreferencedLineageSnapshotRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:sha256:' . str_repeat('0', 64);
+
+        self::assertLineageRejectedWithoutStoreMutation($request, $lineageData, 'misreferenced');
+    }
+
+    /** @param array<string, mixed> $lineageData */
+    private static function assertLineageRejectedWithoutStoreMutation(
+        DayTradingShadowRequest $request,
+        array $lineageData,
+        string $case,
+    ): void {
+        $request = self::withLineage($request, LineageContext::fromArray($lineageData));
+        [$selector, $stores] = self::fixtureSelectorWithStores();
+
+        $outcome = self::fixtureRuntime($selector)->run($request);
+
+        self::assertSame('no_trade', $outcome->status, $case);
+        self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode, $case);
+        self::assertNull($outcome->orderPlan, $case);
+        self::assertNull($outcome->reservation, $case);
+        foreach ($stores as $store) {
+            self::assertSame(1, $store->scopeVersion($request->portfolioScope), $case);
+            self::assertNull($store->plan($request->portfolioScope, $request->decisionKey), $case);
+        }
+    }
+
+    public function testNoTradeEvidenceShapeRemainsStable(): void
+    {
+        $outcome = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: 6.01));
+
+        self::assertSame([
+            'mode_id' => 'day_trading',
+            'mode_version' => '1.1.0',
+            'setup_id' => 'day_trading.trend_continuation.long',
+            'setup_version' => '1.1.0',
+            'side' => 'LONG',
+            'config_hash' => $outcome->lineage->configHash,
+        ], $outcome->evidence);
     }
 
     public function testHoldingDeadlineCreatesEnforceableCloseAction(): void
@@ -179,11 +347,14 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testUnavailableOrExcessiveSlippageIsFailClosed(): void
     {
+        $spreadUnavailable = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: null));
         $unavailable = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: null));
         $excessive = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: 8.01));
 
+        self::assertSame('day_trading_live_spread_unavailable', $spreadUnavailable->reasonCode);
         self::assertSame('day_trading_slippage_unavailable', $unavailable->reasonCode);
         self::assertSame('day_trading_slippage_exceeded', $excessive->reasonCode);
+        self::assertNull($spreadUnavailable->reservation);
         self::assertNull($unavailable->reservation);
         self::assertNull($excessive->reservation);
     }
@@ -237,8 +408,33 @@ final class DayTradingShadowRuntimeTest extends TestCase
         );
     }
 
+    /**
+     * @return array{
+     *     CanonicalPortfolioAdapterSelector,
+     *     array{fake: InMemoryCanonicalPortfolioReservationStore, paper: InMemoryCanonicalPortfolioReservationStore, backtest: InMemoryCanonicalPortfolioReservationStore}
+     * }
+     */
+    private static function fixtureSelectorWithStores(): array
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $stores = [
+            'fake' => new InMemoryCanonicalPortfolioReservationStore(),
+            'paper' => new InMemoryCanonicalPortfolioReservationStore(),
+            'backtest' => new InMemoryCanonicalPortfolioReservationStore(),
+        ];
+
+        return [
+            new CanonicalPortfolioAdapterSelector(
+                new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['fake']),
+                new PaperCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['paper']),
+                new BacktestCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['backtest']),
+            ),
+            $stores,
+        ];
+    }
+
     public static function fixtureRequest(
-        float $liveSpreadBps = 1.0,
+        ?float $liveSpreadBps = 1.0,
         ?float $estimatedSlippageBps = 1.0,
         float $realizedNetPnlQuote = 0.0,
         int $openPositions = 0,
@@ -251,6 +447,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'fake', 'test', 'long', $capability,
         );
         $snapshot = (new EffectiveTradingConfigResolver())->resolve($configRequest);
+        $snapshotData = $snapshot->toArray();
         $lineage = LineageContext::fromOrchestratorPayload([
             'origin' => 'orchestrator',
             'orchestration_run_id' => 'run-day-trading-shadow',
@@ -268,8 +465,8 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'symbol' => 'BTCUSDT',
             'decision_key' => 'decision-day-trading-shadow',
             'dry_run' => true,
-            'effective_config_reference' => 'effective-config:day-trading-shadow',
-            'effective_config_snapshot' => $snapshot->toArray(),
+            'effective_config_reference' => 'effective-config-snapshot:' . $snapshotData['snapshot_hash'],
+            'effective_config_snapshot' => $snapshotData,
         ]);
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
         $components = CanonicalOrderPlanPipelineFixture::accepted(executionPolicy: $policy);
@@ -298,11 +495,11 @@ final class DayTradingShadowRuntimeTest extends TestCase
             $configRequest,
             $lineage,
             [
-                '4h' => ['kline_time' => '2026-08-10T08:00:00Z'],
-                '1h' => ['kline_time' => '2026-08-10T11:00:00Z', 'adx' => 25.0],
-                '15m' => ['kline_time' => '2026-08-10T11:45:00Z'],
-                '5m' => ['kline_time' => '2026-08-10T11:55:00Z'],
-                '1m' => ['kline_time' => '2026-08-10T11:59:00Z'],
+                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z', ['adx' => 25.0]),
+                '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z'),
+                '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z'),
+                '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z'),
             ],
             new CanonicalOrderPlanBuildRequest(...$components),
             $scope,
@@ -310,6 +507,87 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'decision-day-trading-shadow',
             $liveSpreadBps,
             $estimatedSlippageBps,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     * @return array<string, mixed>
+     */
+    private static function indicatorInput(string $timeframe, string $klineTime, array $extra = []): array
+    {
+        $step = match ($timeframe) {
+            '1m' => 60,
+            '5m' => 300,
+            '15m' => 900,
+            '1h' => 3600,
+            '4h' => 14400,
+            default => throw new \InvalidArgumentException('Unsupported test timeframe.'),
+        };
+        $current = (new \DateTimeImmutable($klineTime))->getTimestamp();
+        $timestamps = [$current - $step, $current];
+
+        return array_replace([
+            'snapshot_identity' => [
+                'timeframe' => $timeframe,
+                'symbol' => 'BTCUSDT',
+                'exchange' => 'fake',
+                'environment' => 'test',
+                'market_type' => 'perpetual',
+            ],
+            'kline_time' => $klineTime,
+            'series_order' => 'oldest_to_newest',
+            'ema_200_series' => [100.0, 101.0],
+            'ema_200_series_timestamps' => $timestamps,
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => $timestamps,
+            'macd_line_signal_series' => [-0.1, 0.1],
+            'macd_line_signal_series_timestamps' => $timestamps,
+        ], $extra);
+    }
+
+    private static function withCapability(
+        DayTradingShadowRequest $request,
+        ?ShadowExecutionCapability $capability,
+    ): DayTradingShadowRequest {
+        $config = $request->configRequest;
+
+        return new DayTradingShadowRequest(
+            new EffectiveTradingConfigRequest(
+                $config->modeId,
+                $config->modeVersion,
+                $config->setupId,
+                $config->setupVersion,
+                $config->exchange,
+                $config->environment,
+                $config->side,
+                $capability,
+            ),
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+    }
+
+    private static function withLineage(
+        DayTradingShadowRequest $request,
+        LineageContext $lineage,
+    ): DayTradingShadowRequest {
+        return new DayTradingShadowRequest(
+            $request->configRequest,
+            $lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
         );
     }
 

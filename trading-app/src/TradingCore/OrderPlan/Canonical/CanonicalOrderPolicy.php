@@ -15,8 +15,9 @@ final readonly class CanonicalOrderPolicy
         public float $maximumSpreadBps,
         public float $maximumSlippageBps,
     ) {
+        $deadlinePair = [$ttlSeconds, $cancelAfterSeconds];
         if ($type !== 'limit' || $liquidityRole !== 'maker' || $marketFallback
-            || $ttlSeconds !== 90 || $cancelAfterSeconds !== 120
+            || !\in_array($deadlinePair, [[90, 120], [45, 75]], true)
             || $maximumSpreadBps !== 6.0 || $maximumSlippageBps !== 8.0) {
             throw new CanonicalOrderPlanException('canonical_day_trading_order_policy_invalid');
         }

@@ -24,9 +24,9 @@ final readonly class LineageContext
     private const MODERN_SETUPS = [
         'day_trading.trend_continuation.long' => ['mode' => 'day_trading', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
         'day_trading.trend_continuation.short' => ['mode' => 'day_trading', 'side' => 'SHORT', 'versions' => ['1.0.0']],
-        'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
-        'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
-        'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'versions' => ['1.0.0']],
+        'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
+        'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
+        'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'versions' => ['1.0.0', '1.1.0']],
         'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
         'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'versions' => ['1.0.0']],
     ];
@@ -436,6 +436,23 @@ final readonly class LineageContext
     public function isModern(): bool
     {
         return $this->contractKind === self::CONTRACT_MODERN;
+    }
+
+    public function assertCanonicalIntegrity(): self
+    {
+        if (!$this->isModern()) {
+            throw new LineageContextException('canonical_identity_invalid:contract_kind');
+        }
+
+        $payload = $this->toArray();
+        $payload['environment'] = $this->environment;
+        self::assertCanonicalPayload($payload);
+        $validated = self::fromArray($payload);
+        if ($validated != $this) {
+            throw new LineageContextException('canonical_identity_mismatch:integrity');
+        }
+
+        return $this;
     }
 
     /**

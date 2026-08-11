@@ -1,0 +1,5 @@
+mode_id: scalping
+mode_version: '1.1.0'
+exchange: okx
+overrides:
+  exchange.limits.max_notional: 25.0

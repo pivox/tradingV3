@@ -82,6 +82,7 @@ final readonly class CanonicalOrderPlan
         public ?\DateTimeImmutable $holdingExpiresAt,
         public string $configHash,
         public string $costInputHash,
+        public ?string $orderBookInputHash,
         public array $inputHashes,
         public string $planHash,
     ) {
@@ -182,6 +183,7 @@ final readonly class CanonicalOrderPlan
             ...$request->protection->inputHashes,
             $request->riskRequest->instrument->inputHash,
             $request->netR->costInputHash,
+            ...($request->orderBook === null ? [] : [$request->orderBook->inputHash]),
         ]));
         $entryExpiresAt = $zone->expiresAt;
         $cancelAfterAt = null;
@@ -268,6 +270,7 @@ final readonly class CanonicalOrderPlan
             'holdingExpiresAt' => $holdingExpiresAt,
             'configHash' => $policy->configHash,
             'costInputHash' => $request->netR->costInputHash,
+            'orderBookInputHash' => $request->orderBook?->inputHash,
             'inputHashes' => $inputHashes,
         ];
         $planHash = self::hashValues($values);
@@ -287,6 +290,9 @@ final readonly class CanonicalOrderPlan
     /** @param array<string, mixed> $values */
     private static function hashValues(array $values): string
     {
+        if (($values['orderBookInputHash'] ?? null) === null) {
+            unset($values['orderBookInputHash']);
+        }
         $values['targets'] = array_map(
             static fn (CanonicalOrderPlanTarget $target): array => $target->toArray(),
             $values['targets'],

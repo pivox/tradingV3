@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Setup;
 
+use App\Indicator\Context\CanonicalPullbackAgeCalculator;
 use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
@@ -28,6 +29,26 @@ final class SetupContractLoaderTest extends TestCase
     protected function setUp(): void
     {
         $this->root = dirname(__DIR__, 3) . '/config/trading/setup_contract';
+    }
+
+    public function testPreviouslyPublishedSetupContractsRemainByteForByteImmutable(): void
+    {
+        $expected = [
+            'crash_short/1.0.0.yaml' => '60e65d62933ce76a6adeb3fd9e9dba7a0d299abc06b36bf9581f85298db56406',
+            'crash_short/1.1.0.yaml' => '7da22d29303780b8cb15ce2b72960f0ba79c840aafabe84fb06ff69d9b34f9aa',
+            'day_trading.trend_continuation.long/1.0.0.yaml' => '3b6fef8860691db111916a0ecff37bf703fa4e6b6fbe8631d5a0ea0b004b90c5',
+            'day_trading.trend_continuation.long/1.1.0.yaml' => '4814381e1373a57c9e60190014e929af0928e5bb5a56b816afaa99e0efa70010',
+            'day_trading.trend_continuation.short/1.0.0.yaml' => 'ff9b0c340cff81eda57ffed39192081716007f345419039341b836c1519ba47f',
+            'micro_scalping.momentum_ofi.long/1.0.0.yaml' => '7a4e2290233aea9811e0cdae6e1f9878e0017ca0c360be1d68cfb246e2b7e381',
+            'micro_scalping.momentum_ofi.short/1.0.0.yaml' => '804c5e301e3fd5b861a9038cc2c78540c4b6b2550ef76f1293f89dba0308e5d7',
+            'scalping.pullback.long/1.0.0.yaml' => '12c0d593a3271d8ab61c2efc4039a2d6ac286f6781ad3f6d3163c7a1ed6f9bae',
+            'scalping.trend_continuation.long/1.0.0.yaml' => 'df4936f8f4fbb72f58720c9430c165164e1cd3df8e9173cee34e57f4df95b470',
+            'scalping.trend_momentum.short/1.0.0.yaml' => '921623fd143bc39b2b75e2cbd86941c37194b4ea00ef43bc34f221c331490f25',
+        ];
+
+        foreach ($expected as $relativePath => $expectedHash) {
+            self::assertSame($expectedHash, hash_file('sha256', $this->root . '/' . $relativePath), $relativePath);
+        }
     }
 
     public function testLoadsExactlyTheFrozenEightSourceHypotheses(): void
@@ -137,6 +158,376 @@ final class SetupContractLoaderTest extends TestCase
         ], array_column($fixture['scenarios'], 'expectation', 'id'));
         foreach ($fixture['scenarios'] as $scenario) {
             self::assertNotSame([], $scenario['evidence']);
+        }
+    }
+
+    public function testPublishesThreeIndependentExecutableScalpingShadowSetups(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $expectedSides = [
+            'scalping.trend_continuation.long' => 'long',
+            'scalping.pullback.long' => 'long',
+            'scalping.trend_momentum.short' => 'short',
+        ];
+
+        foreach ($expectedSides as $setupId => $side) {
+            $contract = $loader->load($setupId, '1.1.0');
+            $compiled = (new SetupCompiler())->compile($contract);
+            $execution = $compiled->ast['execution'];
+
+            self::assertSame('shadow', $contract->status, $setupId);
+            self::assertTrue($contract->isExecutable(), $setupId);
+            self::assertTrue($compiled->publishable, $setupId);
+            self::assertSame([], $contract->unresolvedPaths(), $setupId);
+            self::assertSame($side, $contract->side, $setupId);
+            self::assertSame($side, $compiled->ast['side'], $setupId);
+            self::assertSame(['scalping' => '1.1.0'], $compiled->modeVersions, $setupId);
+            self::assertSame('5m', $execution['execution_timeframe']['value'], $setupId);
+            self::assertSame(['1m'], $execution['mandatory_confirmations']['value'], $setupId);
+            self::assertSame(0.22, $execution['entry_zone']['value']['atr_multiplier'], $setupId);
+            self::assertSame(150, $execution['entry_zone']['value']['ttl_seconds'], $setupId);
+            self::assertSame(1.5, $execution['stop']['value']['atr_multiplier'], $setupId);
+            self::assertSame(1.8, $execution['targets']['value'][0]['risk_multiple'], $setupId);
+            self::assertSame(1.3, $execution['minimum_net_r']['value'], $setupId);
+            self::assertSame(45, $execution['order_policy']['value']['ttl_seconds'], $setupId);
+            self::assertSame(75, $execution['order_policy']['value']['cancel_after_seconds'], $setupId);
+            self::assertFalse($execution['order_policy']['value']['market_fallback'], $setupId);
+            self::assertSame('PT5M', $contract->toArray()['validity_window']['value'], $setupId);
+            self::assertSame([], $contract->toArray()['known_defects'], $setupId);
+            self::assertSame([
+                'ohlcv_1h', 'ohlcv_15m', 'ohlcv_5m', 'ohlcv_1m', 'ema', 'macd', 'rsi', 'atr',
+                'vwap', 'volume_ratio', 'order_book', 'fee_schedule', 'funding_schedule',
+            ], $contract->toArray()['data_condition_contract']['required_data'], $setupId);
+        }
+    }
+
+    public function testScalpingShadowVersionsCopyEachLegacyRuleTreeWithoutCrossSetupRescue(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $conditionCounts = [];
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $legacy = $loader->load($setupId, '1.0.0')->toArray();
+            $shadow = $loader->load($setupId, '1.1.0')->toArray();
+            foreach (['context', 'filters', 'no_trade_rules'] as $tree) {
+                self::assertSame($legacy[$tree], $shadow[$tree], $setupId . ' ' . $tree);
+            }
+            $conditionCounts[$setupId] = substr_count(
+                json_encode([$shadow['context'], $shadow['filters'], $shadow['no_trade_rules']], JSON_THROW_ON_ERROR),
+                'pullback_confirmed',
+            );
+        }
+
+        self::assertSame([
+            'scalping.trend_continuation.long' => 0,
+            'scalping.pullback.long' => 1,
+            'scalping.trend_momentum.short' => 0,
+        ], $conditionCounts);
+    }
+
+    public function testScalpingShadowPhpAndSchemaRejectEveryRuleTreeDrift(): void
+    {
+        $continuation = $this->yaml($this->root . '/scalping.trend_continuation.long/1.1.0.yaml');
+        $pullback = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $short = $this->yaml($this->root . '/scalping.trend_momentum.short/1.1.0.yaml');
+
+        $addedPullback = $continuation;
+        $addedPullback['context']['trigger']['nodes'][] = $pullback['context']['trigger']['nodes'][0];
+        $removedPullback = $pullback;
+        array_shift($removedPullback['context']['trigger']['nodes']);
+        $reorderedConfirmations = $continuation;
+        $reorderedConfirmations['context']['confirmations']['nodes'] = array_reverse(
+            $reorderedConfirmations['context']['confirmations']['nodes'],
+        );
+        $modifiedCondition = $short;
+        $modifiedCondition['context']['trigger']['nodes'][1]['condition'] = 'ema_20_lt_50';
+        $modifiedParameter = $continuation;
+        $modifiedParameter['context']['trigger']['nodes'][2]['parameters']['rsi_lt_70_threshold'] = 73;
+        $modifiedRuleProvenance = $pullback;
+        $modifiedRuleProvenance['context']['trigger']['nodes'][0]['provenance'] = 'validations.scalper.yaml:invented';
+        $addedFilter = $continuation;
+        $addedFilter['filters'][] = [
+            'condition' => 'rsi_lt_70', 'timeframe' => '15m',
+            'parameters' => ['rsi_lt_70_threshold' => 74], 'provenance' => 'invented filter',
+        ];
+        $addedNoTradeRule = $short;
+        $addedNoTradeRule['no_trade_rules'][] = [
+            'condition' => 'atr_rel_in_range_15m', 'timeframe' => '15m', 'provenance' => 'invented no-trade rule',
+        ];
+
+        foreach ([
+            'pullback added to continuation' => $addedPullback,
+            'pullback removed' => $removedPullback,
+            'confirmations reordered' => $reorderedConfirmations,
+            'condition modified' => $modifiedCondition,
+            'parameter modified' => $modifiedParameter,
+            'rule provenance modified' => $modifiedRuleProvenance,
+            'filter added' => $addedFilter,
+            'no-trade rule added' => $addedNoTradeRule,
+        ] as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label);
+        }
+    }
+
+    public function testScalpingShadowDeclaresAndFreezesCompleteCatalogAuthority(): void
+    {
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            self::assertSame('1.1.0', $document['data_condition_contract']['condition_catalog_version'] ?? null);
+            self::assertSame([
+                'state' => 'defined',
+                'value' => (new ConditionCatalogLoader())->loadVersion('1.1.0')->stableHash(),
+                'unit' => 'sha256',
+                'source' => 'config/trading/condition_catalog/1.1.0.yaml',
+                'justification' => 'Pinned to the additive canonical #307 catalogue.',
+            ], $document['data_condition_contract']['condition_catalog_hash']);
+        }
+    }
+
+    public function testConditionCatalogVersionIsForbiddenOutsideScalpingOneOne(): void
+    {
+        $mutations = [];
+        foreach ([
+            'legacy scalping' => 'scalping.pullback.long/1.0.0.yaml',
+            'day trading shadow' => 'day_trading.trend_continuation.long/1.1.0.yaml',
+            'crash decision' => 'crash_short/1.1.0.yaml',
+        ] as $label => $relativePath) {
+            $document = $this->yaml($this->root . '/' . $relativePath);
+            $document['data_condition_contract']['condition_catalog_version'] = '1.0.0';
+            $mutations[$label] = $document;
+        }
+
+        foreach ($mutations as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label . ' catalog version');
+        }
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            (new SetupContractValidator())->validate($document);
+            $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $setupId);
+        }
+    }
+
+    public function testScalpingShadowPhpAndSchemaRejectMutableProofFields(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $mutations = [];
+        $mutations['family'] = $document;
+        $mutations['family']['family'] = 'pullback_variant';
+        $mutations['thesis'] = $document;
+        $mutations['thesis']['thesis'] .= ' Mutated.';
+        $mutations['hypothesis'] = $document;
+        $mutations['hypothesis']['hypothesis'] .= ' Mutated.';
+        $mutations['compatibility proof'] = $document;
+        $mutations['compatibility proof']['mode_compatibility']['justification'] .= ' Mutated.';
+        $mutations['decision unit'] = $document;
+        $mutations['decision unit']['execution']['entry_zone']['unit'] = 'price';
+        $mutations['decision source'] = $document;
+        $mutations['decision source']['execution']['order_policy']['source'] = 'invented source';
+        $mutations['decision justification'] = $document;
+        $mutations['decision justification']['execution']['stop']['justification'] .= ' Mutated.';
+        $mutations['decision state'] = $document;
+        $mutations['decision state']['execution']['targets']['state'] = 'unresolved';
+        $mutations['decision state']['execution']['targets']['value'] = null;
+        $mutations['validity proof'] = $document;
+        $mutations['validity proof']['validity_window']['source'] = 'invented source';
+        $mutations['catalog version'] = $document;
+        $mutations['catalog version']['data_condition_contract']['condition_catalog_version'] = '1.0.1';
+        $mutations['catalog source'] = $document;
+        $mutations['catalog source']['data_condition_contract']['condition_catalog_hash']['source'] = 'invented catalog';
+        $mutations['governance'] = $document;
+        $mutations['governance']['governance']['shadow'][0] .= ' mutated';
+        $mutations['provenance content'] = $document;
+        $mutations['provenance content']['provenance'][0]['source'] = 'invented provenance';
+        $mutations['provenance order'] = $document;
+        $mutations['provenance order']['provenance'] = array_reverse($mutations['provenance order']['provenance']);
+        $mutations['provenance length'] = $document;
+        array_pop($mutations['provenance length']['provenance']);
+
+        foreach ($mutations as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label);
+        }
+    }
+
+    public function testScalpingShadowHasPhpAndSchemaParityForFrozenExecutionMutations(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $jsonValidator = new JsonSchemaValidator();
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue($jsonValidator->validate($object, $schema)->isValid(), $setupId);
+            (new SetupContractValidator())->validate($document);
+
+            $numericEquivalent = $document;
+            $numericEquivalent['execution']['entry_zone']['value']['asymmetry_rate'] = 0;
+            $numericEquivalent['execution']['order_policy']['value']['maximum_spread_bps'] = 6;
+            $numericEquivalent['execution']['order_policy']['value']['maximum_slippage_bps'] = 8;
+            (new SetupContractValidator())->validate($numericEquivalent);
+            $numericObject = json_decode(json_encode($numericEquivalent, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue($jsonValidator->validate($numericObject, $schema)->isValid(), $setupId . ' numeric parity');
+
+            $mutations = [];
+            $mutations['execution timeframe'] = $document;
+            $mutations['execution timeframe']['execution']['execution_timeframe']['value'] = '1m';
+            $mutations['confirmation'] = $document;
+            $mutations['confirmation']['execution']['mandatory_confirmations']['value'] = [];
+            $mutations['entry zone'] = $document;
+            $mutations['entry zone']['execution']['entry_zone']['value']['atr_multiplier'] = 0.23;
+            $mutations['stop'] = $document;
+            $mutations['stop']['execution']['stop']['value']['pivot_id'] = 's1';
+            $mutations['target'] = $document;
+            $mutations['target']['execution']['targets']['value'][0]['risk_multiple'] = 2.0;
+            $mutations['minimum net R'] = $document;
+            $mutations['minimum net R']['execution']['minimum_net_r']['value'] = 1.2;
+            $mutations['time stop'] = $document;
+            $mutations['time stop']['execution']['time_stop']['value'] = 'PT3H';
+            $mutations['order ttl'] = $document;
+            $mutations['order ttl']['execution']['order_policy']['value']['ttl_seconds'] = 46;
+            $mutations['market fallback'] = $document;
+            $mutations['market fallback']['execution']['order_policy']['value']['market_fallback'] = true;
+            $mutations['validity'] = $document;
+            $mutations['validity']['validity_window']['value'] = 'PT15M';
+            $mutations['defect rescue'] = $document;
+            $mutations['defect rescue']['known_defects'] = ['legacy selector defect'];
+            $mutations['compatibility version'] = $document;
+            $mutations['compatibility version']['compatible_modes'][0]['mode_version'] = '1.0.0';
+            $mutations['catalog hash'] = $document;
+            $mutations['catalog hash']['data_condition_contract']['condition_catalog_hash']['value'] = str_repeat('0', 64);
+            $mutations['source pin'] = $document;
+            $mutations['source pin']['source_origin']['commit'] = str_repeat('a', 40);
+
+            foreach ($mutations as $label => $mutation) {
+                $this->assertPhpAndSchemaReject($mutation, $setupId . ' ' . $label);
+            }
+        }
+    }
+
+    public function testFrozenProofNumericCanonicalizationIsExactAndSchemaAligned(): void
+    {
+        self::assertSame($this->semanticDocumentHash(['number' => 2]), $this->semanticDocumentHash(['number' => 2.0]));
+        self::assertSame($this->semanticDocumentHash(['number' => 0.0]), $this->semanticDocumentHash(['number' => -0.0]));
+        self::assertSame(
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992]),
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992.0]),
+        );
+        self::assertNotSame(
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992]),
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_993]),
+        );
+        self::assertNotSame(
+            $this->semanticDocumentHash(['number' => 0.1]),
+            $this->semanticDocumentHash(['number' => 0.10000000000000002]),
+        );
+
+        $fractionHash = $this->semanticDocumentHash(['number' => 0.10000000000000002]);
+        $previousPrecision = ini_get('serialize_precision');
+        self::assertIsString($previousPrecision);
+        try {
+            self::assertNotFalse(ini_set('serialize_precision', '3'));
+            self::assertSame($fractionHash, $this->semanticDocumentHash(['number' => 0.10000000000000002]));
+        } finally {
+            ini_set('serialize_precision', $previousPrecision);
+        }
+
+        foreach ([
+            'scalping.trend_continuation.long' => '7ebaae24166be3a248a39b66bb545c52b7eb4498f9c0419bb2dcf919de23136e',
+            'scalping.pullback.long' => 'a02681c73c81609d4cef23b88c7e3acce22b06837f3573c90c113c8d979794ed',
+            'scalping.trend_momentum.short' => '66d12bb65c67b44126a865abc67d8f716320c6c557d33a6a14c75695ca99f769',
+        ] as $setupId => $expectedHash) {
+            self::assertSame(
+                $expectedHash,
+                $this->semanticDocumentHash($this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml')),
+                $setupId,
+            );
+        }
+
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $document['execution']['entry_zone']['value']['asymmetry_rate'] = -0.0;
+        (new SetupContractValidator())->validate($document);
+
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid());
+    }
+
+    public function testFrozenProofNumericCanonicalizationRejectsNonFiniteValuesInPhpAndSchema(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $document['execution']['entry_zone']['value']['asymmetry_rate'] = INF;
+        try {
+            (new SetupContractValidator())->validate($document);
+            self::fail('PHP accepted a non-finite frozen proof number.');
+        } catch (SetupContractException) {
+            self::addToAssertionCount(1);
+        }
+
+        $object = json_decode(
+            json_encode($this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml'), JSON_THROW_ON_ERROR),
+            false,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+        $object->execution->entry_zone->value->asymmetry_rate = INF;
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        self::assertFalse((new JsonSchemaValidator())->validate($object, $schema)->isValid());
+
+        $this->expectException(SetupContractException::class);
+        $this->expectExceptionMessage('finite');
+        $this->semanticDocumentHash(['number' => NAN]);
+    }
+
+    public function testScalpingShadowFixtureFreezesIndependentPassAndNoRescueScenarios(): void
+    {
+        $fixture = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Setup/scalping-1.1.0-scenarios.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        self::assertSame('scalping-shadow-scenarios.v1', $fixture['schema_version']);
+        self::assertCount(6, $fixture['scenarios']);
+        $tuples = array_map(
+            static fn (array $scenario): array => [
+                $scenario['id'], $scenario['setup_id'], $scenario['side'], $scenario['expectation'],
+            ],
+            $fixture['scenarios'],
+        );
+        self::assertSame([
+            ['continuation_long_pass', 'scalping.trend_continuation.long', 'long', 'pass'],
+            ['pullback_long_pass', 'scalping.pullback.long', 'long', 'pass'],
+            ['short_momentum_pass', 'scalping.trend_momentum.short', 'short', 'pass'],
+            ['scenario_a_cannot_rescue_pullback', 'scalping.pullback.long', 'long', 'no_trade'],
+            ['scenario_b_cannot_rescue_continuation', 'scalping.trend_continuation.long', 'long', 'no_trade'],
+            ['missing_1m', 'scalping.trend_momentum.short', 'short', 'no_trade'],
+        ], $tuples);
+        self::assertCount(6, array_unique(array_column($fixture['scenarios'], 'id')));
+        foreach ($fixture['scenarios'] as $scenario) {
+            self::assertNotSame([], $scenario['evidence']);
+            foreach ($scenario['evidence'] as $evidence) {
+                self::assertIsString($evidence);
+                self::assertNotSame('', trim($evidence));
+            }
         }
     }
 
@@ -333,6 +724,11 @@ final class SetupContractLoaderTest extends TestCase
             'config/app/trade_entry.crash.yaml' => '7-12,19-205',
             'src/MtfValidator/config/validations.regular.yaml' => '7-12,84-88,238-349',
         ];
+        $expectedScalpingDecisionRanges = [
+            'scalping.trend_continuation.long' => '6-14,216-356',
+            'scalping.pullback.long' => '6-14,157-161,216-356',
+            'scalping.trend_momentum.short' => '6-14,216-356',
+        ];
 
         foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
             $document = Yaml::parseFile($path);
@@ -348,7 +744,9 @@ final class SetupContractLoaderTest extends TestCase
                 self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
                 self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
                 if (($document['setup_version'] ?? null) === '1.1.0') {
-                    self::assertSame($expectedDecisionRanges[$origin['file']], $origin['line_range']);
+                    $expectedRange = $expectedScalpingDecisionRanges[$document['setup_id']]
+                        ?? $expectedDecisionRanges[$origin['file']];
+                    self::assertSame($expectedRange, $origin['line_range']);
                 }
             }
         }
@@ -489,12 +887,15 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
-    public function testUnsupportedTemporalAndTimeframeContractsRemainFailClosed(): void
+    public function testCanonicalPullbackIsExecutableWhileUnsupportedTimeframesRemainFailClosed(): void
     {
-        $catalog = $this->catalog();
-        self::assertSame('blocked', $catalog->definition('pullback_confirmed')->status);
-        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_long')->timeframes);
-        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_short')->timeframes);
+        $oneZero = $this->catalog();
+        $oneOne = (new ConditionCatalogLoader())->loadVersion('1.1.0');
+        self::assertSame('blocked', $oneZero->definition('pullback_confirmed')->status);
+        self::assertSame('executable', $oneOne->definition('pullback_confirmed')->status);
+        self::assertStringContainsString(CanonicalPullbackAgeCalculator::class, $oneOne->definition('pullback_confirmed')->provenance);
+        self::assertSame(['1h', '4h'], $oneOne->definition('price_regime_ok_long')->timeframes);
+        self::assertSame(['1h', '4h'], $oneOne->definition('price_regime_ok_short')->timeframes);
 
         $short = (new SetupContractLoader($this->root))->load('scalping.trend_momentum.short', '1.0.0')->toArray();
         self::assertNotContains('price_regime_ok_short', array_column($short['context']['context']['nodes'], 'condition'));
@@ -690,7 +1091,7 @@ final class SetupContractLoaderTest extends TestCase
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
         $document['data_condition_contract']['condition_catalog_hash'] = [
             'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
-            'source' => 'test catalog', 'justification' => 'Exact test catalog hash.',
+            'source' => 'config/trading/condition_catalog/1.0.0.yaml', 'justification' => 'Exact test catalog hash.',
         ];
         $snapshot = (new SetupCompiler())->compile(SetupContract::fromDocument($document), $catalog);
         self::assertSame($catalog->stableHash(), $snapshot->conditionCatalogHash);
@@ -802,8 +1203,7 @@ final class SetupContractLoaderTest extends TestCase
         $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
 
         $this->expectException(SetupContractException::class);
-        $this->expectExceptionMessage('Supplied condition catalog is missing:');
-        $this->expectExceptionMessage('pullback_confirmed');
+        $this->expectExceptionMessage('Condition catalog hash mismatch');
         $document = Yaml::parseFile(dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml');
         self::assertIsArray($document);
         $document['conditions'] = array_values(array_filter(
@@ -881,5 +1281,15 @@ final class SetupContractLoaderTest extends TestCase
         return (new ConditionCatalogLoader())->loadFile(
             dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
         );
+    }
+
+    /** @param array<string, mixed> $document */
+    private function semanticDocumentHash(array $document): string
+    {
+        $method = new \ReflectionMethod(SetupContractValidator::class, 'semanticDocumentHash');
+        $hash = $method->invoke(new SetupContractValidator(), $document);
+        self::assertIsString($hash);
+
+        return $hash;
     }
 }

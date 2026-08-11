@@ -1,0 +1,108 @@
+schema_version: '1.0.0'
+mode_id: scalping
+mode_version: '1.1.0'
+lifecycle:
+  status: shadow
+  executable: true
+  rationale: 'Executable only in Shadow environments; certification and promotion evidence remain pending.'
+horizon:
+  state: defined
+  value: { maximum_duration: PT2H, daily_boundary_time: '00:00:00', daily_boundary_timezone: UTC, close_before_boundary: true }
+  unit: holding_horizon_policy
+  source: 'GitHub issue #307 approved decision 2026-08-11'
+  justification: 'Each position is limited to two hours and must be closed before the UTC daily boundary.'
+session_policy:
+  state: defined
+  value: { calendar: continuous_crypto, timezone: UTC }
+  unit: session_policy
+  source: 'GitHub issue #307 approved decision 2026-08-11'
+  justification: 'Shadow evaluation is continuous for crypto while all daily accounting is in UTC.'
+timeframes:
+  regime: ['1h']
+  context: ['15m']
+  trigger: ['5m']
+  execution: ['5m']
+  confirmations: ['1m']
+cadence:
+  evaluation:
+    state: defined
+    value: PT5M
+    unit: duration
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'The immutable shadow contract evaluates on the five-minute execution cadence.'
+  validity_window:
+    state: defined
+    value: PT5M
+    unit: duration
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'A decision expires at the next five-minute evaluation boundary.'
+risk:
+  trade_budget:
+    state: defined
+    value: 2.0
+    unit: percent_equity_per_trade
+    source: 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307'
+    justification: 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.'
+  daily_loss_cap:
+    state: defined
+    value: { percent_equity: 6.0, absolute_quote: 40.0, quote_currency: USDT, day_timezone: UTC, day_boundary_local: '00:00:00', include_unrealized_loss: true }
+    unit: compound_percent_equity_and_quote_per_day
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'The lower of six percent equity and 40 USDT applies in UTC to realized and unrealized loss.'
+  max_concurrent_positions:
+    state: defined
+    value: { limit: 3, include_pending_entries: true }
+    unit: positions
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'Three positions is the cap and pending entries reserve a concurrency slot before filling.'
+  mode_exposure_cap:
+    state: defined
+    value: 75.0
+    unit: percent_equity_notional
+    source: 'GitHub issue #307 approved decision 2026-08-11'
+    justification: 'Aggregate scalping notional is capped at 75 percent of equity.'
+leverage:
+  state: defined
+  value: 3.0
+  unit: leverage_multiple
+  source: 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307'
+  justification: 'Conservative venue envelope copied without legacy runtime loading.'
+order_policy:
+  state: defined
+  value: { margin_mode: isolated, preferred_type: limit, market_fallback: false }
+  unit: policy
+  source: 'GitHub issue #307 approved decision 2026-08-11'
+  justification: 'Only isolated limit orders are admissible; market fallback is prohibited.'
+compatible_setup_ids:
+  - scalping.trend_continuation.long
+  - scalping.pullback.long
+  - scalping.trend_momentum.short
+data_contract:
+  required_inputs:
+    - { kind: candles, timeframes: ['1h', '15m', '5m', '1m'], fields: [open, high, low, close, volume] }
+    - { kind: order_book, timeframes: ['5m'], fields: [best_bid, best_ask, spread_bps] }
+  missing_data_policy: reject
+governance:
+  promotion:
+    target_status: shadow
+    conditions: ['#132 and #191 evidence attached', 'independent risk review approved', 'at least 50 certified trades per executable cell']
+    action: 'publish a new semantic version; never mutate this shadow version'
+  suspension:
+    target_status: draft
+    conditions: ['kill switch asserted', 'data or cost contract breach', 'daily loss or portfolio invariant breached']
+    action: 'reject new entries and preserve complete lineage'
+  rollback:
+    target_status: retired
+    conditions: ['certified baseline regression', 'schema or provenance defect', 'risk invariant breach']
+    action: 'retire this exact version; no implicit fallback'
+ownership_model: mode-contract-ownership-v1
+provenance:
+  - { path: horizon, source: 'GitHub issue #307 approved decision 2026-08-11', unit: holding_horizon_policy, justification: 'PT2H maximum duration and a 00:00 UTC close boundary are explicit decisions.' }
+  - { path: session_policy, source: 'GitHub issue #307 approved decision 2026-08-11', unit: session_policy, justification: 'Continuous crypto session with UTC accounting is explicit.' }
+  - { path: timeframes, source: 'GitHub issue #307 approved decision 2026-08-11', unit: timeframe_roles, justification: '1h/15m/5m/5m/1m are the approved regime, context, trigger, execution and confirmation roles.' }
+  - { path: cadence, source: 'GitHub issue #307 approved decision 2026-08-11', unit: duration, justification: 'Evaluation and validity are both fixed at PT5M.' }
+  - { path: risk, source: 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307', unit: canonical_risk_policy, justification: 'The lower explicit fixed-risk authority replaces the conflicting 7-percent request.' }
+  - { path: leverage, source: 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307', unit: leverage_multiple, justification: 'Conservative venue envelope copied without legacy runtime loading.' }
+  - { path: order_policy, source: 'GitHub issue #307 approved decision 2026-08-11', unit: policy, justification: 'Isolated limit intent has no market fallback.' }
+  - { path: compatible_setup_ids, source: 'GitHub issue #300 catalog for #301', unit: setup_id, justification: 'The immutable contract uses the existing three-setup scalping catalog.' }
+  - { path: data_contract.required_inputs, source: 'GitHub issue #307 approved decision 2026-08-11', unit: required_market_data, justification: 'Candles for all approved timeframes and a five-minute order book are fail-closed inputs.' }

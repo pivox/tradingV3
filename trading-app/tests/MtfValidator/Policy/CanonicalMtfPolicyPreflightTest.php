@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\MtfValidator\Policy;
 
 use App\MtfValidator\Policy\CanonicalMtfPolicyPreflight;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -41,6 +42,9 @@ final class CanonicalMtfPolicyPreflightTest extends TestCase
         $payload = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
         $payload['effective_config_snapshot']['executable'] = false;
         $payload['effective_config_snapshot']['blockers'] = ['mode.status:draft'];
+        $payload['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $payload['effective_config_snapshot'],
+        );
 
         $rejection = (new CanonicalMtfPolicyPreflight())->reject(LineageContext::fromArray($payload));
 

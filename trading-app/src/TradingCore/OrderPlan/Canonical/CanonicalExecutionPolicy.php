@@ -14,6 +14,8 @@ final readonly class CanonicalExecutionPolicy
 {
     /**
      * @param non-empty-list<CanonicalTargetPolicy> $targets
+     * @param list<string>                           $mandatoryConfirmations
+     * @param array<string, mixed>                   $holdingHorizon
      * @param list<string>                           $allowedSymbols
      * @param list<string>                           $allowedMarkets
      */
@@ -51,7 +53,15 @@ final readonly class CanonicalExecutionPolicy
         $setup = self::mapping($payload, 'setup', 'canonical_execution_policy_shape_invalid');
         $ast = self::mapping($setup, 'ast', 'canonical_execution_policy_shape_invalid');
         $execution = self::mapping($ast, 'execution', 'canonical_execution_policy_shape_invalid');
-        $shadow = $snapshot->request->modeId === 'day_trading' && $snapshot->request->modeVersion === '1.1.0';
+        $shadowIdentity = $snapshot->request->modeId . '@' . $snapshot->request->modeVersion;
+        $scalpingShadow = $shadowIdentity === 'scalping@1.1.0'
+            && $snapshot->request->setupVersion === '1.1.0'
+            && \in_array($snapshot->request->setupId, [
+                'scalping.trend_continuation.long',
+                'scalping.pullback.long',
+                'scalping.trend_momentum.short',
+            ], true);
+        $shadow = $shadowIdentity === 'day_trading@1.1.0' || $scalpingShadow;
         $executionKeys = [
             'side',
             'entry_zone',
@@ -86,7 +96,15 @@ final readonly class CanonicalExecutionPolicy
         if ($shadow) {
             $executionTimeframe = self::identifier(self::decision($execution, 'execution_timeframe', 'timeframe'), 'canonical_execution_timeframe_invalid');
             $mandatoryConfirmations = self::stringList(self::decision($execution, 'mandatory_confirmations', 'timeframes'), 'canonical_mandatory_confirmations_invalid');
-            if ($executionTimeframe !== '15m' || $mandatoryConfirmations !== ['5m', '1m']) {
+            $expectedTimeframes = match ($shadowIdentity) {
+                'day_trading@1.1.0' => ['15m', ['5m', '1m']],
+                'scalping@1.1.0' => ['5m', ['1m']],
+                default => null,
+            };
+            if ($expectedTimeframes === null
+                || $executionTimeframe !== $expectedTimeframes[0]
+                || $mandatoryConfirmations !== $expectedTimeframes[1]
+            ) {
                 throw new CanonicalOrderPlanException('canonical_execution_timeframe_invalid');
             }
             $orderPolicy = self::orderPolicy(self::decision($execution, 'order_policy', 'order_policy'));
@@ -96,6 +114,12 @@ final readonly class CanonicalExecutionPolicy
             $mode = self::mapping($payload, 'mode', 'canonical_holding_boundary_invalid');
             $holdingHorizon = self::objectValue(self::decision($mode, 'horizon', 'holding_horizon_policy'), 'canonical_holding_boundary_invalid');
             CanonicalHoldingBoundary::expiresAt(new \DateTimeImmutable('2026-08-10T12:00:00Z'), $holdingWindowSeconds, $holdingHorizon);
+            self::assertShadowIdentityPolicy(
+                $snapshot,
+                $orderPolicy,
+                $holdingWindowSeconds,
+                $holdingHorizon,
+            );
         }
         $environment = self::mapping($payload, 'environment', 'canonical_execution_policy_environment_invalid');
         $allowedSymbols = self::stringList($environment['allowed_symbols'] ?? null, 'canonical_execution_policy_environment_invalid');
@@ -320,6 +344,46 @@ final readonly class CanonicalExecutionPolicy
         );
     }
 
+    /** @param array<string, mixed> $holdingHorizon */
+    private static function assertShadowIdentityPolicy(
+        EffectiveTradingConfigSnapshot $snapshot,
+        ?CanonicalOrderPolicy $orderPolicy,
+        int $holdingWindowSeconds,
+        array $holdingHorizon,
+    ): void {
+        $request = $snapshot->request;
+        $identity = implode('@', [
+            $request->modeId,
+            $request->modeVersion,
+            $request->setupId,
+            $request->setupVersion,
+        ]);
+        $scalpingIdentity = \in_array($identity, [
+            'scalping@1.1.0@scalping.trend_continuation.long@1.1.0',
+            'scalping@1.1.0@scalping.pullback.long@1.1.0',
+            'scalping@1.1.0@scalping.trend_momentum.short@1.1.0',
+        ], true);
+        $expected = match (true) {
+            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H'],
+            $scalpingIdentity => [45, 75, 7200, 'PT2H'],
+            default => null,
+        };
+        if ($orderPolicy === null || $expected === null) {
+            throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
+        }
+        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration] = $expected;
+        if ($orderPolicy->ttlSeconds !== $ttlSeconds
+            || $orderPolicy->cancelAfterSeconds !== $cancelAfterSeconds
+            || $holdingWindowSeconds !== $windowSeconds
+            || ($holdingHorizon['maximum_duration'] ?? null) !== $maximumDuration
+            || ($holdingHorizon['daily_boundary_time'] ?? null) !== '00:00:00'
+            || ($holdingHorizon['daily_boundary_timezone'] ?? null) !== 'UTC'
+            || ($holdingHorizon['close_before_boundary'] ?? null) !== true
+        ) {
+            throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
+        }
+    }
+
     /** @param array<string, mixed> $payload */
     private static function validateCanonicalSchema(array $payload, EffectiveTradingConfigSnapshot $snapshot): void
     {
@@ -406,13 +470,28 @@ final readonly class CanonicalExecutionPolicy
             throw new CanonicalOrderPlanException('canonical_execution_policy_setup_schema_invalid');
         }
         $dataContract = self::mapping($setup, 'data_condition_contract', 'canonical_execution_policy_catalog_invalid');
-        self::requireExactKeys($dataContract, [
+        $dataContractKeys = [
             'required_data',
             'missing_conditions',
             'external_dependencies',
             'condition_catalog_hash',
             'unknown_condition_policy',
-        ], 'canonical_execution_policy_catalog_invalid');
+        ];
+        $scalpingShadow = $snapshot->request->modeId === 'scalping'
+            && $snapshot->request->modeVersion === '1.1.0'
+            && $snapshot->request->setupVersion === '1.1.0'
+            && \in_array($snapshot->request->setupId, [
+                'scalping.trend_continuation.long',
+                'scalping.pullback.long',
+                'scalping.trend_momentum.short',
+            ], true);
+        if ($scalpingShadow) {
+            array_unshift($dataContractKeys, 'condition_catalog_version');
+        }
+        self::requireExactKeys($dataContract, $dataContractKeys, 'canonical_execution_policy_catalog_invalid');
+        if ($scalpingShadow && ($dataContract['condition_catalog_version'] ?? null) !== '1.1.0') {
+            throw new CanonicalOrderPlanException('canonical_execution_policy_catalog_invalid');
+        }
         $catalogDecision = self::mapping($dataContract, 'condition_catalog_hash', 'canonical_execution_policy_catalog_invalid');
         self::requireExactKeys(
             $catalogDecision,

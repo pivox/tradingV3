@@ -29,7 +29,10 @@ final class MacdLineCrossUpWithHysteresisCondition extends AbstractCondition
         $coolDownBars = (int)($context['cool_down_bars'] ?? 2);
         $requirePrevBelow = $context['require_prev_below'] ?? true;
 
-        $macdHist = $context['macd_hist_series'] ?? $context['macd_hist_last3'] ?? null; // oldest..latest
+        $macdHist = $context['macd_line_signal_series']
+            ?? $context['macd_hist_series']
+            ?? $context['macd_hist_last3']
+            ?? null; // oldest..latest
         if (!\is_array($macdHist) || count($macdHist) < 2) {
             return $this->result(self::NAME, false, null, (float)$minGap, $this->baseMeta($context, [
                 'missing_data' => true,

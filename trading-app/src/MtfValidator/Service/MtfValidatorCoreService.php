@@ -84,6 +84,9 @@ class MtfValidatorCoreService
                 $allTimeframes,
                 $now,
                 $exchangeContext,
+                $input->lineageContext?->isModern() === true
+                    ? $input->lineageContext->environment
+                    : null,
             );
         } catch (NotEnoughKlinesException $e) {
             $this->mtfLogger->info('MTF not enough klines', [

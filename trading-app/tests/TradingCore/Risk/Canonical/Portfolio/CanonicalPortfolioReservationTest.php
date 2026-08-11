@@ -12,6 +12,7 @@ use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
 
@@ -31,6 +32,46 @@ final class CanonicalPortfolioReservationTest extends TestCase
         self::assertSame($plan->positionNotional, $reservation->residualNotionalQuote);
         self::assertSame(1, $reservation->version);
         self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $reservation->stateHash);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function invalidCanonicalOpeningStateCases(): iterable
+    {
+        yield 'decision key pattern' => ['decision_key'];
+        yield 'portfolio source pattern' => ['portfolio_source'];
+        yield 'portfolio source semver' => ['portfolio_source_version'];
+        yield 'portfolio input hash' => ['portfolio_input_hash'];
+        yield 'portfolio identity hash' => ['portfolio_identity_hash'];
+        yield 'admission hash' => ['admission_hash'];
+        yield 'version' => ['version'];
+        yield 'plan quantity mismatch' => ['plan_quantity'];
+    }
+
+    #[DataProvider('invalidCanonicalOpeningStateCases')]
+    public function testCanonicalOpeningStateAuthorityRejectsCoordinatedRehashedForgery(string $case): void
+    {
+        [$reservation, $plan] = $this->reservation();
+        $forged = match ($case) {
+            'decision_key' => self::mutateProperty($reservation, 'decisionKey', $reservation->decisionKey, 'bad key'),
+            'portfolio_source' => self::mutateProperty($reservation, 'portfolioSource', $reservation->portfolioSource, 'Bad Source'),
+            'portfolio_source_version' => self::mutateProperty($reservation, 'portfolioSourceVersion', $reservation->portfolioSourceVersion, 'latest'),
+            'portfolio_input_hash' => self::mutateProperty($reservation, 'portfolioInputHash', $reservation->portfolioInputHash, 'invalid'),
+            'portfolio_identity_hash' => self::mutateProperty($reservation, 'portfolioSnapshotIdentityHash', $reservation->portfolioSnapshotIdentityHash, 'invalid'),
+            'admission_hash' => self::mutateProperty($reservation, 'admissionHash', $reservation->admissionHash, 'invalid'),
+            'version' => self::mutateProperty($reservation, 'version', $reservation->version, 2),
+            'plan_quantity' => self::mutateProperty($reservation, 'plannedQuantity', $reservation->plannedQuantity, $reservation->plannedQuantity + $plan->quantityStep),
+            default => throw new \LogicException('Unknown opening-state forgery.'),
+        };
+        $forged = self::mutateProperty(
+            $forged,
+            'stateHash',
+            $forged->stateHash,
+            $forged->expectedStateHash(),
+        );
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_reservation_opening_state_invalid');
+        $forged->assertCanonicalOpeningState($plan);
     }
 
     public function testPartialFillKeepsFilledAndResidualRiskSeparateAndProtected(): void
@@ -384,5 +425,25 @@ final class CanonicalPortfolioReservationTest extends TestCase
             new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
             'sha256:' . str_repeat('9', 64),
         );
+    }
+
+    private static function mutateProperty(
+        CanonicalPortfolioReservation $reservation,
+        string $property,
+        mixed $from,
+        mixed $to,
+    ): CanonicalPortfolioReservation {
+        $serialized = serialize($reservation);
+        $needle = serialize($property) . serialize($from);
+        $replacement = serialize($property) . serialize($to);
+        $position = strpos($serialized, $needle);
+        self::assertNotFalse($position);
+        $mutated = unserialize(
+            substr_replace($serialized, $replacement, $position, strlen($needle)),
+            ['allowed_classes' => true],
+        );
+        self::assertInstanceOf(CanonicalPortfolioReservation::class, $mutated);
+
+        return $mutated;
     }
 }

@@ -2,12 +2,15 @@
 
 namespace App\Indicator\Context;
 
+use App\Common\Enum\Timeframe;
 use App\Indicator\Core\AtrCalculator;
 use App\Indicator\Core\Momentum\Macd;
 use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Exception\InvalidKlineChronologyException;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 
@@ -25,6 +28,8 @@ class IndicatorContextBuilder
     /** @var float[] */ private array $lows = [];
     /** @var float[] */ private array $volumes = [];
     /** @var array<int,array{high:float,low:float,close:float}> */ private array $ohlc = [];
+    /** @var list<mixed> */ private array $timestamps = [];
+    private bool $timestampsSupplied = false;
 
     // Paramètres configurables pour les conditions
     private ?float $entryPrice = null;
@@ -45,6 +50,8 @@ class IndicatorContextBuilder
         private readonly AtrCalculator $atrCalc,
         private readonly Sma $sma,
         #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
+        private readonly ?Ema $emaSeriesCalculator = null,
+        private readonly ?CanonicalPullbackAgeCalculator $pullbackAgeCalculator = null,
     ) {
         $this->traderAvailable = \extension_loaded('trader');
     }
@@ -61,6 +68,8 @@ class IndicatorContextBuilder
     public function volumes(array $volumes): self { $this->volumes = array_map('floatval',$volumes); return $this; }
     /** @param array<int,array{high:float,low:float,close:float}> $ohlc */
     public function ohlc(array $ohlc): self { $this->ohlc = $ohlc; return $this; }
+    /** @param list<mixed> $timestamps */
+    public function timestamps(array $timestamps): self { $this->timestamps = array_values($timestamps); $this->timestampsSupplied = true; return $this; }
 
     // Méthodes pour configurer les paramètres des conditions
     public function entryPrice(?float $price): self { $this->entryPrice = $price; return $this; }
@@ -81,6 +90,8 @@ class IndicatorContextBuilder
         $this->lows = [];
         $this->volumes = [];
         $this->ohlc = [];
+        $this->timestamps = [];
+        $this->timestampsSupplied = false;
         $this->entryPrice = null;
         $this->stopLoss = null;
         $this->atrK = null;
@@ -111,6 +122,8 @@ class IndicatorContextBuilder
     /** @return array<string, mixed> Retourne le contexte prêt pour ConditionRegistry->evaluate(). */
     public function build(): array
     {
+        $seriesTimestamps = $this->canonicalSeriesTimestamps();
+
         // Sanity check for invalid close series (all non-positive)
         if (!empty($this->closes)) {
             $maxClose = max($this->closes);
@@ -174,7 +187,7 @@ class IndicatorContextBuilder
         }
 
         $vwapVal = null;
-        if ($this->highs && $this->lows && $this->closes && $this->volumes) {
+        if ($this->hasAlignedRawOhlcv()) {
             $vwapVal = $this->vwap->calculate($this->highs, $this->lows, $this->closes, $this->volumes);
         }
 
@@ -234,6 +247,9 @@ class IndicatorContextBuilder
         if (isset($emaMap[200], $emaPrevMap[200])) {
             $ema200Slope = $emaMap[200] - $emaPrevMap[200];
         }
+        $ema200Series = $seriesTimestamps !== null && isset($emaMap[200], $emaPrevMap[200])
+            ? [(float) $emaPrevMap[200], (float) $emaMap[200]]
+            : null;
 
         $macdHistLast3 = null;
         $macdHistSeries = null;
@@ -247,6 +263,8 @@ class IndicatorContextBuilder
             $macdHistSeries = $tail;
             $macdHistLast3 = array_slice($tail, -3);
         }
+
+        $pullbackAgeBars = $this->canonicalPullbackAge();
 
         $highSeries = null;
         $lowSeries = null;
@@ -272,6 +290,10 @@ class IndicatorContextBuilder
             'ema' => $emaMap ?: null,
             'ema_prev' => $emaPrevMap ?: null,
             'ema_200_slope' => $ema200Slope,
+            'ema_200_series' => $ema200Series,
+            'ema_200_series_timestamps' => $ema200Series !== null
+                ? array_slice($seriesTimestamps, -2)
+                : null,
             'rsi' => $rsi,
             'macd' => ($macdVal !== null && $signalVal !== null) ? [
                 'macd' => $macdVal,
@@ -280,7 +302,15 @@ class IndicatorContextBuilder
             ] : null,
             'macd_hist_last3' => $macdHistLast3,
             'macd_hist_series' => $macdHistSeries,
-            'series_order' => 'oldest_to_newest',
+            'macd_hist_series_timestamps' => $macdHistSeries !== null && $seriesTimestamps !== null
+                ? array_slice($seriesTimestamps, -count($macdHistSeries))
+                : null,
+            'macd_line_signal_series' => $macdHistSeries,
+            'macd_line_signal_series_timestamps' => $macdHistSeries !== null && $seriesTimestamps !== null
+                ? array_slice($seriesTimestamps, -count($macdHistSeries))
+                : null,
+            'series_order' => $seriesTimestamps !== null ? 'oldest_to_newest' : null,
+            'series_timestamps' => $seriesTimestamps,
             'vwap' => $vwapVal,
             'volume_ratio' => $volumeRatio,
             'atr' => $atr,
@@ -310,9 +340,108 @@ class IndicatorContextBuilder
             'rsi_cross_up_level' => $this->rsiCrossUpLevel,
             'rsi_cross_down_level' => $this->rsiCrossDownLevel,
         ], fn($v) => $v !== null);
+        $context['pullback_age_bars'] = $pullbackAgeBars;
         $this->reset();
 
         return $context;
+    }
+
+    /** @return list<int>|null */
+    private function canonicalSeriesTimestamps(): ?array
+    {
+        if (!$this->timestampsSupplied) {
+            return null;
+        }
+
+        $timeframe = Timeframe::tryFrom($this->timeframe ?? '');
+        if ($timeframe === null) {
+            throw new InvalidKlineChronologyException($this->timeframe ?? '', 'ambiguous_timeframe');
+        }
+        if (count($this->timestamps) !== count($this->closes)) {
+            throw new InvalidKlineChronologyException($timeframe->value, 'timestamp_alignment_mismatch');
+        }
+        if (count($this->timestamps) < 2) {
+            throw new InvalidKlineChronologyException($timeframe->value, 'ambiguous_timestamp_order');
+        }
+
+        $normalized = [];
+        foreach ($this->timestamps as $timestamp) {
+            if ($timestamp instanceof \DateTimeInterface) {
+                $normalized[] = $timestamp->getTimestamp();
+                continue;
+            }
+            if (!is_int($timestamp) && !is_float($timestamp)) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'missing_timestamp');
+            }
+            $numeric = (float) $timestamp;
+            if (!is_finite($numeric)) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'invalid_timestamp');
+            }
+            if ($numeric > 9_999_999_999) {
+                $numeric /= 1000;
+            }
+            if (floor($numeric) !== $numeric) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'invalid_timestamp');
+            }
+            $normalized[] = (int) $numeric;
+        }
+
+        $step = $timeframe->getStepInSeconds();
+        for ($index = 1, $count = count($normalized); $index < $count; ++$index) {
+            $previous = $normalized[$index - 1];
+            $current = $normalized[$index];
+            $delta = $current - $previous;
+            if ($delta === 0) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'duplicate_timestamp', $previous, $current);
+            }
+            if ($delta < 0) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'reversed_timestamp', $previous, $current);
+            }
+            if ($delta !== $step) {
+                throw new InvalidKlineChronologyException($timeframe->value, 'timestamp_gap', $previous, $current);
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function canonicalPullbackAge(): ?int
+    {
+        if (!$this->hasAlignedRawOhlcv()) {
+            return null;
+        }
+        $ema = $this->emaSeriesCalculator ?? new Ema();
+        $ema9 = array_values(array_map('floatval', $ema->calculateSeries($this->closes, 9)));
+        $ema21 = array_values(array_map('floatval', $ema->calculateSeries($this->closes, 21)));
+        $vwaps = array_values(array_map('floatval', $this->vwap->calculateFull(
+            $this->highs,
+            $this->lows,
+            $this->closes,
+            $this->volumes,
+        )));
+        $alignedCount = min(count($this->closes), count($ema9), count($ema21), count($vwaps));
+        if ($alignedCount < 2) {
+            return null;
+        }
+
+        return ($this->pullbackAgeCalculator ?? new CanonicalPullbackAgeCalculator())->age(
+            array_slice($ema9, -$alignedCount),
+            array_slice($ema21, -$alignedCount),
+            array_values(array_map('floatval', array_slice($this->closes, -$alignedCount))),
+            array_slice($vwaps, -$alignedCount),
+            100,
+            0.0015,
+        );
+    }
+
+    private function hasAlignedRawOhlcv(): bool
+    {
+        $count = count($this->closes);
+
+        return $count > 0
+            && count($this->highs) === $count
+            && count($this->lows) === $count
+            && count($this->volumes) === $count;
     }
 
     /**
@@ -445,14 +574,14 @@ class IndicatorContextBuilder
             return ['highs' => $highs, 'lows' => $lows, 'closes' => $closes];
         }
 
-        $n = min(count($this->highs), count($this->lows), count($this->closes));
-        if ($n === 0) {
+        $n = count($this->closes);
+        if ($n === 0 || count($this->highs) !== $n || count($this->lows) !== $n) {
             return null;
         }
 
-        $highs = array_map('floatval', array_slice($this->highs, 0, $n));
-        $lows = array_map('floatval', array_slice($this->lows, 0, $n));
-        $closes = array_map('floatval', array_slice($this->closes, 0, $n));
+        $highs = array_map('floatval', $this->highs);
+        $lows = array_map('floatval', $this->lows);
+        $closes = array_map('floatval', $this->closes);
 
         return ['highs' => $highs, 'lows' => $lows, 'closes' => $closes];
     }

@@ -59,6 +59,24 @@ final class RuleExpressionCompilerTest extends TestCase
         $this->assertRejected(['condition' => 'rsi_lt_70', 'timeframe' => '15m', 'parameters' => ['rsi_lt_70_threshold' => 101], 'provenance' => 'x'], 'above maximum');
     }
 
+    public function testExplicitNodeParametersOverrideDefaultsAndPreservePerParameterLineage(): void
+    {
+        $node = $this->compiler->compile([
+            'condition' => 'atr_rel_in_range_15m',
+            'timeframe' => '15m',
+            'parameters' => ['min_atr_pct' => 0.002],
+            'provenance' => 'test:explicit',
+        ], 'long');
+
+        self::assertInstanceOf(ConditionNode::class, $node);
+        self::assertSame(['max_atr_pct' => 0.045, 'min_atr_pct' => 0.002], $node->parameters);
+        self::assertSame([
+            'max_atr_pct' => 'condition_catalog_default',
+            'min_atr_pct' => 'setup_contract',
+        ], $node->parameterSources);
+        self::assertSame($node->parameterSources, $node->toArray()['parameter_sources']);
+    }
+
     /** @param array<string, mixed> $expression */
     private function assertRejected(array $expression, string $message, string $side = 'long'): void
     {

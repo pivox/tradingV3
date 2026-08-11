@@ -6,7 +6,7 @@ namespace App\TradingCore\OrderPlan\Canonical;
 
 use Psr\Clock\ClockInterface;
 
-final readonly class CanonicalOrderPlanBuilder
+final readonly class CanonicalOrderPlanBuilder implements CanonicalOrderPlanBuilderInterface
 {
     public function __construct(
         private ClockInterface $clock,

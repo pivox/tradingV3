@@ -8,6 +8,7 @@ use Symfony\Component\Yaml\Yaml;
 
 final class ConditionCatalogLoader
 {
+    private const SUPPORTED_VERSIONS = ['1.0.0', '1.1.0'];
     private const TOP_KEYS = ['schema_version', 'catalog_version', 'input_freshness_seconds', 'conditions'];
     private const CONDITION_KEYS = [
         'id', 'implementation', 'metric', 'unit', 'value_type', 'timeframes', 'sides',
@@ -17,6 +18,21 @@ final class ConditionCatalogLoader
     private const TIMEFRAMES = ['global', '4h', '1h', '15m', '5m', '1m'];
     private const SIDES = ['long', 'short'];
     private const PARAMETER_TYPES = ['number', 'integer', 'string', 'boolean'];
+
+    public function loadVersion(string $version, ?string $catalogRoot = null): ConditionCatalog
+    {
+        if (!in_array($version, self::SUPPORTED_VERSIONS, true)) {
+            throw new ConditionCatalogException(sprintf(
+                'Unsupported exact condition catalog version "%s"; no alias or fallback is allowed.',
+                $version,
+            ));
+        }
+
+        return $this->loadFile(rtrim(
+            $catalogRoot ?? dirname(__DIR__, 4) . '/config/trading/condition_catalog',
+            '/',
+        ) . '/' . $version . '.yaml');
+    }
 
     public function loadFile(string $path): ConditionCatalog
     {
@@ -38,8 +54,9 @@ final class ConditionCatalogLoader
         if (($document['schema_version'] ?? null) !== 'condition-catalog.v1') {
             throw new ConditionCatalogException('schema_version must be condition-catalog.v1.');
         }
-        if (($document['catalog_version'] ?? null) !== '1.0.0') {
-            throw new ConditionCatalogException('catalog_version must be the exact supported version 1.0.0.');
+        $catalogVersion = $document['catalog_version'] ?? null;
+        if (!is_string($catalogVersion) || !in_array($catalogVersion, self::SUPPORTED_VERSIONS, true)) {
+            throw new ConditionCatalogException('catalog_version must be an exact supported published version.');
         }
         $rows = $document['conditions'] ?? null;
         if (!is_array($rows) || !array_is_list($rows) || $rows === []) {
@@ -79,7 +96,7 @@ final class ConditionCatalogLoader
             }
         }
 
-        return new ConditionCatalog('condition-catalog.v1', '1.0.0', $freshness, $definitions);
+        return new ConditionCatalog('condition-catalog.v1', $catalogVersion, $freshness, $definitions);
     }
 
     /** @return array<string, array<string, int>> */
