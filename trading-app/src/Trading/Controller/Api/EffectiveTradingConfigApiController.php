@@ -8,6 +8,7 @@ use App\TradingCore\Config\EffectiveTradingConfigReadService;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
 use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -40,9 +41,20 @@ final class EffectiveTradingConfigApiController extends AbstractController
         }
 
         try {
+            $capability = null;
+            $capabilityValue = $request->query->get('execution_capability');
+            if ($capabilityValue !== null) {
+                if (!is_string($capabilityValue) || trim($capabilityValue) === '') {
+                    throw new TradingConfigException('execution_capability must be a non-empty string.');
+                }
+                $capability = ShadowExecutionCapability::tryFrom(trim($capabilityValue));
+                if ($capability === null) {
+                    throw new TradingConfigException('Unknown execution_capability; no fallback is allowed.');
+                }
+            }
             $identity = new EffectiveTradingConfigRequest(
                 $values['mode_id'], $values['mode_version'], $values['setup_id'], $values['setup_version'],
-                $values['exchange'], $values['environment'], $values['side'],
+                $values['exchange'], $values['environment'], $values['side'], $capability,
             );
             return $this->json($this->readService->describe($identity));
         } catch (NonExecutableTradingConfigException $exception) {

@@ -1,0 +1,9 @@
+environment:
+  id: test
+  allowed_symbols: [BTCUSDT]
+  allowed_markets: [perpetual]
+  max_notional: 100.0
+  dry_run: true
+  write_enabled: false
+  kill_switch_enabled: true
+  require_stop_loss: true

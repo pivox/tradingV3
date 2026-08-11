@@ -1,0 +1,7 @@
+exchange:
+  id: fake
+  capabilities: { orders: true, order_types: [limit], stop_loss: true, take_profit: true, reduce_only: true }
+  fees: { maker_rate: 0.0002, taker_rate: 0.0005 }
+  funding: { enabled: true, interval: PT8H }
+  precision: { price_decimals: 2, quantity_decimals: 3 }
+  limits: { max_orders: 20, min_notional: 5.0, max_notional: 1000.0 }

@@ -12,6 +12,7 @@ use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContractLoader;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use Psr\Log\LoggerInterface;
 
 final readonly class EffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
@@ -31,6 +32,17 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
     {
         if (!$request instanceof EffectiveTradingConfigRequest) {
             throw new TradingConfigException('Canonical resolution requires an EffectiveTradingConfigRequest; legacy positional profiles and fallback are forbidden.');
+        }
+
+        $isDayTradingShadow = $request->modeId === 'day_trading' && $request->modeVersion === '1.1.0';
+        if ($isDayTradingShadow && $request->capability === null) {
+            throw new TradingConfigException('day_trading_shadow_capability_required');
+        }
+        if ($isDayTradingShadow && $request->capability === ShadowExecutionCapability::PrivateMainnet) {
+            throw new TradingConfigException('private_mainnet_execution_forbidden');
+        }
+        if ($isDayTradingShadow && $request->capability === ShadowExecutionCapability::Backtest && $request->exchange !== 'fake') {
+            throw new TradingConfigException('day_trading_backtest_requires_fake_exchange');
         }
 
         $modeLoader = $this->modeContracts ?? new ModeContractLoader();

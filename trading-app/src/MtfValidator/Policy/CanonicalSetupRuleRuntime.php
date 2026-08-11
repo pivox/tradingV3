@@ -55,6 +55,28 @@ final class CanonicalSetupRuleRuntime
         if (!hash_equals($this->catalog->stableHash(), $identityCatalogHash)) {
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
         }
+        $dayTradingShadow = $identity->modeId === 'day_trading' && $identity->modeVersion === '1.1.0'
+            && $identity->setupId === 'day_trading.trend_continuation.long' && $identity->setupVersion === '1.1.0';
+        if ($dayTradingShadow) {
+            foreach (['4h', '1h', '15m', '5m', '1m'] as $timeframe) {
+                if (!isset($indicatorsByTimeframe[$timeframe])) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
+                        'schema_version' => 'canonical-setup-rule-runtime.v1',
+                        'mode_id' => $identity->modeId,
+                        'mode_version' => $identity->modeVersion,
+                        'setup_id' => $identity->setupId,
+                        'setup_version' => $identity->setupVersion,
+                        'side' => strtolower((string) $identity->side),
+                        'config_hash' => $identity->configHash,
+                        'catalog_hash' => $identity->conditionCatalogHash,
+                        'evaluated_at' => $evaluatedAt->format(DATE_ATOM),
+                        'execution_timeframe' => '15m',
+                        'mandatory_confirmations' => ['5m', '1m'],
+                        'rejection' => ['timeframe' => $timeframe],
+                    ]);
+                }
+            }
+        }
         $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
         $setupHash = $contract->stableHash();
         $planCacheKey = hash('sha256', json_encode([
@@ -81,8 +103,14 @@ final class CanonicalSetupRuleRuntime
         $filtersPassed = !in_array(false, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $filterResults), true);
         $noTradeMatched = in_array(true, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $noTradeResults), true);
         $passed = $plan->blockers === [] && $sectionsPassed && $filtersPassed && !$noTradeMatched;
+        $staleInput = $dayTradingShadow && $this->containsReasonCode([
+            ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $sectionResults),
+            ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
+            ...array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),
+        ], 'stale_input');
         $reason = match (true) {
             $plan->blockers !== [] => 'compiled_plan_blocked',
+            $staleInput => 'critical_timeframe_stale',
             !$sectionsPassed => 'setup_section_failed',
             !$filtersPassed => 'setup_filter_failed',
             $noTradeMatched => 'no_trade_rule_matched',
@@ -91,6 +119,8 @@ final class CanonicalSetupRuleRuntime
 
         return new CanonicalSetupRuleRuntimeResult($passed, $reason, [
             'schema_version' => 'canonical-setup-rule-runtime.v1',
+            'mode_id' => $identity->modeId,
+            'mode_version' => $identity->modeVersion,
             'setup_id' => $plan->setupId,
             'setup_version' => $plan->setupVersion,
             'setup_hash' => $plan->setupHash,
@@ -98,6 +128,9 @@ final class CanonicalSetupRuleRuntime
             'catalog_version' => $plan->catalogVersion,
             'catalog_hash' => $plan->catalogHash,
             'config_hash' => $identity->configHash,
+            'evaluated_at' => $evaluatedAt->format(DATE_ATOM),
+            'execution_timeframe' => $dayTradingShadow ? '15m' : null,
+            'mandatory_confirmations' => $dayTradingShadow ? ['5m', '1m'] : [],
             'plan_cache_key' => $planCacheKey,
             'plan_cache_hit' => $planCacheHit,
             'blockers' => $plan->blockers,
@@ -105,6 +138,23 @@ final class CanonicalSetupRuleRuntime
             'filters' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
             'no_trade_rules' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),
         ]);
+    }
+
+    private function containsReasonCode(mixed $value, string $reasonCode): bool
+    {
+        if (!is_array($value)) {
+            return false;
+        }
+        if (($value['reason_code'] ?? null) === $reasonCode) {
+            return true;
+        }
+        foreach ($value as $child) {
+            if ($this->containsReasonCode($child, $reasonCode)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

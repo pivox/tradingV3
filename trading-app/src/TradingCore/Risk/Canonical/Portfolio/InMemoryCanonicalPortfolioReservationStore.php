@@ -79,6 +79,20 @@ final class InMemoryCanonicalPortfolioReservationStore implements CanonicalPortf
         return $this->transition($expected, static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->cancelResidual($observedAt, $inputHash));
     }
 
+    public function enforceHoldingDeadline(
+        CanonicalPortfolioReservation $expected,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        return $this->transition(
+            $expected,
+            static fn (CanonicalPortfolioReservation $stored): CanonicalPortfolioReservation => $stored->enforceHoldingDeadline(
+                $observedAt,
+                $inputHash,
+            ),
+        );
+    }
+
     public function acknowledgeResidualReduction(
         CanonicalPortfolioReservation $expected,
         float $venueRemainingQuantity,

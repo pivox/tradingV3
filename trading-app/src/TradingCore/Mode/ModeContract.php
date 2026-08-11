@@ -44,7 +44,7 @@ final readonly class ModeContract
         return $paths;
     }
 
-    /** @return array{regime: list<string>, context: list<string>, trigger: list<string>, execution: list<string>} */
+    /** @return array{regime: list<string>, context: list<string>, trigger: list<string>, execution: list<string>, confirmations?: list<string>} */
     public function timeframeRoles(): array
     {
         return $this->document['timeframes'];

@@ -8,7 +8,7 @@
   "properties": {
     "schema_version": { "const": "1.0.0" },
     "mode_id": { "enum": ["day_trading", "scalping", "micro_scalping"] },
-    "mode_version": { "enum": ["1.0.0"] },
+    "mode_version": { "enum": ["1.0.0", "1.1.0"] },
     "lifecycle": {
       "type": "object", "additionalProperties": false,
       "required": ["status", "executable", "rationale"],
@@ -19,8 +19,14 @@
       },
       "allOf": [{ "if": { "properties": { "status": { "enum": ["draft", "retired"] } }, "required": ["status"] }, "then": { "properties": { "executable": { "const": false } } } }]
     },
-    "horizon": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "holding_horizon_policy" } } }] },
-    "session_policy": { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "session_policy" } } }] },
+    "horizon": { "oneOf": [
+      { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "holding_horizon_policy" } } }] },
+      { "allOf": [{ "$ref": "#/$defs/shadowHorizonDecision" }, { "properties": { "unit": { "const": "holding_horizon_policy" } } }] }
+    ] },
+    "session_policy": { "oneOf": [
+      { "allOf": [{ "$ref": "#/$defs/stringDecision" }, { "properties": { "unit": { "const": "session_policy" } } }] },
+      { "allOf": [{ "$ref": "#/$defs/shadowSessionDecision" }, { "properties": { "unit": { "const": "session_policy" } } }] }
+    ] },
     "timeframes": {
       "type": "object", "additionalProperties": false,
       "required": ["regime", "context", "trigger", "execution"],
@@ -28,7 +34,8 @@
         "regime": { "$ref": "#/$defs/timeframeList" },
         "context": { "$ref": "#/$defs/timeframeList" },
         "trigger": { "$ref": "#/$defs/timeframeList" },
-        "execution": { "$ref": "#/$defs/timeframeList" }
+        "execution": { "$ref": "#/$defs/timeframeList" },
+        "confirmations": { "$ref": "#/$defs/timeframeList" }
       }
     },
     "cadence": {
@@ -48,7 +55,10 @@
           { "allOf": [{ "$ref": "#/$defs/quoteBudgetDecision" }, { "properties": { "unit": { "const": "quote_notional" } } }] }
         ] },
         "daily_loss_cap": { "allOf": [{ "$ref": "#/$defs/dailyCapDecision" }, { "properties": { "unit": { "const": "compound_percent_equity_and_quote_per_day" } } }] },
-        "max_concurrent_positions": { "allOf": [{ "$ref": "#/$defs/positiveIntegerDecision" }, { "properties": { "unit": { "const": "positions" } } }] },
+        "max_concurrent_positions": { "oneOf": [
+          { "allOf": [{ "$ref": "#/$defs/positiveIntegerDecision" }, { "properties": { "unit": { "const": "positions" } } }] },
+          { "allOf": [{ "$ref": "#/$defs/shadowConcurrencyDecision" }, { "properties": { "unit": { "const": "positions" } } }] }
+        ] },
         "mode_exposure_cap": { "allOf": [{ "$ref": "#/$defs/positiveNumberDecision" }, { "properties": { "unit": { "const": "percent_equity_notional" } } }] }
       }
     },
@@ -77,6 +87,17 @@
   },
   "allOf": [
     { "if": { "properties": { "mode_id": { "const": "day_trading" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } } },
+    { "if": { "properties": { "mode_version": { "const": "1.1.0" } }, "required": ["mode_version"] }, "then": {
+      "properties": {
+        "mode_id": { "const": "day_trading" },
+        "lifecycle": { "properties": { "status": { "const": "shadow" }, "executable": { "const": true } } },
+        "timeframes": { "required": ["regime", "context", "trigger", "execution", "confirmations"], "properties": { "regime": { "const": ["4h"] }, "context": { "const": ["1h"] }, "trigger": { "const": ["15m"] }, "execution": { "const": ["15m"] }, "confirmations": { "const": ["5m", "1m"] } } },
+        "cadence": { "properties": { "evaluation": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT15M" } } }, "validity_window": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT15M" } } } } },
+        "risk": { "properties": { "trade_budget": { "properties": { "state": { "const": "defined" }, "value": { "const": 5.0 }, "unit": { "const": "percent_equity_per_trade" } } }, "mode_exposure_cap": { "properties": { "state": { "const": "defined" }, "value": { "const": 100.0 } } } } },
+        "leverage": { "properties": { "state": { "const": "defined" }, "value": { "const": 2.0 } } }
+      }
+    } },
+    { "if": { "properties": { "mode_version": { "const": "1.0.0" } }, "required": ["mode_version"] }, "then": { "properties": { "timeframes": { "not": { "required": ["confirmations"] } } } } },
     { "if": { "properties": { "mode_id": { "const": "scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } } },
     { "if": { "properties": { "mode_id": { "const": "micro_scalping" } }, "required": ["mode_id"] }, "then": { "properties": { "compatible_setup_ids": { "const": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } } }
   ],
@@ -110,6 +131,33 @@
         { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "string", "pattern": "^P(?=[0-9]|T[0-9])(?:[0-9]+Y)?(?:[0-9]+M)?(?:[0-9]+D)?(?:T(?=[0-9])(?:[0-9]+H)?(?:[0-9]+M)?(?:[0-9]+S)?)?$" } } } }
       ]
     },
+    "shadowHorizonDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "properties": { "state": { "const": "defined" }, "value": { "$ref": "#/$defs/shadowHorizon" } } }
+      ]
+    },
+    "shadowHorizon": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maximum_duration", "daily_boundary_time", "daily_boundary_timezone", "close_before_boundary"],
+      "properties": {
+        "maximum_duration": { "const": "PT8H" },
+        "daily_boundary_time": { "const": "00:00:00" },
+        "daily_boundary_timezone": { "const": "UTC" },
+        "close_before_boundary": { "const": true }
+      }
+    },
+    "shadowSessionDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "properties": { "state": { "const": "defined" }, "value": { "$ref": "#/$defs/shadowSession" } } }
+      ]
+    },
+    "shadowSession": {
+      "type": "object", "additionalProperties": false,
+      "required": ["calendar", "timezone"],
+      "properties": { "calendar": { "const": "continuous_crypto" }, "timezone": { "const": "UTC" } }
+    },
     "positiveNumberDecision": {
       "allOf": [
         { "$ref": "#/$defs/decision" },
@@ -121,6 +169,17 @@
         { "$ref": "#/$defs/decision" },
         { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "type": "integer", "minimum": 1 } } } }
       ]
+    },
+    "shadowConcurrencyDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/decision" },
+        { "properties": { "state": { "const": "defined" }, "value": { "$ref": "#/$defs/shadowConcurrency" } } }
+      ]
+    },
+    "shadowConcurrency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["limit", "include_pending_entries"],
+      "properties": { "limit": { "const": 4 }, "include_pending_entries": { "const": true } }
     },
     "dailyCapDecision": {
       "allOf": [
@@ -142,29 +201,47 @@
         "quote_currency": { "const": "USDT" }
       }
     },
-    "dailyCap": {
-      "type": "object", "additionalProperties": false,
-      "required": ["percent_equity", "absolute_quote", "quote_currency"],
-      "properties": {
-        "percent_equity": { "type": "number", "exclusiveMinimum": 0 },
-        "absolute_quote": { "type": "number", "exclusiveMinimum": 0 },
-        "quote_currency": { "const": "USDT" }
+    "dailyCap": { "oneOf": [
+      {
+        "type": "object", "additionalProperties": false,
+        "required": ["percent_equity", "absolute_quote", "quote_currency"],
+        "properties": {
+          "percent_equity": { "type": "number", "exclusiveMinimum": 0 },
+          "absolute_quote": { "type": "number", "exclusiveMinimum": 0 },
+          "quote_currency": { "const": "USDT" }
+        }
+      },
+      {
+        "type": "object", "additionalProperties": false,
+        "required": ["percent_equity", "absolute_quote", "quote_currency", "day_timezone", "day_boundary_local", "include_unrealized_loss"],
+        "properties": {
+          "percent_equity": { "const": 6.0 },
+          "absolute_quote": { "const": 30.0 },
+          "quote_currency": { "const": "USDT" },
+          "day_timezone": { "const": "UTC" },
+          "day_boundary_local": { "const": "00:00:00" },
+          "include_unrealized_loss": { "const": true }
+        }
       }
-    },
+    ] },
     "orderDecision": {
       "allOf": [
         { "$ref": "#/$defs/decision" },
         { "if": { "properties": { "state": { "const": "defined" } }, "required": ["state"] }, "then": { "properties": { "value": { "$ref": "#/$defs/orderPolicy" } } } }
       ]
     },
-    "orderPolicy": {
-      "type": "object", "additionalProperties": false,
-      "required": ["margin_mode", "preferred_type"],
-      "properties": {
-        "margin_mode": { "enum": ["isolated", "cross"] },
-        "preferred_type": { "enum": ["limit", "market"] }
+    "orderPolicy": { "oneOf": [
+      {
+        "type": "object", "additionalProperties": false,
+        "required": ["margin_mode", "preferred_type"],
+        "properties": { "margin_mode": { "enum": ["isolated", "cross"] }, "preferred_type": { "enum": ["limit", "market"] } }
+      },
+      {
+        "type": "object", "additionalProperties": false,
+        "required": ["margin_mode", "preferred_type", "market_fallback"],
+        "properties": { "margin_mode": { "const": "isolated" }, "preferred_type": { "const": "limit" }, "market_fallback": { "const": false } }
       }
-    },
+    ] },
     "dataInput": {
       "type": "object", "additionalProperties": false,
       "required": ["kind", "timeframes", "fields"],

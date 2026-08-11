@@ -1,0 +1,30 @@
+{
+  "schema_version": "day-trading-shadow-scenarios.v1",
+  "mode_id": "day_trading",
+  "mode_version": "1.1.0",
+  "setup_id": "day_trading.trend_continuation.long",
+  "setup_version": "1.1.0",
+  "side": "long",
+  "scenarios": [
+    {
+      "id": "valid_long",
+      "expectation": "pass",
+      "evidence": ["4h regime passes", "1h context passes", "15m trigger passes", "5m and 1m confirmations pass"]
+    },
+    {
+      "id": "failed_condition",
+      "expectation": "no_trade",
+      "evidence": ["15m bullish trigger evaluates false", "no alternate execution timeframe"]
+    },
+    {
+      "id": "missing_1m",
+      "expectation": "no_trade",
+      "evidence": ["mandatory 1m snapshot is absent", "missing-data policy is reject"]
+    },
+    {
+      "id": "stale_5m",
+      "expectation": "no_trade",
+      "evidence": ["mandatory 5m snapshot exceeds catalog freshness", "stale-data policy is reject"]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+schema_version: effective-trading-config.v2
+units:
+  percent: percentage_points
+  duration: iso8601
+  price: quote_price
+  notional: quote_notional
+safety:
+  mainnet_write_enabled: false
+  demo_testnet_write_enabled: false
+  require_stop_loss: true
+  kill_switch_enabled: true

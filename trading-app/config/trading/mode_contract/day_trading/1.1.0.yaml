@@ -1,0 +1,107 @@
+schema_version: '1.0.0'
+mode_id: day_trading
+mode_version: '1.1.0'
+lifecycle:
+  status: shadow
+  executable: true
+  rationale: 'Fake, Paper and backtest shadow only; #132 certification and promotion evidence remain pending.'
+horizon:
+  state: defined
+  value: { maximum_duration: PT8H, daily_boundary_time: '00:00:00', daily_boundary_timezone: UTC, close_before_boundary: true }
+  unit: holding_horizon_policy
+  source: 'GitHub issue #306 decision 2026-08-10'
+  justification: 'An intraday position may live at most eight hours and never cross the UTC daily boundary.'
+session_policy:
+  state: defined
+  value: { calendar: continuous_crypto, timezone: UTC }
+  unit: session_policy
+  source: 'GitHub issue #306 decision 2026-08-10'
+  justification: 'The shadow crypto session is continuously evaluable with UTC accounting.'
+timeframes:
+  regime: ['4h']
+  context: ['1h']
+  trigger: ['15m']
+  execution: ['15m']
+  confirmations: ['5m', '1m']
+cadence:
+  evaluation:
+    state: defined
+    value: PT15M
+    unit: duration
+    source: 'GitHub issue #306 decision 2026-08-10'
+    justification: 'The setup is evaluated on the fixed 15m execution cadence.'
+  validity_window:
+    state: defined
+    value: PT15M
+    unit: duration
+    source: 'GitHub issue #306 decision 2026-08-10'
+    justification: 'A decision is never carried implicitly into the next evaluation window.'
+risk:
+  trade_budget:
+    state: defined
+    value: 5.0
+    unit: percent_equity_per_trade
+    source: 'config/app/trade_entry.regular.yaml:77-84 pinned by #306'
+    justification: 'The historical value is copied into this immutable hypothesis; the runtime never loads regular.'
+  daily_loss_cap:
+    state: defined
+    value: { percent_equity: 6.0, absolute_quote: 30.0, quote_currency: USDT, day_timezone: UTC, day_boundary_local: '00:00:00', include_unrealized_loss: true }
+    unit: compound_percent_equity_and_quote_per_day
+    source: 'config/app/trade_entry.regular.yaml:77-84 plus #306 UTC semantics'
+    justification: 'The lower of the percentage and quote caps applies to realized, unrealized and reserved risk under #304.'
+  max_concurrent_positions:
+    state: defined
+    value: { limit: 4, include_pending_entries: true }
+    unit: positions
+    source: 'config/app/trade_entry.regular.yaml:77-84 plus #304 reservation semantics'
+    justification: 'Pending reservations consume concurrency before a fill.'
+  mode_exposure_cap:
+    state: defined
+    value: 100.0
+    unit: percent_equity_notional
+    source: 'GitHub issue #306 decision 2026-08-10'
+    justification: 'Versioned shadow hypothesis for aggregate day_trading notional.'
+leverage:
+  state: defined
+  value: 2.0
+  unit: leverage_multiple
+  source: 'GitHub issue #306 decision 2026-08-10'
+  justification: 'Mode leverage is capped independently from exchange capability.'
+order_policy:
+  state: defined
+  value: { margin_mode: isolated, preferred_type: limit, market_fallback: false }
+  unit: policy
+  source: 'config/app/trade_entry.regular.yaml:59-62 plus #306 no-fallback decision'
+  justification: 'Only isolated limit intent is admissible; a market fallback is forbidden.'
+compatible_setup_ids:
+  - day_trading.trend_continuation.long
+  - day_trading.trend_continuation.short
+data_contract:
+  required_inputs:
+    - { kind: candles, timeframes: ['4h', '1h', '15m', '5m', '1m'], fields: [open, high, low, close, volume] }
+    - { kind: order_book, timeframes: ['15m'], fields: [best_bid, best_ask, spread_bps] }
+  missing_data_policy: reject
+governance:
+  promotion:
+    target_status: shadow
+    conditions: ['#132 and #191 evidence attached', 'independent risk review approved', 'at least 50 certified trades per executable cell']
+    action: 'publish a new semantic version; never mutate this shadow version'
+  suspension:
+    target_status: draft
+    conditions: ['kill switch asserted', 'data or cost contract breach', 'daily loss or portfolio invariant breached']
+    action: 'reject new entries and preserve complete lineage'
+  rollback:
+    target_status: retired
+    conditions: ['certified baseline regression', 'schema or provenance defect', 'risk invariant breach']
+    action: 'retire this exact version; no implicit fallback'
+ownership_model: mode-contract-ownership-v1
+provenance:
+  - { path: horizon, source: 'GitHub issue #306 decision 2026-08-10', unit: holding_horizon_policy, justification: 'PT8H bounded by 00:00 UTC.' }
+  - { path: session_policy, source: 'GitHub issue #306 decision 2026-08-10', unit: session_policy, justification: 'Continuous crypto session with UTC accounting.' }
+  - { path: timeframes, source: 'src/MtfValidator/config/validations.regular.yaml:7-12 pinned by #306', unit: timeframe_roles, justification: '4h/1h/15m roles are fixed and 5m/1m are mandatory confirmations.' }
+  - { path: cadence, source: 'GitHub issue #306 decision 2026-08-10', unit: duration, justification: 'Both cadence and validity are PT15M.' }
+  - { path: risk, source: 'config/app/trade_entry.regular.yaml:77-84 plus GitHub issue #306', unit: canonical_risk_policy, justification: 'Historical inputs are copied and completed with #304 semantics.' }
+  - { path: leverage, source: 'GitHub issue #306 decision 2026-08-10', unit: leverage_multiple, justification: 'Independent 2x mode cap.' }
+  - { path: order_policy, source: 'config/app/trade_entry.regular.yaml:59-62 plus GitHub issue #306', unit: policy, justification: 'Isolated limit-only, without market fallback.' }
+  - { path: compatible_setup_ids, source: 'GitHub issues #300 and #301 catalog', unit: setup_id, justification: 'Compatibility does not activate the blocked short setup.' }
+  - { path: data_contract.required_inputs, source: 'GitHub issue #306 decision 2026-08-10', unit: required_market_data, justification: 'All five candle timeframes and a live book are fail-closed inputs.' }

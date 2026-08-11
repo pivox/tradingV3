@@ -1,0 +1,190 @@
+schema_version: '1.0.0'
+setup_id: day_trading.trend_continuation.long
+setup_version: '1.1.0'
+status: shadow
+executable: true
+family: trend_continuation
+side: long
+thesis: 'A bullish 4h/1h regime followed by aligned 15m momentum and mandatory 5m/1m confirmations may continue upward.'
+source_origin: { file: 'src/MtfValidator/config/validations.regular.yaml', line_range: '7-12,84-88,238-349', content_sha256: e15ec9ea51330c83b2d0f14791a7985fc06793ee925c32eb4d5d962b3b2e1a13, commit: 719f70cd65b4e68d0ad11e0046af98ab5839ea4e }
+compatible_modes: [{ mode_id: day_trading, mode_version: '1.1.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Exact compatibility with day_trading@1.1.0; no alias or version range.' }
+hypothesis: 'The sourced bullish MTF tree plus the versioned #306 execution policy is a shadow-only falsifiable hypothesis and makes no profitability claim.'
+context:
+  side: long
+  regime:
+    op: all_of
+    provenance: 'validations.regular.yaml:248-254'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:251-253'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:252 evidence branch'
+            nodes:
+              - { condition: ema_50_gt_200, timeframe: 4h, provenance: 'validations.regular.yaml:252' }
+              - { condition: close_above_ema_200, timeframe: 4h, provenance: 'validations.regular.yaml:252' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:253 evidence branch'
+            nodes:
+              - { condition: ema_above_200_with_tolerance, timeframe: 4h, provenance: 'validations.regular.yaml:253' }
+              - { condition: ema_50_gt_200, timeframe: 4h, provenance: 'validations.regular.yaml:253' }
+      - { condition: price_regime_ok_long, timeframe: 4h, provenance: 'validations.regular.yaml:254' }
+  context:
+    op: all_of
+    provenance: 'validations.regular.yaml:262-273'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:265-267'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:266'
+            nodes:
+              - { condition: ema_above_200_with_tolerance, timeframe: 1h, provenance: 'validations.regular.yaml:266' }
+              - { condition: ema_50_gt_200, timeframe: 1h, provenance: 'validations.regular.yaml:266' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:267'
+            nodes:
+              - { condition: ema200_slope_pos, timeframe: 1h, provenance: 'validations.regular.yaml:267' }
+              - { condition: ema_50_gt_200, timeframe: 1h, provenance: 'validations.regular.yaml:267' }
+      - op: any_of
+        provenance: 'validations.regular.yaml:268-272 evidence variants'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1h, provenance: 'validations.regular.yaml:269' }
+          - { condition: macd_line_cross_up_with_hysteresis, timeframe: 1h, parameters: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }, provenance: 'validations.regular.yaml:270-271' }
+          - { condition: macd_hist_slope_pos, timeframe: 1h, provenance: 'validations.regular.yaml:272' }
+      - { condition: price_regime_ok_long, timeframe: 1h, provenance: 'validations.regular.yaml:273' }
+  trigger:
+    op: all_of
+    provenance: 'validations.regular.yaml:287-298'
+    nodes:
+      - op: any_of
+        provenance: 'validations.regular.yaml:290-294 evidence variants'
+        nodes:
+          - op: all_of
+            provenance: 'validations.regular.yaml:291'
+            nodes:
+              - { condition: macd_hist_gt_eps, timeframe: 15m, provenance: 'validations.regular.yaml:291' }
+              - { condition: ema20_over_50_with_tolerance, timeframe: 15m, provenance: 'validations.regular.yaml:291' }
+          - op: all_of
+            provenance: 'validations.regular.yaml:292-294'
+            nodes:
+              - { condition: macd_line_cross_up_with_hysteresis, timeframe: 15m, parameters: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }, provenance: 'validations.regular.yaml:293' }
+              - { condition: close_above_vwap_or_ma9, timeframe: 15m, provenance: 'validations.regular.yaml:294' }
+      - { condition: ema20_over_50_with_tolerance, timeframe: 15m, provenance: 'validations.regular.yaml:295' }
+      - { condition: rsi_lt_70, timeframe: 15m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:296' }
+      - { condition: close_above_vwap_or_ma9, timeframe: 15m, provenance: 'validations.regular.yaml:297' }
+      - { condition: atr_rel_in_range_15m, timeframe: 15m, parameters: { min_atr_pct: 0.0008, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:298' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.regular.yaml:310-341 common confirmations'
+    nodes:
+      - op: all_of
+        provenance: 'validations.regular.yaml:310-321 mandatory 5m confirmation'
+        nodes:
+          - op: any_of
+            provenance: 'validations.regular.yaml:313-317'
+            nodes:
+              - op: all_of
+                provenance: 'validations.regular.yaml:314'
+                nodes:
+                  - { condition: macd_hist_gt_eps, timeframe: 5m, provenance: 'validations.regular.yaml:314' }
+                  - { condition: ema20_over_50_with_tolerance, timeframe: 5m, provenance: 'validations.regular.yaml:314' }
+              - op: all_of
+                provenance: 'validations.regular.yaml:315-317'
+                nodes:
+                  - { condition: macd_line_cross_up_with_hysteresis, timeframe: 5m, parameters: { min_gap: 0.0012, cool_down_bars: 3, require_prev_below: true }, provenance: 'validations.regular.yaml:316' }
+                  - { condition: close_above_vwap_or_ma9, timeframe: 5m, provenance: 'validations.regular.yaml:317' }
+          - { condition: ema20_over_50_with_tolerance, timeframe: 5m, provenance: 'validations.regular.yaml:318' }
+          - { condition: close_above_vwap_or_ma9, timeframe: 5m, provenance: 'validations.regular.yaml:319' }
+          - { condition: rsi_lt_70, timeframe: 5m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:320' }
+          - { condition: atr_rel_in_range_5m, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:321' }
+      - op: all_of
+        provenance: 'validations.regular.yaml:333-341 mandatory 1m confirmation'
+        nodes:
+          - { condition: macd_hist_gt_eps, timeframe: 1m, provenance: 'validations.regular.yaml:336' }
+          - { condition: ema20_over_50_with_tolerance, timeframe: 1m, provenance: 'validations.regular.yaml:337' }
+          - { condition: close_above_vwap_or_ma9, timeframe: 1m, provenance: 'validations.regular.yaml:338' }
+          - { condition: rsi_lt_70, timeframe: 1m, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:339' }
+          - { condition: macd_hist_slope_pos, timeframe: 1m, provenance: 'validations.regular.yaml:340' }
+          - { condition: atr_rel_in_range_5m, timeframe: 1m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.06 }, provenance: 'validations.regular.yaml:341' }
+filters:
+  - { condition: rsi_lt_70, timeframe: global, parameters: { rsi_lt_70_threshold: 73 }, provenance: 'validations.regular.yaml:238-243 long-only filter' }
+  - { condition: adx_min_for_trend_1h, timeframe: 1h, provenance: 'validations.regular.yaml:240 long-only filter' }
+  - { condition: pullback_confirmed_ma9_21, timeframe: global, provenance: 'validations.regular.yaml:241 long-only filter' }
+  - { condition: pullback_confirmed_vwap, timeframe: global, provenance: 'validations.regular.yaml:242 long-only filter' }
+  - { condition: price_lte_ma21_plus_k_atr, timeframe: global, provenance: 'validations.regular.yaml:243 long-only filter' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: long
+  execution_timeframe: { state: defined, value: 15m, unit: timeframe, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Fixed execution with no descent.' }
+  mandatory_confirmations: { state: defined, value: ['5m', '1m'], unit: timeframes, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Both confirmations are required and cannot substitute each other.' }
+  entry_zone:
+    state: defined
+    value: { anchor_source: vwap, anchor_timeframe: 5m, atr_timeframe: 5m, atr_multiplier: 0.30, minimum_half_width_rate: 0.0005, maximum_half_width_rate: 0.0100, asymmetry_rate: 0.0, ttl_seconds: 240, maximum_input_age_seconds: 60, quantize_outward: true }
+    unit: price_zone_policy
+    source: 'config/app/trade_entry.regular.yaml:236-242 pinned by #306'
+    justification: 'Versioned symmetric VWAP/ATR shadow zone.'
+  stop:
+    state: defined
+    value: { kind: atr, timeframe: 5m, atr_multiplier: 1.5, pivot_id: null, buffer_rate: 0.0 }
+    unit: stop_policy
+    source: 'config/app/trade_entry.regular.yaml:45-49 pinned by #306'
+    justification: 'Single ATR stop source without pivot fallback.'
+  targets:
+    state: defined
+    value: [{ id: tp1, risk_multiple: 2.0, liquidity_role: taker }]
+    unit: target_policy
+    source: 'config/app/trade_entry.regular.yaml:45-49 pinned by #306'
+    justification: 'One target at exactly two gross R.'
+  minimum_net_r: { state: defined, value: 1.3, unit: net_r_multiple, source: 'GitHub issue #306 shadow hypothesis 2026-08-10', justification: 'Every target must retain this R after all venue costs.' }
+  invalidation: { state: defined, value: { kind: close_beyond_stop }, unit: invalidation_policy, source: 'GitHub issue #306 decision 2026-08-10', justification: 'The stop is the sole price invalidation boundary.' }
+  time_stop: { state: defined, value: PT8H, unit: duration, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Additionally bounded by the next UTC day boundary.' }
+  cost_contract:
+    state: defined
+    value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }
+    unit: cost_policy
+    source: 'GitHub issue #306 decision 2026-08-10'
+    justification: 'Fees are exchange-owned; spread, slippage and funding require their exact live/model sources.'
+  order_policy:
+    state: defined
+    value: { type: limit, liquidity_role: maker, ttl_seconds: 90, cancel_after_seconds: 120, market_fallback: false, maximum_spread_bps: 6.0, maximum_slippage_bps: 8.0 }
+    unit: order_policy
+    source: 'config/app/trade_entry.regular.yaml:51-62,139-183 plus GitHub issue #306'
+    justification: 'Limit-only shadow hypothesis with explicit timing and live-cost guards.'
+data_condition_contract:
+  required_data: [ohlcv_4h, ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, order_book, fee_schedule, funding_schedule]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  unknown_condition_policy: reject
+validity_window: { state: defined, value: PT15M, unit: duration, source: 'GitHub issue #306 decision 2026-08-10', justification: 'No decision carry-forward or implicit fallback.' }
+governance:
+  shadow: ['capture complete identity and typed decision trace', 'reject every missing or stale critical input', 'use canonical #304 plan and reservation']
+  paper: ['pass deterministic shadow fixtures', 'run Paper with exact venue costs and no tuning']
+  promotion: ['#132 certified net baseline attached', 'at least 50 certified trades per executable cell', 'independent risk review', 'publish a new semantic version']
+  suspension: ['critical data or cost absent or stale', 'condition contract breach', 'trace or risk invariant gap']
+  rollback: ['certified net baseline regression', 'schema or provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects: []
+provenance:
+  - { path: mode_compatibility, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Pinned exclusively to day_trading@1.1.0.' }
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.regular.yaml:248-260', justification: 'Copied bullish 4h regime AST.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.regular.yaml:262-285', justification: 'Copied bullish 1h context AST.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.regular.yaml:287-308', justification: 'Copied bullish 15m trigger AST.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.regular.yaml:310-349 plus GitHub issue #306', justification: 'Copied 5m/1m branches, now both mandatory.' }
+  - { path: filters, source: 'src/MtfValidator/config/validations.regular.yaml:238-243 scoped long by #306', justification: 'Filters belong only to this long setup.' }
+  - { path: execution.execution_timeframe, source: 'GitHub issue #306 decision 2026-08-10', justification: '15m only; no selector.' }
+  - { path: execution.mandatory_confirmations, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Exact 5m then 1m confirmation contract.' }
+  - { path: execution.entry_zone, source: 'config/app/trade_entry.regular.yaml:236-242 pinned by #306', justification: 'Canonical VWAP/ATR zone values copied as a shadow hypothesis.' }
+  - { path: execution.stop, source: 'config/app/trade_entry.regular.yaml:45-49 pinned by #306', justification: 'Canonical ATR-only stop.' }
+  - { path: execution.targets, source: 'config/app/trade_entry.regular.yaml:45-49 pinned by #306', justification: 'Single 2R gross target.' }
+  - { path: execution.minimum_net_r, source: 'GitHub issue #306 shadow hypothesis 2026-08-10', justification: '1.3R net acceptance floor.' }
+  - { path: execution.invalidation, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Close beyond stop.' }
+  - { path: execution.time_stop, source: 'GitHub issue #306 decision 2026-08-10', justification: 'PT8H plus UTC boundary.' }
+  - { path: execution.cost_contract, source: 'GitHub issue #306 decision 2026-08-10', justification: 'Exact venue/live/model cost sources.' }
+  - { path: execution.order_policy, source: 'config/app/trade_entry.regular.yaml:51-62,139-183 plus GitHub issue #306', justification: 'Limit-only timing and cost guards.' }
+  - { path: validity_window, source: 'GitHub issue #306 decision 2026-08-10', justification: 'PT15M validity.' }
+ownership_model: setup-contract-ownership-v1

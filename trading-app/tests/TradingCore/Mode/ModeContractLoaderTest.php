@@ -48,6 +48,56 @@ final class ModeContractLoaderTest extends TestCase
         yield 'micro scalping' => ['micro_scalping'];
     }
 
+    public function testLoadsExecutableDayTradingShadowVersionWithExactDecisions(): void
+    {
+        $contract = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0');
+        $document = $contract->toArray();
+
+        self::assertSame('1.1.0', $contract->modeVersion);
+        self::assertSame('shadow', $contract->lifecycleStatus);
+        self::assertTrue($contract->isExecutable());
+        self::assertSame([
+            'maximum_duration' => 'PT8H',
+            'daily_boundary_time' => '00:00:00',
+            'daily_boundary_timezone' => 'UTC',
+            'close_before_boundary' => true,
+        ], $document['horizon']['value']);
+        self::assertSame(['15m'], $contract->timeframeRoles()['execution']);
+        self::assertSame(['5m', '1m'], $contract->timeframeRoles()['confirmations']);
+        self::assertSame(5.0, $document['risk']['trade_budget']['value']);
+        self::assertSame([
+            'limit' => 4,
+            'include_pending_entries' => true,
+        ], $document['risk']['max_concurrent_positions']['value']);
+        self::assertSame(100.0, $document['risk']['mode_exposure_cap']['value']);
+        self::assertSame(2.0, $document['leverage']['value']);
+        self::assertFalse($document['order_policy']['value']['market_fallback']);
+    }
+
+    public function testDayTradingShadowMutationsFailInPhpAndJsonSchema(): void
+    {
+        $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0')->toArray();
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $mutations = [];
+        $mutations['leverage'] = $document;
+        $mutations['leverage']['leverage']['value'] = 3.0;
+        $mutations['market fallback'] = $document;
+        $mutations['market fallback']['order_policy']['value']['market_fallback'] = true;
+        $mutations['missing confirmations'] = $document;
+        unset($mutations['missing confirmations']['timeframes']['confirmations']);
+
+        foreach ($mutations as $label => $mutation) {
+            try {
+                (new ModeContractValidator())->validate($mutation);
+                self::fail('PHP accepted mutation: ' . $label);
+            } catch (ModeContractException) {
+                self::addToAssertionCount(1);
+            }
+            $object = json_decode(json_encode($mutation, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertFalse((new JsonSchemaValidator())->validate($object, $schema)->isValid(), 'schema accepted mutation: ' . $label);
+        }
+    }
+
     #[DataProvider('rejectedModeIds')]
     public function testRejectsLegacyAliasesAndUnknownModes(string $modeId): void
     {
