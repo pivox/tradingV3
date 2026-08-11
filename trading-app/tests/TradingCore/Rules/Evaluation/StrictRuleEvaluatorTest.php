@@ -468,6 +468,60 @@ final class StrictRuleEvaluatorTest extends TestCase
         ];
     }
 
+    /** @param list<mixed> $series */
+    #[DataProvider('invalidSeriesNumberProvider')]
+    public function testDirectSeriesNumberRejectsEveryNonFiniteOrNonNumericElement(
+        string $conditionId,
+        string $timeframe,
+        string $side,
+        string $metric,
+        array $series,
+    ): void {
+        $condition = $conditionId === MacdHistSlopePosCondition::NAME
+            ? new MacdHistSlopePosCondition()
+            : new Ema200SlopePosCondition();
+        $step = $timeframe === '1h' ? 3600 : 900;
+        $start = 1_786_435_200;
+        $timestamps = array_map(
+            static fn (int $index): int => $start + ($index * $step),
+            array_keys($series),
+        );
+        $result = $this->evaluator([$condition], '1.1.0')->evaluate(
+            new ConditionNode($conditionId, $timeframe, $side, [], 'fixture:invalid-series-number'),
+            $this->context([
+                'series_order' => 'oldest_to_newest',
+                $metric => $series,
+                $metric . '_timestamps' => $timestamps,
+            ], timeframe: $timeframe),
+        );
+
+        self::assertFalse($result->passed);
+        self::assertSame('invalid_series_chronology', $result->reasonCode);
+    }
+
+    /** @return iterable<string, array{string, string, string, string, list<mixed>}> */
+    public static function invalidSeriesNumberProvider(): iterable
+    {
+        yield 'MACD rejects string outside consumed tail' => [
+            MacdHistSlopePosCondition::NAME, '15m', 'long', 'macd_hist_series', ['garbage', -1.0, 1.0],
+        ];
+        yield 'MACD rejects infinity in consumed tail' => [
+            MacdHistSlopePosCondition::NAME, '15m', 'long', 'macd_hist_series', [-1.0, INF],
+        ];
+        yield 'MACD rejects NaN outside consumed tail' => [
+            MacdHistSlopePosCondition::NAME, '15m', 'long', 'macd_hist_series', [NAN, -1.0, 1.0],
+        ];
+        yield 'EMA rejects numeric string in consumed tail' => [
+            'ema200_slope_pos', '1h', 'long', 'ema_200_series', [100.0, '101.0'],
+        ];
+        yield 'EMA rejects infinity outside consumed tail' => [
+            'ema200_slope_pos', '1h', 'long', 'ema_200_series', [INF, 100.0, 101.0],
+        ];
+        yield 'EMA rejects NaN in consumed tail' => [
+            'ema200_slope_pos', '1h', 'long', 'ema_200_series', [100.0, NAN],
+        ];
+    }
+
     public function testGlobalIndicatorConditionAggregatesEveryAvailableTimeframeFailClosed(): void
     {
         $condition = new class implements ConditionInterface {

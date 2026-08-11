@@ -222,6 +222,18 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
                 'ema_200_series_timestamps' => [$start, $start + 3600],
             ], true];
         }
+        yield 'long rejects string outside consumed tail' => ['price_regime_ok_long', 'long', [
+            'ema_200_series' => ['garbage', 100.0, 101.0],
+            'ema_200_series_timestamps' => [$start, $start + 3600, $start + 7200],
+        ], false];
+        yield 'long rejects infinity in consumed tail' => ['price_regime_ok_long', 'long', [
+            'ema_200_series' => [100.0, INF],
+            'ema_200_series_timestamps' => [$start, $start + 3600],
+        ], false];
+        yield 'long rejects NaN outside consumed tail' => ['price_regime_ok_long', 'long', [
+            'ema_200_series' => [NAN, 100.0, 101.0],
+            'ema_200_series_timestamps' => [$start, $start + 3600, $start + 7200],
+        ], false];
     }
 
     /** @param array<string, mixed> $seriesProof */
@@ -255,6 +267,18 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
         yield 'duplicate timestamps' => [[
             'macd_hist_series' => [0.2, 0.1],
             'macd_hist_series_timestamps' => [$start, $start],
+        ], false];
+        yield 'string outside consumed tail' => [[
+            'macd_hist_series' => ['garbage', 0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start, $start + 900, $start + 1800],
+        ], false];
+        yield 'infinity in consumed tail' => [[
+            'macd_hist_series' => [0.2, INF],
+            'macd_hist_series_timestamps' => [$start, $start + 900],
+        ], false];
+        yield 'NaN outside consumed tail' => [[
+            'macd_hist_series' => [NAN, 0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start, $start + 900, $start + 1800],
         ], false];
         yield 'canonical proof' => [[
             'macd_hist_series' => [0.2, 0.1],

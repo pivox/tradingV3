@@ -35,6 +35,13 @@ final readonly class CanonicalSeriesChronologyValidator
         ) {
             return false;
         }
+        if ($definition->valueType === 'series<number>') {
+            foreach ($series as $value) {
+                if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)) {
+                    return false;
+                }
+            }
+        }
 
         $timeframeValue = Timeframe::tryFrom($timeframe);
         if ($timeframeValue === null) {
