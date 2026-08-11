@@ -49,7 +49,7 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
             CanonicalPortfolioAdmissionProof::fromArray($proof->toArray())->toArray(),
         );
         self::assertIsString(json_encode($proof->toArray(), JSON_THROW_ON_ERROR));
-        self::assertSame($proof, $proof->verify($request->plan, $reservation));
+        self::assertSame($proof, $proof->verify($request->plan, $reservation, $request->policy));
     }
 
     public function testAdmissionProofStrictParserRejectsUnknownAndIncompleteEvidence(): void
@@ -78,7 +78,21 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
             CanonicalPortfolioAdmissionProof::fromRequest($request)->toArray(),
         );
 
-        self::assertSame($proof, $proof->verify($request->plan, $reservation));
+        self::assertSame($proof, $proof->verify($request->plan, $reservation, $request->policy));
+    }
+
+    public function testAdmissionProofRejectsSelfDeclaredPolicyThatDiffersFromExpectedEffectiveConfig(): void
+    {
+        $request = $this->request();
+        $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00'));
+        $reservation = CanonicalPortfolioReservation::open($engine->admit($request), $request->plan);
+        $proofData = CanonicalPortfolioAdmissionProof::fromRequest($request)->toArray();
+        $proofData['policy']['max_concurrent_positions'] = 5;
+        $forged = CanonicalPortfolioAdmissionProof::fromArray($proofData);
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_admission_proof_policy_mismatch');
+        $forged->verify($request->plan, $reservation, $request->policy);
     }
 
     public function testReservationDecisionCannotBeConstructedOutsideAdmissionAuthority(): void

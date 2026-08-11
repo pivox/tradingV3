@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\TradingCore\Risk\Canonical\Portfolio;
 
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 
@@ -163,6 +165,112 @@ final readonly class CanonicalPortfolioPolicy
             $concurrencyValue['include_pending_entries'],
             self::percentageRate($exposurePercent, 'canonical_portfolio_exposure_policy_invalid'),
         );
+    }
+
+    public static function fromLineageSnapshot(CanonicalEffectiveConfigSnapshot $snapshot): self
+    {
+        try {
+            $data = $snapshot->toArray();
+            self::exactKeys($data, [
+                'request',
+                'config',
+                'config_hash',
+                'condition_catalog_hash',
+                'ordered_layers',
+                'ordered_files',
+                'provenance',
+                'executable',
+                'blockers',
+            ], 'canonical_portfolio_policy_lineage_invalid');
+            $requestData = self::mapping($data, 'request', 'canonical_portfolio_policy_lineage_invalid');
+            $requestKeys = array_keys($requestData);
+            sort($requestKeys, SORT_STRING);
+            $requiredRequestKeys = ['environment', 'exchange', 'mode_id', 'mode_version', 'setup_id', 'setup_version', 'side'];
+            $acceptedRequestKeys = [...$requiredRequestKeys, 'execution_capability'];
+            sort($acceptedRequestKeys, SORT_STRING);
+            if ($requestKeys !== $requiredRequestKeys && $requestKeys !== $acceptedRequestKeys) {
+                throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+            }
+            foreach ($requiredRequestKeys as $field) {
+                if (!\is_string($requestData[$field])) {
+                    throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+                }
+            }
+            $capability = null;
+            if (array_key_exists('execution_capability', $requestData)) {
+                if (!\is_string($requestData['execution_capability'])) {
+                    throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+                }
+                $capability = ShadowExecutionCapability::tryFrom($requestData['execution_capability']);
+                if (!$capability instanceof ShadowExecutionCapability) {
+                    throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+                }
+            }
+            $config = $data['config'] ?? null;
+            $layers = $data['ordered_layers'] ?? null;
+            $provenance = $data['provenance'] ?? null;
+            $blockers = $data['blockers'] ?? null;
+            if (
+                !\is_array($config)
+                || ($config !== [] && array_is_list($config))
+                || !\is_string($data['config_hash'] ?? null)
+                || !\is_string($data['condition_catalog_hash'] ?? null)
+                || !\is_array($layers)
+                || !array_is_list($layers)
+                || !\is_array($provenance)
+                || ($provenance !== [] && array_is_list($provenance))
+                || !\is_bool($data['executable'] ?? null)
+                || !\is_array($blockers)
+                || !array_is_list($blockers)
+            ) {
+                throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+            }
+            foreach ($blockers as $blocker) {
+                if (!\is_string($blocker)) {
+                    throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+                }
+            }
+            foreach ($layers as $layer) {
+                self::assertProofLayer($layer);
+            }
+            foreach ($provenance as $path => $layer) {
+                if (!\is_string($path) || $path === '') {
+                    throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+                }
+                self::assertProofLayer($layer);
+            }
+
+            /** @var list<array{type:string,name:string,path:string,required:bool}> $layers */
+            /** @var array<string,array{type:string,name:string,path:string,required:bool}> $provenance */
+            /** @var list<string> $blockers */
+            return self::fromSnapshot(new EffectiveTradingConfigSnapshot(
+                new EffectiveTradingConfigRequest(
+                    $requestData['mode_id'],
+                    $requestData['mode_version'],
+                    $requestData['setup_id'],
+                    $requestData['setup_version'],
+                    $requestData['exchange'],
+                    $requestData['environment'],
+                    $requestData['side'],
+                    $capability,
+                ),
+                $config,
+                $data['config_hash'],
+                $data['condition_catalog_hash'],
+                $layers,
+                $provenance,
+                $data['executable'],
+                $blockers,
+            ));
+        } catch (CanonicalPortfolioException $exception) {
+            if ($exception->reasonCode === 'canonical_portfolio_policy_lineage_invalid') {
+                throw $exception;
+            }
+
+            throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid', [], $exception);
+        } catch (\Throwable $exception) {
+            throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid', [], $exception);
+        }
     }
 
     /** @return array<string, bool|int|string> */
@@ -362,6 +470,27 @@ final readonly class CanonicalPortfolioPolicy
             );
         } catch (\Throwable $exception) {
             throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid', [], $exception);
+        }
+    }
+
+    private static function assertProofLayer(mixed $layer): void
+    {
+        if (!\is_array($layer)) {
+            throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+        }
+        $keys = array_keys($layer);
+        sort($keys, SORT_STRING);
+        if (
+            $keys !== ['name', 'path', 'required', 'type']
+            || !\is_string($layer['type'])
+            || $layer['type'] === ''
+            || !\is_string($layer['name'])
+            || $layer['name'] === ''
+            || !\is_string($layer['path'])
+            || $layer['path'] === ''
+            || $layer['required'] !== true
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
         }
     }
 }

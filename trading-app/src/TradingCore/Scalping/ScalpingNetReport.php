@@ -13,6 +13,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTarget;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use Brick\Math\BigDecimal;
 
@@ -288,7 +289,15 @@ final readonly class ScalpingNetReport
             throw new \InvalidArgumentException('scalping_net_report_admission_proof_invalid');
         }
         try {
-            CanonicalPortfolioAdmissionProof::fromArray($proofData)->verify($plan, $reservation);
+            $lineageSnapshot = $outcome->lineage->effectiveConfigSnapshot;
+            if ($lineageSnapshot === null) {
+                throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
+            }
+            CanonicalPortfolioAdmissionProof::fromArray($proofData)->verify(
+                $plan,
+                $reservation,
+                CanonicalPortfolioPolicy::fromLineageSnapshot($lineageSnapshot),
+            );
         } catch (CanonicalPortfolioException $exception) {
             throw new \InvalidArgumentException('scalping_net_report_admission_proof_invalid', 0, $exception);
         }

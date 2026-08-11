@@ -8,6 +8,9 @@ use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use App\TradingCore\Scalping\ScalpingNetReport;
 use App\TradingCore\Scalping\ScalpingNetReportCell;
@@ -16,6 +19,7 @@ use App\TradingCore\Scalping\ScalpingShadowOutcome;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(ScalpingNetReport::class)]
 #[CoversClass(ScalpingNetReportCell::class)]
@@ -484,6 +488,53 @@ final class ScalpingNetReportTest extends TestCase
             $planned->lineage,
             $planned->orderPlan,
             $planned->reservation,
+            $evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_admission_proof_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    /** @return iterable<string, array{string, int|string}> */
+    public static function coordinatedPolicyForgeryCases(): iterable
+    {
+        yield 'daily absolute' => ['daily_loss_absolute_quote', '41'];
+        yield 'daily rate' => ['daily_loss_rate', '0.07'];
+        yield 'concurrency' => ['max_concurrent_positions', 4];
+        yield 'mode exposure' => ['mode_exposure_rate', '0.76'];
+    }
+
+    #[DataProvider('coordinatedPolicyForgeryCases')]
+    public function testRejectsReplayedAdmissionWhoseSelfDeclaredPolicyDiffersFromLineage(
+        string $field,
+        int|string $value,
+    ): void {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+        $evidence = $planned->evidence;
+        self::assertIsArray($evidence['admission_proof'] ?? null);
+        self::assertIsArray($evidence['admission_proof']['policy'] ?? null);
+        $evidence['admission_proof']['policy'][$field] = $value;
+        $proof = CanonicalPortfolioAdmissionProof::fromArray($evidence['admission_proof']);
+        $admission = new CanonicalPortfolioAdmissionRequest(
+            $proof->policy,
+            $planned->orderPlan,
+            $proof->scope,
+            $proof->snapshot,
+            $proof->decisionKey,
+        );
+        $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock($planned->reservation->observedAt)))
+            ->admit($admission);
+        $forgedReservation = CanonicalPortfolioReservation::open($decision, $planned->orderPlan);
+        $evidence['reservation_hash'] = $forgedReservation->stateHash;
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $planned->lineage,
+            $planned->orderPlan,
+            $forgedReservation,
             $evidence,
         );
 

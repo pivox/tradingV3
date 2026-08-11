@@ -20,6 +20,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
@@ -83,8 +84,13 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame('5m', $outcome->evidence['rules']['execution_timeframe']);
         self::assertSame(['1m'], $outcome->evidence['rules']['mandatory_confirmations']);
         self::assertIsArray($outcome->evidence['admission_proof']);
+        self::assertNotNull($outcome->lineage->effectiveConfigSnapshot);
         CanonicalPortfolioAdmissionProof::fromArray($outcome->evidence['admission_proof'])
-            ->verify($outcome->orderPlan, $outcome->reservation);
+            ->verify(
+                $outcome->orderPlan,
+                $outcome->reservation,
+                CanonicalPortfolioPolicy::fromLineageSnapshot($outcome->lineage->effectiveConfigSnapshot),
+            );
     }
 
     public function testCrossSetupIdentityWrongSideAndWrongVersionAreRejectedBeforeReservation(): void

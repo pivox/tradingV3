@@ -170,11 +170,17 @@ final readonly class CanonicalPortfolioAdmissionProof
         }
     }
 
-    public function verify(CanonicalOrderPlan $plan, CanonicalPortfolioReservation $reservation): self
-    {
+    public function verify(
+        CanonicalOrderPlan $plan,
+        CanonicalPortfolioReservation $reservation,
+        CanonicalPortfolioPolicy $expectedPolicy,
+    ): self {
+        if ($this->policy->toAdmissionProofArray() !== $expectedPolicy->toAdmissionProofArray()) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_policy_mismatch');
+        }
         try {
             $request = new CanonicalPortfolioAdmissionRequest(
-                $this->policy,
+                $expectedPolicy,
                 $plan,
                 $this->scope,
                 $this->snapshot,
