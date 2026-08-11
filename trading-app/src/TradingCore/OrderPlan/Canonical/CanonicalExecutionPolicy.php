@@ -14,6 +14,8 @@ final readonly class CanonicalExecutionPolicy
 {
     /**
      * @param non-empty-list<CanonicalTargetPolicy> $targets
+     * @param list<string>                           $mandatoryConfirmations
+     * @param array<string, mixed>                   $holdingHorizon
      * @param list<string>                           $allowedSymbols
      * @param list<string>                           $allowedMarkets
      */
