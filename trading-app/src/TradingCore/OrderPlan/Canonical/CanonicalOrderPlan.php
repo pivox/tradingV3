@@ -79,6 +79,7 @@ final readonly class CanonicalOrderPlan
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $expiresAt,
         public ?\DateTimeImmutable $cancelAfterAt,
+        public ?\DateTimeImmutable $holdingExpiresAt,
         public string $configHash,
         public string $costInputHash,
         public array $inputHashes,
@@ -190,6 +191,11 @@ final readonly class CanonicalOrderPlan
             $entryExpiresAt = $entryTtl < $zone->expiresAt ? $entryTtl : $zone->expiresAt;
             $cancelAfterAt = $cancellationDeadline < $zone->expiresAt ? $cancellationDeadline : $zone->expiresAt;
         }
+        $holdingExpiresAt = $policy->holdingHorizon === [] ? null : CanonicalHoldingBoundary::expiresAt(
+            $createdAt,
+            $policy->holdingWindowSeconds,
+            $policy->holdingHorizon,
+        );
         $values = [
             'modeId' => $riskPolicy->modeId,
             'modeVersion' => $riskPolicy->modeVersion,
@@ -259,6 +265,7 @@ final readonly class CanonicalOrderPlan
             'createdAt' => $createdAt,
             'expiresAt' => $entryExpiresAt,
             'cancelAfterAt' => $cancelAfterAt,
+            'holdingExpiresAt' => $holdingExpiresAt,
             'configHash' => $policy->configHash,
             'costInputHash' => $request->netR->costInputHash,
             'inputHashes' => $inputHashes,
@@ -284,9 +291,9 @@ final readonly class CanonicalOrderPlan
             static fn (CanonicalOrderPlanTarget $target): array => $target->toArray(),
             $values['targets'],
         );
-        foreach (['inputObservedAt', 'observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt', 'cancelAfterAt'] as $field) {
+        foreach (['inputObservedAt', 'observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt', 'cancelAfterAt', 'holdingExpiresAt'] as $field) {
             $timestamp = $values[$field];
-            if ($timestamp === null && $field === 'cancelAfterAt') {
+            if ($timestamp === null && \in_array($field, ['cancelAfterAt', 'holdingExpiresAt'], true)) {
                 continue;
             }
             if (!$timestamp instanceof \DateTimeImmutable) {

@@ -10,14 +10,10 @@ use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
-use App\TradingCore\OrderPlan\Canonical\CanonicalHoldingBoundary;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\PaperCanonicalPortfolioAdapter;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
@@ -30,7 +26,7 @@ final readonly class DayTradingShadowRuntime
         private CanonicalSetupRuleRuntime $ruleRuntime,
         private CanonicalExecutionPolicyCompiler $policyCompiler,
         private CanonicalOrderPlanBuilder $orderPlanBuilder,
-        private CanonicalPortfolioAdapterInterface $portfolioAdapter,
+        private CanonicalPortfolioAdapterSelector $portfolioAdapters,
         private ClockInterface $clock,
     ) {
     }
@@ -44,11 +40,9 @@ final readonly class DayTradingShadowRuntime
         if ($capability === null || !$capability->permitsShadow()) {
             return $this->reject($request, 'day_trading_shadow_capability_forbidden');
         }
-        if (!$this->adapterMatches($capability)) {
-            return $this->reject($request, 'day_trading_shadow_adapter_mismatch');
-        }
 
         try {
+            $portfolioAdapter = $this->portfolioAdapters->select($capability);
             $snapshot = $this->configResolver->resolve($request->configRequest);
             if (!$this->lineageMatches($request, $snapshot->configHash, (string) $snapshot->conditionCatalogHash)) {
                 return $this->reject($request, 'day_trading_shadow_lineage_mismatch');
@@ -72,11 +66,6 @@ final readonly class DayTradingShadowRuntime
                 return $this->reject($request, $guard);
             }
 
-            $holdingExpiry = CanonicalHoldingBoundary::expiresAt(
-                $this->clock->now(),
-                $policy->holdingWindowSeconds,
-                $policy->holdingHorizon,
-            );
             $plan = $this->orderPlanBuilder->build($request->orderPlanRequest);
             if ($plan->orderType !== 'limit') {
                 return $this->reject($request, 'day_trading_shadow_non_limit_plan_forbidden');
@@ -88,7 +77,7 @@ final readonly class DayTradingShadowRuntime
                 $request->portfolioSnapshot,
                 $request->decisionKey,
             );
-            $reservation = $this->portfolioAdapter->reserve($admission);
+            $reservation = $portfolioAdapter->reserve($admission);
 
             return new DayTradingShadowOutcome(
                 'planned',
@@ -102,7 +91,7 @@ final readonly class DayTradingShadowRuntime
                     'reservation_hash' => $reservation->stateHash,
                     'entry_expires_at' => $plan->expiresAt->format(DATE_ATOM),
                     'cancel_after_at' => $plan->cancelAfterAt?->format(DATE_ATOM),
-                    'holding_expires_at' => $holdingExpiry->format(DATE_ATOM),
+                    'holding_expires_at' => $plan->holdingExpiresAt?->format(DATE_ATOM),
                     'rules' => $rules->trace,
                 ],
             );
@@ -122,16 +111,6 @@ final readonly class DayTradingShadowRuntime
             && $config->setupId === 'day_trading.trend_continuation.long'
             && $config->setupVersion === '1.1.0'
             && $config->side === 'long';
-    }
-
-    private function adapterMatches(ShadowExecutionCapability $capability): bool
-    {
-        return match ($capability) {
-            ShadowExecutionCapability::Fake => $this->portfolioAdapter instanceof FakeCanonicalPortfolioAdapter,
-            ShadowExecutionCapability::Paper => $this->portfolioAdapter instanceof PaperCanonicalPortfolioAdapter,
-            ShadowExecutionCapability::Backtest => $this->portfolioAdapter instanceof BacktestCanonicalPortfolioAdapter,
-            ShadowExecutionCapability::PrivateMainnet => false,
-        };
     }
 
     private function lineageMatches(DayTradingShadowRequest $request, string $configHash, string $catalogHash): bool

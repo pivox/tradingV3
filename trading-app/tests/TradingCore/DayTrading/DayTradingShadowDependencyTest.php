@@ -25,7 +25,7 @@ final class DayTradingShadowDependencyTest extends TestCase
             'App\MtfValidator\Policy\CanonicalSetupRuleRuntime',
             'App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler',
             'App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder',
-            'App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface',
+            'App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector',
             'Psr\Clock\ClockInterface',
         ], $types);
     }

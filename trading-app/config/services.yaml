@@ -244,6 +244,27 @@ services:
     App\TradingCore\Execution\Hyperliquid\HyperliquidExecutionLockInterface:
         alias: App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock
 
+    day_trading.shadow_portfolio_store.fake:
+        class: App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore
+
+    day_trading.shadow_portfolio_store.paper:
+        class: App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore
+
+    day_trading.shadow_portfolio_store.backtest:
+        class: App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore
+
+    App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter:
+        arguments:
+            $reservationStore: '@day_trading.shadow_portfolio_store.fake'
+
+    App\TradingCore\Risk\Canonical\Portfolio\Adapter\PaperCanonicalPortfolioAdapter:
+        arguments:
+            $reservationStore: '@day_trading.shadow_portfolio_store.paper'
+
+    App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter:
+        arguments:
+            $reservationStore: '@day_trading.shadow_portfolio_store.backtest'
+
     App\Provider\Hyperliquid\HyperliquidReconciliationStatusInterface:
         alias: App\TradingCore\Execution\Hyperliquid\SymfonyLockHyperliquidExecutionLock
 

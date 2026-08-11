@@ -6,24 +6,31 @@ namespace App\Tests\TradingCore\DayTrading;
 
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\PaperCanonicalPortfolioAdapter;
-use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
-use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore;
 use App\TradingCore\DayTrading\DayTradingShadowRuntime;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(DayTradingShadowRuntime::class)]
+#[CoversClass(CanonicalPortfolioAdapterSelector::class)]
 final class DayTradingShadowAdapterParityTest extends TestCase
 {
+    public function testSelectorMapsEachCapabilityToItsDedicatedAdapter(): void
+    {
+        $selector = DayTradingShadowRuntimeTest::fixtureSelector();
+
+        self::assertInstanceOf(FakeCanonicalPortfolioAdapter::class, $selector->select(ShadowExecutionCapability::Fake));
+        self::assertInstanceOf(PaperCanonicalPortfolioAdapter::class, $selector->select(ShadowExecutionCapability::Paper));
+        self::assertInstanceOf(BacktestCanonicalPortfolioAdapter::class, $selector->select(ShadowExecutionCapability::Backtest));
+    }
+
     public function testFakePaperAndBacktestProduceIdenticalCanonicalShadowDecisions(): void
     {
         $normalized = [];
-        foreach ($this->cells() as [$capability, $adapter]) {
-            $outcome = DayTradingShadowRuntimeTest::fixtureRuntime($adapter)->run(
+        foreach ($this->capabilities() as $capability) {
+            $outcome = DayTradingShadowRuntimeTest::fixtureRuntime()->run(
                 DayTradingShadowRuntimeTest::fixtureRequest(capability: $capability),
             );
             self::assertSame('planned', $outcome->status);
@@ -47,31 +54,13 @@ final class DayTradingShadowAdapterParityTest extends TestCase
         )));
     }
 
-    public function testCapabilityAndAdapterMismatchIsFailClosed(): void
+    /** @return list<ShadowExecutionCapability> */
+    private function capabilities(): array
     {
-        [, $paper] = $this->cells()[1];
-        $outcome = DayTradingShadowRuntimeTest::fixtureRuntime($paper)->run(
-            DayTradingShadowRuntimeTest::fixtureRequest(capability: ShadowExecutionCapability::Fake),
-        );
-
-        self::assertSame('no_trade', $outcome->status);
-        self::assertSame('day_trading_shadow_adapter_mismatch', $outcome->reasonCode);
-        self::assertNull($outcome->reservation);
-    }
-
-    /** @return list<array{ShadowExecutionCapability, CanonicalPortfolioAdapterInterface}> */
-    private function cells(): array
-    {
-        /** @param class-string<CanonicalPortfolioAdapterInterface> $class */
-        $adapter = static fn (string $class): CanonicalPortfolioAdapterInterface => new $class(
-            new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')),
-            new InMemoryCanonicalPortfolioReservationStore(),
-        );
-
         return [
-            [ShadowExecutionCapability::Fake, $adapter(FakeCanonicalPortfolioAdapter::class)],
-            [ShadowExecutionCapability::Paper, $adapter(PaperCanonicalPortfolioAdapter::class)],
-            [ShadowExecutionCapability::Backtest, $adapter(BacktestCanonicalPortfolioAdapter::class)],
+            ShadowExecutionCapability::Fake,
+            ShadowExecutionCapability::Paper,
+            ShadowExecutionCapability::Backtest,
         ];
     }
 }

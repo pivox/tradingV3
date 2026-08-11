@@ -34,15 +34,23 @@ final readonly class CanonicalOrderPlanValidator
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
         if ($plan->modeId === 'day_trading' && $plan->modeVersion === '1.1.0') {
+            $expectedHoldingExpiry = CanonicalHoldingBoundary::expiresAt($plan->createdAt, 28_800, [
+                'maximum_duration' => 'PT8H',
+                'daily_boundary_time' => '00:00:00',
+                'daily_boundary_timezone' => 'UTC',
+                'close_before_boundary' => true,
+            ]);
             if (
                 !$plan->cancelAfterAt instanceof \DateTimeImmutable
+                || !$plan->holdingExpiresAt instanceof \DateTimeImmutable
                 || $plan->expiresAt > $plan->createdAt->modify('+90 seconds')
                 || $plan->cancelAfterAt > $plan->createdAt->modify('+120 seconds')
                 || $plan->cancelAfterAt < $plan->expiresAt
+                || $plan->holdingExpiresAt != $expectedHoldingExpiry
             ) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
             }
-        } elseif ($plan->cancelAfterAt !== null) {
+        } elseif ($plan->cancelAfterAt !== null || $plan->holdingExpiresAt !== null) {
             throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
         }
         if (

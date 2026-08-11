@@ -45,6 +45,14 @@ abstract class AbstractCanonicalPortfolioAdapter implements CanonicalPortfolioAd
         return $this->reservationStore->cancelResidual($reservation, $observedAt, $inputHash);
     }
 
+    final public function enforceHoldingDeadline(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation {
+        return $this->reservationStore->enforceHoldingDeadline($reservation, $observedAt, $inputHash);
+    }
+
     final public function acknowledgeResidualReduction(
         CanonicalPortfolioReservation $reservation,
         float $venueRemainingQuantity,

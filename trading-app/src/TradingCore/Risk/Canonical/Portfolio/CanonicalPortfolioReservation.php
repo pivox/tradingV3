@@ -38,6 +38,7 @@ final readonly class CanonicalPortfolioReservation
         public float $plannedFundingCostQuote,
         public \DateTimeImmutable $entryExpiresAt,
         public ?\DateTimeImmutable $cancelAfterAt,
+        public ?\DateTimeImmutable $holdingExpiresAt,
         public float $filledQuantity,
         public float $protectedQuantity,
         public float $remainingQuantity,
@@ -114,6 +115,7 @@ final readonly class CanonicalPortfolioReservation
             'plannedFundingCostQuote' => $plan->fundingCost,
             'entryExpiresAt' => $plan->expiresAt,
             'cancelAfterAt' => $plan->cancelAfterAt,
+            'holdingExpiresAt' => $plan->holdingExpiresAt,
             'filledQuantity' => 0.0,
             'protectedQuantity' => 0.0,
             'remainingQuantity' => $plan->quantity,
@@ -371,6 +373,37 @@ final readonly class CanonicalPortfolioReservation
         ]));
     }
 
+    public function enforceHoldingDeadline(\DateTimeImmutable $observedAt, string $inputHash): self
+    {
+        self::terminalInput($observedAt, $inputHash, $this->observedAt);
+        if (!$this->holdingExpiresAt instanceof \DateTimeImmutable || $observedAt < $this->holdingExpiresAt) {
+            throw new CanonicalPortfolioException('canonical_portfolio_holding_deadline_not_reached');
+        }
+        if ($this->status === 'closed' || $this->status === 'holding_expired') {
+            return $this;
+        }
+        if ($this->version === PHP_INT_MAX) {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_version_overflow');
+        }
+
+        return self::create(array_replace($this->values(), [
+            'remainingQuantity' => 0.0,
+            'venueRemainingQuantity' => 0.0,
+            'residualRiskQuote' => 0.0,
+            'residualNotionalQuote' => 0.0,
+            'remainingQuantityDecimal' => '0',
+            'venueRemainingQuantityDecimal' => '0',
+            'residualRiskDecimal' => '0',
+            'residualNotionalDecimal' => '0',
+            'status' => $this->filledQuantity > 0.0 ? 'holding_expired' : 'cancelled',
+            'requiredAction' => $this->filledQuantity > 0.0 ? 'close_position' : 'none',
+            'transitionInputHashes' => [...$this->transitionInputHashes, $inputHash],
+            'version' => $this->version + 1,
+            'previousStateHash' => $this->stateHash,
+            'observedAt' => $observedAt,
+        ]));
+    }
+
     public function acknowledgeResidualReduction(
         float $venueRemainingQuantity,
         \DateTimeImmutable $observedAt,
@@ -464,11 +497,13 @@ final readonly class CanonicalPortfolioReservation
         $observedAt = $hashValues['observedAt'] ?? null;
         $entryExpiresAt = $hashValues['entryExpiresAt'] ?? null;
         $cancelAfterAt = $hashValues['cancelAfterAt'] ?? null;
+        $holdingExpiresAt = $hashValues['holdingExpiresAt'] ?? null;
         if (
             !$scope instanceof CanonicalPortfolioScope
             || !$observedAt instanceof \DateTimeImmutable
             || !$entryExpiresAt instanceof \DateTimeImmutable
             || ($cancelAfterAt !== null && !$cancelAfterAt instanceof \DateTimeImmutable)
+            || ($holdingExpiresAt !== null && !$holdingExpiresAt instanceof \DateTimeImmutable)
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_invalid');
         }
@@ -476,6 +511,7 @@ final readonly class CanonicalPortfolioReservation
         $hashValues['observedAt'] = $observedAt->format('Y-m-d\TH:i:s.uP');
         $hashValues['entryExpiresAt'] = $entryExpiresAt->format('Y-m-d\TH:i:s.uP');
         $hashValues['cancelAfterAt'] = $cancelAfterAt?->format('Y-m-d\TH:i:s.uP');
+        $hashValues['holdingExpiresAt'] = $holdingExpiresAt?->format('Y-m-d\TH:i:s.uP');
         return 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode(
             $hashValues,
             'canonical_portfolio_reservation_hash_invalid',

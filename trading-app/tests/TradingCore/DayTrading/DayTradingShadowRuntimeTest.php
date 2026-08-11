@@ -18,8 +18,10 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
-use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\PaperCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioFill;
@@ -48,9 +50,48 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame('2026-08-10T12:02:00+00:00', $outcome->orderPlan->cancelAfterAt?->format(DATE_ATOM));
         self::assertSame($outcome->orderPlan->expiresAt, $outcome->reservation->entryExpiresAt);
         self::assertSame($outcome->orderPlan->cancelAfterAt, $outcome->reservation->cancelAfterAt);
+        self::assertSame('2026-08-10T20:00:00+00:00', $outcome->orderPlan->holdingExpiresAt?->format(DATE_ATOM));
+        self::assertSame($outcome->orderPlan->holdingExpiresAt, $outcome->reservation->holdingExpiresAt);
         self::assertSame('2026-08-10T12:01:30+00:00', $outcome->evidence['entry_expires_at']);
         self::assertSame('2026-08-10T12:02:00+00:00', $outcome->evidence['cancel_after_at']);
         self::assertSame('2026-08-10T20:00:00+00:00', $outcome->evidence['holding_expires_at']);
+    }
+
+    public function testHoldingDeadlineCreatesEnforceableCloseAction(): void
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $adapter = new FakeCanonicalPortfolioAdapter(
+            new CanonicalPortfolioAdmissionEngine($clock),
+            new InMemoryCanonicalPortfolioReservationStore(),
+        );
+        $outcome = self::fixtureRuntime(self::fixtureSelector($adapter))->run(self::fixtureRequest());
+        self::assertNotNull($outcome->orderPlan);
+        self::assertNotNull($outcome->reservation);
+        self::assertTrue(method_exists($adapter, 'enforceHoldingDeadline'));
+        $plan = $outcome->orderPlan;
+        $reservation = $adapter->applyFill($outcome->reservation, new CanonicalPortfolioFill(
+            $outcome->reservation->scope,
+            $outcome->reservation->decisionKey,
+            $outcome->reservation->planHash,
+            $outcome->reservation->admissionHash,
+            'entry-fill',
+            $plan->quantity,
+            $plan->entryPrice,
+            $plan->entryFee,
+            $plan->quantity,
+            0.0,
+            new \DateTimeImmutable('2026-08-10T12:00:01+00:00'),
+            'sha256:' . str_repeat('7', 64),
+        ));
+
+        $expired = $adapter->enforceHoldingDeadline(
+            $reservation,
+            new \DateTimeImmutable('2026-08-10T20:00:00+00:00'),
+            'sha256:' . str_repeat('6', 64),
+        );
+
+        self::assertSame('holding_expired', $expired->status);
+        self::assertSame('close_position', $expired->requiredAction);
     }
 
     public function testReservationRejectsFillAfterOrderTtl(): void
@@ -60,7 +101,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
             new CanonicalPortfolioAdmissionEngine($clock),
             new InMemoryCanonicalPortfolioReservationStore(),
         );
-        $outcome = self::fixtureRuntime($adapter)->run(self::fixtureRequest());
+        $outcome = self::fixtureRuntime(self::fixtureSelector($adapter))->run(self::fixtureRequest());
         self::assertNotNull($outcome->orderPlan);
         self::assertNotNull($outcome->reservation);
         $plan = $outcome->orderPlan;
@@ -171,7 +212,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertNull($exposure->reservation);
     }
 
-    public static function fixtureRuntime(?CanonicalPortfolioAdapterInterface $adapter = null): DayTradingShadowRuntime
+    public static function fixtureRuntime(?CanonicalPortfolioAdapterSelector $adapters = null): DayTradingShadowRuntime
     {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
@@ -180,11 +221,19 @@ final class DayTradingShadowRuntimeTest extends TestCase
             new CanonicalSetupRuleRuntime(self::passingConditions()),
             new CanonicalExecutionPolicyCompiler(),
             new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)),
-            $adapter ?? new FakeCanonicalPortfolioAdapter(
-                new CanonicalPortfolioAdmissionEngine($clock),
-                new InMemoryCanonicalPortfolioReservationStore(),
-            ),
+            $adapters ?? self::fixtureSelector(),
             $clock,
+        );
+    }
+
+    public static function fixtureSelector(?FakeCanonicalPortfolioAdapter $fake = null): CanonicalPortfolioAdapterSelector
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        return new CanonicalPortfolioAdapterSelector(
+            $fake ?? new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), new InMemoryCanonicalPortfolioReservationStore()),
+            new PaperCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), new InMemoryCanonicalPortfolioReservationStore()),
+            new BacktestCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), new InMemoryCanonicalPortfolioReservationStore()),
         );
     }
 

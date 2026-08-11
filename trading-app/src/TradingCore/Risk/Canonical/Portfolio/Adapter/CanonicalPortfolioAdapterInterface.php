@@ -28,6 +28,12 @@ interface CanonicalPortfolioAdapterInterface
         string $inputHash,
     ): CanonicalPortfolioReservation;
 
+    public function enforceHoldingDeadline(
+        CanonicalPortfolioReservation $reservation,
+        \DateTimeImmutable $observedAt,
+        string $inputHash,
+    ): CanonicalPortfolioReservation;
+
     public function acknowledgeResidualReduction(
         CanonicalPortfolioReservation $reservation,
         float $venueRemainingQuantity,
