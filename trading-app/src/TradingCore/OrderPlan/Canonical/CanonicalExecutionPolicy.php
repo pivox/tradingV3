@@ -112,6 +112,12 @@ final readonly class CanonicalExecutionPolicy
             $mode = self::mapping($payload, 'mode', 'canonical_holding_boundary_invalid');
             $holdingHorizon = self::objectValue(self::decision($mode, 'horizon', 'holding_horizon_policy'), 'canonical_holding_boundary_invalid');
             CanonicalHoldingBoundary::expiresAt(new \DateTimeImmutable('2026-08-10T12:00:00Z'), $holdingWindowSeconds, $holdingHorizon);
+            self::assertShadowIdentityPolicy(
+                $snapshot,
+                $orderPolicy,
+                $holdingWindowSeconds,
+                $holdingHorizon,
+            );
         }
         $environment = self::mapping($payload, 'environment', 'canonical_execution_policy_environment_invalid');
         $allowedSymbols = self::stringList($environment['allowed_symbols'] ?? null, 'canonical_execution_policy_environment_invalid');
@@ -334,6 +340,46 @@ final readonly class CanonicalExecutionPolicy
             self::positiveNumber($policy['maximum_spread_bps'], 'canonical_day_trading_order_policy_invalid'),
             self::positiveNumber($policy['maximum_slippage_bps'], 'canonical_day_trading_order_policy_invalid'),
         );
+    }
+
+    /** @param array<string, mixed> $holdingHorizon */
+    private static function assertShadowIdentityPolicy(
+        EffectiveTradingConfigSnapshot $snapshot,
+        ?CanonicalOrderPolicy $orderPolicy,
+        int $holdingWindowSeconds,
+        array $holdingHorizon,
+    ): void {
+        $request = $snapshot->request;
+        $identity = implode('@', [
+            $request->modeId,
+            $request->modeVersion,
+            $request->setupId,
+            $request->setupVersion,
+        ]);
+        $scalpingIdentity = \in_array($identity, [
+            'scalping@1.1.0@scalping.trend_continuation.long@1.1.0',
+            'scalping@1.1.0@scalping.pullback.long@1.1.0',
+            'scalping@1.1.0@scalping.trend_momentum.short@1.1.0',
+        ], true);
+        $expected = match (true) {
+            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H'],
+            $scalpingIdentity => [45, 75, 7200, 'PT2H'],
+            default => null,
+        };
+        if ($orderPolicy === null || $expected === null) {
+            throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
+        }
+        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration] = $expected;
+        if ($orderPolicy->ttlSeconds !== $ttlSeconds
+            || $orderPolicy->cancelAfterSeconds !== $cancelAfterSeconds
+            || $holdingWindowSeconds !== $windowSeconds
+            || ($holdingHorizon['maximum_duration'] ?? null) !== $maximumDuration
+            || ($holdingHorizon['daily_boundary_time'] ?? null) !== '00:00:00'
+            || ($holdingHorizon['daily_boundary_timezone'] ?? null) !== 'UTC'
+            || ($holdingHorizon['close_before_boundary'] ?? null) !== true
+        ) {
+            throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
+        }
     }
 
     /** @param array<string, mixed> $payload */

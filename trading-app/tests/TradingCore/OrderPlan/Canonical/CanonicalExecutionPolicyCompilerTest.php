@@ -82,6 +82,57 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
     }
 
+    public function testRejectsCrossModeShadowOrderAndHoldingPoliciesAfterReauthentication(): void
+    {
+        $resolver = new EffectiveTradingConfigResolver();
+        $scalping = $resolver->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $dayTrading = $resolver->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+
+        foreach ([
+            [$scalping, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['order_policy']['value']['ttl_seconds'] = 90;
+                $payload['setup']['ast']['execution']['order_policy']['value']['cancel_after_seconds'] = 120;
+            }],
+            [$scalping, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['time_stop']['value'] = 'PT8H';
+                $payload['mode']['horizon']['value']['maximum_duration'] = 'PT8H';
+            }],
+            [$dayTrading, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['order_policy']['value']['ttl_seconds'] = 45;
+                $payload['setup']['ast']['execution']['order_policy']['value']['cancel_after_seconds'] = 75;
+            }],
+            [$dayTrading, static function (array &$payload): void {
+                $payload['setup']['ast']['execution']['time_stop']['value'] = 'PT2H';
+                $payload['mode']['horizon']['value']['maximum_duration'] = 'PT2H';
+            }],
+        ] as [$snapshot, $mutate]) {
+            $payload = $snapshot->payload();
+            $mutate($payload);
+            $payload = CanonicalExecutionPolicyFixture::rehashSetup($payload);
+            $forged = new EffectiveTradingConfigSnapshot(
+                $snapshot->request,
+                $payload,
+                CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, (string) $snapshot->conditionCatalogHash),
+                $snapshot->conditionCatalogHash,
+                $snapshot->orderedLayers(),
+                $snapshot->provenance(),
+            );
+
+            try {
+                (new CanonicalExecutionPolicyCompiler())->compile($forged);
+                self::fail('Cross-mode Shadow timing policy was accepted.');
+            } catch (CanonicalOrderPlanException $exception) {
+                self::assertSame('canonical_shadow_identity_policy_mismatch', $exception->reasonCode);
+            }
+        }
+    }
+
     public function testCompilesStrictExecutionPolicyFromAuthenticatedSnapshot(): void
     {
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot());
