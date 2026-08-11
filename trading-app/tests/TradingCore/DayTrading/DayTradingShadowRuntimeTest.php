@@ -148,6 +148,8 @@ final class DayTradingShadowRuntimeTest extends TestCase
         $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
             $lineageData['effective_config_snapshot'],
         );
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:'
+            . $lineageData['effective_config_snapshot']['snapshot_hash'];
         $request = self::withLineage($request, LineageContext::fromArray($lineageData));
         [$selector, $stores] = self::fixtureSelectorWithStores();
 
@@ -160,6 +162,52 @@ final class DayTradingShadowRuntimeTest extends TestCase
         foreach ($stores as $store) {
             self::assertSame(1, $store->scopeVersion($request->portfolioScope));
             self::assertNull($store->plan($request->portfolioScope, $request->decisionKey));
+        }
+    }
+
+    public function testBlockedLineageSnapshotRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        self::assertIsArray($lineageData['effective_config_snapshot']);
+        $lineageData['effective_config_snapshot']['executable'] = false;
+        $lineageData['effective_config_snapshot']['blockers'] = ['manual_blocker'];
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:'
+            . $lineageData['effective_config_snapshot']['snapshot_hash'];
+
+        self::assertLineageRejectedWithoutStoreMutation($request, $lineageData, 'blocked');
+    }
+
+    public function testMisreferencedLineageSnapshotRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:sha256:' . str_repeat('0', 64);
+
+        self::assertLineageRejectedWithoutStoreMutation($request, $lineageData, 'misreferenced');
+    }
+
+    /** @param array<string, mixed> $lineageData */
+    private static function assertLineageRejectedWithoutStoreMutation(
+        DayTradingShadowRequest $request,
+        array $lineageData,
+        string $case,
+    ): void {
+        $request = self::withLineage($request, LineageContext::fromArray($lineageData));
+        [$selector, $stores] = self::fixtureSelectorWithStores();
+
+        $outcome = self::fixtureRuntime($selector)->run($request);
+
+        self::assertSame('no_trade', $outcome->status, $case);
+        self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode, $case);
+        self::assertNull($outcome->orderPlan, $case);
+        self::assertNull($outcome->reservation, $case);
+        foreach ($stores as $store) {
+            self::assertSame(1, $store->scopeVersion($request->portfolioScope), $case);
+            self::assertNull($store->plan($request->portfolioScope, $request->decisionKey), $case);
         }
     }
 
@@ -399,6 +447,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'fake', 'test', 'long', $capability,
         );
         $snapshot = (new EffectiveTradingConfigResolver())->resolve($configRequest);
+        $snapshotData = $snapshot->toArray();
         $lineage = LineageContext::fromOrchestratorPayload([
             'origin' => 'orchestrator',
             'orchestration_run_id' => 'run-day-trading-shadow',
@@ -416,8 +465,8 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'symbol' => 'BTCUSDT',
             'decision_key' => 'decision-day-trading-shadow',
             'dry_run' => true,
-            'effective_config_reference' => 'effective-config:day-trading-shadow',
-            'effective_config_snapshot' => $snapshot->toArray(),
+            'effective_config_reference' => 'effective-config-snapshot:' . $snapshotData['snapshot_hash'],
+            'effective_config_snapshot' => $snapshotData,
         ]);
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
         $components = CanonicalOrderPlanPipelineFixture::accepted(executionPolicy: $policy);

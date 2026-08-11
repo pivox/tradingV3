@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\TradingCore\Shadow;
 
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
+use App\Trading\Lineage\LineageContextException;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
@@ -41,8 +42,19 @@ final readonly class CanonicalShadowRuntime
         if ($capability === null || !$capability->permitsShadow()) {
             return $this->reject($request, $policy->reason('capability_forbidden'));
         }
+
+        try {
+            $request->lineage->assertExecutableTradeContract();
+        } catch (LineageContextException) {
+            return $this->reject($request, $policy->reason('lineage_mismatch'));
+        }
         $lineageSnapshot = $request->lineage->effectiveConfigSnapshot?->toArray();
-        if (($lineageSnapshot['request']['execution_capability'] ?? null) !== $capability->value) {
+        $snapshotHash = $lineageSnapshot['snapshot_hash'] ?? null;
+        if (
+            !\is_string($snapshotHash)
+            || $request->lineage->effectiveConfigReference !== 'effective-config-snapshot:' . $snapshotHash
+            || ($lineageSnapshot['request']['execution_capability'] ?? null) !== $capability->value
+        ) {
             return $this->reject($request, $policy->reason('lineage_mismatch'));
         }
 
