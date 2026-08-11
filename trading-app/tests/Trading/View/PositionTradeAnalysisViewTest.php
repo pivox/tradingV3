@@ -69,6 +69,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
+            $this->conn->executeStatement('DROP TABLE IF EXISTS fill_cost_ledger');
             $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
             $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
             $this->conn->close();
@@ -655,6 +656,115 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertStringContainsString('missing_gross_pnl', (string) $bySymbol['LTCUSDT']['pnl_quality_flags']);
     }
 
+    public function testCanonicalLongLedgerAggregatesPartialFillsIntoCertifiedPnl(): void
+    {
+        $run = 'run_ledger_complete_long';
+        $internalTradeId = 'itd-ledger-complete-long';
+        $positionId = 'position-ledger-complete-long';
+
+        $this->entry('BTCUSDT', $run, 'ledger-complete', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-10 10:00:00+00', 2800, 'hyperliquid');
+        $this->close('BTCUSDT', $run, [
+            'internal_trade_id' => $internalTradeId,
+            'gross_realized_pnl_usdt' => 8.4,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+        ], $positionId, '2026-08-10 10:20:00+00', 2801, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2800, 2801, $internalTradeId, $positionId, 'trade-ledger-complete-long');
+
+        // Deux entrées partielles et deux sorties partielles : le PnL brut est 8.40 USDT
+        // ((110 * .5 + 108 * .5) - (100 * .4 + 101 * .6)). Les coûts sont exclusivement
+        // le ledger durable, avec les zéros explicitement documentés.
+        $this->ledgerFill('BTCUSDT', $internalTradeId, $positionId, 'ledger-entry-a', 'entry', 100.0, 0.4, '2026-08-10 10:00:01+00', [
+            'fee_usdt' => 0.02, 'spread_cost_usdt' => 0.01, 'slippage_cost_usdt' => 0.02,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, $positionId, 'ledger-entry-b', 'entry', 101.0, 0.6, '2026-08-10 10:00:20+00', [
+            'fee_usdt' => 0.03, 'spread_cost_usdt' => 0.01, 'slippage_cost_usdt' => 0.03,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, $positionId, 'ledger-exit-tp1', 'exit', 110.0, 0.5, '2026-08-10 10:10:00+00', [
+            'fee_usdt' => 0.04, 'spread_cost_usdt' => 0.02, 'slippage_cost_usdt' => 0.03,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('BTCUSDT', $internalTradeId, $positionId, 'ledger-exit-final', 'exit', 108.0, 0.5, '2026-08-10 10:20:00+00', [
+            'fee_usdt' => 0.05, 'spread_cost_usdt' => 0.01, 'slippage_cost_usdt' => 0.02,
+            'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+
+        $record = $this->conn->fetchAssociative(
+            'SELECT to_jsonb(v) AS analysis
+             FROM position_trade_analysis_v2 v WHERE entry_event_id = ?',
+            [2800],
+        );
+        self::assertIsArray($record);
+        $row = json_decode((string) $record['analysis'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($row);
+        foreach (['entry_qty', 'entry_vwap', 'exit_qty', 'exit_vwap', 'remaining_qty'] as $field) {
+            self::assertArrayHasKey($field, $row, "le ledger doit projeter `$field`");
+        }
+        self::assertSame('canonical', $row['lineage_classification']);
+        self::assertSame('complete', $row['cost_completeness']);
+        self::assertEqualsWithDelta(1.0, (float) $row['entry_qty'], 1e-9);
+        self::assertEqualsWithDelta(100.6, (float) $row['entry_vwap'], 1e-9);
+        self::assertEqualsWithDelta(1.0, (float) $row['exit_qty'], 1e-9);
+        self::assertEqualsWithDelta(109.0, (float) $row['exit_vwap'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['remaining_qty'], 1e-9);
+        self::assertTrue(filter_var($row['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
+        self::assertEqualsWithDelta(8.4, (float) $row['gross_realized_pnl_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $row['entry_fee_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.09, (float) $row['exit_fee_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['funding_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.05, (float) $row['spread_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.10, (float) $row['slippage_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['borrow_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.0, (float) $row['liquidation_fee_usdt'], 1e-9);
+        self::assertEqualsWithDelta(0.29, (float) $row['total_known_cost_usdt'], 1e-9);
+        self::assertEqualsWithDelta(8.11, (float) $row['net_pnl_usdt'], 1e-9);
+        self::assertEqualsWithDelta(8.11, (float) $row['canonical_net_pnl_usdt'], 1e-9);
+        self::assertStringNotContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
+    }
+
+    public function testLedgerCertificationFailsClosedForMissingExitAndMismatchedProvenance(): void
+    {
+        $run = 'run_ledger_fail_closed';
+
+        $this->entry('ETHUSDT', $run, 'ledger-no-exit', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-no-exit'], '2026-08-10 11:00:00+00', 2810, 'hyperliquid');
+        $this->close('ETHUSDT', $run, ['gross_realized_pnl_usdt' => 1.0], 'position-ledger-no-exit', '2026-08-10 11:05:00+00', 2811, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2810, 2811, 'itd-ledger-no-exit', 'position-ledger-no-exit', 'trade-ledger-no-exit');
+        $this->ledgerFill('ETHUSDT', 'itd-ledger-no-exit', 'position-ledger-no-exit', 'missing-exit-entry', 'entry', 100.0, 1.0, '2026-08-10 11:00:01+00', [
+            'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+
+        $this->entry('SOLUSDT', $run, 'ledger-wrong-provenance', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-wrong-provenance'], '2026-08-10 12:00:00+00', 2820, 'hyperliquid');
+        $this->close('SOLUSDT', $run, ['gross_realized_pnl_usdt' => 2.0], 'position-ledger-wrong-provenance', '2026-08-10 12:05:00+00', 2821, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2820, 2821, 'itd-ledger-wrong-provenance', 'position-ledger-wrong-provenance', 'trade-ledger-wrong-provenance');
+        foreach ([['entry', 100.0, 1.0], ['exit', 102.0, 1.0]] as [$role, $price, $quantity]) {
+            $this->ledgerFill('SOLUSDT', 'itd-ledger-wrong-provenance', 'position-ledger-wrong-provenance', 'wrong-provenance-' . $role, $role, $price, $quantity, '2026-08-10 12:0' . ($role === 'entry' ? '1' : '4') . ':00+00', [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+                'market_data_venue' => 'okx',
+                'paper_execution_cell_id' => 'sha256:' . str_repeat('f', 64),
+            ]);
+        }
+
+        $rows = $this->conn->fetchAllAssociative(
+            'SELECT symbol, cost_completeness, net_pnl_usdt, canonical_net_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY symbol',
+            [$run],
+        );
+        self::assertSame(['ETHUSDT', 'SOLUSDT'], array_column($rows, 'symbol'));
+        foreach ($rows as $row) {
+            self::assertNotSame('complete', $row['cost_completeness']);
+            self::assertNull($row['net_pnl_usdt']);
+            self::assertNull($row['canonical_net_pnl_usdt']);
+        }
+    }
+
     public function testMalformedLegacyFinancialValuesDoNotBreakViewRead(): void
     {
         $run = 'run_malformed_financials';
@@ -1226,6 +1336,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
         $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
+        $this->conn->executeStatement('DROP TABLE IF EXISTS fill_cost_ledger');
         $this->conn->executeStatement('DROP TABLE IF EXISTS trade_lifecycle_event');
         $this->conn->executeStatement('DROP TABLE IF EXISTS indicator_snapshots');
 
@@ -1254,6 +1365,9 @@ CREATE TABLE trade_lifecycle_event (
     decision_key VARCHAR(160),
     intent_id VARCHAR(96),
     paper_network VARCHAR(16),
+    paper_execution_cell_id VARCHAR(71),
+    configuration_snapshot_id VARCHAR(71),
+    paper_eligibility VARCHAR(32),
     timeframe VARCHAR(8),
     config_profile VARCHAR(64),
     exchange VARCHAR(32) DEFAULT 'bitmart',
@@ -1269,8 +1383,55 @@ CREATE TABLE indicator_snapshots (
     id BIGSERIAL PRIMARY KEY,
     symbol VARCHAR(50) NOT NULL,
     timeframe VARCHAR(8) NOT NULL,
+    market_data_venue VARCHAR(32),
     kline_time TIMESTAMPTZ NOT NULL,
     values JSONB
+)
+SQL);
+
+        // DATA-002 + provenance Paper: la fixture reproduit le contrat durable que #190
+        // doit lire, sans se replier sur les valeurs JSON de `position_closed`.
+        $this->conn->executeStatement(<<<'SQL'
+CREATE TABLE fill_cost_ledger (
+    id BIGSERIAL PRIMARY KEY,
+    idempotency_key VARCHAR(255) NOT NULL,
+    payload_hash VARCHAR(64) NOT NULL,
+    internal_trade_id VARCHAR(96),
+    internal_position_id VARCHAR(96),
+    position_id VARCHAR(96),
+    exchange VARCHAR(32) NOT NULL,
+    market_data_venue VARCHAR(32),
+    market_type VARCHAR(32) NOT NULL,
+    symbol VARCHAR(50) NOT NULL,
+    side VARCHAR(16),
+    fill_id VARCHAR(128) NOT NULL,
+    exchange_fill_id VARCHAR(128),
+    exchange_order_id VARCHAR(96),
+    client_order_id VARCHAR(96),
+    order_intent_id BIGINT,
+    fill_role VARCHAR(24) NOT NULL,
+    liquidity_role VARCHAR(24) NOT NULL,
+    price NUMERIC(30, 12),
+    quantity NUMERIC(30, 12),
+    notional NUMERIC(30, 12),
+    fee_amount NUMERIC(30, 12),
+    fee_currency VARCHAR(20),
+    fee_usdt NUMERIC(30, 12),
+    funding_usdt NUMERIC(30, 12),
+    spread_cost_usdt NUMERIC(30, 12),
+    slippage_cost_usdt NUMERIC(30, 12),
+    borrow_cost_usdt NUMERIC(30, 12),
+    liquidation_fee_usdt NUMERIC(30, 12),
+    paper_network VARCHAR(16),
+    paper_execution_cell_id VARCHAR(71),
+    configuration_snapshot_id VARCHAR(71),
+    paper_eligibility VARCHAR(32),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    source VARCHAR(64) NOT NULL,
+    source_version VARCHAR(64) NOT NULL,
+    quality_flags JSONB NOT NULL,
+    raw_reference JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
 )
 SQL);
     }
@@ -1377,6 +1538,119 @@ SQL);
             'INSERT INTO trade_lifecycle_event (id, symbol, event_type, run_id, position_id, exchange, market_data_venue, market_type, extra, happened_at)
              VALUES (?, ?, \'position_closed\', ?, ?, ?, ?, ?, ?::jsonb, ?)',
             [$forcedId, $symbol, $runId, $positionId, $exchange, $marketDataVenue, $marketType, json_encode($extra, JSON_THROW_ON_ERROR), $happenedAt]
+        );
+    }
+
+    private function canonicalLifecycle(
+        int $entryEventId,
+        int $closeEventId,
+        string $internalTradeId,
+        string $positionId,
+        string $tradeId,
+    ): void {
+        $identity = [
+            'internal_trade_id' => $internalTradeId,
+            'position_id' => $positionId,
+            'trade_id' => $tradeId,
+            'correlation_run_id' => 'correlation-' . $tradeId,
+            'orchestration_run_id' => 'orchestration-' . $tradeId,
+            'orchestration_set_id' => 'set-' . $tradeId,
+            'orchestration_dashboard_id' => 'dashboard-' . $tradeId,
+            'mode_id' => 'scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'scalping.pullback',
+            'setup_version' => '1.0.0',
+            'config_hash' => hash('sha256', 'config-' . $tradeId),
+            'condition_catalog_hash' => hash('sha256', 'catalog-' . $tradeId),
+            'side' => 'LONG',
+            'decision_id' => 'decision-' . $tradeId,
+            'decision_key' => 'decision-key-' . $tradeId,
+            'intent_id' => 'intent-' . $tradeId,
+            'order_id' => 'order-' . $tradeId,
+            'paper_network' => 'testnet',
+            'paper_execution_cell_id' => 'sha256:' . str_repeat('a', 64),
+            'configuration_snapshot_id' => 'sha256:' . str_repeat('b', 64),
+            'paper_eligibility' => 'reference_only',
+        ];
+        $sets = implode(', ', array_map(static fn (string $field): string => "$field = :$field", array_keys($identity)));
+
+        foreach ([$entryEventId, $closeEventId] as $eventId) {
+            $this->conn->executeStatement(
+                "UPDATE trade_lifecycle_event SET $sets WHERE id = :id",
+                $identity + ['id' => $eventId],
+            );
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $overrides
+     */
+    private function ledgerFill(
+        string $symbol,
+        string $internalTradeId,
+        string $positionId,
+        string $fillId,
+        string $fillRole,
+        ?float $price,
+        ?float $quantity,
+        string $occurredAt,
+        array $overrides = [],
+    ): void {
+        $feeUsdt = $overrides['fee_usdt'] ?? null;
+        $values = [
+            'idempotency_key' => 'test:' . $internalTradeId . ':' . $fillId,
+            'payload_hash' => hash('sha256', $internalTradeId . ':' . $fillId),
+            'internal_trade_id' => $internalTradeId,
+            'internal_position_id' => 'internal-' . $positionId,
+            'position_id' => $positionId,
+            'exchange' => 'fake',
+            'market_data_venue' => 'hyperliquid',
+            'market_type' => 'paper',
+            'symbol' => $symbol,
+            'side' => 'LONG',
+            'fill_id' => $fillId,
+            'exchange_fill_id' => 'exchange-' . $fillId,
+            'exchange_order_id' => 'order-' . $internalTradeId,
+            'client_order_id' => 'client-' . $internalTradeId,
+            'order_intent_id' => null,
+            'fill_role' => $fillRole,
+            'liquidity_role' => 'taker',
+            'price' => $price,
+            'quantity' => $quantity,
+            'notional' => $price !== null && $quantity !== null ? $price * $quantity : null,
+            'fee_amount' => $feeUsdt,
+            'fee_currency' => $feeUsdt !== null ? 'USDT' : null,
+            'fee_usdt' => $feeUsdt,
+            'funding_usdt' => null,
+            'spread_cost_usdt' => null,
+            'slippage_cost_usdt' => null,
+            'borrow_cost_usdt' => null,
+            'liquidation_fee_usdt' => null,
+            'paper_network' => 'testnet',
+            'paper_execution_cell_id' => 'sha256:' . str_repeat('a', 64),
+            'configuration_snapshot_id' => 'sha256:' . str_repeat('b', 64),
+            'paper_eligibility' => 'reference_only',
+            'occurred_at' => $occurredAt,
+            'source' => 'fake_paper',
+            'source_version' => 'fill_cost_ledger_v1',
+            'quality_flags' => json_encode([], JSON_THROW_ON_ERROR),
+            'raw_reference' => json_encode(['fixture' => $fillId], JSON_THROW_ON_ERROR),
+            'created_at' => $occurredAt,
+        ];
+        foreach ($overrides as $field => $value) {
+            $values[$field] = in_array($field, ['quality_flags', 'raw_reference'], true)
+                ? json_encode($value, JSON_THROW_ON_ERROR)
+                : $value;
+        }
+
+        $columns = array_keys($values);
+        $placeholders = array_map(
+            static fn (string $field): string => in_array($field, ['quality_flags', 'raw_reference'], true) ? ":$field::jsonb" : ":$field",
+            $columns,
+        );
+        $this->conn->executeStatement(
+            sprintf('INSERT INTO fill_cost_ledger (%s) VALUES (%s)', implode(', ', $columns), implode(', ', $placeholders)),
+            $values,
         );
     }
 }
