@@ -154,7 +154,7 @@ final class StrictRuleEvaluatorTest extends TestCase
         $evaluator = $this->evaluator([
             new Ma9CrossUpMa21Condition(),
             new NearVwapCondition(new NullLogger()),
-        ]);
+        ], '1.1.0');
         $node = new ConditionNode('pullback_confirmed', '5m', 'long', ['validity_bars' => 3], 'fixture:pullback');
         $values = [
             'close' => 105.0,
@@ -272,10 +272,10 @@ final class StrictRuleEvaluatorTest extends TestCase
     }
 
     /** @param list<ConditionInterface> $conditions */
-    private function evaluator(array $conditions): StrictRuleEvaluator
+    private function evaluator(array $conditions, string $catalogVersion = '1.0.0'): StrictRuleEvaluator
     {
         $root = dirname(__DIR__, 4);
-        $catalog = (new ConditionCatalogLoader())->loadFile($root . '/config/trading/condition_catalog/1.0.0.yaml');
+        $catalog = (new ConditionCatalogLoader())->loadVersion($catalogVersion, $root . '/config/trading/condition_catalog');
 
         return new StrictRuleEvaluator($catalog, new StrictConditionRegistry($conditions));
     }
