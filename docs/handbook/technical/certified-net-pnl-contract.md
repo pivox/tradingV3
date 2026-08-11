@@ -70,10 +70,11 @@ position approximative ou identifiant provider ambigu.
 
 Les lignes marquees `fill_cancelled`, `fill_corrected`, `fill_reversed` ou
 `voided` sont exclues de l'agregat. Toute autre ligne retenue doit avoir un
-tableau `quality_flags` vide. Pour un fill d'entree ou de sortie, quantite et
-prix doivent etre finis et strictement positifs ; le notionnel, s'il est fourni,
-doit aussi etre fini et strictement positif. L'egalite des quantites utilise une
-tolerance absolue de `0.00000001`.
+tableau `quality_flags` vide et un `fill_role` parmi `entry`, `exit` ou
+`funding`. Pour un fill d'entree ou de sortie, quantite et prix doivent etre
+finis et strictement positifs ; le notionnel, s'il est fourni, doit aussi etre
+fini, strictement positif et coherent avec `price * quantity` a `1e-8` relatif.
+L'egalite des quantites utilise une tolerance absolue de `0.00000001`.
 
 ## Champs d'execution exposes par v2
 
@@ -110,9 +111,12 @@ USDT. Les regles sont :
   explicite sur chaque fill d'entree et de sortie ;
 - `other_trading_fees_usdt` : valeur finie, positive ou nulle, explicite sur la
   cloture ;
-- `funding_usdt` : somme signee des lignes ledger quand elles existent, sinon
-  valeur signee explicite de la cloture ; `0` signifie explicitement non
-  applicable ou aucun funding ;
+- `funding_usdt` : si une ligne `funding` est persistee, chaque settlement doit
+  porter un montant signe normalise ; une ligne de settlement sans montant
+  bloque la certification et interdit tout fallback vers la cloture. En
+  l'absence de ligne `funding`, la somme signee des fills est utilisee quand
+  elle existe, sinon la valeur signee explicite de la cloture ; `0` signifie
+  explicitement non applicable ou aucun funding ;
 - `borrow_cost_usdt` et `liquidation_fee_usdt` : somme ledger finie, positive ou
   nulle quand elle existe, sinon valeur explicite finie, positive ou nulle de la
   cloture.
@@ -153,11 +157,18 @@ contrat sont stables :
   `ledger_lifecycle_identity_mismatch` ;
 - fills et quantites : `missing_entry_fill`, `missing_exit_fill`,
   `invalid_fill_quantity`, `quantity_mismatch`, `partial_exit`,
+  `ledger_unknown_fill_role`, `ledger_notional_mismatch`,
   `ledger_quality_invalid`, `ledger_side_missing`, `ledger_side_mismatch` ;
 - finances : `missing_gross_pnl`, `missing_entry_fee`, `missing_exit_fee`,
-  `missing_other_trading_fees`, `missing_funding`, `missing_spread_cost`,
-  `missing_slippage_cost`, `missing_borrow_cost`,
+  `missing_other_trading_fees`, `ledger_funding_unavailable`,
+  `missing_funding`, `missing_spread_cost`, `missing_slippage_cost`, `missing_borrow_cost`,
   `missing_liquidation_fee`.
+
+`ledger_unknown_fill_role` signale une ligne retenue hors contrat qui aurait pu
+etre ignoree par les sommes. `ledger_notional_mismatch` signale un notionnel
+persistant incoherent avec son fill. `ledger_funding_unavailable` distingue une
+ligne de settlement presente mais non normalisee d'une absence de settlement ;
+les trois bloquent le net certifie.
 
 Les consommateurs doivent exposer ces codes sans les supprimer ni en reclasser
 un sous-ensemble comme non bloquant. Un tableau non vide bloque toujours le net

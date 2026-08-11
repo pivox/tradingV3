@@ -1496,6 +1496,82 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(1.4, (float) $row['net_pnl_usdt'], 1e-9);
     }
 
+    public function testUnknownLedgerFillRoleWithCostMasksCanonicalNetPnl(): void
+    {
+        $internalTradeId = 'itd-ledger-unknown-role';
+        $positionId = 'position-ledger-unknown-role';
+        $this->entry('ATOMUSDT', 'run-ledger-unknown-role', 'unknown-role', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:46:00+00', 2952, 'hyperliquid');
+        $this->close('ATOMUSDT', 'run-ledger-unknown-role', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:47:00+00', 2953, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2952, 2953, $internalTradeId, $positionId, 'trade-ledger-unknown-role');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('ATOMUSDT', $internalTradeId, $positionId, 'unknown-role-' . $role, $role, $price, 1.0, '2026-08-11 15:46:' . ($role === 'entry' ? '10' : '50') . '+00', [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->ledgerFill('ATOMUSDT', $internalTradeId, $positionId, 'unknown-role-fee', 'fee', null, null, '2026-08-11 15:46:30+00', [
+            'fee_usdt' => 10.0,
+        ]);
+
+        $row = $this->analysisRow(2952);
+        self::assertContains('ledger_unknown_fill_role', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testUnnormalizedFundingSettlementPreventsCloseFundingFallback(): void
+    {
+        $internalTradeId = 'itd-ledger-funding-null';
+        $positionId = 'position-ledger-funding-null';
+        $this->entry('APTUSDT', 'run-ledger-funding-null', 'funding-null', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:48:00+00', 2954, 'hyperliquid');
+        $this->close('APTUSDT', 'run-ledger-funding-null', [
+            ...$this->completeCloseContract(1.0),
+            'funding_usdt' => 99.0,
+        ], $positionId, '2026-08-11 15:49:00+00', 2955, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2954, 2955, $internalTradeId, $positionId, 'trade-ledger-funding-null');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('APTUSDT', $internalTradeId, $positionId, 'funding-null-' . $role, $role, $price, 1.0, '2026-08-11 15:48:' . ($role === 'entry' ? '10' : '50') . '+00', [
+                'fee_usdt' => 0.01, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
+                'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->ledgerFill('APTUSDT', $internalTradeId, $positionId, 'funding-null-settlement', 'funding', null, null, '2026-08-11 15:48:30+00');
+
+        $row = $this->analysisRow(2954);
+        self::assertContains('ledger_funding_unavailable', $row['pnl_quality_flags']);
+        self::assertContains('missing_funding', $row['pnl_quality_flags']);
+        self::assertNull($row['funding_usdt'], 'a persisted but unnormalized settlement cannot fall back to close JSON');
+        self::assertNull($row['canonical_net_pnl_usdt']);
+    }
+
+    public function testInconsistentLedgerNotionalMasksCanonicalNetPnl(): void
+    {
+        $internalTradeId = 'itd-ledger-notional-mismatch';
+        $positionId = 'position-ledger-notional-mismatch';
+        $this->entry('ARBUSDT', 'run-ledger-notional-mismatch', 'notional-mismatch', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:50:00+00', 2956, 'hyperliquid');
+        $this->close('ARBUSDT', 'run-ledger-notional-mismatch', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:51:00+00', 2957, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2956, 2957, $internalTradeId, $positionId, 'trade-ledger-notional-mismatch');
+        $this->ledgerFill('ARBUSDT', $internalTradeId, $positionId, 'notional-mismatch-entry', 'entry', 100.0, 1.0, '2026-08-11 15:50:10+00', [
+            'notional' => 1.0, 'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('ARBUSDT', $internalTradeId, $positionId, 'notional-mismatch-exit', 'exit', 101.0, 1.0, '2026-08-11 15:50:50+00', [
+            'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+
+        $row = $this->analysisRow(2956);
+        self::assertContains('ledger_notional_mismatch', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
     public function testIndicatorSnapshotRequiresExactExchangeAndUsesLatestPastKline(): void
     {
         $this->entry('AVAXUSDT', 'run-indicator-exchange', 'indicator', 'scalper', 'fake', 'paper', [
@@ -1503,14 +1579,15 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'timeframe' => '1m',
         ], '2026-08-11 16:00:00+00', 2960, 'hyperliquid');
         foreach ([
-            ['wrong', '2026-08-11 15:59:00+00', ['rsi' => 99, 'atr' => 9]],
-            ['fake', '2026-08-11 15:58:00+00', ['rsi' => 42, 'atr' => 2, 'macd' => 1, 'ma9' => 10, 'ma21' => 11, 'vwap' => 12]],
-            ['fake', '2026-08-11 16:01:00+00', ['rsi' => 88, 'atr' => 8]],
-        ] as [$exchange, $klineTime, $values]) {
+            ['wrong', 'hyperliquid', '2026-08-11 15:59:00+00', ['rsi' => 99, 'atr' => 9]],
+            ['fake', 'okx', '2026-08-11 15:59:00+00', ['rsi' => 77, 'atr' => 7]],
+            ['fake', 'hyperliquid', '2026-08-11 15:58:00+00', ['rsi' => 42, 'atr' => 2, 'macd' => 1, 'ma9' => 10, 'ma21' => 11, 'vwap' => 12]],
+            ['fake', 'hyperliquid', '2026-08-11 16:01:00+00', ['rsi' => 88, 'atr' => 8]],
+        ] as [$exchange, $marketDataVenue, $klineTime, $values]) {
             $this->conn->executeStatement(
                 'INSERT INTO indicator_snapshots (symbol, timeframe, exchange, market_data_venue, market_type, kline_time, values)
                  VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)',
-                ['AVAXUSDT', '1m', $exchange, 'ignored-snapshot-venue', 'paper', $klineTime, json_encode($values, JSON_THROW_ON_ERROR)],
+                ['AVAXUSDT', '1m', $exchange, $marketDataVenue, 'paper', $klineTime, json_encode($values, JSON_THROW_ON_ERROR)],
             );
         }
 
@@ -1535,7 +1612,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'trade_id' => 'indicator-null-identity',
             'timeframe' => '1m',
         ], '2026-08-11 16:05:00+00', 2961, 'hyperliquid');
-        $this->conn->executeStatement('UPDATE trade_lifecycle_event SET exchange = NULL, market_type = NULL WHERE id = 2961');
+        $this->conn->executeStatement('UPDATE trade_lifecycle_event SET exchange = NULL, market_type = NULL, market_data_venue = NULL WHERE id = 2961');
         $this->conn->executeStatement(
             'INSERT INTO indicator_snapshots (symbol, timeframe, exchange, market_type, kline_time, values)
              VALUES (?, ?, NULL, NULL, ?, ?::jsonb)',
