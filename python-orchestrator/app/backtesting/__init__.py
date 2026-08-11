@@ -6,6 +6,7 @@ adapters and execution simulation live in later #191 slices.
 
 from app.backtesting.dataset import (
     CandleRecord,
+    DatasetBuilder,
     DatasetBuildRejected,
     DatasetBuildResult,
     DatasetQualityReport,
@@ -17,6 +18,7 @@ from app.backtesting.dataset import (
 
 __all__ = (
     "CandleRecord",
+    "DatasetBuilder",
     "DatasetBuildRejected",
     "DatasetBuildResult",
     "DatasetQualityReport",

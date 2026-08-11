@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.backtesting.dataset import (
     CandleRecord,
+    DatasetBuilder,
     DatasetBuildRejected,
     DatasetBuildResult,
     DatasetQualityReport,
@@ -54,6 +55,29 @@ def _source() -> DatasetSourceIdentity:
         market_data_venue="fake",
         market_type="perpetual",
     )
+
+
+def _candle_at(
+    minute: int,
+    *,
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1m",
+    source_record_id: str | None = None,
+    **overrides: object,
+) -> CandleRecord:
+    duration = Timeframe(timeframe).duration
+    opened = _utc("2026-01-01T00:00:00") + timedelta(minutes=minute)
+    payload: dict[str, object] = {
+        "source_record_id": source_record_id
+        or f"fake:{symbol}:{timeframe}:{opened.isoformat()}",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "open_at": opened,
+        "close_at": opened + duration,
+        "available_at": opened + duration,
+    }
+    payload.update(overrides)
+    return _candle(**payload)
 
 
 @pytest.mark.parametrize(
@@ -178,16 +202,7 @@ def test_source_and_quality_contracts_are_strict_frozen_and_strategy_independent
         missing_ranges=(missing,),
         quality_flags=("missing_range",),
     )
-    result = DatasetBuildResult(
-        source_identity=source,
-        records=(_candle(),),
-        quality_report=report,
-        symbols=("BTCUSDT",),
-        timeframes=(Timeframe.ONE_MINUTE,),
-        start_at=_utc("2026-01-01T00:00:00"),
-        end_at=_utc("2026-01-01T00:01:00"),
-        record_count=1,
-    )
+    result = DatasetBuilder(source).build((_candle(),))
 
     for contract in (
         CandleRecord,
@@ -227,3 +242,207 @@ def test_build_rejection_exposes_only_stable_reason_and_typed_report() -> None:
     assert rejection.report is report
     assert str(rejection) == "dataset_quality_rejected"
     assert not hasattr(rejection, "records")
+
+
+def test_builder_rejects_empty_input_with_a_typed_report() -> None:
+    builder = DatasetBuilder(_source())
+
+    report = builder.analyze([])
+
+    assert report.input_count == 0
+    assert report.accepted_count == 0
+    assert report.streams == ()
+    assert report.quality_flags == ("empty_input",)
+    with pytest.raises(DatasetBuildRejected) as rejected:
+        builder.build(iter(()))
+    assert rejected.value.reason_code == "dataset_quality_rejected"
+    assert rejected.value.report == report
+
+
+@pytest.mark.parametrize(
+    ("field", "first", "second", "expected_flag"),
+    (
+        ("source_network", "fake", "testnet", "mixed_source_network"),
+        ("market_data_venue", "fake", "bitmart", "mixed_market_data_venue"),
+        ("market_type", "perpetual", "spot", "mixed_market_type"),
+    ),
+)
+def test_builder_rejects_mixed_source_identity_dimensions(
+    field: str,
+    first: str,
+    second: str,
+    expected_flag: str,
+) -> None:
+    records = (
+        _candle_at(0, **{field: first}),
+        _candle_at(1, **{field: second}),
+    )
+
+    report = DatasetBuilder(_source()).analyze(records)
+
+    assert expected_flag in report.quality_flags
+    with pytest.raises(DatasetBuildRejected) as rejected:
+        DatasetBuilder(_source()).build(records)
+    assert expected_flag in rejected.value.report.quality_flags
+
+
+def test_builder_builds_one_complete_stream_and_derives_bounds() -> None:
+    records = (_candle_at(1), _candle_at(0), _candle_at(2))
+
+    result = DatasetBuilder(_source()).build(records)
+
+    assert result.records == (_candle_at(0), _candle_at(1), _candle_at(2))
+    assert result.record_count == 3
+    assert result.symbols == ("BTCUSDT",)
+    assert result.timeframes == (Timeframe.ONE_MINUTE,)
+    assert result.start_at == _utc("2026-01-01T00:00:00")
+    assert result.end_at == _utc("2026-01-01T00:03:00")
+    assert result.quality_report.eligible is True
+    assert result.quality_report.input_count == 3
+    assert result.quality_report.accepted_count == 3
+    assert result.quality_report.streams[0].expected_count == 3
+    assert result.quality_report.streams[0].observed_count == 3
+
+
+def test_builder_orders_multiple_symbols_and_timeframes_canonically() -> None:
+    records = (
+        _candle_at(0, symbol="ETHUSDT", timeframe="1h"),
+        _candle_at(0, symbol="BTCUSDT", timeframe="1h"),
+        _candle_at(0, symbol="BTCUSDT", timeframe="15m"),
+        _candle_at(0, symbol="BTCUSDT", timeframe="1m"),
+    )
+
+    result = DatasetBuilder(_source()).build(reversed(records))
+
+    assert result.symbols == ("BTCUSDT", "ETHUSDT")
+    assert result.timeframes == (
+        Timeframe.ONE_MINUTE,
+        Timeframe.FIFTEEN_MINUTES,
+        Timeframe.ONE_HOUR,
+    )
+    assert tuple((item.symbol, item.timeframe.value) for item in result.records) == (
+        ("BTCUSDT", "1m"),
+        ("BTCUSDT", "15m"),
+        ("BTCUSDT", "1h"),
+        ("ETHUSDT", "1h"),
+    )
+    assert tuple(
+        (stream.symbol, stream.timeframe.value)
+        for stream in result.quality_report.streams
+    ) == (
+        ("BTCUSDT", "1m"),
+        ("BTCUSDT", "15m"),
+        ("BTCUSDT", "1h"),
+        ("ETHUSDT", "1h"),
+    )
+
+
+def test_builder_reports_exact_duplicate_without_deduplicating_or_building() -> None:
+    candle = _candle_at(0)
+
+    report = DatasetBuilder(_source()).analyze((candle, candle))
+
+    assert report.input_count == 2
+    assert report.accepted_count == 2
+    assert report.exact_duplicate_count == 1
+    assert report.conflicting_duplicate_count == 0
+    assert report.quality_flags == ("exact_duplicate",)
+    with pytest.raises(DatasetBuildRejected):
+        DatasetBuilder(_source()).build((candle, candle))
+
+
+def test_builder_reports_conflicting_duplicate_without_selecting_a_winner() -> None:
+    first = _candle_at(0, source_record_id="source-a")
+    second = _candle_at(0, source_record_id="source-b", close="100.5")
+
+    report = DatasetBuilder(_source()).analyze((second, first))
+
+    assert report.exact_duplicate_count == 0
+    assert report.conflicting_duplicate_count == 1
+    assert report.quality_flags == ("conflicting_duplicate",)
+    assert report.streams[0].observed_count == 1
+
+
+def test_builder_reports_one_gap_only_inside_the_observed_bounds() -> None:
+    records = (_candle_at(0), _candle_at(2))
+
+    report = DatasetBuilder(_source()).analyze(records)
+
+    assert report.quality_flags == ("missing_range",)
+    assert report.streams[0].expected_count == 3
+    assert report.streams[0].observed_count == 2
+    assert report.streams[0].first_open_at == _utc("2026-01-01T00:00:00")
+    assert report.streams[0].last_close_at == _utc("2026-01-01T00:03:00")
+    assert report.missing_ranges == (
+        MissingRange(
+            first_missing_open_at=_utc("2026-01-01T00:01:00"),
+            end_at=_utc("2026-01-01T00:02:00"),
+            timeframe="1m",
+            missing_bar_count=1,
+        ),
+    )
+
+
+def test_builder_reports_multiple_contiguous_missing_ranges() -> None:
+    records = tuple(_candle_at(minute) for minute in (0, 3, 4, 7))
+
+    report = DatasetBuilder(_source()).analyze(records)
+
+    assert report.streams[0].expected_count == 8
+    assert report.streams[0].observed_count == 4
+    assert report.missing_ranges == (
+        MissingRange(
+            first_missing_open_at=_utc("2026-01-01T00:01:00"),
+            end_at=_utc("2026-01-01T00:03:00"),
+            timeframe="1m",
+            missing_bar_count=2,
+        ),
+        MissingRange(
+            first_missing_open_at=_utc("2026-01-01T00:05:00"),
+            end_at=_utc("2026-01-01T00:07:00"),
+            timeframe="1m",
+            missing_bar_count=2,
+        ),
+    )
+
+
+def test_builder_rejects_overlapping_and_off_grid_stream_chronology() -> None:
+    overlap = _candle_at(
+        0,
+        source_record_id="overlap",
+        open_at=_utc("2026-01-01T00:00:30"),
+        close_at=_utc("2026-01-01T00:01:30"),
+        available_at=_utc("2026-01-01T00:01:30"),
+    )
+    off_grid_gap = _candle_at(
+        0,
+        source_record_id="off-grid",
+        open_at=_utc("2026-01-01T00:02:30"),
+        close_at=_utc("2026-01-01T00:03:30"),
+        available_at=_utc("2026-01-01T00:03:30"),
+    )
+
+    overlap_report = DatasetBuilder(_source()).analyze((_candle_at(0), overlap))
+    off_grid_report = DatasetBuilder(_source()).analyze(
+        (_candle_at(0), off_grid_gap)
+    )
+
+    assert overlap_report.quality_flags == ("stream_overlap",)
+    assert off_grid_report.quality_flags == ("invalid_stream_chronology",)
+
+
+def test_builder_report_and_result_are_stable_for_input_permutations() -> None:
+    records = (
+        _candle_at(0, symbol="ETHUSDT", timeframe="5m"),
+        _candle_at(0),
+        _candle_at(1),
+    )
+    builder = DatasetBuilder(_source())
+
+    forward_report = builder.analyze(records)
+    reverse_report = builder.analyze(reversed(records))
+    forward_result = builder.build(records)
+    reverse_result = builder.build(reversed(records))
+
+    assert forward_report.model_dump(mode="json") == reverse_report.model_dump(mode="json")
+    assert forward_result.model_dump(mode="json") == reverse_result.model_dump(mode="json")

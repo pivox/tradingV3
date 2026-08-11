@@ -8,6 +8,8 @@ identity.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -269,6 +271,28 @@ class DatasetBuildResult(BaseModel):
     def _validate_utc(cls, value: datetime) -> datetime:
         return _require_utc(value)
 
+    @model_validator(mode="after")
+    def _validate_derived_facts(self) -> "DatasetBuildResult":
+        if not self.quality_report.eligible:
+            raise ValueError("build result requires an eligible quality report")
+        if self.record_count != len(self.records):
+            raise ValueError("record_count must equal records length")
+        if self.start_at != min(item.open_at for item in self.records):
+            raise ValueError("start_at must equal the first record bound")
+        if self.end_at != max(item.close_at for item in self.records):
+            raise ValueError("end_at must equal the last record bound")
+        if self.symbols != tuple(sorted({item.symbol for item in self.records})):
+            raise ValueError("symbols must equal the canonical record symbols")
+        expected_timeframes = tuple(
+            sorted(
+                {item.timeframe for item in self.records},
+                key=lambda item: item.duration_seconds,
+            )
+        )
+        if self.timeframes != expected_timeframes:
+            raise ValueError("timeframes must equal the canonical record timeframes")
+        return self
+
 
 class DatasetBuildRejected(Exception):
     """Stable rejection carrying diagnostics but never the raw records."""
@@ -277,3 +301,205 @@ class DatasetBuildRejected(Exception):
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.report = report
+
+
+_QUALITY_FLAG_ORDER = (
+    "empty_input",
+    "mixed_source_network",
+    "mixed_market_data_venue",
+    "mixed_market_type",
+    "source_identity_mismatch",
+    "exact_duplicate",
+    "conflicting_duplicate",
+    "missing_range",
+    "stream_overlap",
+    "invalid_stream_chronology",
+)
+
+
+def _stream_key(record: CandleRecord) -> tuple[str, str, str, int]:
+    return (
+        record.market_data_venue,
+        record.market_type.value,
+        record.symbol,
+        record.timeframe.duration_seconds,
+    )
+
+
+def _record_sort_key(
+    record: CandleRecord,
+) -> tuple[str, str, str, int, datetime, str]:
+    return (*_stream_key(record), record.open_at, record.source_record_id)
+
+
+def _identity_key(
+    record: CandleRecord,
+) -> tuple[str, MarketType, str, Timeframe, datetime]:
+    return (
+        record.market_data_venue,
+        record.market_type,
+        record.symbol,
+        record.timeframe,
+        record.open_at,
+    )
+
+
+class DatasetBuilder:
+    """Pure fail-closed quality analyzer and deterministic record builder."""
+
+    def __init__(self, source_identity: DatasetSourceIdentity) -> None:
+        self._source_identity = source_identity
+
+    def analyze(self, records: Iterable[CandleRecord]) -> DatasetQualityReport:
+        materialized = tuple(records)
+        for record in materialized:
+            if not isinstance(record, CandleRecord):
+                raise TypeError("DatasetBuilder accepts only CandleRecord values")
+
+        flags: set[str] = set()
+        if not materialized:
+            flags.add("empty_input")
+
+        self._analyze_source_identity(materialized, flags)
+
+        identities: dict[
+            tuple[str, MarketType, str, Timeframe, datetime], list[CandleRecord]
+        ] = defaultdict(list)
+        stream_open_times: dict[
+            tuple[str, str, str, int], set[datetime]
+        ] = defaultdict(set)
+        stream_examples: dict[tuple[str, str, str, int], CandleRecord] = {}
+        for record in materialized:
+            identities[_identity_key(record)].append(record)
+            key = _stream_key(record)
+            stream_open_times[key].add(record.open_at)
+            stream_examples[key] = record
+
+        exact_duplicate_count = 0
+        conflicting_duplicate_count = 0
+        for duplicates in identities.values():
+            if len(duplicates) < 2:
+                continue
+            first = duplicates[0]
+            if all(item == first for item in duplicates[1:]):
+                exact_duplicate_count += len(duplicates) - 1
+            else:
+                conflicting_duplicate_count += len(duplicates) - 1
+        if exact_duplicate_count:
+            flags.add("exact_duplicate")
+        if conflicting_duplicate_count:
+            flags.add("conflicting_duplicate")
+
+        streams: list[DatasetStreamQuality] = []
+        all_missing_ranges: list[MissingRange] = []
+        for key in sorted(stream_open_times):
+            example = stream_examples[key]
+            opens = sorted(stream_open_times[key])
+            duration = example.timeframe.duration
+            missing_ranges: list[MissingRange] = []
+            for previous, current in zip(opens, opens[1:]):
+                delta = current - previous
+                if delta < duration:
+                    flags.add("stream_overlap")
+                    continue
+                if delta == duration:
+                    continue
+                missing_duration = delta - duration
+                if missing_duration % duration != timedelta(0):
+                    flags.add("invalid_stream_chronology")
+                    continue
+                missing_bar_count = int(missing_duration / duration)
+                missing_range = MissingRange(
+                    first_missing_open_at=previous + duration,
+                    end_at=current,
+                    timeframe=example.timeframe,
+                    missing_bar_count=missing_bar_count,
+                )
+                missing_ranges.append(missing_range)
+                all_missing_ranges.append(missing_range)
+                flags.add("missing_range")
+
+            first_open_at = opens[0]
+            last_close_at = opens[-1] + duration
+            span = last_close_at - first_open_at
+            expected_count = max(len(opens), int(span / duration))
+            streams.append(
+                DatasetStreamQuality(
+                    market_data_venue=example.market_data_venue,
+                    market_type=example.market_type,
+                    symbol=example.symbol,
+                    timeframe=example.timeframe,
+                    first_open_at=first_open_at,
+                    last_close_at=last_close_at,
+                    expected_count=expected_count,
+                    observed_count=len(opens),
+                    missing_ranges=tuple(missing_ranges),
+                )
+            )
+
+        ordered_flags = tuple(item for item in _QUALITY_FLAG_ORDER if item in flags)
+        return DatasetQualityReport(
+            input_count=len(materialized),
+            accepted_count=len(materialized),
+            streams=tuple(streams),
+            exact_duplicate_count=exact_duplicate_count,
+            conflicting_duplicate_count=conflicting_duplicate_count,
+            missing_ranges=tuple(all_missing_ranges),
+            quality_flags=ordered_flags,
+        )
+
+    def build(self, records: Iterable[CandleRecord]) -> DatasetBuildResult:
+        materialized = tuple(records)
+        report = self.analyze(materialized)
+        if not report.eligible:
+            raise DatasetBuildRejected("dataset_quality_rejected", report)
+
+        ordered_records = tuple(sorted(materialized, key=_record_sort_key))
+        symbols = tuple(sorted({record.symbol for record in ordered_records}))
+        timeframes = tuple(
+            sorted(
+                {record.timeframe for record in ordered_records},
+                key=lambda item: item.duration_seconds,
+            )
+        )
+        return DatasetBuildResult(
+            source_identity=self._source_identity,
+            records=ordered_records,
+            quality_report=report,
+            symbols=symbols,
+            timeframes=timeframes,
+            start_at=min(record.open_at for record in ordered_records),
+            end_at=max(record.close_at for record in ordered_records),
+            record_count=len(ordered_records),
+        )
+
+    def _analyze_source_identity(
+        self,
+        records: tuple[CandleRecord, ...],
+        flags: set[str],
+    ) -> None:
+        if not records:
+            return
+
+        dimensions: tuple[tuple[str, object, set[object]], ...] = (
+            (
+                "mixed_source_network",
+                self._source_identity.source_network,
+                {record.source_network for record in records},
+            ),
+            (
+                "mixed_market_data_venue",
+                self._source_identity.market_data_venue,
+                {record.market_data_venue for record in records},
+            ),
+            (
+                "mixed_market_type",
+                self._source_identity.market_type,
+                {record.market_type for record in records},
+            ),
+        )
+        for mixed_flag, expected, observed in dimensions:
+            if len(observed) > 1:
+                flags.add(mixed_flag)
+            elif observed != {expected}:
+                flags.add("source_identity_mismatch")
