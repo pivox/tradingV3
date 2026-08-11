@@ -165,6 +165,104 @@ final readonly class CanonicalPortfolioPolicy
         );
     }
 
+    /** @return array<string, bool|int|string> */
+    public function toAdmissionProofArray(): array
+    {
+        return [
+            'mode_id' => $this->modeId,
+            'mode_version' => $this->modeVersion,
+            'setup_id' => $this->setupId,
+            'setup_version' => $this->setupVersion,
+            'exchange' => $this->exchange,
+            'environment' => $this->environment,
+            'side' => $this->side,
+            'config_hash' => $this->configHash,
+            'daily_loss_rate' => CanonicalPortfolioDecimal::fromFloat($this->dailyLossRate, 'canonical_portfolio_admission_proof_invalid')->stripTrailingZeros()->__toString(),
+            'daily_loss_absolute_quote' => CanonicalPortfolioDecimal::fromFloat($this->dailyLossAbsoluteQuote, 'canonical_portfolio_admission_proof_invalid')->stripTrailingZeros()->__toString(),
+            'quote_currency' => $this->quoteCurrency,
+            'day_timezone' => $this->dayTimezone,
+            'day_boundary_local' => $this->dayBoundaryLocal,
+            'include_unrealized_loss' => $this->includeUnrealizedLoss,
+            'max_concurrent_positions' => $this->maxConcurrentPositions,
+            'include_pending_entries' => $this->includePendingEntries,
+            'mode_exposure_rate' => CanonicalPortfolioDecimal::fromFloat($this->modeExposureRate, 'canonical_portfolio_admission_proof_invalid')->stripTrailingZeros()->__toString(),
+        ];
+    }
+
+    /** @param array<string, mixed> $data */
+    public static function fromAdmissionProofArray(array $data): self
+    {
+        self::exactKeys($data, [
+            'mode_id',
+            'mode_version',
+            'setup_id',
+            'setup_version',
+            'exchange',
+            'environment',
+            'side',
+            'config_hash',
+            'daily_loss_rate',
+            'daily_loss_absolute_quote',
+            'quote_currency',
+            'day_timezone',
+            'day_boundary_local',
+            'include_unrealized_loss',
+            'max_concurrent_positions',
+            'include_pending_entries',
+            'mode_exposure_rate',
+        ], 'canonical_portfolio_admission_proof_invalid');
+        foreach (['mode_id', 'mode_version', 'setup_id', 'setup_version', 'exchange', 'environment', 'side', 'config_hash', 'quote_currency', 'day_timezone', 'day_boundary_local'] as $field) {
+            if (!\is_string($data[$field])) {
+                throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+            }
+        }
+        if (
+            !\in_array($data['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true)
+            || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['mode_version']) !== 1
+            || preg_match('/\A[a-z][a-z0-9_.-]*\z/D', $data['setup_id']) !== 1
+            || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $data['setup_version']) !== 1
+            || !\in_array($data['exchange'], ['fake', 'okx', 'hyperliquid'], true)
+            || preg_match('/\A[a-z0-9][a-z0-9_.:-]*\z/D', $data['environment']) !== 1
+            || !\in_array($data['side'], ['long', 'short'], true)
+            || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $data['config_hash']) !== 1
+            || preg_match('/\A[A-Z][A-Z0-9]{2,11}\z/D', $data['quote_currency']) !== 1
+            || !self::validTimezone($data['day_timezone'])
+            || !self::validBoundary($data['day_boundary_local'])
+            || !\is_bool($data['include_unrealized_loss'])
+            || !\is_int($data['max_concurrent_positions'])
+            || $data['max_concurrent_positions'] < 1
+            || !\is_bool($data['include_pending_entries'])
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+        }
+        $dailyLossRate = self::proofDecimal($data['daily_loss_rate']);
+        $dailyLossAbsoluteQuote = self::proofDecimal($data['daily_loss_absolute_quote']);
+        $modeExposureRate = self::proofDecimal($data['mode_exposure_rate']);
+        if ($dailyLossRate <= 0.0 || $dailyLossRate > 1.0 || $dailyLossAbsoluteQuote <= 0.0 || $modeExposureRate <= 0.0) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+        }
+
+        return new self(
+            $data['mode_id'],
+            $data['mode_version'],
+            $data['setup_id'],
+            $data['setup_version'],
+            $data['exchange'],
+            $data['environment'],
+            $data['side'],
+            $data['config_hash'],
+            $dailyLossRate,
+            $dailyLossAbsoluteQuote,
+            $data['quote_currency'],
+            $data['day_timezone'],
+            $data['day_boundary_local'],
+            $data['include_unrealized_loss'],
+            $data['max_concurrent_positions'],
+            $data['include_pending_entries'],
+            $modeExposureRate,
+        );
+    }
+
     /**
      * @param array<string, mixed> $owner
      * @return array<string, mixed>
@@ -249,5 +347,21 @@ final readonly class CanonicalPortfolioPolicy
         }
 
         return (int) $parts[1] < 24 && (int) $parts[2] < 60 && (int) $parts[3] < 60;
+    }
+
+    private static function proofDecimal(mixed $value): float
+    {
+        if (!\is_string($value) || preg_match('/\A-?(0|[1-9]\d*)(?:\.\d*[1-9])?\z/D', $value) !== 1) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+        }
+
+        try {
+            return CanonicalPortfolioDecimal::toFiniteFloat(
+                BigDecimal::of($value),
+                'canonical_portfolio_admission_proof_invalid',
+            );
+        } catch (\Throwable $exception) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid', [], $exception);
+        }
     }
 }

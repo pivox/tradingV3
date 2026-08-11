@@ -68,13 +68,16 @@ final readonly class DayTradingShadowRuntime
 
     private function toDayTradingOutcome(ShadowRuntimeOutcome $outcome): DayTradingShadowOutcome
     {
+        $evidence = $outcome->evidence;
+        unset($evidence['admission_proof']);
+
         return new DayTradingShadowOutcome(
             $outcome->status,
             $this->legacyReasonCode($outcome->reasonCode),
             $outcome->lineage,
             $outcome->orderPlan,
             $outcome->reservation,
-            $outcome->evidence,
+            $evidence,
         );
     }
 

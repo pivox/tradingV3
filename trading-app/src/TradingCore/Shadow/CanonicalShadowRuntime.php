@@ -13,6 +13,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
@@ -76,6 +77,7 @@ final readonly class CanonicalShadowRuntime
                 $request->portfolioSnapshot,
                 $request->decisionKey,
             );
+            $admissionProof = CanonicalPortfolioAdmissionProof::fromRequest($admission);
             $reservation = $portfolioAdapter->reserve($admission);
 
             return new ShadowRuntimeOutcome(
@@ -88,6 +90,7 @@ final readonly class CanonicalShadowRuntime
                     'config_hash' => $snapshot->configHash,
                     'plan_hash' => $plan->planHash,
                     'reservation_hash' => $reservation->stateHash,
+                    'admission_proof' => $admissionProof->toArray(),
                     'entry_expires_at' => $plan->expiresAt->format(DATE_ATOM),
                     'cancel_after_at' => $plan->cancelAfterAt?->format(DATE_ATOM),
                     'holding_expires_at' => $plan->holdingExpiresAt?->format(DATE_ATOM),

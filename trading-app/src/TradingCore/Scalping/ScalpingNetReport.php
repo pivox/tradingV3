@@ -11,8 +11,9 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTarget;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
-use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use Brick\Math\BigDecimal;
 
 final readonly class ScalpingNetReport
@@ -281,6 +282,15 @@ final readonly class ScalpingNetReport
             || ($outcome->evidence['reservation_hash'] ?? null) !== $reservation->stateHash
         ) {
             throw new \InvalidArgumentException('scalping_net_report_evidence_hash_mismatch');
+        }
+        $proofData = $outcome->evidence['admission_proof'] ?? null;
+        if (!\is_array($proofData)) {
+            throw new \InvalidArgumentException('scalping_net_report_admission_proof_invalid');
+        }
+        try {
+            CanonicalPortfolioAdmissionProof::fromArray($proofData)->verify($plan, $reservation);
+        } catch (CanonicalPortfolioException $exception) {
+            throw new \InvalidArgumentException('scalping_net_report_admission_proof_invalid', 0, $exception);
         }
     }
 

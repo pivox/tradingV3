@@ -14,9 +14,11 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservationDecision;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
@@ -25,8 +27,60 @@ use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
 
 #[CoversClass(CanonicalPortfolioAdmissionEngine::class)]
+#[CoversClass(CanonicalPortfolioAdmissionProof::class)]
 final class CanonicalPortfolioAdmissionEngineTest extends TestCase
 {
+    public function testAdmissionProofRoundTripsExactSerializableInputsAndReplaysOpeningAuthority(): void
+    {
+        $request = $this->request();
+        $proof = CanonicalPortfolioAdmissionProof::fromRequest($request);
+        $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00'));
+        $reservation = CanonicalPortfolioReservation::open($engine->admit($request), $request->plan);
+
+        self::assertSame([
+            'schema',
+            'decision_key',
+            'policy',
+            'scope',
+            'snapshot',
+        ], array_keys($proof->toArray()));
+        self::assertSame(
+            $proof->toArray(),
+            CanonicalPortfolioAdmissionProof::fromArray($proof->toArray())->toArray(),
+        );
+        self::assertIsString(json_encode($proof->toArray(), JSON_THROW_ON_ERROR));
+        self::assertSame($proof, $proof->verify($request->plan, $reservation));
+    }
+
+    public function testAdmissionProofStrictParserRejectsUnknownAndIncompleteEvidence(): void
+    {
+        $proof = CanonicalPortfolioAdmissionProof::fromRequest($this->request())->toArray();
+
+        foreach ([
+            array_replace($proof, ['unexpected' => true]),
+            array_diff_key($proof, ['snapshot' => true]),
+        ] as $invalid) {
+            try {
+                CanonicalPortfolioAdmissionProof::fromArray($invalid);
+                self::fail('Non-canonical admission proof was accepted.');
+            } catch (CanonicalPortfolioException $exception) {
+                self::assertSame('canonical_portfolio_admission_proof_invalid', $exception->reasonCode);
+            }
+        }
+    }
+
+    public function testAdmissionProofAcceptsAnotherFullyCoherentCanonicalSnapshot(): void
+    {
+        $request = $this->request(snapshot: $this->snapshot(realizedNetPnlQuote: -6.0));
+        $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00'));
+        $reservation = CanonicalPortfolioReservation::open($engine->admit($request), $request->plan);
+        $proof = CanonicalPortfolioAdmissionProof::fromArray(
+            CanonicalPortfolioAdmissionProof::fromRequest($request)->toArray(),
+        );
+
+        self::assertSame($proof, $proof->verify($request->plan, $reservation));
+    }
+
     public function testReservationDecisionCannotBeConstructedOutsideAdmissionAuthority(): void
     {
         $constructor = (new \ReflectionClass(CanonicalPortfolioReservationDecision::class))->getConstructor();

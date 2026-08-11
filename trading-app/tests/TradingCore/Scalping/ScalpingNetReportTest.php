@@ -321,6 +321,8 @@ final class ScalpingNetReportTest extends TestCase
         yield 'portfolio input hash format' => ['portfolio_input_hash'];
         yield 'portfolio identity hash format' => ['portfolio_identity_hash'];
         yield 'admission hash format' => ['admission_hash'];
+        yield 'coordinated valid portfolio identity hash' => ['portfolio_identity_hash_valid'];
+        yield 'coordinated valid admission hash' => ['admission_hash_valid'];
     }
 
     #[DataProvider('coordinatedReservationForgeryCases')]
@@ -429,6 +431,20 @@ final class ScalpingNetReportTest extends TestCase
                 'invalid',
                 CanonicalPortfolioReservation::class,
             ),
+            'portfolio_identity_hash_valid' => self::mutateSerializedProperty(
+                $reservation,
+                'portfolioSnapshotIdentityHash',
+                $reservation->portfolioSnapshotIdentityHash,
+                'sha256:' . str_repeat('a', 64),
+                CanonicalPortfolioReservation::class,
+            ),
+            'admission_hash_valid' => self::mutateSerializedProperty(
+                $reservation,
+                'admissionHash',
+                $reservation->admissionHash,
+                'sha256:' . str_repeat('b', 64),
+                CanonicalPortfolioReservation::class,
+            ),
             default => throw new \LogicException('Unknown reservation forgery case.'),
         };
         $forged = self::rehashReservation($forged);
@@ -444,7 +460,35 @@ final class ScalpingNetReportTest extends TestCase
         );
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('scalping_net_report_reservation_identity_mismatch');
+        $this->expectExceptionMessage(\in_array($case, [
+            'portfolio_identity_hash_valid',
+            'admission_hash_valid',
+        ], true)
+            ? 'scalping_net_report_admission_proof_invalid'
+            : 'scalping_net_report_reservation_identity_mismatch');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    public function testRejectsValidlySerializedProofWhoseSnapshotWouldProduceAnotherAdmission(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+        $evidence = $planned->evidence;
+        self::assertIsArray($evidence['admission_proof'] ?? null);
+        self::assertIsArray($evidence['admission_proof']['snapshot'] ?? null);
+        $evidence['admission_proof']['snapshot']['realized_net_pnl_quote'] = '-1';
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $planned->lineage,
+            $planned->orderPlan,
+            $planned->reservation,
+            $evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_admission_proof_invalid');
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
@@ -492,6 +536,8 @@ final class ScalpingNetReportTest extends TestCase
         );
         $badEvidence = $planned->evidence;
         $badEvidence['plan_hash'] = 'sha256:' . str_repeat('e', 64);
+        $missingProofEvidence = $planned->evidence;
+        unset($missingProofEvidence['admission_proof']);
 
         foreach ([
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $missingReference, $planned->orderPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_lineage_incomplete'],
@@ -501,6 +547,7 @@ final class ScalpingNetReportTest extends TestCase
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $badReservation, $planned->evidence), 'scalping_net_report_reservation_identity_mismatch'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $badReservationState, $planned->evidence), 'scalping_net_report_reservation_identity_mismatch'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $planned->reservation, $badEvidence), 'scalping_net_report_evidence_hash_mismatch'],
+            [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $planned->reservation, $missingProofEvidence), 'scalping_net_report_admission_proof_invalid'],
         ] as [$outcome, $message]) {
             try {
                 ScalpingNetReport::fromOutcomes([$outcome]);

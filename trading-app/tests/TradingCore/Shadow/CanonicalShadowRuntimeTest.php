@@ -16,6 +16,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Shadow\CanonicalShadowRuntime;
 use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
 use App\TradingCore\Shadow\ShadowRuntimeOutcome;
@@ -45,6 +46,7 @@ final class CanonicalShadowRuntimeTest extends TestCase
                 'config_hash',
                 'plan_hash',
                 'reservation_hash',
+                'admission_proof',
                 'entry_expires_at',
                 'cancel_after_at',
                 'holding_expires_at',
@@ -53,6 +55,9 @@ final class CanonicalShadowRuntimeTest extends TestCase
             self::assertSame($outcome->lineage->configHash, $outcome->evidence['config_hash']);
             self::assertSame($outcome->orderPlan->planHash, $outcome->evidence['plan_hash']);
             self::assertSame($outcome->reservation->stateHash, $outcome->evidence['reservation_hash']);
+            self::assertIsArray($outcome->evidence['admission_proof']);
+            CanonicalPortfolioAdmissionProof::fromArray($outcome->evidence['admission_proof'])
+                ->verify($outcome->orderPlan, $outcome->reservation);
             $normalized[] = [
                 $outcome->status,
                 $outcome->reasonCode,
