@@ -67,11 +67,11 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => ['kline_time' => '2026-08-10T08:00:00Z'],
-                '1h' => ['kline_time' => '2026-08-10T09:00:00Z', 'adx' => 25.0],
-                '15m' => ['kline_time' => '2026-08-10T09:45:00Z'],
-                '5m' => ['kline_time' => '2026-08-10T09:55:00Z'],
-                '1m' => ['kline_time' => '2026-08-10T09:59:00Z'],
+                '4h' => ['kline_time' => '2026-08-10T08:00:00Z', 'series_order' => 'oldest_to_newest'],
+                '1h' => ['kline_time' => '2026-08-10T09:00:00Z', 'adx' => 25.0, 'series_order' => 'oldest_to_newest'],
+                '15m' => ['kline_time' => '2026-08-10T09:45:00Z', 'series_order' => 'oldest_to_newest'],
+                '5m' => ['kline_time' => '2026-08-10T09:55:00Z', 'series_order' => 'oldest_to_newest'],
+                '1m' => ['kline_time' => '2026-08-10T09:59:00Z', 'series_order' => 'oldest_to_newest'],
             ],
             new \DateTimeImmutable('2026-08-10T10:00:00Z'),
         );

@@ -6,6 +6,8 @@ namespace App\Tests\TradingCore\Rules\Evaluation;
 
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionResult;
+use App\Indicator\Condition\Ma9CrossUpMa21Condition;
+use App\Indicator\Condition\NearVwapCondition;
 use App\TradingCore\Rules\Ast\AllOfNode;
 use App\TradingCore\Rules\Ast\AnyOfNode;
 use App\TradingCore\Rules\Ast\ConditionNode;
@@ -16,6 +18,7 @@ use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 
 #[CoversClass(StrictRuleEvaluator::class)]
 final class StrictRuleEvaluatorTest extends TestCase
@@ -102,6 +105,51 @@ final class StrictRuleEvaluatorTest extends TestCase
 
         self::assertTrue($result->passed);
         self::assertSame('condition_passed', $result->reasonCode);
+        self::assertSame(['threshold' => 'setup_contract'], $result->trace['parameter_source']);
+        self::assertSame('scalar', $result->trace['series_order']);
+        self::assertNull($result->trace['reported_series_order']);
+    }
+
+    public function testPullbackConfirmationRequiresCanonicalAgeWithinValidity(): void
+    {
+        $evaluator = $this->evaluator([
+            new Ma9CrossUpMa21Condition(),
+            new NearVwapCondition(new NullLogger()),
+        ]);
+        $node = new ConditionNode('pullback_confirmed', '5m', 'long', ['validity_bars' => 3], 'fixture:pullback');
+        $values = [
+            'close' => 100.0,
+            'vwap' => 100.0,
+            'ema' => [9 => 99.0, 21 => 100.0],
+            'ema_prev' => [9 => 99.0, 21 => 100.0],
+            'series_order' => 'oldest_to_newest',
+        ];
+
+        $missing = $evaluator->evaluate($node, $this->context($values));
+        $valid = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => 2]));
+        $expired = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => 4]));
+
+        self::assertSame('missing_critical_data', $missing->reasonCode);
+        self::assertTrue($valid->passed);
+        self::assertSame('condition_passed', $valid->reasonCode);
+        self::assertFalse($expired->passed);
+        self::assertSame('condition_failed', $expired->reasonCode);
+    }
+
+    public function testSeriesConditionRejectsMissingOrNonCanonicalReportedOrder(): void
+    {
+        $condition = $this->condition('macd_hist_increasing_n', true, 0.1, 0.0);
+        $node = new ConditionNode('macd_hist_increasing_n', '5m', 'long', ['macd_hist_increasing_n' => 2], 'fixture:series');
+        $evaluator = $this->evaluator([$condition]);
+
+        $missing = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2]]));
+        $reversed = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2], 'series_order' => 'newest_to_oldest']));
+        $canonical = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2], 'series_order' => 'oldest_to_newest']));
+
+        self::assertSame('invalid_series_order', $missing->reasonCode);
+        self::assertSame('invalid_series_order', $reversed->reasonCode);
+        self::assertTrue($canonical->passed);
+        self::assertSame('oldest_to_newest', $canonical->trace['reported_series_order']);
     }
 
     public function testGlobalIndicatorConditionAggregatesEveryAvailableTimeframeFailClosed(): void

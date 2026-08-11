@@ -95,6 +95,8 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         self::assertSame([14, 15], array_keys($result['1m']['adx'] ?? []));
         self::assertIsFloat($result['1m']['adx'][14] ?? null);
         self::assertCount(60, $result['1m']['macd_hist_series'] ?? []);
+        self::assertArrayHasKey('pullback_age_bars', $result['1m']);
+        self::assertNull($result['1m']['pullback_age_bars']);
         self::assertIsFloat($result['1m']['volume_ratio'] ?? null);
         self::assertIsFloat($result['1m']['ema_200_slope'] ?? null);
         self::assertIsFloat($result['1m']['ma_21_plus_k_atr'] ?? null);

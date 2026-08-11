@@ -50,6 +50,7 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertSame(array_slice($highs, -60), $context['high_series']);
         self::assertSame(array_slice($lows, -60), $context['low_series']);
         self::assertSame('oldest_to_newest', $context['series_order']);
+        self::assertArrayHasKey('pullback_age_bars', $context);
     }
 
     public function testBuildResetsAllMutableInputAndOverrideState(): void
@@ -87,5 +88,7 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertArrayNotHasKey('stop_loss', $second);
         self::assertArrayNotHasKey('min_atr_pct', $second);
         self::assertArrayNotHasKey('high_series', $second);
+        self::assertArrayHasKey('pullback_age_bars', $second);
+        self::assertNull($second['pullback_age_bars']);
     }
 }

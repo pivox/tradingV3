@@ -6,6 +6,7 @@ use App\Indicator\Core\AtrCalculator;
 use App\Indicator\Core\Momentum\Macd;
 use App\Indicator\Core\Momentum\Rsi;
 use App\Indicator\Core\Trend\Adx;
+use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volume\Vwap;
 use Psr\Log\LoggerInterface;
@@ -45,6 +46,8 @@ class IndicatorContextBuilder
         private readonly AtrCalculator $atrCalc,
         private readonly Sma $sma,
         #[Autowire(service: 'monolog.logger.indicators')] private readonly ?LoggerInterface $indicatorLogger = null,
+        private readonly ?Ema $emaSeriesCalculator = null,
+        private readonly ?CanonicalPullbackAgeCalculator $pullbackAgeCalculator = null,
     ) {
         $this->traderAvailable = \extension_loaded('trader');
     }
@@ -248,6 +251,8 @@ class IndicatorContextBuilder
             $macdHistLast3 = array_slice($tail, -3);
         }
 
+        $pullbackAgeBars = $this->canonicalPullbackAge();
+
         $highSeries = null;
         $lowSeries = null;
         if ($hlcSeries !== null) {
@@ -310,9 +315,39 @@ class IndicatorContextBuilder
             'rsi_cross_up_level' => $this->rsiCrossUpLevel,
             'rsi_cross_down_level' => $this->rsiCrossDownLevel,
         ], fn($v) => $v !== null);
+        $context['pullback_age_bars'] = $pullbackAgeBars;
         $this->reset();
 
         return $context;
+    }
+
+    private function canonicalPullbackAge(): ?int
+    {
+        if ($this->closes === [] || $this->highs === [] || $this->lows === [] || $this->volumes === []) {
+            return null;
+        }
+        $ema = $this->emaSeriesCalculator ?? new Ema();
+        $ema9 = array_values(array_map('floatval', $ema->calculateSeries($this->closes, 9)));
+        $ema21 = array_values(array_map('floatval', $ema->calculateSeries($this->closes, 21)));
+        $vwaps = array_values(array_map('floatval', $this->vwap->calculateFull(
+            $this->highs,
+            $this->lows,
+            $this->closes,
+            $this->volumes,
+        )));
+        $alignedCount = min(count($this->closes), count($ema9), count($ema21), count($vwaps));
+        if ($alignedCount < 2) {
+            return null;
+        }
+
+        return ($this->pullbackAgeCalculator ?? new CanonicalPullbackAgeCalculator())->age(
+            array_slice($ema9, -$alignedCount),
+            array_slice($ema21, -$alignedCount),
+            array_values(array_map('floatval', array_slice($this->closes, -$alignedCount))),
+            array_slice($vwaps, -$alignedCount),
+            100,
+            0.0015,
+        );
     }
 
     /**

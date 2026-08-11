@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Setup;
 
+use App\Indicator\Context\CanonicalPullbackAgeCalculator;
 use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
@@ -489,10 +490,11 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
-    public function testUnsupportedTemporalAndTimeframeContractsRemainFailClosed(): void
+    public function testCanonicalPullbackIsExecutableWhileUnsupportedTimeframesRemainFailClosed(): void
     {
         $catalog = $this->catalog();
-        self::assertSame('blocked', $catalog->definition('pullback_confirmed')->status);
+        self::assertSame('executable', $catalog->definition('pullback_confirmed')->status);
+        self::assertStringContainsString(CanonicalPullbackAgeCalculator::class, $catalog->definition('pullback_confirmed')->provenance);
         self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_long')->timeframes);
         self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_short')->timeframes);
 

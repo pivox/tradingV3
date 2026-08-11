@@ -135,8 +135,16 @@ final readonly class StrictRuleEvaluator
         $base['input_freshness_seconds'] = $this->catalog->freshnessSeconds($snapshot->source, $snapshot->timeframe);
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
+        $base['parameter_source'] = array_fill_keys(array_keys($node->parameters), 'setup_contract');
+        $base['series_order'] = $definition->seriesOrder;
+        $base['reported_series_order'] = $snapshot->values['series_order'] ?? null;
         if (!$snapshot->isValidAt($context->evaluatedAt)) {
             return [false, 'stale_input', $base];
+        }
+        if (str_starts_with($definition->valueType, 'series<')
+            && ($snapshot->values['series_order'] ?? null) !== 'oldest_to_newest'
+        ) {
+            return [false, 'invalid_series_order', $base];
         }
         $condition = $this->registry->get($node->conditionId);
         $isCompiledExpression = str_starts_with($definition->implementation, 'compiled_expression:');
