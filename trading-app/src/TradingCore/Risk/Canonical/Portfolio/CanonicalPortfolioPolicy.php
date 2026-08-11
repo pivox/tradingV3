@@ -181,6 +181,7 @@ final readonly class CanonicalPortfolioPolicy
                 'provenance',
                 'executable',
                 'blockers',
+                'snapshot_hash',
             ], 'canonical_portfolio_policy_lineage_invalid');
             $requestData = self::mapping($data, 'request', 'canonical_portfolio_policy_lineage_invalid');
             $requestKeys = array_keys($requestData);
@@ -210,6 +211,7 @@ final readonly class CanonicalPortfolioPolicy
             $layers = $data['ordered_layers'] ?? null;
             $provenance = $data['provenance'] ?? null;
             $blockers = $data['blockers'] ?? null;
+            $orderedFiles = $data['ordered_files'] ?? null;
             if (
                 !\is_array($config)
                 || ($config !== [] && array_is_list($config))
@@ -222,6 +224,8 @@ final readonly class CanonicalPortfolioPolicy
                 || !\is_bool($data['executable'] ?? null)
                 || !\is_array($blockers)
                 || !array_is_list($blockers)
+                || !\is_array($orderedFiles)
+                || !array_is_list($orderedFiles)
             ) {
                 throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
             }
@@ -232,6 +236,9 @@ final readonly class CanonicalPortfolioPolicy
             }
             foreach ($layers as $layer) {
                 self::assertProofLayer($layer);
+            }
+            if ($orderedFiles !== array_column($layers, 'path')) {
+                throw new CanonicalPortfolioException('canonical_portfolio_policy_lineage_invalid');
             }
             foreach ($provenance as $path => $layer) {
                 if (!\is_string($path) || $path === '') {

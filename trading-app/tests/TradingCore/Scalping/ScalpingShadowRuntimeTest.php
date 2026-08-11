@@ -418,6 +418,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'scalping', '1.1.0', $setupId, '1.1.0', 'fake', 'test', $side, $capability,
         );
         $snapshot = (new EffectiveTradingConfigResolver())->resolve($configRequest);
+        $snapshotData = $snapshot->toArray();
         $decisionKey = 'decision-scalping-shadow-' . str_replace('.', '-', $setupId);
         $lineage = LineageContext::fromOrchestratorPayload([
             'origin' => 'orchestrator',
@@ -436,8 +437,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'symbol' => 'BTCUSDT',
             'decision_key' => $decisionKey,
             'dry_run' => true,
-            'effective_config_reference' => 'effective-config:scalping-shadow',
-            'effective_config_snapshot' => $snapshot->toArray(),
+            'effective_config_reference' => 'effective-config-snapshot:' . $snapshotData['snapshot_hash'],
+            'effective_config_snapshot' => $snapshotData,
         ]);
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
         $components = CanonicalOrderPlanPipelineFixture::accepted(side: $side, executionPolicy: $policy);

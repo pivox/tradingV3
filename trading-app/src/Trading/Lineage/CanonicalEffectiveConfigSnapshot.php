@@ -16,7 +16,7 @@ final readonly class CanonicalEffectiveConfigSnapshot
      */
     public static function fromArray(array $snapshot, array $identity): self
     {
-        $fields = ['request', 'config', 'config_hash', 'condition_catalog_hash', 'ordered_layers', 'ordered_files', 'provenance', 'executable', 'blockers'];
+        $fields = ['request', 'config', 'config_hash', 'condition_catalog_hash', 'ordered_layers', 'ordered_files', 'provenance', 'executable', 'blockers', 'snapshot_hash'];
         foreach ($fields as $field) {
             if (!\array_key_exists($field, $snapshot)) {
                 throw new LineageContextException('canonical_identity_missing:effective_config_snapshot.' . $field);
@@ -51,6 +51,12 @@ final readonly class CanonicalEffectiveConfigSnapshot
         $computed = self::calculateConfigHash($snapshot['config'], $snapshot['condition_catalog_hash']);
         if ($computed !== $snapshot['config_hash']) {
             throw new LineageContextException('canonical_identity_mismatch:config_hash');
+        }
+        if (!\is_string($snapshot['snapshot_hash']) || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $snapshot['snapshot_hash']) !== 1) {
+            throw new LineageContextException('canonical_identity_invalid:snapshot_hash');
+        }
+        if (!hash_equals(self::calculateSnapshotHash($snapshot), $snapshot['snapshot_hash'])) {
+            throw new LineageContextException('canonical_identity_mismatch:snapshot_hash');
         }
         return new self(self::canonicalize($snapshot));
     }
@@ -104,10 +110,54 @@ final readonly class CanonicalEffectiveConfigSnapshot
     /** @param array<string,mixed> $config */
     public static function calculateConfigHash(array $config, string $conditionCatalogHash): string
     {
-        return 'sha256:' . hash('sha256', json_encode(
+        return 'sha256:' . hash('sha256', self::encodeCanonical(
             self::canonicalize(['config' => $config, 'condition_catalog_hash' => $conditionCatalogHash], true),
-            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
         ));
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    public static function calculateSnapshotHash(array $snapshot): string
+    {
+        unset($snapshot['snapshot_hash']);
+
+        return 'sha256:' . hash('sha256', self::encodeCanonical(self::canonicalize($snapshot, true)));
+    }
+
+    private static function encodeCanonical(mixed $value): string
+    {
+        $callerPrecision = ini_get('serialize_precision');
+        if ($callerPrecision === false) {
+            throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
+        }
+        $restorePrecision = $callerPrecision !== '-1';
+        if ($restorePrecision && ini_set('serialize_precision', '-1') === false) {
+            throw new LineageContextException('canonical_identity_invalid:effective_config_snapshot');
+        }
+
+        $encoded = null;
+        $encodingException = null;
+        $restored = true;
+        try {
+            $encoded = json_encode(
+                $value,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            );
+        } catch (\JsonException $exception) {
+            $encodingException = $exception;
+        } finally {
+            if ($restorePrecision) {
+                $restored = ini_set('serialize_precision', $callerPrecision) !== false;
+            }
+        }
+        if (!$restored || !\is_string($encoded)) {
+            throw new LineageContextException(
+                'canonical_identity_invalid:effective_config_snapshot',
+                0,
+                $encodingException,
+            );
+        }
+
+        return $encoded;
     }
 
     private static function canonicalize(mixed $value, bool $normalizeIntegralFloats = false): mixed

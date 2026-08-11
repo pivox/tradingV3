@@ -48,6 +48,7 @@ final class CanonicalPortfolioPolicyCompilerTest extends TestCase
         ];
         $data = $snapshot->toArray();
         $data['request']['execution_capability'] = 'forged';
+        $data['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash($data);
         $lineageSnapshot = CanonicalEffectiveConfigSnapshot::fromArray($data, $identity);
 
         $this->expectException(CanonicalPortfolioException::class);

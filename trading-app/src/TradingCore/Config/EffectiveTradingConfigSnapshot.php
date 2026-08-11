@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Config;
 
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+
 final readonly class EffectiveTradingConfigSnapshot
 {
     /**
@@ -45,7 +47,7 @@ final readonly class EffectiveTradingConfigSnapshot
     /** @return array<string,mixed> */
     public function toArray(): array
     {
-        return [
+        $snapshot = [
             'request' => $this->request->toArray(),
             'config' => $this->payload,
             'config_hash' => $this->configHash,
@@ -56,5 +58,8 @@ final readonly class EffectiveTradingConfigSnapshot
             'executable' => $this->executable,
             'blockers' => $this->blockers,
         ];
+        $snapshot['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash($snapshot);
+
+        return $snapshot;
     }
 }

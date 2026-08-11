@@ -202,6 +202,13 @@ final readonly class ScalpingNetReport
             throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');
         }
         $snapshot = $lineage->effectiveConfigSnapshot->toArray();
+        $snapshotHash = $snapshot['snapshot_hash'] ?? null;
+        if (
+            !\is_string($snapshotHash)
+            || $lineage->effectiveConfigReference !== 'effective-config-snapshot:' . $snapshotHash
+        ) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_reference_invalid');
+        }
         $config = $snapshot['config'] ?? null;
         if (!\is_array($config)) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');

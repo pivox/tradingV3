@@ -190,6 +190,31 @@ final class ScalpingNetReportTest extends TestCase
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
+    public function testRejectsRehashedSnapshotMetadataWhenExternalReferenceStillPinsPreviousEnvelope(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        $lineageData = $planned->lineage->toArray();
+        $lineageData['environment'] = $planned->lineage->environment;
+        self::assertIsArray($lineageData['effective_config_snapshot'] ?? null);
+        $lineageData['effective_config_snapshot']['request']['execution_capability'] = 'paper';
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $forgedLineage = LineageContext::fromArray($lineageData);
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $forgedLineage,
+            $planned->orderPlan,
+            $planned->reservation,
+            $planned->evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_lineage_snapshot_reference_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
     public function testRejectsWriteEnabledSnapshotEvenWhenEveryDependentHashWasRecomputed(): void
     {
         $planned = self::plannedOutcomes()[0];
@@ -211,6 +236,21 @@ final class ScalpingNetReportTest extends TestCase
             $forgedLineage,
             serialize($planned->lineage->configHash),
             serialize($newConfigHash),
+            LineageContext::class,
+        );
+        $snapshot['config_hash'] = $newConfigHash;
+        $newSnapshotHash = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash($snapshot);
+        $forgedLineage = self::mutateEverySerializedValue(
+            $forgedLineage,
+            serialize($snapshot['snapshot_hash']),
+            serialize($newSnapshotHash),
+            LineageContext::class,
+        );
+        $forgedLineage = self::mutateSerializedProperty(
+            $forgedLineage,
+            'effectiveConfigReference',
+            $planned->lineage->effectiveConfigReference,
+            'effective-config-snapshot:' . $newSnapshotHash,
             LineageContext::class,
         );
         $forgedPlan = self::mutateSerializedValue(
