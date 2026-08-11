@@ -6,183 +6,88 @@ namespace App\TradingCore\DayTrading;
 
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
-use App\TradingCore\Config\Exception\TradingConfigException;
-use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
-use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
-use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
-use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
-use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
-use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
-use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
+use App\TradingCore\Shadow\CanonicalShadowRuntime;
+use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
+use App\TradingCore\Shadow\ShadowRuntimeOutcome;
+use App\TradingCore\Shadow\ShadowRuntimeRequest;
 use Psr\Clock\ClockInterface;
 
 final readonly class DayTradingShadowRuntime
 {
+    private CanonicalShadowRuntime $runtime;
+
     public function __construct(
-        private EffectiveTradingConfigResolverInterface $configResolver,
-        private CanonicalSetupRuleRuntime $ruleRuntime,
-        private CanonicalExecutionPolicyCompiler $policyCompiler,
-        private CanonicalOrderPlanBuilder $orderPlanBuilder,
-        private CanonicalPortfolioAdapterSelector $portfolioAdapters,
-        private ClockInterface $clock,
+        EffectiveTradingConfigResolverInterface $configResolver,
+        CanonicalSetupRuleRuntime $ruleRuntime,
+        CanonicalExecutionPolicyCompiler $policyCompiler,
+        CanonicalOrderPlanBuilder $orderPlanBuilder,
+        CanonicalPortfolioAdapterSelector $portfolioAdapters,
+        ClockInterface $clock,
     ) {
+        $this->runtime = new CanonicalShadowRuntime(
+            $configResolver,
+            $ruleRuntime,
+            $policyCompiler,
+            $orderPlanBuilder,
+            $portfolioAdapters,
+            $clock,
+        );
     }
 
     public function run(DayTradingShadowRequest $request): DayTradingShadowOutcome
     {
-        if (!$this->isSupportedIdentity($request)) {
-            return $this->reject($request, 'day_trading_shadow_identity_unsupported');
-        }
-        $capability = $request->configRequest->capability;
-        if ($capability === null || !$capability->permitsShadow()) {
-            return $this->reject($request, 'day_trading_shadow_capability_forbidden');
-        }
-
-        try {
-            $portfolioAdapter = $this->portfolioAdapters->select($capability);
-            $snapshot = $this->configResolver->resolve($request->configRequest);
-            if (!$this->lineageMatches($request, $snapshot->configHash, (string) $snapshot->conditionCatalogHash)) {
-                return $this->reject($request, 'day_trading_shadow_lineage_mismatch');
-            }
-
-            $rules = $this->ruleRuntime->evaluate(
-                $request->lineage,
-                $request->indicatorsByTimeframe,
-                $this->clock->now(),
-            );
-            if (!$rules->passed) {
-                return $this->reject($request, $rules->reasonCode, ['rules' => $rules->trace]);
-            }
-
-            $policy = $this->policyCompiler->compile($snapshot);
-            if ($request->orderPlanRequest->policy->configHash !== $policy->configHash) {
-                return $this->reject($request, 'day_trading_shadow_plan_config_mismatch');
-            }
-            $guard = $this->costGuard($request, $policy);
-            if ($guard !== null) {
-                return $this->reject($request, $guard);
-            }
-
-            $plan = $this->orderPlanBuilder->build($request->orderPlanRequest);
-            if ($plan->orderType !== 'limit') {
-                return $this->reject($request, 'day_trading_shadow_non_limit_plan_forbidden');
-            }
-            $admission = new CanonicalPortfolioAdmissionRequest(
-                CanonicalPortfolioPolicy::fromSnapshot($snapshot),
-                $plan,
-                $request->portfolioScope,
-                $request->portfolioSnapshot,
-                $request->decisionKey,
-            );
-            $reservation = $portfolioAdapter->reserve($admission);
-
-            return new DayTradingShadowOutcome(
-                'planned',
-                'day_trading_shadow_planned',
-                $request->lineage,
-                $plan,
-                $reservation,
-                [
-                    'config_hash' => $snapshot->configHash,
-                    'plan_hash' => $plan->planHash,
-                    'reservation_hash' => $reservation->stateHash,
-                    'entry_expires_at' => $plan->expiresAt->format(DATE_ATOM),
-                    'cancel_after_at' => $plan->cancelAfterAt?->format(DATE_ATOM),
-                    'holding_expires_at' => $plan->holdingExpiresAt?->format(DATE_ATOM),
-                    'rules' => $rules->trace,
-                ],
-            );
-        } catch (CanonicalOrderPlanException|CanonicalPortfolioException|CanonicalRiskException $exception) {
-            return $this->reject($request, $exception->reasonCode, ['domain_evidence' => $exception->evidence]);
-        } catch (TradingConfigException $exception) {
-            return $this->reject($request, $exception->getMessage());
-        }
+        return $this->toDayTradingOutcome($this->runtime->run(
+            $this->toShadowRequest($request),
+            new ShadowRuntimeIdentityPolicy('day_trading_shadow', [[
+                'mode_id' => 'day_trading',
+                'mode_version' => '1.1.0',
+                'setup_id' => 'day_trading.trend_continuation.long',
+                'setup_version' => '1.1.0',
+                'side' => 'long',
+            ]]),
+        ));
     }
 
-    private function isSupportedIdentity(DayTradingShadowRequest $request): bool
+    private function toShadowRequest(DayTradingShadowRequest $request): ShadowRuntimeRequest
     {
-        $config = $request->configRequest;
-
-        return $config->modeId === 'day_trading'
-            && $config->modeVersion === '1.1.0'
-            && $config->setupId === 'day_trading.trend_continuation.long'
-            && $config->setupVersion === '1.1.0'
-            && $config->side === 'long';
+        return new ShadowRuntimeRequest(
+            $request->configRequest,
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
     }
 
-    private function lineageMatches(DayTradingShadowRequest $request, string $configHash, string $catalogHash): bool
-    {
-        $lineage = $request->lineage;
-        $config = $request->configRequest;
-
-        return $lineage->isModern()
-            && $lineage->modeId === $config->modeId
-            && $lineage->modeVersion === $config->modeVersion
-            && $lineage->setupId === $config->setupId
-            && $lineage->setupVersion === $config->setupVersion
-            && strtolower((string) $lineage->side) === $config->side
-            && $lineage->exchange === $config->exchange
-            && $lineage->environment === $config->environment
-            && $lineage->symbol === $request->orderPlanRequest->zone->symbol
-            && $lineage->marketType === $request->orderPlanRequest->zone->marketType
-            && $lineage->decisionKey === $request->decisionKey
-            && $lineage->configHash === $configHash
-            && $lineage->conditionCatalogHash === $catalogHash;
-    }
-
-    private function costGuard(DayTradingShadowRequest $request, CanonicalExecutionPolicy $policy): ?string
-    {
-        $orderPolicy = $policy->orderPolicy;
-        if ($orderPolicy === null) {
-            return 'day_trading_order_policy_unavailable';
-        }
-        if ($request->liveSpreadBps === null || !\is_finite($request->liveSpreadBps) || $request->liveSpreadBps < 0.0) {
-            return 'day_trading_live_spread_unavailable';
-        }
-        if ($request->estimatedSlippageBps === null || !\is_finite($request->estimatedSlippageBps) || $request->estimatedSlippageBps < 0.0) {
-            return 'day_trading_slippage_unavailable';
-        }
-        if ($request->liveSpreadBps > $orderPolicy->maximumSpreadBps) {
-            return 'day_trading_live_spread_exceeded';
-        }
-        if ($request->estimatedSlippageBps > $orderPolicy->maximumSlippageBps) {
-            return 'day_trading_slippage_exceeded';
-        }
-        $costs = $request->orderPlanRequest->costs;
-        if (
-            $costs->entryLiquidityRole !== $orderPolicy->liquidityRole
-            || $costs->entryLiquidityRole !== $policy->costContract->entryLiquidityRole
-            || $costs->stopLiquidityRole !== $policy->costContract->stopLiquidityRole
-            || abs($request->liveSpreadBps - (float) $costs->entrySpreadRate * 10_000.0) > 1.0e-9
-            || abs($request->estimatedSlippageBps - (float) $costs->entrySlippageRate * 10_000.0) > 1.0e-9
-        ) {
-            return 'day_trading_live_cost_snapshot_mismatch';
-        }
-
-        return null;
-    }
-
-    /** @param array<string, mixed> $evidence */
-    private function reject(DayTradingShadowRequest $request, string $reasonCode, array $evidence = []): DayTradingShadowOutcome
+    private function toDayTradingOutcome(ShadowRuntimeOutcome $outcome): DayTradingShadowOutcome
     {
         return new DayTradingShadowOutcome(
-            'no_trade',
-            $reasonCode,
-            $request->lineage,
-            null,
-            null,
-            [
-                'mode_id' => $request->lineage->modeId,
-                'mode_version' => $request->lineage->modeVersion,
-                'setup_id' => $request->lineage->setupId,
-                'setup_version' => $request->lineage->setupVersion,
-                'side' => $request->lineage->side,
-                'config_hash' => $request->lineage->configHash,
-                ...$evidence,
-            ],
+            $outcome->status,
+            $this->legacyReasonCode($outcome->reasonCode),
+            $outcome->lineage,
+            $outcome->orderPlan,
+            $outcome->reservation,
+            $outcome->evidence,
         );
+    }
+
+    private function legacyReasonCode(string $reasonCode): string
+    {
+        return match ($reasonCode) {
+            'day_trading_shadow_order_policy_unavailable' => 'day_trading_order_policy_unavailable',
+            'day_trading_shadow_live_spread_unavailable' => 'day_trading_live_spread_unavailable',
+            'day_trading_shadow_slippage_unavailable' => 'day_trading_slippage_unavailable',
+            'day_trading_shadow_live_spread_exceeded' => 'day_trading_live_spread_exceeded',
+            'day_trading_shadow_slippage_exceeded' => 'day_trading_slippage_exceeded',
+            'day_trading_shadow_live_cost_snapshot_mismatch' => 'day_trading_live_cost_snapshot_mismatch',
+            default => $reasonCode,
+        };
     }
 }

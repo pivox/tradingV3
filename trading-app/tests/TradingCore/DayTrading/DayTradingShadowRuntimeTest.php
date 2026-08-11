@@ -55,6 +55,67 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame('2026-08-10T12:01:30+00:00', $outcome->evidence['entry_expires_at']);
         self::assertSame('2026-08-10T12:02:00+00:00', $outcome->evidence['cancel_after_at']);
         self::assertSame('2026-08-10T20:00:00+00:00', $outcome->evidence['holding_expires_at']);
+        self::assertSame([
+            'config_hash',
+            'plan_hash',
+            'reservation_hash',
+            'entry_expires_at',
+            'cancel_after_at',
+            'holding_expires_at',
+            'rules',
+        ], array_keys($outcome->evidence));
+        self::assertSame($outcome->lineage->configHash, $outcome->evidence['config_hash']);
+        self::assertSame($outcome->orderPlan->planHash, $outcome->evidence['plan_hash']);
+        self::assertSame($outcome->reservation->stateHash, $outcome->evidence['reservation_hash']);
+        self::assertSame('sha256:49acd227208fc91ec45c4af8fe09b2afe8d241ec6b4d816aa7bb78ac76a6c709', $outcome->evidence['config_hash']);
+        self::assertSame('sha256:8934244ac579e1621268737b32cb4e81532ed8321a6f447188e3abdb0dc03c69', $outcome->evidence['plan_hash']);
+        self::assertSame('sha256:da67fe2546a64ef64600fc799cf6019d89176174c9b5265bbb7beaa966221b10', $outcome->evidence['reservation_hash']);
+        self::assertSame('sha256:e7b826037082d72a01d2e3223e7345256c5e6bf014701f539dd4b8edab0d9080', $outcome->reservation->admissionHash);
+    }
+
+    public function testUnsupportedIdentityAndForbiddenCapabilitiesKeepExactFacadeReasons(): void
+    {
+        $request = self::fixtureRequest();
+        $unsupported = new DayTradingShadowRequest(
+            new EffectiveTradingConfigRequest(
+                'day_trading',
+                '1.1.0',
+                'day_trading.trend_continuation.long',
+                '1.1.0',
+                'fake',
+                'test',
+                'short',
+                ShadowExecutionCapability::Fake,
+            ),
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+        $missingCapability = self::withCapability($request, null);
+        $privateMainnet = self::withCapability($request, ShadowExecutionCapability::PrivateMainnet);
+
+        self::assertSame('day_trading_shadow_identity_unsupported', self::fixtureRuntime()->run($unsupported)->reasonCode);
+        self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($missingCapability)->reasonCode);
+        self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($privateMainnet)->reasonCode);
+    }
+
+    public function testNoTradeEvidenceShapeRemainsStable(): void
+    {
+        $outcome = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: 6.01));
+
+        self::assertSame([
+            'mode_id' => 'day_trading',
+            'mode_version' => '1.1.0',
+            'setup_id' => 'day_trading.trend_continuation.long',
+            'setup_version' => '1.1.0',
+            'side' => 'LONG',
+            'config_hash' => $outcome->lineage->configHash,
+        ], $outcome->evidence);
     }
 
     public function testHoldingDeadlineCreatesEnforceableCloseAction(): void
@@ -179,11 +240,14 @@ final class DayTradingShadowRuntimeTest extends TestCase
 
     public function testUnavailableOrExcessiveSlippageIsFailClosed(): void
     {
+        $spreadUnavailable = self::fixtureRuntime()->run(self::fixtureRequest(liveSpreadBps: null));
         $unavailable = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: null));
         $excessive = self::fixtureRuntime()->run(self::fixtureRequest(estimatedSlippageBps: 8.01));
 
+        self::assertSame('day_trading_live_spread_unavailable', $spreadUnavailable->reasonCode);
         self::assertSame('day_trading_slippage_unavailable', $unavailable->reasonCode);
         self::assertSame('day_trading_slippage_exceeded', $excessive->reasonCode);
+        self::assertNull($spreadUnavailable->reservation);
         self::assertNull($unavailable->reservation);
         self::assertNull($excessive->reservation);
     }
@@ -238,7 +302,7 @@ final class DayTradingShadowRuntimeTest extends TestCase
     }
 
     public static function fixtureRequest(
-        float $liveSpreadBps = 1.0,
+        ?float $liveSpreadBps = 1.0,
         ?float $estimatedSlippageBps = 1.0,
         float $realizedNetPnlQuote = 0.0,
         int $openPositions = 0,
@@ -310,6 +374,34 @@ final class DayTradingShadowRuntimeTest extends TestCase
             'decision-day-trading-shadow',
             $liveSpreadBps,
             $estimatedSlippageBps,
+        );
+    }
+
+    private static function withCapability(
+        DayTradingShadowRequest $request,
+        ?ShadowExecutionCapability $capability,
+    ): DayTradingShadowRequest {
+        $config = $request->configRequest;
+
+        return new DayTradingShadowRequest(
+            new EffectiveTradingConfigRequest(
+                $config->modeId,
+                $config->modeVersion,
+                $config->setupId,
+                $config->setupVersion,
+                $config->exchange,
+                $config->environment,
+                $config->side,
+                $capability,
+            ),
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
         );
     }
 

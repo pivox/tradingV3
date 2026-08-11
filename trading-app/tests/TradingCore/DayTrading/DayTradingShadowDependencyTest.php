@@ -51,4 +51,21 @@ final class DayTradingShadowDependencyTest extends TestCase
             self::assertStringNotContainsString($forbidden, $source);
         }
     }
+
+    public function testFacadeDelegatesWithoutDuplicatingCanonicalOrchestration(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 3) . '/src/TradingCore/DayTrading/DayTradingShadowRuntime.php');
+        self::assertIsString($source);
+
+        self::assertStringContainsString('CanonicalShadowRuntime', $source);
+        foreach ([
+            '->evaluate(',
+            '->compile(',
+            '->build(',
+            '->reserve(',
+            'CanonicalPortfolioAdmissionRequest',
+        ] as $duplicatedOrchestration) {
+            self::assertStringNotContainsString($duplicatedOrchestration, $source);
+        }
+    }
 }
