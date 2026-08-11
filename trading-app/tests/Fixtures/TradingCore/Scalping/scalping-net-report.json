@@ -1,0 +1,36 @@
+{
+    "schema": "scalping-net-report.v1",
+    "tuning_applied": false,
+    "cells": [
+        {
+            "setup_id": "scalping.pullback.long",
+            "setup_version": "1.1.0",
+            "side": "long",
+            "sample_count": 1,
+            "gross_r": 1.6676240063740295,
+            "net_r": 1.5922659304415498,
+            "cost_quote": 0.03038049,
+            "certified": false
+        },
+        {
+            "setup_id": "scalping.trend_continuation.long",
+            "setup_version": "1.1.0",
+            "side": "long",
+            "sample_count": 2,
+            "gross_r": 3.335248012748059,
+            "net_r": 3.1845318608830997,
+            "cost_quote": 0.06076098,
+            "certified": false
+        },
+        {
+            "setup_id": "scalping.trend_momentum.short",
+            "setup_version": "1.1.0",
+            "side": "short",
+            "sample_count": 1,
+            "gross_r": 1.6755824200374834,
+            "net_r": 1.608286065360126,
+            "cost_quote": 0.02700156,
+            "certified": false
+        }
+    ]
+}
