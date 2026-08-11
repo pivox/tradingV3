@@ -182,6 +182,7 @@ final readonly class CanonicalOrderPlan
             ...$request->protection->inputHashes,
             $request->riskRequest->instrument->inputHash,
             $request->netR->costInputHash,
+            ...($request->orderBook === null ? [] : [$request->orderBook->inputHash]),
         ]));
         $entryExpiresAt = $zone->expiresAt;
         $cancelAfterAt = null;

@@ -65,6 +65,24 @@ final readonly class CanonicalOrderPlanAuthority
         if ($verifiedZone != $zone) {
             throw new CanonicalOrderPlanException('canonical_order_plan_entry_zone_mismatch');
         }
+        if ($request->orderBook !== null) {
+            if (
+                $request->orderBook->exchange !== $zone->exchange
+                || $request->orderBook->environment !== $zone->environment
+                || $request->orderBook->symbol !== $zone->symbol
+                || $request->orderBook->marketType !== $zone->marketType
+                || $request->orderBook->source !== $request->zoneRequest->market->source
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_book_identity_mismatch');
+            }
+            $entryViolation = $request->orderBook->entryViolation(
+                $zone->side,
+                $verifiedZone->entryPrice,
+            );
+            if ($entryViolation !== null) {
+                throw new CanonicalOrderPlanException('canonical_' . $entryViolation);
+            }
+        }
         $verifiedProtectionRequest = new CanonicalProtectionRequest(
             $policy,
             $verifiedZone,
@@ -99,6 +117,7 @@ final readonly class CanonicalOrderPlanAuthority
             $verifiedRisk,
             $verifiedNetR,
             $request->costs,
+            $request->orderBook,
         );
     }
 }

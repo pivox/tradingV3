@@ -50,4 +50,22 @@ final readonly class CanonicalOrderBookSnapshot
     {
         return 10_000.0 * ($this->bestAsk - $this->bestBid) / (($this->bestAsk + $this->bestBid) / 2.0);
     }
+
+    public function entryViolation(string $side, float $entryPrice): ?string
+    {
+        if (
+            ($side === 'long' && $entryPrice >= $this->bestAsk)
+            || ($side === 'short' && $entryPrice <= $this->bestBid)
+        ) {
+            return 'order_book_maker_entry_invalid';
+        }
+        if (
+            $entryPrice < $this->bestBid
+            || $entryPrice > $this->bestAsk
+        ) {
+            return 'order_book_entry_mismatch';
+        }
+
+        return null;
+    }
 }

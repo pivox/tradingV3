@@ -19,6 +19,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
@@ -191,7 +192,10 @@ final class ScalpingShadowRuntimeTest extends TestCase
     {
         $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
         self::assertNotNull($request->orderBook);
-        $book = self::book(observedAt: '2026-08-10T11:59:30+00:00');
+        $book = self::bookAtMid(
+            $request->orderPlanRequest->zone->entryPrice,
+            observedAt: '2026-08-10T11:59:30+00:00',
+        );
         $candidate = self::withOrderBook($request, $book);
 
         $outcome = self::fixtureRuntime()->run($candidate);
@@ -199,8 +203,97 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame('planned', $outcome->status);
         self::assertSame($book, $candidate->orderBook);
         self::assertSame($book, $candidate->withIndicators($candidate->indicatorsByTimeframe)->orderBook);
-        self::assertSame(99.995, $book->bestBid);
-        self::assertSame(100.005, $book->bestAsk);
+        self::assertLessThan($request->orderPlanRequest->zone->entryPrice, $book->bestBid);
+        self::assertGreaterThan($request->orderPlanRequest->zone->entryPrice, $book->bestAsk);
+    }
+
+    #[DataProvider('entryBookViolations')]
+    public function testOrderBookMustContainTheCanonicalEntryAndPreserveMakerLimitSemantics(
+        string $setupId,
+        string $side,
+        CanonicalOrderBookSnapshot $book,
+        string $reason,
+    ): void {
+        $request = self::fixtureRequest($setupId, $side);
+
+        $outcome = self::fixtureRuntime()->run(self::withOrderBook($request, $book));
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame($reason, $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
+    /** @return iterable<string, array{string, string, CanonicalOrderBookSnapshot, string}> */
+    public static function entryBookViolations(): iterable
+    {
+        yield 'long marketable above ask' => [
+            'scalping.trend_continuation.long',
+            'long',
+            self::bookAtMid(99.9),
+            'scalping_shadow_order_book_maker_entry_invalid',
+        ];
+        yield 'long decentered below bid' => [
+            'scalping.trend_continuation.long',
+            'long',
+            self::bookAtMid(100.3),
+            'scalping_shadow_order_book_entry_mismatch',
+        ];
+        yield 'short marketable below bid' => [
+            'scalping.trend_momentum.short',
+            'short',
+            self::bookAtMid(100.4),
+            'scalping_shadow_order_book_maker_entry_invalid',
+        ];
+        yield 'short decentered above ask' => [
+            'scalping.trend_momentum.short',
+            'short',
+            self::bookAtMid(100.1),
+            'scalping_shadow_order_book_entry_mismatch',
+        ];
+        yield 'long at ask is marketable' => [
+            'scalping.trend_continuation.long',
+            'long',
+            self::bookEndingAtAsk(100.1),
+            'scalping_shadow_order_book_maker_entry_invalid',
+        ];
+        yield 'short at bid is marketable' => [
+            'scalping.trend_momentum.short',
+            'short',
+            self::bookStartingAtBid(100.3),
+            'scalping_shadow_order_book_maker_entry_invalid',
+        ];
+    }
+
+    public function testOrderBookInputHashIsPinnedIntoThePlanAndHashSubstitutionChangesTheProof(): void
+    {
+        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+        self::assertNotNull($request->orderBook);
+        $originalBook = $request->orderBook;
+        $substitutedHash = 'sha256:' . str_repeat('b', 64);
+        $substitutedBook = new CanonicalOrderBookSnapshot(
+            $originalBook->exchange,
+            $originalBook->environment,
+            $originalBook->symbol,
+            $originalBook->marketType,
+            $originalBook->source,
+            $originalBook->bestBid,
+            $originalBook->bestAsk,
+            $originalBook->spreadBps,
+            $originalBook->observedAt,
+            $substitutedHash,
+        );
+
+        $original = self::fixtureRuntime()->run($request);
+        $substituted = self::fixtureRuntime()->run(self::withOrderBook($request, $substitutedBook));
+
+        self::assertSame('planned', $original->status);
+        self::assertSame('planned', $substituted->status);
+        self::assertNotNull($original->orderPlan);
+        self::assertNotNull($substituted->orderPlan);
+        self::assertContains($originalBook->inputHash, $original->orderPlan->inputHashes);
+        self::assertContains($substitutedHash, $substituted->orderPlan->inputHashes);
+        self::assertNotSame($original->orderPlan->planHash, $substituted->orderPlan->planHash);
     }
 
     #[DataProvider('invalidRuntimeBooks')]
@@ -247,11 +340,11 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'scalping_shadow_order_book_source_mismatch',
         ];
         yield 'scalar spread mismatch' => [
-            self::book(bestBid: 99.99, bestAsk: 100.01, spreadBps: 2.0),
+            self::bookAtMid(100.1, 2.0),
             'scalping_shadow_order_book_snapshot_mismatch',
         ];
         yield 'cost spread mismatch' => [
-            self::book(bestBid: 99.99, bestAsk: 100.01, spreadBps: 2.0),
+            self::bookAtMid(100.1, 2.0),
             'scalping_shadow_live_cost_snapshot_mismatch',
             2.0,
         ];
@@ -396,7 +489,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             capability: $capability,
         );
         $limitPlan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
-            ->build($request->orderPlanRequest);
+            ->build(self::withPlanOrderBookProof($request));
         $serialized = serialize($limitPlan);
         $marketPlan = unserialize(
             str_replace('s:5:"limit";', 's:6:"market";', $serialized),
@@ -430,7 +523,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->configRequest,
             $request->lineage,
             $request->indicatorsByTimeframe,
-            $request->orderPlanRequest,
+            self::withPlanOrderBookProof($request),
             $request->portfolioScope,
             $request->portfolioSnapshot,
             $request->decisionKey,
@@ -527,6 +620,9 @@ final class ScalpingShadowRuntimeTest extends TestCase
         ]);
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
         $components = CanonicalOrderPlanPipelineFixture::accepted(side: $side, executionPolicy: $policy);
+        $bookMid = $components['zone']->entryPrice;
+        $bookSpreadBps = $liveSpreadBps ?? 1.0;
+        $bookHalfSpread = $bookMid * $bookSpreadBps / 20_000.0;
         $scope = new CanonicalPortfolioScope('shadow', 'fake', 'test', 'account-1', 'scalping', 'USDT');
         $portfolio = new CanonicalPortfolioSnapshot(
             $scope,
@@ -569,11 +665,11 @@ final class ScalpingShadowRuntimeTest extends TestCase
                 'BTCUSDT',
                 'perpetual',
                 'order_book',
-                100.0 - (($liveSpreadBps ?? 1.0) / 200.0),
-                100.0 + (($liveSpreadBps ?? 1.0) / 200.0),
-                $liveSpreadBps ?? 1.0,
+                $bookMid - $bookHalfSpread,
+                $bookMid + $bookHalfSpread,
+                $bookSpreadBps,
                 new \DateTimeImmutable('2026-08-10T11:59:45+00:00'),
-                'sha256:' . str_repeat('7', 64),
+                'sha256:' . str_repeat('a', 64),
             ) : null,
         );
     }
@@ -690,6 +786,24 @@ final class ScalpingShadowRuntimeTest extends TestCase
         );
     }
 
+    private static function withPlanOrderBookProof(ScalpingShadowRequest $request): CanonicalOrderPlanBuildRequest
+    {
+        $plan = $request->orderPlanRequest;
+
+        return new CanonicalOrderPlanBuildRequest(
+            $plan->policy,
+            $plan->zoneRequest,
+            $plan->zone,
+            $plan->protectionRequest,
+            $plan->protection,
+            $plan->riskRequest,
+            $plan->risk,
+            $plan->netR,
+            $plan->costs,
+            $request->orderBook,
+        );
+    }
+
     private static function book(
         string $exchange = 'fake',
         string $environment = 'test',
@@ -700,6 +814,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
         float $bestAsk = 100.005,
         float $spreadBps = 1.0,
         string $observedAt = '2026-08-10T11:59:45+00:00',
+        string $inputHash = 'sha256:' . '7777777777777777777777777777777777777777777777777777777777777777',
     ): CanonicalOrderBookSnapshot {
         return new CanonicalOrderBookSnapshot(
             $exchange,
@@ -711,7 +826,45 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $bestAsk,
             $spreadBps,
             new \DateTimeImmutable($observedAt),
-            'sha256:' . str_repeat('7', 64),
+            $inputHash,
+        );
+    }
+
+    private static function bookAtMid(
+        float $mid,
+        float $spreadBps = 1.0,
+        string $observedAt = '2026-08-10T11:59:45+00:00',
+    ): CanonicalOrderBookSnapshot
+    {
+        $halfSpread = $mid * $spreadBps / 20_000.0;
+
+        return self::book(
+            bestBid: $mid - $halfSpread,
+            bestAsk: $mid + $halfSpread,
+            spreadBps: $spreadBps,
+            observedAt: $observedAt,
+        );
+    }
+
+    private static function bookEndingAtAsk(float $bestAsk, float $spreadBps = 1.0): CanonicalOrderBookSnapshot
+    {
+        $rate = $spreadBps / 10_000.0;
+
+        return self::book(
+            bestBid: $bestAsk * (2.0 - $rate) / (2.0 + $rate),
+            bestAsk: $bestAsk,
+            spreadBps: $spreadBps,
+        );
+    }
+
+    private static function bookStartingAtBid(float $bestBid, float $spreadBps = 1.0): CanonicalOrderBookSnapshot
+    {
+        $rate = $spreadBps / 10_000.0;
+
+        return self::book(
+            bestBid: $bestBid,
+            bestAsk: $bestBid * (2.0 + $rate) / (2.0 - $rate),
+            spreadBps: $spreadBps,
         );
     }
 

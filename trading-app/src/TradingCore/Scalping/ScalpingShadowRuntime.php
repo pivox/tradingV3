@@ -7,6 +7,7 @@ namespace App\TradingCore\Scalping;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Shadow\CanonicalShadowRuntime;
@@ -69,11 +70,25 @@ final readonly class ScalpingShadowRuntime
 
     private function toShadowRequest(ScalpingShadowRequest $request): ShadowRuntimeRequest
     {
+        $plan = $request->orderPlanRequest;
+        $planWithOrderBook = new CanonicalOrderPlanBuildRequest(
+            $plan->policy,
+            $plan->zoneRequest,
+            $plan->zone,
+            $plan->protectionRequest,
+            $plan->protection,
+            $plan->riskRequest,
+            $plan->risk,
+            $plan->netR,
+            $plan->costs,
+            $request->orderBook,
+        );
+
         return new ShadowRuntimeRequest(
             $request->configRequest,
             $request->lineage,
             $request->indicatorsByTimeframe,
-            $request->orderPlanRequest,
+            $planWithOrderBook,
             $request->portfolioScope,
             $request->portfolioSnapshot,
             $request->decisionKey,

@@ -19,6 +19,7 @@ final readonly class CanonicalOrderPlanBuildRequest
         public CanonicalRiskDecision $risk,
         public CanonicalNetRDecision $netR,
         public CanonicalExecutionCostSnapshot $costs,
+        public ?CanonicalOrderBookSnapshot $orderBook = null,
     ) {
     }
 }

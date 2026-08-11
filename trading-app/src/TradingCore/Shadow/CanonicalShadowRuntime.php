@@ -176,6 +176,9 @@ final readonly class CanonicalShadowRuntime
         if ($book === null) {
             return 'order_book_unavailable';
         }
+        if ($request->orderPlanRequest->orderBook != $book) {
+            return 'order_book_proof_mismatch';
+        }
         $zone = $request->orderPlanRequest->zone;
         $costs = $request->orderPlanRequest->costs;
         if (
@@ -220,6 +223,13 @@ final readonly class CanonicalShadowRuntime
             || abs($book->spreadBps - $request->liveSpreadBps) > 1.0e-9
         ) {
             return 'order_book_snapshot_mismatch';
+        }
+        $entryViolation = $book->entryViolation(
+            $zone->side,
+            $zone->entryPrice,
+        );
+        if ($entryViolation !== null) {
+            return $entryViolation;
         }
 
         return null;
