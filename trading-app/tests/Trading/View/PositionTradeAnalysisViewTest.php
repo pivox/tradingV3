@@ -760,10 +760,12 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'borrow_cost_usdt' => 0.0,
             'liquidation_fee_usdt' => 0.0,
             'entry_qty' => 1.0,
-            'exit_qty' => 0.0,
-            'remaining_qty' => 1.0,
-            'position_fully_closed' => false,
-            'fills_complete' => false,
+            // Le provider prétend à tort que la position est close : la vue doit
+            // privilégier le ledger, qui ne contient aucune sortie durable.
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
             'quantity_coherent' => true,
             'lineage_sufficient' => true,
             'identifier_conflict' => false,
