@@ -184,6 +184,33 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_vwap')]
     private ?float $entryVwap = null;
 
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'entry_first_fill_at')]
+    private ?\DateTimeImmutable $entryFirstFillAt = null;
+
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'entry_last_fill_at')]
+    private ?\DateTimeImmutable $entryLastFillAt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'entry_qty')]
+    private ?float $entryQty = null;
+
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'exit_first_fill_at')]
+    private ?\DateTimeImmutable $exitFirstFillAt = null;
+
+    #[ORM\Column(type: Types::DATETIMETZ_IMMUTABLE, nullable: true, name: 'exit_last_fill_at')]
+    private ?\DateTimeImmutable $exitLastFillAt = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'exit_qty')]
+    private ?float $exitQty = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'exit_vwap')]
+    private ?float $exitVwap = null;
+
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'remaining_qty')]
+    private ?float $remainingQty = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'quantity_status')]
+    private ?string $quantityStatus = null;
+
     // --- Résultat / PnL (contrat explicite, net certifié seulement si complet) ---
 
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'pnl_r')]
@@ -493,6 +520,51 @@ class PositionTradeAnalysisV2
     public function getEntryVwap(): ?float
     {
         return $this->entryVwap;
+    }
+
+    public function getEntryFirstFillAt(): ?\DateTimeImmutable
+    {
+        return $this->entryFirstFillAt;
+    }
+
+    public function getEntryLastFillAt(): ?\DateTimeImmutable
+    {
+        return $this->entryLastFillAt;
+    }
+
+    public function getEntryQty(): ?float
+    {
+        return $this->entryQty;
+    }
+
+    public function getExitFirstFillAt(): ?\DateTimeImmutable
+    {
+        return $this->exitFirstFillAt;
+    }
+
+    public function getExitLastFillAt(): ?\DateTimeImmutable
+    {
+        return $this->exitLastFillAt;
+    }
+
+    public function getExitQty(): ?float
+    {
+        return $this->exitQty;
+    }
+
+    public function getExitVwap(): ?float
+    {
+        return $this->exitVwap;
+    }
+
+    public function getRemainingQty(): ?float
+    {
+        return $this->remainingQty;
+    }
+
+    public function getQuantityStatus(): ?string
+    {
+        return $this->quantityStatus;
     }
 
     public function getPnlR(): ?float
