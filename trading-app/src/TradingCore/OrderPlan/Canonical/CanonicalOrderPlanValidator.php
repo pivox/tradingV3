@@ -10,6 +10,13 @@ use Psr\Clock\ClockInterface;
 
 final readonly class CanonicalOrderPlanValidator
 {
+    /** @var list<array{string, string, string, string, string}> */
+    private const SCALPING_SHADOW_IDENTITIES = [
+        ['scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0', 'long'],
+        ['scalping', '1.1.0', 'scalping.pullback.long', '1.1.0', 'long'],
+        ['scalping', '1.1.0', 'scalping.trend_momentum.short', '1.1.0', 'short'],
+    ];
+
     public function __construct(private ClockInterface $clock)
     {
     }
@@ -51,6 +58,15 @@ final readonly class CanonicalOrderPlanValidator
                 throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
             }
         } elseif ($plan->modeId === 'scalping' && $plan->modeVersion === '1.1.0') {
+            if (!\in_array([
+                $plan->modeId,
+                $plan->modeVersion,
+                $plan->setupId,
+                $plan->setupVersion,
+                $plan->side,
+            ], self::SCALPING_SHADOW_IDENTITIES, true)) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_identity_unsupported');
+            }
             $expectedHoldingExpiry = CanonicalHoldingBoundary::expiresAt($plan->createdAt, 7200, [
                 'maximum_duration' => 'PT2H',
                 'daily_boundary_time' => '00:00:00',

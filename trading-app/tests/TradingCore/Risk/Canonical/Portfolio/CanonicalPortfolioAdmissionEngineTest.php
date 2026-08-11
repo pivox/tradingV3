@@ -94,6 +94,44 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
         self::assertSame(750.0, $decision->projectedModeExposureQuote);
     }
 
+    public function testScalpingAcceptsTheExactSixPercentDailyBoundaryAndRejectsImmediatelyBeyondIt(): void
+    {
+        [$policy, $plan, $scope] = $this->scalpingAuthority(500.0);
+        $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00'));
+        $atBoundary = $this->scalpingSnapshot(
+            $scope,
+            500.0,
+            realizedNetPnlQuote: -30.0 + $plan->totalStopLoss,
+        );
+
+        $decision = $engine->admit(new CanonicalPortfolioAdmissionRequest(
+            $policy,
+            $plan,
+            $scope,
+            $atBoundary,
+            'scalping-percent-boundary',
+        ));
+
+        self::assertSame(30.0, $decision->effectiveDailyLossCapQuote);
+        self::assertSame($plan->totalStopLoss, $decision->remainingDailyLossBeforeCandidateQuote);
+        self::assertSame($plan->totalStopLoss, $decision->reservedRiskQuote);
+
+        $justBeyond = $this->scalpingSnapshot(
+            $scope,
+            500.0,
+            realizedNetPnlQuote: -30.0 + $plan->totalStopLoss - 0.01,
+        );
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_daily_loss_exceeded');
+        $engine->admit(new CanonicalPortfolioAdmissionRequest(
+            $policy,
+            $plan,
+            $scope,
+            $justBeyond,
+            'scalping-percent-over-boundary',
+        ));
+    }
+
     public function testScalpingRejectsFourthReservationExposureAndBothDailyCaps(): void
     {
         [$absolutePolicy, $absolutePlan, $absoluteScope] = $this->scalpingAuthority(1000.0);
@@ -128,7 +166,11 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
                 $percentPolicy,
                 $percentPlan,
                 $percentScope,
-                $this->scalpingSnapshot($percentScope, 500.0, realizedNetPnlQuote: -30.0),
+                $this->scalpingSnapshot(
+                    $percentScope,
+                    500.0,
+                    realizedNetPnlQuote: -30.0 + $percentPlan->totalStopLoss - 0.01,
+                ),
                 'canonical_portfolio_daily_loss_exceeded',
             ],
         ];

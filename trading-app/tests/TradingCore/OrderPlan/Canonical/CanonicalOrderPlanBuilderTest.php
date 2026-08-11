@@ -124,6 +124,33 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         }
     }
 
+    public function testValidatorRejectsAuthenticatedScalpingDeadlinesForEveryUnsupportedIdentity(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        foreach ([
+            'unknown setup' => ['setupId' => 'scalping.unknown.long'],
+            'wrong setup version' => ['setupVersion' => '9.9.9'],
+            'wrong side' => ['side' => 'short'],
+        ] as $changes) {
+            try {
+                (new CanonicalOrderPlanValidator($clock))->validate($this->authenticatedPlan($plan, $changes));
+                self::fail('Unsupported identity was granted the scalping deadline envelope.');
+            } catch (CanonicalOrderPlanException $exception) {
+                self::assertSame('canonical_order_plan_identity_unsupported', $exception->reasonCode);
+            }
+        }
+    }
+
     public function testRejectsComponentsFromDifferentCanonicalIdentity(): void
     {
         $long = CanonicalOrderPlanPipelineFixture::accepted('long');
