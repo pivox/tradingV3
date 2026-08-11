@@ -39,23 +39,24 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
         self::assertNotNull($outcome->orderPlan);
         self::assertNotNull($outcome->reservation);
 
-        $filled = $adapter->applyFill(
+        $fill = $this->fill(
             $outcome->reservation,
-            $this->fill(
-                $outcome->reservation,
-                $outcome->orderPlan,
-                'maker-full-fill',
-                $outcome->orderPlan->quantity,
-                0.0,
-                new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
-            ),
+            $outcome->orderPlan,
+            'maker-full-fill',
+            $outcome->orderPlan->quantity,
+            0.0,
+            new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
         );
+        $filled = $adapter->applyFill($outcome->reservation, $fill);
 
         self::assertSame('filled', $filled->status);
         self::assertSame('none', $filled->requiredAction);
+        self::assertSame('2026-08-10T12:00:44+00:00', $filled->observedAt->format(DATE_ATOM));
         self::assertSame($outcome->orderPlan->quantity, $filled->filledQuantity);
         self::assertSame(0.0, $filled->remainingQuantity);
-        self::assertCount(1, $filled->appliedFillHashes);
+        self::assertSame(['maker-full-fill' => $fill->eventHash()], $filled->appliedFillHashes);
+        self::assertSame($fill->inputHash, $filled->transitionInputHashes[array_key_last($filled->transitionInputHashes)]);
+        self::assertSame($outcome->reservation->stateHash, $filled->previousStateHash);
         self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $filled->stateHash);
     }
 
@@ -80,9 +81,12 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
 
         self::assertSame('cancelled', $cancelled->status);
         self::assertSame('none', $cancelled->requiredAction);
+        self::assertSame('2026-08-10T12:00:45+00:00', $cancelled->observedAt->format(DATE_ATOM));
         self::assertSame(0.0, $cancelled->filledQuantity);
         self::assertSame(0.0, $cancelled->remainingQuantity);
         self::assertSame('sha256:' . str_repeat('1', 64), $cancelled->transitionInputHashes[array_key_last($cancelled->transitionInputHashes)]);
+        self::assertSame($outcome->reservation->stateHash, $cancelled->previousStateHash);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $cancelled->stateHash);
     }
 
     #[DataProvider('capabilities')]
@@ -101,17 +105,24 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
         self::assertNotNull($outcome->reservation);
         $partialQuantity = 0.1;
         $venueRemaining = $outcome->orderPlan->quantity - $partialQuantity;
-        $partiallyFilled = $adapter->applyFill(
+        $fill = $this->fill(
             $outcome->reservation,
-            $this->fill(
-                $outcome->reservation,
-                $outcome->orderPlan,
-                'maker-partial-fill',
-                $partialQuantity,
-                $venueRemaining,
-                new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
-            ),
+            $outcome->orderPlan,
+            'maker-partial-fill',
+            $partialQuantity,
+            $venueRemaining,
+            new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
         );
+        $partiallyFilled = $adapter->applyFill($outcome->reservation, $fill);
+
+        self::assertSame('active', $partiallyFilled->status);
+        self::assertSame('keep_residual', $partiallyFilled->requiredAction);
+        self::assertSame('2026-08-10T12:00:44+00:00', $partiallyFilled->observedAt->format(DATE_ATOM));
+        self::assertSame($partialQuantity, $partiallyFilled->filledQuantity);
+        self::assertSame(['maker-partial-fill' => $fill->eventHash()], $partiallyFilled->appliedFillHashes);
+        self::assertSame($fill->inputHash, $partiallyFilled->transitionInputHashes[array_key_last($partiallyFilled->transitionInputHashes)]);
+        self::assertSame($outcome->reservation->stateHash, $partiallyFilled->previousStateHash);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $partiallyFilled->stateHash);
 
         $cancelled = $adapter->cancelResidual(
             $partiallyFilled,
@@ -121,9 +132,13 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
 
         self::assertSame('partially_filled', $cancelled->status);
         self::assertSame('none', $cancelled->requiredAction);
+        self::assertSame('2026-08-10T12:01:15+00:00', $cancelled->observedAt->format(DATE_ATOM));
         self::assertSame($partialQuantity, $cancelled->filledQuantity);
         self::assertSame(0.0, $cancelled->remainingQuantity);
-        self::assertCount(1, $cancelled->appliedFillHashes);
+        self::assertSame(['maker-partial-fill' => $fill->eventHash()], $cancelled->appliedFillHashes);
+        self::assertSame('sha256:' . str_repeat('2', 64), $cancelled->transitionInputHashes[array_key_last($cancelled->transitionInputHashes)]);
+        self::assertSame($partiallyFilled->stateHash, $cancelled->previousStateHash);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $cancelled->stateHash);
     }
 
     #[DataProvider('capabilities')]
@@ -145,17 +160,23 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
             self::assertNotNull($outcome->orderPlan);
             self::assertNotNull($outcome->reservation);
             $quantity = $partialQuantity ?? $outcome->orderPlan->quantity;
-            $filled = $adapter->applyFill(
+            $fill = $this->fill(
                 $outcome->reservation,
-                $this->fill(
-                    $outcome->reservation,
-                    $outcome->orderPlan,
-                    $fillId . '-holding-fill',
-                    $quantity,
-                    $outcome->orderPlan->quantity - $quantity,
-                    new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
-                ),
+                $outcome->orderPlan,
+                $fillId . '-holding-fill',
+                $quantity,
+                $outcome->orderPlan->quantity - $quantity,
+                new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
             );
+            $filled = $adapter->applyFill($outcome->reservation, $fill);
+
+            self::assertSame($partialQuantity === null ? 'filled' : 'active', $filled->status);
+            self::assertSame($partialQuantity === null ? 'none' : 'keep_residual', $filled->requiredAction);
+            self::assertSame('2026-08-10T12:00:44+00:00', $filled->observedAt->format(DATE_ATOM));
+            self::assertSame($quantity, $filled->filledQuantity);
+            self::assertSame([$fillId . '-holding-fill' => $fill->eventHash()], $filled->appliedFillHashes);
+            self::assertSame($fill->inputHash, $filled->transitionInputHashes[array_key_last($filled->transitionInputHashes)]);
+            self::assertSame($outcome->reservation->stateHash, $filled->previousStateHash);
 
             $expired = $adapter->enforceHoldingDeadline(
                 $filled,
@@ -165,7 +186,16 @@ final class ScalpingShadowFillLifecycleTest extends TestCase
 
             self::assertSame('holding_expired', $expired->status);
             self::assertSame('close_position', $expired->requiredAction);
+            self::assertSame('2026-08-10T14:00:00+00:00', $expired->observedAt->format(DATE_ATOM));
+            self::assertSame(
+                $outcome->orderPlan->holdingExpiresAt?->format(DATE_ATOM),
+                $expired->observedAt->format(DATE_ATOM),
+            );
             self::assertSame(0.0, $expired->remainingQuantity);
+            self::assertSame([$fillId . '-holding-fill' => $fill->eventHash()], $expired->appliedFillHashes);
+            self::assertSame('sha256:' . str_repeat('3', 64), $expired->transitionInputHashes[array_key_last($expired->transitionInputHashes)]);
+            self::assertSame($filled->stateHash, $expired->previousStateHash);
+            self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $expired->stateHash);
         }
     }
 

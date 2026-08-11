@@ -25,7 +25,7 @@ final class ScalpingShadowAdapterParityTest extends TestCase
 {
     public function testSelectorMapsCapabilitiesToDedicatedAdaptersWithIsolatedStores(): void
     {
-        [$selector, $adapters] = $this->harness();
+        [$selector, $adapters, $stores] = $this->harness();
 
         self::assertSame($adapters['fake'], $selector->select(ShadowExecutionCapability::Fake));
         self::assertSame($adapters['paper'], $selector->select(ShadowExecutionCapability::Paper));
@@ -34,49 +34,74 @@ final class ScalpingShadowAdapterParityTest extends TestCase
         self::assertNotSame($adapters['fake'], $adapters['backtest']);
         self::assertNotSame($adapters['paper'], $adapters['backtest']);
 
-        $fakeOutcome = ScalpingShadowRuntimeTest::fixtureRuntime(adapters: $selector)->run(
-            ScalpingShadowRuntimeTest::fixtureRequest(
-                'scalping.trend_continuation.long',
-                'long',
-                capability: ShadowExecutionCapability::Fake,
-            ),
-        );
-        self::assertNotNull($fakeOutcome->orderPlan);
-        self::assertNotNull($fakeOutcome->reservation);
-        $fakeFilled = $adapters['fake']->applyFill(
-            $fakeOutcome->reservation,
-            new CanonicalPortfolioFill(
-                $fakeOutcome->reservation->scope,
-                $fakeOutcome->reservation->decisionKey,
-                $fakeOutcome->reservation->planHash,
-                $fakeOutcome->reservation->admissionHash,
-                'isolation-fill',
-                $fakeOutcome->orderPlan->quantity,
-                $fakeOutcome->orderPlan->entryPrice,
-                $fakeOutcome->orderPlan->entryFee,
-                $fakeOutcome->orderPlan->quantity,
-                0.0,
-                new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
-                'sha256:' . str_repeat('7', 64),
-            ),
-        );
-
-        foreach ([
+        $capabilities = [
+            'fake' => ShadowExecutionCapability::Fake,
             'paper' => ShadowExecutionCapability::Paper,
             'backtest' => ShadowExecutionCapability::Backtest,
-        ] as $name => $capability) {
-            $isolated = ScalpingShadowRuntimeTest::fixtureRuntime(adapters: $selector)->run(
+        ];
+        $reservations = [];
+        foreach ($capabilities as $name => $capability) {
+            $outcome = ScalpingShadowRuntimeTest::fixtureRuntime(adapters: $selector)->run(
                 ScalpingShadowRuntimeTest::fixtureRequest(
                     'scalping.trend_continuation.long',
                     'long',
                     capability: $capability,
                 ),
             );
-            self::assertNotNull($isolated->reservation);
-            self::assertSame('active', $isolated->reservation->status);
-            self::assertSame(0.0, $isolated->reservation->filledQuantity);
-            self::assertSame(1, $isolated->reservation->version);
-            self::assertNotSame($fakeFilled->stateHash, $isolated->reservation->stateHash, $name);
+            self::assertNotNull($outcome->orderPlan);
+            self::assertNotNull($outcome->reservation);
+            self::assertSame(2, $stores[$name]->scopeVersion($outcome->reservation->scope));
+            $reservations[$name] = [$outcome->orderPlan, $outcome->reservation];
+        }
+
+        foreach ($capabilities as $mutatedName => $mutatedCapability) {
+            [$plan, $reservation] = $reservations[$mutatedName];
+            $beforeOtherHashes = [];
+            $beforeOtherVersions = [];
+            foreach ($capabilities as $otherName => $_) {
+                if ($otherName !== $mutatedName) {
+                    $beforeOtherHashes[$otherName] = $reservations[$otherName][1]->stateHash;
+                    $beforeOtherVersions[$otherName] = $stores[$otherName]->scopeVersion($reservations[$otherName][1]->scope);
+                }
+            }
+            $fillId = $mutatedName . '-isolation-fill';
+            $filled = $adapters[$mutatedName]->applyFill(
+                $reservation,
+                new CanonicalPortfolioFill(
+                    $reservation->scope,
+                    $reservation->decisionKey,
+                    $reservation->planHash,
+                    $reservation->admissionHash,
+                    $fillId,
+                    $plan->quantity,
+                    $plan->entryPrice,
+                    $plan->entryFee,
+                    $plan->quantity,
+                    0.0,
+                    new \DateTimeImmutable('2026-08-10T12:00:44+00:00'),
+                    'sha256:' . hash('sha256', $fillId),
+                ),
+            );
+            $reservations[$mutatedName][1] = $filled;
+            self::assertSame('filled', $filled->status);
+            self::assertSame(3, $stores[$mutatedName]->scopeVersion($reservation->scope));
+
+            foreach ($capabilities as $otherName => $otherCapability) {
+                if ($otherName === $mutatedName) {
+                    continue;
+                }
+                $isolated = ScalpingShadowRuntimeTest::fixtureRuntime(adapters: $selector)->run(
+                    ScalpingShadowRuntimeTest::fixtureRequest(
+                        'scalping.trend_continuation.long',
+                        'long',
+                        capability: $otherCapability,
+                    ),
+                );
+                self::assertNotNull($isolated->reservation);
+                self::assertSame($beforeOtherHashes[$otherName], $isolated->reservation->stateHash, $mutatedCapability->value . ' -> ' . $otherName);
+                self::assertSame($beforeOtherVersions[$otherName], $stores[$otherName]->scopeVersion($isolated->reservation->scope), $mutatedCapability->value . ' -> ' . $otherName);
+                self::assertSame($reservations[$otherName][1]->appliedFillHashes, $isolated->reservation->appliedFillHashes);
+            }
         }
     }
 
@@ -166,26 +191,38 @@ final class ScalpingShadowAdapterParityTest extends TestCase
         )));
     }
 
-    /** @return array{CanonicalPortfolioAdapterSelector, array{fake: FakeCanonicalPortfolioAdapter, paper: PaperCanonicalPortfolioAdapter, backtest: BacktestCanonicalPortfolioAdapter}} */
+    /**
+     * @return array{
+     *     CanonicalPortfolioAdapterSelector,
+     *     array{fake: FakeCanonicalPortfolioAdapter, paper: PaperCanonicalPortfolioAdapter, backtest: BacktestCanonicalPortfolioAdapter},
+     *     array{fake: InMemoryCanonicalPortfolioReservationStore, paper: InMemoryCanonicalPortfolioReservationStore, backtest: InMemoryCanonicalPortfolioReservationStore}
+     * }
+     */
     private function harness(): array
     {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $stores = [
+            'fake' => new InMemoryCanonicalPortfolioReservationStore(),
+            'paper' => new InMemoryCanonicalPortfolioReservationStore(),
+            'backtest' => new InMemoryCanonicalPortfolioReservationStore(),
+        ];
         $fake = new FakeCanonicalPortfolioAdapter(
             new CanonicalPortfolioAdmissionEngine($clock),
-            new InMemoryCanonicalPortfolioReservationStore(),
+            $stores['fake'],
         );
         $paper = new PaperCanonicalPortfolioAdapter(
             new CanonicalPortfolioAdmissionEngine($clock),
-            new InMemoryCanonicalPortfolioReservationStore(),
+            $stores['paper'],
         );
         $backtest = new BacktestCanonicalPortfolioAdapter(
             new CanonicalPortfolioAdmissionEngine($clock),
-            new InMemoryCanonicalPortfolioReservationStore(),
+            $stores['backtest'],
         );
 
         return [
             new CanonicalPortfolioAdapterSelector($fake, $paper, $backtest),
             ['fake' => $fake, 'paper' => $paper, 'backtest' => $backtest],
+            $stores,
         ];
     }
 
