@@ -9,6 +9,8 @@ use App\TradingCore\Rules\Ast\AnyOfNode;
 use App\TradingCore\Rules\Ast\ConditionNode;
 use App\TradingCore\Rules\Ast\RuleNode;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Setup\SetupContract;
 
 final readonly class StrictSetupRuleCompiler
@@ -23,6 +25,11 @@ final readonly class StrictSetupRuleCompiler
     public function compile(SetupContract $contract): CompiledSetupRulePlan
     {
         $document = $contract->toArray();
+        try {
+            (new ConditionCatalogResolver())->forSetupDocument($document, $this->catalog);
+        } catch (ConditionCatalogException $exception) {
+            throw new RuleCompilationException($exception->getMessage(), previous: $exception);
+        }
         $declaredHash = $document['data_condition_contract']['condition_catalog_hash'];
         if (($declaredHash['state'] ?? null) === 'defined'
             && (!is_string($declaredHash['value'] ?? null) || !hash_equals($this->catalog->stableHash(), $declaredHash['value']))) {

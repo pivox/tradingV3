@@ -34,6 +34,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             );
 
             self::assertTrue($result->passed, $setupId . ': ' . $result->reasonCode);
+            self::assertSame('1.1.0', $result->trace['catalog_version']);
             self::assertSame('5m', $result->trace['execution_timeframe']);
             self::assertSame(['1m'], $result->trace['mandatory_confirmations']);
         }
@@ -148,6 +149,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
 
         self::assertTrue($result->passed);
         self::assertSame('setup_rules_passed', $result->reasonCode);
+        self::assertSame('1.0.0', $result->trace['catalog_version']);
         self::assertSame('15m', $result->trace['execution_timeframe']);
         self::assertSame(['5m', '1m'], $result->trace['mandatory_confirmations']);
     }

@@ -489,7 +489,7 @@ final readonly class CanonicalExecutionPolicy
             array_unshift($dataContractKeys, 'condition_catalog_version');
         }
         self::requireExactKeys($dataContract, $dataContractKeys, 'canonical_execution_policy_catalog_invalid');
-        if ($scalpingShadow && ($dataContract['condition_catalog_version'] ?? null) !== '1.0.0') {
+        if ($scalpingShadow && ($dataContract['condition_catalog_version'] ?? null) !== '1.1.0') {
             throw new CanonicalOrderPlanException('canonical_execution_policy_catalog_invalid');
         }
         $catalogDecision = self::mapping($dataContract, 'condition_catalog_hash', 'canonical_execution_policy_catalog_invalid');

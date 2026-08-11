@@ -31,6 +31,26 @@ final class SetupContractLoaderTest extends TestCase
         $this->root = dirname(__DIR__, 3) . '/config/trading/setup_contract';
     }
 
+    public function testPreviouslyPublishedSetupContractsRemainByteForByteImmutable(): void
+    {
+        $expected = [
+            'crash_short/1.0.0.yaml' => '60e65d62933ce76a6adeb3fd9e9dba7a0d299abc06b36bf9581f85298db56406',
+            'crash_short/1.1.0.yaml' => '7da22d29303780b8cb15ce2b72960f0ba79c840aafabe84fb06ff69d9b34f9aa',
+            'day_trading.trend_continuation.long/1.0.0.yaml' => '3b6fef8860691db111916a0ecff37bf703fa4e6b6fbe8631d5a0ea0b004b90c5',
+            'day_trading.trend_continuation.long/1.1.0.yaml' => '4814381e1373a57c9e60190014e929af0928e5bb5a56b816afaa99e0efa70010',
+            'day_trading.trend_continuation.short/1.0.0.yaml' => 'ff9b0c340cff81eda57ffed39192081716007f345419039341b836c1519ba47f',
+            'micro_scalping.momentum_ofi.long/1.0.0.yaml' => '7a4e2290233aea9811e0cdae6e1f9878e0017ca0c360be1d68cfb246e2b7e381',
+            'micro_scalping.momentum_ofi.short/1.0.0.yaml' => '804c5e301e3fd5b861a9038cc2c78540c4b6b2550ef76f1293f89dba0308e5d7',
+            'scalping.pullback.long/1.0.0.yaml' => '12c0d593a3271d8ab61c2efc4039a2d6ac286f6781ad3f6d3163c7a1ed6f9bae',
+            'scalping.trend_continuation.long/1.0.0.yaml' => 'df4936f8f4fbb72f58720c9430c165164e1cd3df8e9173cee34e57f4df95b470',
+            'scalping.trend_momentum.short/1.0.0.yaml' => '921623fd143bc39b2b75e2cbd86941c37194b4ea00ef43bc34f221c331490f25',
+        ];
+
+        foreach ($expected as $relativePath => $expectedHash) {
+            self::assertSame($expectedHash, hash_file('sha256', $this->root . '/' . $relativePath), $relativePath);
+        }
+    }
+
     public function testLoadsExactlyTheFrozenEightSourceHypotheses(): void
     {
         $expected = [
@@ -261,13 +281,13 @@ final class SetupContractLoaderTest extends TestCase
             'scalping.trend_momentum.short',
         ] as $setupId) {
             $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
-            self::assertSame('1.0.0', $document['data_condition_contract']['condition_catalog_version'] ?? null);
+            self::assertSame('1.1.0', $document['data_condition_contract']['condition_catalog_version'] ?? null);
             self::assertSame([
                 'state' => 'defined',
-                'value' => '71edbea92b476c7d093ad7f90494e2555a765a2fd50e8dc2f6af3e6ef0b3ea7d',
+                'value' => (new ConditionCatalogLoader())->loadVersion('1.1.0')->stableHash(),
                 'unit' => 'sha256',
-                'source' => 'config/trading/condition_catalog/1.0.0.yaml',
-                'justification' => 'Pinned to the canonical #303 catalogue.',
+                'source' => 'config/trading/condition_catalog/1.1.0.yaml',
+                'justification' => 'Pinned to the additive canonical #307 catalogue.',
             ], $document['data_condition_contract']['condition_catalog_hash']);
         }
     }
@@ -430,9 +450,9 @@ final class SetupContractLoaderTest extends TestCase
         }
 
         foreach ([
-            'scalping.trend_continuation.long' => '0cc4e5e042bac449b6326fa06527f4749d91f3a15292b81b9102115b12d086aa',
-            'scalping.pullback.long' => '36b2114e1c0113fdef812cdca66572124597c044f84dee13d2aeeb8559499106',
-            'scalping.trend_momentum.short' => '582b0100ed479be697387accf89fdf90abc8e31c8e63037ce1d9c4bec02ed33b',
+            'scalping.trend_continuation.long' => '7ebaae24166be3a248a39b66bb545c52b7eb4498f9c0419bb2dcf919de23136e',
+            'scalping.pullback.long' => 'a02681c73c81609d4cef23b88c7e3acce22b06837f3573c90c113c8d979794ed',
+            'scalping.trend_momentum.short' => '66d12bb65c67b44126a865abc67d8f716320c6c557d33a6a14c75695ca99f769',
         ] as $setupId => $expectedHash) {
             self::assertSame(
                 $expectedHash,
@@ -869,11 +889,13 @@ final class SetupContractLoaderTest extends TestCase
 
     public function testCanonicalPullbackIsExecutableWhileUnsupportedTimeframesRemainFailClosed(): void
     {
-        $catalog = $this->catalog();
-        self::assertSame('executable', $catalog->definition('pullback_confirmed')->status);
-        self::assertStringContainsString(CanonicalPullbackAgeCalculator::class, $catalog->definition('pullback_confirmed')->provenance);
-        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_long')->timeframes);
-        self::assertSame(['1h', '4h'], $catalog->definition('price_regime_ok_short')->timeframes);
+        $oneZero = $this->catalog();
+        $oneOne = (new ConditionCatalogLoader())->loadVersion('1.1.0');
+        self::assertSame('blocked', $oneZero->definition('pullback_confirmed')->status);
+        self::assertSame('executable', $oneOne->definition('pullback_confirmed')->status);
+        self::assertStringContainsString(CanonicalPullbackAgeCalculator::class, $oneOne->definition('pullback_confirmed')->provenance);
+        self::assertSame(['1h', '4h'], $oneOne->definition('price_regime_ok_long')->timeframes);
+        self::assertSame(['1h', '4h'], $oneOne->definition('price_regime_ok_short')->timeframes);
 
         $short = (new SetupContractLoader($this->root))->load('scalping.trend_momentum.short', '1.0.0')->toArray();
         self::assertNotContains('price_regime_ok_short', array_column($short['context']['context']['nodes'], 'condition'));
@@ -1069,7 +1091,7 @@ final class SetupContractLoaderTest extends TestCase
         $document = $this->yaml($this->root . '/scalping.pullback.long/1.0.0.yaml');
         $document['data_condition_contract']['condition_catalog_hash'] = [
             'state' => 'defined', 'value' => $catalog->stableHash(), 'unit' => 'sha256',
-            'source' => 'test catalog', 'justification' => 'Exact test catalog hash.',
+            'source' => 'config/trading/condition_catalog/1.0.0.yaml', 'justification' => 'Exact test catalog hash.',
         ];
         $snapshot = (new SetupCompiler())->compile(SetupContract::fromDocument($document), $catalog);
         self::assertSame($catalog->stableHash(), $snapshot->conditionCatalogHash);
@@ -1181,8 +1203,7 @@ final class SetupContractLoaderTest extends TestCase
         $contract = (new SetupContractLoader($this->root))->load('scalping.pullback.long', '1.0.0');
 
         $this->expectException(SetupContractException::class);
-        $this->expectExceptionMessage('Supplied condition catalog is missing:');
-        $this->expectExceptionMessage('pullback_confirmed');
+        $this->expectExceptionMessage('Condition catalog hash mismatch');
         $document = Yaml::parseFile(dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml');
         self::assertIsArray($document);
         $document['conditions'] = array_values(array_filter(

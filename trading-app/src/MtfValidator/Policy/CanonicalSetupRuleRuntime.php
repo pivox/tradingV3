@@ -7,7 +7,8 @@ namespace App\MtfValidator\Policy;
 use App\Indicator\Condition\ConditionInterface;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
-use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Rules\Compiler\StrictSetupRuleCompiler;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationContext;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationResult;
@@ -21,11 +22,10 @@ use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
 
 final class CanonicalSetupRuleRuntime
 {
-    private ConditionCatalog $catalog;
+    private ?ConditionCatalog $suppliedCatalog;
     private SetupContractLoader $contracts;
     private ModeContractLoader $modes;
-    private StrictSetupRuleCompiler $compiler;
-    private StrictRuleEvaluator $evaluator;
+    private StrictConditionRegistry $registry;
     /** @var array<string, \App\TradingCore\Rules\Compiler\CompiledSetupRulePlan> */
     private array $planCache = [];
 
@@ -37,13 +37,10 @@ final class CanonicalSetupRuleRuntime
         ?SetupContractLoader $contracts = null,
         ?ModeContractLoader $modes = null,
     ) {
-        $this->catalog = $catalog ?? (new ConditionCatalogLoader())->loadFile(
-            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
-        );
+        $this->suppliedCatalog = $catalog;
         $this->contracts = $contracts ?? new SetupContractLoader();
         $this->modes = $modes ?? new ModeContractLoader();
-        $this->compiler = new StrictSetupRuleCompiler($this->catalog);
-        $this->evaluator = new StrictRuleEvaluator($this->catalog, new StrictConditionRegistry($conditions));
+        $this->registry = new StrictConditionRegistry($conditions);
     }
 
     /** @param array<string, mixed> $indicatorsByTimeframe */
@@ -55,12 +52,20 @@ final class CanonicalSetupRuleRuntime
         if (!$identity->isModern()) {
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_identity_required', []);
         }
-        $identityCatalogHash = (string) $identity->conditionCatalogHash;
-        $identityCatalogHash = str_starts_with($identityCatalogHash, 'sha256:') ? substr($identityCatalogHash, 7) : $identityCatalogHash;
-        if (!hash_equals($this->catalog->stableHash(), $identityCatalogHash)) {
+        $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
+        try {
+            $catalog = (new ConditionCatalogResolver())->forSetupDocument(
+                $contract->toArray(),
+                $this->suppliedCatalog,
+            );
+        } catch (ConditionCatalogException) {
             return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
         }
-        $contract = $this->contracts->load((string) $identity->setupId, (string) $identity->setupVersion);
+        $identityCatalogHash = (string) $identity->conditionCatalogHash;
+        $identityCatalogHash = str_starts_with($identityCatalogHash, 'sha256:') ? substr($identityCatalogHash, 7) : $identityCatalogHash;
+        if (!hash_equals($catalog->stableHash(), $identityCatalogHash)) {
+            return new CanonicalSetupRuleRuntimeResult(false, 'canonical_condition_catalog_mismatch', []);
+        }
         $shadowTimeframes = $this->shadowTimeframes($identity, $contract);
         if ($shadowTimeframes !== null) {
             foreach ($shadowTimeframes['required'] as $timeframe) {
@@ -86,7 +91,7 @@ final class CanonicalSetupRuleRuntime
                     ]);
                 }
                 $validUntil = $observedAt->modify(
-                    '+' . $this->catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds',
+                    '+' . $catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds',
                 );
                 if ($observedAt > $evaluatedAt || $validUntil < $evaluatedAt) {
                     return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_stale', [
@@ -101,25 +106,26 @@ final class CanonicalSetupRuleRuntime
         }
         $setupHash = $contract->stableHash();
         $planCacheKey = hash('sha256', json_encode([
-            'catalog_hash' => $this->catalog->stableHash(),
+            'catalog_hash' => $catalog->stableHash(),
             'setup_id' => $identity->setupId,
             'setup_version' => $identity->setupVersion,
             'setup_hash' => $setupHash,
             'config_hash' => $identity->configHash,
         ], JSON_THROW_ON_ERROR));
         $planCacheHit = isset($this->planCache[$planCacheKey]);
-        $plan = $this->planCache[$planCacheKey] ??= $this->compiler->compile($contract);
+        $plan = $this->planCache[$planCacheKey] ??= (new StrictSetupRuleCompiler($catalog))->compile($contract);
+        $evaluator = new StrictRuleEvaluator($catalog, $this->registry);
         $context = new RuleEvaluationContext(
             (string) $identity->configHash,
             $evaluatedAt,
-            $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt),
+            $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt, $catalog),
         );
         $sectionResults = [];
         foreach ($plan->sections as $name => $node) {
-            $sectionResults[$name] = $this->evaluator->evaluate($node, $context);
+            $sectionResults[$name] = $evaluator->evaluate($node, $context);
         }
-        $filterResults = array_map(fn ($node): RuleEvaluationResult => $this->evaluator->evaluate($node, $context), $plan->filters);
-        $noTradeResults = array_map(fn ($node): RuleEvaluationResult => $this->evaluator->evaluate($node, $context), $plan->noTradeRules);
+        $filterResults = array_map(fn ($node): RuleEvaluationResult => $evaluator->evaluate($node, $context), $plan->filters);
+        $noTradeResults = array_map(fn ($node): RuleEvaluationResult => $evaluator->evaluate($node, $context), $plan->noTradeRules);
         $sectionsPassed = !in_array(false, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $sectionResults), true);
         $filtersPassed = !in_array(false, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $filterResults), true);
         $noTradeMatched = in_array(true, array_map(static fn (RuleEvaluationResult $result): bool => $result->passed, $noTradeResults), true);
@@ -249,7 +255,12 @@ final class CanonicalSetupRuleRuntime
      * @param array<string, mixed> $indicatorsByTimeframe
      * @return list<RuleInputSnapshot>
      */
-    private function snapshots(LineageContext $identity, array $indicatorsByTimeframe, \DateTimeImmutable $evaluatedAt): array
+    private function snapshots(
+        LineageContext $identity,
+        array $indicatorsByTimeframe,
+        \DateTimeImmutable $evaluatedAt,
+        ConditionCatalog $catalog,
+    ): array
     {
         $snapshots = [];
         foreach ($indicatorsByTimeframe as $timeframe => $indicators) {
@@ -264,7 +275,7 @@ final class CanonicalSetupRuleRuntime
                 $timeframe,
                 'indicator_snapshot',
                 $observedAt,
-                $observedAt->modify('+' . $this->catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
+                $observedAt->modify('+' . $catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds'),
                 $indicators,
             );
         }
@@ -274,7 +285,7 @@ final class CanonicalSetupRuleRuntime
                 'global',
                 'effective_config',
                 $evaluatedAt,
-                $evaluatedAt->modify('+' . $this->catalog->freshnessSeconds('effective_config', 'global') . ' seconds'),
+                $evaluatedAt->modify('+' . $catalog->freshnessSeconds('effective_config', 'global') . ' seconds'),
                 $config,
             );
         }

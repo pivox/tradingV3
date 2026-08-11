@@ -54,7 +54,7 @@ data_condition_contract:
   missing_conditions: []
   external_dependencies:
     - { dependency_id: lev_bounds, state: unresolved, owner: mode_or_exchange, source: 'src/MtfValidator/config/validations.crash.yaml:164-167,247-249', justification: 'Legacy bounds cannot become setup-owned leverage policy; authoritative modern limits are unresolved.', failure_policy: reject }
-  condition_catalog_hash: { state: defined, value: 71edbea92b476c7d093ad7f90494e2555a765a2fd50e8dc2f6af3e6ef0b3ea7d, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
+  condition_catalog_hash: { state: defined, value: 350a310d2ba512bf9d4c373436c4088447291d55c75fdc979cce44cecf1ec7ef, unit: sha256, source: 'config/trading/condition_catalog/1.0.0.yaml', justification: 'Pinned to the canonical #303 catalogue.' }
   unknown_condition_policy: reject
 validity_window: { state: unresolved, value: null, unit: duration, source: 'not defined by validations.crash.yaml', justification: 'Full duration absent.' }
 governance:

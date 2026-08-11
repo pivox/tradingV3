@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\TradingCore\Setup;
 
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
-use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogException;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Setup\Exception\SetupContractException;
 
 final class SetupContractValidator
@@ -61,9 +62,9 @@ final class SetupContractValidator
     ];
     /** Canonical documents are explicit in setup-contract.schema.json scalping* $defs. */
     private const SCALPING_SHADOW_DOCUMENT_HASHES = [
-        'scalping.trend_continuation.long' => '0cc4e5e042bac449b6326fa06527f4749d91f3a15292b81b9102115b12d086aa',
-        'scalping.pullback.long' => '36b2114e1c0113fdef812cdca66572124597c044f84dee13d2aeeb8559499106',
-        'scalping.trend_momentum.short' => '582b0100ed479be697387accf89fdf90abc8e31c8e63037ce1d9c4bec02ed33b',
+        'scalping.trend_continuation.long' => '7ebaae24166be3a248a39b66bb545c52b7eb4498f9c0419bb2dcf919de23136e',
+        'scalping.pullback.long' => 'a02681c73c81609d4cef23b88c7e3acce22b06837f3573c90c113c8d979794ed',
+        'scalping.trend_momentum.short' => '66d12bb65c67b44126a865abc67d8f716320c6c557d33a6a14c75695ca99f769',
     ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
@@ -84,11 +85,8 @@ final class SetupContractValidator
 
     private ConditionCatalog $conditionCatalog;
 
-    public function __construct(?ConditionCatalog $conditionCatalog = null)
+    public function __construct(private readonly ?ConditionCatalog $suppliedConditionCatalog = null)
     {
-        $this->conditionCatalog = $conditionCatalog ?? (new ConditionCatalogLoader())->loadFile(
-            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
-        );
     }
 
     /** @param array<string, mixed> $document */
@@ -123,6 +121,14 @@ final class SetupContractValidator
             || ($document['setup_version'] !== '1.0.0'
                 && ($document['setup_version'] !== '1.1.0' || !in_array($document['setup_id'], $publishedAtOneOne, true)))) {
             throw new SetupContractException('Only exact published setup versions are accepted; aliases and ranges are forbidden.');
+        }
+        try {
+            $this->conditionCatalog = (new ConditionCatalogResolver())->forSetupDocument(
+                $document,
+                $this->suppliedConditionCatalog,
+            );
+        } catch (ConditionCatalogException $exception) {
+            throw new SetupContractException($exception->getMessage(), previous: $exception);
         }
         if (!isset(self::EXPECTED[$document['setup_id']])) {
             throw new SetupContractException(sprintf('Unknown canonical setup id "%s".', $document['setup_id']));
@@ -300,7 +306,7 @@ final class SetupContractValidator
                 throw new SetupContractException('scalping shadow must pin the exact canonical condition catalog hash.');
             }
             if ($data['condition_catalog_version'] !== $this->conditionCatalog->catalogVersion) {
-                throw new SetupContractException('scalping shadow must pin condition catalog version 1.0.0.');
+                throw new SetupContractException('scalping shadow must pin condition catalog version 1.1.0.');
             }
         }
         if ($missing !== [] && $document['status'] !== 'blocked') {

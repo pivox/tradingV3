@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Rules\Compiler;
 
-use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
 use App\TradingCore\Rules\Compiler\StrictSetupRuleCompiler;
 use App\TradingCore\Setup\SetupContractLoader;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -17,8 +17,6 @@ final class StrictSetupRuleCompilerTest extends TestCase
     {
         $root = dirname(__DIR__, 4);
         $setupRoot = $root . '/config/trading/setup_contract';
-        $catalog = (new ConditionCatalogLoader())->loadFile($root . '/config/trading/condition_catalog/1.0.0.yaml');
-        $compiler = new StrictSetupRuleCompiler($catalog);
         $loader = new SetupContractLoader($setupRoot);
         $plans = [];
 
@@ -26,7 +24,8 @@ final class StrictSetupRuleCompilerTest extends TestCase
             $setupId = basename(dirname($path));
             $setupVersion = basename($path, '.yaml');
             $contract = $loader->load($setupId, $setupVersion);
-            $plan = $compiler->compile($contract);
+            $catalog = (new ConditionCatalogResolver())->forSetupDocument($contract->toArray());
+            $plan = (new StrictSetupRuleCompiler($catalog))->compile($contract);
             $plans[$setupId . '@' . $setupVersion] = $plan;
             self::assertSame($catalog->stableHash(), $plan->catalogHash, $path);
             self::assertSame($contract->stableHash(), $plan->setupHash, $path);
