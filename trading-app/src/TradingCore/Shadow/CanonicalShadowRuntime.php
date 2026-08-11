@@ -9,7 +9,7 @@ use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
-use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
@@ -24,7 +24,7 @@ final readonly class CanonicalShadowRuntime
         private EffectiveTradingConfigResolverInterface $configResolver,
         private CanonicalSetupRuleRuntime $ruleRuntime,
         private CanonicalExecutionPolicyCompiler $policyCompiler,
-        private CanonicalOrderPlanBuilder $orderPlanBuilder,
+        private CanonicalOrderPlanBuilderInterface $orderPlanBuilder,
         private CanonicalPortfolioAdapterSelector $portfolioAdapters,
         private ClockInterface $clock,
     ) {

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Scalping;
 
 use App\TradingCore\Scalping\ScalpingShadowRuntime;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
+use App\TradingCore\Shadow\CanonicalShadowRuntime;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
 
@@ -36,11 +38,13 @@ final class ScalpingShadowDependencyTest extends TestCase
         }
     }
 
-    public function testCanonicalCoreKeepsMarketPlansFailClosedBehindFacadePrefix(): void
+    public function testCanonicalCoreDependsOnTheNarrowBuilderBoundary(): void
     {
-        $source = file_get_contents(dirname(__DIR__, 3) . '/src/TradingCore/Shadow/CanonicalShadowRuntime.php');
-        self::assertIsString($source);
-        self::assertStringContainsString("if (\$plan->orderType !== 'limit')", $source);
-        self::assertStringContainsString("\$policy->reason('non_limit_plan_forbidden')", $source);
+        $constructor = (new \ReflectionClass(CanonicalShadowRuntime::class))->getConstructor();
+        self::assertNotNull($constructor);
+        self::assertSame(
+            CanonicalOrderPlanBuilderInterface::class,
+            (string) $constructor->getParameters()[3]->getType(),
+        );
     }
 }

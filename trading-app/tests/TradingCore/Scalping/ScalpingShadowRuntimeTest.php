@@ -15,12 +15,20 @@ use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
+use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use App\TradingCore\Scalping\ScalpingShadowRequest;
 use App\TradingCore\Scalping\ScalpingShadowRuntime;
+use App\TradingCore\Shadow\CanonicalShadowRuntime;
+use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
+use App\TradingCore\Shadow\ShadowRuntimeRequest;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -181,6 +189,62 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame('scalping_shadow_capability_forbidden', $outcome->reasonCode);
         self::assertNull($outcome->orderPlan);
         self::assertNull($outcome->reservation);
+    }
+
+    public function testMarketPlanIsRejectedBeforePortfolioReservation(): void
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+        $limitPlan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build($request->orderPlanRequest);
+        $serialized = serialize($limitPlan);
+        $marketPlan = unserialize(
+            str_replace('s:5:"limit";', 's:6:"market";', $serialized),
+            ['allowed_classes' => true],
+        );
+        self::assertInstanceOf(CanonicalOrderPlan::class, $marketPlan);
+        self::assertSame('market', $marketPlan->orderType);
+        $builder = new class($marketPlan) implements CanonicalOrderPlanBuilderInterface {
+            public function __construct(private readonly CanonicalOrderPlan $plan) {}
+            public function build(CanonicalOrderPlanBuildRequest $request): CanonicalOrderPlan { return $this->plan; }
+        };
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $fakeAdapter = new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $store);
+        $runtime = new CanonicalShadowRuntime(
+            new EffectiveTradingConfigResolver(),
+            new CanonicalSetupRuleRuntime(self::passingConditions()),
+            new CanonicalExecutionPolicyCompiler(),
+            $builder,
+            DayTradingShadowRuntimeTest::fixtureSelector($fakeAdapter),
+            $clock,
+        );
+        $sharedRequest = new ShadowRuntimeRequest(
+            $request->configRequest,
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+        $identity = new ShadowRuntimeIdentityPolicy('scalping_shadow', [[
+            'mode_id' => 'scalping',
+            'mode_version' => '1.1.0',
+            'setup_id' => 'scalping.trend_continuation.long',
+            'setup_version' => '1.1.0',
+            'side' => 'long',
+        ]]);
+
+        $outcome = $runtime->run($sharedRequest, $identity);
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('scalping_shadow_non_limit_plan_forbidden', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+        self::assertSame(1, $store->scopeVersion($request->portfolioScope));
+        self::assertNull($store->plan($request->portfolioScope, $request->decisionKey));
     }
 
     /** @return iterable<string, array{string, string}> */
