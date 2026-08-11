@@ -39,6 +39,26 @@ final class SetupContractValidator
             'commit' => '6ff8ab88e1bb9465f92f39424ae64305ca20ee0d',
         ],
     ];
+    private const SCALPING_SHADOW_SOURCE_ORIGINS = [
+        'scalping.trend_continuation.long' => [
+            'file' => 'src/MtfValidator/config/validations.scalper.yaml',
+            'line_range' => '6-14,216-356',
+            'content_sha256' => '5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2',
+            'commit' => '6c42d14d20798f6fee9d55b306ccaa0539af5e79',
+        ],
+        'scalping.pullback.long' => [
+            'file' => 'src/MtfValidator/config/validations.scalper.yaml',
+            'line_range' => '6-14,157-161,216-356',
+            'content_sha256' => '5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2',
+            'commit' => '6c42d14d20798f6fee9d55b306ccaa0539af5e79',
+        ],
+        'scalping.trend_momentum.short' => [
+            'file' => 'src/MtfValidator/config/validations.scalper.yaml',
+            'line_range' => '6-14,216-356',
+            'content_sha256' => '5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2',
+            'commit' => '6c42d14d20798f6fee9d55b306ccaa0539af5e79',
+        ],
+    ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
         'source_origin', 'compatible_modes', 'mode_compatibility', 'hypothesis', 'context', 'filters',
@@ -71,6 +91,12 @@ final class SetupContractValidator
         $isCrashDecision = ($document['setup_id'] ?? null) === 'crash_short' && ($document['setup_version'] ?? null) === '1.1.0';
         $isDayTradingLongShadow = ($document['setup_id'] ?? null) === 'day_trading.trend_continuation.long'
             && ($document['setup_version'] ?? null) === '1.1.0';
+        $isScalpingShadow = in_array($document['setup_id'] ?? null, [
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ], true) && ($document['setup_version'] ?? null) === '1.1.0';
+        $isExecutableShadow = $isDayTradingLongShadow || $isScalpingShadow;
         $topKeys = self::TOP_KEYS;
         if ($isCrashDecision) {
             $topKeys = array_values(array_diff($topKeys, ['source_origin']));
@@ -80,9 +106,16 @@ final class SetupContractValidator
         foreach (['schema_version', 'setup_id', 'setup_version', 'status', 'family', 'side', 'thesis', 'hypothesis', 'ownership_model'] as $key) {
             $this->string($document, $key, 'contract');
         }
+        $publishedAtOneOne = [
+            'crash_short',
+            'day_trading.trend_continuation.long',
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ];
         if ($document['schema_version'] !== '1.0.0'
-            || (!(($document['setup_id'] === 'crash_short' || $document['setup_id'] === 'day_trading.trend_continuation.long') && in_array($document['setup_version'], ['1.0.0', '1.1.0'], true))
-                && $document['setup_version'] !== '1.0.0')) {
+            || ($document['setup_version'] !== '1.0.0'
+                && ($document['setup_version'] !== '1.1.0' || !in_array($document['setup_id'], $publishedAtOneOne, true)))) {
             throw new SetupContractException('Only exact published setup versions are accepted; aliases and ranges are forbidden.');
         }
         if (!isset(self::EXPECTED[$document['setup_id']])) {
@@ -92,15 +125,15 @@ final class SetupContractValidator
         if ($isCrashDecision) {
             $status = 'blocked';
         }
-        if ($isDayTradingLongShadow) {
+        if ($isExecutableShadow) {
             $status = 'shadow';
         }
         if (!in_array($document['status'], self::STATUSES, true) || $document['status'] !== $status || $document['side'] !== $side) {
             throw new SetupContractException('Setup identity, initial status, or side differs from the frozen catalog.');
         }
         if (!is_bool($document['executable'])
-            || ($isDayTradingLongShadow ? $document['executable'] !== true : $document['executable'] !== false)
-            || ($isDayTradingLongShadow ? $document['status'] !== 'shadow' : !in_array($document['status'], ['draft', 'blocked'], true))) {
+            || ($isExecutableShadow ? $document['executable'] !== true : $document['executable'] !== false)
+            || ($isExecutableShadow ? $document['status'] !== 'shadow' : !in_array($document['status'], ['draft', 'blocked'], true))) {
             throw new SetupContractException('Setup executable state differs from its exact published lifecycle.');
         }
         if ($document['ownership_model'] !== 'setup-contract-ownership-v1') {
@@ -124,6 +157,9 @@ final class SetupContractValidator
         if ($isCrashDecision && $origins !== self::CRASH_DECISION_SOURCE_ORIGINS) {
             throw new SetupContractException('crash_short 1.1.0 source origins must match the exact #310 source pins.');
         }
+        if ($isScalpingShadow && $origins !== [self::SCALPING_SHADOW_SOURCE_ORIGINS[$document['setup_id']]]) {
+            throw new SetupContractException('scalping shadow source origin must match the exact #307 source pin.');
+        }
 
         $modes = $this->list($document, 'compatible_modes', true, 'contract');
         foreach ($modes as $row) {
@@ -131,12 +167,12 @@ final class SetupContractValidator
                 throw new SetupContractException('compatible_modes entries must be mappings.');
             }
             $this->exact($row, ['mode_id', 'mode_version'], 'compatible_modes[]');
-            $expectedModeVersion = $isDayTradingLongShadow ? '1.1.0' : '1.0.0';
+            $expectedModeVersion = $isExecutableShadow ? '1.1.0' : '1.0.0';
             if (!in_array($row['mode_id'] ?? null, ['day_trading', 'scalping', 'micro_scalping'], true) || ($row['mode_version'] ?? null) !== $expectedModeVersion) {
                 throw new SetupContractException('Compatible modes must reference the frozen #300 modern catalog and exact versions.');
             }
         }
-        $expectedModeVersion = $isDayTradingLongShadow ? '1.1.0' : '1.0.0';
+        $expectedModeVersion = $isExecutableShadow ? '1.1.0' : '1.0.0';
         if ($mode === null ? $modes !== [] : $modes !== [['mode_id' => $mode, 'mode_version' => $expectedModeVersion]]) {
             throw new SetupContractException('Setup/mode compatibility differs from the frozen #300 catalog; crash is the sole unresolved exception.');
         }
@@ -170,7 +206,7 @@ final class SetupContractValidator
 
         $execution = $this->map($document, 'execution', 'contract');
         $executionKeys = ['side', 'entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'];
-        if ($isDayTradingLongShadow) {
+        if ($isExecutableShadow) {
             $executionKeys = ['side', 'execution_timeframe', 'mandatory_confirmations', ...array_slice($executionKeys, 1), 'order_policy'];
         }
         if ($isCrashDecision) {
@@ -181,11 +217,11 @@ final class SetupContractValidator
         foreach (['entry_zone', 'stop', 'targets', 'minimum_net_r', 'invalidation', 'time_stop', 'cost_contract'] as $key) {
             $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key, $isCrashDecision && $key === 'cost_contract');
         }
-        if ($isDayTradingLongShadow) {
+        if ($isExecutableShadow) {
             foreach (['execution_timeframe', 'mandatory_confirmations', 'order_policy'] as $key) {
                 $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key);
             }
-            $this->assertDayTradingLongShadowExecution($execution);
+            $this->assertFrozenShadowExecution($execution, $isScalpingShadow ? 'scalping' : 'day_trading');
         }
         if ($isCrashDecision) {
             foreach (['order_policy', 'risk_boundary'] as $key) {
@@ -195,6 +231,9 @@ final class SetupContractValidator
         $this->decision($this->map($document, 'validity_window', 'contract'), 'validity_window');
         if ($isDayTradingLongShadow && $document['validity_window']['value'] !== 'PT15M') {
             throw new SetupContractException('day_trading long shadow validity window must be PT15M.');
+        }
+        if ($isScalpingShadow && $document['validity_window']['value'] !== 'PT5M') {
+            throw new SetupContractException('scalping shadow validity window must be PT5M.');
         }
 
         $data = $this->map($document, 'data_condition_contract', 'contract');
@@ -239,6 +278,18 @@ final class SetupContractValidator
         if ($data['unknown_condition_policy'] !== 'reject') {
             throw new SetupContractException('Unknown conditions must reject.');
         }
+        if ($isScalpingShadow) {
+            $expectedRequiredData = [
+                'ohlcv_1h', 'ohlcv_15m', 'ohlcv_5m', 'ohlcv_1m', 'ema', 'macd', 'rsi', 'atr',
+                'vwap', 'volume_ratio', 'order_book', 'fee_schedule', 'funding_schedule',
+            ];
+            if ($requiredData !== $expectedRequiredData || $missing !== [] || $data['external_dependencies'] !== []) {
+                throw new SetupContractException('scalping shadow data requirements differ from the frozen executable contract.');
+            }
+            if ($conditionCatalogHash['state'] !== 'defined' || $conditionCatalogHash['value'] !== $this->conditionCatalog->stableHash()) {
+                throw new SetupContractException('scalping shadow must pin the exact canonical condition catalog hash.');
+            }
+        }
         if ($missing !== [] && $document['status'] !== 'blocked') {
             throw new SetupContractException('Missing conditions require blocked status.');
         }
@@ -253,6 +304,9 @@ final class SetupContractValidator
         }
         $knownDefects = $this->strings($this->list($document, 'known_defects', true, 'contract'), 'known_defects');
         $this->assertUniqueStrings($knownDefects, 'known_defects');
+        if ($isScalpingShadow && $knownDefects !== []) {
+            throw new SetupContractException('scalping shadow known_defects must be empty.');
+        }
         $rows = $this->list($document, 'provenance', false, 'contract');
         $provenancePaths = [];
         foreach ($rows as $row) {
@@ -275,25 +329,56 @@ final class SetupContractValidator
     }
 
     /** @param array<string, mixed> $execution */
-    private function assertDayTradingLongShadowExecution(array $execution): void
+    private function assertFrozenShadowExecution(array $execution, string $modeId): void
     {
-        $expected = [
+        $common = [
+            'stop' => ['kind' => 'atr', 'timeframe' => '5m', 'atr_multiplier' => 1.5, 'pivot_id' => null, 'buffer_rate' => 0.0],
+            'minimum_net_r' => 1.3,
+            'invalidation' => ['kind' => 'close_beyond_stop'],
+            'cost_contract' => ['entry_liquidity_role' => 'maker', 'stop_liquidity_role' => 'taker', 'entry_spread_source' => 'order_book', 'entry_slippage_source' => 'execution_model', 'stop_spread_source' => 'order_book', 'stop_slippage_source' => 'execution_model', 'target_spread_source' => 'order_book', 'target_slippage_source' => 'execution_model', 'funding_source' => 'venue_schedule', 'funding_interval_seconds' => 28800],
+        ];
+        $expected = $modeId === 'scalping' ? [
+            'execution_timeframe' => '5m',
+            'mandatory_confirmations' => ['1m'],
+            'entry_zone' => ['anchor_source' => 'vwap', 'anchor_timeframe' => '5m', 'atr_timeframe' => '5m', 'atr_multiplier' => 0.22, 'minimum_half_width_rate' => 0.0004, 'maximum_half_width_rate' => 0.0065, 'asymmetry_rate' => 0.0, 'ttl_seconds' => 150, 'maximum_input_age_seconds' => 30, 'quantize_outward' => true],
+            ...$common,
+            'targets' => [['id' => 'tp1', 'risk_multiple' => 1.8, 'liquidity_role' => 'taker']],
+            'time_stop' => 'PT2H',
+            'order_policy' => ['type' => 'limit', 'liquidity_role' => 'maker', 'ttl_seconds' => 45, 'cancel_after_seconds' => 75, 'market_fallback' => false, 'maximum_spread_bps' => 6.0, 'maximum_slippage_bps' => 8.0],
+        ] : [
             'execution_timeframe' => '15m',
             'mandatory_confirmations' => ['5m', '1m'],
             'entry_zone' => ['anchor_source' => 'vwap', 'anchor_timeframe' => '5m', 'atr_timeframe' => '5m', 'atr_multiplier' => 0.30, 'minimum_half_width_rate' => 0.0005, 'maximum_half_width_rate' => 0.0100, 'asymmetry_rate' => 0.0, 'ttl_seconds' => 240, 'maximum_input_age_seconds' => 60, 'quantize_outward' => true],
-            'stop' => ['kind' => 'atr', 'timeframe' => '5m', 'atr_multiplier' => 1.5, 'pivot_id' => null, 'buffer_rate' => 0.0],
+            ...$common,
             'targets' => [['id' => 'tp1', 'risk_multiple' => 2.0, 'liquidity_role' => 'taker']],
-            'minimum_net_r' => 1.3,
-            'invalidation' => ['kind' => 'close_beyond_stop'],
             'time_stop' => 'PT8H',
-            'cost_contract' => ['entry_liquidity_role' => 'maker', 'stop_liquidity_role' => 'taker', 'entry_spread_source' => 'order_book', 'entry_slippage_source' => 'execution_model', 'stop_spread_source' => 'order_book', 'stop_slippage_source' => 'execution_model', 'target_spread_source' => 'order_book', 'target_slippage_source' => 'execution_model', 'funding_source' => 'venue_schedule', 'funding_interval_seconds' => 28800],
             'order_policy' => ['type' => 'limit', 'liquidity_role' => 'maker', 'ttl_seconds' => 90, 'cancel_after_seconds' => 120, 'market_fallback' => false, 'maximum_spread_bps' => 6.0, 'maximum_slippage_bps' => 8.0],
         ];
         foreach ($expected as $key => $value) {
-            if (($execution[$key]['state'] ?? null) !== 'defined' || ($execution[$key]['value'] ?? null) !== $value) {
-                throw new SetupContractException(sprintf('day_trading long shadow execution.%s differs from the frozen decision.', $key));
+            if (($execution[$key]['state'] ?? null) !== 'defined' || !$this->valuesEquivalent($execution[$key]['value'] ?? null, $value)) {
+                throw new SetupContractException(sprintf('%s shadow execution.%s differs from the frozen decision.', $modeId, $key));
             }
         }
+    }
+
+    private function valuesEquivalent(mixed $actual, mixed $expected): bool
+    {
+        if ((is_int($actual) || is_float($actual)) && (is_int($expected) || is_float($expected))) {
+            return is_finite((float) $actual) && (float) $actual === (float) $expected;
+        }
+        if (!is_array($actual) || !is_array($expected)) {
+            return $actual === $expected;
+        }
+        if (array_keys($actual) !== array_keys($expected)) {
+            return false;
+        }
+        foreach ($expected as $key => $value) {
+            if (!$this->valuesEquivalent($actual[$key], $value)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @param list<mixed> $rules */

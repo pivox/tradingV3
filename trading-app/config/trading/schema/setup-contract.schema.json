@@ -83,7 +83,7 @@
     "ownership_model": { "const": "setup-contract-ownership-v1" }
   },
   "allOf": [
-    { "if": { "properties": { "setup_version": { "const": "1.1.0" } }, "required": ["setup_version"] }, "then": { "properties": { "setup_id": { "enum": ["crash_short", "day_trading.trend_continuation.long"] } } } },
+    { "if": { "properties": { "setup_version": { "const": "1.1.0" } }, "required": ["setup_version"] }, "then": { "properties": { "setup_id": { "enum": ["crash_short", "day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } } },
     { "if": { "properties": { "setup_id": { "const": "day_trading.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": {
       "properties": {
         "status": { "const": "shadow" }, "executable": { "const": true },
@@ -107,7 +107,43 @@
           "not": { "required": ["risk_boundary"] }
         }
       }
-    }, "else": { "properties": { "executable": { "const": false } } } },
+    } },
+    { "if": { "properties": { "setup_id": { "enum": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": {
+      "properties": {
+        "status": { "const": "shadow" }, "executable": { "const": true },
+        "compatible_modes": { "const": [{ "mode_id": "scalping", "mode_version": "1.1.0" }] },
+        "known_defects": { "maxItems": 0 },
+        "data_condition_contract": { "properties": {
+          "required_data": { "const": ["ohlcv_1h", "ohlcv_15m", "ohlcv_5m", "ohlcv_1m", "ema", "macd", "rsi", "atr", "vwap", "volume_ratio", "order_book", "fee_schedule", "funding_schedule"] },
+          "missing_conditions": { "maxItems": 0 }, "external_dependencies": { "maxItems": 0 },
+          "condition_catalog_hash": { "properties": { "state": { "const": "defined" }, "value": { "const": "71edbea92b476c7d093ad7f90494e2555a765a2fd50e8dc2f6af3e6ef0b3ea7d" } } }
+        } },
+        "validity_window": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT5M" } } },
+        "execution": {
+          "required": ["side", "execution_timeframe", "mandatory_confirmations", "entry_zone", "stop", "targets", "minimum_net_r", "invalidation", "time_stop", "cost_contract", "order_policy"],
+          "properties": {
+            "execution_timeframe": { "properties": { "state": { "const": "defined" }, "value": { "const": "5m" } } },
+            "mandatory_confirmations": { "properties": { "state": { "const": "defined" }, "value": { "const": ["1m"] } } },
+            "entry_zone": { "properties": { "state": { "const": "defined" }, "value": { "const": { "anchor_source": "vwap", "anchor_timeframe": "5m", "atr_timeframe": "5m", "atr_multiplier": 0.22, "minimum_half_width_rate": 0.0004, "maximum_half_width_rate": 0.0065, "asymmetry_rate": 0.0, "ttl_seconds": 150, "maximum_input_age_seconds": 30, "quantize_outward": true } } } },
+            "stop": { "properties": { "state": { "const": "defined" }, "value": { "const": { "kind": "atr", "timeframe": "5m", "atr_multiplier": 1.5, "pivot_id": null, "buffer_rate": 0.0 } } } },
+            "targets": { "properties": { "state": { "const": "defined" }, "value": { "const": [{ "id": "tp1", "risk_multiple": 1.8, "liquidity_role": "taker" }] } } },
+            "minimum_net_r": { "properties": { "state": { "const": "defined" }, "value": { "const": 1.3 } } },
+            "invalidation": { "properties": { "state": { "const": "defined" }, "value": { "const": { "kind": "close_beyond_stop" } } } },
+            "time_stop": { "properties": { "state": { "const": "defined" }, "value": { "const": "PT2H" } } },
+            "cost_contract": { "properties": { "state": { "const": "defined" }, "value": { "const": { "entry_liquidity_role": "maker", "stop_liquidity_role": "taker", "entry_spread_source": "order_book", "entry_slippage_source": "execution_model", "stop_spread_source": "order_book", "stop_slippage_source": "execution_model", "target_spread_source": "order_book", "target_slippage_source": "execution_model", "funding_source": "venue_schedule", "funding_interval_seconds": 28800 } } } },
+            "order_policy": { "properties": { "state": { "const": "defined" }, "value": { "const": { "type": "limit", "liquidity_role": "maker", "ttl_seconds": 45, "cancel_after_seconds": 75, "market_fallback": false, "maximum_spread_bps": 6.0, "maximum_slippage_bps": 8.0 } } } }
+          },
+          "not": { "required": ["risk_boundary"] }
+        }
+      }
+    } },
+    { "if": { "properties": { "setup_id": { "const": "scalping.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "source_origin": { "const": { "file": "src/MtfValidator/config/validations.scalper.yaml", "line_range": "6-14,216-356", "content_sha256": "5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2", "commit": "6c42d14d20798f6fee9d55b306ccaa0539af5e79" } } } } },
+    { "if": { "properties": { "setup_id": { "const": "scalping.pullback.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "source_origin": { "const": { "file": "src/MtfValidator/config/validations.scalper.yaml", "line_range": "6-14,157-161,216-356", "content_sha256": "5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2", "commit": "6c42d14d20798f6fee9d55b306ccaa0539af5e79" } } } } },
+    { "if": { "properties": { "setup_id": { "const": "scalping.trend_momentum.short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "source_origin": { "const": { "file": "src/MtfValidator/config/validations.scalper.yaml", "line_range": "6-14,216-356", "content_sha256": "5bf86ce415079ee896a98d2c91e987d11db975c986500862b0cff82440c590a2", "commit": "6c42d14d20798f6fee9d55b306ccaa0539af5e79" } } } } },
+    { "if": { "anyOf": [
+      { "properties": { "setup_id": { "const": "day_trading.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] },
+      { "properties": { "setup_id": { "enum": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }
+    ] }, "then": { "properties": { "executable": { "const": true } } }, "else": { "properties": { "executable": { "const": false } } } },
     { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "required": ["source_origins"], "not": { "required": ["source_origin"] }, "properties": { "source_origins": { "$ref": "#/$defs/crashDecisionSourceOrigins" } } }, "else": { "required": ["source_origin"], "not": { "required": ["source_origins"] } } },
     { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "micro_scalping.momentum_ofi.long"] } } }, "then": { "properties": { "side": { "const": "long" } } }, "else": { "properties": { "side": { "const": "short" } } } },
     { "if": { "properties": { "side": { "const": "long" } }, "required": ["side"] }, "then": { "properties": { "context": { "properties": { "side": { "const": "long" } } }, "execution": { "properties": { "side": { "const": "long" } } } } } },
@@ -121,14 +157,14 @@
       "then": { "properties": { "status": { "const": "blocked" } } }
     },
     {
-      "if": { "properties": { "setup_id": { "const": "day_trading.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] },
+      "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] },
       "then": { "properties": { "status": { "const": "shadow" } } }
     },
     {
       "if": { "not": { "anyOf": [
         { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.short", "micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } }, "required": ["setup_id"] },
         { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] },
-        { "properties": { "setup_id": { "const": "day_trading.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }
+        { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }
       ] } },
       "then": { "properties": { "status": { "const": "draft" } } }
     },
@@ -138,7 +174,7 @@
       "else": { "properties": { "compatible_modes": { "minItems": 1, "maxItems": 1 }, "mode_compatibility": { "properties": { "state": { "const": "defined" }, "issue": { "type": "null" } } } } }
     },
     { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.0.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "mode_compatibility": { "properties": { "state": { "const": "unresolved" } } } } } },
-    { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "mode_compatibility": { "properties": { "state": { "const": "distinct_operational_envelope" } } }, "execution": { "required": ["side", "entry_zone", "stop", "targets", "minimum_net_r", "invalidation", "time_stop", "cost_contract", "order_policy", "risk_boundary"] } } }, "else": { "if": { "properties": { "setup_id": { "const": "day_trading.trend_continuation.long" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": {}, "else": { "properties": { "execution": { "properties": { "cost_contract": { "$ref": "#/$defs/decision" } }, "not": { "anyOf": [{ "required": ["execution_timeframe"] }, { "required": ["mandatory_confirmations"] }, { "required": ["order_policy"] }, { "required": ["risk_boundary"] }] } } } } } },
+    { "if": { "properties": { "setup_id": { "const": "crash_short" }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": { "properties": { "mode_compatibility": { "properties": { "state": { "const": "distinct_operational_envelope" } } }, "execution": { "required": ["side", "entry_zone", "stop", "targets", "minimum_net_r", "invalidation", "time_stop", "cost_contract", "order_policy", "risk_boundary"] } } }, "else": { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] }, "setup_version": { "const": "1.1.0" } }, "required": ["setup_id", "setup_version"] }, "then": {}, "else": { "properties": { "execution": { "properties": { "cost_contract": { "$ref": "#/$defs/decision" } }, "not": { "anyOf": [{ "required": ["execution_timeframe"] }, { "required": ["mandatory_confirmations"] }, { "required": ["order_policy"] }, { "required": ["risk_boundary"] }] } } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["day_trading.trend_continuation.long", "day_trading.trend_continuation.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "day_trading" } } } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["scalping.trend_continuation.long", "scalping.pullback.long", "scalping.trend_momentum.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "scalping" } } } } } } },
     { "if": { "properties": { "setup_id": { "enum": ["micro_scalping.momentum_ofi.long", "micro_scalping.momentum_ofi.short"] } } }, "then": { "properties": { "compatible_modes": { "items": { "properties": { "mode_id": { "const": "micro_scalping" } } } } } } }

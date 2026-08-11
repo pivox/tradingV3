@@ -141,6 +141,161 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
+    public function testPublishesThreeIndependentExecutableScalpingShadowSetups(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $expectedSides = [
+            'scalping.trend_continuation.long' => 'long',
+            'scalping.pullback.long' => 'long',
+            'scalping.trend_momentum.short' => 'short',
+        ];
+
+        foreach ($expectedSides as $setupId => $side) {
+            $contract = $loader->load($setupId, '1.1.0');
+            $compiled = (new SetupCompiler())->compile($contract);
+            $execution = $compiled->ast['execution'];
+
+            self::assertSame('shadow', $contract->status, $setupId);
+            self::assertTrue($contract->isExecutable(), $setupId);
+            self::assertTrue($compiled->publishable, $setupId);
+            self::assertSame([], $contract->unresolvedPaths(), $setupId);
+            self::assertSame($side, $contract->side, $setupId);
+            self::assertSame($side, $compiled->ast['side'], $setupId);
+            self::assertSame(['scalping' => '1.1.0'], $compiled->modeVersions, $setupId);
+            self::assertSame('5m', $execution['execution_timeframe']['value'], $setupId);
+            self::assertSame(['1m'], $execution['mandatory_confirmations']['value'], $setupId);
+            self::assertSame(0.22, $execution['entry_zone']['value']['atr_multiplier'], $setupId);
+            self::assertSame(150, $execution['entry_zone']['value']['ttl_seconds'], $setupId);
+            self::assertSame(1.5, $execution['stop']['value']['atr_multiplier'], $setupId);
+            self::assertSame(1.8, $execution['targets']['value'][0]['risk_multiple'], $setupId);
+            self::assertSame(1.3, $execution['minimum_net_r']['value'], $setupId);
+            self::assertSame(45, $execution['order_policy']['value']['ttl_seconds'], $setupId);
+            self::assertSame(75, $execution['order_policy']['value']['cancel_after_seconds'], $setupId);
+            self::assertFalse($execution['order_policy']['value']['market_fallback'], $setupId);
+            self::assertSame('PT5M', $contract->toArray()['validity_window']['value'], $setupId);
+            self::assertSame([], $contract->toArray()['known_defects'], $setupId);
+            self::assertSame([
+                'ohlcv_1h', 'ohlcv_15m', 'ohlcv_5m', 'ohlcv_1m', 'ema', 'macd', 'rsi', 'atr',
+                'vwap', 'volume_ratio', 'order_book', 'fee_schedule', 'funding_schedule',
+            ], $contract->toArray()['data_condition_contract']['required_data'], $setupId);
+        }
+    }
+
+    public function testScalpingShadowVersionsCopyEachLegacyRuleTreeWithoutCrossSetupRescue(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        $conditionCounts = [];
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $legacy = $loader->load($setupId, '1.0.0')->toArray();
+            $shadow = $loader->load($setupId, '1.1.0')->toArray();
+            foreach (['context', 'filters', 'no_trade_rules'] as $tree) {
+                self::assertSame($legacy[$tree], $shadow[$tree], $setupId . ' ' . $tree);
+            }
+            $conditionCounts[$setupId] = substr_count(
+                json_encode([$shadow['context'], $shadow['filters'], $shadow['no_trade_rules']], JSON_THROW_ON_ERROR),
+                'pullback_confirmed',
+            );
+        }
+
+        self::assertSame([
+            'scalping.trend_continuation.long' => 0,
+            'scalping.pullback.long' => 1,
+            'scalping.trend_momentum.short' => 0,
+        ], $conditionCounts);
+    }
+
+    public function testScalpingShadowHasPhpAndSchemaParityForFrozenExecutionMutations(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $jsonValidator = new JsonSchemaValidator();
+
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue($jsonValidator->validate($object, $schema)->isValid(), $setupId);
+            (new SetupContractValidator())->validate($document);
+
+            $numericEquivalent = $document;
+            $numericEquivalent['execution']['entry_zone']['value']['asymmetry_rate'] = 0;
+            $numericEquivalent['execution']['order_policy']['value']['maximum_spread_bps'] = 6;
+            $numericEquivalent['execution']['order_policy']['value']['maximum_slippage_bps'] = 8;
+            (new SetupContractValidator())->validate($numericEquivalent);
+            $numericObject = json_decode(json_encode($numericEquivalent, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue($jsonValidator->validate($numericObject, $schema)->isValid(), $setupId . ' numeric parity');
+
+            $mutations = [];
+            $mutations['execution timeframe'] = $document;
+            $mutations['execution timeframe']['execution']['execution_timeframe']['value'] = '1m';
+            $mutations['confirmation'] = $document;
+            $mutations['confirmation']['execution']['mandatory_confirmations']['value'] = [];
+            $mutations['entry zone'] = $document;
+            $mutations['entry zone']['execution']['entry_zone']['value']['atr_multiplier'] = 0.23;
+            $mutations['stop'] = $document;
+            $mutations['stop']['execution']['stop']['value']['pivot_id'] = 's1';
+            $mutations['target'] = $document;
+            $mutations['target']['execution']['targets']['value'][0]['risk_multiple'] = 2.0;
+            $mutations['minimum net R'] = $document;
+            $mutations['minimum net R']['execution']['minimum_net_r']['value'] = 1.2;
+            $mutations['time stop'] = $document;
+            $mutations['time stop']['execution']['time_stop']['value'] = 'PT3H';
+            $mutations['order ttl'] = $document;
+            $mutations['order ttl']['execution']['order_policy']['value']['ttl_seconds'] = 46;
+            $mutations['market fallback'] = $document;
+            $mutations['market fallback']['execution']['order_policy']['value']['market_fallback'] = true;
+            $mutations['validity'] = $document;
+            $mutations['validity']['validity_window']['value'] = 'PT15M';
+            $mutations['defect rescue'] = $document;
+            $mutations['defect rescue']['known_defects'] = ['legacy selector defect'];
+            $mutations['compatibility version'] = $document;
+            $mutations['compatibility version']['compatible_modes'][0]['mode_version'] = '1.0.0';
+            $mutations['catalog hash'] = $document;
+            $mutations['catalog hash']['data_condition_contract']['condition_catalog_hash']['value'] = str_repeat('0', 64);
+            $mutations['source pin'] = $document;
+            $mutations['source pin']['source_origin']['commit'] = str_repeat('a', 40);
+
+            foreach ($mutations as $label => $mutation) {
+                $this->assertPhpAndSchemaReject($mutation, $setupId . ' ' . $label);
+            }
+        }
+    }
+
+    public function testScalpingShadowFixtureFreezesIndependentPassAndNoRescueScenarios(): void
+    {
+        $fixture = json_decode(
+            (string) file_get_contents(dirname(__DIR__, 3) . '/tests/Fixtures/TradingCore/Setup/scalping-1.1.0-scenarios.json'),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+
+        self::assertSame('scalping-shadow-scenarios.v1', $fixture['schema_version']);
+        self::assertSame([
+            'continuation_long_pass' => 'pass',
+            'pullback_long_pass' => 'pass',
+            'short_momentum_pass' => 'pass',
+            'scenario_a_cannot_rescue_pullback' => 'no_trade',
+            'scenario_b_cannot_rescue_continuation' => 'no_trade',
+            'missing_1m' => 'no_trade',
+        ], array_column($fixture['scenarios'], 'expectation', 'id'));
+        foreach ($fixture['scenarios'] as $scenario) {
+            self::assertContains($scenario['setup_id'], [
+                'scalping.trend_continuation.long',
+                'scalping.pullback.long',
+                'scalping.trend_momentum.short',
+            ]);
+            self::assertNotSame([], $scenario['evidence']);
+        }
+    }
+
     public function testCatalogContainsNoSwingOrNinthCrashPullbackSetup(): void
     {
         $paths = glob($this->root . '/*/1.0.0.yaml') ?: [];
@@ -334,6 +489,11 @@ final class SetupContractLoaderTest extends TestCase
             'config/app/trade_entry.crash.yaml' => '7-12,19-205',
             'src/MtfValidator/config/validations.regular.yaml' => '7-12,84-88,238-349',
         ];
+        $expectedScalpingDecisionRanges = [
+            'scalping.trend_continuation.long' => '6-14,216-356',
+            'scalping.pullback.long' => '6-14,157-161,216-356',
+            'scalping.trend_momentum.short' => '6-14,216-356',
+        ];
 
         foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
             $document = Yaml::parseFile($path);
@@ -349,7 +509,9 @@ final class SetupContractLoaderTest extends TestCase
                 self::assertSame($origin['content_sha256'], hash_file('sha256', $sourcePath), $sourcePath);
                 self::assertMatchesRegularExpression('/^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/', $origin['line_range']);
                 if (($document['setup_version'] ?? null) === '1.1.0') {
-                    self::assertSame($expectedDecisionRanges[$origin['file']], $origin['line_range']);
+                    $expectedRange = $expectedScalpingDecisionRanges[$document['setup_id']]
+                        ?? $expectedDecisionRanges[$origin['file']];
+                    self::assertSame($expectedRange, $origin['line_range']);
                 }
             }
         }
