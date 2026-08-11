@@ -40,6 +40,10 @@ final readonly class CanonicalShadowRuntime
         if ($capability === null || !$capability->permitsShadow()) {
             return $this->reject($request, $policy->reason('capability_forbidden'));
         }
+        $lineageSnapshot = $request->lineage->effectiveConfigSnapshot?->toArray();
+        if (($lineageSnapshot['request']['execution_capability'] ?? null) !== $capability->value) {
+            return $this->reject($request, $policy->reason('lineage_mismatch'));
+        }
 
         try {
             $portfolioAdapter = $this->portfolioAdapters->select($capability);

@@ -8,6 +8,7 @@ use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionResult;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanPipelineFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
@@ -102,6 +103,64 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame('day_trading_shadow_identity_unsupported', self::fixtureRuntime()->run($unsupported)->reasonCode);
         self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($missingCapability)->reasonCode);
         self::assertSame('day_trading_shadow_capability_forbidden', self::fixtureRuntime()->run($privateMainnet)->reasonCode);
+    }
+
+    public function testLineageCapabilityMismatchRejectsEveryShadowCapabilityPairWithoutStoreMutation(): void
+    {
+        $capabilities = [
+            ShadowExecutionCapability::Fake,
+            ShadowExecutionCapability::Paper,
+            ShadowExecutionCapability::Backtest,
+        ];
+
+        foreach ($capabilities as $lineageCapability) {
+            foreach ($capabilities as $requestCapability) {
+                if ($lineageCapability === $requestCapability) {
+                    continue;
+                }
+
+                $request = self::withCapability(
+                    self::fixtureRequest(capability: $lineageCapability),
+                    $requestCapability,
+                );
+                [$selector, $stores] = self::fixtureSelectorWithStores();
+                $outcome = self::fixtureRuntime($selector)->run($request);
+                $pair = $lineageCapability->value . ' -> ' . $requestCapability->value;
+
+                self::assertSame('no_trade', $outcome->status, $pair);
+                self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode, $pair);
+                self::assertNull($outcome->orderPlan, $pair);
+                self::assertNull($outcome->reservation, $pair);
+                foreach ($stores as $store) {
+                    self::assertSame(1, $store->scopeVersion($request->portfolioScope), $pair);
+                    self::assertNull($store->plan($request->portfolioScope, $request->decisionKey), $pair);
+                }
+            }
+        }
+    }
+
+    public function testMissingLineageSnapshotCapabilityRejectsWithoutStoreMutation(): void
+    {
+        $request = self::fixtureRequest(capability: ShadowExecutionCapability::Paper);
+        $lineageData = $request->lineage->toArray();
+        self::assertIsArray($lineageData['effective_config_snapshot']);
+        unset($lineageData['effective_config_snapshot']['request']['execution_capability']);
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $request = self::withLineage($request, LineageContext::fromArray($lineageData));
+        [$selector, $stores] = self::fixtureSelectorWithStores();
+
+        $outcome = self::fixtureRuntime($selector)->run($request);
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+        foreach ($stores as $store) {
+            self::assertSame(1, $store->scopeVersion($request->portfolioScope));
+            self::assertNull($store->plan($request->portfolioScope, $request->decisionKey));
+        }
     }
 
     public function testNoTradeEvidenceShapeRemainsStable(): void
@@ -301,6 +360,31 @@ final class DayTradingShadowRuntimeTest extends TestCase
         );
     }
 
+    /**
+     * @return array{
+     *     CanonicalPortfolioAdapterSelector,
+     *     array{fake: InMemoryCanonicalPortfolioReservationStore, paper: InMemoryCanonicalPortfolioReservationStore, backtest: InMemoryCanonicalPortfolioReservationStore}
+     * }
+     */
+    private static function fixtureSelectorWithStores(): array
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $stores = [
+            'fake' => new InMemoryCanonicalPortfolioReservationStore(),
+            'paper' => new InMemoryCanonicalPortfolioReservationStore(),
+            'backtest' => new InMemoryCanonicalPortfolioReservationStore(),
+        ];
+
+        return [
+            new CanonicalPortfolioAdapterSelector(
+                new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['fake']),
+                new PaperCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['paper']),
+                new BacktestCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['backtest']),
+            ),
+            $stores,
+        ];
+    }
+
     public static function fixtureRequest(
         ?float $liveSpreadBps = 1.0,
         ?float $estimatedSlippageBps = 1.0,
@@ -424,6 +508,23 @@ final class DayTradingShadowRuntimeTest extends TestCase
                 $capability,
             ),
             $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+    }
+
+    private static function withLineage(
+        DayTradingShadowRequest $request,
+        LineageContext $lineage,
+    ): DayTradingShadowRequest {
+        return new DayTradingShadowRequest(
+            $request->configRequest,
+            $lineage,
             $request->indicatorsByTimeframe,
             $request->orderPlanRequest,
             $request->portfolioScope,
