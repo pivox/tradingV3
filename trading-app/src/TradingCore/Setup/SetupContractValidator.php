@@ -59,6 +59,12 @@ final class SetupContractValidator
             'commit' => '6c42d14d20798f6fee9d55b306ccaa0539af5e79',
         ],
     ];
+    /** Canonical documents are explicit in setup-contract.schema.json scalping* $defs. */
+    private const SCALPING_SHADOW_DOCUMENT_HASHES = [
+        'scalping.trend_continuation.long' => '9ba162948ed0ef0756145b7ab47213e5ac0cbf9edd1ce1408af241ab515887a9',
+        'scalping.pullback.long' => 'ef047d8a29cecf119a42f2944f245c7ac1f709f762a796af896e2b558ffcac91',
+        'scalping.trend_momentum.short' => '5c7eae3b39d8d3f023def38d564754b38138687ef21ff2f46381c017efb4c615',
+    ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
         'source_origin', 'compatible_modes', 'mode_compatibility', 'hypothesis', 'context', 'filters',
@@ -237,7 +243,11 @@ final class SetupContractValidator
         }
 
         $data = $this->map($document, 'data_condition_contract', 'contract');
-        $this->exact($data, ['required_data', 'missing_conditions', 'external_dependencies', 'condition_catalog_hash', 'unknown_condition_policy'], 'data_condition_contract');
+        $dataKeys = ['required_data', 'missing_conditions', 'external_dependencies', 'condition_catalog_hash', 'unknown_condition_policy'];
+        if ($isScalpingShadow) {
+            array_unshift($dataKeys, 'condition_catalog_version');
+        }
+        $this->exact($data, $dataKeys, 'data_condition_contract');
         $requiredData = $this->strings($this->list($data, 'required_data', false, 'data_condition_contract'), 'required_data');
         $this->assertUniqueStrings($requiredData, 'data_condition_contract.required_data');
         $missing = $this->strings($this->list($data, 'missing_conditions', true, 'data_condition_contract'), 'missing_conditions');
@@ -289,6 +299,9 @@ final class SetupContractValidator
             if ($conditionCatalogHash['state'] !== 'defined' || $conditionCatalogHash['value'] !== $this->conditionCatalog->stableHash()) {
                 throw new SetupContractException('scalping shadow must pin the exact canonical condition catalog hash.');
             }
+            if ($data['condition_catalog_version'] !== $this->conditionCatalog->catalogVersion) {
+                throw new SetupContractException('scalping shadow must pin condition catalog version 1.0.0.');
+            }
         }
         if ($missing !== [] && $document['status'] !== 'blocked') {
             throw new SetupContractException('Missing conditions require blocked status.');
@@ -325,6 +338,16 @@ final class SetupContractValidator
                 throw new SetupContractException(sprintf('Duplicate provenance path "%s".', $provenancePath));
             }
             $provenancePaths[$provenancePath] = true;
+        }
+        if ($isScalpingShadow) {
+            $actualHash = $this->semanticDocumentHash($document);
+            $expectedHash = self::SCALPING_SHADOW_DOCUMENT_HASHES[$document['setup_id']];
+            if (!hash_equals($expectedHash, $actualHash)) {
+                throw new SetupContractException(sprintf(
+                    '%s@1.1.0 differs from its exact frozen proof document.',
+                    $document['setup_id'],
+                ));
+            }
         }
     }
 
@@ -379,6 +402,42 @@ final class SetupContractValidator
         }
 
         return true;
+    }
+
+    /** @param array<string, mixed> $document */
+    private function semanticDocumentHash(array $document): string
+    {
+        try {
+            return hash('sha256', json_encode(
+                $this->normalizeSemanticNumbers($document),
+                JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES,
+            ));
+        } catch (\JsonException $exception) {
+            throw new SetupContractException('Frozen setup document must be finite and JSON serializable.', 0, $exception);
+        }
+    }
+
+    private function normalizeSemanticNumbers(mixed $value): mixed
+    {
+        if (is_int($value) || is_float($value)) {
+            if (!is_finite((float) $value)) {
+                throw new SetupContractException('Frozen setup numeric values must be finite.');
+            }
+
+            return (float) $value;
+        }
+        if (!is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            return array_map($this->normalizeSemanticNumbers(...), $value);
+        }
+        ksort($value, SORT_STRING);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->normalizeSemanticNumbers($item);
+        }
+
+        return $value;
     }
 
     /** @param list<mixed> $rules */

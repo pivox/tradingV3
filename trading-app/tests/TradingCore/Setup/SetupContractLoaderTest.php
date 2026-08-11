@@ -209,6 +209,110 @@ final class SetupContractLoaderTest extends TestCase
         ], $conditionCounts);
     }
 
+    public function testScalpingShadowPhpAndSchemaRejectEveryRuleTreeDrift(): void
+    {
+        $continuation = $this->yaml($this->root . '/scalping.trend_continuation.long/1.1.0.yaml');
+        $pullback = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $short = $this->yaml($this->root . '/scalping.trend_momentum.short/1.1.0.yaml');
+
+        $addedPullback = $continuation;
+        $addedPullback['context']['trigger']['nodes'][] = $pullback['context']['trigger']['nodes'][0];
+        $removedPullback = $pullback;
+        array_shift($removedPullback['context']['trigger']['nodes']);
+        $reorderedConfirmations = $continuation;
+        $reorderedConfirmations['context']['confirmations']['nodes'] = array_reverse(
+            $reorderedConfirmations['context']['confirmations']['nodes'],
+        );
+        $modifiedCondition = $short;
+        $modifiedCondition['context']['trigger']['nodes'][1]['condition'] = 'ema_20_lt_50';
+        $modifiedParameter = $continuation;
+        $modifiedParameter['context']['trigger']['nodes'][2]['parameters']['rsi_lt_70_threshold'] = 73;
+        $modifiedRuleProvenance = $pullback;
+        $modifiedRuleProvenance['context']['trigger']['nodes'][0]['provenance'] = 'validations.scalper.yaml:invented';
+        $addedFilter = $continuation;
+        $addedFilter['filters'][] = [
+            'condition' => 'rsi_lt_70', 'timeframe' => '15m',
+            'parameters' => ['rsi_lt_70_threshold' => 74], 'provenance' => 'invented filter',
+        ];
+        $addedNoTradeRule = $short;
+        $addedNoTradeRule['no_trade_rules'][] = [
+            'condition' => 'atr_rel_in_range_15m', 'timeframe' => '15m', 'provenance' => 'invented no-trade rule',
+        ];
+
+        foreach ([
+            'pullback added to continuation' => $addedPullback,
+            'pullback removed' => $removedPullback,
+            'confirmations reordered' => $reorderedConfirmations,
+            'condition modified' => $modifiedCondition,
+            'parameter modified' => $modifiedParameter,
+            'rule provenance modified' => $modifiedRuleProvenance,
+            'filter added' => $addedFilter,
+            'no-trade rule added' => $addedNoTradeRule,
+        ] as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label);
+        }
+    }
+
+    public function testScalpingShadowDeclaresAndFreezesCompleteCatalogAuthority(): void
+    {
+        foreach ([
+            'scalping.trend_continuation.long',
+            'scalping.pullback.long',
+            'scalping.trend_momentum.short',
+        ] as $setupId) {
+            $document = $this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml');
+            self::assertSame('1.0.0', $document['data_condition_contract']['condition_catalog_version'] ?? null);
+            self::assertSame([
+                'state' => 'defined',
+                'value' => '71edbea92b476c7d093ad7f90494e2555a765a2fd50e8dc2f6af3e6ef0b3ea7d',
+                'unit' => 'sha256',
+                'source' => 'config/trading/condition_catalog/1.0.0.yaml',
+                'justification' => 'Pinned to the canonical #303 catalogue.',
+            ], $document['data_condition_contract']['condition_catalog_hash']);
+        }
+    }
+
+    public function testScalpingShadowPhpAndSchemaRejectMutableProofFields(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $mutations = [];
+        $mutations['family'] = $document;
+        $mutations['family']['family'] = 'pullback_variant';
+        $mutations['thesis'] = $document;
+        $mutations['thesis']['thesis'] .= ' Mutated.';
+        $mutations['hypothesis'] = $document;
+        $mutations['hypothesis']['hypothesis'] .= ' Mutated.';
+        $mutations['compatibility proof'] = $document;
+        $mutations['compatibility proof']['mode_compatibility']['justification'] .= ' Mutated.';
+        $mutations['decision unit'] = $document;
+        $mutations['decision unit']['execution']['entry_zone']['unit'] = 'price';
+        $mutations['decision source'] = $document;
+        $mutations['decision source']['execution']['order_policy']['source'] = 'invented source';
+        $mutations['decision justification'] = $document;
+        $mutations['decision justification']['execution']['stop']['justification'] .= ' Mutated.';
+        $mutations['decision state'] = $document;
+        $mutations['decision state']['execution']['targets']['state'] = 'unresolved';
+        $mutations['decision state']['execution']['targets']['value'] = null;
+        $mutations['validity proof'] = $document;
+        $mutations['validity proof']['validity_window']['source'] = 'invented source';
+        $mutations['catalog version'] = $document;
+        $mutations['catalog version']['data_condition_contract']['condition_catalog_version'] = '1.0.1';
+        $mutations['catalog source'] = $document;
+        $mutations['catalog source']['data_condition_contract']['condition_catalog_hash']['source'] = 'invented catalog';
+        $mutations['governance'] = $document;
+        $mutations['governance']['governance']['shadow'][0] .= ' mutated';
+        $mutations['provenance content'] = $document;
+        $mutations['provenance content']['provenance'][0]['source'] = 'invented provenance';
+        $mutations['provenance order'] = $document;
+        $mutations['provenance order']['provenance'] = array_reverse($mutations['provenance order']['provenance']);
+        $mutations['provenance length'] = $document;
+        array_pop($mutations['provenance length']['provenance']);
+
+        foreach ($mutations as $label => $mutation) {
+            $this->assertPhpAndSchemaReject($mutation, $label);
+        }
+    }
+
     public function testScalpingShadowHasPhpAndSchemaParityForFrozenExecutionMutations(): void
     {
         $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
@@ -278,21 +382,28 @@ final class SetupContractLoaderTest extends TestCase
         );
 
         self::assertSame('scalping-shadow-scenarios.v1', $fixture['schema_version']);
+        self::assertCount(6, $fixture['scenarios']);
+        $tuples = array_map(
+            static fn (array $scenario): array => [
+                $scenario['id'], $scenario['setup_id'], $scenario['side'], $scenario['expectation'],
+            ],
+            $fixture['scenarios'],
+        );
         self::assertSame([
-            'continuation_long_pass' => 'pass',
-            'pullback_long_pass' => 'pass',
-            'short_momentum_pass' => 'pass',
-            'scenario_a_cannot_rescue_pullback' => 'no_trade',
-            'scenario_b_cannot_rescue_continuation' => 'no_trade',
-            'missing_1m' => 'no_trade',
-        ], array_column($fixture['scenarios'], 'expectation', 'id'));
+            ['continuation_long_pass', 'scalping.trend_continuation.long', 'long', 'pass'],
+            ['pullback_long_pass', 'scalping.pullback.long', 'long', 'pass'],
+            ['short_momentum_pass', 'scalping.trend_momentum.short', 'short', 'pass'],
+            ['scenario_a_cannot_rescue_pullback', 'scalping.pullback.long', 'long', 'no_trade'],
+            ['scenario_b_cannot_rescue_continuation', 'scalping.trend_continuation.long', 'long', 'no_trade'],
+            ['missing_1m', 'scalping.trend_momentum.short', 'short', 'no_trade'],
+        ], $tuples);
+        self::assertCount(6, array_unique(array_column($fixture['scenarios'], 'id')));
         foreach ($fixture['scenarios'] as $scenario) {
-            self::assertContains($scenario['setup_id'], [
-                'scalping.trend_continuation.long',
-                'scalping.pullback.long',
-                'scalping.trend_momentum.short',
-            ]);
             self::assertNotSame([], $scenario['evidence']);
+            foreach ($scenario['evidence'] as $evidence) {
+                self::assertIsString($evidence);
+                self::assertNotSame('', trim($evidence));
+            }
         }
     }
 

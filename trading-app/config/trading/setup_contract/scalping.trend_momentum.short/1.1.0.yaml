@@ -90,6 +90,7 @@ execution:
   cost_contract: { state: defined, value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }, unit: cost_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Fees are exchange-owned; spread, slippage and funding require exact sources.' }
   order_policy: { state: defined, value: { type: limit, liquidity_role: maker, ttl_seconds: 45, cancel_after_seconds: 75, market_fallback: false, maximum_spread_bps: 6.0, maximum_slippage_bps: 8.0 }, unit: order_policy, source: 'GitHub issue #307 approved decision 2026-08-11', justification: 'Limit-only Shadow policy with fixed expiry and live-cost guards.' }
 data_condition_contract:
+  condition_catalog_version: '1.0.0'
   required_data: [ohlcv_1h, ohlcv_15m, ohlcv_5m, ohlcv_1m, ema, macd, rsi, atr, vwap, volume_ratio, order_book, fee_schedule, funding_schedule]
   missing_conditions: []
   external_dependencies: []
