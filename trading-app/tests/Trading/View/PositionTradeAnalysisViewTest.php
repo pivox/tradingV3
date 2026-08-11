@@ -1483,7 +1483,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         foreach ([['entry', 100.0], ['exit', 102.0]] as [$role, $price]) {
             $this->ledgerFill('BNBUSDT', $internalTradeId, $positionId, 'funding-' . $role, $role, $price, 1.0, '2026-08-11 15:4' . ($role === 'entry' ? '1' : '5') . ':00+00', [
                 'fee_usdt' => 0.1, 'spread_cost_usdt' => 0.0, 'slippage_cost_usdt' => 0.0,
-                'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+                'funding_usdt' => 0.2, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
             ]);
         }
         $this->ledgerFill('BNBUSDT', $internalTradeId, $positionId, 'funding-settlement', 'funding', null, null, '2026-08-11 15:44:00+00', [
@@ -1546,6 +1546,86 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertContains('missing_funding', $row['pnl_quality_flags']);
         self::assertNull($row['funding_usdt'], 'a persisted but unnormalized settlement cannot fall back to close JSON');
         self::assertNull($row['canonical_net_pnl_usdt']);
+    }
+
+    public function testExactAggregateCannotCertifyAlongsideContradictoryLedgerProvenance(): void
+    {
+        $internalTradeId = 'itd-ledger-contradictory-provenance';
+        $positionId = 'position-ledger-contradictory-provenance';
+        $this->entry('OPUSDT', 'run-ledger-contradictory-provenance', 'contradictory-provenance', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:54:00+00', 2962, 'hyperliquid');
+        $this->close('OPUSDT', 'run-ledger-contradictory-provenance', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:55:00+00', 2963, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2962, 2963, $internalTradeId, $positionId, 'trade-ledger-contradictory-provenance');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $costs = [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ];
+            $this->ledgerFill('OPUSDT', $internalTradeId, $positionId, 'contradictory-exact-' . $role, $role, $price, 1.0, '2026-08-11 15:54:' . ($role === 'entry' ? '10' : '50') . '+00', $costs);
+            $this->ledgerFill('OPUSDT', $internalTradeId, $positionId, 'contradictory-venue-' . $role, $role, $price, 1.0, '2026-08-11 15:54:' . ($role === 'entry' ? '20' : '55') . '+00', $costs + [
+                'market_data_venue' => 'okx',
+            ]);
+            $this->ledgerFill('OPUSDT', $internalTradeId, $positionId, 'contradictory-paper-' . $role, $role, $price, 1.0, '2026-08-11 15:54:' . ($role === 'entry' ? '30' : '58') . '+00', $costs + [
+                'paper_execution_cell_id' => 'sha256:' . str_repeat('f', 64),
+            ]);
+        }
+
+        self::assertSame(2, $this->exactLedgerAggregateMatchCount(2962));
+        $row = $this->analysisRow(2962);
+        self::assertContains('ledger_market_identity_mismatch', $row['pnl_quality_flags']);
+        self::assertContains('ledger_paper_provenance_mismatch', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testFundingRowCannotCarryExecutionCosts(): void
+    {
+        $internalTradeId = 'itd-ledger-funding-execution-cost';
+        $positionId = 'position-ledger-funding-execution-cost';
+        $this->entry('SEIUSDT', 'run-ledger-funding-execution-cost', 'funding-execution-cost', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:56:00+00', 2964, 'hyperliquid');
+        $this->close('SEIUSDT', 'run-ledger-funding-execution-cost', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:57:00+00', 2965, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2964, 2965, $internalTradeId, $positionId, 'trade-ledger-funding-execution-cost');
+        foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
+            $this->ledgerFill('SEIUSDT', $internalTradeId, $positionId, 'funding-execution-cost-' . $role, $role, $price, 1.0, '2026-08-11 15:56:' . ($role === 'entry' ? '10' : '50') . '+00', [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+            ]);
+        }
+        $this->ledgerFill('SEIUSDT', $internalTradeId, $positionId, 'funding-execution-cost-settlement', 'funding', null, null, '2026-08-11 15:56:30+00', [
+            'funding_usdt' => 0.0, 'spread_cost_usdt' => 99.0,
+        ]);
+
+        $row = $this->analysisRow(2964);
+        self::assertContains('ledger_quality_invalid', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
+    }
+
+    public function testTinyNotionalMismatchUsesRelativeTolerance(): void
+    {
+        $internalTradeId = 'itd-ledger-tiny-notional-mismatch';
+        $positionId = 'position-ledger-tiny-notional-mismatch';
+        $this->entry('1000PEPEUSDT', 'run-ledger-tiny-notional-mismatch', 'tiny-notional-mismatch', 'scalper', 'fake', 'paper', [
+            'internal_trade_id' => $internalTradeId,
+        ], '2026-08-11 15:58:00+00', 2966, 'hyperliquid');
+        $this->close('1000PEPEUSDT', 'run-ledger-tiny-notional-mismatch', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:59:00+00', 2967, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2966, 2967, $internalTradeId, $positionId, 'trade-ledger-tiny-notional-mismatch');
+        $this->ledgerFill('1000PEPEUSDT', $internalTradeId, $positionId, 'tiny-notional-mismatch-entry', 'entry', 0.0001, 0.0001, '2026-08-11 15:58:10+00', [
+            'notional' => 0.000000019, 'fee_usdt' => 0.0, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+        $this->ledgerFill('1000PEPEUSDT', $internalTradeId, $positionId, 'tiny-notional-mismatch-exit', 'exit', 0.000101, 0.0001, '2026-08-11 15:58:50+00', [
+            'fee_usdt' => 0.0, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+        ]);
+
+        $row = $this->analysisRow(2966);
+        self::assertContains('ledger_notional_mismatch', $row['pnl_quality_flags']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+        $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
     }
 
     public function testInconsistentLedgerNotionalMasksCanonicalNetPnl(): void

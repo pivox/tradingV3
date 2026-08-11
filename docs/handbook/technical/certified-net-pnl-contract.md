@@ -68,6 +68,10 @@ l'entree et a la cloture. Les deux evenements doivent aussi porter le meme
 provenance paper. Il n'existe aucun matching par symbole seul, fenetre de temps,
 position approximative ou identifiant provider ambigu.
 
+Si le meme `internal_trade_id` expose un autre agregat sous une identite marche
+ou une provenance Paper differente, la contradiction bloque la certification,
+meme lorsqu'un agregat exact existe par ailleurs.
+
 Les lignes marquees `fill_cancelled`, `fill_corrected`, `fill_reversed` ou
 `voided` sont exclues de l'agregat. Toute autre ligne retenue doit avoir un
 tableau `quality_flags` vide et un `fill_role` parmi `entry`, `exit` ou
@@ -113,13 +117,19 @@ USDT. Les regles sont :
   cloture ;
 - `funding_usdt` : si une ligne `funding` est persistee, chaque settlement doit
   porter un montant signe normalise ; une ligne de settlement sans montant
-  bloque la certification et interdit tout fallback vers la cloture. En
+  bloque la certification et interdit tout fallback vers la cloture. Seule la
+  somme des lignes `funding` est alors retenue : les allocations eventuelles
+  portees par les fills `entry`/`exit` ne sont pas additionnees. En
   l'absence de ligne `funding`, la somme signee des fills est utilisee quand
   elle existe, sinon la valeur signee explicite de la cloture ; `0` signifie
   explicitement non applicable ou aucun funding ;
 - `borrow_cost_usdt` et `liquidation_fee_usdt` : somme ledger finie, positive ou
   nulle quand elle existe, sinon valeur explicite finie, positive ou nulle de la
   cloture.
+
+`spread_cost_usdt` et `slippage_cost_usdt` sont des couts d'execution : ils ne
+peuvent etre portes que par `entry` ou `exit`. Leur presence sur une ligne
+`funding` invalide le ledger.
 
 Tous les composants doivent etre disponibles pour certifier le net. La presence
 d'un PnL realise provider, d'un flag `quantity_coherent=true`, ou d'un montant

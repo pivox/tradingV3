@@ -31,7 +31,7 @@ WITH eligible_ledger AS (
                 ledger.notional NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
                 AND ledger.notional > 0
                 AND abs(ledger.notional - (ledger.price * ledger.quantity)) <= 0.00000001
-                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity), 1::numeric)
+                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity))
              ))
             THEN ledger.quantity
         END AS valid_quantity,
@@ -44,7 +44,7 @@ WITH eligible_ledger AS (
                 ledger.notional NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
                 AND ledger.notional > 0
                 AND abs(ledger.notional - (ledger.price * ledger.quantity)) <= 0.00000001
-                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity), 1::numeric)
+                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity))
              ))
             THEN COALESCE(ledger.notional, ledger.price * ledger.quantity)
         END AS valid_notional,
@@ -60,11 +60,15 @@ WITH eligible_ledger AS (
             AND (ledger.notional IS NULL OR (
                 ledger.notional NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
                 AND (ledger.price IS NULL OR ledger.quantity IS NULL OR abs(ledger.notional - (ledger.price * ledger.quantity)) <= 0.00000001
-                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity), 1::numeric))
+                    * greatest(abs(ledger.notional), abs(ledger.price * ledger.quantity)))
             ))
             AND (ledger.fee_usdt IS NULL OR (ledger.fee_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND ledger.fee_usdt >= 0))
             AND (ledger.spread_cost_usdt IS NULL OR (ledger.spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND ledger.spread_cost_usdt >= 0))
             AND (ledger.slippage_cost_usdt IS NULL OR (ledger.slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND ledger.slippage_cost_usdt >= 0))
+            AND (lower(ledger.fill_role) <> 'funding' OR (
+                ledger.spread_cost_usdt IS NULL
+                AND ledger.slippage_cost_usdt IS NULL
+            ))
             AND (ledger.funding_usdt IS NULL OR ledger.funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric))
             AND (ledger.borrow_cost_usdt IS NULL OR (ledger.borrow_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND ledger.borrow_cost_usdt >= 0))
             AND (ledger.liquidation_fee_usdt IS NULL OR (ledger.liquidation_fee_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND ledger.liquidation_fee_usdt >= 0)) AS row_quality_valid
@@ -97,7 +101,7 @@ WITH eligible_ledger AS (
             AND notional NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
             -- A supplied notional may differ only by at most 1e-8 relative to price × quantity.
             AND abs(notional - (price * quantity)) > 0.00000001
-                * greatest(abs(notional), abs(price * quantity), 1::numeric)
+                * greatest(abs(notional), abs(price * quantity))
         ) AS notional_mismatch_count,
         COUNT(*) FILTER (WHERE NOT row_quality_valid) AS ledger_quality_flagged_count,
         bool_and(row_quality_valid) AS ledger_quality_valid,
@@ -131,15 +135,15 @@ WITH eligible_ledger AS (
         SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS entry_spread_cost_usdt,
         COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS exit_spread_cost_explicit_count,
         SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS exit_spread_cost_usdt,
-        COUNT(spread_cost_usdt) FILTER (WHERE spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit') AND spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit') AND spread_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND spread_cost_usdt >= 0) AS spread_cost_usdt,
 
         COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS entry_slippage_cost_explicit_count,
         SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS entry_slippage_cost_usdt,
         COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS exit_slippage_cost_explicit_count,
         SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS exit_slippage_cost_usdt,
-        COUNT(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit') AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role IN ('entry', 'exit') AND slippage_cost_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND slippage_cost_usdt >= 0) AS slippage_cost_usdt,
 
         COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS entry_funding_explicit_count,
         SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS entry_funding_usdt,
@@ -147,6 +151,7 @@ WITH eligible_ledger AS (
         SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS exit_funding_usdt,
         COUNT(*) FILTER (WHERE normalized_fill_role = 'funding') AS funding_row_count,
         COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'funding' AND funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS funding_row_explicit_count,
+        SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'funding' AND funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS funding_settlement_usdt,
         COUNT(funding_usdt) FILTER (WHERE funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS funding_explicit_count,
         SUM(funding_usdt) FILTER (WHERE funding_usdt NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS funding_usdt,
 
@@ -420,6 +425,8 @@ CROSS JOIN LATERAL (
         AND identity.market_identity_coherent
         AND identity.paper_provenance_complete
         AND identity.paper_provenance_coherent
+        AND NOT probe.market_identity_mismatch
+        AND NOT probe.paper_provenance_mismatch
         AND identity.lifecycle_identity_complete
         AND identity.lifecycle_identity_coherent
         AND ledger.quantity_status = 'complete'
@@ -440,7 +447,7 @@ CROSS JOIN LATERAL (
         END AS other_trading_fees_usdt,
         CASE
             WHEN ledger.funding_row_count > 0
-             AND ledger.funding_row_explicit_count = ledger.funding_row_count THEN ledger.funding_usdt
+             AND ledger.funding_row_explicit_count = ledger.funding_row_count THEN ledger.funding_settlement_usdt
             WHEN ledger.funding_row_count > 0 THEN NULL
             WHEN ledger.funding_explicit_count > 0 THEN ledger.funding_usdt
             ELSE trading_v3_safe_numeric(close_event.extra->> 'funding_usdt')
@@ -490,24 +497,31 @@ CROSS JOIN LATERAL (
             THEN 'missing_paper_provenance' END,
         CASE WHEN old.close_event_id IS NOT NULL AND (
             identity.market_identity_complete IS NOT TRUE
-            OR (ledger.ledger_row_count IS NULL
-                AND identity.internal_trade_identity_complete
+            OR (
+                identity.internal_trade_identity_complete
+                AND identity.market_identity_coherent IS NOT TRUE
+            )
+            OR (
+                identity.internal_trade_identity_complete
+                AND identity.market_identity_coherent
+                AND identity.paper_provenance_complete
+                AND identity.paper_provenance_coherent
+                AND probe.market_identity_mismatch
                 AND (
-                    identity.market_identity_coherent IS NOT TRUE
-                    OR (
-                        identity.market_identity_coherent
-                        AND identity.paper_provenance_complete
-                        AND identity.paper_provenance_coherent
-                        AND NOT probe.paper_provenance_mismatch
-                        AND probe.market_identity_mismatch
-                    )
-                ))
+                    ledger.ledger_row_count IS NOT NULL
+                    OR NOT probe.paper_provenance_mismatch
+                )
+            )
         ) THEN 'ledger_market_identity_mismatch' END,
-        CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
+        CASE WHEN old.close_event_id IS NOT NULL
             AND identity.internal_trade_identity_complete
             AND identity.market_identity_complete
             AND identity.market_identity_coherent
-            AND (identity.paper_provenance_coherent IS NOT TRUE OR probe.paper_provenance_mismatch)
+            AND (
+                identity.paper_provenance_complete IS NOT TRUE
+                OR identity.paper_provenance_coherent IS NOT TRUE
+                OR probe.paper_provenance_mismatch
+            )
             THEN 'ledger_paper_provenance_mismatch' END,
         CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
             AND identity.internal_trade_identity_complete
