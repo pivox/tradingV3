@@ -293,6 +293,12 @@ final class ScalpingNetReportTest extends TestCase
         yield 'version' => ['version'];
         yield 'applied fills' => ['applied_fills'];
         yield 'scope quote currency' => ['scope_quote_currency'];
+        yield 'decision key pattern' => ['decision_key_pattern'];
+        yield 'portfolio source pattern' => ['portfolio_source_pattern'];
+        yield 'portfolio source semver' => ['portfolio_source_semver'];
+        yield 'portfolio input hash format' => ['portfolio_input_hash'];
+        yield 'portfolio identity hash format' => ['portfolio_identity_hash'];
+        yield 'admission hash format' => ['admission_hash'];
     }
 
     #[DataProvider('coordinatedReservationForgeryCases')]
@@ -358,6 +364,47 @@ final class ScalpingNetReportTest extends TestCase
                 'quoteCurrency',
                 $reservation->scope->quoteCurrency,
                 'USDC',
+                CanonicalPortfolioReservation::class,
+            ),
+            'decision_key_pattern' => self::mutateSerializedProperty(
+                $reservation,
+                'decisionKey',
+                $reservation->decisionKey,
+                'bad decision key',
+                CanonicalPortfolioReservation::class,
+            ),
+            'portfolio_source_pattern' => self::mutateSerializedProperty(
+                $reservation,
+                'portfolioSource',
+                $reservation->portfolioSource,
+                'Bad Source',
+                CanonicalPortfolioReservation::class,
+            ),
+            'portfolio_source_semver' => self::mutateSerializedProperty(
+                $reservation,
+                'portfolioSourceVersion',
+                $reservation->portfolioSourceVersion,
+                'latest',
+                CanonicalPortfolioReservation::class,
+            ),
+            'portfolio_input_hash' => self::mutateEverySerializedValue(
+                $reservation,
+                serialize($reservation->portfolioInputHash),
+                serialize('invalid'),
+                CanonicalPortfolioReservation::class,
+            ),
+            'portfolio_identity_hash' => self::mutateSerializedProperty(
+                $reservation,
+                'portfolioSnapshotIdentityHash',
+                $reservation->portfolioSnapshotIdentityHash,
+                'invalid',
+                CanonicalPortfolioReservation::class,
+            ),
+            'admission_hash' => self::mutateSerializedProperty(
+                $reservation,
+                'admissionHash',
+                $reservation->admissionHash,
+                'invalid',
                 CanonicalPortfolioReservation::class,
             ),
             default => throw new \LogicException('Unknown reservation forgery case.'),

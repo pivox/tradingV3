@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Scalping;
 
-use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
@@ -13,6 +12,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTarget;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use Brick\Math\BigDecimal;
 
 final readonly class ScalpingNetReport
@@ -139,6 +139,18 @@ final readonly class ScalpingNetReport
 
     private static function assertLineage(LineageContext $lineage): void
     {
+        try {
+            $lineage->assertCanonicalIntegrity()->assertExecutableTradeContract();
+        } catch (LineageContextException $exception) {
+            $reason = \in_array($exception->getMessage(), [
+                'canonical_identity_invalid:config_hash',
+                'canonical_identity_mismatch:config_hash',
+            ], true)
+                ? 'scalping_net_report_lineage_snapshot_hash_invalid'
+                : 'scalping_net_report_lineage_incomplete';
+
+            throw new \InvalidArgumentException($reason, 0, $exception);
+        }
         $requiredStrings = [
             $lineage->orchestrationRunId,
             $lineage->correlationRunId,
@@ -151,12 +163,8 @@ final readonly class ScalpingNetReport
             $lineage->effectiveConfigReference,
         ];
         if (
-            !$lineage->isModern()
-            || $lineage->effectiveConfigSnapshot === null
-            || in_array(null, $requiredStrings, true)
+            in_array(null, $requiredStrings, true)
             || in_array('', $requiredStrings, true)
-            || !self::validHash($lineage->configHash)
-            || !self::validHash($lineage->conditionCatalogHash)
         ) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');
         }
@@ -171,50 +179,17 @@ final readonly class ScalpingNetReport
             throw new \InvalidArgumentException('scalping_net_report_lineage_identity_invalid');
         }
 
+        if ($lineage->effectiveConfigSnapshot === null) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');
+        }
         $snapshot = $lineage->effectiveConfigSnapshot->toArray();
-        $request = $snapshot['request'] ?? null;
         $config = $snapshot['config'] ?? null;
-        $snapshotConfigHash = $snapshot['config_hash'] ?? null;
-        $snapshotCatalogHash = $snapshot['condition_catalog_hash'] ?? null;
-        if (!\is_array($config) || !\is_string($snapshotConfigHash) || !\is_string($snapshotCatalogHash)) {
-            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_hash_invalid');
-        }
-        try {
-            $recomputedConfigHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash(
-                $config,
-                $snapshotCatalogHash,
-            );
-        } catch (LineageContextException|\JsonException $exception) {
-            throw new \InvalidArgumentException(
-                'scalping_net_report_lineage_snapshot_hash_invalid',
-                0,
-                $exception,
-            );
-        }
-        if (
-            !hash_equals($recomputedConfigHash, $snapshotConfigHash)
-            || !hash_equals($recomputedConfigHash, (string) $lineage->configHash)
-        ) {
-            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_hash_invalid');
+        if (!\is_array($config)) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');
         }
         $environment = $config['environment'] ?? null;
         if (!\is_array($environment) || ($environment['write_enabled'] ?? null) !== false) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_readonly_invalid');
-        }
-        if (
-            !$lineage->effectiveConfigSnapshot->executable()
-            || !\is_array($request)
-            || ($request['mode_id'] ?? null) !== $lineage->modeId
-            || ($request['mode_version'] ?? null) !== $lineage->modeVersion
-            || ($request['setup_id'] ?? null) !== $lineage->setupId
-            || ($request['setup_version'] ?? null) !== $lineage->setupVersion
-            || ($request['side'] ?? null) !== $side
-            || ($request['exchange'] ?? null) !== $lineage->exchange
-            || ($request['environment'] ?? null) !== $lineage->environment
-            || ($snapshot['config_hash'] ?? null) !== $lineage->configHash
-            || ($snapshot['condition_catalog_hash'] ?? null) !== $lineage->conditionCatalogHash
-        ) {
-            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_mismatch');
         }
     }
 
@@ -266,110 +241,15 @@ final readonly class ScalpingNetReport
         CanonicalOrderPlan $plan,
         LineageContext $lineage,
     ): void {
-        $expectedStopFeeRate = $plan->stopLiquidityRole === 'maker'
-            ? $plan->makerFeeRate
-            : $plan->takerFeeRate;
-        $expectedFundingCostRate = $plan->positionNotional > 0.0
-            ? $plan->fundingCost / $plan->positionNotional
-            : 0.0;
-        $zeroDecimal = '0';
         try {
-            $quantityDecimal = CanonicalOrderPlanDecimal::fromFloat(
-                $plan->quantity,
-                'scalping_net_report_reservation_value_invalid',
-            )->__toString();
-            $riskDecimal = CanonicalOrderPlanDecimal::fromFloat(
-                $plan->totalStopLoss,
-                'scalping_net_report_reservation_value_invalid',
-            )->__toString();
-            $notionalDecimal = CanonicalOrderPlanDecimal::fromFloat(
-                $plan->positionNotional,
-                'scalping_net_report_reservation_value_invalid',
-            )->__toString();
-        } catch (CanonicalOrderPlanException $exception) {
+            $reservation->assertCanonicalOpeningState($plan);
+        } catch (CanonicalPortfolioException $exception) {
             throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch', 0, $exception);
         }
         if (
             $reservation->decisionKey !== $lineage->decisionKey
-            || $reservation->configHash !== $plan->configHash
-            || $reservation->planHash !== $plan->planHash
-            || $reservation->scope->modeId !== $plan->modeId
-            || $reservation->scope->exchange !== $plan->exchange
-            || $reservation->scope->environment !== $plan->environment
-            || $reservation->scope->quoteCurrency !== $plan->quoteCurrency
-            || !self::sameDecimal($reservation->reservedRiskQuote, $plan->totalStopLoss)
-            || !self::sameDecimal($reservation->reservedNotionalQuote, $plan->positionNotional)
-            || !self::sameDecimal($reservation->plannedQuantity, $plan->quantity)
-            || !self::sameDecimal($reservation->quantityStep, $plan->quantityStep)
-            || !self::sameDecimal($reservation->contractSize, $plan->contractSize)
-            || $reservation->side !== $plan->side
-            || !self::sameDecimal($reservation->stopPrice, $plan->stopPrice)
-            || !self::sameDecimal($reservation->stopFeeRate, $expectedStopFeeRate)
-            || !self::sameDecimal($reservation->stopSpreadRate, $plan->stopSpreadRate)
-            || !self::sameDecimal($reservation->stopSlippageRate, $plan->stopSlippageRate)
-            || !self::sameDecimal($reservation->fundingCostRate, $expectedFundingCostRate)
-            || !self::sameDecimal($reservation->plannedFundingCostQuote, $plan->fundingCost)
-            || $reservation->entryExpiresAt != $plan->expiresAt
-            || $reservation->cancelAfterAt != $plan->cancelAfterAt
-            || $reservation->holdingExpiresAt != $plan->holdingExpiresAt
-            || !self::sameDecimal($reservation->filledQuantity, 0.0)
-            || !self::sameDecimal($reservation->protectedQuantity, 0.0)
-            || !self::sameDecimal($reservation->remainingQuantity, $plan->quantity)
-            || !self::sameDecimal($reservation->venueRemainingQuantity, $plan->quantity)
-            || !self::sameDecimal($reservation->filledEntryNotionalQuote, 0.0)
-            || !self::sameDecimal($reservation->accumulatedEntryFeeQuote, 0.0)
-            || !self::sameDecimal($reservation->accumulatedGrossStopLossQuote, 0.0)
-            || !self::sameDecimal($reservation->filledRiskQuote, 0.0)
-            || !self::sameDecimal($reservation->residualRiskQuote, $plan->totalStopLoss)
-            || !self::sameDecimal($reservation->filledNotionalQuote, 0.0)
-            || !self::sameDecimal($reservation->residualNotionalQuote, $plan->positionNotional)
-            || $reservation->filledQuantityDecimal !== $zeroDecimal
-            || $reservation->protectedQuantityDecimal !== $zeroDecimal
-            || $reservation->remainingQuantityDecimal !== $quantityDecimal
-            || $reservation->venueRemainingQuantityDecimal !== $quantityDecimal
-            || $reservation->filledEntryNotionalDecimal !== $zeroDecimal
-            || $reservation->accumulatedEntryFeeDecimal !== $zeroDecimal
-            || $reservation->accumulatedGrossStopLossDecimal !== $zeroDecimal
-            || $reservation->filledRiskDecimal !== $zeroDecimal
-            || $reservation->residualRiskDecimal !== $riskDecimal
-            || $reservation->filledNotionalDecimal !== $zeroDecimal
-            || $reservation->residualNotionalDecimal !== $notionalDecimal
-            || $reservation->status !== 'active'
-            || $reservation->requiredAction !== 'none'
-            || $reservation->appliedFillHashes !== []
-            || $reservation->transitionInputHashes !== [$reservation->portfolioInputHash]
-            || $reservation->version !== 1
-            || $reservation->previousStateHash !== null
-            || $reservation->observedAt != $plan->createdAt
-            || !self::validHash($reservation->stateHash)
-            || !self::validHash($reservation->admissionHash)
-            || !self::validHash($reservation->portfolioInputHash)
-            || !self::validHash($reservation->portfolioSnapshotIdentityHash)
         ) {
             throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch');
-        }
-        try {
-            $expectedStateHash = $reservation->expectedStateHash();
-        } catch (\Throwable) {
-            throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch');
-        }
-        if (!hash_equals($expectedStateHash, $reservation->stateHash)) {
-            throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch');
-        }
-    }
-
-    private static function sameDecimal(float $actual, float $expected): bool
-    {
-        try {
-            return CanonicalOrderPlanDecimal::fromFloat(
-                $actual,
-                'scalping_net_report_reservation_value_invalid',
-            )->isEqualTo(CanonicalOrderPlanDecimal::fromFloat(
-                $expected,
-                'scalping_net_report_reservation_value_invalid',
-            ));
-        } catch (CanonicalOrderPlanException) {
-            return false;
         }
     }
 

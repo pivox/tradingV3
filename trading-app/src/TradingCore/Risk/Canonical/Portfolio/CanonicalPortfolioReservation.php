@@ -148,6 +148,103 @@ final readonly class CanonicalPortfolioReservation
         ]);
     }
 
+    public function assertCanonicalOpeningState(CanonicalOrderPlan $plan): self
+    {
+        try {
+            new CanonicalPortfolioScope(
+                $this->scope->network,
+                $this->scope->exchange,
+                $this->scope->environment,
+                $this->scope->accountId,
+                $this->scope->modeId,
+                $this->scope->quoteCurrency,
+            );
+            $quantityDecimal = self::decimal($plan->quantity)->__toString();
+            $riskDecimal = self::decimal($plan->totalStopLoss)->__toString();
+            $notionalDecimal = self::decimal($plan->positionNotional)->__toString();
+            $expectedStateHash = $this->expectedStateHash();
+        } catch (CanonicalPortfolioException $exception) {
+            throw new CanonicalPortfolioException(
+                'canonical_portfolio_reservation_opening_state_invalid',
+                [],
+                $exception,
+            );
+        }
+
+        $expectedStopFeeRate = $plan->stopLiquidityRole === 'maker'
+            ? $plan->makerFeeRate
+            : $plan->takerFeeRate;
+        $expectedFundingCostRate = $plan->positionNotional > 0.0
+            ? $plan->fundingCost / $plan->positionNotional
+            : 0.0;
+        if (
+            preg_match('/\A[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}\z/D', $this->decisionKey) !== 1
+            || preg_match('/\A[a-z][a-z0-9_.:-]*\z/D', $this->portfolioSource) !== 1
+            || preg_match('/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/D', $this->portfolioSourceVersion) !== 1
+            || !self::validHash($this->configHash)
+            || !self::validHash($this->planHash)
+            || !self::validHash($this->portfolioInputHash)
+            || !self::validHash($this->portfolioSnapshotIdentityHash)
+            || !self::validHash($this->admissionHash)
+            || !self::validHash($this->stateHash)
+            || $this->configHash !== $plan->configHash
+            || $this->planHash !== $plan->planHash
+            || $this->scope->modeId !== $plan->modeId
+            || $this->scope->exchange !== $plan->exchange
+            || $this->scope->environment !== $plan->environment
+            || $this->scope->quoteCurrency !== $plan->quoteCurrency
+            || !self::sameDecimal($this->reservedRiskQuote, $plan->totalStopLoss)
+            || !self::sameDecimal($this->reservedNotionalQuote, $plan->positionNotional)
+            || !self::sameDecimal($this->plannedQuantity, $plan->quantity)
+            || !self::sameDecimal($this->quantityStep, $plan->quantityStep)
+            || !self::sameDecimal($this->contractSize, $plan->contractSize)
+            || $this->side !== $plan->side
+            || !self::sameDecimal($this->stopPrice, $plan->stopPrice)
+            || !self::sameDecimal($this->stopFeeRate, $expectedStopFeeRate)
+            || !self::sameDecimal($this->stopSpreadRate, $plan->stopSpreadRate)
+            || !self::sameDecimal($this->stopSlippageRate, $plan->stopSlippageRate)
+            || !self::sameDecimal($this->fundingCostRate, $expectedFundingCostRate)
+            || !self::sameDecimal($this->plannedFundingCostQuote, $plan->fundingCost)
+            || $this->entryExpiresAt != $plan->expiresAt
+            || $this->cancelAfterAt != $plan->cancelAfterAt
+            || $this->holdingExpiresAt != $plan->holdingExpiresAt
+            || !self::sameDecimal($this->filledQuantity, 0.0)
+            || !self::sameDecimal($this->protectedQuantity, 0.0)
+            || !self::sameDecimal($this->remainingQuantity, $plan->quantity)
+            || !self::sameDecimal($this->venueRemainingQuantity, $plan->quantity)
+            || !self::sameDecimal($this->filledEntryNotionalQuote, 0.0)
+            || !self::sameDecimal($this->accumulatedEntryFeeQuote, 0.0)
+            || !self::sameDecimal($this->accumulatedGrossStopLossQuote, 0.0)
+            || !self::sameDecimal($this->filledRiskQuote, 0.0)
+            || !self::sameDecimal($this->residualRiskQuote, $plan->totalStopLoss)
+            || !self::sameDecimal($this->filledNotionalQuote, 0.0)
+            || !self::sameDecimal($this->residualNotionalQuote, $plan->positionNotional)
+            || $this->filledQuantityDecimal !== '0'
+            || $this->protectedQuantityDecimal !== '0'
+            || $this->remainingQuantityDecimal !== $quantityDecimal
+            || $this->venueRemainingQuantityDecimal !== $quantityDecimal
+            || $this->filledEntryNotionalDecimal !== '0'
+            || $this->accumulatedEntryFeeDecimal !== '0'
+            || $this->accumulatedGrossStopLossDecimal !== '0'
+            || $this->filledRiskDecimal !== '0'
+            || $this->residualRiskDecimal !== $riskDecimal
+            || $this->filledNotionalDecimal !== '0'
+            || $this->residualNotionalDecimal !== $notionalDecimal
+            || $this->status !== 'active'
+            || $this->requiredAction !== 'none'
+            || $this->appliedFillHashes !== []
+            || $this->transitionInputHashes !== [$this->portfolioInputHash]
+            || $this->version !== 1
+            || $this->previousStateHash !== null
+            || $this->observedAt != $plan->createdAt
+            || !hash_equals($expectedStateHash, $this->stateHash)
+        ) {
+            throw new CanonicalPortfolioException('canonical_portfolio_reservation_opening_state_invalid');
+        }
+
+        return $this;
+    }
+
     public function applyFill(CanonicalPortfolioFill $fill): self
     {
         $fillHash = $fill->eventHash();
@@ -527,6 +624,20 @@ final readonly class CanonicalPortfolioReservation
     private static function decimal(float $value): BigDecimal
     {
         return CanonicalPortfolioDecimal::fromFloat($value, 'canonical_portfolio_reservation_arithmetic_invalid');
+    }
+
+    private static function sameDecimal(float $actual, float $expected): bool
+    {
+        try {
+            return self::decimal($actual)->isEqualTo(self::decimal($expected));
+        } catch (CanonicalPortfolioException) {
+            return false;
+        }
+    }
+
+    private static function validHash(string $hash): bool
+    {
+        return preg_match('/\Asha256:[a-f0-9]{64}\z/D', $hash) === 1;
     }
 
     private static function float(BigDecimal $value): float

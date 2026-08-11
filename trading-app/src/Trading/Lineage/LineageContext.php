@@ -438,6 +438,23 @@ final readonly class LineageContext
         return $this->contractKind === self::CONTRACT_MODERN;
     }
 
+    public function assertCanonicalIntegrity(): self
+    {
+        if (!$this->isModern()) {
+            throw new LineageContextException('canonical_identity_invalid:contract_kind');
+        }
+
+        $payload = $this->toArray();
+        $payload['environment'] = $this->environment;
+        self::assertCanonicalPayload($payload);
+        $validated = self::fromArray($payload);
+        if ($validated != $this) {
+            throw new LineageContextException('canonical_identity_mismatch:integrity');
+        }
+
+        return $this;
+    }
+
     /**
      * @return array<string,mixed>
      */

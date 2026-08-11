@@ -91,6 +91,27 @@ final class LineageContextTest extends TestCase
         self::assertArrayNotHasKey('config_effective_version', $identity->toArray());
     }
 
+    public function testCanonicalIntegrityRevalidatesSerializedInstanceThroughCanonicalAuthority(): void
+    {
+        $identity = LineageContext::fromOrchestratorPayload($this->canonicalPayload());
+        self::assertSame($identity, $identity->assertCanonicalIntegrity());
+
+        $serialized = serialize($identity);
+        $from = serialize('decisionKey') . serialize($identity->decisionKey);
+        $to = serialize('decisionKey') . serialize('bad decision key');
+        $position = strpos($serialized, $from);
+        self::assertNotFalse($position);
+        $forged = unserialize(
+            substr_replace($serialized, $to, $position, strlen($from)),
+            ['allowed_classes' => true],
+        );
+        self::assertInstanceOf(LineageContext::class, $forged);
+
+        $this->expectException(LineageContextException::class);
+        $this->expectExceptionMessage('canonical_identity_invalid:decision_key');
+        $forged->assertCanonicalIntegrity();
+    }
+
     public function testRequestStageCanonicalIdentityWithoutSymbolRoundTrips(): void
     {
         $payload = $this->canonicalPayload();
