@@ -13,6 +13,8 @@ final readonly class StrictCompiledExpressionEvaluator
 {
     private ConditionCatalog $catalog;
 
+    private CanonicalSeriesChronologyValidator $seriesChronology;
+
     private const IDS = [
         'adx_min_for_trend_1h',
         'close_above_vwap_and_ma9',
@@ -46,11 +48,16 @@ final readonly class StrictCompiledExpressionEvaluator
         'macd_hist_decreasing_n', 'near_vwap', 'price_regime_ok_short', 'rsi_5m_gt_floor', 'volume_ratio_ok',
     ];
 
-    public function __construct(private StrictConditionRegistry $registry, ?ConditionCatalog $catalog = null)
+    public function __construct(
+        private StrictConditionRegistry $registry,
+        ?ConditionCatalog $catalog = null,
+        ?CanonicalSeriesChronologyValidator $seriesChronology = null,
+    )
     {
         $this->catalog = $catalog ?? (new ConditionCatalogLoader())->loadFile(
             dirname(__DIR__, 4) . '/config/trading/condition_catalog/1.0.0.yaml',
         );
+        $this->seriesChronology = $seriesChronology ?? new CanonicalSeriesChronologyValidator();
     }
 
     /** @return list<string> */
@@ -267,6 +274,15 @@ final readonly class StrictCompiledExpressionEvaluator
         }
         if (isset($context['side']) && !in_array($context['side'], $definition->sides, true)) {
             return $this->result($conditionId, false, null, null, ['incompatible_side' => true]);
+        }
+        if ($this->seriesChronology->requiresProof($definition)) {
+            $timeframe = $context['timeframe'] ?? null;
+            if (!is_string($timeframe) || !$this->seriesChronology->isCanonical($definition, $context, $timeframe)) {
+                return $this->result($conditionId, false, null, null, [
+                    'invalid_series_chronology' => true,
+                    'metric' => $definition->metric,
+                ]);
+            }
         }
         foreach ($definition->parameters as $name => $parameter) {
             if (!array_key_exists($name, $context)) {

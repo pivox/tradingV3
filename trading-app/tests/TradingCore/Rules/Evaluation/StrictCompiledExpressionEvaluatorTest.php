@@ -13,6 +13,7 @@ use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Rules\Evaluation\StrictCompiledExpressionEvaluator;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -61,11 +62,12 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
         self::assertTrue($evaluator->evaluate('close_above_vwap_and_ma9', ['close' => 101.0, 'vwap' => 100.0, 'ema' => [9 => 100.5]])->passed);
         self::assertFalse($evaluator->evaluate('close_above_vwap_and_ma9', ['close' => 100.0, 'vwap' => 100.0, 'ema' => [9 => 99.0]])->passed);
         self::assertFalse($evaluator->evaluate('close_above_vwap_and_ma9', ['close' => 101.0, 'vwap' => 100.0])->passed);
-        self::assertTrue($evaluator->evaluate('crash_context_ok', [])->passed);
+        $crashContext = $this->seriesProof('1h', 'short', ema: true, macd: true);
+        self::assertTrue($evaluator->evaluate('crash_context_ok', $crashContext)->passed);
 
         $failing = $passingChildren;
         $failing[2] = $this->condition('macd_hist_decreasing_n', false);
-        self::assertFalse((new StrictCompiledExpressionEvaluator(new StrictConditionRegistry($failing)))->evaluate('crash_context_ok', [])->passed);
+        self::assertFalse((new StrictCompiledExpressionEvaluator(new StrictConditionRegistry($failing)))->evaluate('crash_context_ok', $crashContext)->passed);
     }
 
     public function testSourcedEmaCompositeThresholdsUsePublishedOverrides(): void
@@ -159,11 +161,105 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             fn (string $id): ConditionInterface => $this->condition($id, true),
             ['macd_hist_decreasing_n', 'close_below_vwap', 'atr_rel_in_range_5m', 'volume_ratio_ok', 'ma9_cross_up_ma21', 'near_vwap'],
         )));
-        self::assertTrue($crash->evaluate('crash_short_pattern_1m', ['rsi' => 9.999, 'rsi_extreme_max' => 10.0])->passed);
-        self::assertFalse($crash->evaluate('crash_short_pattern_1m', ['rsi' => 10.0, 'rsi_extreme_max' => 10.0])->passed);
-        self::assertFalse($crash->evaluate('crash_short_pattern_1m', ['rsi' => 10.001, 'rsi_extreme_max' => 10.0])->passed);
-        self::assertTrue($crash->evaluate('crash_short_entry_1m', ['rsi' => 9.999, 'rsi_extreme_max' => 10.0])->passed);
-        self::assertFalse($crash->evaluate('crash_short_entry_1m', ['rsi' => 10.0, 'rsi_extreme_max' => 10.0])->passed);
+        $crashContext = $this->seriesProof('1m', 'short', macd: true);
+        self::assertTrue($crash->evaluate('crash_short_pattern_1m', $crashContext + ['rsi' => 9.999, 'rsi_extreme_max' => 10.0])->passed);
+        self::assertFalse($crash->evaluate('crash_short_pattern_1m', $crashContext + ['rsi' => 10.0, 'rsi_extreme_max' => 10.0])->passed);
+        self::assertFalse($crash->evaluate('crash_short_pattern_1m', $crashContext + ['rsi' => 10.001, 'rsi_extreme_max' => 10.0])->passed);
+        self::assertTrue($crash->evaluate('crash_short_entry_1m', $crashContext + ['rsi' => 9.999, 'rsi_extreme_max' => 10.0])->passed);
+        self::assertFalse($crash->evaluate('crash_short_entry_1m', $crashContext + ['rsi' => 10.0, 'rsi_extreme_max' => 10.0])->passed);
+    }
+
+    /** @param array<string, mixed> $seriesProof */
+    #[DataProvider('nestedEmaSeriesProofProvider')]
+    public function testPriceRegimeRejectsUnprovedNestedEmaSeries(
+        string $expression,
+        string $side,
+        array $seriesProof,
+        bool $expectedPassed,
+    ): void {
+        $long = $side === 'long';
+        $root = dirname(__DIR__, 4);
+        $catalog = (new ConditionCatalogLoader())->loadFile($root . '/config/trading/condition_catalog/1.1.0.yaml');
+        $evaluator = new StrictCompiledExpressionEvaluator(new StrictConditionRegistry([
+            $this->condition($long ? 'ema_50_gt_200' : 'ema_50_lt_200', false),
+            $this->condition($long ? 'close_above_ema_200' : 'close_below_ema_200', true),
+            $this->condition($long ? 'ema200_slope_pos' : 'ema200_slope_neg', true),
+        ]), $catalog);
+
+        $result = $evaluator->evaluate($expression, [
+            '_input_source' => 'indicator_snapshot',
+            'timeframe' => '1h',
+            'side' => $side,
+            'series_order' => 'oldest_to_newest',
+        ] + $seriesProof);
+
+        self::assertSame($expectedPassed, $result->passed);
+    }
+
+    /** @return iterable<string, array{string, string, array<string, mixed>, bool}> */
+    public static function nestedEmaSeriesProofProvider(): iterable
+    {
+        $start = 1_786_435_200;
+        foreach ([
+            'long' => ['price_regime_ok_long', [100.0, 101.0]],
+            'short' => ['price_regime_ok_short', [101.0, 100.0]],
+        ] as $side => [$expression, $series]) {
+            yield $side . ' forged order label only' => [$expression, $side, ['ema_200_slope' => $side === 'long' ? 1.0 : -1.0], false];
+            yield $side . ' duplicate timestamps' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start, $start],
+            ], false];
+            yield $side . ' timestamp gap' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start, $start + 7200],
+            ], false];
+            yield $side . ' reverse timestamps' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start + 3600, $start],
+            ], false];
+            yield $side . ' canonical proof' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start, $start + 3600],
+            ], true];
+        }
+    }
+
+    /** @param array<string, mixed> $seriesProof */
+    #[DataProvider('nestedCrashSeriesProofProvider')]
+    public function testCrashPatternRejectsUnprovedNestedMacdSeries(array $seriesProof, bool $expectedPassed): void
+    {
+        $root = dirname(__DIR__, 4);
+        $catalog = (new ConditionCatalogLoader())->loadFile($root . '/config/trading/condition_catalog/1.1.0.yaml');
+        $evaluator = new StrictCompiledExpressionEvaluator(new StrictConditionRegistry(array_map(
+            fn (string $id): ConditionInterface => $this->condition($id, true),
+            ['ema_20_lt_50', 'close_below_vwap', 'macd_hist_decreasing_n', 'atr_rel_in_range_15m'],
+        )), $catalog);
+
+        $result = $evaluator->evaluate('crash_short_pattern_15m', [
+            '_input_source' => 'indicator_snapshot',
+            'timeframe' => '15m',
+            'side' => 'short',
+            'series_order' => 'oldest_to_newest',
+        ] + $seriesProof);
+
+        self::assertSame($expectedPassed, $result->passed);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, bool}> */
+    public static function nestedCrashSeriesProofProvider(): iterable
+    {
+        $start = 1_786_435_200;
+
+        yield 'forged order label only' => [[], false];
+        yield 'missing timestamps' => [['macd_hist_series' => [0.2, 0.1]], false];
+        yield 'duplicate timestamps' => [[
+            'macd_hist_series' => [0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start, $start],
+        ], false];
+        yield 'canonical proof' => [[
+            'macd_hist_series' => [0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start, $start + 900],
+        ], true];
     }
 
     private function condition(string $name, bool $passed): ConditionInterface
@@ -174,5 +270,33 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             /** @param array<string, mixed> $context */
             public function evaluate(array $context): ConditionResult { return new ConditionResult($this->name, $this->passed); }
         };
+    }
+
+    /** @return array<string, mixed> */
+    private function seriesProof(string $timeframe, string $side, bool $ema = false, bool $macd = false): array
+    {
+        $step = match ($timeframe) {
+            '1m' => 60,
+            '15m' => 900,
+            '1h' => 3600,
+            default => throw new \InvalidArgumentException('Unsupported test timeframe.'),
+        };
+        $start = 1_786_435_200;
+        $proof = [
+            '_input_source' => 'indicator_snapshot',
+            'timeframe' => $timeframe,
+            'side' => $side,
+            'series_order' => 'oldest_to_newest',
+        ];
+        if ($ema) {
+            $proof['ema_200_series'] = [101.0, 100.0];
+            $proof['ema_200_series_timestamps'] = [$start, $start + $step];
+        }
+        if ($macd) {
+            $proof['macd_hist_series'] = [0.2, 0.1];
+            $proof['macd_hist_series_timestamps'] = [$start, $start + $step];
+        }
+
+        return $proof;
     }
 }

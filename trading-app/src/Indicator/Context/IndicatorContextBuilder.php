@@ -247,6 +247,9 @@ class IndicatorContextBuilder
         if (isset($emaMap[200], $emaPrevMap[200])) {
             $ema200Slope = $emaMap[200] - $emaPrevMap[200];
         }
+        $ema200Series = $seriesTimestamps !== null && isset($emaMap[200], $emaPrevMap[200])
+            ? [(float) $emaPrevMap[200], (float) $emaMap[200]]
+            : null;
 
         $macdHistLast3 = null;
         $macdHistSeries = null;
@@ -287,6 +290,10 @@ class IndicatorContextBuilder
             'ema' => $emaMap ?: null,
             'ema_prev' => $emaPrevMap ?: null,
             'ema_200_slope' => $ema200Slope,
+            'ema_200_series' => $ema200Series,
+            'ema_200_series_timestamps' => $ema200Series !== null
+                ? array_slice($seriesTimestamps, -2)
+                : null,
             'rsi' => $rsi,
             'macd' => ($macdVal !== null && $signalVal !== null) ? [
                 'macd' => $macdVal,
@@ -296,6 +303,10 @@ class IndicatorContextBuilder
             'macd_hist_last3' => $macdHistLast3,
             'macd_hist_series' => $macdHistSeries,
             'macd_hist_series_timestamps' => $macdHistSeries !== null && $seriesTimestamps !== null
+                ? array_slice($seriesTimestamps, -count($macdHistSeries))
+                : null,
+            'macd_line_signal_series' => $macdHistSeries,
+            'macd_line_signal_series_timestamps' => $macdHistSeries !== null && $seriesTimestamps !== null
                 ? array_slice($seriesTimestamps, -count($macdHistSeries))
                 : null,
             'series_order' => $seriesTimestamps !== null ? 'oldest_to_newest' : null,

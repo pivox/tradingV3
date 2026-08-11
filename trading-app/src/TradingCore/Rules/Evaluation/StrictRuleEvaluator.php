@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Rules\Evaluation;
 
-use App\Common\Enum\Timeframe;
 use App\Indicator\Condition\ConditionResult;
 use App\TradingCore\Rules\Ast\AllOfNode;
 use App\TradingCore\Rules\Ast\AnyOfNode;
@@ -16,11 +15,15 @@ final readonly class StrictRuleEvaluator
 {
     private const TRACE_SCHEMA = 'strict-rule-trace.v1';
 
+    private CanonicalSeriesChronologyValidator $seriesChronology;
+
     public function __construct(
         private ConditionCatalog $catalog,
         private StrictConditionRegistry $registry,
         private ?StrictCompiledExpressionEvaluator $compiledExpressions = null,
+        ?CanonicalSeriesChronologyValidator $seriesChronology = null,
     ) {
+        $this->seriesChronology = $seriesChronology ?? new CanonicalSeriesChronologyValidator();
     }
 
     public function evaluate(RuleNode $node, RuleEvaluationContext $context): RuleEvaluationResult
@@ -149,13 +152,8 @@ final readonly class StrictRuleEvaluator
         ) {
             return [false, 'invalid_series_order', $base];
         }
-        if (str_starts_with($definition->valueType, 'series<')
-            && array_key_exists($definition->metric, $snapshot->values)
-            && !$this->hasCanonicalSeriesChronology(
-                $snapshot->values[$definition->metric] ?? null,
-                $snapshot->values[$seriesTimestampKey] ?? null,
-                $snapshot->timeframe,
-            )
+        if ($this->seriesChronology->requiresProof($definition)
+            && !$this->seriesChronology->isCanonical($definition, $snapshot->values, $snapshot->timeframe)
         ) {
             return [false, 'invalid_series_chronology', $base];
         }
@@ -167,13 +165,13 @@ final readonly class StrictRuleEvaluator
         $conditionContext = array_replace($snapshot->values, $node->parameters, [
             'timeframe' => $snapshot->timeframe,
             'side' => $node->side,
-            'series_order' => $definition->seriesOrder,
+            'series_order' => $snapshot->values['series_order'] ?? $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
         ]);
         try {
             $result = $isCompiledExpression
-                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry, $this->catalog))->evaluate($node->conditionId, $conditionContext)
+                ? ($this->compiledExpressions ?? new StrictCompiledExpressionEvaluator($this->registry, $this->catalog, $this->seriesChronology))->evaluate($node->conditionId, $conditionContext)
                 : $condition->evaluate($conditionContext);
         } catch (\Throwable $exception) {
             return [false, 'condition_error', $base + ['exception' => $exception::class]];
@@ -206,31 +204,4 @@ final readonly class StrictRuleEvaluator
         ];
     }
 
-    private function hasCanonicalSeriesChronology(mixed $series, mixed $timestamps, string $timeframe): bool
-    {
-        if (!is_array($series)
-            || !array_is_list($series)
-            || count($series) < 2
-            || !is_array($timestamps)
-            || !array_is_list($timestamps)
-            || count($timestamps) !== count($series)
-        ) {
-            return false;
-        }
-        $timeframeValue = Timeframe::tryFrom($timeframe);
-        if ($timeframeValue === null) {
-            return false;
-        }
-        $step = $timeframeValue->getStepInSeconds();
-        for ($index = 0, $count = count($timestamps); $index < $count; ++$index) {
-            if (!is_int($timestamps[$index])) {
-                return false;
-            }
-            if ($index > 0 && $timestamps[$index] - $timestamps[$index - 1] !== $step) {
-                return false;
-            }
-        }
-
-        return true;
-    }
 }

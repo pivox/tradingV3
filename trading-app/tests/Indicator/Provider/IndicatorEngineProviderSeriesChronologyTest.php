@@ -69,6 +69,8 @@ final class IndicatorEngineProviderSeriesChronologyTest extends TestCase
             $context['series_timestamps'],
         );
         self::assertCount(count($context['macd_hist_series']), $context['macd_hist_series_timestamps']);
+        self::assertSame($context['macd_hist_series'], $context['macd_line_signal_series']);
+        self::assertSame($context['macd_hist_series_timestamps'], $context['macd_line_signal_series_timestamps']);
         self::assertSame(end($context['series_timestamps']), $context['candle_open_ts']);
     }
 

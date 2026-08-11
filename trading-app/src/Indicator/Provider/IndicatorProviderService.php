@@ -741,9 +741,15 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'ema'          => $ema,
                     'ema_prev'     => $emaPrev,
                     'ema_200_slope' => $ema[200] - $emaPrev[200],
+                    'ema_200_series' => [(float) $emaPrev[200], (float) $ema[200]],
+                    'ema_200_series_timestamps' => array_slice($seriesTimestamps, -2),
                     'macd'         => $macd,
                     'macd_hist_series' => $macdHistSeries,
                     'macd_hist_series_timestamps' => $macdHistSeries === []
+                        ? []
+                        : array_slice($seriesTimestamps, -count($macdHistSeries)),
+                    'macd_line_signal_series' => $macdHistSeries,
+                    'macd_line_signal_series_timestamps' => $macdHistSeries === []
                         ? []
                         : array_slice($seriesTimestamps, -count($macdHistSeries)),
                     'macd_hist_last3' => array_slice($macdHistSeries, -3),

@@ -92,10 +92,20 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         self::assertSame('oldest_to_newest', $result['1m']['series_order'] ?? null);
         self::assertSame([9, 20, 21, 50, 200], array_keys($result['1m']['ema'] ?? []));
         self::assertSame([9, 20, 21, 50, 200], array_keys($result['1m']['ema_prev'] ?? []));
+        self::assertSame(
+            [$result['1m']['ema_prev'][200], $result['1m']['ema'][200]],
+            $result['1m']['ema_200_series'] ?? null,
+        );
+        self::assertCount(2, $result['1m']['ema_200_series_timestamps'] ?? []);
         self::assertSame(['macd', 'signal', 'hist'], array_keys($result['1m']['macd'] ?? []));
         self::assertSame([14, 15], array_keys($result['1m']['adx'] ?? []));
         self::assertIsFloat($result['1m']['adx'][14] ?? null);
         self::assertCount(60, $result['1m']['macd_hist_series'] ?? []);
+        self::assertSame($result['1m']['macd_hist_series'], $result['1m']['macd_line_signal_series'] ?? null);
+        self::assertSame(
+            $result['1m']['macd_hist_series_timestamps'],
+            $result['1m']['macd_line_signal_series_timestamps'] ?? null,
+        );
         self::assertArrayHasKey('pullback_age_bars', $result['1m']);
         self::assertNull($result['1m']['pullback_age_bars']);
         self::assertIsFloat($result['1m']['volume_ratio'] ?? null);

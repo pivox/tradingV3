@@ -6,6 +6,12 @@ namespace App\Tests\TradingCore\Rules\Evaluation;
 
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionResult;
+use App\Indicator\Condition\Ema200SlopeNegCondition;
+use App\Indicator\Condition\Ema200SlopePosCondition;
+use App\Indicator\Condition\MacdHistSlopeNegCondition;
+use App\Indicator\Condition\MacdHistSlopePosCondition;
+use App\Indicator\Condition\MacdLineCrossDownWithHysteresisCondition;
+use App\Indicator\Condition\MacdLineCrossUpWithHysteresisCondition;
 use App\Indicator\Condition\Ma9CrossUpMa21Condition;
 use App\Indicator\Condition\NearVwapCondition;
 use App\TradingCore\Rules\Ast\AllOfNode;
@@ -18,6 +24,7 @@ use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -224,6 +231,241 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertTrue($canonical->passed);
         self::assertSame('oldest_to_newest', $canonical->trace['reported_series_order']);
         self::assertSame([$start, $start + 300], $canonical->trace['reported_series_timestamps']);
+    }
+
+    /**
+     * @param array<string, mixed> $values
+     * @param array<string, mixed> $parameters
+     */
+    #[DataProvider('macdLineCrossChronologyProvider')]
+    public function testMacdLineCrossRequiresItsDeclaredMetricAndCanonicalProof(
+        string $conditionId,
+        string $side,
+        array $values,
+        array $parameters,
+        string $expectedReason,
+        bool $expectedPassed,
+    ): void {
+        $condition = $conditionId === MacdLineCrossUpWithHysteresisCondition::NAME
+            ? new MacdLineCrossUpWithHysteresisCondition()
+            : new MacdLineCrossDownWithHysteresisCondition();
+        $node = new ConditionNode($conditionId, '5m', $side, $parameters, 'fixture:macd-line-cross');
+
+        $result = $this->evaluator([$condition], '1.1.0')->evaluate($node, $this->context($values));
+
+        self::assertSame($expectedReason, $result->reasonCode);
+        self::assertSame($expectedPassed, $result->passed);
+    }
+
+    /** @return iterable<string, array{string, string, array<string, mixed>, array<string, mixed>, string, bool}> */
+    public static function macdLineCrossChronologyProvider(): iterable
+    {
+        $start = 1_786_435_200;
+        foreach ([
+            'up' => [
+                MacdLineCrossUpWithHysteresisCondition::NAME,
+                'long',
+                [-0.001, 0.001],
+                [0.001, 0.002],
+                ['min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_below' => true],
+            ],
+            'down' => [
+                MacdLineCrossDownWithHysteresisCondition::NAME,
+                'short',
+                [0.001, -0.001],
+                [-0.001, -0.002],
+                ['min_gap' => 0.001, 'cool_down_bars' => 0, 'require_prev_above' => true],
+            ],
+        ] as $direction => [$conditionId, $side, $declaredSeries, $contradictoryLegacySeries, $parameters]) {
+            $base = [
+                'series_order' => 'oldest_to_newest',
+                'macd_hist_series' => $contradictoryLegacySeries,
+            ];
+            yield $direction . ' missing declared metric' => [
+                $conditionId, $side, [
+                    'series_order' => 'oldest_to_newest',
+                    'macd_hist_series' => $declaredSeries,
+                ], $parameters, 'invalid_series_chronology', false,
+            ];
+            yield $direction . ' duplicate timestamp' => [
+                $conditionId, $side, $base + [
+                    'macd_line_signal_series' => $declaredSeries,
+                    'macd_line_signal_series_timestamps' => [$start, $start],
+                ], $parameters, 'invalid_series_chronology', false,
+            ];
+            yield $direction . ' timestamp gap' => [
+                $conditionId, $side, $base + [
+                    'macd_line_signal_series' => $declaredSeries,
+                    'macd_line_signal_series_timestamps' => [$start, $start + 600],
+                ], $parameters, 'invalid_series_chronology', false,
+            ];
+            yield $direction . ' reversed timestamps' => [
+                $conditionId, $side, $base + [
+                    'macd_line_signal_series' => $declaredSeries,
+                    'macd_line_signal_series_timestamps' => [$start + 300, $start],
+                ], $parameters, 'invalid_series_chronology', false,
+            ];
+            yield $direction . ' canonical declared metric wins' => [
+                $conditionId, $side, $base + [
+                    'macd_line_signal_series' => $declaredSeries,
+                    'macd_line_signal_series_timestamps' => [$start, $start + 300],
+                ], $parameters, 'condition_passed', true,
+            ];
+        }
+    }
+
+    /** @param array<string, mixed> $values */
+    #[DataProvider('macdHistogramSlopeMetricProvider')]
+    public function testMacdHistogramSlopeRequiresAndConsumesItsDeclaredMetric(
+        string $conditionId,
+        string $side,
+        array $values,
+        string $expectedReason,
+        bool $expectedPassed,
+    ): void {
+        $condition = $conditionId === MacdHistSlopePosCondition::NAME
+            ? new MacdHistSlopePosCondition()
+            : new MacdHistSlopeNegCondition();
+        $node = new ConditionNode($conditionId, '15m', $side, [], 'fixture:macd-hist-slope');
+
+        $result = $this->evaluator([$condition], '1.1.0')->evaluate($node, $this->context($values, timeframe: '15m'));
+
+        self::assertSame($expectedReason, $result->reasonCode);
+        self::assertSame($expectedPassed, $result->passed);
+    }
+
+    /** @return iterable<string, array{string, string, array<string, mixed>, string, bool}> */
+    public static function macdHistogramSlopeMetricProvider(): iterable
+    {
+        $start = 1_786_435_200;
+
+        yield 'positive slope missing declared metric' => [
+            MacdHistSlopePosCondition::NAME,
+            'long',
+            ['series_order' => 'oldest_to_newest', 'macd_hist_last3' => [0.001, 0.002]],
+            'invalid_series_chronology',
+            false,
+        ];
+        yield 'positive slope consumes proven declared metric' => [
+            MacdHistSlopePosCondition::NAME,
+            'long',
+            [
+                'series_order' => 'oldest_to_newest',
+                'macd_hist_series' => [0.002, 0.001],
+                'macd_hist_series_timestamps' => [$start, $start + 900],
+                'macd_hist_last3' => [0.001, 0.002],
+            ],
+            'condition_failed',
+            false,
+        ];
+        yield 'negative slope missing declared metric' => [
+            MacdHistSlopeNegCondition::NAME,
+            'short',
+            ['series_order' => 'oldest_to_newest', 'macd_hist_last3' => [0.002, 0.001]],
+            'invalid_series_chronology',
+            false,
+        ];
+        yield 'negative slope consumes proven declared metric' => [
+            MacdHistSlopeNegCondition::NAME,
+            'short',
+            [
+                'series_order' => 'oldest_to_newest',
+                'macd_hist_series' => [0.001, 0.002],
+                'macd_hist_series_timestamps' => [$start, $start + 900],
+                'macd_hist_last3' => [0.002, 0.001],
+            ],
+            'condition_failed',
+            false,
+        ];
+    }
+
+    /** @param array<string, mixed> $values */
+    #[DataProvider('ema200SlopeMetricProvider')]
+    public function testEma200SlopeRequiresAndConsumesItsDeclaredMetric(
+        string $conditionId,
+        string $side,
+        array $values,
+        string $expectedReason,
+        bool $expectedPassed,
+    ): void {
+        $condition = $conditionId === 'ema200_slope_pos'
+            ? new Ema200SlopePosCondition()
+            : new Ema200SlopeNegCondition();
+        $node = new ConditionNode($conditionId, '1h', $side, [], 'fixture:ema200-slope');
+
+        $result = $this->evaluator([$condition], '1.1.0')->evaluate($node, $this->context($values, timeframe: '1h'));
+
+        self::assertSame($expectedReason, $result->reasonCode);
+        self::assertSame($expectedPassed, $result->passed);
+    }
+
+    /** @return iterable<string, array{string, string, array<string, mixed>, string, bool}> */
+    public static function ema200SlopeMetricProvider(): iterable
+    {
+        $start = 1_786_435_200;
+
+        yield 'positive slope missing declared metric' => [
+            'ema200_slope_pos',
+            'long',
+            ['series_order' => 'oldest_to_newest', 'ema_200_slope' => 1.0],
+            'invalid_series_chronology',
+            false,
+        ];
+        yield 'positive slope consumes canonical declared metric' => [
+            'ema200_slope_pos',
+            'long',
+            [
+                'series_order' => 'oldest_to_newest',
+                'ema_200_series' => [100.0, 101.0],
+                'ema_200_series_timestamps' => [$start, $start + 3600],
+                'ema_200_slope' => -1.0,
+            ],
+            'condition_passed',
+            true,
+        ];
+        yield 'positive slope rejects contradictory declared metric' => [
+            'ema200_slope_pos',
+            'long',
+            [
+                'series_order' => 'oldest_to_newest',
+                'ema_200_series' => [101.0, 100.0],
+                'ema_200_series_timestamps' => [$start, $start + 3600],
+                'ema_200_slope' => 1.0,
+            ],
+            'condition_failed',
+            false,
+        ];
+        yield 'negative slope missing declared metric' => [
+            'ema200_slope_neg',
+            'short',
+            ['series_order' => 'oldest_to_newest', 'ema_200_slope' => -1.0],
+            'invalid_series_chronology',
+            false,
+        ];
+        yield 'negative slope consumes canonical declared metric' => [
+            'ema200_slope_neg',
+            'short',
+            [
+                'series_order' => 'oldest_to_newest',
+                'ema_200_series' => [101.0, 100.0],
+                'ema_200_series_timestamps' => [$start, $start + 3600],
+                'ema_200_slope' => 1.0,
+            ],
+            'condition_passed',
+            true,
+        ];
+        yield 'negative slope rejects contradictory declared metric' => [
+            'ema200_slope_neg',
+            'short',
+            [
+                'series_order' => 'oldest_to_newest',
+                'ema_200_series' => [100.0, 101.0],
+                'ema_200_series_timestamps' => [$start, $start + 3600],
+                'ema_200_slope' => -1.0,
+            ],
+            'condition_failed',
+            false,
+        ];
     }
 
     public function testGlobalIndicatorConditionAggregatesEveryAvailableTimeframeFailClosed(): void

@@ -21,7 +21,7 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
     public function testMacdAndPriceSeriesAreAlwaysOldestToNewest(): void
     {
         $closes = [];
-        for ($index = 0; $index < 120; ++$index) {
+        for ($index = 0; $index < 220; ++$index) {
             $closes[] = 100.0 + (0.12 * $index) + sin($index / 4.0);
         }
         $macd = new Macd();
@@ -58,6 +58,13 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
             array_slice($timestamps, -count($expectedHistogram)),
             $context['macd_hist_series_timestamps'],
         );
+        self::assertSame($expectedHistogram, $context['macd_line_signal_series']);
+        self::assertSame(
+            $context['macd_hist_series_timestamps'],
+            $context['macd_line_signal_series_timestamps'],
+        );
+        self::assertSame([$context['ema_prev'][200], $context['ema'][200]], $context['ema_200_series']);
+        self::assertSame(array_slice($timestamps, -2), $context['ema_200_series_timestamps']);
         self::assertArrayHasKey('pullback_age_bars', $context);
     }
 
@@ -78,6 +85,10 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertArrayNotHasKey('series_order', $context);
         self::assertArrayNotHasKey('series_timestamps', $context);
         self::assertArrayNotHasKey('macd_hist_series_timestamps', $context);
+        self::assertArrayNotHasKey('macd_line_signal_series', $context);
+        self::assertArrayNotHasKey('macd_line_signal_series_timestamps', $context);
+        self::assertArrayNotHasKey('ema_200_series', $context);
+        self::assertArrayNotHasKey('ema_200_series_timestamps', $context);
     }
 
     public function testSingleTimestampCannotProveSeriesDirection(): void

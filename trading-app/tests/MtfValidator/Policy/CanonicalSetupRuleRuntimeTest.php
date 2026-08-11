@@ -138,11 +138,11 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => ['kline_time' => '2026-08-10T08:00:00Z', 'series_order' => 'oldest_to_newest'],
-                '1h' => ['kline_time' => '2026-08-10T09:00:00Z', 'adx' => 25.0, 'series_order' => 'oldest_to_newest'],
-                '15m' => ['kline_time' => '2026-08-10T09:45:00Z', 'series_order' => 'oldest_to_newest'],
-                '5m' => ['kline_time' => '2026-08-10T09:55:00Z', 'series_order' => 'oldest_to_newest'],
-                '1m' => ['kline_time' => '2026-08-10T09:59:00Z', 'series_order' => 'oldest_to_newest'],
+                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z', ['adx' => 25.0]),
+                '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
+                '5m' => self::indicatorInput('5m', '2026-08-10T09:55:00Z'),
+                '1m' => self::indicatorInput('1m', '2026-08-10T09:59:00Z'),
             ],
             new \DateTimeImmutable('2026-08-10T10:00:00Z'),
         );
@@ -272,11 +272,40 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
     private function scalpingInputs(): array
     {
         return [
-            '1h' => ['kline_time' => '2026-08-10T11:00:00Z', 'series_order' => 'oldest_to_newest'],
-            '15m' => ['kline_time' => '2026-08-10T11:45:00Z', 'series_order' => 'oldest_to_newest', 'pullback_age_bars' => 1],
-            '5m' => ['kline_time' => '2026-08-10T11:55:00Z', 'series_order' => 'oldest_to_newest'],
-            '1m' => ['kline_time' => '2026-08-10T11:59:00Z', 'series_order' => 'oldest_to_newest'],
+            '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z'),
+            '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z', ['pullback_age_bars' => 1]),
+            '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z'),
+            '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z'),
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     * @return array<string, mixed>
+     */
+    private static function indicatorInput(string $timeframe, string $klineTime, array $extra = []): array
+    {
+        $step = match ($timeframe) {
+            '1m' => 60,
+            '5m' => 300,
+            '15m' => 900,
+            '1h' => 3600,
+            '4h' => 14400,
+            default => throw new \InvalidArgumentException('Unsupported test timeframe.'),
+        };
+        $current = (new \DateTimeImmutable($klineTime))->getTimestamp();
+        $timestamps = [$current - $step, $current];
+
+        return array_replace([
+            'kline_time' => $klineTime,
+            'series_order' => 'oldest_to_newest',
+            'ema_200_series' => [100.0, 101.0],
+            'ema_200_series_timestamps' => $timestamps,
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => $timestamps,
+            'macd_line_signal_series' => [-0.1, 0.1],
+            'macd_line_signal_series_timestamps' => $timestamps,
+        ], $extra);
     }
 
     /** @return list<ConditionInterface> */
