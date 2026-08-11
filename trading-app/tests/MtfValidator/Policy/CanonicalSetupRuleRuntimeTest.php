@@ -20,6 +20,51 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalSetupRuleRuntimeResult::class)]
 final class CanonicalSetupRuleRuntimeTest extends TestCase
 {
+    public function testScalpingShadowUsesContractDefinedExecutionAndConfirmationTrace(): void
+    {
+        foreach ([
+            ['scalping.trend_continuation.long', 'long'],
+            ['scalping.pullback.long', 'long'],
+            ['scalping.trend_momentum.short', 'short'],
+        ] as [$setupId, $side]) {
+            $result = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
+                $this->scalpingLineage($setupId, $side),
+                $this->scalpingInputs(),
+                new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+            );
+
+            self::assertTrue($result->passed, $setupId . ': ' . $result->reasonCode);
+            self::assertSame('5m', $result->trace['execution_timeframe']);
+            self::assertSame(['1m'], $result->trace['mandatory_confirmations']);
+        }
+    }
+
+    public function testScalpingShadowRejectsMissingAndStaleMandatoryConfirmationGenerically(): void
+    {
+        $inputs = $this->scalpingInputs();
+        unset($inputs['1m']);
+        $missing = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
+            $this->scalpingLineage('scalping.trend_continuation.long', 'long'),
+            $inputs,
+            new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+        );
+        $staleInputs = $this->scalpingInputs();
+        $staleInputs['1m']['kline_time'] = '2026-08-10T11:55:00Z';
+        $stale = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
+            $this->scalpingLineage('scalping.trend_continuation.long', 'long'),
+            $staleInputs,
+            new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+        );
+
+        self::assertSame('critical_timeframe_missing', $missing->reasonCode);
+        self::assertSame('1m', $missing->trace['rejection']['timeframe']);
+        self::assertSame('5m', $missing->trace['execution_timeframe']);
+        self::assertSame(['1m'], $missing->trace['mandatory_confirmations']);
+        self::assertSame('critical_timeframe_stale', $stale->reasonCode);
+        self::assertSame('5m', $stale->trace['execution_timeframe']);
+        self::assertSame(['1m'], $stale->trace['mandatory_confirmations']);
+    }
+
     public function testDayTradingShadowRejectsMissingMandatoryTimeframeWithoutFallback(): void
     {
         $result = (new CanonicalSetupRuleRuntime([]))->evaluate(
@@ -167,6 +212,46 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         ]);
     }
 
+    private function scalpingLineage(string $setupId, string $side): LineageContext
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
+        ));
+
+        return LineageContext::fromOrchestratorPayload([
+            'origin' => 'orchestrator',
+            'orchestration_run_id' => 'run-scalping-shadow',
+            'orchestration_set_id' => 'set-scalping-shadow',
+            'mode_id' => 'scalping',
+            'mode_version' => '1.1.0',
+            'setup_id' => $setupId,
+            'setup_version' => '1.1.0',
+            'config_hash' => $snapshot->configHash,
+            'condition_catalog_hash' => $snapshot->conditionCatalogHash,
+            'side' => strtoupper($side),
+            'exchange' => 'fake',
+            'environment' => 'test',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'decision_key' => 'decision-scalping-shadow',
+            'dry_run' => true,
+            'effective_config_reference' => 'effective-config:scalping-shadow',
+            'effective_config_snapshot' => $snapshot->toArray(),
+        ]);
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function scalpingInputs(): array
+    {
+        return [
+            '1h' => ['kline_time' => '2026-08-10T11:00:00Z', 'series_order' => 'oldest_to_newest'],
+            '15m' => ['kline_time' => '2026-08-10T11:45:00Z', 'series_order' => 'oldest_to_newest', 'pullback_age_bars' => 1],
+            '5m' => ['kline_time' => '2026-08-10T11:55:00Z', 'series_order' => 'oldest_to_newest'],
+            '1m' => ['kline_time' => '2026-08-10T11:59:00Z', 'series_order' => 'oldest_to_newest'],
+        ];
+    }
+
     /** @return list<ConditionInterface> */
     private function passingConditions(): array
     {
@@ -184,6 +269,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
                 return $this->id;
             }
 
+            /** @param array<string, mixed> $context */
             public function evaluate(array $context): ConditionResult
             {
                 return new ConditionResult($this->id, true);
