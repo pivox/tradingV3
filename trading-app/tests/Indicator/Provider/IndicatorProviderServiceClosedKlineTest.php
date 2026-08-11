@@ -19,6 +19,7 @@ use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
+use App\Indicator\Exception\InvalidKlineChronologyException;
 use App\Indicator\Provider\IndicatorProviderService;
 use App\Indicator\Registry\ConditionRegistry;
 use App\Provider\Context\ExchangeContext;
@@ -194,6 +195,74 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         ));
     }
 
+    public function testClosedKlineWindowSortsValidShuffledTimestamps(): void
+    {
+        $now = new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC'));
+        $service = $this->service(
+            $this->createMock(KlineProviderInterface::class),
+            $this->createMock(IndicatorSnapshotRepository::class),
+            $now,
+        );
+        $method = new \ReflectionMethod($service, 'closedKlineWindow');
+
+        $closed = $method->invoke($service, array_reverse($this->klinesEndingWithCurrentCandle($now)), Timeframe::TF_1M, $now, 250);
+
+        self::assertCount(250, $closed);
+        self::assertSame('2026-05-31 07:55:00', $closed[0]->openTime->format('Y-m-d H:i:s'));
+        self::assertSame('2026-05-31 12:04:00', $closed[249]->openTime->format('Y-m-d H:i:s'));
+    }
+
+    public function testClosedKlineWindowRejectsDuplicateTimestamp(): void
+    {
+        $now = new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC'));
+        $klines = $this->klinesEndingWithCurrentCandle($now);
+        $klines[100] = $this->withOpenTime($klines[100], $klines[99]->openTime);
+        $service = $this->service(
+            $this->createMock(KlineProviderInterface::class),
+            $this->createMock(IndicatorSnapshotRepository::class),
+            $now,
+        );
+        $method = new \ReflectionMethod($service, 'closedKlineWindow');
+
+        $this->expectException(InvalidKlineChronologyException::class);
+        $this->expectExceptionMessage('duplicate_timestamp');
+        $method->invoke($service, $klines, Timeframe::TF_1M, $now, 250);
+    }
+
+    public function testClosedKlineWindowRejectsGapAfterSorting(): void
+    {
+        $now = new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC'));
+        $klines = $this->klinesEndingWithCurrentCandle($now);
+        unset($klines[100]);
+        $service = $this->service(
+            $this->createMock(KlineProviderInterface::class),
+            $this->createMock(IndicatorSnapshotRepository::class),
+            $now,
+        );
+        $method = new \ReflectionMethod($service, 'closedKlineWindow');
+
+        $this->expectException(InvalidKlineChronologyException::class);
+        $this->expectExceptionMessage('timestamp_gap');
+        $method->invoke($service, array_values($klines), Timeframe::TF_1M, $now, 250);
+    }
+
+    public function testProviderPublishesNonNullPullbackAgeFromContinuousClosedKlines(): void
+    {
+        $now = new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC'));
+        $klines = $this->constantClosedKlines($now);
+        $provider = $this->createMock(KlineProviderInterface::class);
+        $provider->expects(self::exactly(2))->method('getKlines')->willReturn($klines);
+        $snapshots = $this->createMock(IndicatorSnapshotRepository::class);
+        $snapshots->expects(self::exactly(2))->method('findLastBySymbolAndTimeframe')->willReturn(null);
+        $snapshots->expects(self::once())->method('upsert');
+
+        $result = $this->service($provider, $snapshots, $now)
+            ->getIndicatorsForSymbolAndTimeframes('BTCUSDT', ['1m'], $now);
+
+        self::assertSame(0, $result['1m']['pullback_age_bars'] ?? null);
+        self::assertSame('oldest_to_newest', $result['1m']['series_order'] ?? null);
+    }
+
     /**
      * @return KlineDto[]
      */
@@ -219,6 +288,44 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         }
 
         return $klines;
+    }
+
+    /** @return KlineDto[] */
+    private function constantClosedKlines(\DateTimeImmutable $now): array
+    {
+        $klines = $this->klinesEndingWithCurrentCandle($now);
+
+        return array_map(function (KlineDto $kline, int $index): KlineDto {
+            if ($index === 250) {
+                return $kline;
+            }
+
+            return new KlineDto(
+                $kline->symbol,
+                $kline->timeframe,
+                $kline->openTime,
+                BigDecimal::of('100'),
+                BigDecimal::of('101'),
+                BigDecimal::of('99'),
+                BigDecimal::of('100'),
+                BigDecimal::of('100'),
+            );
+        }, $klines, array_keys($klines));
+    }
+
+    private function withOpenTime(KlineDto $kline, \DateTimeImmutable $openTime): KlineDto
+    {
+        return new KlineDto(
+            $kline->symbol,
+            $kline->timeframe,
+            $openTime,
+            $kline->open,
+            $kline->high,
+            $kline->low,
+            $kline->close,
+            $kline->volume,
+            $kline->source,
+        );
     }
 
     private function snapshotAt(string $klineTime, ?string $updatedAt = null): IndicatorSnapshotDto

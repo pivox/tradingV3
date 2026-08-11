@@ -12,6 +12,7 @@ use App\Contract\Indicator\Dto\ListIndicatorDto;
 use App\Contract\Indicator\IndicatorProviderInterface;
 use App\Contract\Provider\KlineProviderInterface;
 use App\Indicator\Exception\NotEnoughKlinesException;
+use App\Indicator\Exception\InvalidKlineChronologyException;
 use Brick\Math\RoundingMode;
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Context\CanonicalPullbackAgeCalculator;
@@ -908,10 +909,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         $lastClosedOpenTs = $this->lastClosedKlineOpenTime($at, $timeframe)->getTimestamp();
         $closed = [];
         $hasOpenTime = false;
+        $missingOpenTime = false;
 
         foreach ($klines as $kline) {
             $openTime = $this->extractKlineOpenTime($kline);
             if ($openTime === null) {
+                $missingOpenTime = true;
                 continue;
             }
 
@@ -928,11 +931,36 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         if (!$hasOpenTime) {
             return \array_slice(\array_slice($klines, 0, max(0, \count($klines) - 1)), -$windowSize);
         }
+        if ($missingOpenTime) {
+            throw new InvalidKlineChronologyException($timeframe->value, 'missing_timestamp');
+        }
 
         \usort(
             $closed,
             static fn (array $a, array $b): int => $a['open_ts'] <=> $b['open_ts'],
         );
+        $step = $timeframe->getStepInSeconds();
+        for ($index = 1, $count = count($closed); $index < $count; ++$index) {
+            $previousTimestamp = $closed[$index - 1]['open_ts'];
+            $currentTimestamp = $closed[$index]['open_ts'];
+            $delta = $currentTimestamp - $previousTimestamp;
+            if ($delta === 0) {
+                throw new InvalidKlineChronologyException(
+                    $timeframe->value,
+                    'duplicate_timestamp',
+                    $previousTimestamp,
+                    $currentTimestamp,
+                );
+            }
+            if ($delta !== $step) {
+                throw new InvalidKlineChronologyException(
+                    $timeframe->value,
+                    'timestamp_gap',
+                    $previousTimestamp,
+                    $currentTimestamp,
+                );
+            }
+        }
 
         return \array_map(
             static fn (array $row): mixed => $row['kline'],
