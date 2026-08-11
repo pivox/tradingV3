@@ -177,7 +177,7 @@ class IndicatorContextBuilder
         }
 
         $vwapVal = null;
-        if ($this->highs && $this->lows && $this->closes && $this->volumes) {
+        if ($this->hasAlignedRawOhlcv()) {
             $vwapVal = $this->vwap->calculate($this->highs, $this->lows, $this->closes, $this->volumes);
         }
 
@@ -323,7 +323,7 @@ class IndicatorContextBuilder
 
     private function canonicalPullbackAge(): ?int
     {
-        if ($this->closes === [] || $this->highs === [] || $this->lows === [] || $this->volumes === []) {
+        if (!$this->hasAlignedRawOhlcv()) {
             return null;
         }
         $ema = $this->emaSeriesCalculator ?? new Ema();
@@ -348,6 +348,16 @@ class IndicatorContextBuilder
             100,
             0.0015,
         );
+    }
+
+    private function hasAlignedRawOhlcv(): bool
+    {
+        $count = count($this->closes);
+
+        return $count > 0
+            && count($this->highs) === $count
+            && count($this->lows) === $count
+            && count($this->volumes) === $count;
     }
 
     /**
@@ -480,14 +490,14 @@ class IndicatorContextBuilder
             return ['highs' => $highs, 'lows' => $lows, 'closes' => $closes];
         }
 
-        $n = min(count($this->highs), count($this->lows), count($this->closes));
-        if ($n === 0) {
+        $n = count($this->closes);
+        if ($n === 0 || count($this->highs) !== $n || count($this->lows) !== $n) {
             return null;
         }
 
-        $highs = array_map('floatval', array_slice($this->highs, 0, $n));
-        $lows = array_map('floatval', array_slice($this->lows, 0, $n));
-        $closes = array_map('floatval', array_slice($this->closes, 0, $n));
+        $highs = array_map('floatval', $this->highs);
+        $lows = array_map('floatval', $this->lows);
+        $closes = array_map('floatval', $this->closes);
 
         return ['highs' => $highs, 'lows' => $lows, 'closes' => $closes];
     }

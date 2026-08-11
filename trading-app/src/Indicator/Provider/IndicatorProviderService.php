@@ -770,6 +770,14 @@ final class IndicatorProviderService implements IndicatorProviderInterface
      */
     private function canonicalPullbackAge(array $closes, array $highs, array $lows, array $volumes): ?int
     {
+        $rawCount = count($closes);
+        if ($rawCount < 2
+            || count($highs) !== $rawCount
+            || count($lows) !== $rawCount
+            || count($volumes) !== $rawCount
+        ) {
+            return null;
+        }
         $ema9 = array_values(array_map('floatval', $this->emaService->calculateSeries($closes, 9)));
         $ema21 = array_values(array_map('floatval', $this->emaService->calculateSeries($closes, 21)));
         $vwaps = array_values(array_map('floatval', $this->vwapService->calculateFull($highs, $lows, $closes, $volumes)));

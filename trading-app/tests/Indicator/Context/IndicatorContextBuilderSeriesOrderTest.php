@@ -91,4 +91,23 @@ final class IndicatorContextBuilderSeriesOrderTest extends TestCase
         self::assertArrayHasKey('pullback_age_bars', $second);
         self::assertNull($second['pullback_age_bars']);
     }
+
+    public function testMismatchedRawOhlcvCannotBeSuffixAlignedIntoAPullback(): void
+    {
+        $context = (new IndicatorContextBuilder(
+            new Rsi(),
+            new Macd(),
+            new Adx(),
+            new Vwap(),
+            new AtrCalculator(),
+            new Sma(),
+        ))
+            ->closes([100.0, 90.0, 110.0, 120.0])
+            ->highs([101.0, 91.0, 111.0])
+            ->lows([99.0, 89.0, 109.0])
+            ->volumes([1.0, 1.0, 1.0])
+            ->build();
+
+        self::assertNull($context['pullback_age_bars']);
+    }
 }

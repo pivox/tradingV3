@@ -176,6 +176,24 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
         ));
     }
 
+    public function testMismatchedRawOhlcvCannotBeSuffixAlignedIntoAPullback(): void
+    {
+        $service = $this->service(
+            $this->createMock(KlineProviderInterface::class),
+            $this->createMock(IndicatorSnapshotRepository::class),
+            new \DateTimeImmutable('2026-05-31 12:05:30', new \DateTimeZone('UTC')),
+        );
+        $method = new \ReflectionMethod($service, 'canonicalPullbackAge');
+
+        self::assertNull($method->invoke(
+            $service,
+            [100.0, 90.0, 110.0, 120.0],
+            [101.0, 91.0, 111.0],
+            [99.0, 89.0, 109.0],
+            [1.0, 1.0, 1.0],
+        ));
+    }
+
     /**
      * @return KlineDto[]
      */
