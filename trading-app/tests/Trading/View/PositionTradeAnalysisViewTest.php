@@ -1156,6 +1156,11 @@ final class PositionTradeAnalysisViewTest extends TestCase
                 'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
                 'paper_execution_cell_id' => 'sha256:' . str_repeat('f', 64),
             ]);
+            $this->ledgerFill('XRPUSDT', 'itd-ledger-wrong-cell', 'position-ledger-wrong-cell', 'wrong-cell-other-market-' . $role, $role, $price, $quantity, '2026-08-10 13:1' . ($role === 'entry' ? '1' : '4') . ':00+00', [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
+                'market_data_venue' => 'okx',
+            ]);
         }
 
         // Deux motifs distincts : la venue doit correspondre avant toute agrégation,
@@ -1185,6 +1190,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertContains('ledger_market_identity_mismatch', $bySymbol['SOLUSDT']['pnl_quality_flags']);
         self::assertIsArray($bySymbol['XRPUSDT']['pnl_quality_flags']);
         self::assertContains('ledger_paper_provenance_mismatch', $bySymbol['XRPUSDT']['pnl_quality_flags']);
+        self::assertNotContains('ledger_market_identity_mismatch', $bySymbol['XRPUSDT']['pnl_quality_flags']);
     }
 
     public function testCanonicalShortLedgerUsesSignedGrossAndKeepsProviderPnlSeparate(): void
@@ -1335,7 +1341,11 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->entry('DOTUSDT', 'run-ledger-identity-removed', 'identity-removed', 'scalper', 'fake', 'paper', [
             'internal_trade_id' => $internalTradeId,
         ], '2026-08-11 15:36:00+00', 2942, 'hyperliquid');
-        $this->close('DOTUSDT', 'run-ledger-identity-removed', $this->completeCloseContract(1.0), $positionId, '2026-08-11 15:37:00+00', 2943, 'fake', 'paper', 'hyperliquid');
+        $this->close('DOTUSDT', 'run-ledger-identity-removed', [
+            'recorded_pnl_usdt' => 1.0,
+            'gross_realized_pnl_usdt' => 999.0,
+            'other_trading_fees_usdt' => 0.0,
+        ], $positionId, '2026-08-11 15:37:00+00', 2943, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2942, 2943, $internalTradeId, $positionId, 'trade-ledger-identity-removed');
         foreach ([['entry', 100.0], ['exit', 101.0]] as [$role, $price]) {
             $this->ledgerFill('DOTUSDT', $internalTradeId, $positionId, 'identity-removed-' . $role, $role, $price, 1.0, '2026-08-11 15:3' . ($role === 'entry' ? '6' : '7') . ':30+00', [
@@ -1346,11 +1356,17 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->conn->executeStatement(
             "UPDATE trade_lifecycle_event SET internal_trade_id = NULL, extra = extra - 'internal_trade_id' WHERE id IN (2942, 2943)",
         );
-        $this->conn->executeStatement('UPDATE fill_cost_ledger SET internal_trade_id = NULL WHERE internal_trade_id = ?', [$internalTradeId]);
+        $this->conn->executeStatement(
+            "UPDATE fill_cost_ledger SET internal_trade_id = NULL, market_data_venue = 'okx' WHERE internal_trade_id = ?",
+            [$internalTradeId],
+        );
 
         $row = $this->analysisRow(2942);
-        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertSame('canonical', $row['lineage_classification'], '#302 lineage semantics remain unchanged');
         self::assertContains('missing_internal_trade_identity', $row['pnl_quality_flags']);
+        self::assertNotContains('ledger_market_identity_mismatch', $row['pnl_quality_flags']);
+        self::assertNotContains('ledger_paper_provenance_mismatch', $row['pnl_quality_flags']);
+        self::assertNotContains('ledger_quantity_aggregate_missing', $row['pnl_quality_flags']);
         self::assertNull($row['canonical_net_pnl_usdt']);
         $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
     }
@@ -1374,7 +1390,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->conn->executeStatement('UPDATE fill_cost_ledger SET configuration_snapshot_id = NULL WHERE internal_trade_id = ?', [$internalTradeId]);
 
         $row = $this->analysisRow(2944);
-        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertSame('canonical', $row['lineage_classification'], '#302 lineage semantics remain unchanged');
         self::assertContains('missing_paper_provenance', $row['pnl_quality_flags']);
         self::assertNull($row['canonical_net_pnl_usdt']);
         $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
@@ -1442,7 +1458,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $this->conn->executeStatement("UPDATE fill_cost_ledger SET exchange = '' WHERE internal_trade_id = ?", [$internalTradeId]);
 
         $row = $this->analysisRow(2948);
-        self::assertSame('incomplete', $row['lineage_classification']);
+        self::assertSame('canonical', $row['lineage_classification'], '#302 lineage semantics remain unchanged');
         self::assertContains('ledger_market_identity_mismatch', $row['pnl_quality_flags']);
         self::assertNull($row['canonical_net_pnl_usdt']);
         $this->assertCoreLedgerFinancialEvidenceMasked($row, 1.0);
@@ -1513,6 +1529,31 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(12.0, (float) $row['entry_vwap'], 1e-9);
     }
 
+    public function testIndicatorSnapshotIsUnavailableWithoutNonblankExchangeAndMarketType(): void
+    {
+        $this->entry('SUIUSDT', 'run-indicator-null-identity', 'indicator-null', 'scalper', 'fake', 'paper', [
+            'trade_id' => 'indicator-null-identity',
+            'timeframe' => '1m',
+        ], '2026-08-11 16:05:00+00', 2961, 'hyperliquid');
+        $this->conn->executeStatement('UPDATE trade_lifecycle_event SET exchange = NULL, market_type = NULL WHERE id = 2961');
+        $this->conn->executeStatement(
+            'INSERT INTO indicator_snapshots (symbol, timeframe, exchange, market_type, kline_time, values)
+             VALUES (?, ?, NULL, NULL, ?, ?::jsonb)',
+            ['SUIUSDT', '1m', '2026-08-11 16:04:00+00', json_encode(['rsi' => 77, 'atr' => 7, 'vwap' => 17], JSON_THROW_ON_ERROR)],
+        );
+
+        $row = $this->conn->fetchAssociative(
+            'SELECT snapshot_kline_time, entry_rsi, entry_atr, entry_vwap
+             FROM position_trade_analysis_v2 WHERE entry_event_id = 2961',
+        );
+
+        self::assertIsArray($row);
+        self::assertNull($row['snapshot_kline_time']);
+        self::assertNull($row['entry_rsi']);
+        self::assertNull($row['entry_atr']);
+        self::assertNull($row['entry_vwap']);
+    }
+
     public function testLedgerCompositionMigrationSupportsDownThenUpRoundTrip(): void
     {
         $down = new Version20260811120000($this->conn, new NullLogger());
@@ -1563,9 +1604,9 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame('position_trade_analysis_v2_pre_ledger', $this->conn->fetchOne("SELECT to_regclass('position_trade_analysis_v2_pre_ledger')::text"));
         self::assertSame('position_trade_ledger_aggregate_v1', $this->conn->fetchOne("SELECT to_regclass('position_trade_ledger_aggregate_v1')::text"));
         self::assertSame(
-            'incomplete',
+            'canonical',
             $this->conn->fetchOne('SELECT lineage_classification FROM position_trade_analysis_v2 WHERE entry_event_id = 2970'),
-            'up tightens canonical publication to the ledger identity and Paper provenance contract',
+            'up preserves the exact pre-ledger #302 lineage classification contract',
         );
     }
 

@@ -257,8 +257,10 @@ LEFT JOIN LATERAL (
     FROM indicator_snapshots s
     WHERE s.symbol = old.symbol
       AND s.timeframe = old.timeframe
-      AND s.exchange IS NOT DISTINCT FROM old.exchange
-      AND s.market_type IS NOT DISTINCT FROM old.market_type
+      AND NULLIF(btrim(old.exchange), '') IS NOT NULL
+      AND NULLIF(btrim(old.market_type), '') IS NOT NULL
+      AND s.exchange = old.exchange
+      AND s.market_type = old.market_type
       AND s.kline_time <= old.entry_time
     ORDER BY s.kline_time DESC, s.id DESC
     LIMIT 1
@@ -284,7 +286,8 @@ LEFT JOIN LATERAL (
             )
         ), false) AS paper_provenance_mismatch
     FROM position_trade_ledger_aggregate_v1 candidate
-    WHERE candidate.internal_trade_id IS NOT DISTINCT FROM old.internal_trade_id
+    WHERE NULLIF(btrim(old.internal_trade_id), '') IS NOT NULL
+      AND candidate.internal_trade_id = old.internal_trade_id
 ) probe ON true
 CROSS JOIN LATERAL (
     SELECT
@@ -443,19 +446,30 @@ CROSS JOIN LATERAL (
             THEN 'missing_paper_provenance' END,
         CASE WHEN old.close_event_id IS NOT NULL AND (
             identity.market_identity_complete IS NOT TRUE
-            OR (ledger.ledger_row_count IS NULL AND (
-                identity.market_identity_coherent IS NOT TRUE OR probe.market_identity_mismatch
-            ))
+            OR (ledger.ledger_row_count IS NULL
+                AND identity.internal_trade_identity_complete
+                AND (
+                    identity.market_identity_coherent IS NOT TRUE
+                    OR (
+                        identity.market_identity_coherent
+                        AND identity.paper_provenance_complete
+                        AND identity.paper_provenance_coherent
+                        AND NOT probe.paper_provenance_mismatch
+                        AND probe.market_identity_mismatch
+                    )
+                ))
         ) THEN 'ledger_market_identity_mismatch' END,
         CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
+            AND identity.internal_trade_identity_complete
             AND identity.market_identity_complete
             AND identity.market_identity_coherent
-            AND NOT probe.market_identity_mismatch
             AND (identity.paper_provenance_coherent IS NOT TRUE OR probe.paper_provenance_mismatch)
             THEN 'ledger_paper_provenance_mismatch' END,
         CASE WHEN old.close_event_id IS NOT NULL AND ledger.ledger_row_count IS NULL
+            AND identity.internal_trade_identity_complete
             AND identity.market_identity_complete
             AND identity.market_identity_coherent
+            AND identity.paper_provenance_complete
             AND identity.paper_provenance_coherent
             AND NOT probe.market_identity_mismatch
             AND NOT probe.paper_provenance_mismatch
@@ -557,37 +571,13 @@ SQL);
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2');
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
         $this->addSql('ALTER VIEW position_trade_analysis_v2_pre_ledger RENAME TO position_trade_analysis_v2_legacy_source');
-        $this->addCanonicalWrapperSql(false);
+        $this->addCanonicalWrapperSql();
         $this->addSql('DROP VIEW IF EXISTS position_trade_ledger_aggregate_v1');
     }
 
-    private function addCanonicalWrapperSql(bool $requireLedgerIdentity = true): void
+    private function addCanonicalWrapperSql(): void
     {
-        $entryIdentityRequirements = $requireLedgerIdentity ? <<<'SQL'
-      OR NULLIF(btrim(COALESCE(e.internal_trade_id, e.extra->> 'internal_trade_id')), '') IS NULL
-      OR NULLIF(btrim(e.exchange), '') IS NULL
-      OR NULLIF(btrim(e.market_type), '') IS NULL
-      OR NULLIF(btrim(e.symbol), '') IS NULL
-      OR NULLIF(btrim(e.market_data_venue), '') IS NULL
-      OR NULLIF(btrim(e.paper_network), '') IS NULL
-      OR NULLIF(btrim(e.paper_execution_cell_id), '') IS NULL
-      OR NULLIF(btrim(e.configuration_snapshot_id), '') IS NULL
-      OR NULLIF(btrim(e.paper_eligibility), '') IS NULL
-SQL : <<<'SQL'
-      OR e.paper_network IS NULL OR e.market_data_venue IS NULL
-SQL;
-        $closeIdentityRequirements = $requireLedgerIdentity ? <<<'SQL'
-      OR c.paper_execution_cell_id IS DISTINCT FROM e.paper_execution_cell_id
-      OR c.configuration_snapshot_id IS DISTINCT FROM e.configuration_snapshot_id
-      OR c.paper_eligibility IS DISTINCT FROM e.paper_eligibility
-      OR COALESCE(NULLIF(c.internal_trade_id, ''), NULLIF(c.extra->> 'internal_trade_id', ''))
-          IS DISTINCT FROM COALESCE(NULLIF(e.internal_trade_id, ''), NULLIF(e.extra->> 'internal_trade_id', ''))
-      OR c.exchange IS DISTINCT FROM e.exchange
-      OR c.market_type IS DISTINCT FROM e.market_type
-      OR c.symbol IS DISTINCT FROM e.symbol
-SQL : '';
-
-        $this->addSql(<<<SQL
+        $this->addSql(<<<'SQL'
 CREATE VIEW position_trade_analysis_v2 AS
 SELECT
   legacy.*,
@@ -635,7 +625,7 @@ CROSS JOIN LATERAL (
       OR e.correlation_run_id IS NULL OR e.orchestration_run_id IS NULL
       OR e.orchestration_set_id IS NULL OR e.orchestration_dashboard_id IS NULL
       OR e.order_id IS NULL
-{$entryIdentityRequirements}
+      OR e.paper_network IS NULL OR e.market_data_venue IS NULL
     THEN 'incomplete'
     WHEN c.id IS NOT NULL AND (
       c.mode_id IS DISTINCT FROM e.mode_id OR c.mode_version IS DISTINCT FROM e.mode_version
@@ -650,7 +640,6 @@ CROSS JOIN LATERAL (
       OR c.orchestration_dashboard_id IS DISTINCT FROM e.orchestration_dashboard_id
       OR c.paper_network IS DISTINCT FROM e.paper_network
       OR c.market_data_venue IS DISTINCT FROM e.market_data_venue
-{$closeIdentityRequirements}
       OR c.order_id IS DISTINCT FROM e.order_id
       OR c.position_id IS NULL OR c.trade_id IS NULL
     ) THEN 'incomplete'
