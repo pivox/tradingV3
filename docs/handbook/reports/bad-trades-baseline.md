@@ -6,14 +6,14 @@ Statut au 26 juin 2026 : l'extraction de production n'a pas pu etre executee loc
 
 ## Source canonique
 
-La population de base vient de `position_trade_analysis_v2`. Les metriques nettes utilisent uniquement les lignes certifiees par v2 ou rendues certifiables par le ledger lorsque la vue v2 est bloquee par `ledger_quantity_aggregate_missing` :
+La population de base vient de `position_trade_analysis_v2`, unique autorite de certification. Les metriques nettes utilisent uniquement les lignes certifiees par cette vue :
 
 - `analysis_status = matched_closed` ;
 - `close_match_status = matched` ;
-- `cost_completeness = complete` dans v2 ou certification ledger complete ;
+- `cost_completeness = complete` ;
 - `pnl_quality_flags = []` ;
 - `position_fully_closed = true` ;
-- `net_pnl_usdt` et `realized_net_pnl_r` non nuls.
+- `canonical_net_pnl_usdt` et `canonical_realized_net_pnl_r` non nuls.
 
 Les lignes `partial`, `unknown`, `unmatched`, legacy ambigues, a couts incomplets ou avec flags qualite sont segmentees et exclues des ratios de winrate, expectancy, profit factor, drawdown et simulation.
 
@@ -42,15 +42,14 @@ python3 trading-app/scripts/bad_trades_baseline.py \
 
 ## Axes couverts
 
-Le script produit les agregats par profil, symbole, direction, timeframe, profil/symbole, profil/direction et profil/timeframe. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates.
+Le script produit les agregats par profil, symbole, direction, timeframe, profil/symbole, profil/direction et profil/timeframe. Il calcule count, population certifiee, winrate, Wilson 95 %, expectancy nette, profit factor, max drawdown, R net moyen/median, MFE/MAE, duree, couts et causes de perte candidates. La liquidite maker/taker est explicitement `unavailable_not_exposed_by_position_trade_analysis_v2` : une colonne absente ne devient jamais un faux zero.
 
-L'export enrichit la vue v2 par :
+L'export peut enrichir le diagnostic, sans modifier la certification fournie par v2 :
 
-- `order_intent` via `internal_trade_id` et scope exact exchange/market/symbol, uniquement si unique ;
-- `trade_zone_events` via `decision_key` unique issu de `order_intent` ;
-- `fill_cost_ledger` via `internal_trade_id` et scope exact exchange/market/symbol.
+- `order_intent` via `internal_trade_id` et la provenance canonique exacte, uniquement si le match est unique ;
+- `trade_zone_events` via le `decision_key` canonique de v2 et le scope exact exchange/market/symbol/timeframe, uniquement si le match est unique.
 
-Quand le ledger est utilise comme source de certification effective, tous les composants de cout ledger doivent etre presents au niveau agrege, chaque ligne doit porter le cout applicable a son `fill_role`, le ledger ne doit pas porter de flags qualite, les fills d'entree/sortie doivent exister avec quantite positive, l'agregat quantitatif doit fermer la position (`entry_qty = exit_qty`, `remaining_qty` dans la tolerance `0.00000001`), et aucun flag v2 bloquant autre que `ledger_quantity_aggregate_missing` ne doit rester. La colonne `certification_source` vaut alors `ledger`; sinon elle vaut `v2` ou reste vide.
+L'export ne lit ni ne re-agrege directement `fill_cost_ledger`. Il ne recalcule aucun cout et ne retire aucun flag qualite. `certification_source` vaut `v2` uniquement pour une ligne deja certifiee par la vue ; sinon la colonne reste vide. `recorded_pnl_usdt` et `estimated_net_pnl_usdt` restent auditables, mais ne remplacent jamais un net canonique absent.
 
 Aucun rapprochement par symbole seul ou fenetre temporelle n'est utilise. Les conflits d'identifiants restent visibles avec `identifier_conflict`.
 

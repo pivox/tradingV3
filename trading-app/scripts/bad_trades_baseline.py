@@ -35,11 +35,6 @@ def parse_float(value: Any) -> float | None:
     return float(normalized)
 
 
-def parse_int(value: Any) -> int:
-    parsed = parse_float(value)
-    return 0 if parsed is None else int(parsed)
-
-
 def parse_datetime(value: Any) -> datetime:
     normalized = str(value or "").strip()
     if normalized.endswith("Z"):
@@ -247,11 +242,7 @@ def summarize_rows(rows: list[dict[str, str]]) -> dict[str, Any]:
             field: round_or_none(sum(parse_float(row.get(field)) or 0.0 for row in rows))
             for field in cost_fields
         },
-        "liquidity": {
-            "maker_fills": sum(parse_int(row.get("maker_fill_count")) for row in rows),
-            "taker_fills": sum(parse_int(row.get("taker_fill_count")) for row in rows),
-            "unknown_fills": sum(parse_int(row.get("unknown_liquidity_fill_count")) for row in rows),
-        },
+        "liquidity": {"status": "unavailable_not_exposed_by_position_trade_analysis_v2"},
         "loss_causes": dict(sorted(causes.items())),
     }
 
@@ -377,7 +368,10 @@ def build_baseline(
     return {
         "source": {
             "input_csv": str(input_csv),
-            "contract": "certified export rows only; source may be v2 or ledger when the SQL marks cost_completeness complete",
+            "contract": (
+                "position_trade_analysis_v2 is the sole certification authority; KPI PnL uses "
+                "canonical_net_pnl_usdt and canonical_realized_net_pnl_r only"
+            ),
         },
         "population": summarize_population(rows, certified),
         "certification_cells": {
@@ -392,9 +386,9 @@ def build_baseline(
             "all_certified": simulate_group(aggregate_eligible, seed, monte_carlo_runs),
         },
         "coverage_gaps": [
-            "direction/side is certified only when a unique order_intent is matched by internal_trade_id and exact exchange/market/symbol scope.",
-            "EntryZone distance requires a unique trade_zone_events match through the order_intent decision_key and exact exchange/market/symbol/timeframe scope.",
-            "maker/taker is available only when fill_cost_ledger rows exist for the same internal_trade_id and exact exchange/market/symbol scope.",
+            "order_intent metadata is diagnostic only and requires a unique internal_trade_id plus exact canonical provenance match.",
+            "EntryZone distance is diagnostic only and requires a unique trade_zone_events match through the canonical v2 decision_key and exact exchange/market/symbol/timeframe scope.",
+            "maker/taker liquidity is unavailable because position_trade_analysis_v2 does not expose authoritative liquidity-role aggregates.",
             "TP/SL recalculation causes are not certified by v2 and must be joined from lifecycle events before causal claims.",
             "Compounding ON needs real account equity or risk fraction per trade; v2 only exposes risk_usdt_at_entry.",
         ],
@@ -442,8 +436,9 @@ def render_markdown(result: dict[str, Any]) -> str:
     lines = [
         "# Baseline bad trades certifiee v2",
         "",
-        "Ce rapport est genere depuis l'export `bad-trades-baseline-v2.sql`, base sur `position_trade_analysis_v2` et enrichi par `order_intent`, `trade_zone_events` et `fill_cost_ledger` lorsque les identifiants sont uniques.",
+        "Ce rapport est genere depuis l'export `bad-trades-baseline-v2.sql`. `position_trade_analysis_v2` est son unique autorite de certification ; `order_intent` et `trade_zone_events` apportent uniquement un contexte diagnostique lorsque leurs identifiants sont uniques.",
         "Les lignes partielles, inconnues, ambigues, legacy ou a couts incomplets sont segmentees et exclues des metriques nettes.",
+        "La liquidite maker/taker est marquee indisponible : la vue v2 ne publie pas d'agregat de role de liquidite faisant autorite.",
         "",
         "## Population",
         "",

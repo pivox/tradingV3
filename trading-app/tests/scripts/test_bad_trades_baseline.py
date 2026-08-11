@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "trading-app" / "scripts" / "bad_trades_baseline.py"
 FIXTURE = ROOT / "trading-app" / "tests" / "fixtures" / "bad_trades_baseline_sample.csv"
+EXPORT_SQL = ROOT / "docs" / "handbook" / "reports" / "queries" / "bad-trades-baseline-v2.sql"
 
 
 def load_module():
@@ -43,8 +45,9 @@ def test_build_baseline_segments_certified_rows_and_computes_core_metrics() -> N
     assert day_trading["mean_realized_net_pnl_r"] == 0.25
     assert day_trading["median_realized_net_pnl_r"] == 0.25
     assert day_trading["wilson_95"]["low"] < day_trading["winrate"] < day_trading["wilson_95"]["high"]
-    assert day_trading["liquidity"]["maker_fills"] == 1
-    assert day_trading["liquidity"]["taker_fills"] == 1
+    assert day_trading["liquidity"] == {
+        "status": "unavailable_not_exposed_by_position_trade_analysis_v2"
+    }
     assert result["groups"]["side"]["LONG"]["rows"] == 4
     assert result["groups"]["side"]["SHORT"]["rows"] == 1
 
@@ -86,8 +89,44 @@ def test_cli_writes_markdown_and_json_outputs(tmp_path: Path) -> None:
     assert "# Baseline bad trades certifiee v2" in rendered
     assert "## Metriques par side" in rendered
     assert "costs_destroy_edge" in rendered
+    assert "unique autorite de certification" in rendered
+    assert "fill_cost_ledger" not in rendered
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["population"]["certified_rows"] == 5
+    assert payload["source"]["contract"] == (
+        "position_trade_analysis_v2 is the sole certification authority; KPI PnL uses "
+        "canonical_net_pnl_usdt and canonical_realized_net_pnl_r only"
+    )
+    assert "fill_cost_ledger" not in json.dumps(payload)
+
+
+def test_current_v2_export_shape_marks_liquidity_unavailable_instead_of_zero(tmp_path: Path) -> None:
+    module = load_module()
+    liquidity_fields = {
+        "maker_fill_count",
+        "taker_fill_count",
+        "unknown_liquidity_fill_count",
+    }
+    sql = EXPORT_SQL.read_text(encoding="utf-8")
+    assert not any(field in sql for field in liquidity_fields)
+
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        reader = csv.DictReader(source)
+        assert reader.fieldnames is not None
+        fieldnames = [field for field in reader.fieldnames if field not in liquidity_fields]
+        rows = [{field: row[field] for field in fieldnames} for row in reader]
+
+    exported = tmp_path / "v2-export.csv"
+    with exported.open("w", newline="", encoding="utf-8") as target:
+        writer = csv.DictWriter(target, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    result = module.build_baseline(exported, seed=132, monte_carlo_runs=20, min_cell_size=1)
+
+    assert result["groups"]["mode"]["day_trading"]["liquidity"] == {
+        "status": "unavailable_not_exposed_by_position_trade_analysis_v2"
+    }
 
 
 def test_max_drawdown_uses_realized_close_order() -> None:
