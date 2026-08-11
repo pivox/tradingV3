@@ -14,6 +14,7 @@ use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
@@ -172,6 +173,88 @@ final class ScalpingShadowRuntimeTest extends TestCase
             self::assertNull($outcome->orderPlan);
             self::assertNull($outcome->reservation);
         }
+    }
+
+    public function testMissingCanonicalOrderBookFailsClosedBeforePlanning(): void
+    {
+        $outcome = self::fixtureRuntime()->run(
+            self::fixtureRequest('scalping.trend_continuation.long', 'long', includeOrderBook: false),
+        );
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('scalping_shadow_order_book_unavailable', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
+    public function testCanonicalOrderBookAtTheFreshnessBoundaryPlansWithoutMutation(): void
+    {
+        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+        self::assertNotNull($request->orderBook);
+        $book = self::book(observedAt: '2026-08-10T11:59:30+00:00');
+        $candidate = self::withOrderBook($request, $book);
+
+        $outcome = self::fixtureRuntime()->run($candidate);
+
+        self::assertSame('planned', $outcome->status);
+        self::assertSame($book, $candidate->orderBook);
+        self::assertSame($book, $candidate->withIndicators($candidate->indicatorsByTimeframe)->orderBook);
+        self::assertSame(99.995, $book->bestBid);
+        self::assertSame(100.005, $book->bestAsk);
+    }
+
+    #[DataProvider('invalidRuntimeBooks')]
+    public function testInvalidRuntimeOrderBookNeverPlansOrReserves(
+        CanonicalOrderBookSnapshot $book,
+        string $reason,
+        float $liveSpreadBps = 1.0,
+    ): void {
+        $request = self::fixtureRequest(
+            'scalping.trend_continuation.long',
+            'long',
+            liveSpreadBps: $liveSpreadBps,
+        );
+
+        $outcome = self::fixtureRuntime()->run(self::withOrderBook($request, $book));
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame($reason, $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
+    /** @return iterable<string, array{CanonicalOrderBookSnapshot, string, 2?: float}> */
+    public static function invalidRuntimeBooks(): iterable
+    {
+        yield 'stale' => [
+            self::book(observedAt: '2026-08-10T11:59:29+00:00'),
+            'scalping_shadow_order_book_stale',
+        ];
+        yield 'future' => [
+            self::book(observedAt: '2026-08-10T12:00:01+00:00'),
+            'scalping_shadow_order_book_future',
+        ];
+        yield 'exchange identity mismatch' => [
+            self::book(exchange: 'other'),
+            'scalping_shadow_order_book_identity_mismatch',
+        ];
+        yield 'symbol identity mismatch' => [
+            self::book(symbol: 'ETHUSDT'),
+            'scalping_shadow_order_book_identity_mismatch',
+        ];
+        yield 'source mismatch' => [
+            self::book(source: 'ticker'),
+            'scalping_shadow_order_book_source_mismatch',
+        ];
+        yield 'scalar spread mismatch' => [
+            self::book(bestBid: 99.99, bestAsk: 100.01, spreadBps: 2.0),
+            'scalping_shadow_order_book_snapshot_mismatch',
+        ];
+        yield 'cost spread mismatch' => [
+            self::book(bestBid: 99.99, bestAsk: 100.01, spreadBps: 2.0),
+            'scalping_shadow_live_cost_snapshot_mismatch',
+            2.0,
+        ];
     }
 
     public function testOutcomeRejectsEveryIncompleteOrContradictoryShape(): void
@@ -353,6 +436,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         );
         $identity = new ShadowRuntimeIdentityPolicy('scalping_shadow', [[
             'mode_id' => 'scalping',
@@ -360,7 +444,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'setup_id' => 'scalping.trend_continuation.long',
             'setup_version' => '1.1.0',
             'side' => 'long',
-        ]]);
+        ]], requiresCanonicalOrderBook: true);
 
         $outcome = $runtime->run($sharedRequest, $identity);
 
@@ -413,6 +497,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
         ?float $liveSpreadBps = 1.0,
         ?float $estimatedSlippageBps = 1.0,
         ShadowExecutionCapability $capability = ShadowExecutionCapability::Fake,
+        bool $includeOrderBook = true,
     ): ScalpingShadowRequest {
         $configRequest = new EffectiveTradingConfigRequest(
             'scalping', '1.1.0', $setupId, '1.1.0', 'fake', 'test', $side, $capability,
@@ -478,6 +563,18 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $decisionKey,
             $liveSpreadBps,
             $estimatedSlippageBps,
+            $includeOrderBook ? new CanonicalOrderBookSnapshot(
+                'fake',
+                'test',
+                'BTCUSDT',
+                'perpetual',
+                'order_book',
+                100.0 - (($liveSpreadBps ?? 1.0) / 200.0),
+                100.0 + (($liveSpreadBps ?? 1.0) / 200.0),
+                $liveSpreadBps ?? 1.0,
+                new \DateTimeImmutable('2026-08-10T11:59:45+00:00'),
+                'sha256:' . str_repeat('7', 64),
+            ) : null,
         );
     }
 
@@ -521,6 +618,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         );
     }
 
@@ -536,6 +634,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         );
     }
 
@@ -551,6 +650,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         );
     }
 
@@ -568,6 +668,50 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
+        );
+    }
+
+    private static function withOrderBook(
+        ScalpingShadowRequest $request,
+        ?CanonicalOrderBookSnapshot $orderBook,
+    ): ScalpingShadowRequest {
+        return new ScalpingShadowRequest(
+            $request->configRequest,
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+            $orderBook,
+        );
+    }
+
+    private static function book(
+        string $exchange = 'fake',
+        string $environment = 'test',
+        string $symbol = 'BTCUSDT',
+        string $marketType = 'perpetual',
+        string $source = 'order_book',
+        float $bestBid = 99.995,
+        float $bestAsk = 100.005,
+        float $spreadBps = 1.0,
+        string $observedAt = '2026-08-10T11:59:45+00:00',
+    ): CanonicalOrderBookSnapshot {
+        return new CanonicalOrderBookSnapshot(
+            $exchange,
+            $environment,
+            $symbol,
+            $marketType,
+            $source,
+            $bestBid,
+            $bestAsk,
+            $spreadBps,
+            new \DateTimeImmutable($observedAt),
+            'sha256:' . str_repeat('7', 64),
         );
     }
 

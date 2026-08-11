@@ -6,6 +6,7 @@ namespace App\TradingCore\Shadow;
 
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
@@ -23,6 +24,7 @@ final readonly class ShadowRuntimeRequest
         public string $decisionKey,
         public ?float $liveSpreadBps,
         public ?float $estimatedSlippageBps,
+        public ?CanonicalOrderBookSnapshot $orderBook = null,
     ) {
     }
 }

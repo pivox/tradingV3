@@ -11,6 +11,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTime;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
@@ -65,9 +66,18 @@ final readonly class CanonicalShadowRuntime
             if ($request->orderPlanRequest->policy->configHash !== $executionPolicy->configHash) {
                 return $this->reject($request, $policy->reason('plan_config_mismatch'));
             }
+            if ($policy->requiresCanonicalOrderBook) {
+                $orderBookGuard = $this->orderBookGuard($request, $executionPolicy);
+                if ($orderBookGuard !== null) {
+                    return $this->reject($request, $policy->reason($orderBookGuard));
+                }
+            }
             $guardSuffix = $this->costGuard($request, $executionPolicy);
             if ($guardSuffix !== null) {
                 return $this->reject($request, $policy->reason($guardSuffix));
+            }
+            if ($policy->requiresCanonicalOrderBook && !$this->orderBookCostsMatch($request)) {
+                return $this->reject($request, $policy->reason('order_book_snapshot_mismatch'));
             }
 
             $plan = $this->orderPlanBuilder->build($request->orderPlanRequest);
@@ -158,6 +168,90 @@ final readonly class CanonicalShadowRuntime
         }
 
         return null;
+    }
+
+    private function orderBookGuard(ShadowRuntimeRequest $request, CanonicalExecutionPolicy $policy): ?string
+    {
+        $book = $request->orderBook;
+        if ($book === null) {
+            return 'order_book_unavailable';
+        }
+        $zone = $request->orderPlanRequest->zone;
+        $costs = $request->orderPlanRequest->costs;
+        if (
+            $book->exchange !== $request->configRequest->exchange
+            || $book->environment !== $request->configRequest->environment
+            || $book->symbol !== $request->lineage->symbol
+            || $book->marketType !== $request->lineage->marketType
+            || $book->exchange !== $zone->exchange
+            || $book->environment !== $zone->environment
+            || $book->symbol !== $zone->symbol
+            || $book->marketType !== $zone->marketType
+            || $book->exchange !== $costs->exchange
+            || $book->environment !== $costs->environment
+            || $book->symbol !== $costs->symbol
+            || $book->marketType !== $costs->marketType
+        ) {
+            return 'order_book_identity_mismatch';
+        }
+        if (
+            $book->source !== $policy->costContract->entrySpreadSource
+            || $book->source !== $policy->costContract->stopSpreadSource
+            || $book->source !== $policy->costContract->targetSpreadSource
+            || $book->source !== $costs->entrySpreadSource
+            || $book->source !== $costs->stopSpreadSource
+        ) {
+            return 'order_book_source_mismatch';
+        }
+        foreach ($costs->targets as $target) {
+            if ($book->source !== $target->spreadSource) {
+                return 'order_book_source_mismatch';
+            }
+        }
+        $now = $this->clock->now();
+        if ($book->observedAt > $now) {
+            return 'order_book_future';
+        }
+        if (CanonicalOrderPlanTime::isOlderThan($book->observedAt, $now, $policy->entryZone->maximumInputAgeSeconds)) {
+            return 'order_book_stale';
+        }
+        if (
+            $request->liveSpreadBps === null
+            || abs($book->spreadBps - $request->liveSpreadBps) > 1.0e-9
+        ) {
+            return 'order_book_snapshot_mismatch';
+        }
+
+        return null;
+    }
+
+    private function orderBookCostsMatch(ShadowRuntimeRequest $request): bool
+    {
+        $book = $request->orderBook;
+        if ($book === null) {
+            return false;
+        }
+        $costs = $request->orderPlanRequest->costs;
+        if (
+            !$this->spreadMatchesRate($book->spreadBps, $costs->entrySpreadRate)
+            || !$this->spreadMatchesRate($book->spreadBps, $costs->stopSpreadRate)
+        ) {
+            return false;
+        }
+        foreach ($costs->targets as $target) {
+            if (!$this->spreadMatchesRate($book->spreadBps, $target->spreadRate)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function spreadMatchesRate(float $spreadBps, ?float $spreadRate): bool
+    {
+        return $spreadRate !== null
+            && \is_finite($spreadRate)
+            && abs($spreadBps - $spreadRate * 10_000.0) <= 1.0e-9;
     }
 
     /** @param array<string, mixed> $evidence */

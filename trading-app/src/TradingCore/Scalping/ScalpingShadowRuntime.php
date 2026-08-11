@@ -63,7 +63,7 @@ final readonly class ScalpingShadowRuntime
                     'setup_version' => '1.1.0',
                     'side' => 'short',
                 ],
-            ]),
+            ], requiresCanonicalOrderBook: true),
         ));
     }
 
@@ -79,6 +79,7 @@ final readonly class ScalpingShadowRuntime
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         );
     }
 
