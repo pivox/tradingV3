@@ -4,3 +4,24 @@ This package intentionally starts with stable data contracts only. Backtrader
 adapters and execution simulation live in later #191 slices.
 """
 
+from app.backtesting.dataset import (
+    CandleRecord,
+    DatasetBuildRejected,
+    DatasetBuildResult,
+    DatasetQualityReport,
+    DatasetSourceIdentity,
+    DatasetStreamQuality,
+    MissingRange,
+    Timeframe,
+)
+
+__all__ = (
+    "CandleRecord",
+    "DatasetBuildRejected",
+    "DatasetBuildResult",
+    "DatasetQualityReport",
+    "DatasetSourceIdentity",
+    "DatasetStreamQuality",
+    "MissingRange",
+    "Timeframe",
+)
