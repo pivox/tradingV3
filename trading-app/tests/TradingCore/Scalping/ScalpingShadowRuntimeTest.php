@@ -19,7 +19,10 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\BacktestCanonicalPortfolioAdapter;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\PaperCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
@@ -289,10 +292,16 @@ final class ScalpingShadowRuntimeTest extends TestCase
         }
     }
 
-    public function testMarketPlanIsRejectedBeforePortfolioReservation(): void
-    {
+    #[DataProvider('executionCapabilities')]
+    public function testMarketPlanIsRejectedBeforePortfolioReservation(
+        ShadowExecutionCapability $capability,
+    ): void {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
-        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+        $request = self::fixtureRequest(
+            'scalping.trend_continuation.long',
+            'long',
+            capability: $capability,
+        );
         $limitPlan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
             ->build($request->orderPlanRequest);
         $serialized = serialize($limitPlan);
@@ -306,14 +315,22 @@ final class ScalpingShadowRuntimeTest extends TestCase
             public function __construct(private readonly CanonicalOrderPlan $plan) {}
             public function build(CanonicalOrderPlanBuildRequest $request): CanonicalOrderPlan { return $this->plan; }
         };
-        $store = new InMemoryCanonicalPortfolioReservationStore();
-        $fakeAdapter = new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $store);
+        $stores = [
+            'fake' => new InMemoryCanonicalPortfolioReservationStore(),
+            'paper' => new InMemoryCanonicalPortfolioReservationStore(),
+            'backtest' => new InMemoryCanonicalPortfolioReservationStore(),
+        ];
+        $selector = new CanonicalPortfolioAdapterSelector(
+            new FakeCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['fake']),
+            new PaperCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['paper']),
+            new BacktestCanonicalPortfolioAdapter(new CanonicalPortfolioAdmissionEngine($clock), $stores['backtest']),
+        );
         $runtime = new CanonicalShadowRuntime(
             new EffectiveTradingConfigResolver(),
             new CanonicalSetupRuleRuntime(self::passingConditions()),
             new CanonicalExecutionPolicyCompiler(),
             $builder,
-            DayTradingShadowRuntimeTest::fixtureSelector($fakeAdapter),
+            $selector,
             $clock,
         );
         $sharedRequest = new ShadowRuntimeRequest(
@@ -341,8 +358,9 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame('scalping_shadow_non_limit_plan_forbidden', $outcome->reasonCode);
         self::assertNull($outcome->orderPlan);
         self::assertNull($outcome->reservation);
-        self::assertSame(1, $store->scopeVersion($request->portfolioScope));
-        self::assertNull($store->plan($request->portfolioScope, $request->decisionKey));
+        $selectedStore = $stores[$capability->value];
+        self::assertSame(1, $selectedStore->scopeVersion($request->portfolioScope));
+        self::assertNull($selectedStore->plan($request->portfolioScope, $request->decisionKey));
     }
 
     /** @return iterable<string, array{string, string}> */
@@ -353,8 +371,19 @@ final class ScalpingShadowRuntimeTest extends TestCase
         yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 
+    /** @return iterable<string, array{ShadowExecutionCapability}> */
+    public static function executionCapabilities(): iterable
+    {
+        yield 'fake' => [ShadowExecutionCapability::Fake];
+        yield 'paper' => [ShadowExecutionCapability::Paper];
+        yield 'backtest' => [ShadowExecutionCapability::Backtest];
+    }
+
     /** @param list<string> $failingConditionTimeframes */
-    public static function fixtureRuntime(array $failingConditionTimeframes = []): ScalpingShadowRuntime
+    public static function fixtureRuntime(
+        array $failingConditionTimeframes = [],
+        ?CanonicalPortfolioAdapterSelector $adapters = null,
+    ): ScalpingShadowRuntime
     {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
@@ -363,7 +392,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
             new CanonicalSetupRuleRuntime(self::passingConditions($failingConditionTimeframes)),
             new CanonicalExecutionPolicyCompiler(),
             new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)),
-            DayTradingShadowRuntimeTest::fixtureSelector(),
+            $adapters ?? DayTradingShadowRuntimeTest::fixtureSelector(),
             $clock,
         );
     }
