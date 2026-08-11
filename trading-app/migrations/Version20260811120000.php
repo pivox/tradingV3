@@ -35,10 +35,7 @@ WITH eligible_ledger AS (
             THEN COALESCE(ledger.notional, ledger.price * ledger.quantity)
         END AS valid_notional,
         CASE
-            WHEN ledger.fee_usdt >= 0
-             AND upper(trim(ledger.fee_currency)) = 'USDT'
-             AND (ledger.fee_amount IS NULL OR ledger.fee_amount >= 0)
-            THEN ledger.fee_usdt
+            WHEN ledger.fee_usdt >= 0 THEN ledger.fee_usdt
         END AS normalized_fee_usdt,
         ledger.quality_flags IN ('[]'::jsonb, '{}'::jsonb, 'null'::jsonb)
             AND (ledger.spread_cost_usdt IS NULL OR ledger.spread_cost_usdt >= 0)

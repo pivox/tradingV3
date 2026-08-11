@@ -755,7 +755,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'slippage_cost_usdt' => 0.02, 'borrow_cost_usdt' => 0.0,
         ]);
         $this->ledgerFill('BTCUSDT', $internalTradeId, 'position-helper-complete', 'helper-entry-b', 'entry', 101.0, 0.6, '2026-08-11 10:00:20+00', [
-            'fee_amount' => 0.03, 'fee_currency' => 'USDT', 'fee_usdt' => 0.03,
+            // Provider raw fee metadata is not a certification input once fee_usdt is normalized.
+            'fee_amount' => -0.50, 'fee_currency' => 'USDC', 'fee_usdt' => 0.03,
             'funding_usdt' => -0.05, 'spread_cost_usdt' => 0.01,
             'slippage_cost_usdt' => 0.03, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
         ]);
