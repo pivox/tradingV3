@@ -7,21 +7,25 @@ identity.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.backtesting.contracts import MarketType
+from app.backtesting.contracts import DatasetDescriptor, MarketType
 
 
 _CANDLE_SCHEMA_VERSION = "backtest-candle.v1"
 _QUALITY_SCHEMA_VERSION = "backtest-dataset-quality.v1"
+_MANIFEST_SCHEMA_VERSION = "backtest-dataset-manifest.v1"
+_DATASET_BUILD_VERSION = "backtest-dataset-builder.v1"
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _CANONICAL_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*(?:\.[0-9]*[1-9])?)$")
 
@@ -68,6 +72,34 @@ def _canonical_decimal(value: object) -> str:
     if not isinstance(value, str) or _CANONICAL_DECIMAL_PATTERN.fullmatch(value) is None:
         raise ValueError("value must be a canonical decimal string")
     return value
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return _json_value(value.model_dump())
+    if isinstance(value, datetime):
+        normalized = _require_utc(value)
+        return normalized.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        _json_value(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _sha256(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 class CandleRecord(BaseModel):
@@ -509,3 +541,181 @@ class DatasetBuilder:
                 flags.add(mixed_flag)
             if observed != {expected}:
                 flags.add("source_identity_mismatch")
+
+
+class DatasetArtifacts(BaseModel):
+    """The three canonical artifact bytes plus their derived descriptor."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    candles_ndjson: bytes = Field(..., min_length=1)
+    quality_report_json: bytes = Field(..., min_length=1)
+    manifest_json: bytes = Field(..., min_length=1)
+    descriptor: DatasetDescriptor
+
+
+class DatasetArtifactVerificationError(Exception):
+    """Stable fail-closed rejection that never includes artifact contents."""
+
+    reason_code = "dataset_artifact_verification_failed"
+
+    def __init__(self) -> None:
+        super().__init__(self.reason_code)
+
+
+def _manifest_core(result: DatasetBuildResult) -> dict[str, Any]:
+    return {
+        "build_version": _DATASET_BUILD_VERSION,
+        "coverage": {
+            "end_at": result.end_at,
+            "record_count": result.record_count,
+            "start_at": result.start_at,
+            "symbols": result.symbols,
+            "timeframes": tuple(item.value for item in result.timeframes),
+        },
+        "quality_flags": result.quality_report.quality_flags,
+        "quality_report_schema_version": result.quality_report.schema_version,
+        "record_schema_version": _CANDLE_SCHEMA_VERSION,
+        "schema_version": _MANIFEST_SCHEMA_VERSION,
+        "source": result.source_identity,
+    }
+
+
+def _dataset_checksum(
+    manifest_core: Mapping[str, Any],
+    candles_checksum: str,
+    quality_report_checksum: str,
+) -> str:
+    checksum_payload = _canonical_json(
+        {
+            "candles_checksum": candles_checksum,
+            "manifest_core": manifest_core,
+            "quality_report_checksum": quality_report_checksum,
+        }
+    )
+    return _sha256(checksum_payload)
+
+
+def _manifest(
+    result: DatasetBuildResult,
+    candles_checksum: str,
+    quality_report_checksum: str,
+) -> dict[str, Any]:
+    core = _json_value(_manifest_core(result))
+    dataset_checksum = _dataset_checksum(
+        core,
+        candles_checksum,
+        quality_report_checksum,
+    )
+    return {
+        **core,
+        "artifacts": {
+            "candles.ndjson": candles_checksum,
+            "quality-report.json": quality_report_checksum,
+        },
+        "dataset_checksum": dataset_checksum,
+        "dataset_id": "backtest-dataset-"
+        + dataset_checksum.removeprefix("sha256:"),
+    }
+
+
+def _parse_canonical_json_file(payload: bytes) -> Any:
+    if not payload.endswith(b"\n") or payload.endswith(b"\n\n"):
+        raise ValueError("canonical JSON file must have one trailing newline")
+    decoded = json.loads(payload[:-1].decode("utf-8"))
+    if _canonical_json(decoded) + b"\n" != payload:
+        raise ValueError("JSON file is not canonical")
+    return decoded
+
+
+class DatasetSerializer:
+    """Serialize and cross-verify deterministic in-memory dataset artifacts."""
+
+    @classmethod
+    def serialize(cls, result: DatasetBuildResult) -> DatasetArtifacts:
+        if not isinstance(result, DatasetBuildResult):
+            raise TypeError("DatasetSerializer accepts only DatasetBuildResult")
+        validated_result = DatasetBuildResult(**result.model_dump())
+        candles_ndjson = b"".join(
+            _canonical_json(record) + b"\n" for record in validated_result.records
+        )
+        quality_report_json = (
+            _canonical_json(validated_result.quality_report) + b"\n"
+        )
+        manifest = _manifest(
+            validated_result,
+            _sha256(candles_ndjson),
+            _sha256(quality_report_json),
+        )
+        manifest_json = _canonical_json(manifest) + b"\n"
+        artifacts = DatasetArtifacts(
+            candles_ndjson=candles_ndjson,
+            quality_report_json=quality_report_json,
+            manifest_json=manifest_json,
+            descriptor=DatasetDescriptor.from_manifest(manifest),
+        )
+        cls.verify(artifacts)
+        return artifacts
+
+    @classmethod
+    def verify(cls, artifacts: DatasetArtifacts) -> DatasetDescriptor:
+        try:
+            if not isinstance(artifacts, DatasetArtifacts):
+                raise TypeError("DatasetSerializer verifies only DatasetArtifacts")
+
+            manifest = _parse_canonical_json_file(artifacts.manifest_json)
+            if not isinstance(manifest, dict):
+                raise ValueError("dataset manifest must be an object")
+            descriptor = DatasetDescriptor.from_manifest(manifest)
+            if descriptor != artifacts.descriptor:
+                raise ValueError("dataset descriptor does not match manifest")
+
+            expected_candles_checksum = manifest["artifacts"]["candles.ndjson"]
+            expected_report_checksum = manifest["artifacts"]["quality-report.json"]
+            if _sha256(artifacts.candles_ndjson) != expected_candles_checksum:
+                raise ValueError("candles checksum mismatch")
+            if _sha256(artifacts.quality_report_json) != expected_report_checksum:
+                raise ValueError("quality report checksum mismatch")
+
+            report_payload = _parse_canonical_json_file(
+                artifacts.quality_report_json
+            )
+            report = DatasetQualityReport.model_validate_json(
+                _canonical_json(report_payload)
+            )
+
+            if not artifacts.candles_ndjson.endswith(b"\n") or (
+                artifacts.candles_ndjson.endswith(b"\n\n")
+            ):
+                raise ValueError("candles file must have one trailing newline")
+            lines = artifacts.candles_ndjson[:-1].split(b"\n")
+            if not lines or any(not line for line in lines):
+                raise ValueError("candles file must contain canonical records")
+            records: list[CandleRecord] = []
+            for line in lines:
+                record = CandleRecord.model_validate_json(line)
+                if _canonical_json(record) != line:
+                    raise ValueError("candle record is not canonical")
+                records.append(record)
+
+            source = DatasetSourceIdentity.model_validate_json(
+                _canonical_json(manifest["source"])
+            )
+            result = DatasetBuilder(source).build(records)
+            if result.quality_report != report:
+                raise ValueError("quality report does not match candle records")
+
+            expected_manifest = _manifest(
+                result,
+                expected_candles_checksum,
+                expected_report_checksum,
+            )
+            if manifest != expected_manifest:
+                raise ValueError("manifest facts or checksum graph mismatch")
+            if _canonical_json(expected_manifest) + b"\n" != artifacts.manifest_json:
+                raise ValueError("manifest bytes are not canonical")
+            return descriptor
+        except DatasetArtifactVerificationError:
+            raise
+        except Exception as exc:
+            raise DatasetArtifactVerificationError() from exc

@@ -13,7 +13,7 @@ from collections.abc import Mapping as MappingAbc
 from datetime import datetime, timezone
 from enum import Enum
 from math import isclose, isfinite
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Literal, Mapping
 
 from pydantic import (
     BaseModel,
@@ -150,24 +150,33 @@ def _deep_thaw(value: Any) -> Any:
 
 
 class DatasetDescriptor(BaseModel):
-    """Immutable descriptor for a versioned backtest dataset."""
+    """Immutable facts reconstructed from a canonical dataset manifest."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    dataset_id: str = Field(..., min_length=1)
+    dataset_id: str = Field(..., pattern=r"^backtest-dataset-[0-9a-f]{64}$")
+    schema_version: Literal["backtest-dataset-manifest.v1"]
+    record_schema_version: Literal["backtest-candle.v1"]
+    quality_report_schema_version: Literal["backtest-dataset-quality.v1"]
+    build_version: str = Field(..., min_length=1)
     source: str = Field(..., min_length=1)
-    exchange: str = Field(..., min_length=1)
+    source_schema_version: str = Field(..., min_length=1)
+    source_build_version: str = Field(..., min_length=1)
+    source_checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    source_network: str = Field(..., min_length=1)
+    market_data_venue: str = Field(..., min_length=1)
     market_type: MarketType
     symbols: tuple[str, ...] = Field(..., min_length=1)
     timeframes: tuple[str, ...] = Field(..., min_length=1)
     start_at: datetime
     end_at: datetime
-    missing_ranges: tuple[str, ...] = ()
+    record_count: int = Field(..., ge=1)
+    candles_checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    quality_report_checksum: str = Field(..., pattern=_SHA256_PATTERN)
     quality_flags: tuple[str, ...] = ()
-    build_version: str = Field(..., min_length=1)
-    checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    dataset_checksum: str = Field(..., pattern=_SHA256_PATTERN)
 
-    @field_validator("symbols", "timeframes", "missing_ranges", "quality_flags", mode="before")
+    @field_validator("symbols", "timeframes", "quality_flags", mode="before")
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
         return _normalize_string_tuple(value)
@@ -181,7 +190,94 @@ class DatasetDescriptor(BaseModel):
     def _validate_bounds(self) -> "DatasetDescriptor":
         if self.end_at <= self.start_at:
             raise ValueError("dataset end_at must be after start_at")
+        if self.symbols != tuple(sorted(set(self.symbols))):
+            raise ValueError("dataset symbols must be unique and sorted")
+        timeframe_order = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "1h": 3600,
+            "4h": 14400,
+        }
+        if any(item not in timeframe_order for item in self.timeframes):
+            raise ValueError("dataset contains unsupported timeframe")
+        if self.timeframes != tuple(
+            sorted(set(self.timeframes), key=timeframe_order.__getitem__)
+        ):
+            raise ValueError("dataset timeframes must be unique and duration-sorted")
+        checksum_hex = self.dataset_checksum.removeprefix("sha256:")
+        if self.dataset_id != f"backtest-dataset-{checksum_hex}":
+            raise ValueError("dataset_id must derive from dataset_checksum")
         return self
+
+    @classmethod
+    def from_manifest(cls, manifest: Mapping[str, Any]) -> "DatasetDescriptor":
+        """Reconstruct the descriptor solely from exact manifest facts."""
+
+        expected_top_level = {
+            "artifacts",
+            "build_version",
+            "coverage",
+            "dataset_checksum",
+            "dataset_id",
+            "quality_flags",
+            "quality_report_schema_version",
+            "record_schema_version",
+            "schema_version",
+            "source",
+        }
+        if set(manifest) != expected_top_level:
+            raise ValueError("dataset manifest fields are invalid")
+        source = manifest["source"]
+        coverage = manifest["coverage"]
+        artifacts = manifest["artifacts"]
+        if not isinstance(source, MappingAbc) or set(source) != {
+            "market_data_venue",
+            "market_type",
+            "source",
+            "source_build_version",
+            "source_checksum",
+            "source_network",
+            "source_schema_version",
+        }:
+            raise ValueError("dataset manifest source is invalid")
+        if not isinstance(coverage, MappingAbc) or set(coverage) != {
+            "end_at",
+            "record_count",
+            "start_at",
+            "symbols",
+            "timeframes",
+        }:
+            raise ValueError("dataset manifest coverage is invalid")
+        if not isinstance(artifacts, MappingAbc) or set(artifacts) != {
+            "candles.ndjson",
+            "quality-report.json",
+        }:
+            raise ValueError("dataset manifest artifacts are invalid")
+
+        return cls(
+            dataset_id=manifest["dataset_id"],
+            schema_version=manifest["schema_version"],
+            record_schema_version=manifest["record_schema_version"],
+            quality_report_schema_version=manifest["quality_report_schema_version"],
+            build_version=manifest["build_version"],
+            source=source["source"],
+            source_schema_version=source["source_schema_version"],
+            source_build_version=source["source_build_version"],
+            source_checksum=source["source_checksum"],
+            source_network=source["source_network"],
+            market_data_venue=source["market_data_venue"],
+            market_type=source["market_type"],
+            symbols=coverage["symbols"],
+            timeframes=coverage["timeframes"],
+            start_at=coverage["start_at"],
+            end_at=coverage["end_at"],
+            record_count=coverage["record_count"],
+            candles_checksum=artifacts["candles.ndjson"],
+            quality_report_checksum=artifacts["quality-report.json"],
+            quality_flags=manifest["quality_flags"],
+            dataset_checksum=manifest["dataset_checksum"],
+        )
 
 
 class EffectiveConfigSnapshot(BaseModel):

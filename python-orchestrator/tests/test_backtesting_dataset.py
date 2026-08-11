@@ -1,22 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.backtesting.contracts import MarketType
+from app.backtesting.contracts import DatasetDescriptor, MarketType
 from app.backtesting.dataset import (
     CandleRecord,
+    DatasetArtifactVerificationError,
+    DatasetArtifacts,
     DatasetBuilder,
     DatasetBuildRejected,
     DatasetBuildResult,
     DatasetQualityReport,
     DatasetSourceIdentity,
     DatasetStreamQuality,
+    DatasetSerializer,
     MissingRange,
     Timeframe,
 )
+
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "backtesting"
 
 
 def _utc(value: str) -> datetime:
@@ -86,6 +95,44 @@ def _candle_at(
     }
     payload.update(overrides)
     return _candle(**payload)
+
+
+def _golden_records() -> tuple[CandleRecord, ...]:
+    return (
+        _candle_at(0),
+        _candle_at(
+            1,
+            open="101",
+            high="103",
+            low="100",
+            close="102",
+            volume="2.5",
+        ),
+        _candle_at(
+            0,
+            symbol="ETHUSDT",
+            timeframe="5m",
+            open="200",
+            high="205",
+            low="198",
+            close="204",
+            volume="12.25",
+            available_at=_utc("2026-01-01T00:05:02"),
+        ),
+    )
+
+
+def _sha256(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _canonical_json(payload: object) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 @pytest.mark.parametrize(
@@ -525,3 +572,116 @@ def test_build_result_rejects_forged_quality_evidence(forgery: str) -> None:
 
     with pytest.raises(ValidationError, match="quality report must match records"):
         DatasetBuildResult(**payload)
+
+
+def test_serializer_matches_golden_bytes_and_is_permutation_invariant() -> None:
+    builder = DatasetBuilder(_source())
+    forward = DatasetSerializer.serialize(builder.build(_golden_records()))
+    reverse = DatasetSerializer.serialize(builder.build(reversed(_golden_records())))
+
+    assert forward == reverse
+    assert forward.candles_ndjson == (_FIXTURE_DIR / "candles-v1.ndjson").read_bytes()
+    assert forward.quality_report_json == (
+        _FIXTURE_DIR / "quality-report-v1.json"
+    ).read_bytes()
+    assert forward.manifest_json == (_FIXTURE_DIR / "manifest-v1.json").read_bytes()
+    for payload in (
+        forward.candles_ndjson,
+        forward.quality_report_json,
+        forward.manifest_json,
+    ):
+        payload.decode("utf-8")
+        assert payload.endswith(b"\n")
+        assert not payload.endswith(b"\n\n")
+
+
+def test_manifest_checksum_graph_recomputes_from_exact_fixture_bytes() -> None:
+    candles = (_FIXTURE_DIR / "candles-v1.ndjson").read_bytes()
+    report = (_FIXTURE_DIR / "quality-report-v1.json").read_bytes()
+    manifest_bytes = (_FIXTURE_DIR / "manifest-v1.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+
+    assert manifest["artifacts"] == {
+        "candles.ndjson": _sha256(candles),
+        "quality-report.json": _sha256(report),
+    }
+    manifest_core = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+    }
+    checksum_payload = _canonical_json(
+        {
+            "candles_checksum": manifest["artifacts"]["candles.ndjson"],
+            "manifest_core": manifest_core,
+            "quality_report_checksum": manifest["artifacts"]["quality-report.json"],
+        }
+    )
+    expected_dataset_checksum = _sha256(checksum_payload)
+
+    assert manifest["dataset_checksum"] == expected_dataset_checksum
+    assert manifest["dataset_id"] == (
+        "backtest-dataset-" + expected_dataset_checksum.removeprefix("sha256:")
+    )
+    assert manifest_bytes == _canonical_json(manifest) + b"\n"
+
+
+def test_descriptor_is_derived_from_and_agrees_with_manifest_facts() -> None:
+    artifacts = DatasetSerializer.serialize(
+        DatasetBuilder(_source()).build(_golden_records())
+    )
+    manifest = json.loads(artifacts.manifest_json)
+    descriptor = artifacts.descriptor
+
+    assert descriptor == DatasetDescriptor.from_manifest(manifest)
+    assert descriptor.schema_version == "backtest-dataset-manifest.v1"
+    assert descriptor.record_schema_version == "backtest-candle.v1"
+    assert descriptor.quality_report_schema_version == "backtest-dataset-quality.v1"
+    assert descriptor.build_version == "backtest-dataset-builder.v1"
+    assert descriptor.source == "paper-fixture"
+    assert descriptor.source_schema_version == "paper-market-events.v1"
+    assert descriptor.source_build_version == "paper-exporter.v3"
+    assert descriptor.source_checksum == "sha256:" + "a" * 64
+    assert descriptor.source_network == "fake"
+    assert descriptor.market_data_venue == "fake"
+    assert descriptor.market_type is MarketType.PERPETUAL
+    assert descriptor.symbols == ("BTCUSDT", "ETHUSDT")
+    assert descriptor.timeframes == ("1m", "5m")
+    assert descriptor.start_at == _utc("2026-01-01T00:00:00")
+    assert descriptor.end_at == _utc("2026-01-01T00:05:00")
+    assert descriptor.record_count == 3
+    assert descriptor.candles_checksum == manifest["artifacts"]["candles.ndjson"]
+    assert descriptor.quality_report_checksum == (
+        manifest["artifacts"]["quality-report.json"]
+    )
+    assert descriptor.quality_flags == ()
+    assert descriptor.dataset_checksum == manifest["dataset_checksum"]
+
+    for contract in (DatasetArtifacts, DatasetDescriptor):
+        assert set(contract.model_fields).isdisjoint(
+            {"profile", "mode", "mode_id", "setup", "setup_id", "alias"}
+        )
+    assert "generated_at" not in manifest
+    assert "created_at" not in manifest
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ("candles_ndjson", "quality_report_json", "manifest_json", "descriptor"),
+)
+def test_cross_verification_rejects_any_tampered_artifact(
+    artifact_name: str,
+) -> None:
+    artifacts = DatasetSerializer.serialize(
+        DatasetBuilder(_source()).build(_golden_records())
+    )
+    if artifact_name == "descriptor":
+        replacement: object = artifacts.descriptor.model_copy(
+            update={"record_count": 999}
+        )
+    else:
+        replacement = getattr(artifacts, artifact_name) + b" "
+    tampered = artifacts.model_copy(update={artifact_name: replacement})
+
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(tampered)

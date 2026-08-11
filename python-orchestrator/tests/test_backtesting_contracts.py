@@ -24,19 +24,36 @@ def _dt(value: str) -> datetime:
 
 
 def _dataset() -> DatasetDescriptor:
-    return DatasetDescriptor(
-        dataset_id="ds_btc_2026_01",
-        source="fixture",
-        exchange="fake",
-        market_type=MarketType.PERPETUAL,
-        symbols=("BTCUSDT", "ETHUSDT"),
-        timeframes=("1m", "5m", "15m"),
-        start_at=_dt("2026-01-01T00:00:00"),
-        end_at=_dt("2026-01-31T00:00:00"),
-        missing_ranges=(),
-        quality_flags=(),
-        build_version="dataset-builder-v1",
-        checksum="sha256:" + "a" * 64,
+    return DatasetDescriptor.from_manifest(
+        {
+            "schema_version": "backtest-dataset-manifest.v1",
+            "record_schema_version": "backtest-candle.v1",
+            "quality_report_schema_version": "backtest-dataset-quality.v1",
+            "build_version": "backtest-dataset-builder.v1",
+            "source": {
+                "source": "fixture",
+                "source_schema_version": "fixture-candles.v1",
+                "source_build_version": "fixture-builder.v1",
+                "source_checksum": "sha256:" + "d" * 64,
+                "source_network": "fake",
+                "market_data_venue": "fake",
+                "market_type": "perpetual",
+            },
+            "coverage": {
+                "symbols": ["BTCUSDT", "ETHUSDT"],
+                "timeframes": ["1m", "5m", "15m"],
+                "start_at": "2026-01-01T00:00:00Z",
+                "end_at": "2026-01-31T00:00:00Z",
+                "record_count": 100,
+            },
+            "quality_flags": [],
+            "artifacts": {
+                "candles.ndjson": "sha256:" + "b" * 64,
+                "quality-report.json": "sha256:" + "c" * 64,
+            },
+            "dataset_checksum": "sha256:" + "a" * 64,
+            "dataset_id": "backtest-dataset-" + "a" * 64,
+        }
     )
 
 
