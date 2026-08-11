@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Scalping;
 
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Lineage\LineageContextException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTarget;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use Brick\Math\BigDecimal;
 
@@ -169,6 +173,34 @@ final readonly class ScalpingNetReport
 
         $snapshot = $lineage->effectiveConfigSnapshot->toArray();
         $request = $snapshot['request'] ?? null;
+        $config = $snapshot['config'] ?? null;
+        $snapshotConfigHash = $snapshot['config_hash'] ?? null;
+        $snapshotCatalogHash = $snapshot['condition_catalog_hash'] ?? null;
+        if (!\is_array($config) || !\is_string($snapshotConfigHash) || !\is_string($snapshotCatalogHash)) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_hash_invalid');
+        }
+        try {
+            $recomputedConfigHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash(
+                $config,
+                $snapshotCatalogHash,
+            );
+        } catch (LineageContextException|\JsonException $exception) {
+            throw new \InvalidArgumentException(
+                'scalping_net_report_lineage_snapshot_hash_invalid',
+                0,
+                $exception,
+            );
+        }
+        if (
+            !hash_equals($recomputedConfigHash, $snapshotConfigHash)
+            || !hash_equals($recomputedConfigHash, (string) $lineage->configHash)
+        ) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_hash_invalid');
+        }
+        $environment = $config['environment'] ?? null;
+        if (!\is_array($environment) || ($environment['write_enabled'] ?? null) !== false) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_readonly_invalid');
+        }
         if (
             !$lineage->effectiveConfigSnapshot->executable()
             || !\is_array($request)
@@ -205,6 +237,11 @@ final readonly class ScalpingNetReport
             || $plan->setupVersion !== '1.1.0'
         ) {
             throw new \InvalidArgumentException('scalping_net_report_plan_identity_mismatch');
+        }
+        try {
+            CanonicalOrderPlanValidator::validateAt($plan, $plan->createdAt);
+        } catch (CanonicalOrderPlanException|\JsonException $exception) {
+            throw new \InvalidArgumentException('scalping_net_report_plan_invalid', 0, $exception);
         }
         if (!self::validHash($plan->planHash) || !self::validHash($plan->costInputHash) || !self::validHashes($plan->inputHashes)) {
             throw new \InvalidArgumentException('scalping_net_report_plan_hash_invalid');

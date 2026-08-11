@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Scalping;
 
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
@@ -139,6 +140,147 @@ final class ScalpingNetReportTest extends TestCase
         ScalpingNetReport::fromOutcomes([$planned, $planned]);
     }
 
+    public function testRejectsSnapshotConfigMutationWhenStoredHashesWereNotRecomputed(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        $mutatedLineage = self::mutateSerializedValue(
+            $planned->lineage,
+            's:13:"write_enabled";b:0;',
+            's:13:"write_enabled";b:1;',
+            LineageContext::class,
+        );
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $mutatedLineage,
+            $planned->orderPlan,
+            $planned->reservation,
+            $planned->evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_lineage_snapshot_hash_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    public function testRejectsWriteEnabledSnapshotEvenWhenEveryDependentHashWasRecomputed(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+        $forgedLineage = self::mutateSerializedValue(
+            $planned->lineage,
+            's:13:"write_enabled";b:0;',
+            's:13:"write_enabled";b:1;',
+            LineageContext::class,
+        );
+        self::assertNotNull($forgedLineage->effectiveConfigSnapshot);
+        $snapshot = $forgedLineage->effectiveConfigSnapshot->toArray();
+        $newConfigHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash(
+            $snapshot['config'],
+            $snapshot['condition_catalog_hash'],
+        );
+        $forgedLineage = self::mutateEverySerializedValue(
+            $forgedLineage,
+            serialize($planned->lineage->configHash),
+            serialize($newConfigHash),
+            LineageContext::class,
+        );
+        $forgedPlan = self::mutateSerializedValue(
+            $planned->orderPlan,
+            serialize($planned->orderPlan->configHash),
+            serialize($newConfigHash),
+            CanonicalOrderPlan::class,
+        );
+        $forgedPlan = self::mutateSerializedValue(
+            $forgedPlan,
+            serialize($planned->orderPlan->planHash),
+            serialize($forgedPlan->expectedPlanHash()),
+            CanonicalOrderPlan::class,
+        );
+        $forgedReservation = self::mutateSerializedValue(
+            $planned->reservation,
+            serialize($planned->reservation->configHash),
+            serialize($newConfigHash),
+            $planned->reservation::class,
+        );
+        $forgedReservation = self::mutateSerializedValue(
+            $forgedReservation,
+            serialize($planned->reservation->planHash),
+            serialize($forgedPlan->planHash),
+            $planned->reservation::class,
+        );
+        $forgedReservation = self::mutateSerializedValue(
+            $forgedReservation,
+            serialize($planned->reservation->stateHash),
+            serialize($forgedReservation->expectedStateHash()),
+            $planned->reservation::class,
+        );
+        $forgedEvidence = $planned->evidence;
+        $forgedEvidence['config_hash'] = $newConfigHash;
+        $forgedEvidence['plan_hash'] = $forgedPlan->planHash;
+        $forgedEvidence['reservation_hash'] = $forgedReservation->stateHash;
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $forgedLineage,
+            $forgedPlan,
+            $forgedReservation,
+            $forgedEvidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_lineage_snapshot_readonly_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    public function testCanonicalPlanValidationRejectsCoordinatedRewardAndHashForgery(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+        $target = $planned->orderPlan->targets[0];
+        $forgedPlan = self::mutateSerializedValue(
+            $planned->orderPlan,
+            serialize($target->grossReward),
+            serialize($target->grossReward + 0.01),
+            CanonicalOrderPlan::class,
+        );
+        $forgedPlan = self::mutateSerializedValue(
+            $forgedPlan,
+            serialize($planned->orderPlan->planHash),
+            serialize($forgedPlan->expectedPlanHash()),
+            CanonicalOrderPlan::class,
+        );
+        $forgedReservation = self::mutateSerializedValue(
+            $planned->reservation,
+            serialize($planned->reservation->planHash),
+            serialize($forgedPlan->planHash),
+            $planned->reservation::class,
+        );
+        $forgedReservation = self::mutateSerializedValue(
+            $forgedReservation,
+            serialize($planned->reservation->stateHash),
+            serialize($forgedReservation->expectedStateHash()),
+            $planned->reservation::class,
+        );
+        $forgedEvidence = $planned->evidence;
+        $forgedEvidence['plan_hash'] = $forgedPlan->planHash;
+        $forgedEvidence['reservation_hash'] = $forgedReservation->stateHash;
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $planned->lineage,
+            $forgedPlan,
+            $forgedReservation,
+            $forgedEvidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_plan_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
     public function testRejectsIncompleteLineageAndEveryPlanReservationHashMismatch(): void
     {
         $planned = self::plannedOutcomes()[0];
@@ -188,7 +330,7 @@ final class ScalpingNetReportTest extends TestCase
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $missingReference, $planned->orderPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_lineage_incomplete'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $foreignSetupPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_plan_identity_mismatch'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $badConfigPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_plan_identity_mismatch'],
-            [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $badPlanHashPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_plan_hash_invalid'],
+            [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $badPlanHashPlan, $planned->reservation, $planned->evidence), 'scalping_net_report_plan_invalid'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $badReservation, $planned->evidence), 'scalping_net_report_reservation_identity_mismatch'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $badReservationState, $planned->evidence), 'scalping_net_report_reservation_identity_mismatch'],
             [new ScalpingShadowOutcome('planned', $planned->reasonCode, $planned->lineage, $planned->orderPlan, $planned->reservation, $badEvidence), 'scalping_net_report_evidence_hash_mismatch'],
@@ -224,7 +366,7 @@ final class ScalpingNetReportTest extends TestCase
         );
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('scalping_net_report_plan_value_invalid');
+        $this->expectExceptionMessage('scalping_net_report_plan_invalid');
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
@@ -328,6 +470,23 @@ final class ScalpingNetReportTest extends TestCase
         $position = strpos($serialized, $from);
         self::assertNotFalse($position, 'Mutation source was not found in serialized fixture.');
         $serialized = substr_replace($serialized, $to, $position, strlen($from));
+        $mutated = unserialize($serialized, ['allowed_classes' => true]);
+        self::assertInstanceOf($class, $mutated);
+
+        return $mutated;
+    }
+
+    /**
+     * @template T of object
+     * @param T               $object
+     * @param class-string<T> $class
+     * @return T
+     */
+    private static function mutateEverySerializedValue(object $object, string $from, string $to, string $class): object
+    {
+        $serialized = serialize($object);
+        $serialized = str_replace($from, $to, $serialized, $replacements);
+        self::assertGreaterThan(0, $replacements, 'Mutation source was not found in serialized fixture.');
         $mutated = unserialize($serialized, ['allowed_classes' => true]);
         self::assertInstanceOf($class, $mutated);
 
