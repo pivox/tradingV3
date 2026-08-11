@@ -51,6 +51,35 @@ def write_minimum_eligible_fixture(tmp_path: Path, filename: str = "eligible.csv
     return destination
 
 
+@pytest.mark.parametrize("value", ["Infinity", "-Infinity", "NaN"])
+def test_parse_float_rejects_non_finite_csv_values(value: str) -> None:
+    module = load_module()
+
+    assert module.parse_float(value) is None
+
+
+@pytest.mark.parametrize("value", ["Infinity", "-Infinity", "NaN"])
+@pytest.mark.parametrize(
+    ("field", "exclusion_reason"),
+    [
+        ("net_pnl_usdt", "missing_net_pnl_usdt"),
+        ("realized_net_pnl_r", "missing_realized_net_pnl_r"),
+    ],
+)
+def test_non_finite_csv_kpi_values_cannot_certify_trade(
+    field: str,
+    exclusion_reason: str,
+    value: str,
+) -> None:
+    module = load_module()
+    with FIXTURE.open(newline="", encoding="utf-8") as source:
+        row = next(csv.DictReader(source))
+    row[field] = value
+
+    assert module.is_certified(row) is False
+    assert exclusion_reason in module.exclusion_reasons(row)
+
+
 def test_build_baseline_rejects_cell_minimum_below_global_contract() -> None:
     module = load_module()
 

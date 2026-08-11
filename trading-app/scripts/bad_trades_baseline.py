@@ -32,7 +32,8 @@ def parse_float(value: Any) -> float | None:
     normalized = str(value).strip()
     if normalized == "":
         return None
-    return float(normalized)
+    parsed = float(normalized)
+    return parsed if math.isfinite(parsed) else None
 
 
 def parse_datetime(value: Any) -> datetime:
