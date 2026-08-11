@@ -34,15 +34,19 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
             throw new TradingConfigException('Canonical resolution requires an EffectiveTradingConfigRequest; legacy positional profiles and fallback are forbidden.');
         }
 
-        $isDayTradingShadow = $request->modeId === 'day_trading' && $request->modeVersion === '1.1.0';
-        if ($isDayTradingShadow && $request->capability === null) {
-            throw new TradingConfigException('day_trading_shadow_capability_required');
+        $modernShadowIdentity = $request->modeId . '@' . $request->modeVersion;
+        $isModernShadow = in_array($modernShadowIdentity, [
+            'day_trading@1.1.0',
+            'scalping@1.1.0',
+        ], true);
+        if ($isModernShadow && $request->capability === null) {
+            throw new TradingConfigException($request->modeId . '_shadow_capability_required');
         }
-        if ($isDayTradingShadow && $request->capability === ShadowExecutionCapability::PrivateMainnet) {
+        if ($isModernShadow && $request->capability === ShadowExecutionCapability::PrivateMainnet) {
             throw new TradingConfigException('private_mainnet_execution_forbidden');
         }
-        if ($isDayTradingShadow && $request->capability === ShadowExecutionCapability::Backtest && $request->exchange !== 'fake') {
-            throw new TradingConfigException('day_trading_backtest_requires_fake_exchange');
+        if ($isModernShadow && $request->capability === ShadowExecutionCapability::Backtest && $request->exchange !== 'fake') {
+            throw new TradingConfigException($request->modeId . '_backtest_requires_fake_exchange');
         }
 
         $modeLoader = $this->modeContracts ?? new ModeContractLoader();

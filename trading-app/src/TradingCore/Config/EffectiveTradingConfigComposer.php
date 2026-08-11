@@ -21,6 +21,7 @@ final class EffectiveTradingConfigComposer
         'exchange.fees.maker_rate',
         'exchange.fees.taker_rate',
         'exchange.funding.interval',
+        'exchange.limits.max_notional',
     ];
 
     /** @param list<TradingConfigLayer> $layers */
@@ -65,7 +66,7 @@ final class EffectiveTradingConfigComposer
             if (!$this->hasCompatibleOverrideType($path, $current, $value)) {
                 throw new TradingConfigException(sprintf('mode_exchange override type mismatch at "%s".', $path));
             }
-            $this->assertOverrideValue($path, $current, $value);
+            $this->assertOverrideValue($path, $current, $value, $payload);
             $this->writePath($payload, $path, $this->normalize($value, $path));
             $this->clearProvenance($provenance, $path);
             $this->recordLeaves($provenance, $path, $value, $pair->toLogContext());
@@ -75,7 +76,7 @@ final class EffectiveTradingConfigComposer
         $payload['environment'] = $this->normalize($environment->config['environment'], 'environment');
         $this->recordLeaves($provenance, 'environment', $environment->config['environment'], $environment->toLogContext());
         $this->assertRequestIdentity($request, $payload);
-        $this->assertSafety($payload);
+        $this->assertSafety($payload, array_key_exists('exchange.limits.max_notional', $overrides));
 
         $canonical = $this->canonicalize($payload);
         $canonicalCatalogHash = $conditionCatalogHash === null
@@ -268,7 +269,7 @@ final class EffectiveTradingConfigComposer
     }
 
     /** @param array<string,mixed> $payload */
-    private function assertSafety(array $payload): void
+    private function assertSafety(array $payload, bool $hasExplicitExchangeNotionalCap): void
     {
         $safety = $this->mapping($payload['safety'], 'safety');
         foreach (['mainnet_write_enabled' => false, 'demo_testnet_write_enabled' => false, 'require_stop_loss' => true, 'kill_switch_enabled' => true] as $key => $required) {
@@ -292,9 +293,12 @@ final class EffectiveTradingConfigComposer
             throw new TradingConfigException('Every #133 exchange requires capabilities.stop_loss=true.');
         }
         $limits = $this->mapping($exchange['limits'], 'exchange.limits');
-        if ($environment['max_notional'] > $limits['max_notional']) {
+        if (!$hasExplicitExchangeNotionalCap && $environment['max_notional'] > $limits['max_notional']) {
             throw new TradingConfigException('Environment max_notional cannot exceed the exchange max_notional safety limit.');
         }
+        // An explicit mode/exchange override is already validated as a tightening
+        // cap. The canonical risk engine applies the minimum of that cap and the
+        // independent environment cap, so a stricter pair cap remains admissible.
     }
 
     /**
@@ -351,7 +355,8 @@ final class EffectiveTradingConfigComposer
         if ($limits['min_notional'] > $limits['max_notional']) throw new TradingConfigException('exchange.limits.min_notional cannot exceed max_notional.');
     }
 
-    private function assertOverrideValue(string $path, mixed $current, mixed $value): void
+    /** @param array<string,mixed> $payload */
+    private function assertOverrideValue(string $path, mixed $current, mixed $value, array $payload): void
     {
         if (in_array($path, [
             'mode.risk.trade_budget.value',
@@ -395,6 +400,18 @@ final class EffectiveTradingConfigComposer
             return;
         }
 
+        if ($path === 'exchange.limits.max_notional') {
+            $this->assertPositiveFinite($value, $path);
+            $minimum = $this->readPath($payload, 'exchange.limits.min_notional');
+            if ($value < $minimum) {
+                throw new TradingConfigException($path . ' must be greater than or equal to exchange.limits.min_notional.');
+            }
+            if ($value > $current) {
+                throw new TradingConfigException(sprintf('mode_exchange override at "%s" must tighten or preserve the existing cap.', $path));
+            }
+            return;
+        }
+
         if ($path === 'mode.order_policy.value' && $value !== $current) {
             throw new TradingConfigException('mode_exchange order policy cannot weaken or alter the canonical mode policy.');
         }
@@ -408,6 +425,7 @@ final class EffectiveTradingConfigComposer
             'mode.leverage.value',
             'exchange.fees.maker_rate',
             'exchange.fees.taker_rate',
+            'exchange.limits.max_notional',
         ], true)) {
             return (is_int($current) || is_float($current)) && (is_int($value) || is_float($value));
         }
@@ -428,6 +446,16 @@ final class EffectiveTradingConfigComposer
             throw new TradingConfigException(sprintf('%s must be a finite number.', $path));
         }
         if ($value < 0) throw new TradingConfigException(sprintf('%s must be non-negative.', $path));
+    }
+
+    private function assertPositiveFinite(mixed $value, string $path): void
+    {
+        if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)) {
+            throw new TradingConfigException(sprintf('%s must be a finite number.', $path));
+        }
+        if ($value <= 0) {
+            throw new TradingConfigException(sprintf('%s must be positive.', $path));
+        }
     }
 
     private function assertIsoDuration(mixed $value, string $path): void

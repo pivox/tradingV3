@@ -15,6 +15,12 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(EffectiveTradingConfigResolver::class)]
 final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
 {
+    private const SCALPING_SETUPS = [
+        ['scalping.trend_continuation.long', 'long'],
+        ['scalping.pullback.long', 'long'],
+        ['scalping.trend_momentum.short', 'short'],
+    ];
+
     /** @dataProvider modernSafeTargetProvider */
     public function testKnownModernTargetsReachContractGateButCannotExecuteDrafts(string $exchange, string $environment): void
     {
@@ -75,5 +81,117 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
             'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
             'okx', 'mainnet', 'long', ShadowExecutionCapability::PrivateMainnet,
         ));
+    }
+
+    /** @dataProvider rejectedDayTradingCapabilityProvider */
+    public function testDayTradingShadowPreservesExactCapabilityFailureReasons(
+        ?ShadowExecutionCapability $capability,
+        string $reason,
+    ): void {
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage($reason);
+
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            $capability === ShadowExecutionCapability::Backtest ? 'okx' : 'fake',
+            $capability === ShadowExecutionCapability::Backtest ? 'demo' : 'test',
+            'long', $capability,
+        ));
+    }
+
+    /** @return iterable<string,array{?ShadowExecutionCapability,string}> */
+    public static function rejectedDayTradingCapabilityProvider(): iterable
+    {
+        yield 'missing capability' => [null, 'day_trading_shadow_capability_required'];
+        yield 'non-fake backtest' => [ShadowExecutionCapability::Backtest, 'day_trading_backtest_requires_fake_exchange'];
+    }
+
+    /** @dataProvider scalpingShadowTargetProvider */
+    public function testScalpingShadowResolvesThroughSixStrictModernLayers(
+        string $setupId,
+        string $side,
+        string $exchange,
+        string $environment,
+        ShadowExecutionCapability $capability,
+    ): void {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            $exchange, $environment, $side, $capability,
+        ));
+        $payload = $snapshot->payload();
+        $serializedLayers = json_encode($snapshot->orderedLayers(), JSON_THROW_ON_ERROR);
+
+        self::assertSame(
+            ['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'],
+            array_column($snapshot->orderedLayers(), 'type'),
+        );
+        self::assertSame('scalping', $payload['mode']['mode_id']);
+        self::assertSame('1.1.0', $payload['mode']['mode_version']);
+        self::assertSame($setupId, $payload['setup']['setup_id']);
+        self::assertSame('1.1.0', $payload['setup']['setup_version']);
+        self::assertSame($side, $payload['setup']['side']);
+        self::assertSame($exchange, $payload['exchange']['id']);
+        self::assertSame(25.0, $payload['exchange']['limits']['max_notional']);
+        self::assertSame(3.0, $payload['mode']['leverage']['value']);
+        self::assertFalse($payload['environment']['write_enabled']);
+        self::assertTrue($payload['environment']['dry_run']);
+        self::assertSame($capability->value, $snapshot->request->toArray()['execution_capability']);
+        self::assertMatchesRegularExpression('/^sha256:[a-f0-9]{64}$/', $snapshot->configHash);
+        self::assertDoesNotMatchRegularExpression('/\bscalper\b/', $serializedLayers);
+    }
+
+    /** @return iterable<string,array{string,string,string,string,ShadowExecutionCapability}> */
+    public static function scalpingShadowTargetProvider(): iterable
+    {
+        $targets = [
+            'Fake test' => ['fake', 'test', ShadowExecutionCapability::Fake],
+            'OKX demo Paper' => ['okx', 'demo', ShadowExecutionCapability::Paper],
+            'Hyperliquid testnet Paper' => ['hyperliquid', 'testnet', ShadowExecutionCapability::Paper],
+            'OKX mainnet public read-only' => ['okx', 'mainnet', ShadowExecutionCapability::Paper],
+            'Hyperliquid mainnet public read-only' => ['hyperliquid', 'mainnet', ShadowExecutionCapability::Paper],
+        ];
+
+        foreach (self::SCALPING_SETUPS as [$setupId, $side]) {
+            foreach ($targets as $targetName => [$exchange, $environment, $capability]) {
+                yield $setupId . ' / ' . $targetName => [$setupId, $side, $exchange, $environment, $capability];
+            }
+        }
+    }
+
+    /** @dataProvider rejectedScalpingCapabilityProvider */
+    public function testScalpingShadowCapabilityGateRejectsBeforeContractOrLayerResolution(
+        ?ShadowExecutionCapability $capability,
+        string $exchange,
+        string $environment,
+        string $reason,
+    ): void {
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage($reason);
+
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.pullback.long', '9.9.9',
+            $exchange, $environment, 'long', $capability,
+        ));
+    }
+
+    /** @return iterable<string,array{?ShadowExecutionCapability,string,string,string}> */
+    public static function rejectedScalpingCapabilityProvider(): iterable
+    {
+        yield 'missing capability' => [null, 'fake', 'test', 'scalping_shadow_capability_required'];
+        yield 'private mainnet forbidden' => [ShadowExecutionCapability::PrivateMainnet, 'okx', 'mainnet', 'private_mainnet_execution_forbidden'];
+        yield 'OKX backtest forbidden' => [ShadowExecutionCapability::Backtest, 'okx', 'demo', 'scalping_backtest_requires_fake_exchange'];
+        yield 'Hyperliquid backtest forbidden' => [ShadowExecutionCapability::Backtest, 'hyperliquid', 'testnet', 'scalping_backtest_requires_fake_exchange'];
+    }
+
+    public function testScalpingBacktestResolvesOnlyAgainstFakeExchange(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.pullback.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Backtest,
+        ));
+
+        self::assertSame('fake', $snapshot->payload()['exchange']['id']);
+        self::assertSame('backtest', $snapshot->request->toArray()['execution_capability']);
+        self::assertFalse($snapshot->payload()['environment']['write_enabled']);
     }
 }

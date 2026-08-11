@@ -42,7 +42,7 @@ final class ModernConfigLegacyQuarantineTest extends TestCase
         yield 'micro scalping' => ['micro_scalping'];
     }
 
-    public function testDayTradingRuntimeLayersRemainReadOnlyAndAliasFree(): void
+    public function testModernShadowRuntimeLayersRemainReadOnlyAndAliasFree(): void
     {
         $root = dirname(__DIR__, 2) . '/config/trading/runtime';
         $text = '';
