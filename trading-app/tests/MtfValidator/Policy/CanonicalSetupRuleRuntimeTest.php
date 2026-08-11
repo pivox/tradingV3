@@ -58,11 +58,36 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
 
         self::assertSame('critical_timeframe_missing', $missing->reasonCode);
         self::assertSame('1m', $missing->trace['rejection']['timeframe']);
+        self::assertSame('timeframe_mapping_missing', $missing->trace['rejection']['cause']);
         self::assertSame('5m', $missing->trace['execution_timeframe']);
         self::assertSame(['1m'], $missing->trace['mandatory_confirmations']);
         self::assertSame('critical_timeframe_stale', $stale->reasonCode);
+        self::assertSame('outside_freshness_window', $stale->trace['rejection']['cause']);
         self::assertSame('5m', $stale->trace['execution_timeframe']);
         self::assertSame(['1m'], $stale->trace['mandatory_confirmations']);
+    }
+
+    public function testScalpingShadowTreatsEveryUnparseableRequiredKlineTimeAsMissing(): void
+    {
+        foreach ([
+            'absent' => [],
+            'null' => ['kline_time' => null],
+            'malformed' => ['kline_time' => 'not-an-instant'],
+            'invalid type' => ['kline_time' => []],
+        ] as $label => $oneMinuteInput) {
+            $inputs = $this->scalpingInputs();
+            $inputs['1m'] = $oneMinuteInput;
+
+            $result = (new CanonicalSetupRuleRuntime($this->passingConditions()))->evaluate(
+                $this->scalpingLineage('scalping.trend_continuation.long', 'long'),
+                $inputs,
+                new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+            );
+
+            self::assertSame('critical_timeframe_missing', $result->reasonCode, $label);
+            self::assertSame('1m', $result->trace['rejection']['timeframe'], $label);
+            self::assertSame('kline_time_missing_or_invalid', $result->trace['rejection']['cause'], $label);
+        }
     }
 
     public function testDayTradingShadowRejectsMissingMandatoryTimeframeWithoutFallback(): void

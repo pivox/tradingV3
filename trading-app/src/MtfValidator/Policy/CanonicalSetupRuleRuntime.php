@@ -46,7 +46,7 @@ final class CanonicalSetupRuleRuntime
         $this->evaluator = new StrictRuleEvaluator($this->catalog, new StrictConditionRegistry($conditions));
     }
 
-    /** @param array<string, array<string, mixed>> $indicatorsByTimeframe */
+    /** @param array<string, mixed> $indicatorsByTimeframe */
     public function evaluate(
         LineageContext $identity,
         array $indicatorsByTimeframe,
@@ -64,10 +64,37 @@ final class CanonicalSetupRuleRuntime
         $shadowTimeframes = $this->shadowTimeframes($identity, $contract);
         if ($shadowTimeframes !== null) {
             foreach ($shadowTimeframes['required'] as $timeframe) {
-                if (!isset($indicatorsByTimeframe[$timeframe])) {
+                if (!array_key_exists($timeframe, $indicatorsByTimeframe)
+                    || !\is_array($indicatorsByTimeframe[$timeframe])
+                ) {
                     return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
                         ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
-                        'rejection' => ['timeframe' => $timeframe],
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'timeframe_mapping_missing',
+                        ],
+                    ]);
+                }
+                $observedAt = $this->instant($indicatorsByTimeframe[$timeframe]['kline_time'] ?? null);
+                if ($observedAt === null) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_missing', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'kline_time_missing_or_invalid',
+                        ],
+                    ]);
+                }
+                $validUntil = $observedAt->modify(
+                    '+' . $this->catalog->freshnessSeconds('indicator_snapshot', $timeframe) . ' seconds',
+                );
+                if ($observedAt > $evaluatedAt || $validUntil < $evaluatedAt) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'critical_timeframe_stale', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => 'outside_freshness_window',
+                        ],
                     ]);
                 }
             }
@@ -219,13 +246,16 @@ final class CanonicalSetupRuleRuntime
     }
 
     /**
-     * @param array<string, array<string, mixed>> $indicatorsByTimeframe
+     * @param array<string, mixed> $indicatorsByTimeframe
      * @return list<RuleInputSnapshot>
      */
     private function snapshots(LineageContext $identity, array $indicatorsByTimeframe, \DateTimeImmutable $evaluatedAt): array
     {
         $snapshots = [];
         foreach ($indicatorsByTimeframe as $timeframe => $indicators) {
+            if (!is_array($indicators)) {
+                continue;
+            }
             $observedAt = $this->instant($indicators['kline_time'] ?? null);
             if ($observedAt === null) {
                 continue;

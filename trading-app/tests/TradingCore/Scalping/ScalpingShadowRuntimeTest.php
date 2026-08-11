@@ -25,6 +25,7 @@ use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservati
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use App\TradingCore\Scalping\ScalpingShadowRequest;
+use App\TradingCore\Scalping\ScalpingShadowOutcome;
 use App\TradingCore\Scalping\ScalpingShadowRuntime;
 use App\TradingCore\Shadow\CanonicalShadowRuntime;
 use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
@@ -125,11 +126,17 @@ final class ScalpingShadowRuntimeTest extends TestCase
         $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
         $missing = $request->indicatorsByTimeframe;
         unset($missing['1m']);
+        $null = $request->indicatorsByTimeframe;
+        $null['1m']['kline_time'] = null;
+        $malformed = $request->indicatorsByTimeframe;
+        $malformed['1m']['kline_time'] = 'not-an-instant';
         $stale = $request->indicatorsByTimeframe;
         $stale['1m']['kline_time'] = '2026-08-10T11:55:00Z';
 
         foreach ([
             [$request->withIndicators($missing), 'scalping_shadow_critical_timeframe_missing'],
+            [$request->withIndicators($null), 'scalping_shadow_critical_timeframe_missing'],
+            [$request->withIndicators($malformed), 'scalping_shadow_critical_timeframe_missing'],
             [$request->withIndicators($stale), 'scalping_shadow_critical_timeframe_stale'],
         ] as [$candidate, $reason]) {
             $outcome = self::fixtureRuntime()->run($candidate);
@@ -137,6 +144,30 @@ final class ScalpingShadowRuntimeTest extends TestCase
             self::assertSame($reason, $outcome->reasonCode);
             self::assertNull($outcome->orderPlan);
             self::assertNull($outcome->reservation);
+        }
+    }
+
+    public function testOutcomeRejectsEveryIncompleteOrContradictoryShape(): void
+    {
+        $planned = self::fixtureRuntime()->run(self::fixtureRequest('scalping.trend_continuation.long', 'long'));
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+
+        foreach ([
+            ['invalid', null, null, 'scalping_shadow_status_invalid'],
+            ['planned', null, null, 'scalping_shadow_outcome_shape_invalid'],
+            ['planned', $planned->orderPlan, null, 'scalping_shadow_outcome_shape_invalid'],
+            ['planned', null, $planned->reservation, 'scalping_shadow_outcome_shape_invalid'],
+            ['no_trade', $planned->orderPlan, null, 'scalping_shadow_outcome_shape_invalid'],
+            ['no_trade', null, $planned->reservation, 'scalping_shadow_outcome_shape_invalid'],
+            ['no_trade', $planned->orderPlan, $planned->reservation, 'scalping_shadow_outcome_shape_invalid'],
+        ] as [$status, $plan, $reservation, $message]) {
+            try {
+                new ScalpingShadowOutcome($status, 'reason', $planned->lineage, $plan, $reservation, []);
+                self::fail('Invalid scalping outcome shape was accepted.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame($message, $exception->getMessage());
+            }
         }
     }
 

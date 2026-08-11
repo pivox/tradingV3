@@ -22,7 +22,10 @@ final readonly class ScalpingShadowOutcome
         if (!\in_array($status, ['planned', 'no_trade'], true)) {
             throw new \InvalidArgumentException('scalping_shadow_status_invalid');
         }
-        if (($status === 'planned') !== ($orderPlan !== null && $reservation !== null)) {
+        $validShape = $status === 'planned'
+            ? $orderPlan !== null && $reservation !== null
+            : $orderPlan === null && $reservation === null;
+        if (!$validShape) {
             throw new \InvalidArgumentException('scalping_shadow_outcome_shape_invalid');
         }
     }
