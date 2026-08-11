@@ -6,6 +6,7 @@ namespace App\TradingCore\Scalping;
 
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
@@ -208,6 +209,13 @@ final readonly class ScalpingNetReport
             || $lineage->effectiveConfigReference !== 'effective-config-snapshot:' . $snapshotHash
         ) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_snapshot_reference_invalid');
+        }
+        $executionCapability = $snapshot['request']['execution_capability'] ?? null;
+        $capability = \is_string($executionCapability)
+            ? ShadowExecutionCapability::tryFrom($executionCapability)
+            : null;
+        if ($capability === null || !$capability->permitsShadow()) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_capability_invalid');
         }
         $config = $snapshot['config'] ?? null;
         if (!\is_array($config)) {

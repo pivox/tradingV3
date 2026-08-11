@@ -6,6 +6,7 @@ namespace App\Tests\TradingCore\Scalping;
 
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
@@ -212,6 +213,47 @@ final class ScalpingNetReportTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('scalping_net_report_lineage_snapshot_reference_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    /** @return iterable<string, array{ShadowExecutionCapability}> */
+    public static function allowedExecutionCapabilities(): iterable
+    {
+        yield 'fake' => [ShadowExecutionCapability::Fake];
+        yield 'paper' => [ShadowExecutionCapability::Paper];
+        yield 'backtest' => [ShadowExecutionCapability::Backtest];
+    }
+
+    #[DataProvider('allowedExecutionCapabilities')]
+    public function testAcceptsEveryCanonicalShadowExecutionCapability(
+        ShadowExecutionCapability $capability,
+    ): void {
+        $planned = self::plannedOutcomes()[0];
+        $outcome = self::withRehashedLineageCapability($planned, $capability->value);
+
+        $report = ScalpingNetReport::fromOutcomes([$outcome]);
+
+        self::assertSame(1, $report->cells[0]->sampleCount);
+        self::assertFalse($report->cells[0]->certified);
+    }
+
+    /** @return iterable<string, array{null|string}> */
+    public static function forbiddenExecutionCapabilities(): iterable
+    {
+        yield 'missing' => [null];
+        yield 'unknown' => ['demo'];
+        yield 'private mainnet' => [ShadowExecutionCapability::PrivateMainnet->value];
+    }
+
+    #[DataProvider('forbiddenExecutionCapabilities')]
+    public function testRejectsMissingUnknownAndMainnetExecutionCapabilitiesAfterSnapshotRehash(
+        ?string $capability,
+    ): void {
+        $planned = self::plannedOutcomes()[0];
+        $outcome = self::withRehashedLineageCapability($planned, $capability);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_lineage_capability_invalid');
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
@@ -760,7 +802,36 @@ final class ScalpingNetReportTest extends TestCase
             $decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,
+            $request->orderBook,
         ));
+    }
+
+    private static function withRehashedLineageCapability(
+        ScalpingShadowOutcome $planned,
+        ?string $capability,
+    ): ScalpingShadowOutcome {
+        $lineageData = $planned->lineage->toArray();
+        $lineageData['environment'] = $planned->lineage->environment;
+        self::assertIsArray($lineageData['effective_config_snapshot'] ?? null);
+        if ($capability === null) {
+            unset($lineageData['effective_config_snapshot']['request']['execution_capability']);
+        } else {
+            $lineageData['effective_config_snapshot']['request']['execution_capability'] = $capability;
+        }
+        $snapshotHash = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $lineageData['effective_config_snapshot'],
+        );
+        $lineageData['effective_config_snapshot']['snapshot_hash'] = $snapshotHash;
+        $lineageData['effective_config_reference'] = 'effective-config-snapshot:' . $snapshotHash;
+
+        return new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            LineageContext::fromArray($lineageData),
+            $planned->orderPlan,
+            $planned->reservation,
+            $planned->evidence,
+        );
     }
 
     /**
