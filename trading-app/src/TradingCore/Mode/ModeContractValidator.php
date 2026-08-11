@@ -13,7 +13,7 @@ final class ModeContractValidator
     private const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
     private const PUBLISHED_VERSIONS = [
         'day_trading' => ['1.0.0', '1.1.0'],
-        'scalping' => ['1.0.0'],
+        'scalping' => ['1.0.0', '1.1.0'],
         'micro_scalping' => ['1.0.0'],
     ];
     private const GOVERNANCE_TARGETS = [
@@ -68,7 +68,8 @@ final class ModeContractValidator
                 $document['mode_id'],
             ));
         }
-        $isDayTradingShadow = $document['mode_id'] === 'day_trading' && $document['mode_version'] === '1.1.0';
+        $isShadowContract = $document['mode_version'] === '1.1.0'
+            && in_array($document['mode_id'], ['day_trading', 'scalping'], true);
 
         $lifecycle = $this->mapping($document, 'lifecycle');
         $this->assertExactKeys($lifecycle, ['status', 'executable', 'rationale'], 'lifecycle');
@@ -86,14 +87,14 @@ final class ModeContractValidator
         $this->assertDecision($this->mapping($document, 'session_policy'), 'session_policy');
         $this->assertUnit($this->mapping($document, 'horizon'), 'horizon', 'holding_horizon_policy');
         $this->assertUnit($this->mapping($document, 'session_policy'), 'session_policy', 'session_policy');
-        if ($isDayTradingShadow) {
-            $this->assertDayTradingShadowHorizon($this->mapping($document, 'horizon'));
-            $this->assertDayTradingShadowSession($this->mapping($document, 'session_policy'));
+        if ($isShadowContract) {
+            $this->assertShadowHorizon($this->mapping($document, 'horizon'), $document['mode_id']);
+            $this->assertShadowSession($this->mapping($document, 'session_policy'));
         } else {
             $this->assertDefinedString($this->mapping($document, 'horizon'), 'horizon');
             $this->assertDefinedString($this->mapping($document, 'session_policy'), 'session_policy');
         }
-        $this->assertTimeframes($this->mapping($document, 'timeframes'), $isDayTradingShadow);
+        $this->assertTimeframes($this->mapping($document, 'timeframes'), $isShadowContract);
 
         $cadence = $this->mapping($document, 'cadence');
         $this->assertExactKeys($cadence, ['evaluation', 'validity_window'], 'cadence');
@@ -121,9 +122,9 @@ final class ModeContractValidator
         } else {
             $this->assertDefinedPositiveNumber($tradeBudget, 'risk.trade_budget');
         }
-        $this->assertDefinedDailyCap($this->mapping($risk, 'daily_loss_cap'), $isDayTradingShadow);
-        if ($isDayTradingShadow) {
-            $this->assertDayTradingShadowConcurrency($this->mapping($risk, 'max_concurrent_positions'));
+        $this->assertDefinedDailyCap($this->mapping($risk, 'daily_loss_cap'), $isShadowContract);
+        if ($isShadowContract) {
+            $this->assertShadowConcurrency($this->mapping($risk, 'max_concurrent_positions'), $document['mode_id']);
         } else {
             $this->assertDefinedPositiveInteger($this->mapping($risk, 'max_concurrent_positions'), 'risk.max_concurrent_positions');
         }
@@ -135,10 +136,10 @@ final class ModeContractValidator
         $orderPolicy = $this->mapping($document, 'order_policy');
         $this->assertDecision($orderPolicy, 'order_policy');
         $this->assertUnit($orderPolicy, 'order_policy', 'policy');
-        $this->assertDefinedOrderPolicy($orderPolicy, $isDayTradingShadow);
+        $this->assertDefinedOrderPolicy($orderPolicy, $isShadowContract);
 
-        if ($isDayTradingShadow) {
-            $this->assertDayTradingShadowFrozenValues($document);
+        if ($isShadowContract) {
+            $this->assertShadowFrozenValues($document);
         }
 
         $setupIds = $this->stringList($document, 'compatible_setup_ids', false);
@@ -303,7 +304,7 @@ final class ModeContractValidator
             throw new ModeContractException('risk.daily_loss_cap absolute_quote/currency are invalid.');
         }
         if ($extended && ($value['day_timezone'] !== 'UTC' || $value['day_boundary_local'] !== '00:00:00' || $value['include_unrealized_loss'] !== true)) {
-            throw new ModeContractException('risk.daily_loss_cap shadow day semantics are invalid.');
+            throw new ModeContractException('risk.daily_loss_cap shadow semantics are invalid.');
         }
     }
 
@@ -365,51 +366,72 @@ final class ModeContractValidator
     }
 
     /** @param array<string, mixed> $decision */
-    private function assertDayTradingShadowHorizon(array $decision): void
+    private function assertShadowHorizon(array $decision, string $modeId): void
     {
         $value = $decision['value'] ?? null;
         if (!is_array($value) || array_is_list($value)) {
-            throw new ModeContractException('day_trading 1.1.0 horizon must be a mapping.');
+            throw new ModeContractException(sprintf('%s 1.1.0 horizon must be a mapping.', $modeId));
         }
         $this->assertExactKeys($value, ['maximum_duration', 'daily_boundary_time', 'daily_boundary_timezone', 'close_before_boundary'], 'horizon.value');
-        if ($value !== ['maximum_duration' => 'PT8H', 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true]) {
-            throw new ModeContractException('day_trading 1.1.0 horizon differs from the frozen shadow decision.');
+        $duration = $modeId === 'day_trading' ? 'PT8H' : 'PT2H';
+        if ($value !== ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true]) {
+            throw new ModeContractException(sprintf('%s 1.1.0 horizon differs from the frozen shadow decision.', $modeId));
         }
     }
 
     /** @param array<string, mixed> $decision */
-    private function assertDayTradingShadowSession(array $decision): void
+    private function assertShadowSession(array $decision): void
     {
         if (($decision['value'] ?? null) !== ['calendar' => 'continuous_crypto', 'timezone' => 'UTC']) {
-            throw new ModeContractException('day_trading 1.1.0 session differs from the frozen shadow decision.');
+            throw new ModeContractException('Shadow session differs from the frozen decision.');
         }
     }
 
     /** @param array<string, mixed> $decision */
-    private function assertDayTradingShadowConcurrency(array $decision): void
+    private function assertShadowConcurrency(array $decision, string $modeId): void
     {
         $value = $decision['value'] ?? null;
         if (!is_array($value) || array_is_list($value)) {
             throw new ModeContractException('risk.max_concurrent_positions shadow value must be a mapping.');
         }
         $this->assertExactKeys($value, ['limit', 'include_pending_entries'], 'risk.max_concurrent_positions.value');
-        if ($value !== ['limit' => 4, 'include_pending_entries' => true]) {
+        $limit = $modeId === 'day_trading' ? 4 : 3;
+        if ($value !== ['limit' => $limit, 'include_pending_entries' => true]) {
             throw new ModeContractException('risk.max_concurrent_positions differs from the frozen shadow decision.');
         }
     }
 
     /** @param array<string, mixed> $document */
-    private function assertDayTradingShadowFrozenValues(array $document): void
+    private function assertShadowFrozenValues(array $document): void
     {
+        $frozen = $document['mode_id'] === 'day_trading'
+            ? [
+                'timeframes' => ['regime' => ['4h'], 'context' => ['1h'], 'trigger' => ['15m'], 'execution' => ['15m'], 'confirmations' => ['5m', '1m']],
+                'cadence' => 'PT15M',
+                'trade_budget' => 5.0,
+                'daily_loss_cap' => ['percent_equity' => 6.0, 'absolute_quote' => 30.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
+                'mode_exposure_cap' => 100.0,
+                'leverage' => 2.0,
+            ]
+            : [
+                'timeframes' => ['regime' => ['1h'], 'context' => ['15m'], 'trigger' => ['5m'], 'execution' => ['5m'], 'confirmations' => ['1m']],
+                'cadence' => 'PT5M',
+                'trade_budget' => 2.0,
+                'daily_loss_cap' => ['percent_equity' => 6.0, 'absolute_quote' => 40.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
+                'mode_exposure_cap' => 75.0,
+                'leverage' => 3.0,
+            ];
+
         if ($document['lifecycle']['status'] !== 'shadow' || $document['lifecycle']['executable'] !== true
-            || $document['timeframes'] !== ['regime' => ['4h'], 'context' => ['1h'], 'trigger' => ['15m'], 'execution' => ['15m'], 'confirmations' => ['5m', '1m']]
-            || $document['cadence']['evaluation']['value'] !== 'PT15M'
-            || $document['cadence']['validity_window']['value'] !== 'PT15M'
-            || $document['risk']['trade_budget']['value'] !== 5.0
-            || $document['risk']['mode_exposure_cap']['value'] !== 100.0
-            || $document['leverage']['value'] !== 2.0
+            || $document['timeframes'] !== $frozen['timeframes']
+            || $document['cadence']['evaluation']['value'] !== $frozen['cadence']
+            || $document['cadence']['validity_window']['value'] !== $frozen['cadence']
+            || $document['risk']['trade_budget']['value'] !== $frozen['trade_budget']
+            || $document['risk']['daily_loss_cap']['value'] !== $frozen['daily_loss_cap']
+            || $document['risk']['mode_exposure_cap']['value'] !== $frozen['mode_exposure_cap']
+            || $document['leverage']['value'] !== $frozen['leverage']
             || $document['order_policy']['value'] !== ['margin_mode' => 'isolated', 'preferred_type' => 'limit', 'market_fallback' => false]) {
-            throw new ModeContractException('day_trading 1.1.0 differs from the frozen shadow contract.');
+            throw new ModeContractException(sprintf('%s 1.1.0 differs from the frozen shadow contract.', $document['mode_id']));
         }
     }
 
