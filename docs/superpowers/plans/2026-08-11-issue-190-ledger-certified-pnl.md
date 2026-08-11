@@ -231,37 +231,49 @@ git commit -m "feat(#190): certify v2 net PnL from persisted ledger"
 - Modify: `docs/handbook/technical/certified-net-pnl-contract.md`
 - Modify: `docs/superpowers/plans/2026-08-11-issue-190-ledger-certified-pnl.md`
 
-- [ ] **Step 1: Remove export-side ledger recertification**
+- [x] **Step 1: Remove export-side ledger recertification**
 
 Make the bad-trades baseline query consume `canonical_net_pnl_usdt`,
 `canonical_realized_net_pnl_r`, `cost_completeness`, and
 `lineage_classification` directly from `position_trade_analysis_v2`. Delete its
 independent fill aggregation and certification predicate.
 
-- [ ] **Step 2: Update the contract documentation**
+- [x] **Step 2: Update the contract documentation**
 
 Document the exact aggregate identity, component applicability rules, new fill
 fields, stable quality flags, and that real providers remain partial/unknown
 until they persist complete normalized cost evidence.
 
-- [ ] **Step 3: Run verification**
+- [x] **Step 3: Run the required focused verification**
 
 ```bash
 cd trading-app
-php bin/phpunit tests/Trading tests/Repository/FuturesOrderExactQuantityPostgresTest.php
-vendor/bin/phpstan analyse --no-progress \
+php bin/phpunit tests/Trading/View/PositionTradeAnalysisViewTest.php
+php bin/phpunit tests/Trading/Reporting/PositionTradeAnalysisReportingServiceTest.php
+php bin/phpunit tests/Trading/Service/RunTradeOutcomeServiceTest.php
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G \
   src/Trading/Pnl \
   src/Trading/Entity/PositionTradeAnalysisV2.php \
   src/Trading/Reporting \
   src/Trading/Service/RunTradeOutcomeService.php
-php bin/console doctrine:migrations:migrate --no-interaction --env=test
-php bin/console doctrine:migrations:migrate prev --no-interaction --env=test
-php bin/console doctrine:migrations:migrate --no-interaction --env=test
+php -l migrations/Version20260811120000.php
+php -l src/Trading/Entity/PositionTradeAnalysisV2.php
+php -l tests/Trading/View/PositionTradeAnalysisViewTest.php
 ```
 
-Expected: all tests and PHPStan pass; migration up/down/up succeeds.
+Result on `0d02ce7a`: 48 tests / 586 assertions, 8 / 51 and 11 / 83;
+targeted PHPStan and PHP syntax checks pass. A disposable PostgreSQL database
+migrated from scratch through 50 migrations / 973 queries, and the integration
+test covers the targeted migration down/up round-trip. The export SQL executed
+successfully against that schema.
 
-- [ ] **Step 4: Check the patch**
+Separate follow-up: the broader 4,093-test command remains an environment-level
+suite follow-up. Its attempted run hit Symfony/PHPUnit child-process temporary
+file races (12 failures) and two repository schema-order errors outside this
+three-file documentation patch; no failing assertion involved the focused #190
+suites above.
+
+- [x] **Step 4: Check the patch**
 
 ```bash
 git diff --check origin/main...HEAD
@@ -270,7 +282,7 @@ git status --short
 
 Expected: no whitespace errors and only intended #190 files changed.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add docs/handbook/reports/queries/bad-trades-baseline-v2.sql docs/handbook/technical/certified-net-pnl-contract.md docs/superpowers/plans/2026-08-11-issue-190-ledger-certified-pnl.md

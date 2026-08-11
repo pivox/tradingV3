@@ -1,10 +1,24 @@
 # Contrat PnL net certifie v1
 
-Ce contrat versionne la premiere surface `position_trade_analysis_v2` capable d'exposer un PnL net certifie. Une ligne certifiee exige un matching exact deja fourni par `internal_trade_id`/FIFO, des fills complets, des quantites coherentes et toutes les composantes de cout normalisees en USDT.
+`position_trade_analysis_v2` est l'unique autorite publique pour le PnL net
+certifie. Le ledger brut et sa vue d'agregation sont des preuves internes et des
+surfaces de diagnostic : aucun export, service ou dashboard ne doit les
+re-agreger pour creer une seconde certification.
 
-## Formule
+Un consommateur de KPI utilise exclusivement :
 
-Convention de signe du funding : credit positif, debit negatif.
+- `canonical_net_pnl_usdt` pour le PnL net USDT ;
+- `canonical_realized_net_pnl_r` pour le PnL net en R ;
+- `cost_completeness`, `pnl_quality_flags` et `lineage_classification` pour la
+  qualite et le lineage.
+
+`recorded_pnl_usdt`, `estimated_net_pnl_usdt`, `net_pnl_usdt` non canonique et
+`pnl_r` restent auditables, mais ne sont jamais des fallbacks d'un KPI certifie.
+
+## Formule et convention de signe
+
+Le funding est signe du point de vue de la position : un credit est positif et
+un debit est negatif.
 
 ```text
 net_pnl_usdt =
@@ -19,102 +33,204 @@ net_pnl_usdt =
   - liquidation_fee_usdt
 ```
 
-`total_known_cost_usdt` est l'impact net des couts connus sur le brut : `gross_realized_pnl_usdt - net_pnl_usdt`. Un credit de funding reduit donc ce total.
+`total_known_cost_usdt = gross_realized_pnl_usdt - net_pnl_usdt`. Un credit de
+funding diminue donc le cout total ; un debit l'augmente.
 
-## Certification
+Le brut est reconstruit depuis les notionnels du ledger :
 
-`net_pnl_usdt` reste `NULL` sauf si toutes ces conditions sont vraies :
+- long : `exit_notional - entry_notional` ;
+- short : `entry_notional - exit_notional`.
 
-- `gross_realized_pnl_usdt` est present et demontre par fills ;
-- tous les couts obligatoires sont presents, avec `0` uniquement quand explicitement connu/non applicable ;
-- les montants sont normalises en USDT ;
-- les fills d'entree et de sortie sont complets ;
-- `entry_qty = exit_qty`, `remaining_qty = 0`, et `position_fully_closed=true` ;
-- `quantity_status=complete` dans l'agregat `FillQuantityAggregationService` ;
-- aucun `quantity_quality_flags` bloquant (`fill_conflict`, `exit_qty_exceeds_entry_qty`, `missing_entry_fill`, `missing_exit_fill`, `position_not_fully_closed`) ;
-- aucun `identifier_conflict` ;
-- le lineage est suffisant.
+Le risque utilise pour `canonical_realized_net_pnl_r` est exclusivement
+`risk_usdt_at_entry`, capture a l'entree et strictement positif. Un deplacement
+ulterieur du stop ne reecrit pas ce denominateur.
 
-Sinon `cost_completeness` vaut `partial` ou `unknown`, `net_pnl_usdt` vaut `NULL`, et `pnl_quality_flags` liste les raisons (`missing_entry_fee`, `quantity_mismatch`, `position_not_fully_closed`, etc.).
+## Identite exacte de l'agregat
 
-Les valeurs numeriques legacy ou provider qui ne sont pas parseables sont traitees comme inconnues. Elles ne doivent jamais faire echouer la lecture de `position_trade_analysis_v2` et ne peuvent pas produire un PnL net certifie.
+La vue interne `position_trade_ledger_aggregate_v1` groupe les lignes
+`fill_cost_ledger` sur le tuple exact suivant :
 
-Aucun flag provider du type `quantity_coherent=true` ne remplace cette preuve quantitative. Les TP1, trailing du reliquat, scale-out, partial stop et partial entry fills doivent etre reduits au meme triplet `entry_qty`, `exit_qty`, `remaining_qty` avant certification.
+```text
+internal_trade_id
++ exchange
++ market_type
++ symbol
++ market_data_venue
++ paper_execution_cell_id
++ configuration_snapshot_id
++ paper_network
++ paper_eligibility
+```
 
-## Audit des sources
+L'agregat n'est rattache a une analyse que si ce tuple correspond exactement a
+l'entree et a la cloture. Les deux evenements doivent aussi porter le meme
+`internal_trade_id`, le meme lineage lifecycle complet et coherent, et la meme
+provenance paper. Il n'existe aucun matching par symbole seul, fenetre de temps,
+position approximative ou identifiant provider ambigu.
 
-| Provider | champ financier | endpoint/source | brut ou net | signe | disponibilite | granularite | fiabilite | nullable | fixture | tests |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Fake/Paper | entry/exit fill price/qty | `FakeExchangeMatchingEngine` events + `getFillsSnapshot()` | brut fill | prix/qty positifs | au fill | fill | complet pour fixtures | non | fill event `fake_paper_fill_ledger_v1` | `FakeExchangeAdapterTest`, `NetPnlCertificationServiceTest` |
-| Fake/Paper | maker/taker | metadata fill/order | classification execution | `maker`/`taker` | au fill | fill | partiel, derive ordre | oui | metadata | test service |
-| Fake/Paper | fee par fill/devise | fee deterministe `notional * 0.0005`, `USDT` | cout explicite | positif | au fill | fill | complet | non | fill fee USDT | `testFakeFillsExpose...` |
-| Fake/Paper | spread/slippage | fill event explicite, REST/WS puis `fill_cost_ledger` | cout par fill | cout positif ou zero explicite | au fill | fill | complet pour fixtures Fake | non | `fixed_adverse_slippage_bps_v1`, `top_of_book_embedded_spread_v1` | adapter, normalizer et ledger tests |
-| Fake/Paper | funding perpetuel | `FakeFundingModel` -> `funding.accrued` -> `ExchangeFundingReceived` -> `fill_cost_ledger` | cout signe exchange-neutral | credit positif/debit negatif | echeance explicite | position + echeance + version modele | complet si USDT, inconnu sinon | oui hors USDT ou taux absent | `funding-model-v1.json` | modele, normalizer, projection, ledger et golden 18 |
-| Fake/Paper | borrow/liquidation | lifecycle `extra` explicite fixture | couts normalises | cout positif | a la cloture | trade | complet si fourni | non pour certification | `position_trade_analysis_v2` fixture | PostgreSQL view test |
-| Bitmart | order fill price/qty | `OrderDto` / `/contract/private/order*` (`deal_avg_price`, `deal_size`) | brut order | positif | apres fill/order history | ordre | partiel | oui | payload brut metadata | adapter tests existants |
-| Bitmart | fee par fill/devise | `/contract/private/trades` (`paid_fees`, `fee_currency`) | cout fill | provider brut, non normalise garanti | apres REST sync | fill | partiel, pas relie au trade logique complet | oui | `FuturesOrderTrade` | projection tests partiels |
-| Bitmart | realized PnL provider | `/contract/private/transaction-history` flow_type=2 | inconnu brut/net | montant provider | apres cloture | transaction | non certifie | oui | transaction raw | sync tests existants |
-| Bitmart | funding | `/contract/private/transaction-history` flow_type=3, contract funding metadata | funding provider | non certifie ici | apres transaction | transaction | partiel | oui | raw transaction | aucun contrat net |
-| Bitmart | spread/slippage/borrow/liquidation | logs/config ou absent | absent | n/a | n/a | n/a | non disponible | oui | aucun | aucun |
-| OKX | fills price/qty/fee/devise | `/api/v5/trade/fills` | fill brut + fee | fee provider, devise fournie | REST reconciliation | fill | partiel, non relie v2 au trade complet | oui | adapter rows | `OkxExchangeAdapterTest` |
-| OKX | realized/position PnL | `/api/v5/account/positions` (`realizedPnl`, `upl`) | provider, brut/net non prouve | provider | position ouverte | position | non certifie | oui | adapter row | mapping tests |
-| OKX | funding/spread/slippage/borrow/liquidation | non persiste dans v2 | absent | n/a | n/a | n/a | non disponible | oui | aucun | aucun |
-| Hyperliquid | fills price/qty/fee/devise | `userFills` | fill brut + fee | fee USDC | REST reconciliation | fill | partiel, devise non USDT | oui | adapter rows | adapter tests |
-| Hyperliquid | position PnL | `clearinghouseState` (`unrealizedPnl`) | provider position | provider | position ouverte | position | non certifie | oui | state raw | adapter tests |
-| Hyperliquid | realized/funding/spread/slippage/borrow/liquidation | non persiste dans v2 | absent | n/a | n/a | n/a | non disponible | oui | aucun | aucun |
+Les lignes marquees `fill_cancelled`, `fill_corrected`, `fill_reversed` ou
+`voided` sont exclues de l'agregat. Toute autre ligne retenue doit avoir un
+tableau `quality_flags` vide. Pour un fill d'entree ou de sortie, quantite et
+prix doivent etre finis et strictement positifs ; le notionnel, s'il est fourni,
+doit aussi etre fini et strictement positif. L'egalite des quantites utilise une
+tolerance absolue de `0.00000001`.
 
-Conclusion : seul Fake/Paper peut servir de reference complete dans ce lot. Les providers reels restent `partial` ou `unknown` tant qu'un ledger fill/cout persistant et relie au trade logique n'est pas livre.
+## Champs d'execution exposes par v2
 
-## Ledger fills/couts
+Les dix champs de synthese des fills exposes par la vue publique sont :
 
-Le ledger persistant v1 est documente dans `docs/handbook/technical/fill-cost-ledger.md`.
-Le dry-run de divergence v1/v2 pre-backfill est documente dans
-`docs/handbook/technical/position-trade-analysis-backfill-divergence.md`.
-La bascule progressive des consommateurs applicatifs v1 -> v2 est documentee dans
-`docs/handbook/technical/position-trade-analysis-consumer-cutover.md`.
+1. `entry_first_fill_at` ;
+2. `entry_last_fill_at` ;
+3. `entry_qty` ;
+4. `entry_vwap` ;
+5. `exit_first_fill_at` ;
+6. `exit_last_fill_at` ;
+7. `exit_qty` ;
+8. `exit_vwap` ;
+9. `remaining_qty` ;
+10. `quantity_status`.
 
-Il introduit la table `fill_cost_ledger`, reliee au trade logique par `internal_trade_id` lorsque le lineage exact est disponible. L'idempotence est portee par `exchange + market_type + exchange_fill_id` quand l'exchange fournit un identifiant de fill, sinon par un identifiant interne deterministe documente.
+Pour une ligne certifiee, ces valeurs proviennent de l'agregat exact. Sur une
+ligne non certifiee sans agregat, `entry_vwap` peut encore contenir le fallback
+historique de snapshot ; cette valeur diagnostique ne constitue pas une preuve
+de fill. `quantity_status` vaut `missing_entry_fill`, `open_position`,
+`invalid_fill_quantity`, `quantity_mismatch`, `partial_exit` ou `complete`.
+Seul `complete` donne `position_fully_closed=true`.
 
-Les couts absents restent `NULL`. Les rows sans lineage exact restent visibles avec `quality_flags=["missing_lineage"]` et ne doivent pas etre considerees comme net PnL certifie.
+## Applicabilite des couts
 
-Pour les fills Fake/Paper, les couts de spread et slippage sont produits une seule
-fois par le matching engine puis copies par les surfaces REST/WS. Le ledger ne les
-recalcule pas : il persiste uniquement les valeurs explicites finies et
-non negatives. Une valeur negative, non numerique ou non finie reste `NULL` avec
-`spread_cost_invalid` ou `slippage_cost_invalid`. Le replay exact reste idempotent;
-un meme identifiant de fill avec un cout modifie est un conflit de payload.
+Une absence est `NULL`, jamais un zero implicite. Lorsqu'un composant ne
+s'applique pas, le producteur doit persister un `0` explicite et normalise en
+USDT. Les regles sont :
 
-La quantite residuelle est calculee par `FillQuantityAggregationService` sur `internal_trade_id + exchange + market_type`. Le certificateur peut consommer le resultat via `certifyWithQuantityAggregation(...)`; si l'agregat n'autorise pas la certification, `net_pnl_usdt` et `realized_net_pnl_R` restent `NULL` meme lorsque les listes de fills passees au calcul semblent equilibrees.
+- `entry_fee_usdt` et `exit_fee_usdt` : `fee_usdt` fini, positif ou nul, present
+  sur chaque fill d'entree et de sortie ; les champs provider bruts
+  `fee_amount`/`fee_currency` ne certifient rien a eux seuls ;
+- `spread_cost_usdt` et `slippage_cost_usdt` : valeur finie, positive ou nulle,
+  explicite sur chaque fill d'entree et de sortie ;
+- `other_trading_fees_usdt` : valeur finie, positive ou nulle, explicite sur la
+  cloture ;
+- `funding_usdt` : somme signee des lignes ledger quand elles existent, sinon
+  valeur signee explicite de la cloture ; `0` signifie explicitement non
+  applicable ou aucun funding ;
+- `borrow_cost_usdt` et `liquidation_fee_usdt` : somme ledger finie, positive ou
+  nulle quand elle existe, sinon valeur explicite finie, positive ou nulle de la
+  cloture.
 
-`position_trade_analysis_v2` ne certifie plus le net a partir des seuls extras `position_closed`. Tant que la vue SQL ne consomme pas directement l'agregat ledger persistant, elle ajoute `ledger_quantity_aggregate_missing`, garde `cost_completeness=partial` pour les lignes autrement completes et laisse `net_pnl_usdt`/`realized_net_pnl_R` a `NULL`.
+Tous les composants doivent etre disponibles pour certifier le net. La presence
+d'un PnL realise provider, d'un flag `quantity_coherent=true`, ou d'un montant
+dans les extras lifecycle ne remplace ni les fills exacts ni les couts
+normalises.
 
-## Risque initial et R
+## Deux portes distinctes
 
-Le risque utilise pour les ratios R provient uniquement de l'evenement d'entree. La vue expose :
+La porte **core evidence** prouve l'execution : cloture presente, identites
+interne/marche/paper/lifecycle completes et coherentes, agregat present,
+quantites fermees, rows ledger valides, et sides coherents (`BUY -> SELL` pour
+un long, `SELL -> BUY` pour un short). Elle autorise la projection du brut, des
+frais de fills et des couts de microstructure issus du ledger.
 
-- `risk_usdt_at_entry`, depuis `risk_usdt_at_entry` puis `risk_usdt` dans `order_submitted` ;
-- `initial_stop_price`, depuis `initial_stop_price` puis `stop_final_price` de l'ordre initial ;
-- `stop_distance_pct`, depuis `stop_distance_pct` ou le calcul `abs(entry_price - initial_stop_price) / entry_price` ;
-- `planned_r_multiple`, depuis `planned_r_multiple` puis `r_multiple_final`.
+La porte **all-cost** exige en plus que tous les couts applicables soient
+explicites. Techniquement, `pnl_quality_flags` doit etre exactement `[]`. C'est
+seulement a cette seconde porte que :
 
-Un deplacement ulterieur du stop ne reecrit pas ce risque initial dans la vue. Si le risque est absent, nul, negatif ou non parseable, les ratios R restent `NULL`.
+- `cost_completeness = complete` ;
+- `net_pnl_usdt` et `realized_net_pnl_r` deviennent non nuls.
 
-`realized_gross_pnl_R` est calcule des que `gross_realized_pnl_usdt` et un risque initial positif sont disponibles. `realized_net_pnl_R` exige en plus un `net_pnl_usdt` certifie ; il reste donc `NULL` lorsque le net est bloque par une quantite incomplete, un cout manquant ou `ledger_quantity_aggregate_missing`.
+Une preuve core valide mais un cout manquant donne `partial`. Une cloture sans
+preuve financiere utilisable donne `unknown`. Une position sans cloture donne
+`not_applicable`. Les valeurs invalides sont masquees ; elles ne font pas
+echouer la lecture de la vue.
 
-## MFE / MAE
+## Flags qualite stables
 
-La vue conserve les champs historiques `mfe_pct` et `mae_pct` provenant du listener lifecycle. Leur source runtime actuelle est best-effort via klines 1m (`high/low`) entre ouverture et cloture. Cette source n'est pas une certification microstructure : gaps, donnees manquantes, mark/mid/last et scale-in restent a versionner separement.
+`pnl_quality_flags` est une liste machine-readable. Les codes produits par ce
+contrat sont stables :
 
-Les nouveaux champs explicitent la qualite :
+- matching et provenance : `unmatched`, `missing_internal_trade_identity`,
+  `missing_paper_provenance`, `ledger_market_identity_mismatch`,
+  `ledger_paper_provenance_mismatch`, `ledger_quantity_aggregate_missing`,
+  `ledger_lifecycle_identity_mismatch` ;
+- fills et quantites : `missing_entry_fill`, `missing_exit_fill`,
+  `invalid_fill_quantity`, `quantity_mismatch`, `partial_exit`,
+  `ledger_quality_invalid`, `ledger_side_missing`, `ledger_side_mismatch` ;
+- finances : `missing_gross_pnl`, `missing_entry_fee`, `missing_exit_fee`,
+  `missing_other_trading_fees`, `missing_funding`, `missing_spread_cost`,
+  `missing_slippage_cost`, `missing_borrow_cost`,
+  `missing_liquidation_fee`.
 
-- `mfe_price` / `mae_price` : prix extreme favorable/defavorable ;
-- `mfe_at` / `mae_at` : ouverture de la kline 1m portant l'extreme lorsqu'elle est connue ;
-- `mfe_R` : impact favorable en R, positif ou zero si la meilleure excursion reste sous le prix d'entree ;
-- `mae_R` : impact adverse en R, negatif ou zero pour la source runtime lorsqu'aucune excursion adverse n'est observee ;
-- `mfe_mae_data_quality` : `complete`, `partial`, `missing_price_data`, `provider_error`, `legacy_best_effort`, `not_applicable` ou `unknown`.
+Les consommateurs doivent exposer ces codes sans les supprimer ni en reclasser
+un sous-ensemble comme non bloquant. Un tableau non vide bloque toujours le net
+certifie.
 
-La source runtime ajoute `mfe_mae_source=kline_1m_high_low`, `mfe_mae_timeframe=1m`, la fenetre UTC, `mfe_mae_sample_count` et `mfe_mae_expected_sample_count`. La fenetre est semi-ouverte `[ouverture, cloture)` : une kline dont l'ouverture est egale a l'heure de cloture n'est pas utilisee. `complete` exige une fenetre alignee sur les bornes 1m, des klines horodatees couvrant toute la fenetre attendue et une lecture sous la limite ; sinon la qualite reste `partial` ou `missing_price_data`. Les anciennes valeurs sans source/fenetre restent visibles mais classees `legacy_best_effort`; elles ne doivent pas etre utilisees comme MFE/MAE certifie.
+## Separation du lineage #302
 
-## Backfill
+La certification financiere #190 et le lineage canonique #302 sont deux preuves
+orthogonales. La premiere est calculee dans la source interne de v2 ; le wrapper
+public #302 classe ensuite la ligne `canonical`, `legacy` ou `incomplete` depuis
+l'identite lifecycle.
 
-Aucun backfill heuristique n'est autorise. Les anciennes lignes peuvent exposer `recorded_pnl_usdt` ou `estimated_net_pnl_usdt`, mais `net_pnl_usdt` reste `NULL` sans les champs explicites du contrat.
+Le wrapper n'expose `canonical_net_pnl_usdt` et
+`canonical_realized_net_pnl_r` que si `lineage_classification = canonical`.
+Ainsi, meme une ligne financierement complete ne devient pas un KPI canonique
+si le mode, le setup, le side, les versions/hashes, les identifiants de decision,
+la provenance paper ou la coherence entree/cloture sont absents ou divergents.
+
+Pour les campagnes de certification, la cellule exacte est :
+
+```text
+paper_network x market_data_venue x mode_id x setup_id x canonical_side
+```
+
+`mode_version`, `setup_version`, `canonical_config_hash` et
+`condition_catalog_hash` restent exportes pour l'audit exact. Une cellule de
+moins de 50 trades certifies reste sous-echantillonnee et est exclue des KPI ;
+elle ne doit jamais etre fusionnee avec une autre cellule pour atteindre le
+minimum.
+
+## Statut des providers
+
+| Provider | Evidence disponible aujourd'hui | Statut de certification |
+| --- | --- | --- |
+| Fake/Paper | fills persistants, frais USDT, spread/slippage explicites, funding signe et provenance paper versionnee dans les scenarios complets | peut etre `complete` uniquement quand chaque preuve du contrat est presente |
+| Bitmart | fills/frais et transactions provider disponibles partiellement ; couts et rattachement au trade logique pas toujours complets | `partial` ou `unknown` tant que le ledger normalise exact est incomplet |
+| OKX | fills, frais/devise et PnL provider disponibles, mais chaine de couts v2 complete non persistee | `partial` ou `unknown` |
+| Hyperliquid | fills et frais USDC disponibles, mais USDC n'est pas implicitement traite comme USDT et les autres couts ne sont pas tous persistes | `partial` ou `unknown` |
+
+Le provider n'est pas en lui-meme un critere de confiance. Toute execution,
+Fake comprise, certifie uniquement avec des fills et couts complets, finis,
+normalises en USDT et relies par l'identite exacte. Un provider reel pourra
+devenir `complete` sans changer la formule des qu'il persistera cette evidence.
+
+## Regle pour les consommateurs
+
+Une ligne entre dans un KPI certifie seulement si toutes les conditions
+suivantes sont vraies :
+
+```text
+lineage_classification = canonical
+analysis_status = matched_closed
+close_match_status = matched
+cost_completeness = complete
+pnl_quality_flags = []
+position_fully_closed = true
+canonical_net_pnl_usdt IS NOT NULL
+canonical_realized_net_pnl_r IS NOT NULL
+```
+
+Le rapport `bad-trades-baseline-v2.sql` applique exactement ce contrat. Il peut
+joindre `order_intent` et `trade_zone_events` pour enrichir le diagnostic, mais
+il ne lit pas `fill_cost_ledger`, ne recertifie aucune ligne et ne remplace
+jamais un canonical net absent par `recorded_pnl_usdt` ou
+`estimated_net_pnl_usdt`.
+
+## MFE / MAE et backfill
+
+Les champs MFE/MAE conservent leur contrat separe. Seule une qualite
+`mfe_mae_data_quality=complete` et une provenance temporelle complete permettent
+une interpretation forte ; ils ne participent pas a la certification du PnL
+net.
+
+Aucun backfill heuristique n'est autorise. Les anciennes lignes restent
+visibles pour l'audit, mais leurs montants enregistres ou estimes ne deviennent
+pas canoniques sans evidence ledger complete et lineage #302 canonique.
