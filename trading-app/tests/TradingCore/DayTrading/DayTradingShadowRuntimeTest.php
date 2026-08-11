@@ -21,6 +21,8 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\FakeCanonicalPortfolioAdapter;
 use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterInterface;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioFill;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use App\TradingCore\Risk\Canonical\Portfolio\InMemoryCanonicalPortfolioReservationStore;
@@ -42,7 +44,72 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame('active', $outcome->reservation->status);
         self::assertSame($outcome->lineage->configHash, $outcome->orderPlan->configHash);
         self::assertSame($outcome->orderPlan->planHash, $outcome->reservation->planHash);
+        self::assertSame('2026-08-10T12:01:30+00:00', $outcome->orderPlan->expiresAt->format(DATE_ATOM));
+        self::assertSame('2026-08-10T12:02:00+00:00', $outcome->orderPlan->cancelAfterAt?->format(DATE_ATOM));
+        self::assertSame($outcome->orderPlan->expiresAt, $outcome->reservation->entryExpiresAt);
+        self::assertSame($outcome->orderPlan->cancelAfterAt, $outcome->reservation->cancelAfterAt);
+        self::assertSame('2026-08-10T12:01:30+00:00', $outcome->evidence['entry_expires_at']);
+        self::assertSame('2026-08-10T12:02:00+00:00', $outcome->evidence['cancel_after_at']);
         self::assertSame('2026-08-10T20:00:00+00:00', $outcome->evidence['holding_expires_at']);
+    }
+
+    public function testReservationRejectsFillAfterOrderTtl(): void
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $adapter = new FakeCanonicalPortfolioAdapter(
+            new CanonicalPortfolioAdmissionEngine($clock),
+            new InMemoryCanonicalPortfolioReservationStore(),
+        );
+        $outcome = self::fixtureRuntime($adapter)->run(self::fixtureRequest());
+        self::assertNotNull($outcome->orderPlan);
+        self::assertNotNull($outcome->reservation);
+        $plan = $outcome->orderPlan;
+        $reservation = $outcome->reservation;
+
+        $this->expectException(CanonicalPortfolioException::class);
+        $this->expectExceptionMessage('canonical_portfolio_entry_expired');
+        $adapter->applyFill($reservation, new CanonicalPortfolioFill(
+            $reservation->scope,
+            $reservation->decisionKey,
+            $reservation->planHash,
+            $reservation->admissionHash,
+            'late-fill',
+            $plan->quantity,
+            $plan->entryPrice,
+            $plan->entryFee,
+            $plan->quantity,
+            0.0,
+            new \DateTimeImmutable('2026-08-10T12:01:31+00:00'),
+            'sha256:' . str_repeat('9', 64),
+        ));
+    }
+
+    public function testLineageMustMatchPlanMarketAndDecisionIdentity(): void
+    {
+        foreach ([
+            ['symbol' => 'ETHUSDT'],
+            ['market_type' => 'spot'],
+            ['decision_key' => 'different-decision'],
+        ] as $mutation) {
+            $request = self::fixtureRequest();
+            $lineage = LineageContext::fromArray(array_replace($request->lineage->toArray(), $mutation));
+            $mismatched = new DayTradingShadowRequest(
+                $request->configRequest,
+                $lineage,
+                $request->indicatorsByTimeframe,
+                $request->orderPlanRequest,
+                $request->portfolioScope,
+                $request->portfolioSnapshot,
+                $request->decisionKey,
+                $request->liveSpreadBps,
+                $request->estimatedSlippageBps,
+            );
+
+            $outcome = self::fixtureRuntime()->run($mismatched);
+            self::assertSame('no_trade', $outcome->status);
+            self::assertSame('day_trading_shadow_lineage_mismatch', $outcome->reasonCode);
+            self::assertNull($outcome->reservation);
+        }
     }
 
     public function testRuleRejectionNeverCreatesAReservation(): void

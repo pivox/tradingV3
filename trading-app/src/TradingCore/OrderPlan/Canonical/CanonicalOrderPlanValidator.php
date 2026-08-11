@@ -33,6 +33,18 @@ final readonly class CanonicalOrderPlanValidator
         if ($plan->zoneComputedAt > $plan->createdAt || $plan->createdAt > $now || $plan->expiresAt < $now) {
             throw new CanonicalOrderPlanException('canonical_order_plan_expired');
         }
+        if ($plan->modeId === 'day_trading' && $plan->modeVersion === '1.1.0') {
+            if (
+                !$plan->cancelAfterAt instanceof \DateTimeImmutable
+                || $plan->expiresAt > $plan->createdAt->modify('+90 seconds')
+                || $plan->cancelAfterAt > $plan->createdAt->modify('+120 seconds')
+                || $plan->cancelAfterAt < $plan->expiresAt
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
+            }
+        } elseif ($plan->cancelAfterAt !== null) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
+        }
         if (
             $plan->maximumInputAgeSeconds <= 0
             || $plan->costObservedAt > $plan->createdAt

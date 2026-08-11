@@ -36,6 +36,8 @@ final readonly class CanonicalPortfolioReservation
         public float $stopSlippageRate,
         public float $fundingCostRate,
         public float $plannedFundingCostQuote,
+        public \DateTimeImmutable $entryExpiresAt,
+        public ?\DateTimeImmutable $cancelAfterAt,
         public float $filledQuantity,
         public float $protectedQuantity,
         public float $remainingQuantity,
@@ -110,6 +112,8 @@ final readonly class CanonicalPortfolioReservation
             'stopSlippageRate' => $plan->stopSlippageRate,
             'fundingCostRate' => $fundingCostRate,
             'plannedFundingCostQuote' => $plan->fundingCost,
+            'entryExpiresAt' => $plan->expiresAt,
+            'cancelAfterAt' => $plan->cancelAfterAt,
             'filledQuantity' => 0.0,
             'protectedQuantity' => 0.0,
             'remainingQuantity' => $plan->quantity,
@@ -171,6 +175,9 @@ final readonly class CanonicalPortfolioReservation
         }
         if ($fill->observedAt < $this->observedAt) {
             throw new CanonicalPortfolioException('canonical_portfolio_fill_out_of_order');
+        }
+        if ($fill->observedAt > $this->entryExpiresAt) {
+            throw new CanonicalPortfolioException('canonical_portfolio_entry_expired');
         }
 
         $fillQuantity = self::decimal($fill->quantity);
@@ -455,11 +462,20 @@ final readonly class CanonicalPortfolioReservation
     {
         $scope = $hashValues['scope'] ?? null;
         $observedAt = $hashValues['observedAt'] ?? null;
-        if (!$scope instanceof CanonicalPortfolioScope || !$observedAt instanceof \DateTimeImmutable) {
+        $entryExpiresAt = $hashValues['entryExpiresAt'] ?? null;
+        $cancelAfterAt = $hashValues['cancelAfterAt'] ?? null;
+        if (
+            !$scope instanceof CanonicalPortfolioScope
+            || !$observedAt instanceof \DateTimeImmutable
+            || !$entryExpiresAt instanceof \DateTimeImmutable
+            || ($cancelAfterAt !== null && !$cancelAfterAt instanceof \DateTimeImmutable)
+        ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_state_invalid');
         }
         $hashValues['scope'] = $scope->toArray();
         $hashValues['observedAt'] = $observedAt->format('Y-m-d\TH:i:s.uP');
+        $hashValues['entryExpiresAt'] = $entryExpiresAt->format('Y-m-d\TH:i:s.uP');
+        $hashValues['cancelAfterAt'] = $cancelAfterAt?->format('Y-m-d\TH:i:s.uP');
         return 'sha256:' . hash('sha256', CanonicalPortfolioDecimal::encode(
             $hashValues,
             'canonical_portfolio_reservation_hash_invalid',

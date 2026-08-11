@@ -100,6 +100,8 @@ final readonly class DayTradingShadowRuntime
                     'config_hash' => $snapshot->configHash,
                     'plan_hash' => $plan->planHash,
                     'reservation_hash' => $reservation->stateHash,
+                    'entry_expires_at' => $plan->expiresAt->format(DATE_ATOM),
+                    'cancel_after_at' => $plan->cancelAfterAt?->format(DATE_ATOM),
                     'holding_expires_at' => $holdingExpiry->format(DATE_ATOM),
                     'rules' => $rules->trace,
                 ],
@@ -145,6 +147,9 @@ final readonly class DayTradingShadowRuntime
             && strtolower((string) $lineage->side) === $config->side
             && $lineage->exchange === $config->exchange
             && $lineage->environment === $config->environment
+            && $lineage->symbol === $request->orderPlanRequest->zone->symbol
+            && $lineage->marketType === $request->orderPlanRequest->zone->marketType
+            && $lineage->decisionKey === $request->decisionKey
             && $lineage->configHash === $configHash
             && $lineage->conditionCatalogHash === $catalogHash;
     }

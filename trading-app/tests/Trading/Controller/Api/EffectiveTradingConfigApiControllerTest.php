@@ -58,6 +58,34 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertSame('invalid_config_request', $this->json($response)['error']['code']);
     }
 
+    public function testDayTradingViewerAcceptsExplicitShadowCapability(): void
+    {
+        $response = $this->controller()->effective(new Request([
+            'mode_id' => 'day_trading', 'mode_version' => '1.1.0',
+            'setup_id' => 'day_trading.trend_continuation.long', 'setup_version' => '1.1.0',
+            'exchange' => 'fake', 'environment' => 'test', 'side' => 'long',
+            'execution_capability' => 'fake',
+        ]));
+        $body = $this->json($response);
+
+        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
+        self::assertSame('fake', $body['request']['execution_capability']);
+        self::assertTrue($body['executable']);
+    }
+
+    public function testViewerRejectsUnknownCapabilityWithoutFallback(): void
+    {
+        $response = $this->controller()->effective(new Request([
+            'mode_id' => 'day_trading', 'mode_version' => '1.1.0',
+            'setup_id' => 'day_trading.trend_continuation.long', 'setup_version' => '1.1.0',
+            'exchange' => 'fake', 'environment' => 'test', 'side' => 'long',
+            'execution_capability' => 'simulated-ish',
+        ]));
+
+        self::assertSame(Response::HTTP_BAD_REQUEST, $response->getStatusCode());
+        self::assertSame('invalid_config_request', $this->json($response)['error']['code']);
+    }
+
     private function controller(): EffectiveTradingConfigApiController
     {
         $controller = new EffectiveTradingConfigApiController(new EffectiveTradingConfigReadService(new EffectiveTradingConfigResolver()));
