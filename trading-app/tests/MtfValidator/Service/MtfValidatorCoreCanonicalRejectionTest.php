@@ -14,6 +14,7 @@ use App\MtfValidator\Service\ExecutionSelectionService;
 use App\MtfValidator\Service\MtfTimeframeResolver;
 use App\MtfValidator\Service\MtfValidatorCoreService;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -75,6 +76,9 @@ final class MtfValidatorCoreCanonicalRejectionTest extends TestCase
         $payload = CanonicalSnapshotFixture::lineage(CanonicalSnapshotFixture::config())->toArray();
         $payload['effective_config_snapshot']['executable'] = false;
         $payload['effective_config_snapshot']['blockers'] = ['mode.status:draft'];
+        $payload['effective_config_snapshot']['snapshot_hash'] = CanonicalEffectiveConfigSnapshot::calculateSnapshotHash(
+            $payload['effective_config_snapshot'],
+        );
         $identity = LineageContext::fromOrchestratorPayload($payload);
         $indicatorProvider = $this->createMock(IndicatorProviderInterface::class);
         $indicatorProvider->expects(self::never())->method(self::anything());

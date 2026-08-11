@@ -30,6 +30,7 @@ use App\Indicator\Registry\ConditionRegistry;
 use App\Provider\Context\ExchangeContext;
 use App\Provider\Fake\FakeKlineProvider;
 use App\Repository\IndicatorSnapshotRepository;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
@@ -656,6 +657,7 @@ final class IndicatorProviderService implements IndicatorProviderInterface
         array $timeframes,
         \DateTimeInterface $at,
         ?ExchangeContext $context = null,
+        ?string $environment = null,
     ): array {
         $context = ExchangeContext::resolve($context);
         $result = [];
@@ -723,6 +725,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $klineTime = $snapshot->klineTime ?? \DateTimeImmutable::createFromInterface($at);
 
                 $result[$tf] = [
+                    ...($environment === null ? [] : ['snapshot_identity' => (new CanonicalIndicatorSnapshotIdentity(
+                        (string) $tf,
+                        $symbol,
+                        $context->exchange->value,
+                        $environment,
+                        $context->marketType->value,
+                    ))->toArray()]),
                     'close'        => $lastClose,
                     'rsi'          => $snapshot->rsi,
                     'ema_20'       => $snapshot->ema20?->toFloat(),

@@ -72,6 +72,8 @@ final class IndicatorEngineProviderSeriesChronologyTest extends TestCase
         self::assertSame($context['macd_hist_series'], $context['macd_line_signal_series']);
         self::assertSame($context['macd_hist_series_timestamps'], $context['macd_line_signal_series_timestamps']);
         self::assertSame(end($context['series_timestamps']), $context['candle_open_ts']);
+        self::assertSame($context['candle_open_ts'], end($context['macd_hist_series_timestamps']));
+        self::assertSame($context['candle_open_ts'], end($context['macd_line_signal_series_timestamps']));
     }
 
     private function provider(): IndicatorEngineProvider

@@ -68,6 +68,55 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         self::assertSame(['1m'], $stale->trace['mandatory_confirmations']);
     }
 
+    public function testScalpingShadowRejectsMissingAndCrossMarketSnapshotIdentityBeforeConditionEvaluation(): void
+    {
+        $evaluations = 0;
+        $condition = new class($evaluations) implements ConditionInterface {
+            public function __construct(private int &$evaluations)
+            {
+            }
+
+            public function getName(): string
+            {
+                return 'ema20_gt_ema50';
+            }
+
+            /** @param array<string, mixed> $context */
+            public function evaluate(array $context): ConditionResult
+            {
+                ++$this->evaluations;
+
+                return new ConditionResult($this->getName(), true);
+            }
+        };
+        $runtime = new CanonicalSetupRuleRuntime([$condition]);
+        $lineage = $this->scalpingLineage('scalping.trend_continuation.long', 'long');
+
+        foreach ([
+            'missing' => null,
+            'timeframe' => ['timeframe' => '15m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'symbol' => ['timeframe' => '1m', 'symbol' => 'ETHUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'exchange' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'okx', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'environment' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'local', 'market_type' => 'perpetual'],
+            'market type' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'spot'],
+        ] as $label => $snapshotIdentity) {
+            $inputs = $this->scalpingInputs();
+            if ($snapshotIdentity === null) {
+                unset($inputs['1m']['snapshot_identity']);
+            } else {
+                $inputs['1m']['snapshot_identity'] = $snapshotIdentity;
+            }
+
+            $result = $runtime->evaluate($lineage, $inputs, new \DateTimeImmutable('2026-08-10T12:00:00Z'));
+
+            self::assertFalse($result->passed, $label);
+            self::assertSame('indicator_snapshot_identity_mismatch', $result->reasonCode, $label);
+            self::assertSame('1m', $result->trace['rejection']['timeframe'], $label);
+            self::assertSame($label === 'missing' ? 'identity_missing_or_invalid' : 'identity_mismatch', $result->trace['rejection']['cause'], $label);
+            self::assertSame(0, $evaluations, $label);
+        }
+    }
+
     public function testScalpingShadowTreatsEveryUnparseableRequiredKlineTimeAsMissing(): void
     {
         foreach ([
@@ -96,10 +145,10 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime([]))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => ['kline_time' => '2026-08-10T08:00:00Z'],
-                '1h' => ['kline_time' => '2026-08-10T09:00:00Z'],
-                '15m' => ['kline_time' => '2026-08-10T09:45:00Z'],
-                '5m' => ['kline_time' => '2026-08-10T09:55:00Z'],
+                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z'),
+                '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
+                '5m' => self::indicatorInput('5m', '2026-08-10T09:55:00Z'),
             ],
             new \DateTimeImmutable('2026-08-10T10:00:00Z'),
         );
@@ -118,11 +167,11 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $result = (new CanonicalSetupRuleRuntime([]))->evaluate(
             $this->dayTradingLineage(),
             [
-                '4h' => ['kline_time' => '2026-08-10T08:00:00Z'],
-                '1h' => ['kline_time' => '2026-08-10T09:00:00Z'],
-                '15m' => ['kline_time' => '2026-08-10T09:45:00Z'],
-                '5m' => ['kline_time' => '2026-08-10T09:00:00Z'],
-                '1m' => ['kline_time' => '2026-08-10T09:59:00Z'],
+                '4h' => self::indicatorInput('4h', '2026-08-10T08:00:00Z'),
+                '1h' => self::indicatorInput('1h', '2026-08-10T09:00:00Z'),
+                '15m' => self::indicatorInput('15m', '2026-08-10T09:45:00Z'),
+                '5m' => self::indicatorInput('5m', '2026-08-10T09:00:00Z'),
+                '1m' => self::indicatorInput('1m', '2026-08-10T09:59:00Z'),
             ],
             new \DateTimeImmutable('2026-08-10T10:00:00Z'),
         );
@@ -297,6 +346,13 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         $timestamps = [$current - $step, $current];
 
         return array_replace([
+            'snapshot_identity' => [
+                'timeframe' => $timeframe,
+                'symbol' => 'BTCUSDT',
+                'exchange' => 'fake',
+                'environment' => 'test',
+                'market_type' => 'perpetual',
+            ],
             'kline_time' => $klineTime,
             'series_order' => 'oldest_to_newest',
             'ema_200_series' => [100.0, 101.0],

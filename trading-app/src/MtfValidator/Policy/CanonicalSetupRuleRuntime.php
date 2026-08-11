@@ -16,6 +16,7 @@ use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use App\TradingCore\Mode\ModeContractLoader;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
@@ -87,6 +88,34 @@ final class CanonicalSetupRuleRuntime
                         'rejection' => [
                             'timeframe' => $timeframe,
                             'cause' => 'kline_time_missing_or_invalid',
+                        ],
+                    ]);
+                }
+                $snapshotIdentityData = $indicatorsByTimeframe[$timeframe]['snapshot_identity'] ?? null;
+                $snapshotIdentity = \is_array($snapshotIdentityData)
+                    ? CanonicalIndicatorSnapshotIdentity::tryFromArray($snapshotIdentityData)
+                    : null;
+                $expectedSnapshotIdentity = new CanonicalIndicatorSnapshotIdentity(
+                    $timeframe,
+                    (string) $identity->symbol,
+                    (string) $identity->exchange,
+                    (string) $identity->environment,
+                    (string) $identity->marketType,
+                );
+                if ($snapshotIdentity === null || !$snapshotIdentity->matches(
+                    $expectedSnapshotIdentity->timeframe,
+                    $expectedSnapshotIdentity->symbol,
+                    $expectedSnapshotIdentity->exchange,
+                    $expectedSnapshotIdentity->environment,
+                    $expectedSnapshotIdentity->marketType,
+                )) {
+                    return new CanonicalSetupRuleRuntimeResult(false, 'indicator_snapshot_identity_mismatch', [
+                        ...$this->traceIdentity($identity, $evaluatedAt, $shadowTimeframes),
+                        'rejection' => [
+                            'timeframe' => $timeframe,
+                            'cause' => $snapshotIdentity === null ? 'identity_missing_or_invalid' : 'identity_mismatch',
+                            'expected_identity' => $expectedSnapshotIdentity->toArray(),
+                            'observed_identity' => $snapshotIdentity?->toArray(),
                         ],
                     ]);
                 }

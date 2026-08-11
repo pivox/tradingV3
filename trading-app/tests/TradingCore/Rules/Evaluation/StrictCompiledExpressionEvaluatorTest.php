@@ -191,6 +191,7 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             'timeframe' => '1h',
             'side' => $side,
             'series_order' => 'oldest_to_newest',
+            'kline_time' => '2026-08-10T10:00:00+00:00',
         ] + $seriesProof);
 
         self::assertSame($expectedPassed, $result->passed);
@@ -199,7 +200,7 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
     /** @return iterable<string, array{string, string, array<string, mixed>, bool}> */
     public static function nestedEmaSeriesProofProvider(): iterable
     {
-        $start = 1_786_435_200;
+        $start = 1_786_352_400;
         foreach ([
             'long' => ['price_regime_ok_long', [100.0, 101.0]],
             'short' => ['price_regime_ok_short', [101.0, 100.0]],
@@ -216,6 +217,14 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             yield $side . ' reverse timestamps' => [$expression, $side, [
                 'ema_200_series' => $series,
                 'ema_200_series_timestamps' => [$start + 3600, $start],
+            ], false];
+            yield $side . ' stale evenly spaced timestamps' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start - 3600, $start],
+            ], false];
+            yield $side . ' future evenly spaced timestamps' => [$expression, $side, [
+                'ema_200_series' => $series,
+                'ema_200_series_timestamps' => [$start + 3600, $start + 7200],
             ], false];
             yield $side . ' canonical proof' => [$expression, $side, [
                 'ema_200_series' => $series,
@@ -252,6 +261,7 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             'timeframe' => '15m',
             'side' => 'short',
             'series_order' => 'oldest_to_newest',
+            'kline_time' => '2026-08-10T10:00:00+00:00',
         ] + $seriesProof);
 
         self::assertSame($expectedPassed, $result->passed);
@@ -260,13 +270,21 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
     /** @return iterable<string, array{array<string, mixed>, bool}> */
     public static function nestedCrashSeriesProofProvider(): iterable
     {
-        $start = 1_786_435_200;
+        $start = 1_786_355_100;
 
         yield 'forged order label only' => [[], false];
         yield 'missing timestamps' => [['macd_hist_series' => [0.2, 0.1]], false];
         yield 'duplicate timestamps' => [[
             'macd_hist_series' => [0.2, 0.1],
             'macd_hist_series_timestamps' => [$start, $start],
+        ], false];
+        yield 'stale evenly spaced timestamps' => [[
+            'macd_hist_series' => [0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start - 900, $start],
+        ], false];
+        yield 'future evenly spaced timestamps' => [[
+            'macd_hist_series' => [0.2, 0.1],
+            'macd_hist_series_timestamps' => [$start + 900, $start + 1800],
         ], false];
         yield 'string outside consumed tail' => [[
             'macd_hist_series' => ['garbage', 0.2, 0.1],
@@ -305,12 +323,14 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
             '1h' => 3600,
             default => throw new \InvalidArgumentException('Unsupported test timeframe.'),
         };
-        $start = 1_786_435_200;
+        $end = 1_786_356_000;
+        $start = $end - $step;
         $proof = [
             '_input_source' => 'indicator_snapshot',
             'timeframe' => $timeframe,
             'side' => $side,
             'series_order' => 'oldest_to_newest',
+            'kline_time' => '2026-08-10T10:00:00+00:00',
         ];
         if ($ema) {
             $proof['ema_200_series'] = [101.0, 100.0];

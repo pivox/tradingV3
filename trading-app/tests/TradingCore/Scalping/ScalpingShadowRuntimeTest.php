@@ -176,6 +176,60 @@ final class ScalpingShadowRuntimeTest extends TestCase
         }
     }
 
+    public function testCrossMarketIndicatorSnapshotsNeverPlanOrMutatePortfolioState(): void
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $store = new InMemoryCanonicalPortfolioReservationStore();
+        $selector = DayTradingShadowRuntimeTest::fixtureSelector(new FakeCanonicalPortfolioAdapter(
+            new CanonicalPortfolioAdmissionEngine($clock),
+            $store,
+        ));
+        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+
+        foreach ([
+            'missing' => null,
+            'timeframe' => ['timeframe' => '15m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'symbol' => ['timeframe' => '1m', 'symbol' => 'ETHUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'exchange' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'okx', 'environment' => 'test', 'market_type' => 'perpetual'],
+            'environment' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'local', 'market_type' => 'perpetual'],
+            'market type' => ['timeframe' => '1m', 'symbol' => 'BTCUSDT', 'exchange' => 'fake', 'environment' => 'test', 'market_type' => 'spot'],
+        ] as $label => $snapshotIdentity) {
+            $inputs = $request->indicatorsByTimeframe;
+            if ($snapshotIdentity === null) {
+                unset($inputs['1m']['snapshot_identity']);
+            } else {
+                $inputs['1m']['snapshot_identity'] = $snapshotIdentity;
+            }
+
+            $outcome = self::fixtureRuntime(adapters: $selector)->run($request->withIndicators($inputs));
+
+            self::assertSame('no_trade', $outcome->status, $label);
+            self::assertSame('scalping_shadow_indicator_snapshot_identity_mismatch', $outcome->reasonCode, $label);
+            self::assertNull($outcome->orderPlan, $label);
+            self::assertNull($outcome->reservation, $label);
+            self::assertSame(1, $store->scopeVersion($request->portfolioScope), $label);
+            self::assertNull($store->plan($request->portfolioScope, $request->decisionKey), $label);
+        }
+    }
+
+    public function testStaleOrFutureEvenlySpacedSeriesNeverPlansOrReserves(): void
+    {
+        $request = self::fixtureRequest('scalping.trend_momentum.short', 'short');
+        $stale = $request->indicatorsByTimeframe;
+        $stale['1m']['macd_hist_series_timestamps'] = [1_786_363_020, 1_786_363_080];
+        $future = $request->indicatorsByTimeframe;
+        $future['1m']['macd_hist_series_timestamps'] = [1_786_363_200, 1_786_363_260];
+
+        foreach ([$stale, $future] as $inputs) {
+            $outcome = self::fixtureRuntime()->run($request->withIndicators($inputs));
+
+            self::assertSame('no_trade', $outcome->status);
+            self::assertSame('scalping_shadow_setup_section_failed', $outcome->reasonCode);
+            self::assertNull($outcome->orderPlan);
+            self::assertNull($outcome->reservation);
+        }
+    }
+
     public function testMissingCanonicalOrderBookFailsClosedBeforePlanning(): void
     {
         $outcome = self::fixtureRuntime()->run(
@@ -691,6 +745,13 @@ final class ScalpingShadowRuntimeTest extends TestCase
         $timestamps = [$current - $step, $current];
 
         return array_replace([
+            'snapshot_identity' => [
+                'timeframe' => $timeframe,
+                'symbol' => 'BTCUSDT',
+                'exchange' => 'fake',
+                'environment' => 'test',
+                'market_type' => 'perpetual',
+            ],
             'kline_time' => $klineTime,
             'series_order' => 'oldest_to_newest',
             'ema_200_series' => [100.0, 101.0],

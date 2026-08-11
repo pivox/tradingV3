@@ -66,11 +66,16 @@ interface IndicatorProviderInterface
      */
     public function listAvailableIndicators(): array;
 
+    /**
+     * @param list<string> $timeframes
+     * @return array<string, array<string, mixed>>
+     */
     public function getIndicatorsForSymbolAndTimeframes(
         string $symbol,
         array $timeframes,
         \DateTimeInterface $at,
         ?ExchangeContext $context = null,
+        ?string $environment = null,
     ): array;
 
 }

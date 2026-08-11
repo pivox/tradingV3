@@ -193,7 +193,7 @@ final class StrictRuleEvaluatorTest extends TestCase
         $condition = $this->condition('macd_hist_increasing_n', true, 0.1, 0.0);
         $node = new ConditionNode('macd_hist_increasing_n', '5m', 'long', ['macd_hist_increasing_n' => 2], 'fixture:series');
         $evaluator = $this->evaluator([$condition]);
-        $start = 1_786_435_200;
+        $start = 1_786_355_700;
 
         $missing = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2]]));
         $reversed = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2], 'series_order' => 'newest_to_oldest']));
@@ -233,6 +233,39 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertSame([$start, $start + 300], $canonical->trace['reported_series_timestamps']);
     }
 
+    public function testSeriesConditionAnchorsTheFinalTimestampToTheCanonicalSnapshotCandle(): void
+    {
+        $condition = $this->condition('macd_hist_increasing_n', true, 0.1, 0.0);
+        $node = new ConditionNode('macd_hist_increasing_n', '5m', 'long', ['macd_hist_increasing_n' => 2], 'fixture:series-anchor');
+        $evaluator = $this->evaluator([$condition]);
+        $base = [
+            'macd_hist_series' => [0.1, 0.2],
+            'series_order' => 'oldest_to_newest',
+        ];
+
+        $stale = $evaluator->evaluate($node, $this->context($base + [
+            'kline_time' => '2026-08-10T10:00:00+00:00',
+            'macd_hist_series_timestamps' => [1_786_355_400, 1_786_355_700],
+        ]));
+        $future = $evaluator->evaluate($node, $this->context($base + [
+            'kline_time' => '2026-08-10T10:00:00+00:00',
+            'macd_hist_series_timestamps' => [1_786_356_000, 1_786_356_300],
+        ]));
+        $subsecond = $evaluator->evaluate($node, $this->context($base + [
+            'kline_time' => '2026-08-10T10:00:00.500000+00:00',
+            'macd_hist_series_timestamps' => [1_786_355_700, 1_786_356_000],
+        ]));
+        $timezoneEquivalent = $evaluator->evaluate($node, $this->context($base + [
+            'kline_time' => '2026-08-10T12:00:00+02:00',
+            'macd_hist_series_timestamps' => [1_786_355_700, 1_786_356_000],
+        ]));
+
+        self::assertSame('invalid_series_chronology', $stale->reasonCode);
+        self::assertSame('invalid_series_chronology', $future->reasonCode);
+        self::assertSame('invalid_series_chronology', $subsecond->reasonCode);
+        self::assertTrue($timezoneEquivalent->passed);
+    }
+
     /**
      * @param array<string, mixed> $values
      * @param array<string, mixed> $parameters
@@ -260,7 +293,7 @@ final class StrictRuleEvaluatorTest extends TestCase
     /** @return iterable<string, array{string, string, array<string, mixed>, array<string, mixed>, string, bool}> */
     public static function macdLineCrossChronologyProvider(): iterable
     {
-        $start = 1_786_435_200;
+        $start = 1_786_355_700;
         foreach ([
             'up' => [
                 MacdLineCrossUpWithHysteresisCondition::NAME,
@@ -337,7 +370,7 @@ final class StrictRuleEvaluatorTest extends TestCase
     /** @return iterable<string, array{string, string, array<string, mixed>, string, bool}> */
     public static function macdHistogramSlopeMetricProvider(): iterable
     {
-        $start = 1_786_435_200;
+        $start = 1_786_355_100;
 
         yield 'positive slope missing declared metric' => [
             MacdHistSlopePosCondition::NAME,
@@ -402,7 +435,7 @@ final class StrictRuleEvaluatorTest extends TestCase
     /** @return iterable<string, array{string, string, array<string, mixed>, string, bool}> */
     public static function ema200SlopeMetricProvider(): iterable
     {
-        $start = 1_786_435_200;
+        $start = 1_786_352_400;
 
         yield 'positive slope missing declared metric' => [
             'ema200_slope_pos',
@@ -481,7 +514,7 @@ final class StrictRuleEvaluatorTest extends TestCase
             ? new MacdHistSlopePosCondition()
             : new Ema200SlopePosCondition();
         $step = $timeframe === '1h' ? 3600 : 900;
-        $start = 1_786_435_200;
+        $start = 1_786_356_000 - (($series === [] ? 1 : count($series)) - 1) * $step;
         $timestamps = array_map(
             static fn (int $index): int => $start + ($index * $step),
             array_keys($series),
@@ -590,6 +623,19 @@ final class StrictRuleEvaluatorTest extends TestCase
     private function context(array $values, bool $include = true, bool $stale = false, string $timeframe = '5m'): RuleEvaluationContext
     {
         $now = new \DateTimeImmutable('2026-08-10T10:00:00+00:00');
+        if (!array_key_exists('kline_time', $values)) {
+            foreach ($values as $key => $candidate) {
+                if (str_ends_with((string) $key, '_timestamps') && is_array($candidate) && $candidate !== []) {
+                    $lastTimestamp = $candidate[array_key_last($candidate)];
+                    if (is_int($lastTimestamp)) {
+                        $values['kline_time'] = (new \DateTimeImmutable('@' . $lastTimestamp))
+                            ->setTimezone(new \DateTimeZone('UTC'))
+                            ->format(DATE_ATOM);
+                    }
+                    break;
+                }
+            }
+        }
         $snapshots = $include ? [
             new RuleInputSnapshot(
                 $timeframe,

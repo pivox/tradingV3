@@ -88,6 +88,7 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
             ->getIndicatorsForSymbolAndTimeframes('BTCUSDT', ['1m'], $now);
 
         self::assertSame(250.0, $result['1m']['close'] ?? null);
+        self::assertArrayNotHasKey('snapshot_identity', $result['1m']);
         self::assertSame('2026-05-31 12:04:00', $result['1m']['kline_time'] ?? null);
         self::assertSame('oldest_to_newest', $result['1m']['series_order'] ?? null);
         self::assertSame([9, 20, 21, 50, 200], array_keys($result['1m']['ema'] ?? []));
@@ -138,9 +139,16 @@ final class IndicatorProviderServiceClosedKlineTest extends TestCase
             $snapshotRepository,
             $now,
             $fakeKlines,
-        )->getIndicatorsForSymbolAndTimeframes('BTCUSDT', ['1m'], $now, $fakeContext);
+        )->getIndicatorsForSymbolAndTimeframes('BTCUSDT', ['1m'], $now, $fakeContext, 'test');
 
         self::assertSame(250.0, $result['1m']['close'] ?? null);
+        self::assertSame([
+            'timeframe' => '1m',
+            'symbol' => 'BTCUSDT',
+            'exchange' => 'fake',
+            'environment' => 'test',
+            'market_type' => 'perpetual',
+        ], $result['1m']['snapshot_identity'] ?? null);
     }
 
     public function testSnapshotFreshnessRequiresExpectedClosedCandle(): void

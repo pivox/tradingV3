@@ -479,6 +479,13 @@ final class DayTradingShadowRuntimeTest extends TestCase
         $timestamps = [$current - $step, $current];
 
         return array_replace([
+            'snapshot_identity' => [
+                'timeframe' => $timeframe,
+                'symbol' => 'BTCUSDT',
+                'exchange' => 'fake',
+                'environment' => 'test',
+                'market_type' => 'perpetual',
+            ],
             'kline_time' => $klineTime,
             'series_order' => 'oldest_to_newest',
             'ema_200_series' => [100.0, 101.0],

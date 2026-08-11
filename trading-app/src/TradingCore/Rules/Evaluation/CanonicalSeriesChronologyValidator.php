@@ -47,9 +47,16 @@ final readonly class CanonicalSeriesChronologyValidator
         if ($timeframeValue === null) {
             return false;
         }
+        $candleTimestamp = $this->canonicalSecond($context['kline_time'] ?? null);
+        if ($candleTimestamp === null) {
+            return false;
+        }
         $step = $timeframeValue->getStepInSeconds();
         foreach ($timestamps as $index => $timestamp) {
             if (!is_int($timestamp)) {
+                return false;
+            }
+            if ($timestamp > $candleTimestamp) {
                 return false;
             }
             if ($index > 0 && $timestamp - $timestamps[$index - 1] !== $step) {
@@ -57,6 +64,40 @@ final readonly class CanonicalSeriesChronologyValidator
             }
         }
 
-        return true;
+        return $timestamps[array_key_last($timestamps)] === $candleTimestamp;
+    }
+
+    private function canonicalSecond(mixed $value): ?int
+    {
+        if ($value instanceof \DateTimeInterface) {
+            $instant = \DateTimeImmutable::createFromInterface($value);
+
+            return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
+        }
+        if (is_int($value)) {
+            if ($value > 10_000_000_000) {
+                return $value % 1000 === 0 ? intdiv($value, 1000) : null;
+            }
+
+            return $value;
+        }
+        if (is_float($value)) {
+            if (!is_finite($value)) {
+                return null;
+            }
+            $seconds = $value > 10_000_000_000 ? $value / 1000.0 : $value;
+
+            return floor($seconds) === $seconds ? (int) $seconds : null;
+        }
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+        try {
+            $instant = new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
+        } catch (\Exception) {
+            return null;
+        }
+
+        return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
     }
 }
