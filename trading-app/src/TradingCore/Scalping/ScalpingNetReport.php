@@ -266,6 +266,29 @@ final readonly class ScalpingNetReport
         CanonicalOrderPlan $plan,
         LineageContext $lineage,
     ): void {
+        $expectedStopFeeRate = $plan->stopLiquidityRole === 'maker'
+            ? $plan->makerFeeRate
+            : $plan->takerFeeRate;
+        $expectedFundingCostRate = $plan->positionNotional > 0.0
+            ? $plan->fundingCost / $plan->positionNotional
+            : 0.0;
+        $zeroDecimal = '0';
+        try {
+            $quantityDecimal = CanonicalOrderPlanDecimal::fromFloat(
+                $plan->quantity,
+                'scalping_net_report_reservation_value_invalid',
+            )->__toString();
+            $riskDecimal = CanonicalOrderPlanDecimal::fromFloat(
+                $plan->totalStopLoss,
+                'scalping_net_report_reservation_value_invalid',
+            )->__toString();
+            $notionalDecimal = CanonicalOrderPlanDecimal::fromFloat(
+                $plan->positionNotional,
+                'scalping_net_report_reservation_value_invalid',
+            )->__toString();
+        } catch (CanonicalOrderPlanException $exception) {
+            throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch', 0, $exception);
+        }
         if (
             $reservation->decisionKey !== $lineage->decisionKey
             || $reservation->configHash !== $plan->configHash
@@ -273,12 +296,51 @@ final readonly class ScalpingNetReport
             || $reservation->scope->modeId !== $plan->modeId
             || $reservation->scope->exchange !== $plan->exchange
             || $reservation->scope->environment !== $plan->environment
+            || $reservation->scope->quoteCurrency !== $plan->quoteCurrency
+            || !self::sameDecimal($reservation->reservedRiskQuote, $plan->totalStopLoss)
+            || !self::sameDecimal($reservation->reservedNotionalQuote, $plan->positionNotional)
+            || !self::sameDecimal($reservation->plannedQuantity, $plan->quantity)
+            || !self::sameDecimal($reservation->quantityStep, $plan->quantityStep)
+            || !self::sameDecimal($reservation->contractSize, $plan->contractSize)
             || $reservation->side !== $plan->side
-            || $reservation->reservedRiskQuote !== $plan->totalStopLoss
-            || $reservation->reservedNotionalQuote !== $plan->positionNotional
+            || !self::sameDecimal($reservation->stopPrice, $plan->stopPrice)
+            || !self::sameDecimal($reservation->stopFeeRate, $expectedStopFeeRate)
+            || !self::sameDecimal($reservation->stopSpreadRate, $plan->stopSpreadRate)
+            || !self::sameDecimal($reservation->stopSlippageRate, $plan->stopSlippageRate)
+            || !self::sameDecimal($reservation->fundingCostRate, $expectedFundingCostRate)
+            || !self::sameDecimal($reservation->plannedFundingCostQuote, $plan->fundingCost)
+            || $reservation->entryExpiresAt != $plan->expiresAt
+            || $reservation->cancelAfterAt != $plan->cancelAfterAt
+            || $reservation->holdingExpiresAt != $plan->holdingExpiresAt
+            || !self::sameDecimal($reservation->filledQuantity, 0.0)
+            || !self::sameDecimal($reservation->protectedQuantity, 0.0)
+            || !self::sameDecimal($reservation->remainingQuantity, $plan->quantity)
+            || !self::sameDecimal($reservation->venueRemainingQuantity, $plan->quantity)
+            || !self::sameDecimal($reservation->filledEntryNotionalQuote, 0.0)
+            || !self::sameDecimal($reservation->accumulatedEntryFeeQuote, 0.0)
+            || !self::sameDecimal($reservation->accumulatedGrossStopLossQuote, 0.0)
+            || !self::sameDecimal($reservation->filledRiskQuote, 0.0)
+            || !self::sameDecimal($reservation->residualRiskQuote, $plan->totalStopLoss)
+            || !self::sameDecimal($reservation->filledNotionalQuote, 0.0)
+            || !self::sameDecimal($reservation->residualNotionalQuote, $plan->positionNotional)
+            || $reservation->filledQuantityDecimal !== $zeroDecimal
+            || $reservation->protectedQuantityDecimal !== $zeroDecimal
+            || $reservation->remainingQuantityDecimal !== $quantityDecimal
+            || $reservation->venueRemainingQuantityDecimal !== $quantityDecimal
+            || $reservation->filledEntryNotionalDecimal !== $zeroDecimal
+            || $reservation->accumulatedEntryFeeDecimal !== $zeroDecimal
+            || $reservation->accumulatedGrossStopLossDecimal !== $zeroDecimal
+            || $reservation->filledRiskDecimal !== $zeroDecimal
+            || $reservation->residualRiskDecimal !== $riskDecimal
+            || $reservation->filledNotionalDecimal !== $zeroDecimal
+            || $reservation->residualNotionalDecimal !== $notionalDecimal
             || $reservation->status !== 'active'
             || $reservation->requiredAction !== 'none'
-            || $reservation->filledQuantity !== 0.0
+            || $reservation->appliedFillHashes !== []
+            || $reservation->transitionInputHashes !== [$reservation->portfolioInputHash]
+            || $reservation->version !== 1
+            || $reservation->previousStateHash !== null
+            || $reservation->observedAt != $plan->createdAt
             || !self::validHash($reservation->stateHash)
             || !self::validHash($reservation->admissionHash)
             || !self::validHash($reservation->portfolioInputHash)
@@ -293,6 +355,21 @@ final readonly class ScalpingNetReport
         }
         if (!hash_equals($expectedStateHash, $reservation->stateHash)) {
             throw new \InvalidArgumentException('scalping_net_report_reservation_identity_mismatch');
+        }
+    }
+
+    private static function sameDecimal(float $actual, float $expected): bool
+    {
+        try {
+            return CanonicalOrderPlanDecimal::fromFloat(
+                $actual,
+                'scalping_net_report_reservation_value_invalid',
+            )->isEqualTo(CanonicalOrderPlanDecimal::fromFloat(
+                $expected,
+                'scalping_net_report_reservation_value_invalid',
+            ));
+        } catch (CanonicalOrderPlanException) {
+            return false;
         }
     }
 

@@ -8,6 +8,7 @@ use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservation;
 use App\TradingCore\Scalping\ScalpingNetReport;
 use App\TradingCore\Scalping\ScalpingNetReportCell;
 use App\TradingCore\Scalping\ScalpingShadowRequest;
@@ -281,6 +282,103 @@ final class ScalpingNetReportTest extends TestCase
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function coordinatedReservationForgeryCases(): iterable
+    {
+        yield 'planned quantity' => ['planned_quantity'];
+        yield 'stop cost' => ['stop_cost'];
+        yield 'entry deadline' => ['entry_deadline'];
+        yield 'decimal mirror' => ['decimal_mirror'];
+        yield 'protected state' => ['protected_state'];
+        yield 'version' => ['version'];
+        yield 'applied fills' => ['applied_fills'];
+        yield 'scope quote currency' => ['scope_quote_currency'];
+    }
+
+    #[DataProvider('coordinatedReservationForgeryCases')]
+    public function testRejectsCoordinatedRehashedReservationThatIsNotExactOpeningState(string $case): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        self::assertNotNull($planned->reservation);
+        $plan = $planned->orderPlan;
+        $reservation = $planned->reservation;
+        $forged = match ($case) {
+            'planned_quantity' => self::mutateSerializedProperty(
+                $reservation,
+                'plannedQuantity',
+                $reservation->plannedQuantity,
+                $reservation->plannedQuantity + $plan->quantityStep,
+                CanonicalPortfolioReservation::class,
+            ),
+            'stop_cost' => self::mutateSerializedProperty(
+                $reservation,
+                'stopFeeRate',
+                $reservation->stopFeeRate,
+                $reservation->stopFeeRate + 0.001,
+                CanonicalPortfolioReservation::class,
+            ),
+            'entry_deadline' => self::mutateSerializedProperty(
+                $reservation,
+                'entryExpiresAt',
+                $reservation->entryExpiresAt,
+                $reservation->entryExpiresAt->modify('+1 second'),
+                CanonicalPortfolioReservation::class,
+            ),
+            'decimal_mirror' => self::mutateSerializedProperty(
+                $reservation,
+                'remainingQuantityDecimal',
+                $reservation->remainingQuantityDecimal,
+                '999',
+                CanonicalPortfolioReservation::class,
+            ),
+            'protected_state' => self::mutateSerializedProperty(
+                $reservation,
+                'protectedQuantity',
+                $reservation->protectedQuantity,
+                $plan->quantityStep,
+                CanonicalPortfolioReservation::class,
+            ),
+            'version' => self::mutateSerializedProperty(
+                $reservation,
+                'version',
+                $reservation->version,
+                2,
+                CanonicalPortfolioReservation::class,
+            ),
+            'applied_fills' => self::mutateSerializedProperty(
+                $reservation,
+                'appliedFillHashes',
+                $reservation->appliedFillHashes,
+                ['forged-fill' => 'sha256:' . str_repeat('a', 64)],
+                CanonicalPortfolioReservation::class,
+            ),
+            'scope_quote_currency' => self::mutateSerializedProperty(
+                $reservation,
+                'quoteCurrency',
+                $reservation->scope->quoteCurrency,
+                'USDC',
+                CanonicalPortfolioReservation::class,
+            ),
+            default => throw new \LogicException('Unknown reservation forgery case.'),
+        };
+        $forged = self::rehashReservation($forged);
+        $evidence = $planned->evidence;
+        $evidence['reservation_hash'] = $forged->stateHash;
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $planned->lineage,
+            $plan,
+            $forged,
+            $evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_reservation_identity_mismatch');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
     public function testRejectsIncompleteLineageAndEveryPlanReservationHashMismatch(): void
     {
         $planned = self::plannedOutcomes()[0];
@@ -474,6 +572,38 @@ final class ScalpingNetReportTest extends TestCase
         self::assertInstanceOf($class, $mutated);
 
         return $mutated;
+    }
+
+    /**
+     * @template T of object
+     * @param T               $object
+     * @param class-string<T> $class
+     * @return T
+     */
+    private static function mutateSerializedProperty(
+        object $object,
+        string $property,
+        mixed $from,
+        mixed $to,
+        string $class,
+    ): object {
+        return self::mutateSerializedValue(
+            $object,
+            serialize($property) . serialize($from),
+            serialize($property) . serialize($to),
+            $class,
+        );
+    }
+
+    private static function rehashReservation(CanonicalPortfolioReservation $reservation): CanonicalPortfolioReservation
+    {
+        return self::mutateSerializedProperty(
+            $reservation,
+            'stateHash',
+            $reservation->stateHash,
+            $reservation->expectedStateHash(),
+            CanonicalPortfolioReservation::class,
+        );
     }
 
     /**
