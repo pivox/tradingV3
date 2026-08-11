@@ -29,7 +29,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
 
     public function buildContext(string $symbol, string $timeframe, array $klines, array $options = []): array
     {
-        $closes = $highs = $lows = $vols = [];
+        $closes = $highs = $lows = $vols = $timestamps = [];
         $ohlc = [];
         $lastOpenTime = null;
 
@@ -64,6 +64,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             $ohlc[] = ['high' => $h, 'low' => $l, 'close' => $c];
 
             $openTime = $this->extractOpenTime($k);
+            $timestamps[] = $openTime;
             if ($openTime !== null) {
                 $lastOpenTime = $openTime;
             }
@@ -74,6 +75,7 @@ final class IndicatorEngineProvider implements IndicatorEngineInterface
             ->withDefaults()
             ->symbol($symbol)
             ->timeframe($timeframe)
+            ->timestamps($timestamps)
             ->closes($closes)
             ->highs($highs)
             ->lows($lows)

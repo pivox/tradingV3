@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Rules\Evaluation;
 
+use App\Common\Enum\Timeframe;
 use App\Indicator\Condition\ConditionResult;
 use App\TradingCore\Rules\Ast\AllOfNode;
 use App\TradingCore\Rules\Ast\AnyOfNode;
@@ -138,6 +139,8 @@ final readonly class StrictRuleEvaluator
         $base['parameter_source'] = $node->parameterSources;
         $base['series_order'] = $definition->seriesOrder;
         $base['reported_series_order'] = $snapshot->values['series_order'] ?? null;
+        $seriesTimestampKey = $definition->metric . '_timestamps';
+        $base['reported_series_timestamps'] = $snapshot->values[$seriesTimestampKey] ?? null;
         if (!$snapshot->isValidAt($context->evaluatedAt)) {
             return [false, 'stale_input', $base];
         }
@@ -145,6 +148,16 @@ final readonly class StrictRuleEvaluator
             && ($snapshot->values['series_order'] ?? null) !== 'oldest_to_newest'
         ) {
             return [false, 'invalid_series_order', $base];
+        }
+        if (str_starts_with($definition->valueType, 'series<')
+            && array_key_exists($definition->metric, $snapshot->values)
+            && !$this->hasCanonicalSeriesChronology(
+                $snapshot->values[$definition->metric] ?? null,
+                $snapshot->values[$seriesTimestampKey] ?? null,
+                $snapshot->timeframe,
+            )
+        ) {
+            return [false, 'invalid_series_chronology', $base];
         }
         $condition = $this->registry->get($node->conditionId);
         $isCompiledExpression = str_starts_with($definition->implementation, 'compiled_expression:');
@@ -191,5 +204,33 @@ final readonly class StrictRuleEvaluator
             'threshold' => $result->threshold,
             'meta' => $result->meta,
         ];
+    }
+
+    private function hasCanonicalSeriesChronology(mixed $series, mixed $timestamps, string $timeframe): bool
+    {
+        if (!is_array($series)
+            || !array_is_list($series)
+            || count($series) < 2
+            || !is_array($timestamps)
+            || !array_is_list($timestamps)
+            || count($timestamps) !== count($series)
+        ) {
+            return false;
+        }
+        $timeframeValue = Timeframe::tryFrom($timeframe);
+        if ($timeframeValue === null) {
+            return false;
+        }
+        $step = $timeframeValue->getStepInSeconds();
+        for ($index = 0, $count = count($timestamps); $index < $count; ++$index) {
+            if (!is_int($timestamps[$index])) {
+                return false;
+            }
+            if ($index > 0 && $timestamps[$index] - $timestamps[$index - 1] !== $step) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

@@ -689,11 +689,13 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                 $highs = [];
                 $lows = [];
                 $volumes = [];
+                $seriesTimestamps = [];
                 foreach ($klines as $k) {
                     $closes[] = (float) $k->close->toFloat();
                     $highs[] = (float) $k->high->toFloat();
                     $lows[] = (float) $k->low->toFloat();
                     $volumes[] = (float) $k->volume->toFloat();
+                    $seriesTimestamps[] = $k->openTime->getTimestamp();
                 }
                 $lastClose = $closes ? (float) end($closes) : null;
                 $previousCloses = array_slice($closes, 0, -1);
@@ -741,8 +743,12 @@ final class IndicatorProviderService implements IndicatorProviderInterface
                     'ema_200_slope' => $ema[200] - $emaPrev[200],
                     'macd'         => $macd,
                     'macd_hist_series' => $macdHistSeries,
+                    'macd_hist_series_timestamps' => $macdHistSeries === []
+                        ? []
+                        : array_slice($seriesTimestamps, -count($macdHistSeries)),
                     'macd_hist_last3' => array_slice($macdHistSeries, -3),
                     'series_order' => 'oldest_to_newest',
+                    'series_timestamps' => $seriesTimestamps,
                     'pullback_age_bars' => $pullbackAgeBars,
                     'volume_ratio' => $volumeRatio,
                     'ma_21_plus_k_atr' => $ma21 !== null && $atr !== null ? $ma21 + (1.3 * $atr) : null,

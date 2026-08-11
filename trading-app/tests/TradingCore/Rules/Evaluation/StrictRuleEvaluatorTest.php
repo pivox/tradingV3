@@ -181,20 +181,49 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertSame('missing_critical_data', $numericString->reasonCode);
     }
 
-    public function testSeriesConditionRejectsMissingOrNonCanonicalReportedOrder(): void
+    public function testSeriesConditionRejectsOrderLabelWithoutAlignedTimestampProof(): void
     {
         $condition = $this->condition('macd_hist_increasing_n', true, 0.1, 0.0);
         $node = new ConditionNode('macd_hist_increasing_n', '5m', 'long', ['macd_hist_increasing_n' => 2], 'fixture:series');
         $evaluator = $this->evaluator([$condition]);
+        $start = 1_786_435_200;
 
         $missing = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2]]));
         $reversed = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2], 'series_order' => 'newest_to_oldest']));
-        $canonical = $evaluator->evaluate($node, $this->context(['macd_hist_series' => [0.1, 0.2], 'series_order' => 'oldest_to_newest']));
+        $unproved = $evaluator->evaluate($node, $this->context([
+            'macd_hist_series' => [0.1, 0.2],
+            'series_order' => 'oldest_to_newest',
+        ]));
+        $duplicate = $evaluator->evaluate($node, $this->context([
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => [$start, $start],
+            'series_order' => 'oldest_to_newest',
+        ]));
+        $gap = $evaluator->evaluate($node, $this->context([
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => [$start, $start + 600],
+            'series_order' => 'oldest_to_newest',
+        ]));
+        $inverted = $evaluator->evaluate($node, $this->context([
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => [$start + 300, $start],
+            'series_order' => 'oldest_to_newest',
+        ]));
+        $canonical = $evaluator->evaluate($node, $this->context([
+            'macd_hist_series' => [0.1, 0.2],
+            'macd_hist_series_timestamps' => [$start, $start + 300],
+            'series_order' => 'oldest_to_newest',
+        ]));
 
         self::assertSame('invalid_series_order', $missing->reasonCode);
         self::assertSame('invalid_series_order', $reversed->reasonCode);
+        self::assertSame('invalid_series_chronology', $unproved->reasonCode);
+        self::assertSame('invalid_series_chronology', $duplicate->reasonCode);
+        self::assertSame('invalid_series_chronology', $gap->reasonCode);
+        self::assertSame('invalid_series_chronology', $inverted->reasonCode);
         self::assertTrue($canonical->passed);
         self::assertSame('oldest_to_newest', $canonical->trace['reported_series_order']);
+        self::assertSame([$start, $start + 300], $canonical->trace['reported_series_timestamps']);
     }
 
     public function testGlobalIndicatorConditionAggregatesEveryAvailableTimeframeFailClosed(): void
