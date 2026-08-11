@@ -104,6 +104,28 @@ final class ScalpingNetReportTest extends TestCase
         self::assertSame([false, false, false], array_column($forward->toArray()['cells'], 'certified'));
     }
 
+    public function testJsonSerializationIgnoresAndRestoresCallerSerializePrecision(): void
+    {
+        $report = ScalpingNetReport::fromOutcomes(self::plannedOutcomes());
+        $originalPrecision = ini_get('serialize_precision');
+        self::assertNotFalse($originalPrecision);
+        self::assertNotFalse(ini_set('serialize_precision', '3'));
+
+        try {
+            $json = $report->toJson();
+
+            self::assertSame('3', ini_get('serialize_precision'));
+            self::assertSame(
+                file_get_contents(dirname(__DIR__, 2) . '/Fixtures/TradingCore/Scalping/scalping-net-report.json'),
+                $json,
+            );
+        } finally {
+            self::assertNotFalse(ini_set('serialize_precision', $originalPrecision));
+        }
+
+        self::assertSame($originalPrecision, ini_get('serialize_precision'));
+    }
+
     public function testRejectsNonOutcomesNoTradeAndEmptyEvidenceSets(): void
     {
         $planned = self::plannedOutcomes()[0];

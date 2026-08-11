@@ -131,10 +131,27 @@ final readonly class ScalpingNetReport
 
     public function toJson(): string
     {
-        return json_encode(
-            $this->toArray(),
-            JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES,
-        ) . "\n";
+        $callerPrecision = ini_get('serialize_precision');
+        if ($callerPrecision === false) {
+            throw new \RuntimeException('scalping_net_report_json_precision_unavailable');
+        }
+        $restorePrecision = $callerPrecision !== '-1';
+        if ($restorePrecision && ini_set('serialize_precision', '-1') === false) {
+            throw new \RuntimeException('scalping_net_report_json_precision_unavailable');
+        }
+
+        try {
+            $json = json_encode(
+                $this->toArray(),
+                JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES,
+            );
+        } finally {
+            if ($restorePrecision && ini_set('serialize_precision', $callerPrecision) === false) {
+                throw new \RuntimeException('scalping_net_report_json_precision_restore_failed');
+            }
+        }
+
+        return $json . "\n";
     }
 
     private static function assertLineage(LineageContext $lineage): void
