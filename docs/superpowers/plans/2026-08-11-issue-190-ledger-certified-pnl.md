@@ -15,14 +15,14 @@
 **Files:**
 - Modify: `trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php`
 
-- [ ] **Step 1: Extend the PostgreSQL fixture schema**
+- [x] **Step 1: Extend the PostgreSQL fixture schema**
 
 Create `fill_cost_ledger` in the test schema with the production identity,
 quantity, price, fee, funding, spread, slippage, borrow, liquidation,
 quality, and Paper provenance columns used by the migration. Add
 `market_data_venue`, `exchange`, and `market_type` to indicator fixtures.
 
-- [ ] **Step 2: Add a complete canonical long fixture**
+- [x] **Step 2: Add a complete canonical long fixture**
 
 Insert two partial entry fills and two partial exit fills for one exact
 `internal_trade_id`. Use explicit USDT fees, spread/slippage costs, zero close
@@ -41,14 +41,14 @@ self::assertNotNull($row['canonical_net_pnl_usdt']);
 self::assertStringNotContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
 ```
 
-- [ ] **Step 3: Add fail-closed fixtures**
+- [x] **Step 3: Add fail-closed fixtures**
 
 Add focused rows proving that missing exit fills, a missing fee, quantity
 mismatch, a ledger quality flag, wrong market-data venue, wrong Paper cell, and
 canonical entry/close lineage mismatch each leave canonical net PnL null with a
 stable quality flag.
 
-- [ ] **Step 4: Run the focused test and verify RED**
+- [x] **Step 4: Run the focused test and verify RED**
 
 Run:
 
@@ -60,7 +60,7 @@ php bin/phpunit tests/Trading/View/PositionTradeAnalysisViewTest.php
 Expected: the complete-ledger assertion fails because the current view always
 emits `ledger_quantity_aggregate_missing` and `net_pnl_usdt` is null.
 
-- [ ] **Step 5: Commit the red test**
+- [x] **Step 5: Commit the red test**
 
 ```bash
 git add trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php
@@ -73,7 +73,7 @@ git commit -m "test(#190): require ledger-backed certified PnL"
 - Create: `trading-app/migrations/Version20260811120000.php`
 - Test: `trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php`
 
-- [ ] **Step 1: Create `position_trade_ledger_aggregate_v1`**
+- [x] **Step 1: Create `position_trade_ledger_aggregate_v1`**
 
 The migration creates a read-only view grouped by:
 
@@ -108,7 +108,7 @@ CASE
 END
 ```
 
-- [ ] **Step 2: Require explicit cost evidence**
+- [x] **Step 2: Require explicit cost evidence**
 
 For entry/exit fills, every fee must be non-null and normalized to USDT, and
 every spread/slippage cost must be explicitly non-null and non-negative.
@@ -117,7 +117,7 @@ summed when ledger settlement rows exist; otherwise the composed view may use
 only explicit close-contract values. Never `COALESCE` missing applicability to
 zero.
 
-- [ ] **Step 3: Run the focused test**
+- [x] **Step 3: Run the focused test**
 
 ```bash
 cd trading-app
@@ -127,7 +127,7 @@ php bin/phpunit tests/Trading/View/PositionTradeAnalysisViewTest.php
 Expected: still FAIL because the public v2 surface does not yet consume the
 aggregate; the helper view assertions pass.
 
-- [ ] **Step 4: Commit the aggregate**
+- [x] **Step 4: Commit the aggregate**
 
 ```bash
 git add trading-app/migrations/Version20260811120000.php trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php
@@ -141,7 +141,7 @@ git commit -m "feat(#190): aggregate exact fill cost ledger evidence"
 - Modify: `trading-app/src/Trading/Entity/PositionTradeAnalysisV2.php`
 - Modify: `trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php`
 
-- [ ] **Step 1: Preserve and replace the underlying view**
+- [x] **Step 1: Preserve and replace the underlying view**
 
 Drop the #302 wrapper, rename `position_trade_analysis_v2_legacy_source` to
 `position_trade_analysis_v2_pre_ledger`, and create a new
@@ -176,7 +176,7 @@ Append `entry_first_fill_at`, `entry_last_fill_at`, `entry_qty`, `entry_vwap`,
 `exit_first_fill_at`, `exit_last_fill_at`, `exit_qty`, `exit_vwap`,
 `remaining_qty`, and `quantity_status`.
 
-- [ ] **Step 2: Calculate gross and net fail-closed**
+- [x] **Step 2: Calculate gross and net fail-closed**
 
 Derive gross from fill notionals and canonical side:
 
@@ -191,20 +191,20 @@ Publish net only when quantity is complete, the close matches, ledger and Paper
 identity match, costs are explicit, sides are coherent, and structured entry and
 close lineage agree. Funding is added; all other costs are subtracted.
 
-- [ ] **Step 3: Recreate the #302 wrapper**
+- [x] **Step 3: Recreate the #302 wrapper**
 
 Recreate `position_trade_analysis_v2` with the exact canonical columns and
 `lineage_classification` rules from `Version20260808114000`. Keep
 `canonical_net_pnl_usdt` and `canonical_realized_net_pnl_r` masked unless the
 classification is `canonical`.
 
-- [ ] **Step 4: Map fill aggregate fields**
+- [x] **Step 4: Map fill aggregate fields**
 
 Add nullable Doctrine read-only properties and getters for the ten new fill
 aggregate columns. Keep `hasCertifiedNetPnl()` unchanged: exact close, complete
 costs, canonical lineage, and non-null net remain mandatory.
 
-- [ ] **Step 5: Run focused view, repository, reporting and outcome tests**
+- [x] **Step 5: Run focused view, repository, reporting and outcome tests**
 
 ```bash
 cd trading-app
@@ -217,7 +217,7 @@ php bin/phpunit \
 Expected: PASS, including a complete ledger row visible as certified and every
 incomplete fixture still masked.
 
-- [ ] **Step 6: Commit the composition**
+- [x] **Step 6: Commit the composition**
 
 ```bash
 git add trading-app/migrations/Version20260811120000.php trading-app/src/Trading/Entity/PositionTradeAnalysisV2.php trading-app/tests/Trading/View/PositionTradeAnalysisViewTest.php
