@@ -402,6 +402,80 @@ final class SetupContractLoaderTest extends TestCase
         }
     }
 
+    public function testFrozenProofNumericCanonicalizationIsExactAndSchemaAligned(): void
+    {
+        self::assertSame($this->semanticDocumentHash(['number' => 2]), $this->semanticDocumentHash(['number' => 2.0]));
+        self::assertSame($this->semanticDocumentHash(['number' => 0.0]), $this->semanticDocumentHash(['number' => -0.0]));
+        self::assertSame(
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992]),
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992.0]),
+        );
+        self::assertNotSame(
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_992]),
+            $this->semanticDocumentHash(['number' => 9_007_199_254_740_993]),
+        );
+        self::assertNotSame(
+            $this->semanticDocumentHash(['number' => 0.1]),
+            $this->semanticDocumentHash(['number' => 0.10000000000000002]),
+        );
+
+        $fractionHash = $this->semanticDocumentHash(['number' => 0.10000000000000002]);
+        $previousPrecision = ini_get('serialize_precision');
+        self::assertIsString($previousPrecision);
+        try {
+            self::assertNotFalse(ini_set('serialize_precision', '3'));
+            self::assertSame($fractionHash, $this->semanticDocumentHash(['number' => 0.10000000000000002]));
+        } finally {
+            ini_set('serialize_precision', $previousPrecision);
+        }
+
+        foreach ([
+            'scalping.trend_continuation.long' => '0cc4e5e042bac449b6326fa06527f4749d91f3a15292b81b9102115b12d086aa',
+            'scalping.pullback.long' => '36b2114e1c0113fdef812cdca66572124597c044f84dee13d2aeeb8559499106',
+            'scalping.trend_momentum.short' => '582b0100ed479be697387accf89fdf90abc8e31c8e63037ce1d9c4bec02ed33b',
+        ] as $setupId => $expectedHash) {
+            self::assertSame(
+                $expectedHash,
+                $this->semanticDocumentHash($this->yaml($this->root . '/' . $setupId . '/1.1.0.yaml')),
+                $setupId,
+            );
+        }
+
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $document['execution']['entry_zone']['value']['asymmetry_rate'] = -0.0;
+        (new SetupContractValidator())->validate($document);
+
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid());
+    }
+
+    public function testFrozenProofNumericCanonicalizationRejectsNonFiniteValuesInPhpAndSchema(): void
+    {
+        $document = $this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml');
+        $document['execution']['entry_zone']['value']['asymmetry_rate'] = INF;
+        try {
+            (new SetupContractValidator())->validate($document);
+            self::fail('PHP accepted a non-finite frozen proof number.');
+        } catch (SetupContractException) {
+            self::addToAssertionCount(1);
+        }
+
+        $object = json_decode(
+            json_encode($this->yaml($this->root . '/scalping.pullback.long/1.1.0.yaml'), JSON_THROW_ON_ERROR),
+            false,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+        $object->execution->entry_zone->value->asymmetry_rate = INF;
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        self::assertFalse((new JsonSchemaValidator())->validate($object, $schema)->isValid());
+
+        $this->expectException(SetupContractException::class);
+        $this->expectExceptionMessage('finite');
+        $this->semanticDocumentHash(['number' => NAN]);
+    }
+
     public function testScalpingShadowFixtureFreezesIndependentPassAndNoRescueScenarios(): void
     {
         $fixture = json_decode(
@@ -1186,5 +1260,15 @@ final class SetupContractLoaderTest extends TestCase
         return (new ConditionCatalogLoader())->loadFile(
             dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
         );
+    }
+
+    /** @param array<string, mixed> $document */
+    private function semanticDocumentHash(array $document): string
+    {
+        $method = new \ReflectionMethod(SetupContractValidator::class, 'semanticDocumentHash');
+        $hash = $method->invoke(new SetupContractValidator(), $document);
+        self::assertIsString($hash);
+
+        return $hash;
     }
 }

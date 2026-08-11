@@ -61,9 +61,9 @@ final class SetupContractValidator
     ];
     /** Canonical documents are explicit in setup-contract.schema.json scalping* $defs. */
     private const SCALPING_SHADOW_DOCUMENT_HASHES = [
-        'scalping.trend_continuation.long' => '9ba162948ed0ef0756145b7ab47213e5ac0cbf9edd1ce1408af241ab515887a9',
-        'scalping.pullback.long' => 'ef047d8a29cecf119a42f2944f245c7ac1f709f762a796af896e2b558ffcac91',
-        'scalping.trend_momentum.short' => '5c7eae3b39d8d3f023def38d564754b38138687ef21ff2f46381c017efb4c615',
+        'scalping.trend_continuation.long' => '0cc4e5e042bac449b6326fa06527f4749d91f3a15292b81b9102115b12d086aa',
+        'scalping.pullback.long' => '36b2114e1c0113fdef812cdca66572124597c044f84dee13d2aeeb8559499106',
+        'scalping.trend_momentum.short' => '582b0100ed479be697387accf89fdf90abc8e31c8e63037ce1d9c4bec02ed33b',
     ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
@@ -387,7 +387,7 @@ final class SetupContractValidator
     private function valuesEquivalent(mixed $actual, mixed $expected): bool
     {
         if ((is_int($actual) || is_float($actual)) && (is_int($expected) || is_float($expected))) {
-            return is_finite((float) $actual) && (float) $actual === (float) $expected;
+            return $this->numbersEquivalent($actual, $expected);
         }
         if (!is_array($actual) || !is_array($expected)) {
             return $actual === $expected;
@@ -402,6 +402,25 @@ final class SetupContractValidator
         }
 
         return true;
+    }
+
+    private function numbersEquivalent(int|float $actual, int|float $expected): bool
+    {
+        if (is_int($actual) && is_int($expected)) {
+            return $actual === $expected;
+        }
+        if (is_float($actual) && is_float($expected)) {
+            return is_finite($actual) && is_finite($expected) && $actual === $expected;
+        }
+
+        $integer = is_int($actual) ? $actual : $expected;
+        $float = is_float($actual) ? $actual : $expected;
+        if (!is_finite($float) || floor($float) !== $float) {
+            return false;
+        }
+        $roundTrippedInteger = (int) $float;
+
+        return (float) $roundTrippedInteger === $float && $integer === $roundTrippedInteger;
     }
 
     /** @param array<string, mixed> $document */
@@ -419,12 +438,24 @@ final class SetupContractValidator
 
     private function normalizeSemanticNumbers(mixed $value): mixed
     {
-        if (is_int($value) || is_float($value)) {
-            if (!is_finite((float) $value)) {
+        if (is_int($value)) {
+            return $this->canonicalNumericTag('integer', (string) $value);
+        }
+        if (is_float($value)) {
+            if (!is_finite($value)) {
                 throw new SetupContractException('Frozen setup numeric values must be finite.');
             }
+            if ($value === 0.0) {
+                return $this->canonicalNumericTag('integer', '0');
+            }
+            if (floor($value) === $value) {
+                $integer = (int) $value;
+                if ((float) $integer === $value) {
+                    return $this->canonicalNumericTag('integer', (string) $integer);
+                }
+            }
 
-            return (float) $value;
+            return $this->canonicalNumericTag('binary64', $this->canonicalFloatDecimal($value));
         }
         if (!is_array($value)) {
             return $value;
@@ -438,6 +469,41 @@ final class SetupContractValidator
         }
 
         return $value;
+    }
+
+    /** @return array{__setup_contract_number__: array{kind: string, decimal: string}} */
+    private function canonicalNumericTag(string $kind, string $decimal): array
+    {
+        return ['__setup_contract_number__' => ['kind' => $kind, 'decimal' => $decimal]];
+    }
+
+    private function canonicalFloatDecimal(float $value): string
+    {
+        $previousPrecision = ini_get('serialize_precision');
+        if ($previousPrecision === false) {
+            throw new SetupContractException('Frozen setup numeric values need a stable decimal serializer.');
+        }
+        $changed = $previousPrecision !== '-1';
+        if ($changed && ini_set('serialize_precision', '-1') === false) {
+            throw new SetupContractException('Frozen setup numeric values need a stable decimal serializer.');
+        }
+
+        $encoded = false;
+        $restored = true;
+        try {
+            $encoded = json_encode($value, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
+        } catch (\JsonException $exception) {
+            throw new SetupContractException('Frozen setup numeric values need a stable decimal serializer.', 0, $exception);
+        } finally {
+            if ($changed) {
+                $restored = ini_set('serialize_precision', $previousPrecision) !== false;
+            }
+        }
+        if (!is_string($encoded) || !$restored) {
+            throw new SetupContractException('Frozen setup numeric values need a stable decimal serializer.');
+        }
+
+        return $encoded;
     }
 
     /** @param list<mixed> $rules */
