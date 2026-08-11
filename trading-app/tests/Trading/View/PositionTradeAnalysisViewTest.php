@@ -667,13 +667,21 @@ final class PositionTradeAnalysisViewTest extends TestCase
         ], '2026-08-10 10:00:00+00', 2800, 'hyperliquid');
         $this->close('BTCUSDT', $run, [
             'internal_trade_id' => $internalTradeId,
-            'gross_realized_pnl_usdt' => 8.4,
+            // Ces valeurs provider ne constituent pas le brut certifié : le ledger doit
+            // recalculer 8.40, mais conserver le PnL enregistré séparément.
+            'gross_realized_pnl_usdt' => 999.0,
+            'recorded_pnl_usdt' => 7.77,
             'other_trading_fees_usdt' => 0.0,
             'funding_usdt' => 0.0,
             'borrow_cost_usdt' => 0.0,
             'liquidation_fee_usdt' => 0.0,
         ], $positionId, '2026-08-10 10:20:00+00', 2801, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2800, 2801, $internalTradeId, $positionId, 'trade-ledger-complete-long');
+        $this->conn->executeStatement(
+            'INSERT INTO indicator_snapshots (symbol, timeframe, exchange, market_data_venue, market_type, kline_time, values)
+             VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)',
+            ['BTCUSDT', '1m', 'fake', 'hyperliquid', 'paper', '2026-08-10 09:59:00+00', '{}'],
+        );
 
         // Deux entrées partielles et deux sorties partielles : le PnL brut est 8.40 USDT
         // ((110 * .5 + 108 * .5) - (100 * .4 + 101 * .6)). Les coûts sont exclusivement
@@ -694,6 +702,10 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'fee_usdt' => 0.05, 'spread_cost_usdt' => 0.01, 'slippage_cost_usdt' => 0.02,
             'funding_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
         ]);
+        self::assertSame(
+            ['BUY', 'BUY', 'SELL', 'SELL'],
+            $this->conn->fetchFirstColumn('SELECT side FROM fill_cost_ledger WHERE internal_trade_id = ? ORDER BY occurred_at', [$internalTradeId]),
+        );
 
         $record = $this->conn->fetchAssociative(
             'SELECT to_jsonb(v) AS analysis
@@ -714,6 +726,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(109.0, (float) $row['exit_vwap'], 1e-9);
         self::assertEqualsWithDelta(0.0, (float) $row['remaining_qty'], 1e-9);
         self::assertTrue(filter_var($row['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
+        self::assertEqualsWithDelta(7.77, (float) $row['recorded_pnl_usdt'], 1e-9);
         self::assertEqualsWithDelta(8.4, (float) $row['gross_realized_pnl_usdt'], 1e-9);
         self::assertEqualsWithDelta(0.05, (float) $row['entry_fee_usdt'], 1e-9);
         self::assertEqualsWithDelta(0.09, (float) $row['exit_fee_usdt'], 1e-9);
@@ -728,9 +741,9 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertStringNotContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
     }
 
-    public function testLedgerCertificationFailsClosedForMissingExitAndMismatchedProvenance(): void
+    public function testLedgerCertificationFailsClosedWhenExitEvidenceIsMissing(): void
     {
-        $run = 'run_ledger_fail_closed';
+        $run = 'run_ledger_missing_exit';
 
         $this->entry('ETHUSDT', $run, 'ledger-no-exit', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-no-exit'], '2026-08-10 11:00:00+00', 2810, 'hyperliquid');
         $this->close('ETHUSDT', $run, ['gross_realized_pnl_usdt' => 1.0], 'position-ledger-no-exit', '2026-08-10 11:05:00+00', 2811, 'fake', 'paper', 'hyperliquid');
@@ -740,6 +753,21 @@ final class PositionTradeAnalysisViewTest extends TestCase
             'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
         ]);
 
+        $row = $this->conn->fetchAssociative(
+            'SELECT cost_completeness, net_pnl_usdt, canonical_net_pnl_usdt
+             FROM position_trade_analysis_v2 WHERE entry_event_id = ?',
+            [2810],
+        );
+        self::assertIsArray($row);
+        self::assertNotSame('complete', $row['cost_completeness']);
+        self::assertNull($row['net_pnl_usdt']);
+        self::assertNull($row['canonical_net_pnl_usdt']);
+    }
+
+    public function testLedgerCertificationFailsClosedForVenueAndPaperCellMismatch(): void
+    {
+        $run = 'run_ledger_provenance_mismatch';
+
         $this->entry('SOLUSDT', $run, 'ledger-wrong-provenance', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-wrong-provenance'], '2026-08-10 12:00:00+00', 2820, 'hyperliquid');
         $this->close('SOLUSDT', $run, ['gross_realized_pnl_usdt' => 2.0], 'position-ledger-wrong-provenance', '2026-08-10 12:05:00+00', 2821, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2820, 2821, 'itd-ledger-wrong-provenance', 'position-ledger-wrong-provenance', 'trade-ledger-wrong-provenance');
@@ -748,16 +776,33 @@ final class PositionTradeAnalysisViewTest extends TestCase
                 'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
                 'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
                 'market_data_venue' => 'okx',
+            ]);
+        }
+
+        $this->entry('XRPUSDT', $run, 'ledger-wrong-cell', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-wrong-cell'], '2026-08-10 13:00:00+00', 2830, 'hyperliquid');
+        $this->close('XRPUSDT', $run, ['gross_realized_pnl_usdt' => 2.0], 'position-ledger-wrong-cell', '2026-08-10 13:05:00+00', 2831, 'fake', 'paper', 'hyperliquid');
+        $this->canonicalLifecycle(2830, 2831, 'itd-ledger-wrong-cell', 'position-ledger-wrong-cell', 'trade-ledger-wrong-cell');
+        foreach ([['entry', 100.0, 1.0], ['exit', 102.0, 1.0]] as [$role, $price, $quantity]) {
+            $this->ledgerFill('XRPUSDT', 'itd-ledger-wrong-cell', 'position-ledger-wrong-cell', 'wrong-cell-' . $role, $role, $price, $quantity, '2026-08-10 13:0' . ($role === 'entry' ? '1' : '4') . ':00+00', [
+                'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
+                'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
                 'paper_execution_cell_id' => 'sha256:' . str_repeat('f', 64),
             ]);
         }
+
+        // Deux motifs distincts : la venue doit correspondre avant toute agrégation,
+        // puis la cellule Paper. Aucune ligne de ledger ne satisfait chaque contrat.
+        self::assertSame(0, $this->exactLedgerAggregateMatchCount(2820));
+        self::assertSame(2, $this->ledgerRowsMismatchingCanonicalField(2820, 'market_data_venue'));
+        self::assertSame(0, $this->exactLedgerAggregateMatchCount(2830));
+        self::assertSame(2, $this->ledgerRowsMismatchingCanonicalField(2830, 'paper_execution_cell_id'));
 
         $rows = $this->conn->fetchAllAssociative(
             'SELECT symbol, cost_completeness, net_pnl_usdt, canonical_net_pnl_usdt
              FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY symbol',
             [$run],
         );
-        self::assertSame(['ETHUSDT', 'SOLUSDT'], array_column($rows, 'symbol'));
+        self::assertSame(['SOLUSDT', 'XRPUSDT'], array_column($rows, 'symbol'));
         foreach ($rows as $row) {
             self::assertNotSame('complete', $row['cost_completeness']);
             self::assertNull($row['net_pnl_usdt']);
@@ -1383,7 +1428,9 @@ CREATE TABLE indicator_snapshots (
     id BIGSERIAL PRIMARY KEY,
     symbol VARCHAR(50) NOT NULL,
     timeframe VARCHAR(8) NOT NULL,
+    exchange VARCHAR(32),
     market_data_venue VARCHAR(32),
+    market_type VARCHAR(32),
     kline_time TIMESTAMPTZ NOT NULL,
     values JSONB
 )
@@ -1582,6 +1629,44 @@ SQL);
         }
     }
 
+    private function exactLedgerAggregateMatchCount(int $entryEventId): int
+    {
+        return (int) $this->conn->fetchOne(<<<'SQL'
+SELECT COUNT(*)
+FROM fill_cost_ledger ledger
+JOIN trade_lifecycle_event entry_event ON entry_event.id = :entry_event_id
+WHERE ledger.internal_trade_id IS NOT DISTINCT FROM entry_event.internal_trade_id
+  AND ledger.position_id IS NOT DISTINCT FROM entry_event.position_id
+  AND ledger.exchange IS NOT DISTINCT FROM entry_event.exchange
+  AND ledger.market_type IS NOT DISTINCT FROM entry_event.market_type
+  AND ledger.symbol IS NOT DISTINCT FROM entry_event.symbol
+  AND ledger.market_data_venue IS NOT DISTINCT FROM entry_event.market_data_venue
+  AND ledger.paper_network IS NOT DISTINCT FROM entry_event.paper_network
+  AND ledger.paper_execution_cell_id IS NOT DISTINCT FROM entry_event.paper_execution_cell_id
+  AND ledger.configuration_snapshot_id IS NOT DISTINCT FROM entry_event.configuration_snapshot_id
+  AND ledger.paper_eligibility IS NOT DISTINCT FROM entry_event.paper_eligibility
+SQL, ['entry_event_id' => $entryEventId]);
+    }
+
+    private function ledgerRowsMismatchingCanonicalField(int $entryEventId, string $field): int
+    {
+        if (!in_array($field, ['market_data_venue', 'paper_execution_cell_id'], true)) {
+            throw new \InvalidArgumentException('unsupported_ledger_provenance_field');
+        }
+
+        return (int) $this->conn->fetchOne(<<<SQL
+SELECT COUNT(*)
+FROM fill_cost_ledger ledger
+JOIN trade_lifecycle_event entry_event ON entry_event.id = :entry_event_id
+WHERE ledger.internal_trade_id IS NOT DISTINCT FROM entry_event.internal_trade_id
+  AND ledger.position_id IS NOT DISTINCT FROM entry_event.position_id
+  AND ledger.exchange IS NOT DISTINCT FROM entry_event.exchange
+  AND ledger.market_type IS NOT DISTINCT FROM entry_event.market_type
+  AND ledger.symbol IS NOT DISTINCT FROM entry_event.symbol
+  AND ledger.$field IS DISTINCT FROM entry_event.$field
+SQL, ['entry_event_id' => $entryEventId]);
+    }
+
     /**
      * @param array<string,mixed> $overrides
      */
@@ -1607,7 +1692,7 @@ SQL);
             'market_data_venue' => 'hyperliquid',
             'market_type' => 'paper',
             'symbol' => $symbol,
-            'side' => 'LONG',
+            'side' => $fillRole === 'entry' ? 'BUY' : ($fillRole === 'exit' ? 'SELL' : null),
             'fill_id' => $fillId,
             'exchange_fill_id' => 'exchange-' . $fillId,
             'exchange_order_id' => 'order-' . $internalTradeId,
