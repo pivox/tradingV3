@@ -715,7 +715,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertIsArray($record);
         $row = json_decode((string) $record['analysis'], true, 512, JSON_THROW_ON_ERROR);
         self::assertIsArray($row);
-        foreach (['entry_qty', 'entry_vwap', 'exit_qty', 'exit_vwap', 'remaining_qty'] as $field) {
+        foreach (['entry_qty', 'entry_vwap', 'exit_qty', 'exit_vwap', 'remaining_qty', 'quantity_status'] as $field) {
             self::assertArrayHasKey($field, $row, "le ledger doit projeter `$field`");
         }
         self::assertSame('canonical', $row['lineage_classification']);
@@ -725,6 +725,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(1.0, (float) $row['exit_qty'], 1e-9);
         self::assertEqualsWithDelta(109.0, (float) $row['exit_vwap'], 1e-9);
         self::assertEqualsWithDelta(0.0, (float) $row['remaining_qty'], 1e-9);
+        self::assertSame('complete', $row['quantity_status']);
         self::assertTrue(filter_var($row['position_fully_closed'], FILTER_VALIDATE_BOOLEAN));
         self::assertEqualsWithDelta(7.77, (float) $row['recorded_pnl_usdt'], 1e-9);
         self::assertEqualsWithDelta(8.4, (float) $row['gross_realized_pnl_usdt'], 1e-9);
@@ -738,7 +739,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(0.29, (float) $row['total_known_cost_usdt'], 1e-9);
         self::assertEqualsWithDelta(8.11, (float) $row['net_pnl_usdt'], 1e-9);
         self::assertEqualsWithDelta(8.11, (float) $row['canonical_net_pnl_usdt'], 1e-9);
-        self::assertStringNotContainsString('ledger_quantity_aggregate_missing', (string) $row['pnl_quality_flags']);
+        self::assertIsArray($row['pnl_quality_flags']);
+        self::assertNotContains('ledger_quantity_aggregate_missing', $row['pnl_quality_flags']);
     }
 
     public function testLedgerCertificationFailsClosedWhenExitEvidenceIsMissing(): void
@@ -746,22 +748,48 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $run = 'run_ledger_missing_exit';
 
         $this->entry('ETHUSDT', $run, 'ledger-no-exit', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-no-exit'], '2026-08-10 11:00:00+00', 2810, 'hyperliquid');
-        $this->close('ETHUSDT', $run, ['gross_realized_pnl_usdt' => 1.0], 'position-ledger-no-exit', '2026-08-10 11:05:00+00', 2811, 'fake', 'paper', 'hyperliquid');
+        $this->close('ETHUSDT', $run, [
+            'gross_realized_pnl_usdt' => 1.0,
+            'recorded_pnl_usdt' => 1.0,
+            'entry_fee_usdt' => 0.01,
+            'exit_fee_usdt' => 0.0,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 0.0,
+            'remaining_qty' => 1.0,
+            'position_fully_closed' => false,
+            'fills_complete' => false,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fill_cost_ledger_v1',
+        ], 'position-ledger-no-exit', '2026-08-10 11:05:00+00', 2811, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2810, 2811, 'itd-ledger-no-exit', 'position-ledger-no-exit', 'trade-ledger-no-exit');
         $this->ledgerFill('ETHUSDT', 'itd-ledger-no-exit', 'position-ledger-no-exit', 'missing-exit-entry', 'entry', 100.0, 1.0, '2026-08-10 11:00:01+00', [
             'fee_usdt' => 0.01, 'funding_usdt' => 0.0, 'spread_cost_usdt' => 0.0,
             'slippage_cost_usdt' => 0.0, 'borrow_cost_usdt' => 0.0, 'liquidation_fee_usdt' => 0.0,
         ]);
 
-        $row = $this->conn->fetchAssociative(
-            'SELECT cost_completeness, net_pnl_usdt, canonical_net_pnl_usdt
-             FROM position_trade_analysis_v2 WHERE entry_event_id = ?',
+        $record = $this->conn->fetchAssociative(
+            'SELECT to_jsonb(v) AS analysis
+             FROM position_trade_analysis_v2 v WHERE entry_event_id = ?',
             [2810],
         );
+        self::assertIsArray($record);
+        $row = json_decode((string) $record['analysis'], true, 512, JSON_THROW_ON_ERROR);
         self::assertIsArray($row);
         self::assertNotSame('complete', $row['cost_completeness']);
         self::assertNull($row['net_pnl_usdt']);
         self::assertNull($row['canonical_net_pnl_usdt']);
+        self::assertArrayHasKey('quantity_status', $row);
+        self::assertSame('open_position', $row['quantity_status']);
+        self::assertIsArray($row['pnl_quality_flags']);
+        self::assertContains('missing_exit_fill', $row['pnl_quality_flags']);
     }
 
     public function testLedgerCertificationFailsClosedForVenueAndPaperCellMismatch(): void
@@ -769,7 +797,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         $run = 'run_ledger_provenance_mismatch';
 
         $this->entry('SOLUSDT', $run, 'ledger-wrong-provenance', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-wrong-provenance'], '2026-08-10 12:00:00+00', 2820, 'hyperliquid');
-        $this->close('SOLUSDT', $run, ['gross_realized_pnl_usdt' => 2.0], 'position-ledger-wrong-provenance', '2026-08-10 12:05:00+00', 2821, 'fake', 'paper', 'hyperliquid');
+        $this->close('SOLUSDT', $run, $this->completeCloseContract(2.0), 'position-ledger-wrong-provenance', '2026-08-10 12:05:00+00', 2821, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2820, 2821, 'itd-ledger-wrong-provenance', 'position-ledger-wrong-provenance', 'trade-ledger-wrong-provenance');
         foreach ([['entry', 100.0, 1.0], ['exit', 102.0, 1.0]] as [$role, $price, $quantity]) {
             $this->ledgerFill('SOLUSDT', 'itd-ledger-wrong-provenance', 'position-ledger-wrong-provenance', 'wrong-provenance-' . $role, $role, $price, $quantity, '2026-08-10 12:0' . ($role === 'entry' ? '1' : '4') . ':00+00', [
@@ -780,7 +808,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
         }
 
         $this->entry('XRPUSDT', $run, 'ledger-wrong-cell', 'scalper', 'fake', 'paper', ['internal_trade_id' => 'itd-ledger-wrong-cell'], '2026-08-10 13:00:00+00', 2830, 'hyperliquid');
-        $this->close('XRPUSDT', $run, ['gross_realized_pnl_usdt' => 2.0], 'position-ledger-wrong-cell', '2026-08-10 13:05:00+00', 2831, 'fake', 'paper', 'hyperliquid');
+        $this->close('XRPUSDT', $run, $this->completeCloseContract(2.0), 'position-ledger-wrong-cell', '2026-08-10 13:05:00+00', 2831, 'fake', 'paper', 'hyperliquid');
         $this->canonicalLifecycle(2830, 2831, 'itd-ledger-wrong-cell', 'position-ledger-wrong-cell', 'trade-ledger-wrong-cell');
         foreach ([['entry', 100.0, 1.0], ['exit', 102.0, 1.0]] as [$role, $price, $quantity]) {
             $this->ledgerFill('XRPUSDT', 'itd-ledger-wrong-cell', 'position-ledger-wrong-cell', 'wrong-cell-' . $role, $role, $price, $quantity, '2026-08-10 13:0' . ($role === 'entry' ? '1' : '4') . ':00+00', [
@@ -798,16 +826,25 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertSame(2, $this->ledgerRowsMismatchingCanonicalField(2830, 'paper_execution_cell_id'));
 
         $rows = $this->conn->fetchAllAssociative(
-            'SELECT symbol, cost_completeness, net_pnl_usdt, canonical_net_pnl_usdt
-             FROM position_trade_analysis_v2 WHERE run_id = ? ORDER BY symbol',
+            'SELECT symbol, to_jsonb(v) AS analysis
+             FROM position_trade_analysis_v2 v WHERE run_id = ? ORDER BY symbol',
             [$run],
         );
         self::assertSame(['SOLUSDT', 'XRPUSDT'], array_column($rows, 'symbol'));
+        $bySymbol = [];
         foreach ($rows as $row) {
+            $bySymbol[$row['symbol']] = json_decode((string) $row['analysis'], true, 512, JSON_THROW_ON_ERROR);
+        }
+        foreach ($bySymbol as $row) {
+            self::assertIsArray($row);
             self::assertNotSame('complete', $row['cost_completeness']);
             self::assertNull($row['net_pnl_usdt']);
             self::assertNull($row['canonical_net_pnl_usdt']);
         }
+        self::assertIsArray($bySymbol['SOLUSDT']['pnl_quality_flags']);
+        self::assertContains('ledger_market_identity_mismatch', $bySymbol['SOLUSDT']['pnl_quality_flags']);
+        self::assertIsArray($bySymbol['XRPUSDT']['pnl_quality_flags']);
+        self::assertContains('ledger_paper_provenance_mismatch', $bySymbol['XRPUSDT']['pnl_quality_flags']);
     }
 
     public function testMalformedLegacyFinancialValuesDoNotBreakViewRead(): void
@@ -1627,6 +1664,34 @@ SQL);
                 $identity + ['id' => $eventId],
             );
         }
+    }
+
+    /**
+     * @return array<string,float|bool|string>
+     */
+    private function completeCloseContract(float $grossRealizedPnlUsdt): array
+    {
+        return [
+            'gross_realized_pnl_usdt' => $grossRealizedPnlUsdt,
+            'recorded_pnl_usdt' => $grossRealizedPnlUsdt,
+            'entry_fee_usdt' => 0.01,
+            'exit_fee_usdt' => 0.01,
+            'other_trading_fees_usdt' => 0.0,
+            'funding_usdt' => 0.0,
+            'spread_cost_usdt' => 0.0,
+            'slippage_cost_usdt' => 0.0,
+            'borrow_cost_usdt' => 0.0,
+            'liquidation_fee_usdt' => 0.0,
+            'entry_qty' => 1.0,
+            'exit_qty' => 1.0,
+            'remaining_qty' => 0.0,
+            'position_fully_closed' => true,
+            'fills_complete' => true,
+            'quantity_coherent' => true,
+            'lineage_sufficient' => true,
+            'identifier_conflict' => false,
+            'pnl_source' => 'fill_cost_ledger_v1',
+        ];
     }
 
     private function exactLedgerAggregateMatchCount(int $entryEventId): int
