@@ -167,21 +167,28 @@ final readonly class StrictCompiledExpressionEvaluator
     /** @param array<string, mixed> $context */
     private function pullbackConfirmed(array $context): ConditionResult
     {
-        $confirmation = $this->anyChildren('pullback_confirmation', ['ma9_cross_up_ma21', 'near_vwap'], $context);
-        $age = $this->number($context['pullback_age_bars'] ?? null);
-        $validityBars = (float) ($context['validity_bars'] ?? 3);
-        if ($age === null) {
-            return $this->result('pullback_confirmed', false, null, $validityBars, [
+        $rawAge = $context['pullback_age_bars'] ?? null;
+        $rawValidityBars = $context['validity_bars'] ?? 3;
+        $validityBars = is_int($rawValidityBars) && $rawValidityBars >= 0 ? $rawValidityBars : null;
+        if ($rawAge === null) {
+            return $this->result('pullback_confirmed', false, null, $validityBars !== null ? (float) $validityBars : null, [
                 'missing_data' => true,
                 'missing_field' => 'pullback_age_bars',
-                'children' => [$confirmation->toArray()],
+                'authority' => 'pullback_age_bars',
             ]);
         }
-        $validity = $this->numberComparison('pullback_age_bars_lte', $age, $validityBars, '<=');
+        if (!is_int($rawAge) || $rawAge < 0 || $validityBars === null) {
+            return $this->result('pullback_confirmed', false, null, $validityBars !== null ? (float) $validityBars : null, [
+                'invalid_numeric' => true,
+                'invalid_field' => $validityBars === null ? 'validity_bars' : 'pullback_age_bars',
+                'expected' => 'non_negative_integer',
+                'authority' => 'pullback_age_bars',
+            ]);
+        }
 
-        return $this->result('pullback_confirmed', $confirmation->passed && $validity->passed, $age, $validityBars, [
-            'operator' => 'all_of',
-            'children' => [$confirmation->toArray(), $validity->toArray()],
+        return $this->result('pullback_confirmed', $rawAge <= $validityBars, (float) $rawAge, (float) $validityBars, [
+            'operator' => '<=',
+            'authority' => 'pullback_age_bars',
         ]);
     }
 

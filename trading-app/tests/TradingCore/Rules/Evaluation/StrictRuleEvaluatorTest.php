@@ -118,7 +118,7 @@ final class StrictRuleEvaluatorTest extends TestCase
         ]);
         $node = new ConditionNode('pullback_confirmed', '5m', 'long', ['validity_bars' => 3], 'fixture:pullback');
         $values = [
-            'close' => 100.0,
+            'close' => 105.0,
             'vwap' => 100.0,
             'ema' => [9 => 99.0, 21 => 100.0],
             'ema_prev' => [9 => 99.0, 21 => 100.0],
@@ -128,12 +128,18 @@ final class StrictRuleEvaluatorTest extends TestCase
         $missing = $evaluator->evaluate($node, $this->context($values));
         $valid = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => 2]));
         $expired = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => 4]));
+        $negative = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => -1]));
+        $fractional = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => 1.5]));
+        $numericString = $evaluator->evaluate($node, $this->context($values + ['pullback_age_bars' => '2']));
 
         self::assertSame('missing_critical_data', $missing->reasonCode);
         self::assertTrue($valid->passed);
         self::assertSame('condition_passed', $valid->reasonCode);
         self::assertFalse($expired->passed);
         self::assertSame('condition_failed', $expired->reasonCode);
+        self::assertSame('missing_critical_data', $negative->reasonCode);
+        self::assertSame('missing_critical_data', $fractional->reasonCode);
+        self::assertSame('missing_critical_data', $numericString->reasonCode);
     }
 
     public function testSeriesConditionRejectsMissingOrNonCanonicalReportedOrder(): void

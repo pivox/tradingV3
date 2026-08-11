@@ -142,14 +142,18 @@ final class StrictCompiledExpressionEvaluatorTest extends TestCase
         ])->passed);
 
         self::assertFalse($evaluator->evaluate('pullback_confirmed', [
-            'close' => 100.0, 'vwap' => 100.0, 'validity_bars' => 3,
+            'close' => 105.0, 'vwap' => 100.0, 'validity_bars' => 3,
         ])->passed);
         self::assertTrue($evaluator->evaluate('pullback_confirmed', [
-            'close' => 100.0, 'vwap' => 100.0, 'validity_bars' => 3, 'pullback_age_bars' => 3,
+            'close' => 105.0, 'vwap' => 100.0, 'validity_bars' => 3, 'pullback_age_bars' => 3,
         ])->passed);
-        self::assertFalse($evaluator->evaluate('pullback_confirmed', [
-            'close' => 100.0, 'vwap' => 100.0, 'validity_bars' => 3, 'pullback_age_bars' => 3.001,
-        ])->passed);
+        foreach ([-1, 3.001, '2'] as $invalidAge) {
+            $invalid = $evaluator->evaluate('pullback_confirmed', [
+                'close' => 100.0, 'vwap' => 100.0, 'validity_bars' => 3, 'pullback_age_bars' => $invalidAge,
+            ]);
+            self::assertFalse($invalid->passed);
+            self::assertTrue($invalid->meta['invalid_numeric']);
+        }
 
         $crash = new StrictCompiledExpressionEvaluator(new StrictConditionRegistry(array_map(
             fn (string $id): ConditionInterface => $this->condition($id, true),
