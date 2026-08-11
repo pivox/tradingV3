@@ -24,25 +24,25 @@ WITH eligible_ledger AS (
         lower(ledger.fill_role) AS normalized_fill_role,
         CASE
             WHEN ledger.quantity > 0
-             AND COALESCE(
-                    CASE WHEN ledger.notional > 0 THEN ledger.notional END,
-                    CASE WHEN ledger.price > 0 THEN ledger.price * ledger.quantity END
-                 ) > 0
+             AND ledger.price > 0
+             AND (ledger.notional IS NULL OR ledger.notional > 0)
             THEN ledger.quantity
         END AS valid_quantity,
         CASE
             WHEN ledger.quantity > 0
-            THEN COALESCE(
-                CASE WHEN ledger.notional > 0 THEN ledger.notional END,
-                CASE WHEN ledger.price > 0 THEN ledger.price * ledger.quantity END
-            )
+             AND ledger.price > 0
+             AND (ledger.notional IS NULL OR ledger.notional > 0)
+            THEN COALESCE(ledger.notional, ledger.price * ledger.quantity)
         END AS valid_notional,
         CASE
-            WHEN ledger.fee_usdt IS NOT NULL THEN ledger.fee_usdt
-            WHEN upper(trim(ledger.fee_currency)) = 'USDT' AND ledger.fee_amount IS NOT NULL
-                THEN ledger.fee_amount
+            WHEN ledger.fee_usdt >= 0
+             AND upper(trim(ledger.fee_currency)) = 'USDT'
+             AND (ledger.fee_amount IS NULL OR ledger.fee_amount >= 0)
+            THEN ledger.fee_usdt
         END AS normalized_fee_usdt,
-        ledger.quality_flags IN ('[]'::jsonb, '{}'::jsonb, 'null'::jsonb) AS row_quality_valid
+        ledger.quality_flags IN ('[]'::jsonb, '{}'::jsonb, 'null'::jsonb)
+            AND (ledger.spread_cost_usdt IS NULL OR ledger.spread_cost_usdt >= 0)
+            AND (ledger.slippage_cost_usdt IS NULL OR ledger.slippage_cost_usdt >= 0) AS row_quality_valid
     FROM fill_cost_ledger ledger
     WHERE NOT (ledger.quality_flags ?| ARRAY['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided'])
 ), ledger_aggregate AS (
@@ -86,19 +86,19 @@ WITH eligible_ledger AS (
         COUNT(normalized_fee_usdt) AS fee_usdt_count,
         SUM(normalized_fee_usdt) AS fee_usdt,
 
-        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_spread_cost_usdt,
-        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_spread_cost_explicit_count,
-        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_spread_cost_usdt,
-        COUNT(spread_cost_usdt) AS spread_cost_explicit_count,
-        SUM(spread_cost_usdt) AS spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt >= 0) AS entry_spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND spread_cost_usdt >= 0) AS entry_spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt >= 0) AS exit_spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND spread_cost_usdt >= 0) AS exit_spread_cost_usdt,
+        COUNT(spread_cost_usdt) FILTER (WHERE spread_cost_usdt >= 0) AS spread_cost_explicit_count,
+        SUM(spread_cost_usdt) FILTER (WHERE spread_cost_usdt >= 0) AS spread_cost_usdt,
 
-        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_slippage_cost_usdt,
-        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit') AS exit_slippage_cost_usdt,
-        COUNT(slippage_cost_usdt) AS slippage_cost_explicit_count,
-        SUM(slippage_cost_usdt) AS slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt >= 0) AS entry_slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'entry' AND slippage_cost_usdt >= 0) AS entry_slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt >= 0) AS exit_slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE normalized_fill_role = 'exit' AND slippage_cost_usdt >= 0) AS exit_slippage_cost_usdt,
+        COUNT(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt >= 0) AS slippage_cost_explicit_count,
+        SUM(slippage_cost_usdt) FILTER (WHERE slippage_cost_usdt >= 0) AS slippage_cost_usdt,
 
         COUNT(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_funding_explicit_count,
         SUM(funding_usdt) FILTER (WHERE normalized_fill_role = 'entry') AS entry_funding_usdt,
@@ -143,9 +143,9 @@ WITH eligible_ledger AS (
         aggregate.*,
         CASE
             WHEN entry_fill_count = 0 THEN 'missing_entry_fill'
+            WHEN exit_fill_count = 0 THEN 'open_position'
             WHEN entry_valid_fill_count < entry_fill_count
               OR exit_valid_fill_count < exit_fill_count THEN 'invalid_fill_quantity'
-            WHEN exit_fill_count = 0 THEN 'open_position'
             WHEN exit_qty - entry_qty > 0.00000001 THEN 'quantity_mismatch'
             WHEN abs(entry_qty - exit_qty) <= 0.00000001 THEN 'complete'
             ELSE 'partial_exit'
