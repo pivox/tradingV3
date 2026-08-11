@@ -7,6 +7,7 @@ namespace App\Tests\TradingCore\OrderPlan\Canonical;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\OrderPlan\Canonical\CanonicalNetRDecision;
@@ -67,6 +68,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         ));
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
         $components = CanonicalOrderPlanPipelineFixture::accepted(side: $side, executionPolicy: $policy);
+        $components['orderBook'] = self::orderBook($components['zone']->entryPrice);
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
         $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
@@ -86,6 +88,8 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertCount(1, $plan->targets);
         self::assertSame(1.8, $plan->targets[0]->riskMultiple);
         self::assertGreaterThanOrEqual(1.3, $plan->targets[0]->netR);
+        self::assertSame($components['orderBook']->inputHash, $plan->orderBookInputHash);
+        self::assertContains($plan->orderBookInputHash, $plan->inputHashes);
     }
 
     /** @return iterable<string, array{string, string}> */
@@ -94,6 +98,50 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
         yield 'pullback long' => ['scalping.pullback.long', 'long'];
         yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
+    }
+
+    public function testBuildRejectsScalpingPlanWithoutCanonicalOrderBookProof(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_book_required');
+        (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+    }
+
+    public function testValidatorRejectsScalpingPlanWithoutIdentifiableOrderBookHash(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
+        );
+        $components['orderBook'] = self::orderBook($components['zone']->entryPrice);
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $validator = new CanonicalOrderPlanValidator($clock);
+        $plan = (new CanonicalOrderPlanBuilder($clock, $validator))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        foreach ([null, $plan->costInputHash] as $unidentifiedHash) {
+            try {
+                $validator->validate($this->authenticatedPlan($plan, [
+                    'orderBookInputHash' => $unidentifiedHash,
+                ]));
+                self::fail('A scalping plan without identifiable order-book lineage was accepted.');
+            } catch (CanonicalOrderPlanException $exception) {
+                self::assertSame('canonical_order_plan_order_book_lineage_invalid', $exception->reasonCode);
+            }
+        }
     }
 
     public function testValidatorRejectsAuthenticatedScalpingDeadlinesOutsideTheFrozenEnvelope(): void
@@ -105,6 +153,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $components = CanonicalOrderPlanPipelineFixture::accepted(
             executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
         );
+        $components['orderBook'] = self::orderBook($components['zone']->entryPrice);
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
         $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
@@ -133,6 +182,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $components = CanonicalOrderPlanPipelineFixture::accepted(
             executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
         );
+        $components['orderBook'] = self::orderBook($components['zone']->entryPrice);
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
         $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
@@ -504,5 +554,23 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertInstanceOf(CanonicalOrderPlan::class, $authenticated);
 
         return $authenticated;
+    }
+
+    private static function orderBook(float $entryPrice): CanonicalOrderBookSnapshot
+    {
+        $halfSpread = $entryPrice / 20_000.0;
+
+        return new CanonicalOrderBookSnapshot(
+            'fake',
+            'test',
+            'BTCUSDT',
+            'perpetual',
+            'order_book',
+            $entryPrice - $halfSpread,
+            $entryPrice + $halfSpread,
+            1.0,
+            new \DateTimeImmutable('2026-08-10T11:59:45+00:00'),
+            'sha256:' . str_repeat('8', 64),
+        );
     }
 }

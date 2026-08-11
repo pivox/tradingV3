@@ -48,6 +48,8 @@ final class CanonicalOrderPlanPipelineFixture
         ?CanonicalExecutionPolicy $executionPolicy = null,
         float $equityQuote = 1000.0,
         float $availableBalanceQuote = 1000.0,
+        string $exchange = 'fake',
+        string $environment = 'test',
     ): array
     {
         $policy = $executionPolicy ?? CanonicalExecutionPolicyFixture::policy($side);
@@ -56,22 +58,22 @@ final class CanonicalOrderPlanPipelineFixture
         $zoneRequest = new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
-            new CanonicalMarketSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
-            new CanonicalTickSnapshot('fake', 'test', 'BTCUSDT', 'perpetual', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
+            new CanonicalMarketSnapshot($exchange, $environment, 'BTCUSDT', 'perpetual', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
+            new CanonicalTickSnapshot($exchange, $environment, 'BTCUSDT', 'perpetual', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
         );
         $zone = (new CanonicalEntryZoneEngine(new MockClock('2026-08-10T12:00:00+00:00')))->calculate($zoneRequest);
         $protectionRequest = new CanonicalProtectionRequest(
             $policy,
             $zone,
-            new CanonicalPriceObservation('fake', 'test', 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
             null,
         );
         $protection = (new CanonicalProtectionEngine())->calculate($protectionRequest);
         $costs = new CanonicalExecutionCostSnapshot(
-            'fake',
-            'test',
+            $exchange,
+            $environment,
             'BTCUSDT',
             'perpetual',
             $policy->configHash,
@@ -128,8 +130,8 @@ final class CanonicalOrderPlanPipelineFixture
                 1,
             ),
             new CanonicalInstrumentSnapshot(
-                'fake',
-                'test',
+                $exchange,
+                $environment,
                 'BTCUSDT',
                 'perpetual',
                 'USDT',

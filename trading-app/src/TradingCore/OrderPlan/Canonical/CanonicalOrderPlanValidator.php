@@ -74,6 +74,14 @@ final readonly class CanonicalOrderPlanValidator
                 'close_before_boundary' => true,
             ]);
             if (
+                !isset($plan->orderBookInputHash)
+                || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $plan->orderBookInputHash) !== 1
+                || !\in_array($plan->orderBookInputHash, $plan->inputHashes, true)
+                || ($plan->inputHashes[array_key_last($plan->inputHashes)] ?? null) !== $plan->orderBookInputHash
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_order_book_lineage_invalid');
+            }
+            if (
                 !$plan->cancelAfterAt instanceof \DateTimeImmutable
                 || !$plan->holdingExpiresAt instanceof \DateTimeImmutable
                 || $plan->expiresAt > $plan->createdAt->modify('+45 seconds')

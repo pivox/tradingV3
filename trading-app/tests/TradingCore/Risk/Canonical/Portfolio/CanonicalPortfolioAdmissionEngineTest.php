@@ -9,6 +9,7 @@ use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
@@ -516,6 +517,20 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
             executionPolicy: $executionPolicy,
             equityQuote: $equityQuote,
             availableBalanceQuote: $equityQuote,
+        );
+        $entryPrice = $components['zone']->entryPrice;
+        $halfSpread = $entryPrice / 20_000.0;
+        $components['orderBook'] = new CanonicalOrderBookSnapshot(
+            'fake',
+            'test',
+            'BTCUSDT',
+            'perpetual',
+            'order_book',
+            $entryPrice - $halfSpread,
+            $entryPrice + $halfSpread,
+            1.0,
+            new \DateTimeImmutable('2026-08-10T11:59:45+00:00'),
+            'sha256:' . str_repeat('c', 64),
         );
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
         $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))

@@ -21,6 +21,13 @@ final readonly class CanonicalOrderPlanAuthority
         $riskPolicy = $policy->riskPolicy;
         $zone = $request->zone;
         $protection = $request->protection;
+        if (
+            $riskPolicy->modeId === 'scalping'
+            && $riskPolicy->modeVersion === '1.1.0'
+            && $request->orderBook === null
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_book_required');
+        }
         foreach ([$zone, $protection] as $component) {
             if (
                 $component->modeId !== $riskPolicy->modeId

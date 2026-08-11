@@ -217,6 +217,13 @@ final readonly class ScalpingNetReport
         if ($capability === null || !$capability->permitsShadow()) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_capability_invalid');
         }
+        $snapshotExchange = $snapshot['request']['exchange'] ?? null;
+        if (
+            $capability === ShadowExecutionCapability::Backtest
+            && ($snapshotExchange !== 'fake' || $lineage->exchange !== 'fake')
+        ) {
+            throw new \InvalidArgumentException('scalping_net_report_lineage_capability_exchange_invalid');
+        }
         $config = $snapshot['config'] ?? null;
         if (!\is_array($config)) {
             throw new \InvalidArgumentException('scalping_net_report_lineage_incomplete');
@@ -246,6 +253,14 @@ final readonly class ScalpingNetReport
             || $plan->setupVersion !== '1.1.0'
         ) {
             throw new \InvalidArgumentException('scalping_net_report_plan_identity_mismatch');
+        }
+        if (
+            !isset($plan->orderBookInputHash)
+            || !self::validHash($plan->orderBookInputHash)
+            || !\in_array($plan->orderBookInputHash, $plan->inputHashes, true)
+            || ($plan->inputHashes[array_key_last($plan->inputHashes)] ?? null) !== $plan->orderBookInputHash
+        ) {
+            throw new \InvalidArgumentException('scalping_net_report_order_book_proof_invalid');
         }
         try {
             CanonicalOrderPlanValidator::validateAt($plan, $plan->createdAt);

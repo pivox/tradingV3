@@ -645,9 +645,11 @@ final class ScalpingShadowRuntimeTest extends TestCase
         ?float $estimatedSlippageBps = 1.0,
         ShadowExecutionCapability $capability = ShadowExecutionCapability::Fake,
         bool $includeOrderBook = true,
+        string $exchange = 'fake',
+        string $environment = 'test',
     ): ScalpingShadowRequest {
         $configRequest = new EffectiveTradingConfigRequest(
-            'scalping', '1.1.0', $setupId, '1.1.0', 'fake', 'test', $side, $capability,
+            'scalping', '1.1.0', $setupId, '1.1.0', $exchange, $environment, $side, $capability,
         );
         $snapshot = (new EffectiveTradingConfigResolver())->resolve($configRequest);
         $snapshotData = $snapshot->toArray();
@@ -663,8 +665,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'config_hash' => $snapshot->configHash,
             'condition_catalog_hash' => $snapshot->conditionCatalogHash,
             'side' => strtoupper($side),
-            'exchange' => 'fake',
-            'environment' => 'test',
+            'exchange' => $exchange,
+            'environment' => $environment,
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
             'decision_key' => $decisionKey,
@@ -673,11 +675,16 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'effective_config_snapshot' => $snapshotData,
         ]);
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
-        $components = CanonicalOrderPlanPipelineFixture::accepted(side: $side, executionPolicy: $policy);
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            side: $side,
+            executionPolicy: $policy,
+            exchange: $exchange,
+            environment: $environment,
+        );
         $bookMid = $components['zone']->entryPrice;
         $bookSpreadBps = $liveSpreadBps ?? 1.0;
         $bookHalfSpread = $bookMid * $bookSpreadBps / 20_000.0;
-        $scope = new CanonicalPortfolioScope('shadow', 'fake', 'test', 'account-1', 'scalping', 'USDT');
+        $scope = new CanonicalPortfolioScope('shadow', $exchange, $environment, 'account-1', 'scalping', 'USDT');
         $portfolio = new CanonicalPortfolioSnapshot(
             $scope,
             'scalping_test',
@@ -702,10 +709,10 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $configRequest,
             $lineage,
             [
-                '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z'),
-                '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z', ['pullback_age_bars' => 1]),
-                '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z'),
-                '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z'),
+                '1h' => self::indicatorInput('1h', '2026-08-10T11:00:00Z', exchange: $exchange, environment: $environment),
+                '15m' => self::indicatorInput('15m', '2026-08-10T11:45:00Z', ['pullback_age_bars' => 1], $exchange, $environment),
+                '5m' => self::indicatorInput('5m', '2026-08-10T11:55:00Z', exchange: $exchange, environment: $environment),
+                '1m' => self::indicatorInput('1m', '2026-08-10T11:59:00Z', exchange: $exchange, environment: $environment),
             ],
             new CanonicalOrderPlanBuildRequest(...$components),
             $scope,
@@ -714,8 +721,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $liveSpreadBps,
             $estimatedSlippageBps,
             $includeOrderBook ? new CanonicalOrderBookSnapshot(
-                'fake',
-                'test',
+                $exchange,
+                $environment,
                 'BTCUSDT',
                 'perpetual',
                 'order_book',
@@ -732,7 +739,13 @@ final class ScalpingShadowRuntimeTest extends TestCase
      * @param array<string, mixed> $extra
      * @return array<string, mixed>
      */
-    private static function indicatorInput(string $timeframe, string $klineTime, array $extra = []): array
+    private static function indicatorInput(
+        string $timeframe,
+        string $klineTime,
+        array $extra = [],
+        string $exchange = 'fake',
+        string $environment = 'test',
+    ): array
     {
         $step = match ($timeframe) {
             '1m' => 60,
@@ -748,8 +761,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
             'snapshot_identity' => [
                 'timeframe' => $timeframe,
                 'symbol' => 'BTCUSDT',
-                'exchange' => 'fake',
-                'environment' => 'test',
+                'exchange' => $exchange,
+                'environment' => $environment,
                 'market_type' => 'perpetual',
             ],
             'kline_time' => $klineTime,
@@ -875,7 +888,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
         float $bestAsk = 100.005,
         float $spreadBps = 1.0,
         string $observedAt = '2026-08-10T11:59:45+00:00',
-        string $inputHash = 'sha256:' . '7777777777777777777777777777777777777777777777777777777777777777',
+        string $inputHash = 'sha256:' . 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     ): CanonicalOrderBookSnapshot {
         return new CanonicalOrderBookSnapshot(
             $exchange,

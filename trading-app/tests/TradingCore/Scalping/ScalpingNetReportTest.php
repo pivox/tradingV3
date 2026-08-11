@@ -257,6 +257,60 @@ final class ScalpingNetReportTest extends TestCase
         ScalpingNetReport::fromOutcomes([$outcome]);
     }
 
+    /** @return iterable<string, array{string, string}> */
+    public static function nonFakeBacktestExchanges(): iterable
+    {
+        yield 'OKX demo' => ['okx', 'demo'];
+        yield 'Hyperliquid testnet' => ['hyperliquid', 'testnet'];
+    }
+
+    #[DataProvider('nonFakeBacktestExchanges')]
+    public function testRejectsBacktestLineageRelabeledToNonFakeExchange(
+        string $exchange,
+        string $environment,
+    ): void {
+        $paper = ScalpingShadowRuntimeTest::fixtureRuntime()->run(
+            ScalpingShadowRuntimeTest::fixtureRequest(
+                'scalping.trend_continuation.long',
+                'long',
+                capability: ShadowExecutionCapability::Paper,
+                exchange: $exchange,
+                environment: $environment,
+            ),
+        );
+        self::assertSame('planned', $paper->status);
+        self::assertSame($exchange, $paper->lineage->exchange);
+        self::assertSame($exchange, $paper->orderPlan?->exchange);
+        self::assertSame($exchange, $paper->reservation?->scope->exchange);
+        $outcome = self::withRehashedLineageCapability(
+            $paper,
+            ShadowExecutionCapability::Backtest->value,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_lineage_capability_exchange_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
+    public function testRejectsPreFixPlanWithoutIdentifiableOrderBookProof(): void
+    {
+        $planned = self::plannedOutcomes()[0];
+        self::assertNotNull($planned->orderPlan);
+        $preFixPlan = self::preFixPlanWithoutOrderBookProof($planned->orderPlan);
+        $outcome = new ScalpingShadowOutcome(
+            'planned',
+            $planned->reasonCode,
+            $planned->lineage,
+            $preFixPlan,
+            $planned->reservation,
+            $planned->evidence,
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('scalping_net_report_order_book_proof_invalid');
+        ScalpingNetReport::fromOutcomes([$outcome]);
+    }
+
     public function testRejectsWriteEnabledSnapshotEvenWhenEveryDependentHashWasRecomputed(): void
     {
         $planned = self::plannedOutcomes()[0];
@@ -832,6 +886,28 @@ final class ScalpingNetReportTest extends TestCase
             $planned->reservation,
             $planned->evidence,
         );
+    }
+
+    private static function preFixPlanWithoutOrderBookProof(CanonicalOrderPlan $plan): CanonicalOrderPlan
+    {
+        $reflection = new \ReflectionClass(CanonicalOrderPlan::class);
+        $values = get_object_vars($plan);
+        unset($values['orderBookInputHash']);
+        $values['planHash'] = 'sha256:' . str_repeat('0', 64);
+        $unsigned = $reflection->newInstanceWithoutConstructor();
+        foreach ($values as $property => $value) {
+            $reflection->getProperty($property)->setValue($unsigned, $value);
+        }
+        self::assertInstanceOf(CanonicalOrderPlan::class, $unsigned);
+        $values['planHash'] = $unsigned->expectedPlanHash();
+
+        $preFix = $reflection->newInstanceWithoutConstructor();
+        foreach ($values as $property => $value) {
+            $reflection->getProperty($property)->setValue($preFix, $value);
+        }
+        self::assertInstanceOf(CanonicalOrderPlan::class, $preFix);
+
+        return $preFix;
     }
 
     /**
