@@ -135,7 +135,7 @@ final readonly class StrictRuleEvaluator
         $base['input_freshness_seconds'] = $this->catalog->freshnessSeconds($snapshot->source, $snapshot->timeframe);
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
-        $base['parameter_source'] = array_fill_keys(array_keys($node->parameters), 'setup_contract');
+        $base['parameter_source'] = $node->parameterSources;
         $base['series_order'] = $definition->seriesOrder;
         $base['reported_series_order'] = $snapshot->values['series_order'] ?? null;
         if (!$snapshot->isValidAt($context->evaluatedAt)) {

@@ -12,6 +12,7 @@ use App\TradingCore\Rules\Ast\AllOfNode;
 use App\TradingCore\Rules\Ast\AnyOfNode;
 use App\TradingCore\Rules\Ast\ConditionNode;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
+use App\TradingCore\Rules\Compiler\RuleExpressionCompiler;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationContext;
 use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
@@ -108,6 +109,44 @@ final class StrictRuleEvaluatorTest extends TestCase
         self::assertSame(['threshold' => 'setup_contract'], $result->trace['parameter_source']);
         self::assertSame('scalar', $result->trace['series_order']);
         self::assertNull($result->trace['reported_series_order']);
+    }
+
+    public function testTraceDistinguishesExplicitParametersFromCatalogDefaults(): void
+    {
+        $condition = new class implements ConditionInterface {
+            public function getName(): string { return 'atr_rel_in_range_15m'; }
+            /** @param array<string, mixed> $context */
+            public function evaluate(array $context): ConditionResult
+            {
+                return new ConditionResult($this->getName(),
+                    ($context['min_atr_pct'] ?? null) === 0.002
+                    && ($context['max_atr_pct'] ?? null) === 0.045,
+                );
+            }
+        };
+        $root = dirname(__DIR__, 4);
+        $catalog = (new ConditionCatalogLoader())->loadFile($root . '/config/trading/condition_catalog/1.0.0.yaml');
+        $node = (new RuleExpressionCompiler($catalog))->compile([
+            'condition' => 'atr_rel_in_range_15m',
+            'timeframe' => '15m',
+            'parameters' => ['min_atr_pct' => 0.002],
+            'provenance' => 'fixture:mixed-parameter-authority',
+        ], 'long');
+        $now = new \DateTimeImmutable('2026-08-10T10:00:00+00:00');
+        $context = new RuleEvaluationContext('config-hash', $now, [
+            new RuleInputSnapshot('15m', 'indicator_snapshot', $now, $now->modify('+1200 seconds'), [
+                'min_atr_pct' => 99.0,
+                'max_atr_pct' => 99.0,
+            ]),
+        ]);
+
+        $result = (new StrictRuleEvaluator($catalog, new StrictConditionRegistry([$condition])))->evaluate($node, $context);
+
+        self::assertTrue($result->passed);
+        self::assertSame([
+            'max_atr_pct' => 'condition_catalog_default',
+            'min_atr_pct' => 'setup_contract',
+        ], $result->trace['parameter_source']);
     }
 
     public function testPullbackConfirmationRequiresCanonicalAgeWithinValidity(): void
