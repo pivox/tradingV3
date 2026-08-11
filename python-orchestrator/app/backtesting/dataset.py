@@ -73,7 +73,7 @@ def _canonical_decimal(value: object) -> str:
 class CandleRecord(BaseModel):
     """One immutable, normalized, complete candle."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     schema_version: Literal["backtest-candle.v1"] = _CANDLE_SCHEMA_VERSION
     source_record_id: str = Field(..., min_length=1)
@@ -121,6 +121,9 @@ class CandleRecord(BaseModel):
 
     @model_validator(mode="after")
     def _validate_candle(self) -> "CandleRecord":
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        if (self.open_at - epoch) % self.timeframe.duration != timedelta(0):
+            raise ValueError("open_at must align to UTC timeframe grid")
         if self.close_at - self.open_at != self.timeframe.duration:
             raise ValueError("candle duration must equal timeframe")
         if self.available_at < self.close_at:
@@ -143,7 +146,7 @@ class CandleRecord(BaseModel):
 class DatasetSourceIdentity(BaseModel):
     """Exact identity of the already verified source passed to the builder."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     source: str = Field(..., min_length=1)
     source_schema_version: str = Field(..., min_length=1)
@@ -168,7 +171,7 @@ class DatasetSourceIdentity(BaseModel):
 class MissingRange(BaseModel):
     """Inclusive first missing candle open and exclusive range end."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     first_missing_open_at: datetime
     end_at: datetime
@@ -193,7 +196,7 @@ class MissingRange(BaseModel):
 class DatasetStreamQuality(BaseModel):
     """Coverage and defects for one canonical candle stream."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     market_data_venue: str = Field(..., min_length=1)
     market_type: MarketType
@@ -227,7 +230,7 @@ class DatasetStreamQuality(BaseModel):
 class DatasetQualityReport(BaseModel):
     """Deterministically ordered, machine-readable dataset analysis."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     schema_version: Literal["backtest-dataset-quality.v1"] = _QUALITY_SCHEMA_VERSION
     input_count: int = Field(..., ge=0)
@@ -255,7 +258,7 @@ class DatasetQualityReport(BaseModel):
 class DatasetBuildResult(BaseModel):
     """Pure, eligible build output before canonical serialization."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     source_identity: DatasetSourceIdentity
     records: tuple[CandleRecord, ...] = Field(..., min_length=1)
@@ -273,7 +276,10 @@ class DatasetBuildResult(BaseModel):
 
     @model_validator(mode="after")
     def _validate_derived_facts(self) -> "DatasetBuildResult":
-        if not self.quality_report.eligible:
+        recomputed_report = DatasetBuilder(self.source_identity).analyze(self.records)
+        if recomputed_report != self.quality_report:
+            raise ValueError("quality report must match records and source identity")
+        if not recomputed_report.eligible:
             raise ValueError("build result requires an eligible quality report")
         if self.record_count != len(self.records):
             raise ValueError("record_count must equal records length")
@@ -501,5 +507,5 @@ class DatasetBuilder:
         for mixed_flag, expected, observed in dimensions:
             if len(observed) > 1:
                 flags.add(mixed_flag)
-            elif observed != {expected}:
+            if observed != {expected}:
                 flags.add("source_identity_mismatch")

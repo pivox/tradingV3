@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
+from app.backtesting.contracts import MarketType
 from app.backtesting.dataset import (
     CandleRecord,
     DatasetBuilder,
@@ -28,9 +29,9 @@ def _candle(**overrides: object) -> CandleRecord:
         "source_record_id": "fake:BTCUSDT:1m:2026-01-01T00:00:00Z",
         "source_network": "fake",
         "market_data_venue": "fake",
-        "market_type": "perpetual",
+        "market_type": MarketType.PERPETUAL,
         "symbol": "BTCUSDT",
-        "timeframe": "1m",
+        "timeframe": Timeframe.ONE_MINUTE,
         "open_at": _utc("2026-01-01T00:00:00"),
         "close_at": _utc("2026-01-01T00:01:00"),
         "available_at": _utc("2026-01-01T00:01:00"),
@@ -42,6 +43,13 @@ def _candle(**overrides: object) -> CandleRecord:
         "complete": True,
     }
     payload.update(overrides)
+    if isinstance(payload["market_type"], str):
+        payload["market_type"] = MarketType(payload["market_type"])
+    if isinstance(payload["timeframe"], str):
+        try:
+            payload["timeframe"] = Timeframe(payload["timeframe"])
+        except ValueError:
+            pass
     return CandleRecord(**payload)
 
 
@@ -53,7 +61,7 @@ def _source() -> DatasetSourceIdentity:
         source_checksum="sha256:" + "a" * 64,
         source_network="fake",
         market_data_venue="fake",
-        market_type="perpetual",
+        market_type=MarketType.PERPETUAL,
     )
 
 
@@ -139,6 +147,29 @@ def test_candle_requires_exact_timeframe_duration_and_availability_boundary() ->
 
 
 @pytest.mark.parametrize(
+    ("timeframe", "opened"),
+    (
+        ("1m", _utc("2026-01-01T00:00:30")),
+        ("5m", _utc("2026-01-01T00:01:00")),
+        ("1h", _utc("2026-01-01T00:30:00")),
+    ),
+)
+def test_candle_open_must_align_to_the_utc_timeframe_grid(
+    timeframe: str,
+    opened: datetime,
+) -> None:
+    duration = Timeframe(timeframe).duration
+
+    with pytest.raises(ValidationError, match="open_at must align to UTC timeframe grid"):
+        _candle(
+            timeframe=timeframe,
+            open_at=opened,
+            close_at=opened + duration,
+            available_at=opened + duration,
+        )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (
         ("open", "01"),
@@ -178,14 +209,14 @@ def test_source_and_quality_contracts_are_strict_frozen_and_strategy_independent
     missing = MissingRange(
         first_missing_open_at=_utc("2026-01-01T00:01:00"),
         end_at=_utc("2026-01-01T00:02:00"),
-        timeframe="1m",
+        timeframe=Timeframe.ONE_MINUTE,
         missing_bar_count=1,
     )
     stream = DatasetStreamQuality(
         market_data_venue="fake",
-        market_type="perpetual",
+        market_type=MarketType.PERPETUAL,
         symbol="BTCUSDT",
-        timeframe="1m",
+        timeframe=Timeframe.ONE_MINUTE,
         first_open_at=_utc("2026-01-01T00:00:00"),
         last_close_at=_utc("2026-01-01T00:03:00"),
         expected_count=3,
@@ -222,6 +253,42 @@ def test_source_and_quality_contracts_are_strict_frozen_and_strategy_independent
         source.source = "changed"
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         DatasetSourceIdentity(**{**source.model_dump(), "profile": "regular"})
+
+
+def test_dataset_contracts_reject_python_coercions_but_accept_canonical_json() -> None:
+    candle = _candle()
+    source = _source()
+
+    for contract in (
+        CandleRecord,
+        DatasetSourceIdentity,
+        MissingRange,
+        DatasetStreamQuality,
+        DatasetQualityReport,
+        DatasetBuildResult,
+    ):
+        assert contract.model_config.get("strict") is True
+
+    with pytest.raises(ValidationError):
+        CandleRecord(**{**candle.model_dump(), "open_at": "2026-01-01T00:00:00Z"})
+    with pytest.raises(ValidationError):
+        DatasetSourceIdentity(**{**source.model_dump(), "source": b"paper-fixture"})
+    with pytest.raises(ValidationError):
+        DatasetQualityReport(
+            input_count=True,
+            accepted_count=0,
+            exact_duplicate_count=0,
+            conflicting_duplicate_count=0,
+        )
+    with pytest.raises(ValidationError):
+        DatasetQualityReport(
+            input_count=1.0,
+            accepted_count=0,
+            exact_duplicate_count=0,
+            conflicting_duplicate_count=0,
+        )
+
+    assert CandleRecord.model_validate_json(candle.model_dump_json()) == candle
 
 
 def test_build_rejection_exposes_only_stable_reason_and_typed_report() -> None:
@@ -284,6 +351,20 @@ def test_builder_rejects_mixed_source_identity_dimensions(
     with pytest.raises(DatasetBuildRejected) as rejected:
         DatasetBuilder(_source()).build(records)
     assert expected_flag in rejected.value.report.quality_flags
+
+
+def test_source_mismatch_is_reported_independently_from_a_mixed_dimension() -> None:
+    records = (
+        _candle_at(0, source_network="testnet"),
+        _candle_at(1, source_network="paper"),
+    )
+
+    report = DatasetBuilder(_source()).analyze(records)
+
+    assert report.quality_flags == (
+        "mixed_source_network",
+        "source_identity_mismatch",
+    )
 
 
 def test_builder_builds_one_complete_stream_and_derives_bounds() -> None:
@@ -377,7 +458,7 @@ def test_builder_reports_one_gap_only_inside_the_observed_bounds() -> None:
         MissingRange(
             first_missing_open_at=_utc("2026-01-01T00:01:00"),
             end_at=_utc("2026-01-01T00:02:00"),
-            timeframe="1m",
+            timeframe=Timeframe.ONE_MINUTE,
             missing_bar_count=1,
         ),
     )
@@ -394,41 +475,16 @@ def test_builder_reports_multiple_contiguous_missing_ranges() -> None:
         MissingRange(
             first_missing_open_at=_utc("2026-01-01T00:01:00"),
             end_at=_utc("2026-01-01T00:03:00"),
-            timeframe="1m",
+            timeframe=Timeframe.ONE_MINUTE,
             missing_bar_count=2,
         ),
         MissingRange(
             first_missing_open_at=_utc("2026-01-01T00:05:00"),
             end_at=_utc("2026-01-01T00:07:00"),
-            timeframe="1m",
+            timeframe=Timeframe.ONE_MINUTE,
             missing_bar_count=2,
         ),
     )
-
-
-def test_builder_rejects_overlapping_and_off_grid_stream_chronology() -> None:
-    overlap = _candle_at(
-        0,
-        source_record_id="overlap",
-        open_at=_utc("2026-01-01T00:00:30"),
-        close_at=_utc("2026-01-01T00:01:30"),
-        available_at=_utc("2026-01-01T00:01:30"),
-    )
-    off_grid_gap = _candle_at(
-        0,
-        source_record_id="off-grid",
-        open_at=_utc("2026-01-01T00:02:30"),
-        close_at=_utc("2026-01-01T00:03:30"),
-        available_at=_utc("2026-01-01T00:03:30"),
-    )
-
-    overlap_report = DatasetBuilder(_source()).analyze((_candle_at(0), overlap))
-    off_grid_report = DatasetBuilder(_source()).analyze(
-        (_candle_at(0), off_grid_gap)
-    )
-
-    assert overlap_report.quality_flags == ("stream_overlap",)
-    assert off_grid_report.quality_flags == ("invalid_stream_chronology",)
 
 
 def test_builder_report_and_result_are_stable_for_input_permutations() -> None:
@@ -446,3 +502,26 @@ def test_builder_report_and_result_are_stable_for_input_permutations() -> None:
 
     assert forward_report.model_dump(mode="json") == reverse_report.model_dump(mode="json")
     assert forward_result.model_dump(mode="json") == reverse_result.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("forgery", ("counts", "streams", "source"))
+def test_build_result_rejects_forged_quality_evidence(forgery: str) -> None:
+    result = DatasetBuilder(_source()).build((_candle_at(0), _candle_at(1)))
+    payload = result.model_dump()
+
+    if forgery == "counts":
+        payload["quality_report"] = result.quality_report.model_copy(
+            update={"input_count": 999, "accepted_count": 999}
+        )
+    elif forgery == "streams":
+        payload["quality_report"] = result.quality_report.model_copy(
+            update={"streams": ()}
+        )
+    else:
+        payload["records"] = (
+            _candle_at(0, source_network="unexpected"),
+            _candle_at(1, source_network="unexpected"),
+        )
+
+    with pytest.raises(ValidationError, match="quality report must match records"):
+        DatasetBuildResult(**payload)
