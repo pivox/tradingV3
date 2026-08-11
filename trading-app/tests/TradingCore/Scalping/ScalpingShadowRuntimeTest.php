@@ -62,6 +62,20 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame($side, $outcome->orderPlan->side);
         self::assertSame($outcome->lineage->configHash, $outcome->orderPlan->configHash);
         self::assertSame($outcome->orderPlan->planHash, $outcome->reservation->planHash);
+        self::assertSame(0.02, $outcome->orderPlan->riskRate);
+        self::assertSame(3.0, $outcome->orderPlan->modeLeverageCap);
+        self::assertLessThanOrEqual(3, $outcome->orderPlan->finalLeverage);
+        self::assertSame(25.0, $outcome->orderPlan->exchangeMaxNotional);
+        self::assertLessThanOrEqual(25.0, $outcome->orderPlan->positionNotional);
+        self::assertSame('2026-08-10T12:00:45+00:00', $outcome->orderPlan->expiresAt->format(DATE_ATOM));
+        self::assertSame('2026-08-10T12:01:15+00:00', $outcome->orderPlan->cancelAfterAt?->format(DATE_ATOM));
+        self::assertSame('2026-08-10T14:00:00+00:00', $outcome->orderPlan->holdingExpiresAt?->format(DATE_ATOM));
+        self::assertCount(1, $outcome->orderPlan->targets);
+        self::assertSame(1.8, $outcome->orderPlan->targets[0]->riskMultiple);
+        self::assertGreaterThanOrEqual(1.3, $outcome->orderPlan->targets[0]->netR);
+        self::assertSame($outcome->orderPlan->expiresAt, $outcome->reservation->entryExpiresAt);
+        self::assertSame($outcome->orderPlan->cancelAfterAt, $outcome->reservation->cancelAfterAt);
+        self::assertSame($outcome->orderPlan->holdingExpiresAt, $outcome->reservation->holdingExpiresAt);
         self::assertSame('5m', $outcome->evidence['rules']['execution_timeframe']);
         self::assertSame(['1m'], $outcome->evidence['rules']['mandatory_confirmations']);
     }
@@ -220,6 +234,59 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame('scalping_shadow_capability_forbidden', $outcome->reasonCode);
         self::assertNull($outcome->orderPlan);
         self::assertNull($outcome->reservation);
+    }
+
+    public function testPortfolioBoundariesRejectBeforeAReservationIsPublished(): void
+    {
+        $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
+        $scope = $request->portfolioScope;
+        $snapshot = static fn (
+            float $realizedNetPnlQuote = 0.0,
+            int $openPositions = 0,
+            int $pendingEntries = 0,
+            float $openNotionalQuote = 0.0,
+            float $pendingNotionalQuote = 0.0,
+        ): CanonicalPortfolioSnapshot => new CanonicalPortfolioSnapshot(
+            $scope,
+            'scalping_boundary_test',
+            '1.0.0',
+            new \DateTimeImmutable('2026-08-10T00:00:00+00:00'),
+            new \DateTimeImmutable('2026-08-11T00:00:00+00:00'),
+            new \DateTimeImmutable('2026-08-10T11:59:50+00:00'),
+            1000.0,
+            $realizedNetPnlQuote,
+            0.0,
+            $openPositions,
+            $pendingEntries,
+            $openNotionalQuote,
+            $pendingNotionalQuote,
+            0.0,
+            [],
+            1,
+            'sha256:' . str_repeat('9', 64),
+        );
+
+        foreach ([
+            'fourth position includes pending' => [
+                $snapshot(openPositions: 2, pendingEntries: 1),
+                'canonical_portfolio_concurrency_exceeded',
+            ],
+            'exposure above 75 percent' => [
+                $snapshot(openNotionalQuote: 750.0),
+                'canonical_portfolio_mode_exposure_exceeded',
+            ],
+            'absolute daily loss cap' => [
+                $snapshot(realizedNetPnlQuote: -40.0),
+                'canonical_portfolio_daily_loss_exceeded',
+            ],
+        ] as [$portfolio, $reason]) {
+            $outcome = self::fixtureRuntime()->run(self::withPortfolioSnapshot($request, $portfolio));
+
+            self::assertSame('no_trade', $outcome->status);
+            self::assertSame($reason, $outcome->reasonCode);
+            self::assertNull($outcome->orderPlan);
+            self::assertNull($outcome->reservation);
+        }
     }
 
     public function testMarketPlanIsRejectedBeforePortfolioReservation(): void
@@ -413,6 +480,23 @@ final class ScalpingShadowRuntimeTest extends TestCase
             $plan,
             $request->portfolioScope,
             $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+        );
+    }
+
+    private static function withPortfolioSnapshot(
+        ScalpingShadowRequest $request,
+        CanonicalPortfolioSnapshot $portfolioSnapshot,
+    ): ScalpingShadowRequest {
+        return new ScalpingShadowRequest(
+            $request->configRequest,
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $portfolioSnapshot,
             $request->decisionKey,
             $request->liveSpreadBps,
             $request->estimatedSlippageBps,

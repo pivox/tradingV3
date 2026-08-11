@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Risk\Canonical;
 
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Risk\Canonical\CanonicalRiskException;
 use App\TradingCore\Risk\Canonical\CanonicalRiskPolicyCompiler;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -16,6 +18,28 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalRiskPolicyCompiler::class)]
 final class CanonicalRiskPolicyCompilerTest extends TestCase
 {
+    #[DataProvider('scalpingIdentities')]
+    public function testCompilesExactScalpingRiskLeverageAndNotionalBoundaries(string $setupId, string $side): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
+        ));
+
+        $policy = (new CanonicalRiskPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('scalping', $policy->modeId);
+        self::assertSame('1.1.0', $policy->modeVersion);
+        self::assertSame($setupId, $policy->setupId);
+        self::assertSame('1.1.0', $policy->setupVersion);
+        self::assertSame($side, $policy->side);
+        self::assertSame(0.02, $policy->riskRate);
+        self::assertSame(3.0, $policy->modeLeverageCap);
+        self::assertSame(5.0, $policy->exchangeMinNotional);
+        self::assertSame(25.0, $policy->exchangeMaxNotional);
+        self::assertSame(100.0, $policy->environmentMaxNotional);
+    }
+
     public function testCompilesPercentagePointsExactlyOnceAndPreservesAuthority(): void
     {
         $policy = (new CanonicalRiskPolicyCompiler())->compile($this->snapshot());
@@ -139,6 +163,14 @@ final class CanonicalRiskPolicyCompilerTest extends TestCase
             },
             'canonical_policy_identity_mismatch',
         ];
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function scalpingIdentities(): iterable
+    {
+        yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
+        yield 'pullback long' => ['scalping.pullback.long', 'long'];
+        yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 
     public function testRejectsSnapshotThatIsNotExecutable(): void

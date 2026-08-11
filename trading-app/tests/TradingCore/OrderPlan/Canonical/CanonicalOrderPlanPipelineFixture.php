@@ -46,6 +46,8 @@ final class CanonicalOrderPlanPipelineFixture
         string $costObservedAt = '2026-08-10T11:59:50+00:00',
         string $instrumentObservedAt = '2026-08-10T11:59:40+00:00',
         ?CanonicalExecutionPolicy $executionPolicy = null,
+        float $equityQuote = 1000.0,
+        float $availableBalanceQuote = 1000.0,
     ): array
     {
         $policy = $executionPolicy ?? CanonicalExecutionPolicyFixture::policy($side);
@@ -104,8 +106,8 @@ final class CanonicalOrderPlanPipelineFixture
             'perpetual',
             'USDT',
             $side,
-            1000.0,
-            1000.0,
+            $equityQuote,
+            $availableBalanceQuote,
             $protection->entryPrice,
             $protection->stopPrice,
             1.0,

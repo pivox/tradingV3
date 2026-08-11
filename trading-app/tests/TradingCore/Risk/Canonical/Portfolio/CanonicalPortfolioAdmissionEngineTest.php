@@ -4,9 +4,19 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Risk\Canonical\Portfolio;
 
+use App\Tests\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanPipelineFixture;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanValidator;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionEngine;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioReservationDecision;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
@@ -62,6 +72,76 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
         self::assertSame(1, $first->expectedStateVersion);
         self::assertSame($first->reservationHash, $second->reservationHash);
         self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $first->reservationHash);
+    }
+
+    public function testScalpingAcceptsTheExactDailyConcurrencyAndExposureEdges(): void
+    {
+        [$policy, $plan, $scope] = $this->scalpingAuthority(1000.0);
+        $snapshot = $this->scalpingSnapshot(
+            $scope,
+            1000.0,
+            realizedNetPnlQuote: -40.0 + $plan->totalStopLoss,
+            openPositions: 2,
+            openNotionalQuote: 750.0 - $plan->positionNotional,
+        );
+
+        $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))
+            ->admit(new CanonicalPortfolioAdmissionRequest($policy, $plan, $scope, $snapshot, 'scalping-boundary'));
+
+        self::assertSame(40.0, $decision->effectiveDailyLossCapQuote);
+        self::assertSame(3, $decision->projectedConcurrentPositions);
+        self::assertSame(750.0, $decision->modeExposureCapQuote);
+        self::assertSame(750.0, $decision->projectedModeExposureQuote);
+    }
+
+    public function testScalpingRejectsFourthReservationExposureAndBothDailyCaps(): void
+    {
+        [$absolutePolicy, $absolutePlan, $absoluteScope] = $this->scalpingAuthority(1000.0);
+        [$percentPolicy, $percentPlan, $percentScope] = $this->scalpingAuthority(500.0);
+        $cases = [
+            'fourth reservation' => [
+                $absolutePolicy,
+                $absolutePlan,
+                $absoluteScope,
+                $this->scalpingSnapshot($absoluteScope, 1000.0, openPositions: 2, pendingEntries: 1),
+                'canonical_portfolio_concurrency_exceeded',
+            ],
+            'above 75 percent exposure' => [
+                $absolutePolicy,
+                $absolutePlan,
+                $absoluteScope,
+                $this->scalpingSnapshot(
+                    $absoluteScope,
+                    1000.0,
+                    openNotionalQuote: 750.01 - $absolutePlan->positionNotional,
+                ),
+                'canonical_portfolio_mode_exposure_exceeded',
+            ],
+            '40 USDT absolute loss cap' => [
+                $absolutePolicy,
+                $absolutePlan,
+                $absoluteScope,
+                $this->scalpingSnapshot($absoluteScope, 1000.0, realizedNetPnlQuote: -40.0),
+                'canonical_portfolio_daily_loss_exceeded',
+            ],
+            'six percent equity loss cap' => [
+                $percentPolicy,
+                $percentPlan,
+                $percentScope,
+                $this->scalpingSnapshot($percentScope, 500.0, realizedNetPnlQuote: -30.0),
+                'canonical_portfolio_daily_loss_exceeded',
+            ],
+        ];
+
+        foreach ($cases as [$policy, $plan, $scope, $snapshot, $reason]) {
+            try {
+                (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))
+                    ->admit(new CanonicalPortfolioAdmissionRequest($policy, $plan, $scope, $snapshot, 'scalping-rejected'));
+                self::fail('Scalping portfolio boundary was accepted.');
+            } catch (CanonicalPortfolioException $exception) {
+                self::assertSame($reason, $exception->reasonCode);
+            }
+        }
     }
 
     public function testRejectsWhenAbsoluteDailyLossCapacityCannotReserveCandidate(): void
@@ -312,6 +392,59 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
     private function scope(): CanonicalPortfolioScope
     {
         return new CanonicalPortfolioScope('paper-mainnet', 'fake', 'test', 'account-1', 'day_trading', 'USDT');
+    }
+
+    /** @return array{CanonicalPortfolioPolicy, CanonicalOrderPlan, CanonicalPortfolioScope} */
+    private function scalpingAuthority(float $equityQuote): array
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $executionPolicy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: $executionPolicy,
+            equityQuote: $equityQuote,
+            availableBalanceQuote: $equityQuote,
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+        $scope = new CanonicalPortfolioScope('shadow', 'fake', 'test', 'account-1', 'scalping', 'USDT');
+
+        return [CanonicalPortfolioPolicy::fromSnapshot($snapshot), $plan, $scope];
+    }
+
+    private function scalpingSnapshot(
+        CanonicalPortfolioScope $scope,
+        float $equityQuote,
+        float $realizedNetPnlQuote = 0.0,
+        float $unrealizedNetPnlQuote = 0.0,
+        int $openPositions = 0,
+        int $pendingEntries = 0,
+        float $openNotionalQuote = 0.0,
+        float $pendingNotionalQuote = 0.0,
+        float $reservedRiskQuote = 0.0,
+    ): CanonicalPortfolioSnapshot {
+        return new CanonicalPortfolioSnapshot(
+            $scope,
+            'scalping_boundary_test',
+            '1.0.0',
+            new \DateTimeImmutable('2026-08-10T00:00:00+00:00'),
+            new \DateTimeImmutable('2026-08-11T00:00:00+00:00'),
+            new \DateTimeImmutable('2026-08-10T11:59:50+00:00'),
+            $equityQuote,
+            $realizedNetPnlQuote,
+            $unrealizedNetPnlQuote,
+            $openPositions,
+            $pendingEntries,
+            $openNotionalQuote,
+            $pendingNotionalQuote,
+            $reservedRiskQuote,
+            [],
+            1,
+            'sha256:' . str_repeat('9', 64),
+        );
     }
 
     /** @return array<string, mixed> */

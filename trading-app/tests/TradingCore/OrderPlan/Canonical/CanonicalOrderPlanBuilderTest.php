@@ -22,6 +22,7 @@ use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
 
@@ -57,23 +58,70 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertSame($plan, $validator->validate($plan));
     }
 
-    public function testBuildsScalpingPlanWithExactModernDeadlines(): void
+    #[DataProvider('scalpingIdentities')]
+    public function testBuildsScalpingPlanWithExactModernBoundaries(string $setupId, string $side): void
     {
         $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
-            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
-            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
         ));
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
-        $components = CanonicalOrderPlanPipelineFixture::accepted(executionPolicy: $policy);
+        $components = CanonicalOrderPlanPipelineFixture::accepted(side: $side, executionPolicy: $policy);
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
         $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
             ->build(new CanonicalOrderPlanBuildRequest(...$components));
 
         self::assertSame('scalping', $plan->modeId);
+        self::assertSame($setupId, $plan->setupId);
+        self::assertSame($side, $plan->side);
         self::assertSame('2026-08-10T12:00:45+00:00', $plan->expiresAt->format(DATE_ATOM));
         self::assertSame('2026-08-10T12:01:15+00:00', $plan->cancelAfterAt?->format(DATE_ATOM));
         self::assertSame('2026-08-10T14:00:00+00:00', $plan->holdingExpiresAt?->format(DATE_ATOM));
+        self::assertSame(0.02, $plan->riskRate);
+        self::assertSame(3.0, $plan->modeLeverageCap);
+        self::assertLessThanOrEqual(3, $plan->finalLeverage);
+        self::assertSame(25.0, $plan->exchangeMaxNotional);
+        self::assertLessThanOrEqual(25.0, $plan->positionNotional);
+        self::assertCount(1, $plan->targets);
+        self::assertSame(1.8, $plan->targets[0]->riskMultiple);
+        self::assertGreaterThanOrEqual(1.3, $plan->targets[0]->netR);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function scalpingIdentities(): iterable
+    {
+        yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
+        yield 'pullback long' => ['scalping.pullback.long', 'long'];
+        yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
+    }
+
+    public function testValidatorRejectsAuthenticatedScalpingDeadlinesOutsideTheFrozenEnvelope(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $components = CanonicalOrderPlanPipelineFixture::accepted(
+            executionPolicy: (new CanonicalExecutionPolicyCompiler())->compile($snapshot),
+        );
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        foreach ([
+            'entry after 45 seconds' => ['expiresAt' => $plan->createdAt->modify('+46 seconds')],
+            'cancel after 75 seconds' => ['cancelAfterAt' => $plan->createdAt->modify('+76 seconds')],
+            'cancel before entry expiry' => ['cancelAfterAt' => $plan->createdAt->modify('+44 seconds')],
+            'holding after PT2H' => ['holdingExpiresAt' => $plan->createdAt->modify('+7201 seconds')],
+        ] as $changes) {
+            try {
+                (new CanonicalOrderPlanValidator($clock))->validate($this->authenticatedPlan($plan, $changes));
+                self::fail('Scalping plan outside the frozen deadline envelope was accepted.');
+            } catch (CanonicalOrderPlanException $exception) {
+                self::assertSame('canonical_order_plan_order_deadline_invalid', $exception->reasonCode);
+            }
+        }
     }
 
     public function testRejectsComponentsFromDifferentCanonicalIdentity(): void
@@ -407,5 +455,27 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
             $decision->configHash,
             $decision->costInputHash,
         );
+    }
+
+    /** @param array<string, mixed> $changes */
+    private function authenticatedPlan(CanonicalOrderPlan $plan, array $changes): CanonicalOrderPlan
+    {
+        $reflection = new \ReflectionClass(CanonicalOrderPlan::class);
+        $values = array_replace(get_object_vars($plan), $changes);
+        $values['planHash'] = 'sha256:' . str_repeat('0', 64);
+        $unsigned = $reflection->newInstanceWithoutConstructor();
+        foreach ($values as $property => $value) {
+            $reflection->getProperty($property)->setValue($unsigned, $value);
+        }
+        self::assertInstanceOf(CanonicalOrderPlan::class, $unsigned);
+        $values['planHash'] = $unsigned->expectedPlanHash();
+
+        $authenticated = $reflection->newInstanceWithoutConstructor();
+        foreach ($values as $property => $value) {
+            $reflection->getProperty($property)->setValue($authenticated, $value);
+        }
+        self::assertInstanceOf(CanonicalOrderPlan::class, $authenticated);
+
+        return $authenticated;
     }
 }

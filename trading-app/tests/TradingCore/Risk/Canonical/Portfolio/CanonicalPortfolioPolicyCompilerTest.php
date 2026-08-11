@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\TradingCore\Risk\Canonical\Portfolio;
 
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioException;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicyCompiler;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -13,6 +16,30 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalPortfolioPolicyCompiler::class)]
 final class CanonicalPortfolioPolicyCompilerTest extends TestCase
 {
+    #[DataProvider('scalpingIdentities')]
+    public function testCompilesExactScalpingDailyConcurrencyAndExposureBoundaries(string $setupId, string $side): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
+        ));
+
+        $policy = (new CanonicalPortfolioPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('scalping', $policy->modeId);
+        self::assertSame($setupId, $policy->setupId);
+        self::assertSame($side, $policy->side);
+        self::assertSame(0.06, $policy->dailyLossRate);
+        self::assertSame(40.0, $policy->dailyLossAbsoluteQuote);
+        self::assertSame('USDT', $policy->quoteCurrency);
+        self::assertSame('UTC', $policy->dayTimezone);
+        self::assertSame('00:00:00', $policy->dayBoundaryLocal);
+        self::assertTrue($policy->includeUnrealizedLoss);
+        self::assertSame(3, $policy->maxConcurrentPositions);
+        self::assertTrue($policy->includePendingEntries);
+        self::assertSame(0.75, $policy->modeExposureRate);
+    }
+
     public function testCompilesExplicitPortfolioSemanticsAndPercentagePointsExactlyOnce(): void
     {
         $policy = (new CanonicalPortfolioPolicyCompiler())->compile(CanonicalPortfolioFixture::snapshot());
@@ -91,5 +118,13 @@ final class CanonicalPortfolioPolicyCompilerTest extends TestCase
                 'unit' => 'compound_percent_equity_and_quote_per_day',
             ],
         ], 'canonical_portfolio_daily_policy_invalid'];
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function scalpingIdentities(): iterable
+    {
+        yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
+        yield 'pullback long' => ['scalping.pullback.long', 'long'];
+        yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 }

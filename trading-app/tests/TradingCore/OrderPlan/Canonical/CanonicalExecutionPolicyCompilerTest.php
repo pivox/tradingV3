@@ -13,6 +13,7 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(CanonicalExecutionPolicyCompiler::class)]
@@ -42,11 +43,12 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
     }
 
-    public function testCompilesOnlyTheExactPublishedScalpingShadowEnvelope(): void
+    #[DataProvider('scalpingIdentities')]
+    public function testCompilesOnlyTheExactPublishedScalpingShadowEnvelope(string $setupId, string $side): void
     {
         $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
-            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
-            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+            'scalping', '1.1.0', $setupId, '1.1.0',
+            'fake', 'test', $side, ShadowExecutionCapability::Fake,
         ));
 
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
@@ -54,10 +56,27 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame('5m', $policy->executionTimeframe);
         self::assertSame(['1m'], $policy->mandatoryConfirmations);
         self::assertNotNull($policy->orderPolicy);
+        self::assertSame('limit', $policy->orderPolicy->type);
+        self::assertSame('maker', $policy->orderPolicy->liquidityRole);
         self::assertSame(45, $policy->orderPolicy->ttlSeconds);
         self::assertSame(75, $policy->orderPolicy->cancelAfterSeconds);
+        self::assertFalse($policy->orderPolicy->marketFallback);
         self::assertSame(7200, $policy->holdingWindowSeconds);
         self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
+        self::assertSame(0.02, $policy->riskPolicy->riskRate);
+        self::assertSame(3.0, $policy->riskPolicy->modeLeverageCap);
+        self::assertSame(25.0, $policy->riskPolicy->exchangeMaxNotional);
+        self::assertSame(1.3, $policy->minimumNetR);
+        self::assertCount(1, $policy->targets);
+        self::assertSame(1.8, $policy->targets[0]->riskMultiple);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function scalpingIdentities(): iterable
+    {
+        yield 'trend continuation long' => ['scalping.trend_continuation.long', 'long'];
+        yield 'pullback long' => ['scalping.pullback.long', 'long'];
+        yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 
     public function testLegacyIdentityCannotOptIntoModernShadowExecutionDecisions(): void
