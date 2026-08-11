@@ -152,7 +152,7 @@ final class CanonicalShadowRuntimeTest extends TestCase
         $admissionDay = DayTradingShadowRuntimeTest::fixtureRequest(realizedNetPnlQuote: -30.0);
 
         foreach ([
-            [$missingRuleInput, 'critical_timeframe_missing', 'rules'],
+            [$missingRuleInput, 'day_trading_shadow_critical_timeframe_missing', 'rules'],
             [$configMismatch, 'day_trading_shadow_plan_config_mismatch', null],
             [self::shared($costMismatchDay), 'day_trading_shadow_live_cost_snapshot_mismatch', null],
             [self::shared($admissionDay), 'canonical_portfolio_daily_loss_exceeded', 'domain_evidence'],

@@ -81,6 +81,14 @@ final readonly class DayTradingShadowRuntime
     private function legacyReasonCode(string $reasonCode): string
     {
         return match ($reasonCode) {
+            'day_trading_shadow_canonical_identity_required' => 'canonical_identity_required',
+            'day_trading_shadow_canonical_condition_catalog_mismatch' => 'canonical_condition_catalog_mismatch',
+            'day_trading_shadow_critical_timeframe_missing' => 'critical_timeframe_missing',
+            'day_trading_shadow_critical_timeframe_stale' => 'critical_timeframe_stale',
+            'day_trading_shadow_compiled_plan_blocked' => 'compiled_plan_blocked',
+            'day_trading_shadow_setup_section_failed' => 'setup_section_failed',
+            'day_trading_shadow_setup_filter_failed' => 'setup_filter_failed',
+            'day_trading_shadow_no_trade_rule_matched' => 'no_trade_rule_matched',
             'day_trading_shadow_order_policy_unavailable' => 'day_trading_order_policy_unavailable',
             'day_trading_shadow_live_spread_unavailable' => 'day_trading_live_spread_unavailable',
             'day_trading_shadow_slippage_unavailable' => 'day_trading_slippage_unavailable',

@@ -57,7 +57,7 @@ final class ScalpingShadowRuntimeTest extends TestCase
         self::assertSame(['1m'], $outcome->evidence['rules']['mandatory_confirmations']);
     }
 
-    public function testCrossSetupRescueWrongSideAndWrongVersionAreRejectedBeforeReservation(): void
+    public function testCrossSetupIdentityWrongSideAndWrongVersionAreRejectedBeforeReservation(): void
     {
         $trend = self::fixtureRequest('scalping.trend_continuation.long', 'long');
         $pullback = self::fixtureRequest('scalping.pullback.long', 'long');
@@ -84,6 +84,34 @@ final class ScalpingShadowRuntimeTest extends TestCase
         }
     }
 
+    public function testContinuationConditionsCannotRescueExpiredPullback(): void
+    {
+        $request = self::fixtureRequest('scalping.pullback.long', 'long');
+        $inputs = $request->indicatorsByTimeframe;
+        $inputs['15m']['pullback_age_bars'] = 4;
+
+        $outcome = self::fixtureRuntime()->run($request->withIndicators($inputs));
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('scalping_shadow_setup_section_failed', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
+    public function testPullbackConditionsCannotRescueFailedContinuationTrigger(): void
+    {
+        $outcome = self::fixtureRuntime([
+            'macd_hist_gt_eps@15m',
+            'macd_hist_slope_pos@15m',
+            'macd_line_above_signal@15m',
+        ])->run(self::fixtureRequest('scalping.trend_continuation.long', 'long'));
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('scalping_shadow_setup_section_failed', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
     public function testMissingOrStaleOneMinuteConfirmationNeverReserves(): void
     {
         $request = self::fixtureRequest('scalping.trend_continuation.long', 'long');
@@ -93,8 +121,8 @@ final class ScalpingShadowRuntimeTest extends TestCase
         $stale['1m']['kline_time'] = '2026-08-10T11:55:00Z';
 
         foreach ([
-            [$request->withIndicators($missing), 'critical_timeframe_missing'],
-            [$request->withIndicators($stale), 'critical_timeframe_stale'],
+            [$request->withIndicators($missing), 'scalping_shadow_critical_timeframe_missing'],
+            [$request->withIndicators($stale), 'scalping_shadow_critical_timeframe_stale'],
         ] as [$candidate, $reason]) {
             $outcome = self::fixtureRuntime()->run($candidate);
             self::assertSame('no_trade', $outcome->status);
@@ -163,13 +191,14 @@ final class ScalpingShadowRuntimeTest extends TestCase
         yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 
-    public static function fixtureRuntime(): ScalpingShadowRuntime
+    /** @param list<string> $failingConditionTimeframes */
+    public static function fixtureRuntime(array $failingConditionTimeframes = []): ScalpingShadowRuntime
     {
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
 
         return new ScalpingShadowRuntime(
             new EffectiveTradingConfigResolver(),
-            new CanonicalSetupRuleRuntime(self::passingConditions()),
+            new CanonicalSetupRuleRuntime(self::passingConditions($failingConditionTimeframes)),
             new CanonicalExecutionPolicyCompiler(),
             new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)),
             DayTradingShadowRuntimeTest::fixtureSelector(),
@@ -295,18 +324,30 @@ final class ScalpingShadowRuntimeTest extends TestCase
         );
     }
 
-    /** @return list<ConditionInterface> */
-    private static function passingConditions(): array
+    /**
+     * @param list<string> $failingConditionTimeframes
+     * @return list<ConditionInterface>
+     */
+    private static function passingConditions(array $failingConditionTimeframes = []): array
     {
         $ids = (new \App\TradingCore\Rules\Catalog\ConditionCatalogLoader())->loadFile(
             dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
         )->conditionIds();
 
-        return array_map(static fn (string $id): ConditionInterface => new class($id) implements ConditionInterface {
-            public function __construct(private readonly string $id) {}
+        return array_map(static fn (string $id): ConditionInterface => new class($id, $failingConditionTimeframes) implements ConditionInterface {
+            /** @param list<string> $failingConditionTimeframes */
+            public function __construct(
+                private readonly string $id,
+                private readonly array $failingConditionTimeframes,
+            ) {}
             public function getName(): string { return $this->id; }
             /** @param array<string, mixed> $context */
-            public function evaluate(array $context): ConditionResult { return new ConditionResult($this->id, true); }
+            public function evaluate(array $context): ConditionResult
+            {
+                $identity = $this->id . '@' . ($context['timeframe'] ?? 'global');
+
+                return new ConditionResult($this->id, !\in_array($identity, $this->failingConditionTimeframes, true));
+            }
         }, $ids);
     }
 }

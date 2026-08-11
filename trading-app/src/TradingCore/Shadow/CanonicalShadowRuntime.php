@@ -53,7 +53,7 @@ final readonly class CanonicalShadowRuntime
                 $this->clock->now(),
             );
             if (!$rules->passed) {
-                return $this->reject($request, $rules->reasonCode, ['rules' => $rules->trace]);
+                return $this->reject($request, $policy->reason($rules->reasonCode), ['rules' => $rules->trace]);
             }
 
             $executionPolicy = $this->policyCompiler->compile($snapshot);
