@@ -1610,6 +1610,22 @@ final class PositionTradeAnalysisViewTest extends TestCase
         );
     }
 
+    public function testLedgerMigrationSqlContainsNoDoctrineSensitiveJsonbQuestionMarkOperator(): void
+    {
+        $migration = new Version20260811120000($this->conn, new NullLogger());
+        $migration->up(new Schema());
+        $sql = implode("\n", array_map(
+            static fn ($query): string => $query->getStatement(),
+            $migration->getSql(),
+        ));
+
+        self::assertDoesNotMatchRegularExpression(
+            '/\?(?:[|&])?/',
+            $sql,
+            'Doctrine treats PostgreSQL JSONB question-mark operators as positional placeholders during console migrations.',
+        );
+    }
+
     public function testMalformedLegacyFinancialValuesDoNotBreakViewRead(): void
     {
         $run = 'run_malformed_financials';

@@ -51,7 +51,10 @@ WITH eligible_ledger AS (
     FROM fill_cost_ledger ledger
     WHERE NOT (
         jsonb_typeof(ledger.quality_flags) = 'array'
-        AND ledger.quality_flags ?| ARRAY['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided']
+        AND jsonb_exists_any(
+            ledger.quality_flags,
+            ARRAY['fill_cancelled', 'fill_corrected', 'fill_reversed', 'voided']::text[]
+        )
     )
 ), ledger_aggregate AS (
     SELECT
