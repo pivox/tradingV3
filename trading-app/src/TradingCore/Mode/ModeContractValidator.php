@@ -433,6 +433,43 @@ final class ModeContractValidator
             || $document['order_policy']['value'] !== ['margin_mode' => 'isolated', 'preferred_type' => 'limit', 'market_fallback' => false]) {
             throw new ModeContractException(sprintf('%s 1.1.0 differs from the frozen shadow contract.', $document['mode_id']));
         }
+
+        if ($document['mode_id'] === 'scalping') {
+            $this->assertScalpingShadowDataAndMetadata($document);
+        }
+    }
+
+    /** @param array<string, mixed> $document */
+    private function assertScalpingShadowDataAndMetadata(array $document): void
+    {
+        if ($document['data_contract'] !== [
+            'required_inputs' => [
+                ['kind' => 'candles', 'timeframes' => ['1h', '15m', '5m', '1m'], 'fields' => ['open', 'high', 'low', 'close', 'volume']],
+                ['kind' => 'order_book', 'timeframes' => ['5m'], 'fields' => ['best_bid', 'best_ask', 'spread_bps']],
+            ],
+            'missing_data_policy' => 'reject',
+        ]) {
+            throw new ModeContractException('scalping 1.1.0 data contract differs from the frozen shadow contract.');
+        }
+
+        if ($document['risk']['trade_budget']['source'] !== 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307'
+            || $document['risk']['trade_budget']['justification'] !== 'The approved two-percent Shadow budget deliberately replaces the legacy seven-percent default.'
+            || $document['leverage']['source'] !== 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307'
+            || $document['leverage']['justification'] !== 'The approved three-times mode cap is independent of exchange capability.'
+            || ($document['provenance'][4] ?? null) !== [
+                'path' => 'risk',
+                'source' => 'config/app/trade_entry.scalper.yaml:73-78 pinned by #307',
+                'unit' => 'canonical_risk_policy',
+                'justification' => 'The two-percent budget deliberately replaces the legacy seven-percent default; remaining risk limits are explicit Shadow decisions.',
+            ]
+            || ($document['provenance'][5] ?? null) !== [
+                'path' => 'leverage',
+                'source' => 'config/trading/mode_exchange/scalper.{okx,hyperliquid}.yaml pinned by #307',
+                'unit' => 'leverage_multiple',
+                'justification' => 'The approved three-times mode cap is independent of exchange capability.',
+            ]) {
+            throw new ModeContractException('scalping 1.1.0 decision metadata differs from the frozen shadow contract.');
+        }
     }
 
     /**

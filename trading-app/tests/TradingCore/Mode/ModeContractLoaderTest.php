@@ -130,8 +130,28 @@ final class ModeContractLoaderTest extends TestCase
         $mutations['daily cap']['risk']['daily_loss_cap']['value']['absolute_quote'] = 41.0;
         $mutations['concurrency'] = $document;
         $mutations['concurrency']['risk']['max_concurrent_positions']['value']['limit'] = 4;
+        $mutations['trade budget'] = $document;
+        $mutations['trade budget']['risk']['trade_budget']['value'] = 3.0;
+        $mutations['exposure'] = $document;
+        $mutations['exposure']['risk']['mode_exposure_cap']['value'] = 76.0;
+        $mutations['leverage'] = $document;
+        $mutations['leverage']['leverage']['value'] = 4.0;
+        $mutations['execution'] = $document;
+        $mutations['execution']['timeframes']['execution'] = ['1m'];
+        $mutations['confirmation'] = $document;
+        $mutations['confirmation']['timeframes']['confirmations'] = ['5m'];
         $mutations['market fallback'] = $document;
         $mutations['market fallback']['order_policy']['value']['market_fallback'] = true;
+        $mutations['data contract'] = $document;
+        array_pop($mutations['data contract']['data_contract']['required_inputs']);
+        $mutations['data contract field'] = $document;
+        $mutations['data contract field']['data_contract']['required_inputs'][1]['fields'][2] = 'order_flow_imbalance';
+        $mutations['trade budget source'] = $document;
+        $mutations['trade budget source']['risk']['trade_budget']['source'] = 'synthetic-test';
+        $mutations['leverage source'] = $document;
+        $mutations['leverage source']['leverage']['source'] = 'synthetic-test';
+        $mutations['risk provenance'] = $document;
+        $mutations['risk provenance']['provenance'][4]['source'] = 'synthetic-test';
 
         foreach ($mutations as $label => $mutation) {
             try {
