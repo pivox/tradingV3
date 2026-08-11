@@ -50,6 +50,23 @@ final readonly class CanonicalOrderPlanValidator
             ) {
                 throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
             }
+        } elseif ($plan->modeId === 'scalping' && $plan->modeVersion === '1.1.0') {
+            $expectedHoldingExpiry = CanonicalHoldingBoundary::expiresAt($plan->createdAt, 7200, [
+                'maximum_duration' => 'PT2H',
+                'daily_boundary_time' => '00:00:00',
+                'daily_boundary_timezone' => 'UTC',
+                'close_before_boundary' => true,
+            ]);
+            if (
+                !$plan->cancelAfterAt instanceof \DateTimeImmutable
+                || !$plan->holdingExpiresAt instanceof \DateTimeImmutable
+                || $plan->expiresAt > $plan->createdAt->modify('+45 seconds')
+                || $plan->cancelAfterAt > $plan->createdAt->modify('+75 seconds')
+                || $plan->cancelAfterAt < $plan->expiresAt
+                || $plan->holdingExpiresAt != $expectedHoldingExpiry
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
+            }
         } elseif ($plan->cancelAfterAt !== null || $plan->holdingExpiresAt !== null) {
             throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
         }

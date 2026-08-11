@@ -14,6 +14,10 @@ use App\TradingCore\OrderPlan\Canonical\CanonicalNetRTargetDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalEntryZone;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionDecision;
 use App\TradingCore\OrderPlan\Canonical\CanonicalProtectionTarget;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\Risk\Canonical\CanonicalRiskDecision;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
@@ -51,6 +55,25 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertSame('sha256:', substr($plan->planHash, 0, 7));
         self::assertContains($components['riskRequest']->instrument->inputHash, $plan->inputHashes);
         self::assertSame($plan, $validator->validate($plan));
+    }
+
+    public function testBuildsScalpingPlanWithExactModernDeadlines(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+        $components = CanonicalOrderPlanPipelineFixture::accepted(executionPolicy: $policy);
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+
+        $plan = (new CanonicalOrderPlanBuilder($clock, new CanonicalOrderPlanValidator($clock)))
+            ->build(new CanonicalOrderPlanBuildRequest(...$components));
+
+        self::assertSame('scalping', $plan->modeId);
+        self::assertSame('2026-08-10T12:00:45+00:00', $plan->expiresAt->format(DATE_ATOM));
+        self::assertSame('2026-08-10T12:01:15+00:00', $plan->cancelAfterAt?->format(DATE_ATOM));
+        self::assertSame('2026-08-10T14:00:00+00:00', $plan->holdingExpiresAt?->format(DATE_ATOM));
     }
 
     public function testRejectsComponentsFromDifferentCanonicalIdentity(): void

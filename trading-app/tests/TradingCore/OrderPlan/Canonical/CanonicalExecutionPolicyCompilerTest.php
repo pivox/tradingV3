@@ -42,6 +42,46 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
     }
 
+    public function testCompilesOnlyTheExactPublishedScalpingShadowEnvelope(): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'scalping', '1.1.0', 'scalping.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('5m', $policy->executionTimeframe);
+        self::assertSame(['1m'], $policy->mandatoryConfirmations);
+        self::assertNotNull($policy->orderPolicy);
+        self::assertSame(45, $policy->orderPolicy->ttlSeconds);
+        self::assertSame(75, $policy->orderPolicy->cancelAfterSeconds);
+        self::assertSame(7200, $policy->holdingWindowSeconds);
+        self::assertSame('UTC', $policy->holdingHorizon['daily_boundary_timezone']);
+    }
+
+    public function testLegacyIdentityCannotOptIntoModernShadowExecutionDecisions(): void
+    {
+        $payload = $this->payload();
+        $execution = &$payload['setup']['ast']['execution'];
+        $execution['execution_timeframe'] = self::decision('15m', 'timeframe');
+        $execution['mandatory_confirmations'] = self::decision(['5m', '1m'], 'timeframes');
+        $execution['order_policy'] = self::decision([
+            'type' => 'limit',
+            'liquidity_role' => 'maker',
+            'ttl_seconds' => 90,
+            'cancel_after_seconds' => 120,
+            'market_fallback' => false,
+            'maximum_spread_bps' => 6.0,
+            'maximum_slippage_bps' => 8.0,
+        ], 'order_policy');
+        unset($execution);
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_execution_policy_shape_invalid');
+        (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot($payload));
+    }
+
     public function testCompilesStrictExecutionPolicyFromAuthenticatedSnapshot(): void
     {
         $policy = (new CanonicalExecutionPolicyCompiler())->compile($this->snapshot());
@@ -257,5 +297,17 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
     private function payload(): array
     {
         return CanonicalExecutionPolicyFixture::payload();
+    }
+
+    /** @return array{state:string,value:mixed,unit:string,source:string,justification:string} */
+    private static function decision(mixed $value, string $unit): array
+    {
+        return [
+            'state' => 'defined',
+            'value' => $value,
+            'unit' => $unit,
+            'source' => 'test fixture',
+            'justification' => 'Proves that legacy identities cannot enable modern Shadow fields.',
+        ];
     }
 }
