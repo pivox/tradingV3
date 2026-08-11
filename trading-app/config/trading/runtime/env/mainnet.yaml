@@ -1,0 +1,9 @@
+environment:
+  id: mainnet
+  allowed_symbols: [BTCUSDT, ETHUSDT]
+  allowed_markets: [perpetual]
+  max_notional: 250.0
+  dry_run: true
+  write_enabled: false
+  kill_switch_enabled: true
+  require_stop_loss: true

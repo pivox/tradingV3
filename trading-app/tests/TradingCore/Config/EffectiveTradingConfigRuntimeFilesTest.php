@@ -61,7 +61,9 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         yield 'Fake local' => ['fake', 'local'];
         yield 'Fake test' => ['fake', 'test'];
         yield 'OKX demo Paper' => ['okx', 'demo'];
+        yield 'OKX mainnet Paper read-only' => ['okx', 'mainnet'];
         yield 'Hyperliquid testnet Paper' => ['hyperliquid', 'testnet'];
+        yield 'Hyperliquid mainnet Paper read-only' => ['hyperliquid', 'mainnet'];
     }
 
     public function testDayTradingShadowRejectsPrivateMainnetCapabilityBeforeResolution(): void
