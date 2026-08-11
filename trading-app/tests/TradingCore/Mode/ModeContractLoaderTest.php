@@ -179,6 +179,32 @@ final class ModeContractLoaderTest extends TestCase
         }
     }
 
+    public function testFrozenShadowNumericLeavesHavePhpJsonSchemaParity(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/mode-contract.schema.json');
+        $documents = [];
+        $documents['scalping'] = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.1.0')->toArray();
+        $documents['scalping']['risk']['trade_budget']['value'] = 2;
+        $documents['scalping']['risk']['daily_loss_cap']['value']['percent_equity'] = 6;
+        $documents['scalping']['risk']['daily_loss_cap']['value']['absolute_quote'] = 40;
+        $documents['scalping']['risk']['max_concurrent_positions']['value']['limit'] = 3.0;
+        $documents['scalping']['risk']['mode_exposure_cap']['value'] = 75;
+        $documents['scalping']['leverage']['value'] = 3;
+        $documents['day trading'] = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0')->toArray();
+        $documents['day trading']['risk']['trade_budget']['value'] = 5;
+        $documents['day trading']['risk']['daily_loss_cap']['value']['percent_equity'] = 6;
+        $documents['day trading']['risk']['daily_loss_cap']['value']['absolute_quote'] = 30;
+        $documents['day trading']['risk']['max_concurrent_positions']['value']['limit'] = 4.0;
+        $documents['day trading']['risk']['mode_exposure_cap']['value'] = 100;
+        $documents['day trading']['leverage']['value'] = 2;
+
+        foreach ($documents as $label => $document) {
+            (new ModeContractValidator())->validate($document);
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $label);
+        }
+    }
+
     public function testDayTradingShadowMutationsFailInPhpAndJsonSchema(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('day_trading', '1.1.0')->toArray();

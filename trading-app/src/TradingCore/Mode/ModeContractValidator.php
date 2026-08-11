@@ -374,7 +374,7 @@ final class ModeContractValidator
         }
         $this->assertExactKeys($value, ['maximum_duration', 'daily_boundary_time', 'daily_boundary_timezone', 'close_before_boundary'], 'horizon.value');
         $duration = $modeId === 'day_trading' ? 'PT8H' : 'PT2H';
-        if ($value !== ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true]) {
+        if (!$this->frozenValuesEqual($value, ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true])) {
             throw new ModeContractException(sprintf('%s 1.1.0 horizon differs from the frozen shadow decision.', $modeId));
         }
     }
@@ -396,7 +396,7 @@ final class ModeContractValidator
         }
         $this->assertExactKeys($value, ['limit', 'include_pending_entries'], 'risk.max_concurrent_positions.value');
         $limit = $modeId === 'day_trading' ? 4 : 3;
-        if ($value !== ['limit' => $limit, 'include_pending_entries' => true]) {
+        if (!$this->frozenValuesEqual($value, ['limit' => $limit, 'include_pending_entries' => true])) {
             throw new ModeContractException('risk.max_concurrent_positions differs from the frozen shadow decision.');
         }
     }
@@ -426,10 +426,10 @@ final class ModeContractValidator
             || $document['timeframes'] !== $frozen['timeframes']
             || $document['cadence']['evaluation']['value'] !== $frozen['cadence']
             || $document['cadence']['validity_window']['value'] !== $frozen['cadence']
-            || $document['risk']['trade_budget']['value'] !== $frozen['trade_budget']
-            || $document['risk']['daily_loss_cap']['value'] !== $frozen['daily_loss_cap']
-            || $document['risk']['mode_exposure_cap']['value'] !== $frozen['mode_exposure_cap']
-            || $document['leverage']['value'] !== $frozen['leverage']
+            || !$this->frozenValuesEqual($document['risk']['trade_budget']['value'], $frozen['trade_budget'])
+            || !$this->frozenValuesEqual($document['risk']['daily_loss_cap']['value'], $frozen['daily_loss_cap'])
+            || !$this->frozenValuesEqual($document['risk']['mode_exposure_cap']['value'], $frozen['mode_exposure_cap'])
+            || !$this->frozenValuesEqual($document['leverage']['value'], $frozen['leverage'])
             || $document['order_policy']['value'] !== ['margin_mode' => 'isolated', 'preferred_type' => 'limit', 'market_fallback' => false]) {
             throw new ModeContractException(sprintf('%s 1.1.0 differs from the frozen shadow contract.', $document['mode_id']));
         }
@@ -495,6 +495,27 @@ final class ModeContractValidator
         ]) {
             throw new ModeContractException('scalping 1.1.0 decision metadata differs from the frozen shadow contract.');
         }
+    }
+
+    private function frozenValuesEqual(mixed $actual, mixed $expected): bool
+    {
+        if ((is_int($actual) || is_float($actual)) && (is_int($expected) || is_float($expected))) {
+            return (float) $actual === (float) $expected;
+        }
+        if (is_array($actual) || is_array($expected)) {
+            if (!is_array($actual) || !is_array($expected) || array_keys($actual) !== array_keys($expected)) {
+                return false;
+            }
+            foreach ($expected as $key => $expectedValue) {
+                if (!$this->frozenValuesEqual($actual[$key], $expectedValue)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return $actual === $expected;
     }
 
     /**
