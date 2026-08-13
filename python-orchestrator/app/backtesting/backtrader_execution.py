@@ -20,7 +20,7 @@ class BacktestExecutionEvent:
     kind: Literal["entry_filled", "stop_filled", "target_filled", "holding_expired"]
     happened_at: datetime
     source_record_id: str
-    price: float
+    price: Decimal
     quantity: float
     stop_price: float
     plan_hash: str
@@ -55,6 +55,8 @@ def execute_plan(
         if not entered:
             if bar.open_at < created:
                 continue
+            if bar.available_at >= entry_deadline:
+                return BacktestExecutionResult("not_executed", "entry_expired", ())
             if bar.open_at < entry_deadline < bar.close_at:
                 raise BacktestExecutionError("backtrader_entry_window_ambiguous")
             if bar.open_at >= entry_deadline:
@@ -84,7 +86,7 @@ def execute_plan(
         if holding is not None and bar.open_at < holding < bar.close_at:
             raise BacktestExecutionError("backtrader_holding_window_ambiguous")
         if holding is not None and bar.open_at >= holding:
-            events.append(_event("holding_expired", bar, float(bar.open), envelope))
+            events.append(_event("holding_expired", bar, _decimal(bar.open), envelope))
             return BacktestExecutionResult("closed", "holding_expired", tuple(events))
         stop_hit = (
             _decimal(bar.low) <= stop_price
@@ -121,7 +123,7 @@ def _decimal(value: Decimal | float) -> Decimal:
 def _event(
     kind: Literal["entry_filled", "stop_filled", "target_filled", "holding_expired"],
     bar: VerifiedBacktraderBar,
-    price: float,
+    price: Decimal | float,
     envelope: CanonicalBacktestOrderPlan,
 ) -> BacktestExecutionEvent:
     plan = envelope.plan
@@ -129,7 +131,7 @@ def _event(
         kind=kind,
         happened_at=bar.available_at,
         source_record_id=bar.source_record_id,
-        price=price,
+        price=_decimal(price),
         quantity=plan.quantity,
         stop_price=plan.stop_price,
         plan_hash=plan.plan_hash,

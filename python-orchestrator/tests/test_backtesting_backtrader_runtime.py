@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 import re
@@ -8,6 +9,7 @@ import pytest
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, _php_plan_hash
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
+from app.backtesting.backtrader_runtime import _canonical
 from app.backtesting.contracts import MarketType
 from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
 
@@ -79,6 +81,12 @@ def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
     ).lower()
     for forbidden in ("rsi", "macd", "position_sizer", "risk_rate *", "entryzonecalculator"):
         assert re.search(rf"\b{re.escape(forbidden)}\b", source) is None
+
+
+def test_runtime_canonical_json_preserves_decimal_event_prices() -> None:
+    assert _canonical({"price": Decimal("100.09999999999999999")}) == (
+        '{"price":100.09999999999999999}'
+    )
 
 
 def test_runtime_rejects_plan_feed_identity_mismatch() -> None:

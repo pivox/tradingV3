@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from datetime import timezone
+from decimal import Decimal
 from typing import Any
 
 import backtrader as bt
@@ -19,7 +20,20 @@ _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            + ":"
+            + _canonical(value[key])
+            for key in sorted(value)
+        ) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_canonical(item) for item in value) + "]"
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("backtrader_runtime_number_out_of_range")
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
 def _hash(value: Any) -> str:
