@@ -14,7 +14,7 @@ import backtrader as bt
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
-from app.backtesting.backtrader_net_outcome import settle_authenticated_outcome
+from app.backtesting.backtrader_net_outcome import project_plan_bound_net_outcome
 
 
 _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
@@ -109,7 +109,7 @@ class CanonicalBacktraderRuntime:
         outcome = execute_plan(plan, tuple(feed.bars[index] for index in delivered))
         net_outcome = (
             json.loads(
-                settle_authenticated_outcome(plan, outcome),
+                project_plan_bound_net_outcome(plan, outcome, feed),
                 parse_float=Decimal,
                 parse_int=Decimal,
             )

@@ -9,20 +9,23 @@ from typing import Any
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import BacktestExecutionResult
+from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 
 
-_COST_BASIS_VERSION = "canonical-order-plan-authenticated-costs.v1"
+_COST_BASIS_VERSION = "canonical-order-plan-bound-costs.v1"
 
 
 class BacktestNetOutcomeError(ValueError):
     """Stable fail-closed settlement error."""
 
 
-def settle_authenticated_outcome(
+def project_plan_bound_net_outcome(
     envelope: CanonicalBacktestOrderPlan,
     execution: BacktestExecutionResult,
+    feed: VerifiedBacktraderFeedAdapter,
 ) -> str:
     envelope = _revalidate_plan(envelope)
+    _verify_dataset_evidence(envelope, execution, feed)
     plan = envelope.plan
     if (
         execution.status != "closed"
@@ -102,8 +105,10 @@ def settle_authenticated_outcome(
         raise BacktestNetOutcomeError("backtrader_net_outcome_cost_mismatch")
 
     result: dict[str, Any] = {
-        "schema_version": "canonical-backtest-net-outcome.v1",
+        "schema_version": "canonical-backtest-planned-net-outcome.v1",
         "cost_basis_version": _COST_BASIS_VERSION,
+        "cost_evidence": "canonical_plan_projection",
+        "costs_are_certified": False,
         "funding_evidence": "canonical_plan_provision",
         "dataset_id": envelope.dataset_id,
         "dataset_checksum": envelope.dataset_checksum,
@@ -164,6 +169,30 @@ def _verify_event_lineage(envelope: CanonicalBacktestOrderPlan, event: Any) -> N
         or _decimal(event.stop_price) != _decimal(plan.stop_price)
     ):
         raise BacktestNetOutcomeError("backtrader_net_outcome_lineage_mismatch")
+
+
+def _verify_dataset_evidence(
+    envelope: CanonicalBacktestOrderPlan,
+    execution: BacktestExecutionResult,
+    feed: VerifiedBacktraderFeedAdapter,
+) -> None:
+    plan = envelope.plan
+    if (
+        not isinstance(feed, VerifiedBacktraderFeedAdapter)
+        or feed.dataset_id != envelope.dataset_id
+        or feed.dataset_checksum != envelope.dataset_checksum
+        or feed.symbol != plan.symbol
+        or feed.timeframe != envelope.timeframe
+        or feed.market_type != plan.market_type
+    ):
+        raise BacktestNetOutcomeError("backtrader_net_outcome_dataset_evidence_mismatch")
+    bars = {bar.source_record_id: bar for bar in feed.bars}
+    if len(bars) != len(feed.bars):
+        raise BacktestNetOutcomeError("backtrader_net_outcome_dataset_evidence_mismatch")
+    for event in execution.events:
+        bar = bars.get(event.source_record_id)
+        if bar is None or bar.available_at != event.happened_at:
+            raise BacktestNetOutcomeError("backtrader_net_outcome_dataset_evidence_mismatch")
 
 
 def _decimal(value: Decimal | float | int) -> Decimal:

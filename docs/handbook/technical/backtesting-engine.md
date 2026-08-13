@@ -65,10 +65,13 @@ ambigue et rejetee. Une position encore ouverte en fin de dataset est egalement
 rejetee, sans fermeture optimiste.
 
 Pour une sortie au stop ou a un target canonique,
-`backtrader_net_outcome.py` selectionne la branche de cout deja authentifiee
-dans le plan PHP. Il publie le brut, les fees, spread, slippage, la provision
+`backtrader_net_outcome.py` selectionne la branche de cout liee par hash dans
+le plan PHP. Il publie le brut, les fees, spread, slippage, la provision
 funding adverse, le net et le R exacts, puis lie le document au dataset,
-`plan_hash`, `config_hash` et `cost_input_hash`. Python ne recalcule aucun cout
+`plan_hash`, `config_hash` et `cost_input_hash`. Comme ces SHA-256 sont
+recalculables et ne constituent pas une attestation PHP non falsifiable, le
+document porte `costs_are_certified=false` et
+`cost_evidence=canonical_plan_projection`. Python ne recalcule aucun cout
 a partir des taux ou du notionnel. `funding_evidence=canonical_plan_provision`
 signifie explicitement qu'il s'agit de la provision conservative du plan, pas
 d'un funding historique realise. Une sortie `holding_expired` n'a pas encore

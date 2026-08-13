@@ -68,7 +68,9 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     assert decoded["result_is_live_proof"] is False
     assert decoded["input_hash"].startswith("sha256:")
     assert decoded["result_hash"].startswith("sha256:")
-    assert decoded["net_outcome"]["schema_version"] == "canonical-backtest-net-outcome.v1"
+    assert decoded["net_outcome"]["schema_version"] == "canonical-backtest-planned-net-outcome.v1"
+    assert decoded["net_outcome"]["costs_are_certified"] is False
+    assert decoded["net_outcome"]["cost_evidence"] == "canonical_plan_projection"
     assert decoded["net_outcome"]["net_pnl_quote"] == 5.8632057
     assert decoded["net_outcome"]["funding_evidence"] == "canonical_plan_provision"
     assert decoded["net_outcome"]["outcome_hash"].startswith("sha256:")
@@ -115,7 +117,7 @@ def test_runtime_revalidates_a_forged_model_instance() -> None:
         CanonicalBacktraderRuntime().run(plan, feed)
 
 
-def test_runtime_rejects_holding_exit_without_authenticated_cost_branch() -> None:
+def test_runtime_rejects_holding_exit_without_plan_bound_cost_branch() -> None:
     feed = _feed()
     payload = json.loads(FIXTURE.read_text())
     payload["plan"]["holdingExpiresAt"] = "2026-08-10T12:01:00.000000+00:00"

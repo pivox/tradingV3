@@ -1,4 +1,4 @@
-# Backtrader Authenticated Net Outcome Design
+# Backtrader Plan-Bound Net Outcome Design
 
 ## Scope
 
@@ -10,9 +10,9 @@ ledger.
 
 ## Decision
 
-`CanonicalOrderPlan` already authenticates the complete adverse stop cost and
+`CanonicalOrderPlan` already hash-binds the complete adverse stop cost and
 each target's complete net reward. The backtest settlement adapter selects the
-matching authenticated branch after execution and emits its components. It
+matching plan-bound branch after execution and emits its components. It
 does not multiply rates, notionals, prices, or quantities in Python.
 
 For a target exit, the authoritative components are the target's
@@ -21,7 +21,7 @@ For a target exit, the authoritative components are the target's
 For a stop exit, the authoritative components are `grossStopLoss`, entry/stop
 fees, entry/stop spread, entry/stop slippage and plan `fundingCost`;
 `totalStopLoss` is copied as the PHP-certified loss. Stop net PnL and R are the
-negative of those authenticated magnitudes.
+negative of those plan-bound magnitudes.
 
 The output calls funding `planned_adverse_funding_cost`, with
 `funding_evidence=canonical_plan_provision`. It must never be described as
@@ -30,13 +30,16 @@ authority and verified dataset stream and remains a separate atomic lot.
 
 ## Contract and lineage
 
-The immutable result uses `canonical-backtest-net-outcome.v1` and includes the
+The immutable result uses `canonical-backtest-planned-net-outcome.v1`, declares
+`costs_are_certified=false` and `cost_evidence=canonical_plan_projection`, and includes the
 dataset id/checksum, plan/config/cost-input hashes, modern identity, symbol,
 side, terminal event identity, exact decimal components, cost-basis version and
 an outcome hash. Decimal values are encoded as exact JSON numbers. The adapter
 revalidates the plan and requires the execution event to match the same plan,
-config, dataset, quantity and authenticated stop/target price.
+config, dataset, quantity and plan-bound stop/target price.
 
+The settlement consumes the verified feed and requires each event record id and
+`happened_at` to match an exact feed bar bound to the dataset checksum.
 Non-executed plans produce no trade outcome. A holding-expiry result, unknown
 target, missing event, forged event lineage, non-terminal trace, or mismatched
 cost arithmetic fails closed with a stable error code.

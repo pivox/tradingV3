@@ -6,13 +6,14 @@ from pathlib import Path
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, _php_plan_hash
 from app.backtesting.backtrader_execution import BacktestExecutionEvent, BacktestExecutionResult
+from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
 import pytest
 
 from app.backtesting.backtrader_net_outcome import (
     BacktestNetOutcomeError,
     _canonical_json,
     _decimal,
-    settle_authenticated_outcome,
+    project_plan_bound_net_outcome,
 )
 
 
@@ -22,6 +23,49 @@ UTC = timezone.utc
 
 def _plan() -> CanonicalBacktestOrderPlan:
     return CanonicalBacktestOrderPlan.model_validate_json(FIXTURE.read_text())
+
+
+def _feed() -> VerifiedBacktraderFeedAdapter:
+    plan = _plan()
+    bars = (
+        VerifiedBacktraderBar(
+            source_record_id="bar-entry",
+            open_at=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+            close_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+            close=Decimal("100"), volume=Decimal("10"),
+        ),
+        VerifiedBacktraderBar(
+            source_record_id="bar-target",
+            open_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
+            close_at=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+            open=Decimal("100"), high=Decimal("103"), low=Decimal("99"),
+            close=Decimal("102"), volume=Decimal("10"),
+        ),
+        VerifiedBacktraderBar(
+            source_record_id="bar-stop",
+            open_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
+            close_at=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("98"),
+            close=Decimal("99"), volume=Decimal("10"),
+        ),
+    )
+    feed = object.__new__(VerifiedBacktraderFeedAdapter)
+    for field, value in {
+        "bars": bars,
+        "dataset_id": plan.dataset_id,
+        "dataset_checksum": plan.dataset_checksum,
+        "symbol": plan.plan.symbol,
+        "timeframe": plan.timeframe,
+        "source_network": "mainnet",
+        "market_data_venue": "okx",
+        "market_type": plan.plan.market_type,
+    }.items():
+        object.__setattr__(feed, field, value)
+    return feed
 
 
 def _target_execution() -> BacktestExecutionResult:
@@ -66,11 +110,13 @@ def _stop_execution() -> BacktestExecutionResult:
     )
 
 
-def test_target_outcome_uses_only_authenticated_php_cost_components() -> None:
-    encoded = settle_authenticated_outcome(_plan(), _target_execution())
+def test_target_outcome_projects_plan_bound_php_cost_components() -> None:
+    encoded = project_plan_bound_net_outcome(_plan(), _target_execution(), _feed())
     outcome = json.loads(encoded)
 
-    assert outcome["schema_version"] == "canonical-backtest-net-outcome.v1"
+    assert outcome["schema_version"] == "canonical-backtest-planned-net-outcome.v1"
+    assert outcome["costs_are_certified"] is False
+    assert outcome["cost_evidence"] == "canonical_plan_projection"
     assert outcome["terminal_event_kind"] == "target_filled"
     assert outcome["target_id"] == "tp1"
     assert outcome["gross_pnl_quote"] == 6.2425
@@ -85,18 +131,18 @@ def test_target_outcome_uses_only_authenticated_php_cost_components() -> None:
     assert outcome["net_pnl_quote"] == 5.8632057
     assert outcome["net_r"] == 1.2699571651090342
     assert outcome["funding_evidence"] == "canonical_plan_provision"
-    assert outcome["cost_basis_version"] == "canonical-order-plan-authenticated-costs.v1"
+    assert outcome["cost_basis_version"] == "canonical-order-plan-bound-costs.v1"
     assert outcome["dataset_id"] == _plan().dataset_id
     assert outcome["dataset_checksum"] == _plan().dataset_checksum
     assert outcome["plan_hash"] == _plan().plan.plan_hash
     assert outcome["config_hash"] == _plan().plan.config_hash
     assert outcome["cost_input_hash"] == _plan().plan.cost_input_hash
     assert outcome["outcome_hash"].startswith("sha256:")
-    assert settle_authenticated_outcome(_plan(), _target_execution()) == encoded
+    assert project_plan_bound_net_outcome(_plan(), _target_execution(), _feed()) == encoded
 
 
-def test_stop_outcome_is_signed_and_reconciles_authenticated_risk_components() -> None:
-    outcome = json.loads(settle_authenticated_outcome(_plan(), _stop_execution()))
+def test_stop_outcome_is_signed_and_reconciles_plan_bound_risk_components() -> None:
+    outcome = json.loads(project_plan_bound_net_outcome(_plan(), _stop_execution(), _feed()))
 
     assert outcome["terminal_event_kind"] == "stop_filled"
     assert outcome["target_id"] is None
@@ -138,7 +184,7 @@ def test_rejects_unsupported_or_unknown_terminal_execution(
     error: str,
 ) -> None:
     with pytest.raises(BacktestNetOutcomeError, match=error):
-        settle_authenticated_outcome(_plan(), execution)
+        project_plan_bound_net_outcome(_plan(), execution, _feed())
 
 
 @pytest.mark.parametrize(
@@ -155,25 +201,38 @@ def test_rejects_forged_event_lineage(change: dict) -> None:
     execution = _target_execution()
     forged = replace(execution.events[1], **change)
     with pytest.raises(BacktestNetOutcomeError, match="lineage_mismatch"):
-        settle_authenticated_outcome(_plan(), replace(execution, events=(execution.events[0], forged)))
+        project_plan_bound_net_outcome(_plan(), replace(execution, events=(execution.events[0], forged)), _feed())
 
 
 def test_rejects_wrong_entry_price_and_non_chronological_trace() -> None:
     execution = _target_execution()
-    for forged_entry in (
-        replace(execution.events[0], price=Decimal("100.2")),
-        replace(
-            execution.events[0],
-            happened_at=execution.events[1].happened_at + timedelta(seconds=1),
-        ),
-    ):
-        with pytest.raises(BacktestNetOutcomeError, match="execution_mismatch"):
-            settle_authenticated_outcome(
-                _plan(), replace(execution, events=(forged_entry, execution.events[1]))
-            )
+    with pytest.raises(BacktestNetOutcomeError, match="execution_mismatch"):
+        project_plan_bound_net_outcome(
+            _plan(),
+            replace(
+                execution,
+                events=(replace(execution.events[0], price=Decimal("100.2")), execution.events[1]),
+            ),
+            _feed(),
+        )
+    with pytest.raises(BacktestNetOutcomeError, match="dataset_evidence_mismatch"):
+        project_plan_bound_net_outcome(
+            _plan(),
+            replace(
+                execution,
+                events=(
+                    replace(
+                        execution.events[0],
+                        happened_at=execution.events[1].happened_at + timedelta(seconds=1),
+                    ),
+                    execution.events[1],
+                ),
+            ),
+            _feed(),
+        )
 
 
-def test_rejects_forged_authenticated_cost_total() -> None:
+def test_rejects_non_reconciling_plan_bound_cost_total() -> None:
     payload = json.loads(FIXTURE.read_text())
     payload["plan"]["targets"][0]["netReward"] = 99.0
     unsigned = {key: value for key, value in payload["plan"].items() if key != "planHash"}
@@ -184,7 +243,7 @@ def test_rejects_forged_authenticated_cost_total() -> None:
         replace(event, plan_hash=envelope.plan.plan_hash) for event in execution.events
     )
     with pytest.raises(BacktestNetOutcomeError, match="cost_mismatch"):
-        settle_authenticated_outcome(envelope, replace(execution, events=events))
+        project_plan_bound_net_outcome(envelope, replace(execution, events=events), _feed())
 
 
 def test_rejects_forged_plan_instance_and_stop_price() -> None:
@@ -192,17 +251,38 @@ def test_rejects_forged_plan_instance_and_stop_price() -> None:
         update={"plan": _plan().plan.model_copy(update={"entry_fee": 99.0})}
     )
     with pytest.raises(BacktestNetOutcomeError, match="plan_invalid"):
-        settle_authenticated_outcome(forged_plan, _target_execution())
+        project_plan_bound_net_outcome(forged_plan, _target_execution(), _feed())
 
     execution = _stop_execution()
     with pytest.raises(BacktestNetOutcomeError, match="execution_mismatch"):
-        settle_authenticated_outcome(
+        project_plan_bound_net_outcome(
             _plan(),
             replace(
                 execution,
                 events=(execution.events[0], replace(execution.events[1], price=Decimal("98.3"))),
-            ),
+            ), _feed(),
         )
+
+
+def test_rejects_terminal_record_or_time_not_in_verified_dataset() -> None:
+    execution = _target_execution()
+    for forged_terminal in (
+        replace(execution.events[1], source_record_id="not-in-dataset"),
+        replace(execution.events[1], happened_at=datetime(2026, 8, 10, 12, 2, 1, tzinfo=UTC)),
+    ):
+        with pytest.raises(BacktestNetOutcomeError, match="dataset_evidence_mismatch"):
+            project_plan_bound_net_outcome(
+                _plan(),
+                replace(execution, events=(execution.events[0], forged_terminal)),
+                _feed(),
+            )
+
+
+def test_rejects_feed_identity_mismatch() -> None:
+    feed = _feed()
+    object.__setattr__(feed, "dataset_checksum", "sha256:" + "b" * 64)
+    with pytest.raises(BacktestNetOutcomeError, match="dataset_evidence_mismatch"):
+        project_plan_bound_net_outcome(_plan(), _target_execution(), feed)
 
 
 def test_exact_encoder_rejects_non_finite_decimals_and_supports_sequences() -> None:
