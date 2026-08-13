@@ -344,26 +344,15 @@ class DatasetPublisher:
         owns_fd = False
         if staging_fd is None:
             try:
-                os.rmdir(staging_name, dir_fd=root_fd)
-                return
-            except FileNotFoundError:
-                return
-            except OSError as exc:
-                if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
-                    raise
-        if staging_fd is None:
-            try:
                 staging_fd = os.open(
                     staging_name,
                     _DIRECTORY_FLAGS,
                     dir_fd=root_fd,
                 )
                 owns_fd = True
-            except FileNotFoundError:
+            except OSError:
                 return
         assert staging_fd is not None
-        opened = os.fstat(staging_fd)
-        staging_identity = (opened.st_dev, opened.st_ino)
         if not DatasetPublisher._named_directory_matches_fd(
             root_fd,
             staging_name,
@@ -378,13 +367,6 @@ class DatasetPublisher:
         finally:
             if owns_fd:
                 os.close(staging_fd)
-        if not DatasetPublisher._named_directory_matches_identity(
-            root_fd,
-            staging_name,
-            staging_identity,
-        ):
-            return
-        os.rmdir(staging_name, dir_fd=root_fd)
 
     @staticmethod
     def _named_directory_matches_fd(
@@ -393,10 +375,15 @@ class DatasetPublisher:
         directory_fd: int,
     ) -> bool:
         opened = os.fstat(directory_fd)
-        return DatasetPublisher._named_directory_matches_identity(
-            root_fd,
-            name,
-            (opened.st_dev, opened.st_ino),
+        return (
+            stat.S_ISDIR(opened.st_mode)
+            and stat.S_IMODE(opened.st_mode) == 0o700
+            and opened.st_nlink >= 1
+            and DatasetPublisher._named_directory_matches_identity(
+                root_fd,
+                name,
+                (opened.st_dev, opened.st_ino),
+            )
         )
 
     @staticmethod
