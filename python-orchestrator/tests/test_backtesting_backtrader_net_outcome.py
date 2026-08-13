@@ -25,9 +25,9 @@ def _plan() -> CanonicalBacktestOrderPlan:
     return CanonicalBacktestOrderPlan.model_validate_json(FIXTURE.read_text())
 
 
-def _feed() -> VerifiedBacktraderFeedAdapter:
+def _feed(*, stop: bool = False) -> VerifiedBacktraderFeedAdapter:
     plan = _plan()
-    bars = (
+    entry = (
         VerifiedBacktraderBar(
             source_record_id="bar-entry",
             open_at=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
@@ -36,6 +36,8 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
             open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
             close=Decimal("100"), volume=Decimal("10"),
         ),
+    )
+    target = (
         VerifiedBacktraderBar(
             source_record_id="bar-target",
             open_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
@@ -44,6 +46,8 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
             open=Decimal("100"), high=Decimal("103"), low=Decimal("99"),
             close=Decimal("102"), volume=Decimal("10"),
         ),
+    )
+    stopped = (
         VerifiedBacktraderBar(
             source_record_id="bar-stop",
             open_at=datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
@@ -53,6 +57,7 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
             close=Decimal("99"), volume=Decimal("10"),
         ),
     )
+    bars = entry + (stopped if stop else target)
     feed = object.__new__(VerifiedBacktraderFeedAdapter)
     for field, value in {
         "bars": bars,
@@ -142,7 +147,7 @@ def test_target_outcome_projects_plan_bound_php_cost_components() -> None:
 
 
 def test_stop_outcome_is_signed_and_reconciles_plan_bound_risk_components() -> None:
-    outcome = json.loads(project_plan_bound_net_outcome(_plan(), _stop_execution(), _feed()))
+    outcome = json.loads(project_plan_bound_net_outcome(_plan(), _stop_execution(), _feed(stop=True)))
 
     assert outcome["terminal_event_kind"] == "stop_filled"
     assert outcome["target_id"] is None
@@ -175,7 +180,7 @@ def test_stop_outcome_is_signed_and_reconciles_plan_bound_risk_components() -> N
                 _target_execution(),
                 events=(_target_execution().events[0], replace(_target_execution().events[1], price=Decimal("103.0"))),
             ),
-            "target_unknown",
+            "execution_evidence_mismatch",
         ),
     ],
 )
@@ -206,7 +211,7 @@ def test_rejects_forged_event_lineage(change: dict) -> None:
 
 def test_rejects_wrong_entry_price_and_non_chronological_trace() -> None:
     execution = _target_execution()
-    with pytest.raises(BacktestNetOutcomeError, match="execution_mismatch"):
+    with pytest.raises(BacktestNetOutcomeError, match="execution_evidence_mismatch"):
         project_plan_bound_net_outcome(
             _plan(),
             replace(
@@ -254,13 +259,13 @@ def test_rejects_forged_plan_instance_and_stop_price() -> None:
         project_plan_bound_net_outcome(forged_plan, _target_execution(), _feed())
 
     execution = _stop_execution()
-    with pytest.raises(BacktestNetOutcomeError, match="execution_mismatch"):
+    with pytest.raises(BacktestNetOutcomeError, match="execution_evidence_mismatch"):
         project_plan_bound_net_outcome(
             _plan(),
             replace(
                 execution,
                 events=(execution.events[0], replace(execution.events[1], price=Decimal("98.3"))),
-            ), _feed(),
+            ), _feed(stop=True),
         )
 
 
@@ -278,11 +283,31 @@ def test_rejects_terminal_record_or_time_not_in_verified_dataset() -> None:
             )
 
 
+def test_rejects_fill_that_does_not_match_execution_replayed_from_feed() -> None:
+    execution = _target_execution()
+    forged_terminal = replace(
+        execution.events[1],
+        source_record_id="bar-entry",
+        happened_at=execution.events[0].happened_at,
+    )
+    with pytest.raises(BacktestNetOutcomeError, match="execution_evidence_mismatch"):
+        project_plan_bound_net_outcome(
+            _plan(),
+            replace(execution, events=(execution.events[0], forged_terminal)),
+            _feed(),
+        )
+
+
 def test_rejects_feed_identity_mismatch() -> None:
     feed = _feed()
     object.__setattr__(feed, "dataset_checksum", "sha256:" + "b" * 64)
     with pytest.raises(BacktestNetOutcomeError, match="dataset_evidence_mismatch"):
         project_plan_bound_net_outcome(_plan(), _target_execution(), feed)
+
+    duplicate = _feed()
+    object.__setattr__(duplicate, "bars", duplicate.bars + (duplicate.bars[0],))
+    with pytest.raises(BacktestNetOutcomeError, match="dataset_evidence_mismatch"):
+        project_plan_bound_net_outcome(_plan(), _target_execution(), duplicate)
 
 
 def test_exact_encoder_rejects_non_finite_decimals_and_supports_sequences() -> None:

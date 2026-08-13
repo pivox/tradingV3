@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
-from app.backtesting.backtrader_execution import BacktestExecutionResult
+from app.backtesting.backtrader_execution import BacktestExecutionResult, execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 
 
@@ -37,35 +37,16 @@ def project_plan_bound_net_outcome(
     entry_event, terminal_event = execution.events
     _verify_event_lineage(envelope, entry_event)
     _verify_event_lineage(envelope, terminal_event)
-    if (
-        entry_event.price != _decimal(plan.entry_price)
-        or entry_event.happened_at > terminal_event.happened_at
-        or execution.reason_code not in (
-            "target_filled", "stop_filled", "conservative_stop_first"
-        )
-        or (
-            terminal_event.kind == "target_filled"
-            and execution.reason_code != "target_filled"
-        )
-        or (
-            terminal_event.kind == "stop_filled"
-            and execution.reason_code not in ("stop_filled", "conservative_stop_first")
-        )
-    ):
-        raise BacktestNetOutcomeError("backtrader_net_outcome_execution_mismatch")
+    if execute_plan(envelope, feed.bars) != execution:
+        raise BacktestNetOutcomeError("backtrader_net_outcome_execution_evidence_mismatch")
 
     target = None
     if terminal_event.kind == "target_filled":
         target = next(
-            (
-                item
-                for item in plan.targets
-                if _decimal(item.price) == terminal_event.price
-            ),
-            None,
+            item
+            for item in plan.targets
+            if _decimal(item.price) == terminal_event.price
         )
-        if target is None:
-            raise BacktestNetOutcomeError("backtrader_net_outcome_target_unknown")
         entry_fee = _decimal(target.entry_fee)
         exit_fee = _decimal(target.target_fee)
         entry_spread = _decimal(target.entry_spread_cost)
@@ -77,8 +58,6 @@ def project_plan_bound_net_outcome(
         net_pnl = _decimal(target.net_reward)
         net_r = _decimal(target.net_r)
     else:
-        if terminal_event.price != _decimal(plan.stop_price):
-            raise BacktestNetOutcomeError("backtrader_net_outcome_execution_mismatch")
         entry_fee = _decimal(plan.entry_fee)
         exit_fee = _decimal(plan.stop_exit_fee)
         entry_spread = _decimal(plan.entry_spread_cost)
