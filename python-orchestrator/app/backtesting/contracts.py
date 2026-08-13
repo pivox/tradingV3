@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping as MappingAbc
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -36,6 +37,9 @@ from app.modern_trading_contracts import (
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _GIT_SHA_PATTERN = r"^[0-9a-f]{40}$"
+_RFC3339_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class MarketType(str, Enum):
@@ -108,6 +112,16 @@ def _require_utc(value: datetime) -> datetime:
     if value.utcoffset() != timezone.utc.utcoffset(value):
         raise ValueError("datetime must be UTC-aware")
     return value.astimezone(timezone.utc)
+
+
+def _reject_ambiguous_datetime_input(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value
+    if type(value) is not str:
+        raise ValueError("backtest_datetime_type_invalid")
+    if _RFC3339_DATETIME_PATTERN.fullmatch(value) is None:
+        raise ValueError("backtest_datetime_lexical_invalid")
+    return value
 
 
 def _canonical_manifest_datetime(value: datetime) -> str:
@@ -533,9 +547,7 @@ class BacktestRunRequest(BaseModel):
     @field_validator("period_start", "period_end", mode="before")
     @classmethod
     def _reject_coerced_datetimes(cls, value: Any) -> Any:
-        if not isinstance(value, datetime) and type(value) is not str:
-            raise ValueError("backtest_datetime_type_invalid")
-        return value
+        return _reject_ambiguous_datetime_input(value)
 
     @field_validator("period_start", "period_end")
     @classmethod
@@ -728,9 +740,7 @@ class BacktestTradeLedgerEntry(BaseModel):
     @field_validator("signal_at", mode="before")
     @classmethod
     def _validate_utc(cls, value: datetime) -> datetime:
-        if not isinstance(value, datetime) and type(value) is not str:
-            raise ValueError("backtest_datetime_type_invalid")
-        return value
+        return _reject_ambiguous_datetime_input(value)
 
     @field_validator("signal_at")
     @classmethod

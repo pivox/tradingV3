@@ -431,6 +431,25 @@ def test_run_rejects_coerced_datetime_inputs(field: str, value: object) -> None:
         BacktestRunRequest(**_modern_run_payload(**{field: value}))
 
 
+@pytest.mark.parametrize("field", ("period_start", "period_end"))
+@pytest.mark.parametrize(
+    "value",
+    (
+        "1767312000",
+        "1767312000.0",
+        "2026-01-02",
+        " 2026-01-02T00:00:00Z",
+        "2026-01-02 00:00:00Z",
+        "2026-01-02T00:00:00Z ",
+    ),
+)
+def test_run_rejects_non_rfc3339_datetime_strings(
+    field: str, value: str
+) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_lexical_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -448,6 +467,37 @@ def test_ledger_rejects_coerced_enum_inputs(field: str, value: object) -> None:
 def test_ledger_rejects_coerced_datetime_inputs(value: object) -> None:
     with pytest.raises(ValidationError, match="backtest_datetime_type_invalid"):
         BacktestTradeLedgerEntry(**_modern_ledger_payload(signal_at=value))
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "1767312000",
+        "1767312000.0",
+        "2026-01-02",
+        " 2026-01-02T00:00:00Z",
+        "2026-01-02 00:00:00Z",
+        "2026-01-02T00:00:00Z ",
+    ),
+)
+def test_ledger_rejects_non_rfc3339_datetime_strings(value: str) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_lexical_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(signal_at=value))
+
+
+def test_run_and_ledger_accept_exact_utc_iso_datetime_strings() -> None:
+    request = BacktestRunRequest(
+        **_modern_run_payload(
+            period_start="2026-01-02T00:00:00Z",
+            period_end="2026-01-03T00:00:00+00:00",
+        )
+    )
+    ledger = BacktestTradeLedgerEntry(
+        **_modern_ledger_payload(signal_at="2026-01-02T00:00:00.123456Z")
+    )
+
+    assert request.period_start == _dt("2026-01-02T00:00:00")
+    assert ledger.signal_at.microsecond == 123456
 
 
 @pytest.mark.parametrize(
@@ -522,6 +572,7 @@ def test_ledger_accepts_json_numbers_and_json_enum_values() -> None:
         market_type="perpetual",
         direction="long",
         entry_order_type="maker",
+        signal_at="2026-01-02T00:00:00Z",
     )
 
     entry = BacktestTradeLedgerEntry.model_validate_json(json.dumps(payload, default=str))
