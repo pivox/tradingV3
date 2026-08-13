@@ -379,6 +379,75 @@ def test_run_and_ledger_default_json_wire_round_trip() -> None:
     assert restored_ledger == ledger
     assert restored_request.reproducibility_fingerprint() == request.reproducibility_fingerprint()
     assert restored_ledger.total_known_cost_usdt == ledger.total_known_cost_usdt
+    assert json.loads(request.model_dump_json())["result_is_live_proof"] is False
+    ledger_wire = json.loads(ledger.model_dump_json())
+    assert ledger_wire["result_is_live_proof"] is False
+    assert ledger_wire["total_known_cost_usdt"] == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"result_is_live_proof": True},
+        {"result_is_live_proof": 0},
+    ),
+)
+def test_run_rejects_forged_computed_wire_values(update: dict[str, object]) -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+    wire = request.model_dump(mode="json")
+    wire.update(update)
+
+    with pytest.raises(ValidationError, match="backtest_run_computed_field_invalid"):
+        BacktestRunRequest.model_validate(wire)
+
+
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"result_is_live_proof": True},
+        {"total_known_cost_usdt": True},
+        {"total_known_cost_usdt": 99.0},
+    ),
+)
+def test_ledger_rejects_forged_computed_wire_values(update: dict[str, object]) -> None:
+    ledger = BacktestTradeLedgerEntry(**_modern_ledger_payload())
+    wire = ledger.model_dump(mode="json")
+    wire.update(update)
+
+    with pytest.raises(ValidationError, match="backtest_ledger_computed_field_invalid"):
+        BacktestTradeLedgerEntry.model_validate(wire)
+
+
+@pytest.mark.parametrize("value", (b"conservative_stop_first", 1, True))
+def test_run_rejects_coerced_intrabar_policy(value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_run_enum_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(intra_bar_policy=value))
+
+
+@pytest.mark.parametrize("field", ("period_start", "period_end"))
+@pytest.mark.parametrize("value", (1, 1.0, True, b"2026-01-02T00:00:00Z"))
+def test_run_rejects_coerced_datetime_inputs(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("market_type", b"perpetual"),
+        ("direction", b"long"),
+        ("entry_order_type", b"maker"),
+    ),
+)
+def test_ledger_rejects_coerced_enum_inputs(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_ledger_enum_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(**{field: value}))
+
+
+@pytest.mark.parametrize("value", (1, 1.0, True, b"2026-01-02T00:00:00Z"))
+def test_ledger_rejects_coerced_datetime_inputs(value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(signal_at=value))
 
 
 @pytest.mark.parametrize(

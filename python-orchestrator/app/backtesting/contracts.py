@@ -19,6 +19,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
+    computed_field,
     field_validator,
     model_validator,
 )
@@ -484,6 +486,22 @@ class BacktestRunRequest(BaseModel):
     cost_model_version: str = Field(..., min_length=1)
     intra_bar_policy: IntraBarPolicy = IntraBarPolicy.CONSERVATIVE_STOP_FIRST
 
+    @model_validator(mode="before")
+    @classmethod
+    def _consume_computed_wire_fields(cls, value: Any, info: ValidationInfo) -> Any:
+        if not isinstance(value, MappingAbc):
+            return value
+        payload = dict(value)
+        if "result_is_live_proof" in payload:
+            if payload["result_is_live_proof"] is not False:
+                raise ValueError("backtest_run_computed_field_invalid")
+            payload.pop("result_is_live_proof")
+        if info.mode == "json" and isinstance(payload.get("dataset"), MappingAbc):
+            payload["dataset"] = DatasetDescriptor.model_validate_json(
+                json.dumps(payload["dataset"], ensure_ascii=False, separators=(",", ":"))
+            )
+        return payload
+
     @field_validator("symbols", "timeframes", mode="before")
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
@@ -503,6 +521,20 @@ class BacktestRunRequest(BaseModel):
     def _reject_coerced_seed(cls, value: Any) -> Any:
         if type(value) is not int:
             raise ValueError("backtest_run_scalar_type_invalid")
+        return value
+
+    @field_validator("intra_bar_policy", mode="before")
+    @classmethod
+    def _reject_coerced_policy(cls, value: Any) -> Any:
+        if not isinstance(value, IntraBarPolicy) and type(value) is not str:
+            raise ValueError("backtest_run_enum_type_invalid")
+        return value
+
+    @field_validator("period_start", "period_end", mode="before")
+    @classmethod
+    def _reject_coerced_datetimes(cls, value: Any) -> Any:
+        if not isinstance(value, datetime) and type(value) is not str:
+            raise ValueError("backtest_datetime_type_invalid")
         return value
 
     @field_validator("period_start", "period_end")
@@ -547,6 +579,7 @@ class BacktestRunRequest(BaseModel):
             raise ValueError("period must stay inside each requested stream bounds")
         return self
 
+    @computed_field
     @property
     def result_is_live_proof(self) -> bool:
         return False
@@ -597,6 +630,37 @@ class BacktestTradeLedgerEntry(BaseModel):
     liquidation_fee_usdt: float = Field(default=0.0, ge=0)
     quality_flags: tuple[str, ...] = ()
 
+    @model_validator(mode="before")
+    @classmethod
+    def _consume_computed_wire_fields(cls, value: Any) -> Any:
+        if not isinstance(value, MappingAbc):
+            return value
+        payload = dict(value)
+        if "result_is_live_proof" in payload:
+            if payload["result_is_live_proof"] is not False:
+                raise ValueError("backtest_ledger_computed_field_invalid")
+            payload.pop("result_is_live_proof")
+        if "total_known_cost_usdt" in payload:
+            supplied = payload["total_known_cost_usdt"]
+            cost_fields = (
+                "fee_usdt",
+                "spread_cost_usdt",
+                "slippage_cost_usdt",
+                "funding_usdt",
+                "borrow_cost_usdt",
+                "liquidation_fee_usdt",
+            )
+            costs = [payload.get(field, 0.0) for field in cost_fields]
+            if type(supplied) not in (int, float) or any(
+                type(item) not in (int, float) for item in costs
+            ):
+                raise ValueError("backtest_ledger_computed_field_invalid")
+            expected = costs[0] + costs[1] + costs[2] - costs[3] + costs[4] + costs[5]
+            if not isclose(float(supplied), float(expected), rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError("backtest_ledger_computed_field_invalid")
+            payload.pop("total_known_cost_usdt")
+        return payload
+
     @field_validator("quality_flags", mode="before")
     @classmethod
     def _normalize_flags(cls, value: Any) -> tuple[str, ...]:
@@ -645,6 +709,13 @@ class BacktestTradeLedgerEntry(BaseModel):
             raise ValueError("backtest_ledger_numeric_type_invalid")
         return value
 
+    @field_validator("market_type", "direction", "entry_order_type", mode="before")
+    @classmethod
+    def _reject_coerced_enums(cls, value: Any) -> Any:
+        if not isinstance(value, (MarketType, Direction, OrderType)) and type(value) is not str:
+            raise ValueError("backtest_ledger_enum_type_invalid")
+        return value
+
     @field_validator(
         "config_hash", "condition_catalog_hash", "snapshot_hash", mode="before"
     )
@@ -654,9 +725,16 @@ class BacktestTradeLedgerEntry(BaseModel):
             raise ValueError("backtest_ledger_hash_type_invalid")
         return value
 
-    @field_validator("signal_at")
+    @field_validator("signal_at", mode="before")
     @classmethod
     def _validate_utc(cls, value: datetime) -> datetime:
+        if not isinstance(value, datetime) and type(value) is not str:
+            raise ValueError("backtest_datetime_type_invalid")
+        return value
+
+    @field_validator("signal_at")
+    @classmethod
+    def _require_signal_utc(cls, value: datetime) -> datetime:
         return _require_utc(value)
 
     @model_validator(mode="after")
@@ -686,6 +764,7 @@ class BacktestTradeLedgerEntry(BaseModel):
             raise ValueError("net_pnl_usdt must equal gross_pnl_usdt minus known costs")
         return self
 
+    @computed_field
     @property
     def total_known_cost_usdt(self) -> float:
         return (
@@ -697,6 +776,7 @@ class BacktestTradeLedgerEntry(BaseModel):
             + self.liquidation_fee_usdt
         )
 
+    @computed_field
     @property
     def result_is_live_proof(self) -> bool:
         return False
