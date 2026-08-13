@@ -155,6 +155,7 @@ final class PaperBacktestDatasetAdapter
             || !\is_string($payload['block_time'] ?? null)
             || \strlen($payload['block_time']) > 64
             || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['block_time']) !== 1
+            || $payload['block_time'] !== $event->exchangeTimestamp->format('Uv')
         ) {
             throw new PaperBacktestAdapterException('paper_backtest_public_trade_invalid');
         }

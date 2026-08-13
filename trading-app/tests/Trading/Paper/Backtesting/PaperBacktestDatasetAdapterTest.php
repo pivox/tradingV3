@@ -132,6 +132,12 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             ])),
             'paper_backtest_public_trade_invalid',
         );
+        $this->assertAdapterFailure(
+            $this->snapshot($hlCandle, $this->hyperliquidTrade([
+                'block_time' => '1786615230001',
+            ])),
+            'paper_backtest_public_trade_invalid',
+        );
     }
 
     public function testAcceptsEveryVerifiedOkxPublicTradeOrigin(): void
