@@ -97,6 +97,8 @@ class FrozenJsonDict(Mapping[str, Any]):
     __slots__ = ("__backing",)
 
     def __init__(self, value: Mapping[str, Any]) -> None:
+        if not value:
+            raise ValueError("canonical_json_ambiguous_empty_mapping")
         if _has_contiguous_zero_based_integer_string_key_set(value):
             raise ValueError("canonical_json_ambiguous_integer_key_map")
         data: dict[str, Any] = {}
@@ -200,6 +202,8 @@ def _canonical_json_value(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _canonical_json_value(value.model_dump(mode="json"))
     if isinstance(value, Mapping):
+        if not value:
+            raise ValueError("canonical_json_ambiguous_empty_mapping")
         if _has_contiguous_zero_based_integer_string_key_set(value):
             raise ValueError("canonical_json_ambiguous_integer_key_map")
         normalized: dict[str, Any] = {}

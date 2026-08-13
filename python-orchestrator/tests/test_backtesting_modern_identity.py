@@ -538,11 +538,6 @@ def test_contiguous_integer_string_key_mappings_are_rejected_independent_of_orde
     ("mapping", "expected_hash"),
     (
         (
-            # PHP 8.4 json_encode on the explicit empty object `(object) []`.
-            {},
-            "sha256:47948c903e73b9514f6197841dbc5b5055e1d03901642e88c188ae0292115dfe",
-        ),
-        (
             {"1": "x"},
             "sha256:ac57774e0ca6e948702467cf2f5d49c532b70376a0ad80ec15c7d1e4563f1fd2",
         ),
@@ -552,13 +547,35 @@ def test_contiguous_integer_string_key_mappings_are_rejected_independent_of_orde
         ),
     ),
 )
-def test_empty_noncontiguous_and_nonnumeric_mappings_remain_objects(
+def test_noncontiguous_and_nonnumeric_mappings_remain_objects(
     mapping: dict[str, str], expected_hash: str
 ) -> None:
     catalog_hash = "sha256:" + "b" * 64
 
     assert dict(FrozenJsonDict(mapping)) == mapping
     assert calculate_config_hash({"value": mapping}, catalog_hash) == expected_hash
+
+
+def test_empty_mappings_reject_but_empty_sequences_keep_php_list_parity() -> None:
+    catalog_hash = "sha256:" + "b" * 64
+
+    for ambiguous in ({}, {"nested": {}}):
+        with pytest.raises(ValueError, match="canonical_json_ambiguous_empty_mapping"):
+            FrozenJsonDict(ambiguous)
+        with pytest.raises(ValueError, match="canonical_json_ambiguous_empty_mapping"):
+            calculate_config_hash(ambiguous, catalog_hash)
+
+    frozen = FrozenJsonDict({"list": [], "tuple": ()})
+    assert frozen["list"] == ()
+    assert frozen["tuple"] == ()
+    # PHP public canonicalizer encodes an empty array as []; an explicit empty
+    # object is rejected as an unsupported type, so Mapping({}) has no shared form.
+    assert calculate_config_hash({"empty": []}, catalog_hash) == (
+        "sha256:28fc5eab6b4347aa831e41de3ed85faa4b4ffb4c8c075af280ddc289e7f5a0bf"
+    )
+    assert calculate_config_hash({"empty": ()}, catalog_hash) == (
+        "sha256:28fc5eab6b4347aa831e41de3ed85faa4b4ffb4c8c075af280ddc289e7f5a0bf"
+    )
 
 
 @pytest.mark.parametrize(
