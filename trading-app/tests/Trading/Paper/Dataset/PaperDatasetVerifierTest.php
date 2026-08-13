@@ -23,6 +23,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
 
 #[CoversClass(PaperDatasetVerifier::class)]
 #[CoversClass(PaperDatasetSnapshotLimits::class)]
@@ -208,6 +209,128 @@ final class PaperDatasetVerifierTest extends TestCase
         $this->expectExceptionMessage('paper_dataset_snapshot_limits_invalid');
 
         new PaperDatasetSnapshotLimits($events, $bytes);
+    }
+
+    public function testDefaultSnapshotBudgetRejectsBeforePhpMemoryExhaustion(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $datasetRoot = $this->testRoot . '/snapshot-memory-guard';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+$root = %s;
+$directory = $root . '/dataset-memory-guard';
+mkdir($root, 0700);
+mkdir($directory, 0700);
+$eventsPath = $directory . '/events.ndjson';
+$handle = fopen($eventsPath, 'wb');
+chmod($eventsPath, 0600);
+$checksum = hash_init('sha256');
+$first = null;
+$last = null;
+$lastEventId = null;
+$padding = str_repeat('x!', 350_000);
+$payload = ['ask' => '30001', 'bid' => '29999', 'padding' => $padding];
+$payloadHash = hash('sha256', App\Trading\Paper\MarketData\CanonicalJson::encode($payload));
+
+for ($index = 0; $index < 25; ++$index) {
+    $exchangeAt = (new DateTimeImmutable('2026-07-19T10:00:00.000000Z'))->modify('+' . $index . ' seconds');
+    $exchangeTimestamp = $exchangeAt->format('Y-m-d\TH:i:s.u\Z');
+    $sequence = (string) ($index + 1);
+    $eventId = hash('sha256', implode('|', [
+        '2',
+        'mainnet',
+        'okx',
+        'BTCUSDT',
+        'top_of_book',
+        $exchangeTimestamp,
+        $sequence,
+    ]));
+    $event = [
+        'schema_version' => 2,
+        'event_id' => $eventId,
+        'source_network' => 'mainnet',
+        'source_venue' => 'okx',
+        'symbol' => 'BTCUSDT',
+        'channel' => 'top_of_book',
+        'exchange_timestamp' => $exchangeTimestamp,
+        'received_timestamp' => $exchangeAt->modify('+1 second')->format('Y-m-d\TH:i:s.u\Z'),
+        'sequence' => $sequence,
+        'payload' => $payload,
+        'payload_hash' => $payloadHash,
+    ];
+    $line = App\Trading\Paper\MarketData\CanonicalJson::encode($event) . "\n";
+    fwrite($handle, $line);
+    hash_update($checksum, $line);
+    $first ??= $exchangeAt;
+    $last = $exchangeAt;
+    $lastEventId = $eventId;
+}
+fclose($handle);
+if (filesize($eventsPath) <= App\Trading\Paper\Dataset\PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_BYTES) {
+    fwrite(STDOUT, 'fixture_under_snapshot_byte_limit');
+    exit(4);
+}
+
+$manifest = new App\Trading\Paper\Dataset\PaperDatasetManifest(
+    schemaVersion: App\Trading\Paper\Dataset\PaperDatasetManifest::SCHEMA_VERSION,
+    recorderVersion: '1.0.0',
+    datasetId: 'dataset-memory-guard',
+    venue: App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+    network: App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
+    symbols: ['BTCUSDT' => 'BTC-USDT-SWAP'],
+    startExchangeTimestamp: $first,
+    endExchangeTimestamp: $last,
+    channels: ['top_of_book'],
+    eventCount: 25,
+    sequenceGaps: [],
+    quality: App\Trading\Paper\MarketData\PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+    modelName: null,
+    modelVersion: null,
+    eventsFileSha256: hash_final($checksum),
+    state: App\Trading\Paper\Dataset\PaperDatasetState::COMPLETE,
+    lastEventId: $lastEventId,
+);
+$manifestPath = $directory . '/manifest.json';
+file_put_contents(
+    $manifestPath,
+    (new App\Trading\Paper\Dataset\PaperDatasetManifestCodec())->encode($manifest),
+);
+chmod($manifestPath, 0600);
+
+try {
+    (new App\Trading\Paper\Dataset\PaperDatasetVerifier())->verifyBaselineSnapshot($directory);
+} catch (RuntimeException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit($exception->getMessage() === 'paper_dataset_snapshot_limit_exceeded' ? 0 : 2);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(3);
+PHP,
+            var_export($autoload, true),
+            var_export($datasetRoot, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=128M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(60.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_dataset_snapshot_limit_exceeded', $process->getOutput());
     }
 
     /** @return iterable<string, array{int, int}> */

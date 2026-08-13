@@ -11,9 +11,9 @@ final class PaperDatasetFormatLimits
     public const MAX_CANONICAL_EVENT_LINE_BYTES = (CanonicalJson::MAX_BYTES * 6) + 200_000;
     public const MAX_MANIFEST_BYTES = 65_536;
 
-    /** Bounds the optional in-memory backtest snapshot without restricting streamed verification. */
-    public const MAX_BACKTEST_SNAPSHOT_EVENTS = 100_000;
+    /** Keeps object/index overhead bounded under the supported 128 MiB PHP memory limit. */
+    public const MAX_BACKTEST_SNAPSHOT_EVENTS = 10_000;
 
-    /** Allows a substantial candle corpus while keeping retained canonical source bytes finite. */
-    public const MAX_BACKTEST_SNAPSHOT_BYTES = 128 * 1024 * 1024;
+    /** Leaves at least seven raw-byte budgets for decoding, objects, verifier indexes and PHP runtime. */
+    public const MAX_BACKTEST_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 }
