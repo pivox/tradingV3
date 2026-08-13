@@ -90,17 +90,15 @@ class DatasetPublisher:
             )
 
         staging_name, staging_fd = self._create_staging(root_fd, dataset_id)
+        renamed = False
         try:
-            try:
-                for filename, attribute in _ARTIFACT_PAYLOADS:
-                    self._write_private_file(
-                        staging_fd,
-                        filename,
-                        getattr(artifacts, attribute),
-                    )
-                self._fsync_staging(staging_fd)
-            finally:
-                os.close(staging_fd)
+            for filename, attribute in _ARTIFACT_PAYLOADS:
+                self._write_private_file(
+                    staging_fd,
+                    filename,
+                    getattr(artifacts, attribute),
+                )
+            self._fsync_staging(staging_fd)
 
             existing = self._existing_status(root_fd, dataset_id, artifacts)
             if existing is not None:
@@ -116,6 +114,7 @@ class DatasetPublisher:
             self._assert_root_path_stable(root_identity)
             try:
                 _atomic_rename_no_replace(root_fd, staging_name, dataset_id)
+                renamed = True
             except OSError as exc:
                 if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
                     raise
@@ -137,7 +136,11 @@ class DatasetPublisher:
                 status=DatasetPublicationStatus.PUBLISHED,
             )
         finally:
-            self._cleanup_staging(root_fd, staging_name)
+            try:
+                if not renamed:
+                    self._cleanup_staging(root_fd, staging_name, staging_fd)
+            finally:
+                os.close(staging_fd)
 
     def _after_prepare_root(self) -> None:
         """Test hook at the path-to-dirfd trust boundary."""

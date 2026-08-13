@@ -213,6 +213,42 @@ def test_real_emfile_during_staging_open_cleans_without_reopening(
     assert not tuple(root.glob(".*.staging-*"))
 
 
+def test_emfile_after_first_artifact_cleans_with_retained_staging_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    target = root / artifacts.descriptor.dataset_id
+    real_open = os.open
+    staging_open_count = 0
+
+    def fail_second_artifact_and_staging_reopen(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal staging_open_count
+        if isinstance(path, str) and ".staging-" in path:
+            staging_open_count += 1
+            if staging_open_count > 1:
+                raise OSError(errno.EMFILE, "too many open files")
+        if path == "quality-report.json":
+            raise OSError(errno.EMFILE, "too many open files")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_second_artifact_and_staging_reopen)
+
+    with pytest.raises(OSError) as rejected:
+        DatasetPublisher(root).publish(artifacts)
+
+    assert rejected.value.errno == errno.EMFILE
+    assert not target.exists()
+    assert not tuple(root.glob(".*.staging-*"))
+
+
 @pytest.mark.parametrize(
     ("publisher_type", "message"),
     (
