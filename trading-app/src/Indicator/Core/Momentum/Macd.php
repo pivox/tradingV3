@@ -51,6 +51,7 @@ final class Macd implements IndicatorInterface
 
     /**
      * Variante nullable : retourne des null si insuffisant.
+     * @param float[] $closes
      * @return array{macd: ?float, signal: ?float, hist: ?float}
      */
     public function calculateNullable(array $closes, int $fast = 12, int $slow = 26, int $signal = 9): array
@@ -102,7 +103,6 @@ final class Macd implements IndicatorInterface
         // Prefer TRADER extension if available
         if (function_exists('trader_macd')) {
             try {
-                /** @phpstan-ignore-next-line */
                 $res = \trader_macd($closes, $fast, $slow, $signal);
                 if (is_array($res) && isset($res[0], $res[1], $res[2])) {
                     // trader_macd returns [macd, macdsignal, macdhist]
@@ -151,19 +151,27 @@ final class Macd implements IndicatorInterface
      */
     public function calculateFullPhp(array $closes, int $fast, int $slow, int $signal): array
     {
+        if ($fast <= 0 || $slow <= 0 || $signal <= 0 || $fast === $slow) {
+            return ['macd' => [], 'signal' => [], 'hist' => []];
+        }
+
         $n = count($closes);
         if ($n < max($fast, $slow) + $signal) {
             return ['macd' => [], 'signal' => [], 'hist' => []];
         }
 
-        // Utiliser la méthode emaSeries existante pour calculer les EMA
         $emaFast = $this->emaSeries($closes, $fast);
         $emaSlow = $this->emaSeries($closes, $slow);
-        $len = min(count($emaFast), count($emaSlow));
+        $firstSharedSourceIndex = max($fast, $slow) - 1;
+        $fastOffset = $firstSharedSourceIndex - ($fast - 1);
+        $slowOffset = $firstSharedSourceIndex - ($slow - 1);
+        $emaFast = array_slice($emaFast, $fastOffset);
+        $emaSlow = array_slice($emaSlow, $slowOffset);
+        $length = min(count($emaFast), count($emaSlow));
         $macd = [];
 
-        // MACD line = EMA(fast) - EMA(slow) (alignement par le plus court)
-        for ($i = 0; $i < $len; $i++) {
+        // Both values at index i now describe the same source candle.
+        for ($i = 0; $i < $length; $i++) {
             $macd[] = $emaFast[$i] - $emaSlow[$i];
         }
 
@@ -220,7 +228,7 @@ final class Macd implements IndicatorInterface
     // Generic interface wrappers
     public function calculateValue(mixed ...$args): mixed
     {
-        /** @var array $closes */
+        /** @var float[] $closes */
         $closes = $args[0] ?? [];
         $fast   = isset($args[1]) ? (int)$args[1] : 12;
         $slow   = isset($args[2]) ? (int)$args[2] : 26;
@@ -228,9 +236,10 @@ final class Macd implements IndicatorInterface
         return $this->calculate($closes, $fast, $slow, $signal);
     }
 
+    /** @return array{macd: float[]|null[], signal: float[]|null[], hist: float[]|null[]} */
     public function calculateSeries(mixed ...$args): array
     {
-        /** @var array $closes */
+        /** @var float[] $closes */
         $closes = $args[0] ?? [];
         $fast   = isset($args[1]) ? (int)$args[1] : 12;
         $slow   = isset($args[2]) ? (int)$args[2] : 26;

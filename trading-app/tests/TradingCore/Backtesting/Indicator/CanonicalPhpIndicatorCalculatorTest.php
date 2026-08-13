@@ -78,7 +78,7 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         self::assertEqualsWithDelta(124.054413712443889, $first['ema_20'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(122.545613533078054, $first['ema_50'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(115.852119009884632, $first['ema_200'], self::GOLDEN_DELTA);
-        self::assertEqualsWithDelta(-0.018424765194933, $first['macd_hist'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(0.014185413043459105, $first['macd_hist'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(112.568424120520518, $first['vwap'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(0.388296351355937, $first['atr'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(82.900568639307565, $first['adx'][14], self::GOLDEN_DELTA);
