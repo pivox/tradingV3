@@ -287,6 +287,32 @@ final readonly class CanonicalOrderPlan
         return self::hashValues($values);
     }
 
+    /** @return array<string, mixed> */
+    public function toArray(): array
+    {
+        $values = get_object_vars($this);
+        $values['targets'] = array_map(
+            static fn (CanonicalOrderPlanTarget $target): array => $target->toArray(),
+            $this->targets,
+        );
+        foreach (['inputObservedAt', 'observedAt', 'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt', 'cancelAfterAt', 'holdingExpiresAt'] as $field) {
+            $timestamp = $values[$field];
+            if ($timestamp === null) {
+                unset($values[$field]);
+                continue;
+            }
+            if (!$timestamp instanceof \DateTimeImmutable) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_timestamp_invalid');
+            }
+            $values[$field] = $timestamp->format('Y-m-d\TH:i:s.uP');
+        }
+        if ($this->orderBookInputHash === null) {
+            unset($values['orderBookInputHash']);
+        }
+
+        return $values;
+    }
+
     /** @param array<string, mixed> $values */
     private static function hashValues(array $values): string
     {
