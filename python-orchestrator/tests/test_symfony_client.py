@@ -12,7 +12,12 @@ from typing import Any
 import httpx
 import pytest
 
-from app.schemas import CanonicalTradingIdentity, OrchestratorSet
+from app.schemas import (
+    CanonicalTradingIdentity,
+    OrchestratorSet,
+    calculate_config_hash,
+    calculate_snapshot_hash,
+)
 from app.services.correlation import canonical_correlation_id
 from app.services.symfony_client import (
     ContractsUnavailableError,
@@ -65,20 +70,21 @@ def _canonical_identity() -> CanonicalTradingIdentity:
         "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
         "exchange": {"id": "fake"}, "environment": {"id": "test"},
     }
-    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
-    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    config_hash = calculate_config_hash(config, catalog_hash)
     layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
+    snapshot = {
+        "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+        "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": layers[1]},
+        "executable": True, "blockers": [],
+    }
+    snapshot["snapshot_hash"] = calculate_snapshot_hash(snapshot)
     return CanonicalTradingIdentity(
         mode_id="scalping", mode_version="1.0.0", setup_id="scalping.pullback.long", setup_version="1.0.0",
         config_hash=config_hash, condition_catalog_hash=catalog_hash, side="LONG",
         effective_config_reference="effective-config:cfg-1",
-        effective_config_snapshot={
-            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
-            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
-            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
-            "provenance": {"mode.mode_id": layers[1]},
-            "executable": True, "blockers": [],
-        },
+        effective_config_snapshot=snapshot,
     )
 
 

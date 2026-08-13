@@ -19,6 +19,8 @@ from app.schemas import (
     SetRead,
     SetUpdate,
     assert_set_persistable,
+    calculate_config_hash,
+    calculate_snapshot_hash,
 )
 
 
@@ -28,24 +30,23 @@ def test_full_php_133_snapshot_shape_round_trips_unchanged_with_hash_parity():
         "schema_version": "effective-trading-config.v2",
         "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
         "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
-        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
-        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "mode": {"mode_id": "scalping", "mode_version": "1.1.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "side": "long"},
         "exchange": {"id": "fake"},
         "environment": {"id": "test", "note": "café/path"},
     }
-    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    config_hash = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    assert config_hash == "sha256:057ac6a372647c22330a50d9b0f3dfecd0afbb05152f5ad460e07132fe2f5b9f"
+    config_hash = calculate_config_hash(config, catalog_hash)
     layers = [
         {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
         for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
     ]
     payload = {
-        "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long", "execution_capability": "backtest"},
         "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
         "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
         "provenance": {"mode.mode_id": layers[1]}, "executable": True, "blockers": [],
     }
+    payload["snapshot_hash"] = calculate_snapshot_hash(payload)
 
     snapshot = CanonicalEffectiveConfigSnapshot(**payload)
 
@@ -56,14 +57,10 @@ def test_effective_snapshot_hash_normalizes_integral_float_and_deep_freezes_meta
     payload = _canonical_identity_payload()["effective_config_snapshot"]
     payload["config"]["environment"]["note"] = "café/path"
     payload["config"]["environment"]["leverage"] = 3.0
-    normalized = json.loads(json.dumps(payload["config"], ensure_ascii=False))
-    assert normalized["environment"]["leverage"] == 3.0
-    normalized["environment"]["leverage"] = 3
-    canonical = json.dumps(
-        {"config": normalized, "condition_catalog_hash": payload["condition_catalog_hash"]},
-        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    payload["config_hash"] = calculate_config_hash(
+        payload["config"], payload["condition_catalog_hash"]
     )
-    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    payload["snapshot_hash"] = calculate_snapshot_hash(payload)
 
     snapshot = CanonicalEffectiveConfigSnapshot(**payload)
     before_hash = snapshot.config_hash
@@ -223,6 +220,15 @@ def test_canonical_trading_identity_rejects_malformed_hashes(field, value):
         CanonicalTradingIdentity(**payload)
 
 
+@pytest.mark.parametrize("field", ["config_hash", "condition_catalog_hash"])
+def test_canonical_trading_identity_rejects_bytes_hashes_before_coercion(field):
+    payload = _canonical_identity_payload()
+    payload[field] = payload[field].encode("ascii")
+
+    with pytest.raises(ValidationError, match="canonical_trading_identity_hash_type_invalid"):
+        CanonicalTradingIdentity(**payload)
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -245,46 +251,39 @@ def _canonical_identity_payload():
         "schema_version": "effective-trading-config.v2",
         "units": {"percent": "percentage_points", "duration": "iso8601", "price": "quote_price", "notional": "quote_notional"},
         "safety": {"mainnet_write_enabled": False, "demo_testnet_write_enabled": False, "require_stop_loss": True, "kill_switch_enabled": True},
-        "mode": {"mode_id": "scalping", "mode_version": "1.0.0"},
-        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "side": "long"},
+        "mode": {"mode_id": "scalping", "mode_version": "1.1.0"},
+        "setup": {"setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "side": "long"},
         "exchange": {"id": "fake"}, "environment": {"id": "test"},
     }
-    canonical = json.dumps({"config": config, "condition_catalog_hash": catalog_hash}, separators=(",", ":"), sort_keys=True)
-    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    config_hash = calculate_config_hash(config, catalog_hash)
     layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
+    snapshot = {
+        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long", "execution_capability": "backtest"},
+        "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
+        "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": layers[1]},
+        "executable": True, "blockers": [],
+    }
+    snapshot["snapshot_hash"] = calculate_snapshot_hash(snapshot)
     return {
         "mode_id": "scalping",
-        "mode_version": "1.0.0",
+        "mode_version": "1.1.0",
         "setup_id": "scalping.pullback.long",
-        "setup_version": "1.0.0",
+        "setup_version": "1.1.0",
         "config_hash": config_hash,
         "condition_catalog_hash": catalog_hash,
         "side": "LONG",
         "effective_config_reference": "effective-config:cfg-1",
-        "effective_config_snapshot": {
-            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
-            "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
-            "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
-            "provenance": {"mode.mode_id": layers[1]},
-            "executable": True, "blockers": [],
-        },
+        "effective_config_snapshot": snapshot,
     }
 
 
 def _rehash_effective_snapshot(payload, *, normalize_integral_floats=False):
-    config = payload["config"]
-    if normalize_integral_floats:
-        config_for_hash = json.loads(json.dumps(config))
-        config_for_hash["environment"]["leverage"] = 3
-    else:
-        config_for_hash = config
-    canonical = json.dumps(
-        {"config": config_for_hash, "condition_catalog_hash": payload["condition_catalog_hash"]},
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    del normalize_integral_floats  # canonical hashing always normalizes integral floats
+    payload["config_hash"] = calculate_config_hash(
+        payload["config"], payload["condition_catalog_hash"]
     )
-    payload["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    payload["snapshot_hash"] = calculate_snapshot_hash(payload)
 
 
 def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
@@ -297,11 +296,8 @@ def test_canonical_set_rejects_snapshot_exchange_or_environment_mismatch():
 
     identity["effective_config_snapshot"]["request"]["environment"] = "test"
     identity["effective_config_snapshot"]["config"]["environment"]["id"] = "test"
-    canonical = json.dumps(
-        {"config": identity["effective_config_snapshot"]["config"], "condition_catalog_hash": identity["condition_catalog_hash"]},
-        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
-    )
-    identity["config_hash"] = identity["effective_config_snapshot"]["config_hash"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    _rehash_effective_snapshot(identity["effective_config_snapshot"])
+    identity["config_hash"] = identity["effective_config_snapshot"]["config_hash"]
     with pytest.raises(ValidationError, match="canonical_environment_mismatch"):
         OrchestratorSet(
             set_id="environment-mismatch", exchange="fake", environment="demo", dry_run=True,
@@ -325,12 +321,13 @@ def test_canonical_effective_config_request_accepts_php_exchange_environment_pai
 ):
     request = CanonicalEffectiveConfigRequest(
         mode_id="scalping",
-        mode_version="1.0.0",
+        mode_version="1.1.0",
         setup_id="scalping.pullback.long",
-        setup_version="1.0.0",
+        setup_version="1.1.0",
         exchange=exchange,
         environment=environment,
         side="long",
+        execution_capability="backtest" if exchange == "fake" else "paper",
     )
 
     assert request.exchange == exchange
@@ -341,12 +338,13 @@ def test_canonical_effective_config_request_rejects_invalid_exchange_environment
     with pytest.raises(ValidationError, match="canonical_exchange_environment_invalid"):
         CanonicalEffectiveConfigRequest(
             mode_id="scalping",
-            mode_version="1.0.0",
+            mode_version="1.1.0",
             setup_id="scalping.pullback.long",
-            setup_version="1.0.0",
+            setup_version="1.1.0",
             exchange="fake",
             environment="demo",
             side="long",
+            execution_capability="backtest",
         )
 
 

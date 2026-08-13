@@ -1,0 +1,120 @@
+{
+    "request": {
+        "mode_id": "scalping",
+        "mode_version": "1.1.0",
+        "setup_id": "scalping.pullback.long",
+        "setup_version": "1.1.0",
+        "exchange": "fake",
+        "environment": "test",
+        "side": "long",
+        "execution_capability": "backtest"
+    },
+    "config": {
+        "schema_version": "effective-trading-config.v2",
+        "units": {
+            "percent": "percentage_points",
+            "duration": "iso8601",
+            "price": "quote_price",
+            "notional": "quote_notional"
+        },
+        "safety": {
+            "mainnet_write_enabled": false,
+            "demo_testnet_write_enabled": false,
+            "require_stop_loss": true,
+            "kill_switch_enabled": true
+        },
+        "mode": {
+            "mode_id": "scalping",
+            "mode_version": "1.1.0"
+        },
+        "setup": {
+            "setup_id": "scalping.pullback.long",
+            "setup_version": "1.1.0",
+            "side": "long"
+        },
+        "exchange": {
+            "id": "fake"
+        },
+        "environment": {
+            "id": "test",
+            "evidence": {
+                "unicode": "café/path",
+                "integral_float": 3.0,
+                "scientific": 1.0e-7,
+                "negative_scientific": -1.234567890123456e-7,
+                "line_separators": "x\u2028y\u2029z"
+            }
+        }
+    },
+    "config_hash": "sha256:f775802a1cbadd11459944ef127c43ea79d814fa99909a94f4d064f4081f03ce",
+    "condition_catalog_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ordered_layers": [
+        {
+            "type": "base",
+            "name": "base",
+            "path": "/config/base.yaml",
+            "required": true
+        },
+        {
+            "type": "mode",
+            "name": "scalping",
+            "path": "/config/modes/scalping.yaml",
+            "required": true
+        },
+        {
+            "type": "setup",
+            "name": "scalping.pullback.long",
+            "path": "/config/setups/scalping.pullback.long.yaml",
+            "required": true
+        },
+        {
+            "type": "exchange",
+            "name": "fake",
+            "path": "/config/exchanges/fake.yaml",
+            "required": true
+        },
+        {
+            "type": "mode_exchange",
+            "name": "scalping+fake",
+            "path": "/config/mode-exchange/scalping.fake.yaml",
+            "required": true
+        },
+        {
+            "type": "environment",
+            "name": "test",
+            "path": "/config/environments/test.yaml",
+            "required": true
+        }
+    ],
+    "ordered_files": [
+        "/config/base.yaml",
+        "/config/modes/scalping.yaml",
+        "/config/setups/scalping.pullback.long.yaml",
+        "/config/exchanges/fake.yaml",
+        "/config/mode-exchange/scalping.fake.yaml",
+        "/config/environments/test.yaml"
+    ],
+    "provenance": {
+        "mode.mode_id": {
+            "type": "mode",
+            "name": "scalping",
+            "path": "/config/modes/scalping.yaml",
+            "required": true
+        },
+        "setup.setup_id": {
+            "type": "setup",
+            "name": "scalping.pullback.long",
+            "path": "/config/setups/scalping.pullback.long.yaml",
+            "required": true
+        },
+        "environment.evidence": {
+            "type": "environment",
+            "name": "test",
+            "path": "/config/environments/test.yaml",
+            "required": true
+        }
+    },
+    "executable": true,
+    "blockers": [],
+    "snapshot_hash": "sha256:83066b37f9fffbaf88d29cad54d31e9f22b0100c4938dfbbc83579dba55cb66c"
+}

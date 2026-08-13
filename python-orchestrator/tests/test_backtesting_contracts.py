@@ -4,22 +4,26 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from math import inf, nan
+from math import nan
 
 import pytest
 from pydantic import ValidationError
 
+import app.backtesting.contracts as backtesting_contracts
 from app.backtesting.contracts import (
     BacktestRunRequest,
     BacktestTradeLedgerEntry,
     DatasetDescriptor,
     Direction,
-    EffectiveConfigSnapshot,
-    FrozenDict,
     IntraBarPolicy,
     MarketType,
     OrderType,
-    Profile,
+)
+from app.modern_trading_contracts import (
+    CanonicalEffectiveConfigSnapshot,
+    ModernTradingIdentity,
+    calculate_config_hash,
+    calculate_snapshot_hash,
 )
 
 
@@ -124,27 +128,190 @@ def _dataset() -> DatasetDescriptor:
     return DatasetDescriptor.from_manifest(_manifest())
 
 
-def _config(profile: Profile = Profile.SCALPER) -> EffectiveConfigSnapshot:
-    return EffectiveConfigSnapshot(
-        profile=profile,
-        config_hash="sha256:" + "b" * 64,
-        config_version="effective-config-v1",
-        source_layers=("base", f"mode/{profile.value}", "exchange/fake"),
-        effective_config={
-            "risk": {"risk_pct": 0.01},
-            "entry": {"maker_first": True},
-        },
-    )
-
-
-def _ledger_entry(**overrides: object) -> BacktestTradeLedgerEntry:
+def _modern_identity(**overrides: str) -> ModernTradingIdentity:
     payload = {
+        "mode_id": "scalping",
+        "mode_version": "1.1.0",
+        "setup_id": "scalping.pullback.long",
+        "setup_version": "1.1.0",
+        "exchange": "fake",
+        "environment": "test",
+        "side": "long",
+    }
+    payload.update(overrides)
+    return ModernTradingIdentity(**payload)
+
+
+def _canonical_config(
+    identity: ModernTradingIdentity | None = None,
+    *,
+    executable: bool = True,
+    blockers: tuple[str, ...] = (),
+    marker: str = "baseline",
+    condition_catalog_hash: str = "sha256:" + "b" * 64,
+    execution_capability: str = "backtest",
+) -> CanonicalEffectiveConfigSnapshot:
+    identity = identity or _modern_identity()
+    request = {**identity.model_dump(), "execution_capability": execution_capability}
+    config = {
+        "schema_version": "effective-trading-config.v2",
+        "units": {
+            "percent": "percentage_points",
+            "duration": "iso8601",
+            "price": "quote_price",
+            "notional": "quote_notional",
+        },
+        "safety": {
+            "mainnet_write_enabled": False,
+            "demo_testnet_write_enabled": False,
+            "require_stop_loss": True,
+            "kill_switch_enabled": True,
+        },
+        "mode": {
+            "mode_id": identity.mode_id,
+            "mode_version": identity.mode_version,
+            "marker": marker,
+        },
+        "setup": {
+            "setup_id": identity.setup_id,
+            "setup_version": identity.setup_version,
+            "side": identity.side,
+        },
+        "exchange": {"id": identity.exchange},
+        "environment": {"id": identity.environment},
+    }
+    layers = [
+        {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
+        for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
+    ]
+    payload = {
+        "request": request,
+        "config": config,
+        "config_hash": calculate_config_hash(config, condition_catalog_hash),
+        "condition_catalog_hash": condition_catalog_hash,
+        "ordered_layers": layers,
+        "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": deepcopy(layers[1])},
+        "executable": executable,
+        "blockers": list(blockers),
+    }
+    payload["snapshot_hash"] = calculate_snapshot_hash(payload)
+    return CanonicalEffectiveConfigSnapshot(**payload)
+
+
+def _modern_run_payload(**overrides: object) -> dict[str, object]:
+    identity = _modern_identity()
+    payload: dict[str, object] = {
+        "dataset": _dataset(),
+        "identity": identity,
+        "config": _canonical_config(identity),
+        "symbols": ("BTCUSDT",),
+        "timeframes": ("1m", "5m"),
+        "period_start": _dt("2026-01-02T00:00:00"),
+        "period_end": _dt("2026-01-03T00:00:00"),
+        "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+        "engine_version": "backtest-contracts-v1",
+        "random_seed": 191,
+        "cost_model_version": "net-cost-v1",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_modern_run_request_accepts_exact_executable_identity_snapshot() -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+
+    assert request.identity.model_dump() == request.config.request.model_dump(
+        exclude={"execution_capability"}
+    )
+    assert request.config.request.execution_capability == "backtest"
+
+
+def test_legacy_profile_contracts_and_payloads_are_rejected() -> None:
+    assert not hasattr(backtesting_contracts, "Profile")
+    assert not hasattr(backtesting_contracts, "EffectiveConfigSnapshot")
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        BacktestRunRequest(**_modern_run_payload(profile="scalper"))
+
+
+def test_run_request_requires_exact_identity_snapshot_equality() -> None:
+    with pytest.raises(ValidationError, match="backtest_identity_snapshot_mismatch"):
+        BacktestRunRequest(
+            **_modern_run_payload(
+                identity=_modern_identity(
+                    setup_id="scalping.trend_momentum.short", side="short"
+                )
+            )
+        )
+
+
+def test_run_request_requires_executable_unblocked_backtest_snapshot() -> None:
+    blocked = _canonical_config(executable=False, blockers=("mode_blocked",))
+    with pytest.raises(ValidationError, match="backtest_config_not_executable"):
+        BacktestRunRequest(**_modern_run_payload(config=blocked))
+
+    paper = _canonical_config(execution_capability="paper")
+    with pytest.raises(ValidationError, match="backtest_execution_capability_required"):
+        BacktestRunRequest(**_modern_run_payload(config=paper))
+
+
+def test_run_market_data_venue_is_independent_from_simulated_exchange() -> None:
+    manifest = _manifest()
+    manifest["source"]["market_data_venue"] = "okx"  # type: ignore[index]
+    manifest["source"]["source_network"] = "okx-demo"  # type: ignore[index]
+    for stream in manifest["coverage"]["streams"]:  # type: ignore[index]
+        stream["market_data_venue"] = "okx"
+    dataset = DatasetDescriptor.from_manifest(_bind_manifest(manifest))
+
+    request = BacktestRunRequest(**_modern_run_payload(dataset=dataset))
+
+    assert request.dataset.market_data_venue == "okx"
+    assert request.identity.exchange == "fake"
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "value"),
+    (
+        ("identity", "mode_id", "day_trading"),
+        ("identity", "mode_version", "1.0.0"),
+        ("identity", "setup_id", "scalping.trend_momentum.short"),
+        ("identity", "setup_version", "1.0.0"),
+        ("identity", "exchange", "okx"),
+        ("identity", "environment", "local"),
+        ("identity", "side", "short"),
+        ("config", "config_hash", "sha256:" + "c" * 64),
+        ("config", "condition_catalog_hash", "sha256:" + "c" * 64),
+        ("config", "snapshot_hash", "sha256:" + "c" * 64),
+    ),
+)
+def test_fingerprint_binds_every_identity_and_hash_field(
+    target: str, field: str, value: str
+) -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+    if target == "identity":
+        altered = request.model_copy(
+            update={"identity": request.identity.model_copy(update={field: value})}
+        )
+    else:
+        altered = request.model_copy(
+            update={"config": request.config.model_copy(update={field: value})}
+        )
+
+    assert altered.reproducibility_fingerprint() != request.reproducibility_fingerprint()
+
+
+def _modern_ledger_payload(**overrides: object) -> dict[str, object]:
+    identity = _modern_identity()
+    config = _canonical_config(identity)
+    payload: dict[str, object] = {
         "backtest_run_id": "bt_191",
         "dataset_id": "ds_btc_2026_01",
-        "config_hash": "sha256:" + "b" * 64,
+        **identity.model_dump(),
+        "config_hash": config.config_hash,
+        "condition_catalog_hash": config.condition_catalog_hash,
+        "snapshot_hash": config.snapshot_hash,
         "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-        "profile": Profile.SCALPER,
-        "exchange": "fake",
         "market_type": MarketType.PERPETUAL,
         "symbol": "BTCUSDT",
         "direction": Direction.LONG,
@@ -163,117 +330,307 @@ def _ledger_entry(**overrides: object) -> BacktestTradeLedgerEntry:
         "quality_flags": (),
     }
     payload.update(overrides)
-    return BacktestTradeLedgerEntry(**payload)
+    return payload
+
+
+def test_ledger_carries_exact_identity_and_rejects_direction_divergence() -> None:
+    entry = BacktestTradeLedgerEntry(**_modern_ledger_payload())
+    restored = BacktestTradeLedgerEntry.model_validate(entry.model_dump(round_trip=True))
+    assert entry.setup_id == "scalping.pullback.long"
+    assert entry.condition_catalog_hash.startswith("sha256:")
+    assert entry.snapshot_hash.startswith("sha256:")
+    assert restored == entry
+
+    with pytest.raises(ValidationError, match="backtest_ledger_direction_side_mismatch"):
+        BacktestTradeLedgerEntry(
+            **_modern_ledger_payload(direction=Direction.SHORT, initial_stop=102.0)
+        )
+
+
+@pytest.mark.parametrize(
+    ("exchange", "environment"),
+    (
+        ("fake", "mainnet"),
+        ("okx", "demo"),
+        ("okx", "mainnet"),
+        ("hyperliquid", "testnet"),
+        ("hyperliquid", "mainnet"),
+    ),
+)
+def test_standalone_backtest_ledger_rejects_non_fake_execution_targets(
+    exchange: str, environment: str
+) -> None:
+    with pytest.raises(
+        ValidationError, match="backtest_ledger_execution_target_invalid"
+    ):
+        BacktestTradeLedgerEntry(
+            **_modern_ledger_payload(exchange=exchange, environment=environment)
+        )
+
+
+@pytest.mark.parametrize("environment", ("local", "test"))
+def test_standalone_backtest_ledger_accepts_fake_environments(
+    environment: str,
+) -> None:
+    entry = BacktestTradeLedgerEntry(
+        **_modern_ledger_payload(exchange="fake", environment=environment)
+    )
+
+    assert (entry.exchange, entry.environment) == ("fake", environment)
+
+
+def test_ledger_rejects_legacy_profile_and_unknown_identity_fields() -> None:
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(profile="scalper"))
+
+
+def _ledger_entry(**overrides: object) -> BacktestTradeLedgerEntry:
+    return BacktestTradeLedgerEntry(**_modern_ledger_payload(**overrides))
 
 
 def test_run_request_fingerprint_is_stable_for_same_inputs() -> None:
-    request = BacktestRunRequest(
-        dataset=_dataset(),
-        config=_config(),
-        profile=Profile.SCALPER,
-        symbols=("BTCUSDT",),
-        timeframes=("1m", "5m"),
-        period_start=_dt("2026-01-02T00:00:00"),
-        period_end=_dt("2026-01-03T00:00:00"),
-        git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-        engine_version="backtest-contracts-v1",
-        random_seed=191,
-        cost_model_version="net-cost-v1",
-    )
+    request = BacktestRunRequest(**_modern_run_payload())
 
-    same_request = BacktestRunRequest.model_validate(request.model_dump())
+    same_request = BacktestRunRequest.model_validate(request.model_dump(round_trip=True))
 
     assert request.reproducibility_fingerprint() == same_request.reproducibility_fingerprint()
     assert request.intra_bar_policy is IntraBarPolicy.CONSERVATIVE_STOP_FIRST
     assert request.result_is_live_proof is False
 
 
-def test_run_request_rejects_profile_mismatch_and_dataset_escape() -> None:
-    with pytest.raises(ValidationError, match="config profile must match run profile"):
-        BacktestRunRequest(
-            dataset=_dataset(),
-            config=_config(Profile.REGULAR),
-            profile=Profile.SCALPER,
-            symbols=("BTCUSDT",),
-            timeframes=("1m",),
-            period_start=_dt("2026-01-02T00:00:00"),
-            period_end=_dt("2026-01-03T00:00:00"),
-            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-            engine_version="backtest-contracts-v1",
-            random_seed=191,
-            cost_model_version="net-cost-v1",
-        )
+def test_run_and_ledger_default_json_wire_round_trip() -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+    ledger = BacktestTradeLedgerEntry(**_modern_ledger_payload())
 
-    with pytest.raises(ValidationError, match="symbols must be contained in dataset"):
-        BacktestRunRequest(
-            dataset=_dataset(),
-            config=_config(),
-            profile=Profile.SCALPER,
-            symbols=("SOLUSDT",),
-            timeframes=("1m",),
-            period_start=_dt("2026-01-02T00:00:00"),
-            period_end=_dt("2026-01-03T00:00:00"),
-            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-            engine_version="backtest-contracts-v1",
-            random_seed=191,
-            cost_model_version="net-cost-v1",
+    restored_request = BacktestRunRequest.model_validate_json(request.model_dump_json())
+    restored_ledger = BacktestTradeLedgerEntry.model_validate_json(
+        ledger.model_dump_json()
+    )
+
+    assert restored_request == request
+    assert restored_ledger == ledger
+    assert restored_request.reproducibility_fingerprint() == request.reproducibility_fingerprint()
+    assert restored_ledger.total_known_cost_usdt == ledger.total_known_cost_usdt
+    assert json.loads(request.model_dump_json())["result_is_live_proof"] is False
+    ledger_wire = json.loads(ledger.model_dump_json())
+    assert ledger_wire["result_is_live_proof"] is False
+    assert ledger_wire["total_known_cost_usdt"] == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"result_is_live_proof": True},
+        {"result_is_live_proof": 0},
+    ),
+)
+def test_run_rejects_forged_computed_wire_values(update: dict[str, object]) -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+    wire = request.model_dump(mode="json")
+    wire.update(update)
+
+    with pytest.raises(ValidationError, match="backtest_run_computed_field_invalid"):
+        BacktestRunRequest.model_validate(wire)
+
+
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"result_is_live_proof": True},
+        {"total_known_cost_usdt": True},
+        {"total_known_cost_usdt": 99.0},
+    ),
+)
+def test_ledger_rejects_forged_computed_wire_values(update: dict[str, object]) -> None:
+    ledger = BacktestTradeLedgerEntry(**_modern_ledger_payload())
+    wire = ledger.model_dump(mode="json")
+    wire.update(update)
+
+    with pytest.raises(ValidationError, match="backtest_ledger_computed_field_invalid"):
+        BacktestTradeLedgerEntry.model_validate(wire)
+
+
+@pytest.mark.parametrize("value", (b"conservative_stop_first", 1, True))
+def test_run_rejects_coerced_intrabar_policy(value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_run_enum_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(intra_bar_policy=value))
+
+
+@pytest.mark.parametrize("field", ("period_start", "period_end"))
+@pytest.mark.parametrize("value", (1, 1.0, True, b"2026-01-02T00:00:00Z"))
+def test_run_rejects_coerced_datetime_inputs(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
+@pytest.mark.parametrize("field", ("period_start", "period_end"))
+@pytest.mark.parametrize(
+    "value",
+    (
+        "1767312000",
+        "1767312000.0",
+        "2026-01-02",
+        " 2026-01-02T00:00:00Z",
+        "2026-01-02 00:00:00Z",
+        "2026-01-02T00:00:00Z ",
+    ),
+)
+def test_run_rejects_non_rfc3339_datetime_strings(
+    field: str, value: str
+) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_lexical_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("market_type", b"perpetual"),
+        ("direction", b"long"),
+        ("entry_order_type", b"maker"),
+    ),
+)
+def test_ledger_rejects_coerced_enum_inputs(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_ledger_enum_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(**{field: value}))
+
+
+@pytest.mark.parametrize("value", (1, 1.0, True, b"2026-01-02T00:00:00Z"))
+def test_ledger_rejects_coerced_datetime_inputs(value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(signal_at=value))
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "1767312000",
+        "1767312000.0",
+        "2026-01-02",
+        " 2026-01-02T00:00:00Z",
+        "2026-01-02 00:00:00Z",
+        "2026-01-02T00:00:00Z ",
+    ),
+)
+def test_ledger_rejects_non_rfc3339_datetime_strings(value: str) -> None:
+    with pytest.raises(ValidationError, match="backtest_datetime_lexical_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(signal_at=value))
+
+
+def test_run_and_ledger_accept_exact_utc_iso_datetime_strings() -> None:
+    request = BacktestRunRequest(
+        **_modern_run_payload(
+            period_start="2026-01-02T00:00:00Z",
+            period_end="2026-01-03T00:00:00+00:00",
         )
+    )
+    ledger = BacktestTradeLedgerEntry(
+        **_modern_ledger_payload(signal_at="2026-01-02T00:00:00.123456Z")
+    )
+
+    assert request.period_start == _dt("2026-01-02T00:00:00")
+    assert ledger.signal_at.microsecond == 123456
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("git_commit_sha", b"12c9a9fbe369b49afd3d98e495991a21381e8b7b"),
+        ("engine_version", b"backtest-contracts-v1"),
+        ("cost_model_version", b"net-cost-v1"),
+        ("random_seed", True),
+        ("random_seed", "191"),
+    ),
+)
+def test_run_rejects_scalar_coercion(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_run_scalar_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "backtest_run_id",
+        "dataset_id",
+        "git_commit_sha",
+        "mode_id",
+        "mode_version",
+        "setup_id",
+        "setup_version",
+        "exchange",
+        "environment",
+        "side",
+        "symbol",
+    ),
+)
+def test_ledger_rejects_bytes_for_exact_string_fields(field: str) -> None:
+    payload = _modern_ledger_payload()
+    payload[field] = str(payload[field]).encode("utf-8")
+
+    with pytest.raises(ValidationError, match="backtest_ledger_string_type_invalid"):
+        BacktestTradeLedgerEntry(**payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "entry_price",
+        "entry_quantity",
+        "initial_stop",
+        "gross_pnl_usdt",
+        "net_pnl_usdt",
+        "pnl_r",
+        "fee_usdt",
+        "spread_cost_usdt",
+        "slippage_cost_usdt",
+        "funding_usdt",
+        "borrow_cost_usdt",
+        "liquidation_fee_usdt",
+    ),
+)
+@pytest.mark.parametrize("value", (True, "1.0"))
+def test_ledger_rejects_bool_and_string_numeric_coercion(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError, match="backtest_ledger_numeric_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(**{field: value}))
+
+
+def test_ledger_accepts_json_numbers_and_json_enum_values() -> None:
+    payload = _modern_ledger_payload(
+        entry_price=100,
+        entry_quantity=1,
+        initial_stop=98,
+        market_type="perpetual",
+        direction="long",
+        entry_order_type="maker",
+        signal_at="2026-01-02T00:00:00Z",
+    )
+
+    entry = BacktestTradeLedgerEntry.model_validate_json(json.dumps(payload, default=str))
+
+    assert entry.entry_price == 100.0
+    assert entry.direction is Direction.LONG
+
+
+def test_run_request_rejects_dataset_and_period_escape() -> None:
+    with pytest.raises(ValidationError, match="symbols must be contained in dataset"):
+        BacktestRunRequest(**_modern_run_payload(symbols=("SOLUSDT",), timeframes=("1m",)))
 
     with pytest.raises(ValidationError, match="period must stay inside dataset bounds"):
         BacktestRunRequest(
-            dataset=_dataset(),
-            config=_config(),
-            profile=Profile.SCALPER,
-            symbols=("BTCUSDT",),
-            timeframes=("1m",),
-            period_start=_dt("2025-12-31T00:00:00"),
-            period_end=_dt("2026-01-03T00:00:00"),
-            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-            engine_version="backtest-contracts-v1",
-            random_seed=191,
-            cost_model_version="net-cost-v1",
+            **_modern_run_payload(
+                timeframes=("1m",),
+                period_start=_dt("2025-12-31T00:00:00"),
+            )
         )
-
-
-def test_effective_config_snapshot_deep_freezes_payload() -> None:
-    payload = {
-        "risk": {"risk_pct": 0.01},
-        "entry": {"modes": ["maker"]},
-    }
-
-    snapshot = EffectiveConfigSnapshot(
-        profile=Profile.SCALPER,
-        config_hash="sha256:" + "b" * 64,
-        config_version="effective-config-v1",
-        source_layers=("base", "mode/scalper"),
-        effective_config=payload,
-    )
-    payload["risk"]["risk_pct"] = 0.99
-    payload["entry"]["modes"].append("taker")
-
-    assert snapshot.effective_config["risk"]["risk_pct"] == 0.01
-    assert snapshot.effective_config["entry"]["modes"] == ("maker",)
-    with pytest.raises(TypeError):
-        snapshot.effective_config["risk"]["risk_pct"] = 0.02
 
 
 def test_run_request_rejects_non_utc_datetimes_cleanly() -> None:
     naive_start = datetime.fromisoformat("2026-01-02T00:00:00")
 
     with pytest.raises(ValidationError, match="datetime must be UTC-aware"):
-        BacktestRunRequest(
-            dataset=_dataset(),
-            config=_config(),
-            profile=Profile.SCALPER,
-            symbols=("BTCUSDT",),
-            timeframes=("1m",),
-            period_start=naive_start,
-            period_end=_dt("2026-01-03T00:00:00"),
-            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-            engine_version="backtest-contracts-v1",
-            random_seed=191,
-            cost_model_version="net-cost-v1",
-        )
+        BacktestRunRequest(**_modern_run_payload(period_start=naive_start))
 
 
 def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
@@ -294,27 +651,7 @@ def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
         )
 
     with pytest.raises(ValidationError, match="must be a sequence of strings"):
-        EffectiveConfigSnapshot(
-            **{
-                **_config().model_dump(),
-                "source_layers": "base",
-            }
-        )
-
-    with pytest.raises(ValidationError, match="must be a sequence of strings"):
-        BacktestRunRequest(
-            dataset=_dataset(),
-            config=_config(),
-            profile=Profile.SCALPER,
-            symbols="BTCUSDT",
-            timeframes=("1m",),
-            period_start=_dt("2026-01-02T00:00:00"),
-            period_end=_dt("2026-01-03T00:00:00"),
-            git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-            engine_version="backtest-contracts-v1",
-            random_seed=191,
-            cost_model_version="net-cost-v1",
-        )
+        BacktestRunRequest(**_modern_run_payload(symbols="BTCUSDT", timeframes=("1m",)))
 
     with pytest.raises(ValidationError, match="must be a sequence of strings"):
         DatasetDescriptor(
@@ -333,29 +670,6 @@ def test_sequence_fields_reject_scalar_strings_and_non_string_items() -> None:
         )
 
 
-def test_effective_config_snapshot_rejects_non_json_collections() -> None:
-    with pytest.raises(ValidationError, match="effective_config must contain JSON-compatible values"):
-        EffectiveConfigSnapshot(
-            profile=Profile.SCALPER,
-            config_hash="sha256:" + "b" * 64,
-            config_version="effective-config-v1",
-            source_layers=("base", "mode/scalper"),
-            effective_config={"entry": {"modes": {"maker", "taker"}}},
-        )
-
-
-@pytest.mark.parametrize("value", (nan, inf))
-def test_effective_config_snapshot_rejects_non_finite_floats(value: float) -> None:
-    with pytest.raises(ValidationError, match="effective_config must contain finite floats"):
-        EffectiveConfigSnapshot(
-            profile=Profile.SCALPER,
-            config_hash="sha256:" + "b" * 64,
-            config_version="effective-config-v1",
-            source_layers=("base", "mode/scalper"),
-            effective_config={"risk": {"risk_pct": value}},
-        )
-
-
 def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
     entry = _ledger_entry()
 
@@ -364,7 +678,7 @@ def test_trade_ledger_entry_requires_stop_and_net_cost_components() -> None:
 
     with pytest.raises(ValidationError, match="initial_stop is required"):
         BacktestTradeLedgerEntry(
-            **{**entry.model_dump(), "initial_stop": None}
+            **{**entry.model_dump(round_trip=True), "initial_stop": None}
         )
 
 
@@ -376,58 +690,6 @@ def test_trade_ledger_entry_rejects_non_finite_values() -> None:
 def test_trade_ledger_entry_rejects_inconsistent_net_pnl() -> None:
     with pytest.raises(ValidationError, match="net_pnl_usdt must equal gross_pnl_usdt minus known costs"):
         _ledger_entry(net_pnl_usdt=5.0)
-
-
-@pytest.mark.parametrize(
-    ("value", "message"),
-    (
-        (None, "at least 1 item"),
-        (191, "must be a sequence of strings"),
-    ),
-)
-def test_sequence_normalization_rejects_missing_or_non_iterable_layers(
-    value: object,
-    message: str,
-) -> None:
-    with pytest.raises(ValidationError, match=message):
-        EffectiveConfigSnapshot(
-            profile=Profile.SCALPER,
-            config_hash="sha256:" + "b" * 64,
-            config_version="effective-config-v1",
-            source_layers=value,  # type: ignore[arg-type]
-            effective_config={"risk": {"risk_pct": 0.01}},
-        )
-
-
-def test_config_freeze_accepts_frozen_values_and_rejects_unknown_objects() -> None:
-    frozen = FrozenDict({"entry": {"modes": ("maker",)}})
-    snapshot = EffectiveConfigSnapshot(
-        profile=Profile.SCALPER,
-        config_hash="sha256:" + "b" * 64,
-        config_version="effective-config-v1",
-        source_layers=("base",),
-        effective_config=frozen,
-    )
-
-    assert snapshot.model_dump(mode="json")["effective_config"] == {
-        "entry": {"modes": ["maker"]}
-    }
-    with pytest.raises(ValidationError, match="JSON-compatible values"):
-        EffectiveConfigSnapshot(
-            profile=Profile.SCALPER,
-            config_hash="sha256:" + "b" * 64,
-            config_version="effective-config-v1",
-            source_layers=("base",),
-            effective_config={"bad": object()},
-        )
-    with pytest.raises(ValidationError, match="must be a mapping"):
-        EffectiveConfigSnapshot(
-            profile=Profile.SCALPER,
-            config_hash="sha256:" + "b" * 64,
-            config_version="effective-config-v1",
-            source_layers=("base",),
-            effective_config=("not", "a", "mapping"),  # type: ignore[arg-type]
-        )
 
 
 @pytest.mark.parametrize(
@@ -490,32 +752,20 @@ def test_descriptor_manifest_shape_rejects_python_coercions(
 
 
 def test_run_scope_rejects_timeframe_and_period_order_escape() -> None:
-    valid = BacktestRunRequest(
-        dataset=_dataset(),
-        config=_config(),
-        profile=Profile.SCALPER,
-        symbols=("BTCUSDT",),
-        timeframes=("1m",),
-        period_start=_dt("2026-01-02T00:00:00"),
-        period_end=_dt("2026-01-03T00:00:00"),
-        git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-        engine_version="backtest-contracts-v1",
-        random_seed=191,
-        cost_model_version="net-cost-v1",
-    )
+    valid = BacktestRunRequest(**_modern_run_payload(timeframes=("1m",)))
 
     with pytest.raises(ValidationError, match="timeframes must be contained"):
-        BacktestRunRequest(**{**valid.model_dump(), "timeframes": ("4h",)})
+        BacktestRunRequest(**{**valid.model_dump(round_trip=True), "timeframes": ("4h",)})
     with pytest.raises(ValidationError, match="period_end must be after"):
         BacktestRunRequest(
             **{
-                **valid.model_dump(),
+                **valid.model_dump(round_trip=True),
                 "period_end": valid.period_start,
             }
         )
 
 
-def test_contracts_reject_non_utc_offset_empty_config_and_invalid_stops() -> None:
+def test_contracts_reject_non_utc_offset_and_invalid_stops() -> None:
     with pytest.raises(ValidationError, match="datetime must be UTC-aware"):
         DatasetDescriptor(
             **{
@@ -524,33 +774,19 @@ def test_contracts_reject_non_utc_offset_empty_config_and_invalid_stops() -> Non
             }
         )
 
-    empty_layers = _config().model_copy(update={"source_layers": ()})
-    with pytest.raises(ValueError, match="source_layers must not be empty"):
-        empty_layers._validate_config()
-    empty_config = _config().model_copy(update={"effective_config": FrozenDict({})})
-    with pytest.raises(ValueError, match="effective_config must not be empty"):
-        empty_config._validate_config()
-
     with pytest.raises(ValidationError, match="long initial_stop must be below"):
         _ledger_entry(initial_stop=100.0)
     with pytest.raises(ValidationError, match="short initial_stop must be above"):
-        _ledger_entry(direction=Direction.SHORT, initial_stop=99.0)
+        _ledger_entry(
+            setup_id="scalping.trend_momentum.short",
+            side="short",
+            direction=Direction.SHORT,
+            initial_stop=99.0,
+        )
 
 
 def test_run_request_requires_each_exact_symbol_timeframe_stream() -> None:
-    payload = {
-        "dataset": _dataset(),
-        "config": _config(),
-        "profile": Profile.SCALPER,
-        "symbols": ("ETHUSDT",),
-        "timeframes": ("5m",),
-        "period_start": _dt("2026-01-02T00:00:00"),
-        "period_end": _dt("2026-01-03T00:00:00"),
-        "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-        "engine_version": "backtest-contracts-v1",
-        "random_seed": 191,
-        "cost_model_version": "net-cost-v1",
-    }
+    payload = _modern_run_payload(symbols=("ETHUSDT",), timeframes=("5m",))
 
     assert BacktestRunRequest(**payload).symbols == ("ETHUSDT",)
     with pytest.raises(ValidationError, match="stream is not in dataset"):
@@ -573,19 +809,13 @@ def test_run_request_period_must_fit_every_selected_stream() -> None:
     eth_stream["record_count"] = 2880
     manifest["coverage"]["record_count"] = 57600  # type: ignore[index]
     dataset = DatasetDescriptor.from_manifest(_bind_manifest(manifest))
-    payload = {
-        "dataset": dataset,
-        "config": _config(),
-        "profile": Profile.SCALPER,
-        "symbols": ("ETHUSDT",),
-        "timeframes": ("5m",),
-        "period_start": _dt("2026-01-10T00:00:00"),
-        "period_end": _dt("2026-01-20T00:00:00"),
-        "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
-        "engine_version": "backtest-contracts-v1",
-        "random_seed": 191,
-        "cost_model_version": "net-cost-v1",
-    }
+    payload = _modern_run_payload(
+        dataset=dataset,
+        symbols=("ETHUSDT",),
+        timeframes=("5m",),
+        period_start=_dt("2026-01-10T00:00:00"),
+        period_end=_dt("2026-01-20T00:00:00"),
+    )
 
     assert BacktestRunRequest(**payload).period_end == _dt("2026-01-20T00:00:00")
     with pytest.raises(ValidationError, match="each requested stream bounds"):

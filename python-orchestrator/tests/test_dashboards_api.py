@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pytest
+
+from app.modern_trading_contracts import calculate_config_hash, calculate_snapshot_hash
 
 
 def _create_dashboard(client, name="dash_a", enabled=True, description="demo"):
@@ -38,16 +37,23 @@ def _canonical_identity_payload():
         "exchange": {"id": "fake"},
         "environment": {"id": "test"},
     }
-    canonical = json.dumps(
-        {"config": config, "condition_catalog_hash": catalog_hash},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    config_hash = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    config_hash = calculate_config_hash(config, catalog_hash)
     layers = [
         {"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True}
         for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
     ]
+    snapshot = {
+        "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "config": config,
+        "config_hash": config_hash,
+        "condition_catalog_hash": catalog_hash,
+        "ordered_layers": layers,
+        "ordered_files": [layer["path"] for layer in layers],
+        "provenance": {"mode.mode_id": layers[1]},
+        "executable": True,
+        "blockers": [],
+    }
+    snapshot["snapshot_hash"] = calculate_snapshot_hash(snapshot)
     return {
         "mode_id": "scalping",
         "mode_version": "1.0.0",
@@ -57,17 +63,7 @@ def _canonical_identity_payload():
         "condition_catalog_hash": catalog_hash,
         "side": "LONG",
         "effective_config_reference": "effective-config:cfg-1",
-        "effective_config_snapshot": {
-            "request": {"mode_id": "scalping", "mode_version": "1.0.0", "setup_id": "scalping.pullback.long", "setup_version": "1.0.0", "exchange": "fake", "environment": "test", "side": "long"},
-            "config": config,
-            "config_hash": config_hash,
-            "condition_catalog_hash": catalog_hash,
-            "ordered_layers": layers,
-            "ordered_files": [layer["path"] for layer in layers],
-            "provenance": {"mode.mode_id": layers[1]},
-            "executable": True,
-            "blockers": [],
-        },
+        "effective_config_snapshot": snapshot,
     }
 
 

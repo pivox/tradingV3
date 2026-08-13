@@ -2,14 +2,15 @@
 
 ## Statut
 
-Contrats v1 et Dataset Builder deterministe livres pour #191.
+Contrats v1, Dataset Builder deterministe et frontiere d'identite moderne livres
+pour #191.
 
 Ce lot ne livre pas encore un moteur Backtrader executable. Il fixe la frontiere
 de contrat entre les futurs composants :
 
 ```text
 Dataset Builder
-  -> Effective Config snapshot
+  -> Canonical Effective Config snapshot #133/#303
   -> TradingCore adapter
   -> Backtrader adapter
   -> Execution simulator
@@ -183,30 +184,49 @@ de son timeframe et sa couverture sans gap verifie exactement
 doit tenir dans les bornes propres de chacun ; la presence separee d'un symbole
 et d'un timeframe ne forge donc jamais une combinaison absente.
 
-### Config effective
+### Identite moderne et config effective
 
-`EffectiveConfigSnapshot` capture :
+`BacktestRunRequest` exige une `ModernTradingIdentity` exacte :
 
-- profil (`regular`, `scalper`, `scalper_micro`) ;
-- hash `sha256` ;
-- version de contrat ;
-- couches chargees ;
-- configuration effective serialisee.
+- `mode_id` et `mode_version` ;
+- `setup_id` et `setup_version` ;
+- `exchange` et `environment` ;
+- `side`.
 
-Un run backtest ne peut utiliser qu'une config dont le profil correspond au
-profil du run.
+Seules les cellules publiees par les contrats #300/#301 sont acceptees. Les
+anciens profils `regular`, `scalper` et `scalper_micro`, les variantes de casse,
+les versions implicites et tout champ JSON `profile` sont rejetes sans alias ni
+fallback.
 
-La configuration effective est gelee recursivement a la creation du snapshot :
-un dictionnaire source mute apres coup ne peut pas modifier les parametres du
-run ni invalider silencieusement `config_hash`.
+La config est un `CanonicalEffectiveConfigSnapshot` #133/#303. Elle lie la
+requete moderne, la config effective, les six couches ordonnees
+`base -> mode -> setup -> exchange -> mode_exchange -> environment`, les
+fichiers exacts, la provenance declaree, l'executabilite et les
+blockers. Trois empreintes `sha256` distinctes protegent la config et le
+catalogue de conditions (`config_hash`), le catalogue lui-meme
+(`condition_catalog_hash`) et l'enveloppe complete (`snapshot_hash`). La
+canonicalisation Python est verrouillee hash pour hash par une fixture calculee
+avec les methodes publiques PHP de `CanonicalEffectiveConfigSnapshot`, y compris
+Unicode, slash, float integral et notation scientifique.
+
+La configuration effective et sa provenance sont gelees recursivement : une
+structure source mutee apres validation ne peut pas changer silencieusement un
+run. Le run echoue ferme si son identite differe de celle du snapshot, si
+`executable` n'est pas vrai, si `blockers` n'est pas vide ou si
+`execution_capability` n'est pas exactement `backtest`. Cette capacite exige
+`exchange=fake`; `private_mainnet` est interdite.
+
+La venue de donnees du dataset est independante de l'exchange simule. Un run
+avec `exchange=fake` peut donc rejouer un dataset Paper verifie provenant
+d'OKX ou d'Hyperliquid sans pretendre avoir execute un ordre sur cette venue.
 
 ### Reproductibilite
 
 `BacktestRunRequest` porte :
 
 - dataset ;
-- config ;
-- profil execute ;
+- identite moderne exacte ;
+- snapshot canonique de config ;
 - symboles et timeframes inclus dans le dataset ;
 - periode ;
 - commit Git ;
@@ -215,8 +235,12 @@ run ni invalider silencieusement `config_hash`.
 - version du modele de cout ;
 - politique intra-bougie.
 
-Le fingerprint de reproductibilite est un hash canonique des inputs. A inputs
-identiques, le fingerprint doit rester identique.
+Le fingerprint de reproductibilite est un hash canonique de tous ces inputs. Il
+lie notamment les sept champs d'identite, les trois hashes du snapshot, le
+dataset et ses checksums, la periode, le commit Git, la seed, le modele de cout
+et la politique intra-bougie. A inputs identiques, le fingerprint reste
+identique ; toute falsification semantique du snapshot est rejetee avant son
+calcul.
 
 Tous les timestamps des contrats sont UTC-aware. Une date naive ou dans un autre
 offset est rejetee par validation Pydantic avant toute comparaison de bornes.
@@ -248,7 +272,9 @@ Le mode optimiste `tp_first` n'existe pas dans le contrat v1.
 - des couts nets explicites (`fee_usdt`, `spread_cost_usdt`, `slippage_cost_usdt`,
   `funding_usdt`, borrow/liquidation si applicables) ;
 - des valeurs numeriques finies uniquement, avec `net_pnl_usdt = gross_pnl_usdt - total_known_cost_usdt` ;
-- le commit Git, le dataset et le hash de config.
+- le commit Git et le dataset ;
+- les sept champs d'identite moderne et la direction coherente avec `side` ;
+- `config_hash`, `condition_catalog_hash` et `snapshot_hash`.
 
 Un trade simule sans SL est invalide. Les signaux non executes seront modelises
 dans un contrat separe lors du lot execution simulator.
@@ -275,16 +301,25 @@ reelle lorsque les donnees seront disponibles.
 Ces elements restent dans #191 et doivent etre livres par PRs suivantes avec
 tests golden dedies.
 
-Le Dataset Builder est independant de toute strategie et n'expose aucun champ
-`profile`, mode, setup ou alias. Il ne rend donc aucun mode moderne executable.
-Avant cela, un lot ulterieur de #191 doit remplacer la frontiere runtime legacy `Profile`
-par les identites exactes `mode_id`, `mode_version`, `setup_id`,
-`setup_version`, `side` et le snapshot immuable #133/#303.
+Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
+`profile`, mode, setup ou alias. La frontiere de run utilise desormais les
+identites exactes et le snapshot immuable #133/#303, mais ce contrat seul ne
+rend aucun mode moderne executable : l'adapter TradingCore, l'execution
+Backtrader et le simulateur restent differes.
+
+Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
+backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
+d'ecriture prive vers une venue.
 
 ## Validation locale
 
 ```bash
 cd python-orchestrator
+python3 -m pytest -q \
+  tests/test_backtesting_modern_identity.py \
+  tests/test_backtesting_contracts.py \
+  tests/test_schemas.py \
+  tests/test_symfony_client.py
 PYTHONHASHSEED=1 python3 -m pytest \
   tests/test_backtesting_contracts.py \
   tests/test_backtesting_dataset.py \
@@ -294,10 +329,7 @@ PYTHONHASHSEED=987654 python3 -m pytest \
   tests/test_backtesting_dataset.py \
   tests/test_backtesting_dataset_store.py -q
 python3 -m pytest -q
-python3 -m py_compile \
-  app/backtesting/contracts.py \
-  app/backtesting/dataset.py \
-  app/backtesting/dataset_store.py
+python3 -m compileall -q app tests
 cd ..
 git diff --check
 ```
