@@ -12,6 +12,7 @@ use App\Indicator\Core\Trend\Ema;
 use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorCandle;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorWindow;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
@@ -23,7 +24,7 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
 {
     private const GOLDEN_DELTA = 1.0e-12;
 
-    public function testItCalculatesFiniteDeterministicScalarIndicators(): void
+    public function testItCalculatesFiniteDeterministicCanonicalProviderContext(): void
     {
         $window = $this->window();
         $calculator = new CanonicalPhpIndicatorCalculator(
@@ -55,21 +56,25 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
             'bb_upper',
             'bb_middle',
             'bb_lower',
+            'ema',
+            'ema_prev',
+            'ema_200_slope',
+            'ema_200_series',
+            'ema_200_series_timestamps',
+            'macd',
+            'macd_hist_series',
+            'macd_hist_series_timestamps',
+            'macd_line_signal_series',
+            'macd_line_signal_series_timestamps',
+            'macd_hist_last3',
+            'series_order',
+            'series_timestamps',
+            'pullback_age_bars',
+            'volume_ratio',
+            'ma_21_plus_k_atr',
         ], array_keys($first));
         self::assertSame([14, 15], array_keys($first['adx']));
-
-        foreach ($first as $name => $value) {
-            if ($name === 'adx') {
-                foreach ($value as $adx) {
-                    self::assertIsFloat($adx);
-                    self::assertTrue(is_finite($adx));
-                }
-                continue;
-            }
-
-            self::assertIsFloat($value);
-            self::assertTrue(is_finite($value));
-        }
+        $this->assertFiniteNumericContext($first);
 
         self::assertSame(125.23, $first['close']);
         // Golden vector independently derived from the documented PHP/Wilder
@@ -89,11 +94,90 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         self::assertEqualsWithDelta(124.048500000000018, $first['bb_middle'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(122.866953978890393, $first['bb_lower'], self::GOLDEN_DELTA);
         self::assertSame($first, $second);
+        self::assertSame(CanonicalJson::encode($first), CanonicalJson::encode($second));
         self::assertGreaterThan($first['bb_lower'], $first['bb_middle']);
         self::assertGreaterThan($first['bb_middle'], $first['bb_upper']);
         self::assertGreaterThan(0.0, $first['atr']);
         self::assertGreaterThanOrEqual(0.0, $first['rsi']);
         self::assertLessThanOrEqual(100.0, $first['rsi']);
+
+        self::assertSame([9, 20, 21, 50, 200], array_keys($first['ema']));
+        self::assertSame([9, 20, 21, 50, 200], array_keys($first['ema_prev']));
+        self::assertEqualsWithDelta($first['ema_20'], $first['ema'][20], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta($first['ema_50'], $first['ema'][50], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta($first['ema_200'], $first['ema'][200], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(115.75786894968248, $first['ema_prev'][200], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(
+            $first['ema'][200] - $first['ema_prev'][200],
+            $first['ema_200_slope'],
+            self::GOLDEN_DELTA,
+        );
+        self::assertSame([$first['ema_prev'][200], $first['ema'][200]], $first['ema_200_series']);
+
+        $timestamps = array_map(
+            static fn (CanonicalIndicatorCandle $candle): int => $candle->openTimestamp()->getTimestamp(),
+            $window->candles(),
+        );
+        self::assertCount(250, $first['series_timestamps']);
+        self::assertSame($timestamps, $first['series_timestamps']);
+        self::assertSame(array_slice($timestamps, -2), $first['ema_200_series_timestamps']);
+        self::assertSame('oldest_to_newest', $first['series_order']);
+
+        self::assertSame(['macd', 'signal', 'hist'], array_keys($first['macd']));
+        self::assertEqualsWithDelta(0.71426160007723638, $first['macd']['macd'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(0.70007618703377728, $first['macd']['signal'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta($first['macd_hist'], $first['macd']['hist'], self::GOLDEN_DELTA);
+        self::assertCount(60, $first['macd_hist_series']);
+        self::assertSame(array_slice($timestamps, -60), $first['macd_hist_series_timestamps']);
+        self::assertSame($first['macd_hist_series'], $first['macd_line_signal_series']);
+        self::assertSame(
+            $first['macd_hist_series_timestamps'],
+            $first['macd_line_signal_series_timestamps'],
+        );
+        self::assertEqualsWithDelta(
+            $first['macd']['hist'],
+            $first['macd_hist_series'][array_key_last($first['macd_hist_series'])],
+            self::GOLDEN_DELTA,
+        );
+        $expectedMacdTail = [
+            -0.007722336305286959,
+            -0.0030020603344795838,
+            0.014185413043459105,
+        ];
+        foreach ($expectedMacdTail as $index => $expected) {
+            self::assertEqualsWithDelta($expected, $first['macd_hist_last3'][$index], self::GOLDEN_DELTA);
+        }
+        self::assertSame($first['macd_hist_last3'], array_slice($first['macd_hist_series'], -3));
+
+        self::assertNull($first['pullback_age_bars']);
+        self::assertEqualsWithDelta(1.1857292759706191, $first['volume_ratio'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(124.5057376377151, $first['ma_21_plus_k_atr'], self::GOLDEN_DELTA);
+    }
+
+    /** @param array<string|int, mixed> $context */
+    private function assertFiniteNumericContext(array $context): void
+    {
+        foreach ($context as $key => $value) {
+            $key = (string) $key;
+            if (is_array($value)) {
+                $this->assertFiniteNumericContext($value);
+                continue;
+            }
+            if ($value === null) {
+                self::assertContains($key, ['pullback_age_bars', 'volume_ratio']);
+                continue;
+            }
+            if (is_float($value)) {
+                self::assertTrue(is_finite($value), sprintf('%s must be finite', $key));
+                continue;
+            }
+            if (is_int($value)) {
+                continue;
+            }
+
+            self::assertSame('series_order', $key);
+            self::assertSame('oldest_to_newest', $value);
+        }
     }
 
     private function window(): CanonicalIndicatorWindow
