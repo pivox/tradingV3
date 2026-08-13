@@ -44,7 +44,7 @@ dataset identity and exact record bytes.
   symbol stream; delayed receipt remains explicit.
 - Bid, ask and visible quantities are strict positive canonical decimals;
   `bid_price < ask_price` is mandatory.
-- OKX quantities use `contracts` and require canonical non-negative order
+- OKX quantities use `contracts` and require canonical positive order
   counts. Hyperliquid quantities use `base_asset` and require null order
   counts.
 - Origins are limited to the already certified public source variants for the
