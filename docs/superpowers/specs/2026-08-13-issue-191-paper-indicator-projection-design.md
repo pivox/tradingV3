@@ -53,7 +53,7 @@ For `4h`, PHP groups four consecutive `1h` records aligned at UTC epoch hours di
 
 For each requested timeframe, the projector feeds exactly 250 validated bars to the deterministic PHP calculator facade. Output keys match the current canonical runtime context, including scalar values, EMA/MACD series and timestamps, ADX variants, volume ratio, pullback age, and `ma_21_plus_k_atr`.
 
-The facade rejects non-finite inputs or outputs. It must compute the actual MACD line/signal evidence rather than copying the histogram into `macd_line_signal_series`. Any unavailable required indicator is an error, not an empty timeframe.
+The facade rejects non-finite inputs or outputs. It preserves the current `macd_line_signal_series` contract: the series is the signed MACD-minus-signal gap (the histogram), which the hysteresis conditions consume directly. Any unavailable required indicator is an error, not an empty timeframe.
 
 Each snapshot includes:
 
@@ -87,7 +87,7 @@ Tests cover:
 - exactly 1,000 hourly records producing 250 correct `4h` aggregates;
 - OHLCV, maximum availability, UTC alignment, gaps, duplicates, reversals, future close, future availability, and incomplete records;
 - forged symbol, venue, network, market type, checksums, request identity, window hash, input hash, and result hash;
-- finite PHP-only indicator output, canonical runtime shape, and the corrected MACD line/signal series;
+- finite PHP-only indicator output, canonical runtime shape, and the signed MACD-minus-signal gap series;
 - golden OKX and Hyperliquid requests through the real Symfony subprocess;
 - byte-identical replay and equality across environments with or without `php-trader` loaded;
 - input size, depth, structure, output, stderr, and timeout bounds;
