@@ -19,7 +19,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    computed_field,
     field_validator,
     model_validator,
 )
@@ -490,6 +489,22 @@ class BacktestRunRequest(BaseModel):
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
         return _normalize_string_tuple(value)
 
+    @field_validator(
+        "git_commit_sha", "engine_version", "cost_model_version", mode="before"
+    )
+    @classmethod
+    def _reject_coerced_strings(cls, value: Any) -> Any:
+        if type(value) is not str:
+            raise ValueError("backtest_run_scalar_type_invalid")
+        return value
+
+    @field_validator("random_seed", mode="before")
+    @classmethod
+    def _reject_coerced_seed(cls, value: Any) -> Any:
+        if type(value) is not int:
+            raise ValueError("backtest_run_scalar_type_invalid")
+        return value
+
     @field_validator("period_start", "period_end")
     @classmethod
     def _validate_utc(cls, value: datetime) -> datetime:
@@ -532,7 +547,6 @@ class BacktestRunRequest(BaseModel):
             raise ValueError("period must stay inside each requested stream bounds")
         return self
 
-    @computed_field
     @property
     def result_is_live_proof(self) -> bool:
         return False
@@ -589,6 +603,49 @@ class BacktestTradeLedgerEntry(BaseModel):
         return _normalize_string_tuple(value)
 
     @field_validator(
+        "backtest_run_id",
+        "dataset_id",
+        "git_commit_sha",
+        "mode_id",
+        "mode_version",
+        "setup_id",
+        "setup_version",
+        "exchange",
+        "environment",
+        "side",
+        "symbol",
+        mode="before",
+    )
+    @classmethod
+    def _reject_coerced_strings(cls, value: Any) -> Any:
+        if type(value) is not str:
+            raise ValueError("backtest_ledger_string_type_invalid")
+        return value
+
+    @field_validator(
+        "entry_price",
+        "entry_quantity",
+        "initial_stop",
+        "gross_pnl_usdt",
+        "net_pnl_usdt",
+        "pnl_r",
+        "fee_usdt",
+        "spread_cost_usdt",
+        "slippage_cost_usdt",
+        "funding_usdt",
+        "borrow_cost_usdt",
+        "liquidation_fee_usdt",
+        mode="before",
+    )
+    @classmethod
+    def _reject_coerced_numbers(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if type(value) not in (int, float):
+            raise ValueError("backtest_ledger_numeric_type_invalid")
+        return value
+
+    @field_validator(
         "config_hash", "condition_catalog_hash", "snapshot_hash", mode="before"
     )
     @classmethod
@@ -629,7 +686,6 @@ class BacktestTradeLedgerEntry(BaseModel):
             raise ValueError("net_pnl_usdt must equal gross_pnl_usdt minus known costs")
         return self
 
-    @computed_field
     @property
     def total_known_cost_usdt(self) -> float:
         return (
@@ -641,7 +697,6 @@ class BacktestTradeLedgerEntry(BaseModel):
             + self.liquidation_fee_usdt
         )
 
-    @computed_field
     @property
     def result_is_live_proof(self) -> bool:
         return False

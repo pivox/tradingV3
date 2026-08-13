@@ -366,6 +366,101 @@ def test_run_request_fingerprint_is_stable_for_same_inputs() -> None:
     assert request.result_is_live_proof is False
 
 
+def test_run_and_ledger_default_json_wire_round_trip() -> None:
+    request = BacktestRunRequest(**_modern_run_payload())
+    ledger = BacktestTradeLedgerEntry(**_modern_ledger_payload())
+
+    restored_request = BacktestRunRequest.model_validate_json(request.model_dump_json())
+    restored_ledger = BacktestTradeLedgerEntry.model_validate_json(
+        ledger.model_dump_json()
+    )
+
+    assert restored_request == request
+    assert restored_ledger == ledger
+    assert restored_request.reproducibility_fingerprint() == request.reproducibility_fingerprint()
+    assert restored_ledger.total_known_cost_usdt == ledger.total_known_cost_usdt
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("git_commit_sha", b"12c9a9fbe369b49afd3d98e495991a21381e8b7b"),
+        ("engine_version", b"backtest-contracts-v1"),
+        ("cost_model_version", b"net-cost-v1"),
+        ("random_seed", True),
+        ("random_seed", "191"),
+    ),
+)
+def test_run_rejects_scalar_coercion(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match="backtest_run_scalar_type_invalid"):
+        BacktestRunRequest(**_modern_run_payload(**{field: value}))
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "backtest_run_id",
+        "dataset_id",
+        "git_commit_sha",
+        "mode_id",
+        "mode_version",
+        "setup_id",
+        "setup_version",
+        "exchange",
+        "environment",
+        "side",
+        "symbol",
+    ),
+)
+def test_ledger_rejects_bytes_for_exact_string_fields(field: str) -> None:
+    payload = _modern_ledger_payload()
+    payload[field] = str(payload[field]).encode("utf-8")
+
+    with pytest.raises(ValidationError, match="backtest_ledger_string_type_invalid"):
+        BacktestTradeLedgerEntry(**payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "entry_price",
+        "entry_quantity",
+        "initial_stop",
+        "gross_pnl_usdt",
+        "net_pnl_usdt",
+        "pnl_r",
+        "fee_usdt",
+        "spread_cost_usdt",
+        "slippage_cost_usdt",
+        "funding_usdt",
+        "borrow_cost_usdt",
+        "liquidation_fee_usdt",
+    ),
+)
+@pytest.mark.parametrize("value", (True, "1.0"))
+def test_ledger_rejects_bool_and_string_numeric_coercion(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError, match="backtest_ledger_numeric_type_invalid"):
+        BacktestTradeLedgerEntry(**_modern_ledger_payload(**{field: value}))
+
+
+def test_ledger_accepts_json_numbers_and_json_enum_values() -> None:
+    payload = _modern_ledger_payload(
+        entry_price=100,
+        entry_quantity=1,
+        initial_stop=98,
+        market_type="perpetual",
+        direction="long",
+        entry_order_type="maker",
+    )
+
+    entry = BacktestTradeLedgerEntry.model_validate_json(json.dumps(payload, default=str))
+
+    assert entry.entry_price == 100.0
+    assert entry.direction is Direction.LONG
+
+
 def test_run_request_rejects_dataset_and_period_escape() -> None:
     with pytest.raises(ValidationError, match="symbols must be contained in dataset"):
         BacktestRunRequest(**_modern_run_payload(symbols=("SOLUSDT",), timeframes=("1m",)))
