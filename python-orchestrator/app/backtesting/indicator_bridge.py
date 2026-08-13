@@ -5,13 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from pydantic import (
@@ -86,6 +91,72 @@ def _format_utc(value: datetime) -> str:
 def _canonical_hash(value: Mapping[str, Any] | BaseModel | list[Any]) -> str:
     payload = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
     return "sha256:" + hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
+
+
+def _paper_hash(value: Mapping[str, Any] | list[Any]) -> str:
+    return "sha256:" + hashlib.sha256(_canonical_json(value).encode()).hexdigest()
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _derived_four_hour_records(source: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Reproduce PHP's derived-window evidence only; no indicators are calculated."""
+
+    derived: list[dict[str, Any]] = []
+    for offset in range(0, 1000, 4):
+        components = source[offset : offset + 4]
+        record = {
+            "schema_version": "canonical-derived-indicator-candle.v1",
+            "component_source_record_ids": [
+                item["source_record_id"] for item in components
+            ],
+            "source_network": components[0]["source_network"],
+            "market_data_venue": components[0]["market_data_venue"],
+            "market_type": components[0]["market_type"],
+            "symbol": components[0]["symbol"],
+            "timeframe": "4h",
+            "open_at": components[0]["open_at"],
+            "close_at": components[3]["close_at"],
+            "available_at": max(item["available_at"] for item in components),
+            "open": components[0]["open"],
+            "high": _canonical_decimal(
+                max(Decimal(item["high"]) for item in components)
+            ),
+            "low": _canonical_decimal(
+                min(Decimal(item["low"]) for item in components)
+            ),
+            "close": components[3]["close"],
+            "volume": _canonical_decimal(
+                sum(Decimal(item["volume"]) for item in components)
+            ),
+            "complete": True,
+            "origin": "aggregate_1h_utc",
+        }
+        derived.append(
+            {
+                "derived_record_id": _paper_hash(record).removeprefix("sha256:"),
+                **record,
+            }
+        )
+    return derived
+
+
+def _expected_window_hash(
+    request: "CanonicalIndicatorProjectionRequest", timeframe: str
+) -> str:
+    windows = request.candles_by_timeframe
+    if timeframe == "4h":
+        hourly = [thaw_json(item) for item in windows["1h"]]
+        return _paper_hash(_derived_four_hour_records(hourly))
+    native = windows[timeframe]
+    if timeframe == "1h" and "4h" in request.requested_timeframes:
+        native = native[-250:]
+    return _paper_hash([thaw_json(item) for item in native])
 
 
 class CanonicalIndicatorDatasetBinding(BaseModel):
@@ -477,8 +548,14 @@ class VerifiedIndicatorWindowBuilder:
         return payload
 
 
+@dataclass(frozen=True, slots=True, init=False)
 class BacktestIndicatorBridge:
     DEFAULT_TIMEOUT_SECONDS = 15.0
+
+    _argv: tuple[str, ...]
+    _timeout: float
+    _max_output: int
+    _environment: Mapping[str, str]
 
     def __init__(
         self,
@@ -498,6 +575,11 @@ class BacktestIndicatorBridge:
             )
         if not argv or any(type(item) is not str or not item for item in argv):
             raise ValueError("indicator_bridge_argv_invalid")
+        executable = argv[0]
+        if os.sep not in executable:
+            resolved = shutil.which(executable)
+            if resolved is not None:
+                argv = (resolved, *argv[1:])
         if (
             type(timeout_seconds) not in (int, float)
             or not math.isfinite(timeout_seconds)
@@ -506,9 +588,22 @@ class BacktestIndicatorBridge:
             or not 1 <= max_output_bytes <= _MAX_BYTES
         ):
             raise ValueError("indicator_bridge_bounds_invalid")
-        self._argv = argv
-        self._timeout = float(timeout_seconds)
-        self._max_output = max_output_bytes
+        object.__setattr__(self, "_argv", argv)
+        object.__setattr__(self, "_timeout", float(timeout_seconds))
+        object.__setattr__(self, "_max_output", max_output_bytes)
+        object.__setattr__(
+            self,
+            "_environment",
+            MappingProxyType(
+                {
+                    "LANG": "C.UTF-8",
+                    "LC_ALL": "C.UTF-8",
+                    "PATH": os.defpath,
+                    # macOS otherwise injects a user-derived value at exec time.
+                    "__CF_USER_TEXT_ENCODING": "0x0:0x0:0x0",
+                }
+            ),
+        )
 
     @property
     def argv(self) -> tuple[str, ...]:
@@ -541,6 +636,7 @@ class BacktestIndicatorBridge:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
+                env=dict(self._environment),
             )
         except (OSError, ValueError) as exc:
             raise IndicatorBridgeError("indicator_bridge_process_unavailable") from exc
@@ -677,6 +773,8 @@ class BacktestIndicatorBridge:
                 expected_kline = windows[timeframe][-1]["open_at"]
             if snapshot["kline_time"] != expected_kline:
                 raise IndicatorBridgeError("indicator_bridge_result_identity_mismatch")
+            if snapshot["window_hash"] != _expected_window_hash(request, timeframe):
+                raise IndicatorBridgeError("indicator_bridge_window_hash_mismatch")
 
 
 __all__ = (

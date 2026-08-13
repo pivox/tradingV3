@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 import hashlib
+import json
 import stat
 import sys
 import textwrap
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -30,12 +32,16 @@ from app.backtesting.indicator_bridge import (
     IndicatorBridgeError,
     VerifiedIndicatorWindowBuilder,
 )
-from app.backtesting.tradingcore_bridge import CanonicalIndicatorSnapshot
+from app.backtesting.tradingcore_bridge import (
+    CanonicalBacktestRuleRequest,
+    CanonicalIndicatorSnapshot,
+)
 from app.modern_trading_contracts import _canonical_json
 
 
 UTC = timezone.utc
 EVALUATED_AT = "2026-02-12T20:00:00.000000Z"
+SNAPSHOT = Path(__file__).parent / "fixtures/backtesting/php-effective-config-snapshot.json"
 
 
 def _record(
@@ -412,7 +418,7 @@ def _result_payload(request: CanonicalIndicatorProjectionRequest) -> dict:
                 "market_type": "perpetual",
             },
             "kline_time": kline_times[timeframe],
-            "window_hash": "sha256:" + ("a" if timeframe != "4h" else "b") * 64,
+            "window_hash": _expected_window_hash(request, timeframe),
             "indicator_engine_version": "php_fallback_v1",
         }
     payload = {
@@ -429,6 +435,54 @@ def _result_payload(request: CanonicalIndicatorProjectionRequest) -> dict:
     }
     payload["result_hash"] = _hash(payload)
     return payload
+
+
+def _paper_hash(value) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _expected_window_hash(
+    request: CanonicalIndicatorProjectionRequest, timeframe: str
+) -> str:
+    windows = request.model_dump(mode="json")["candles_by_timeframe"]
+    if timeframe != "4h":
+        source = windows[timeframe]
+        if timeframe == "1h" and "4h" in request.requested_timeframes:
+            source = source[-250:]
+        return _paper_hash(source)
+    derived = []
+    for offset in range(0, 1000, 4):
+        components = windows["1h"][offset : offset + 4]
+        record = {
+            "schema_version": "canonical-derived-indicator-candle.v1",
+            "component_source_record_ids": [item["source_record_id"] for item in components],
+            "source_network": components[0]["source_network"],
+            "market_data_venue": components[0]["market_data_venue"],
+            "market_type": "perpetual",
+            "symbol": request.symbol,
+            "timeframe": "4h",
+            "open_at": components[0]["open_at"],
+            "close_at": components[-1]["close_at"],
+            "available_at": max(item["available_at"] for item in components),
+            "open": components[0]["open"],
+            "high": _decimal(max(Decimal(item["high"]) for item in components)),
+            "low": _decimal(min(Decimal(item["low"]) for item in components)),
+            "close": components[-1]["close"],
+            "volume": _decimal(sum(Decimal(item["volume"]) for item in components)),
+            "complete": True,
+            "origin": "aggregate_1h_utc",
+        }
+        derived.append({"derived_record_id": _paper_hash(record).removeprefix("sha256:"), **record})
+    return _paper_hash(derived)
 
 
 def _script(tmp_path: Path, source: str, *, name: str = "child.py") -> str:
@@ -475,6 +529,38 @@ def test_bridge_uses_fixed_shell_free_argv_and_canonical_stdin(tmp_path: Path) -
         "--no-interaction",
         "--no-ansi",
     )
+
+
+def test_bridge_child_environment_is_minimal_and_drops_parent_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request()
+    response = _canonical_json(_result_payload(request))
+    monkeypatch.setenv("INDICATOR_BRIDGE_SECRET_SENTINEL", "must-not-leak")
+    script = _script(
+        tmp_path,
+        f"""
+        import os, sys
+        expected = {{"LANG", "LC_ALL", "PATH", "__CF_USER_TEXT_ENCODING"}}
+        if set(os.environ) != expected or "INDICATOR_BRIDGE_SECRET_SENTINEL" in os.environ:
+            sys.exit(9)
+        if os.environ["LANG"] != "C.UTF-8" or os.environ["LC_ALL"] != "C.UTF-8":
+            sys.exit(10)
+        print({response!r})
+        """,
+        name="environment.py",
+    )
+    assert BacktestIndicatorBridge((sys.executable, script)).project(request).request_id == request.request_id
+
+
+def test_bridge_is_frozen_after_construction() -> None:
+    bridge = BacktestIndicatorBridge((sys.executable,))
+    with pytest.raises((AttributeError, TypeError)):
+        bridge._timeout = 99  # type: ignore[misc]
+    with pytest.raises((AttributeError, TypeError)):
+        bridge.extra = True  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        bridge._environment["PATH"] = "/forged"  # type: ignore[index]
 
 
 def test_bridge_rejects_invalid_argv_and_request_type() -> None:
@@ -607,6 +693,23 @@ def test_bridge_rejects_kline_identity_drift(tmp_path: Path) -> None:
         BacktestIndicatorBridge((sys.executable, script)).project(request)
 
 
+@pytest.mark.parametrize("timeframe", ["1m", "4h"])
+def test_bridge_rejects_well_formed_forged_window_hash(
+    timeframe: str, tmp_path: Path
+) -> None:
+    request = _request()
+    payload = _result_payload(request)
+    assert payload["snapshots_by_timeframe"][timeframe]["window_hash"] == _expected_window_hash(
+        request, timeframe
+    )
+    payload["snapshots_by_timeframe"][timeframe]["window_hash"] = "sha256:" + "f" * 64
+    payload.pop("result_hash")
+    payload["result_hash"] = _hash(payload)
+    script = _script(tmp_path, f"print({_canonical_json(payload)!r})")
+    with pytest.raises(IndicatorBridgeError, match="window_hash_mismatch"):
+        BacktestIndicatorBridge((sys.executable, script)).project(request)
+
+
 @pytest.mark.parametrize(
     ("venue", "network"),
     [("okx", "mainnet"), ("hyperliquid", "testnet")],
@@ -627,3 +730,17 @@ def test_real_symfony_projection_is_byte_deterministic_and_rule_compatible(
     assert projected == bridge.project(request)
     for snapshot in projected.snapshots_by_timeframe.values():
         CanonicalIndicatorSnapshot.model_validate(dict(snapshot))
+    rule_request = CanonicalBacktestRuleRequest.model_validate(
+        {
+            "schema_version": "canonical-backtest-rule-request.v1",
+            "request_id": f"rule-{venue}",
+            "effective_config_snapshot": json.loads(SNAPSHOT.read_text()),
+            "symbol": request.symbol,
+            "market_type": "perpetual",
+            "evaluated_at": request.evaluated_at.removesuffix(".000000Z") + "Z",
+            "indicators_by_timeframe": projected.model_dump(mode="json")[
+                "snapshots_by_timeframe"
+            ],
+        }
+    )
+    assert tuple(rule_request.indicators_by_timeframe) == request.requested_timeframes
