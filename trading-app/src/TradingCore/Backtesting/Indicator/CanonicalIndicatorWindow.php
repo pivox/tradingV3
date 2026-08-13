@@ -10,6 +10,7 @@ final readonly class CanonicalIndicatorWindow
 {
     private const RECORD_COUNT = 250;
     private const SOURCE_BINDING_KEYS = ['source_network', 'market_data_venue', 'market_type'];
+    private const DERIVED_CONSTRUCTION = 'canonical-derived-indicator-window.v1';
 
     /** @var list<CanonicalIndicatorCandle> */
     private array $canonicalCandles;
@@ -25,8 +26,13 @@ final readonly class CanonicalIndicatorWindow
         private string $windowSymbol,
         private string $windowTimeframe,
         string $evaluatedAt,
+        ?string $internalConstruction = null,
     ) {
-        if (!\in_array($windowTimeframe, ['1m', '5m', '15m', '1h'], true)) {
+        if ($internalConstruction !== null && $internalConstruction !== self::DERIVED_CONSTRUCTION) {
+            throw new CanonicalIndicatorProjectionException('canonical_indicator_window_construction_invalid');
+        }
+        $derived = $internalConstruction === self::DERIVED_CONSTRUCTION;
+        if (!\in_array($windowTimeframe, $derived ? ['4h'] : ['1m', '5m', '15m', '1h'], true)) {
             throw new CanonicalIndicatorProjectionException('canonical_indicator_timeframe_invalid');
         }
         if (!\in_array($windowSymbol, ['BTCUSDT', 'ETHUSDT'], true)) {
@@ -42,7 +48,9 @@ final readonly class CanonicalIndicatorWindow
         $canonicalRecords = [];
         $previous = null;
         foreach ($records as $record) {
-            $candle = CanonicalIndicatorCandle::fromArray($record);
+            $candle = $derived
+                ? CanonicalIndicatorCandle::fromDerivedArray($record)
+                : CanonicalIndicatorCandle::fromArray($record);
             if ($candle->sourceNetwork !== $sourceBinding['source_network']
                 || $candle->marketDataVenue !== $sourceBinding['market_data_venue']
                 || $candle->marketType !== $sourceBinding['market_type']
@@ -73,6 +81,23 @@ final readonly class CanonicalIndicatorWindow
         $this->hash = 'sha256:' . hash('sha256', CanonicalJson::encode($canonicalRecords));
     }
 
+    /**
+     * Internal construction path for records derived from validated native candles.
+     *
+     * @internal Only CanonicalFourHourAggregator may call this.
+     *
+     * @param list<array<string, mixed>> $records
+     * @param array<string, mixed>       $sourceBinding
+     */
+    public static function fromDerivedRecords(
+        array $records,
+        array $sourceBinding,
+        string $symbol,
+        string $evaluatedAt,
+    ): self {
+        return new self($records, $sourceBinding, $symbol, '4h', $evaluatedAt, self::DERIVED_CONSTRUCTION);
+    }
+
     /** @return list<CanonicalIndicatorCandle> */
     public function candles(): array
     {
@@ -94,8 +119,12 @@ final readonly class CanonicalIndicatorWindow
         return $this->hash;
     }
 
-    /** @param array<string, mixed> $sourceBinding */
-    private static function validateSourceBinding(array $sourceBinding): void
+    /**
+     * @internal Shared strict validation for native and derived construction.
+     *
+     * @param array<string, mixed> $sourceBinding
+     */
+    public static function validateSourceBinding(array $sourceBinding): void
     {
         $keys = array_keys($sourceBinding);
         sort($keys, SORT_STRING);
