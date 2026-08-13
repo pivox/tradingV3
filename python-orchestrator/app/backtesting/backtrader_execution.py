@@ -50,6 +50,8 @@ def execute_plan(
         if bar.available_at < created:
             continue
         if not entered:
+            if bar.open_at < created:
+                continue
             if bar.open_at < entry_deadline < bar.close_at:
                 raise BacktestExecutionError("backtrader_entry_window_ambiguous")
             if bar.open_at >= entry_deadline:

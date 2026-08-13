@@ -61,3 +61,18 @@ def test_bar_crossing_plan_expiry_is_ambiguous() -> None:
     bar = VerifiedBacktraderBar(**{**bar.__dict__, "close_at": bar.close_at + timedelta(minutes=1), "available_at": bar.available_at + timedelta(minutes=1)})
     with pytest.raises(BacktestExecutionError, match="entry_window_ambiguous"):
         execute_plan(_plan(), (bar,))
+
+
+def test_bar_crossing_plan_creation_cannot_retroactively_fill() -> None:
+    bar = _bar(0, high=101, low=99)
+    bar = VerifiedBacktraderBar(
+        **{
+            **bar.__dict__,
+            "open_at": bar.open_at - timedelta(minutes=1),
+            "close_at": bar.open_at,
+            "available_at": bar.open_at,
+        }
+    )
+    result = execute_plan(_plan(), (bar,))
+    assert result.status == "not_executed"
+    assert result.reason_code == "entry_not_filled"
