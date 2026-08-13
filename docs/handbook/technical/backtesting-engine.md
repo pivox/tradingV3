@@ -108,14 +108,14 @@ cible est reverifiee integralement apres celui-ci. Une substitution dans cette
 ultime fenetre ne peut donc jamais produire un faux statut de succes ; elle
 echoue fermee sans supprimer le repertoire inconnu ni le staging original
 deplace par un acteur concurrent.
-Le cleanup d'echec ne supprime jamais un repertoire de staging par son nom. Il
-ouvre, si necessaire, le repertoire avec `O_DIRECTORY|O_NOFOLLOW`, verifie son
-mode et son identite device/inode, puis supprime seulement son contenu via le
-fd prouve. Si le nom disparait, change ou ne peut pas etre ouvert surement, il
-ne touche a rien. Un echec peut donc laisser un staging prive `0700` vide et
-recuperable ; un janitor peut le retirer ulterieurement, hors publication
-concurrente et selon une politique explicite. Une publication reussie ne fuit
-pas de staging : le repertoire est lui-meme renomme atomiquement en cible.
+Le cleanup d'echec ne supprime aucun objet du filesystem : ni repertoire par
+nom, ni fichier via fd. Meme une suppression relative a un fd pourrait courir
+avec le remplacement de l'entree interne visee. Le publisher ferme seulement
+ses descripteurs et preserve donc le staging prive `0700`, vide, partiel ou
+complet selon le point d'echec. Un janitor peut le retirer ulterieurement, hors
+publication concurrente et selon une politique explicite. Une publication
+reussie ne fuit pas de staging : le repertoire est lui-meme renomme atomiquement
+en cible.
 
 `DatasetDescriptor` identifie le jeu de donnees derive par :
 

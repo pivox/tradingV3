@@ -199,10 +199,10 @@ git commit -m "feat(#191): serialize checksummed backtest datasets"
 
 Using `tmp_path`, cover successful private publication, exact repeat as a
 no-op, same `dataset_id` with different bytes, changed/missing/extra artifact,
-symlinked target/artifact, injected failure before rename, and cleanup of the
-verified staging contents. Assert conflicts preserve all pre-existing bytes,
-that failure cleanup never removes a directory by name, and that recoverable
-private staging directories may remain empty after failure.
+symlinked target/artifact and injected failure before rename. Assert conflicts
+preserve all pre-existing bytes, that failure cleanup never removes any
+filesystem entry, and that recoverable private staging directories remain
+empty, partial or complete according to the failure boundary.
 
 - [x] **Step 2: Verify RED**
 
@@ -299,9 +299,10 @@ git commit -m "docs(#191): document deterministic dataset reproduction"
 - Task 4 publication: `b9876be6`; review fixes for no-replace publication,
   anchored root `dirfd`, path identity, symlink/hardlink races and staging cleanup:
   `ad94a026`, `db4822a2`, `378bc58a`, `a43fc5a4`, `982efb8c`, `bb76611e`,
-  `f52e2240`. Failure cleanup removes only contents through a verified staging
-  fd and can leave an empty private directory for a separately governed janitor;
-  successful publication renames the staging directory and leaves no leak.
+  `f52e2240`. Failure cleanup only closes descriptors and preserves the private
+  staging, including its contents, for a separately governed non-concurrent
+  janitor; successful publication renames the staging directory and leaves no
+  leak.
 - Atomic no-replace uses `renameatx_np(RENAME_EXCL)` on macOS and
   `renameat2(RENAME_NOREPLACE)` on Linux. Unsupported platforms fail closed.
 - Golden artifacts are checked in under

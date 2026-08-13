@@ -131,11 +131,11 @@ a published dataset. If the target already contains the three exact verified
 bytes, publication is an idempotent no-op. Any missing, changed, extra, or
 symlinked artifact at that identity is a stable conflict and remains untouched.
 A failed build or failed staging write leaves no published target.
-Failure cleanup never removes a staging directory by name: it deletes only
-contents reached through a private, no-follow, identity-verified directory fd.
-It may leave an empty private staging directory for a janitor operating outside
-concurrent publication. Successful publication leaves no staging directory
-because the atomic rename turns that directory into the immutable target.
+Failure cleanup removes no filesystem entry, not even fd-relative contents: it
+only closes retained descriptors. It preserves an empty, partial or complete
+private staging directory for a janitor operating outside concurrent
+publication. Successful publication leaves no staging directory because the
+atomic rename turns that directory into the immutable target.
 
 The implementation uses the existing Pydantic dependency for contracts and
 only the Python standard library for Decimal validation, ordering, canonical

@@ -35,10 +35,10 @@ def _target(root: Path) -> Path:
     return root / _artifacts().descriptor.dataset_id
 
 
-def _assert_one_empty_staging(root: Path) -> Path:
+def _assert_one_staging(root: Path, expected_names: set[str]) -> Path:
     staging = tuple(root.glob(".*.staging-*"))
     assert len(staging) == 1
-    assert tuple(staging[0].iterdir()) == ()
+    assert {item.name for item in staging[0].iterdir()} == expected_names
     return staging[0]
 
 
@@ -187,7 +187,7 @@ def test_staging_creation_failure_leaves_only_empty_recoverable_directory(
         publisher_type(root).publish(_artifacts())
 
     assert not _target(root).exists()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, set())
 
 
 def test_real_emfile_during_staging_open_leaves_unknown_directory_untouched(
@@ -217,10 +217,10 @@ def test_real_emfile_during_staging_open_leaves_unknown_directory_untouched(
 
     assert rejected.value.errno == errno.EMFILE
     assert not target.exists()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, set())
 
 
-def test_emfile_after_first_artifact_cleans_contents_with_retained_staging_fd(
+def test_emfile_after_first_artifact_preserves_contents_with_retained_staging_fd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -253,7 +253,7 @@ def test_emfile_after_first_artifact_cleans_contents_with_retained_staging_fd(
 
     assert rejected.value.errno == errno.EMFILE
     assert not target.exists()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, {"candles.ndjson"})
 
 
 @pytest.mark.parametrize(
@@ -263,7 +263,7 @@ def test_emfile_after_first_artifact_cleans_contents_with_retained_staging_fd(
         (_FailStagingFsyncPublisher, "injected staging fsync"),
     ),
 )
-def test_write_or_staging_fsync_failure_cleans_only_staging_contents(
+def test_write_or_staging_fsync_failure_preserves_staging_contents(
     tmp_path: Path,
     publisher_type: type[DatasetPublisher],
     message: str,
@@ -274,7 +274,12 @@ def test_write_or_staging_fsync_failure_cleans_only_staging_contents(
         publisher_type(root).publish(_artifacts())
 
     assert not _target(root).exists()
-    _assert_one_empty_staging(root)
+    expected_names = (
+        {"candles.ndjson"}
+        if publisher_type is _FailSecondWritePublisher
+        else _ARTIFACT_NAMES
+    )
+    _assert_one_staging(root, expected_names)
 
 
 class _CreateEmptyTargetPublisher(DatasetPublisher):
@@ -378,7 +383,7 @@ def test_target_created_in_pre_rename_window_is_never_replaced(tmp_path: Path) -
     target = _target(root)
     assert target.is_dir()
     assert tuple(target.iterdir()) == ()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, _ARTIFACT_NAMES)
 
 
 class _PublishExactWinnerPublisher(DatasetPublisher):
@@ -397,7 +402,7 @@ def test_concurrent_exact_winner_becomes_idempotent(tmp_path: Path) -> None:
 
     assert result.status is DatasetPublicationStatus.ALREADY_PUBLISHED
     assert result.target == _target(root)
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, _ARTIFACT_NAMES)
 
 
 class _SwapRootForSymlinkPublisher(DatasetPublisher):
@@ -432,7 +437,7 @@ class _MoveRootBeforeRenamePublisher(DatasetPublisher):
         self._root.mkdir(mode=0o700)
 
 
-def test_root_move_before_rename_fails_closed_and_cleans_anchored_contents(
+def test_root_move_before_rename_fails_closed_and_preserves_anchored_staging(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "datasets"
@@ -443,7 +448,7 @@ def test_root_move_before_rename_fails_closed_and_cleans_anchored_contents(
 
     assert tuple(root.iterdir()) == ()
     assert not (_target(parked)).exists()
-    _assert_one_empty_staging(parked)
+    _assert_one_staging(parked, _ARTIFACT_NAMES)
 
 
 class _MoveRootAfterRenamePublisher(DatasetPublisher):
@@ -479,32 +484,35 @@ def test_hardlinked_existing_artifact_is_not_idempotent(tmp_path: Path) -> None:
     assert outside_link.read_bytes() == _artifacts().candles_ndjson
 
 
-def test_failure_before_rename_leaves_no_target_and_empty_staging(tmp_path: Path) -> None:
+def test_failure_before_rename_leaves_no_target_and_complete_staging(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "datasets"
 
     with pytest.raises(OSError, match="injected before rename"):
         _FailBeforeRenamePublisher(root).publish(_artifacts())
 
     assert not _target(root).exists()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, _ARTIFACT_NAMES)
 
 
-def test_failure_cleanup_never_removes_staging_directory(
+def test_failure_cleanup_never_removes_staging_or_its_contents(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "datasets"
 
-    def forbid_rmdir(*args: object, **kwargs: object) -> None:
-        raise AssertionError("failure cleanup must not call os.rmdir")
+    def forbid_removal(*args: object, **kwargs: object) -> None:
+        raise AssertionError("failure cleanup must not remove filesystem entries")
 
-    monkeypatch.setattr(os, "rmdir", forbid_rmdir)
+    monkeypatch.setattr(os, "rmdir", forbid_removal)
+    monkeypatch.setattr(os, "unlink", forbid_removal)
 
     with pytest.raises(OSError, match="injected before rename"):
         _FailBeforeRenamePublisher(root).publish(_artifacts())
 
     assert not _target(root).exists()
-    _assert_one_empty_staging(root)
+    _assert_one_staging(root, _ARTIFACT_NAMES)
 
 
 def test_publisher_rejects_non_artifact_input_without_touching_root(
