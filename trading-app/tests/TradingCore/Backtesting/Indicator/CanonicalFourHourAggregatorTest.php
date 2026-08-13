@@ -103,6 +103,36 @@ final class CanonicalFourHourAggregatorTest extends TestCase
         $this->assertFailure(array_slice($this->records(), 0, 999), 'canonical_indicator_four_hour_count_invalid');
     }
 
+    public function testRejectsARehashedDerivedWindowThatReusesEvidenceAcrossFourHourBars(): void
+    {
+        $window = (new CanonicalFourHourAggregator())->aggregate(
+            $this->records(),
+            self::BINDING,
+            'BTCUSDT',
+            self::EVALUATED_AT,
+        );
+        $derivedRecords = array_map(
+            static fn (CanonicalIndicatorCandle $candle): array => $candle->toArray(),
+            $window->candles(),
+        );
+        $derivedRecords[1]['component_source_record_ids'][0] = $derivedRecords[0]['component_source_record_ids'][0];
+        $forged = $derivedRecords[1];
+        unset($forged['derived_record_id']);
+        $derivedRecords[1]['derived_record_id'] = hash('sha256', CanonicalJson::encode($forged));
+
+        try {
+            CanonicalIndicatorWindow::fromDerivedRecords(
+                $derivedRecords,
+                self::BINDING,
+                'BTCUSDT',
+                self::EVALUATED_AT,
+            );
+            self::fail('Expected duplicate derived component evidence rejection.');
+        } catch (CanonicalIndicatorProjectionException $exception) {
+            self::assertSame('canonical_indicator_derived_component_duplicate', $exception->getMessage());
+        }
+    }
+
     /** @param callable(list<array<string, mixed>>): void $mutate */
     #[DataProvider('invalidInputProvider')]
     public function testRejectsInvalidHourlyComponents(callable $mutate, string $reason): void

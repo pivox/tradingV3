@@ -321,6 +321,12 @@ final readonly class CanonicalIndicatorCandle
         return $this->availableTime;
     }
 
+    /** @return list<string> */
+    public function componentSourceRecordIds(): array
+    {
+        return $this->componentSourceRecordIds;
+    }
+
     public function durationSeconds(): int
     {
         return self::DURATIONS[$this->timeframe];

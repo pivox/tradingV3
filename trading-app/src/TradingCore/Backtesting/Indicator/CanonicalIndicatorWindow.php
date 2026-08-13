@@ -47,6 +47,7 @@ final readonly class CanonicalIndicatorWindow
         $candles = [];
         $canonicalRecords = [];
         $recordIds = [];
+        $componentRecordIds = [];
         $previous = null;
         foreach ($records as $record) {
             $candle = $derived
@@ -75,6 +76,14 @@ final readonly class CanonicalIndicatorWindow
             }
             if ($candle->availableTimestamp() > $evaluationTime) {
                 throw new CanonicalIndicatorProjectionException('canonical_indicator_future_availability');
+            }
+            if ($derived) {
+                foreach ($candle->componentSourceRecordIds() as $componentRecordId) {
+                    if (isset($componentRecordIds[$componentRecordId])) {
+                        throw new CanonicalIndicatorProjectionException('canonical_indicator_derived_component_duplicate');
+                    }
+                    $componentRecordIds[$componentRecordId] = true;
+                }
             }
             $candles[] = $candle;
             $canonicalRecords[] = $candle->toArray();
