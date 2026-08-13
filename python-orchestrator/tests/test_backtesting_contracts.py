@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from math import inf, nan
 
 import pytest
@@ -14,6 +15,7 @@ from app.backtesting.contracts import (
     DatasetDescriptor,
     Direction,
     EffectiveConfigSnapshot,
+    FrozenDict,
     IntraBarPolicy,
     MarketType,
     OrderType,
@@ -25,7 +27,7 @@ def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
-def _dataset() -> DatasetDescriptor:
+def _manifest() -> dict[str, object]:
     manifest = {
         "schema_version": "backtest-dataset-manifest.v1",
         "record_schema_version": "backtest-candle.v1",
@@ -73,7 +75,11 @@ def _dataset() -> DatasetDescriptor:
     checksum = "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
     manifest["dataset_checksum"] = checksum
     manifest["dataset_id"] = "backtest-dataset-" + checksum.removeprefix("sha256:")
-    return DatasetDescriptor.from_manifest(manifest)
+    return manifest
+
+
+def _dataset() -> DatasetDescriptor:
+    return DatasetDescriptor.from_manifest(_manifest())
 
 
 def _config(profile: Profile = Profile.SCALPER) -> EffectiveConfigSnapshot:
@@ -328,3 +334,162 @@ def test_trade_ledger_entry_rejects_non_finite_values() -> None:
 def test_trade_ledger_entry_rejects_inconsistent_net_pnl() -> None:
     with pytest.raises(ValidationError, match="net_pnl_usdt must equal gross_pnl_usdt minus known costs"):
         _ledger_entry(net_pnl_usdt=5.0)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    (
+        (None, "at least 1 item"),
+        (191, "must be a sequence of strings"),
+    ),
+)
+def test_sequence_normalization_rejects_missing_or_non_iterable_layers(
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        EffectiveConfigSnapshot(
+            profile=Profile.SCALPER,
+            config_hash="sha256:" + "b" * 64,
+            config_version="effective-config-v1",
+            source_layers=value,  # type: ignore[arg-type]
+            effective_config={"risk": {"risk_pct": 0.01}},
+        )
+
+
+def test_config_freeze_accepts_frozen_values_and_rejects_unknown_objects() -> None:
+    frozen = FrozenDict({"entry": {"modes": ("maker",)}})
+    snapshot = EffectiveConfigSnapshot(
+        profile=Profile.SCALPER,
+        config_hash="sha256:" + "b" * 64,
+        config_version="effective-config-v1",
+        source_layers=("base",),
+        effective_config=frozen,
+    )
+
+    assert snapshot.model_dump(mode="json")["effective_config"] == {
+        "entry": {"modes": ["maker"]}
+    }
+    with pytest.raises(ValidationError, match="JSON-compatible values"):
+        EffectiveConfigSnapshot(
+            profile=Profile.SCALPER,
+            config_hash="sha256:" + "b" * 64,
+            config_version="effective-config-v1",
+            source_layers=("base",),
+            effective_config={"bad": object()},
+        )
+    with pytest.raises(ValidationError, match="must be a mapping"):
+        EffectiveConfigSnapshot(
+            profile=Profile.SCALPER,
+            config_hash="sha256:" + "b" * 64,
+            config_version="effective-config-v1",
+            source_layers=("base",),
+            effective_config=("not", "a", "mapping"),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    (
+        ({"end_at": _dt("2026-01-01T00:00:00")}, "end_at must be after"),
+        ({"symbols": ("ETHUSDT", "BTCUSDT")}, "symbols must be unique and sorted"),
+        ({"timeframes": ("30m",)}, "unsupported timeframe"),
+        ({"timeframes": ("5m", "1m")}, "duration-sorted"),
+        ({"dataset_id": "backtest-dataset-" + "0" * 64}, "must derive"),
+        ({"source": "changed"}, "does not bind descriptor facts"),
+    ),
+)
+def test_descriptor_semantic_invariants_fail_closed(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    forged = _dataset().model_copy(update=updates)
+
+    with pytest.raises(ValueError, match=message):
+        forged._validate_bounds()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (("top", None), "manifest fields"),
+        (("source", None), "manifest source"),
+        (("coverage", None), "manifest coverage"),
+        (("artifacts", None), "manifest artifacts"),
+        (("dataset_id", 7), "string scalar"),
+        (("record_count", True), "record_count must be an integer"),
+        (("symbols", ["BTCUSDT", 7]), "symbols must be an array of strings"),
+        (("quality_flags", [7]), "quality_flags must be an array of strings"),
+    ),
+)
+def test_descriptor_manifest_shape_rejects_python_coercions(
+    mutation: tuple[str, object],
+    message: str,
+) -> None:
+    manifest = deepcopy(_manifest())
+    field, value = mutation
+    if field == "top":
+        manifest["unexpected"] = value
+    elif field == "source":
+        manifest["source"] = value
+    elif field == "coverage":
+        manifest["coverage"] = value
+    elif field == "artifacts":
+        manifest["artifacts"] = value
+    elif field == "record_count":
+        manifest["coverage"][field] = value  # type: ignore[index]
+    elif field == "symbols":
+        manifest["coverage"][field] = value  # type: ignore[index]
+    else:
+        manifest[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        DatasetDescriptor.from_manifest(manifest)
+
+
+def test_run_scope_rejects_timeframe_and_period_order_escape() -> None:
+    valid = BacktestRunRequest(
+        dataset=_dataset(),
+        config=_config(),
+        profile=Profile.SCALPER,
+        symbols=("BTCUSDT",),
+        timeframes=("1m",),
+        period_start=_dt("2026-01-02T00:00:00"),
+        period_end=_dt("2026-01-03T00:00:00"),
+        git_commit_sha="12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+        engine_version="backtest-contracts-v1",
+        random_seed=191,
+        cost_model_version="net-cost-v1",
+    )
+
+    with pytest.raises(ValidationError, match="timeframes must be contained"):
+        BacktestRunRequest(**{**valid.model_dump(), "timeframes": ("4h",)})
+    with pytest.raises(ValidationError, match="period_end must be after"):
+        BacktestRunRequest(
+            **{
+                **valid.model_dump(),
+                "period_end": valid.period_start,
+            }
+        )
+
+
+def test_contracts_reject_non_utc_offset_empty_config_and_invalid_stops() -> None:
+    with pytest.raises(ValidationError, match="datetime must be UTC-aware"):
+        DatasetDescriptor(
+            **{
+                **_dataset().model_dump(),
+                "start_at": datetime(2026, 1, 1, tzinfo=timezone(timedelta(hours=1))),
+            }
+        )
+
+    empty_layers = _config().model_copy(update={"source_layers": ()})
+    with pytest.raises(ValueError, match="source_layers must not be empty"):
+        empty_layers._validate_config()
+    empty_config = _config().model_copy(update={"effective_config": FrozenDict({})})
+    with pytest.raises(ValueError, match="effective_config must not be empty"):
+        empty_config._validate_config()
+
+    with pytest.raises(ValidationError, match="long initial_stop must be below"):
+        _ledger_entry(initial_stop=100.0)
+    with pytest.raises(ValidationError, match="short initial_stop must be above"):
+        _ledger_entry(direction=Direction.SHORT, initial_stop=99.0)

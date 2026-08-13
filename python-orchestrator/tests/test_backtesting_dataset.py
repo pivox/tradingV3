@@ -135,6 +135,63 @@ def _canonical_json(payload: object) -> bytes:
     ).encode("utf-8")
 
 
+def _fixture_artifacts() -> DatasetArtifacts:
+    manifest_json = (_FIXTURE_DIR / "manifest-v1.json").read_bytes()
+    return DatasetArtifacts(
+        candles_ndjson=(_FIXTURE_DIR / "candles-v1.ndjson").read_bytes(),
+        quality_report_json=(_FIXTURE_DIR / "quality-report-v1.json").read_bytes(),
+        manifest_json=manifest_json,
+        descriptor=DatasetDescriptor.from_manifest(json.loads(manifest_json)),
+    )
+
+
+def _rebind_artifacts(
+    artifacts: DatasetArtifacts,
+    *,
+    candles_ndjson: bytes | None = None,
+    quality_report_json: bytes | None = None,
+    manifest_updates: dict[str, object] | None = None,
+) -> DatasetArtifacts:
+    candles = artifacts.candles_ndjson if candles_ndjson is None else candles_ndjson
+    report = (
+        artifacts.quality_report_json
+        if quality_report_json is None
+        else quality_report_json
+    )
+    manifest = json.loads(artifacts.manifest_json)
+    if manifest_updates:
+        manifest.update(manifest_updates)
+    manifest["artifacts"] = {
+        "candles.ndjson": _sha256(candles),
+        "quality-report.json": _sha256(report),
+    }
+    core = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+    }
+    manifest["dataset_checksum"] = _sha256(
+        _canonical_json(
+            {
+                "candles_checksum": manifest["artifacts"]["candles.ndjson"],
+                "manifest_core": core,
+                "quality_report_checksum": manifest["artifacts"][
+                    "quality-report.json"
+                ],
+            }
+        )
+    )
+    manifest["dataset_id"] = "backtest-dataset-" + manifest[
+        "dataset_checksum"
+    ].removeprefix("sha256:")
+    return DatasetArtifacts(
+        candles_ndjson=candles,
+        quality_report_json=report,
+        manifest_json=_canonical_json(manifest) + b"\n",
+        descriptor=DatasetDescriptor.from_manifest(manifest),
+    )
+
+
 @pytest.mark.parametrize(
     ("timeframe", "duration"),
     (("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600), ("4h", 14400)),
@@ -797,3 +854,186 @@ def test_cross_verification_rejects_any_tampered_artifact(
 
     with pytest.raises(DatasetArtifactVerificationError):
         DatasetSerializer.verify(tampered)
+
+
+def test_quality_contracts_reject_inconsistent_bounds_and_flags() -> None:
+    missing = MissingRange(
+        first_missing_open_at=_utc("2026-01-01T00:01:00"),
+        end_at=_utc("2026-01-01T00:02:00"),
+        timeframe=Timeframe.ONE_MINUTE,
+        missing_bar_count=1,
+    )
+    with pytest.raises(ValidationError, match="duration must match"):
+        MissingRange(
+            **{
+                **missing.model_dump(),
+                "end_at": _utc("2026-01-01T00:03:00"),
+            }
+        )
+    with pytest.raises(ValidationError, match="last_close_at must follow"):
+        DatasetStreamQuality(
+            market_data_venue="fake",
+            market_type=MarketType.PERPETUAL,
+            symbol="BTCUSDT",
+            timeframe=Timeframe.ONE_MINUTE,
+            first_open_at=_utc("2026-01-01T00:02:00"),
+            last_close_at=_utc("2026-01-01T00:01:00"),
+            expected_count=1,
+            observed_count=1,
+        )
+    with pytest.raises(ValidationError, match="timeframe must match"):
+        DatasetStreamQuality(
+            market_data_venue="fake",
+            market_type=MarketType.PERPETUAL,
+            symbol="BTCUSDT",
+            timeframe=Timeframe.FIVE_MINUTES,
+            first_open_at=_utc("2026-01-01T00:00:00"),
+            last_close_at=_utc("2026-01-01T00:05:00"),
+            expected_count=1,
+            observed_count=1,
+            missing_ranges=(missing,),
+        )
+    for flags, message in (
+        ((" ",), "must not be blank"),
+        (("missing_range", "missing_range"), "must be unique"),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            DatasetQualityReport(
+                input_count=0,
+                accepted_count=0,
+                exact_duplicate_count=0,
+                conflicting_duplicate_count=0,
+                quality_flags=flags,
+            )
+
+
+def test_builder_reports_overlap_and_non_integral_stream_chronology() -> None:
+    first = _candle_at(0)
+    overlap_open = first.open_at + timedelta(seconds=30)
+    overlap = first.model_copy(
+        update={
+            "source_record_id": "overlap",
+            "open_at": overlap_open,
+            "close_at": overlap_open + Timeframe.ONE_MINUTE.duration,
+            "available_at": overlap_open + Timeframe.ONE_MINUTE.duration,
+        }
+    )
+    irregular_open = first.open_at + timedelta(seconds=90)
+    irregular = first.model_copy(
+        update={
+            "source_record_id": "irregular",
+            "open_at": irregular_open,
+            "close_at": irregular_open + Timeframe.ONE_MINUTE.duration,
+            "available_at": irregular_open + Timeframe.ONE_MINUTE.duration,
+        }
+    )
+
+    assert "stream_overlap" in DatasetBuilder(_source()).analyze((first, overlap)).quality_flags
+    assert "invalid_stream_chronology" in DatasetBuilder(_source()).analyze(
+        (first, irregular)
+    ).quality_flags
+    with pytest.raises(TypeError, match="only CandleRecord"):
+        DatasetBuilder(_source()).analyze((first, object()))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    (
+        ({"record_count": 99}, "record_count must equal"),
+        ({"start_at": _utc("2025-12-31T23:59:00")}, "first record bound"),
+        ({"end_at": _utc("2026-01-01T01:00:00")}, "last record bound"),
+        ({"symbols": ("FORGED",)}, "canonical record symbols"),
+        ({"timeframes": (Timeframe.FIVE_MINUTES,)}, "canonical record timeframes"),
+    ),
+)
+def test_build_result_rejects_forged_derived_facts(
+    update: dict[str, object],
+    message: str,
+) -> None:
+    forged = DatasetBuilder(_source()).build(_golden_records()).model_copy(update=update)
+
+    with pytest.raises(ValueError, match=message):
+        forged._validate_derived_facts()
+
+
+def test_build_result_rejects_an_ineligible_recomputed_report() -> None:
+    records = (_candle_at(0), _candle_at(2))
+    report = DatasetBuilder(_source()).analyze(records)
+    forged = DatasetBuildResult.model_construct(
+        source_identity=_source(),
+        records=records,
+        quality_report=report,
+        symbols=("BTCUSDT",),
+        timeframes=(Timeframe.ONE_MINUTE,),
+        start_at=records[0].open_at,
+        end_at=records[-1].close_at,
+        record_count=2,
+    )
+
+    with pytest.raises(ValueError, match="requires an eligible quality report"):
+        forged._validate_derived_facts()
+
+
+def test_serializer_rejects_wrong_types_and_noncanonical_json() -> None:
+    with pytest.raises(TypeError, match="only DatasetBuildResult"):
+        DatasetSerializer.serialize(object())  # type: ignore[arg-type]
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(object())  # type: ignore[arg-type]
+
+    noncanonical_manifest = _fixture_artifacts().model_copy(
+        update={"manifest_json": b'{"not": "canonical"}\n'}
+    )
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(noncanonical_manifest)
+
+    scalar_manifest = _fixture_artifacts().model_copy(update={"manifest_json": b"[]\n"})
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(scalar_manifest)
+
+
+@pytest.mark.parametrize(
+    "candles",
+    (
+        b"not-newline-terminated",
+        b"\n",
+        b'{"available_at": "not-canonical"}\n',
+    ),
+)
+def test_verifier_rejects_rebound_noncanonical_candle_files(candles: bytes) -> None:
+    forged = _rebind_artifacts(_fixture_artifacts(), candles_ndjson=candles)
+
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(forged)
+
+
+def test_verifier_rejects_rebound_report_and_manifest_semantic_forgery() -> None:
+    artifacts = _fixture_artifacts()
+    report = json.loads(artifacts.quality_report_json)
+    report["input_count"] = 999
+    forged_report = _rebind_artifacts(
+        artifacts,
+        quality_report_json=_canonical_json(report) + b"\n",
+    )
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(forged_report)
+
+    forged_manifest = _rebind_artifacts(
+        artifacts,
+        manifest_updates={"build_version": "forged-builder.v1"},
+    )
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(forged_manifest)
+
+
+def test_verifier_preserves_stable_verification_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifacts = _fixture_artifacts()
+
+    def reject_manifest(*args: object, **kwargs: object) -> DatasetDescriptor:
+        raise DatasetArtifactVerificationError()
+
+    monkeypatch.setattr(DatasetDescriptor, "from_manifest", reject_manifest)
+
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(artifacts)
