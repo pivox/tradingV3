@@ -39,6 +39,30 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] string $datasetDirectory,
         ?int $eventLimit = null,
     ): PaperDatasetManifest {
+        return $this->verifySnapshot($datasetDirectory, $eventLimit)->manifest;
+    }
+
+    public function verifyForBaseline(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): PaperDatasetManifest {
+        return $this->verifyBaselineSnapshot($datasetDirectory, $eventLimit)->manifest;
+    }
+
+    public function verifyBaselineSnapshot(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): VerifiedPaperDatasetSnapshot {
+        $snapshot = $this->verifySnapshot($datasetDirectory, $eventLimit);
+        $this->assertBaselineManifest($snapshot->manifest);
+
+        return $snapshot;
+    }
+
+    private function verifySnapshot(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): VerifiedPaperDatasetSnapshot {
         $this->assertNoSymlinkComponents($datasetDirectory);
         $unresolvedRoot = dirname($datasetDirectory);
         $rootPin = $this->openPinnedDirectory($unresolvedRoot, 'paper_dataset_directory_invalid');
@@ -144,7 +168,7 @@ final class PaperDatasetVerifier
             );
             $assertDirectories();
 
-            return $manifest;
+            return new VerifiedPaperDatasetSnapshot($manifest, $facts['events']);
         } finally {
             if ($datasetPin !== null) {
                 fclose($datasetPin['handle']);
@@ -153,11 +177,8 @@ final class PaperDatasetVerifier
         }
     }
 
-    public function verifyForBaseline(
-        #[\SensitiveParameter] string $datasetDirectory,
-        ?int $eventLimit = null,
-    ): PaperDatasetManifest {
-        $manifest = $this->verify($datasetDirectory, $eventLimit);
+    private function assertBaselineManifest(PaperDatasetManifest $manifest): void
+    {
         if (!$manifest->hasCertifiableNetworkProvenance()) {
             throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
         }
@@ -167,8 +188,6 @@ final class PaperDatasetVerifier
             throw new \RuntimeException('paper_dataset_hyperliquid_model_invalid');
         }
         $this->assertHyperliquidHistoricalCoverageIdentity($manifest, true);
-
-        return $manifest;
     }
 
     private function assertHyperliquidHistoricalCoverageIdentity(
@@ -555,6 +574,7 @@ final class PaperDatasetVerifier
      *   end_exchange_timestamp: \DateTimeImmutable|null,
      *   channels: list<string>,
      *   sequence_gaps: array<string, int>,
+     *   events: list<PaperMarketEvent>,
      *   events_checksum: string,
      *   events_bytes: int,
      *   events_identity: array{dev: int, ino: int}
@@ -573,6 +593,8 @@ final class PaperDatasetVerifier
         $sequenceGaps = [];
         /** @var list<string> $channels */
         $channels = [];
+        /** @var list<PaperMarketEvent> $events */
+        $events = [];
         $count = 0;
         $lastEventId = null;
         $start = null;
@@ -697,6 +719,7 @@ final class PaperDatasetVerifier
                 }
 
                 ++$count;
+                $events[] = $event;
                 $lastEventId = $event->eventId;
                 $channels[] = $event->channel->value;
                 $start = $start === null || $event->exchangeTimestamp < $start ? $event->exchangeTimestamp : $start;
@@ -762,6 +785,7 @@ final class PaperDatasetVerifier
             'end_exchange_timestamp' => $end,
             'channels' => $channels,
             'sequence_gaps' => $sequenceGaps,
+            'events' => $events,
             'events_checksum' => $parsedChecksum,
             'events_bytes' => $statistics['size'],
             'events_identity' => [

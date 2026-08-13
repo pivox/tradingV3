@@ -11,6 +11,7 @@ use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequest;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -23,6 +24,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperDatasetVerifier::class)]
+#[CoversClass(VerifiedPaperDatasetSnapshot::class)]
 #[CoversClass(PaperDatasetManifest::class)]
 #[CoversClass(PaperDatasetRecorder::class)]
 #[CoversClass(PaperMarketEvent::class)]
@@ -55,6 +57,73 @@ final class PaperDatasetVerifierTest extends TestCase
         file_put_contents($this->eventsPath(), '{"payload":{"bid":"private-sentinel"}');
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', ['private-sentinel']);
+    }
+
+    public function testBaselineSnapshotReturnsTheManifestAndExactOrderedVerifiedEvents(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $candle = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::CANDLE_1M,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.000000Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:01:00.000001Z'),
+            sequence: '1',
+            payload: [
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'bar' => '1m',
+                'open' => '30000',
+                'high' => '30001',
+                'low' => '29999',
+                'close' => '30000.5',
+                'volume_contracts' => '10',
+                'volume_base' => '0.001',
+                'volume_quote' => '30',
+                'confirmed' => true,
+                'origin' => 'rest_history_candles',
+            ],
+        );
+        $book = $this->event(sequence: '1', microseconds: 1);
+        $recorder->append($candle);
+        $recorder->append($book);
+        $expectedManifest = $recorder->complete();
+
+        $snapshot = (new PaperDatasetVerifier())->verifyBaselineSnapshot(
+            $recorder->datasetDirectory(),
+        );
+
+        self::assertSame($expectedManifest->toArray(), $snapshot->manifest->toArray());
+        self::assertContainsOnlyInstancesOf(PaperMarketEvent::class, $snapshot->events);
+        self::assertSame(
+            [
+                CanonicalJson::encode($candle->toArray()),
+                CanonicalJson::encode($book->toArray()),
+            ],
+            array_map(
+                static fn (PaperMarketEvent $event): string => CanonicalJson::encode($event->toArray()),
+                $snapshot->events,
+            ),
+        );
+
+        $callerEvents = $snapshot->events;
+        array_pop($callerEvents);
+        self::assertCount(2, $snapshot->events);
+    }
+
+    public function testBaselineSnapshotDefensivelyCopiesAndValidatesItsEventList(): void
+    {
+        $events = ['source-key' => $this->event(sequence: '1', microseconds: 1)];
+        $snapshot = new VerifiedPaperDatasetSnapshot($this->manifest(), $events);
+        array_pop($events);
+
+        self::assertCount(1, $snapshot->events);
+        self::assertSame([0], array_keys($snapshot->events));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('verified_paper_dataset_events_invalid');
+
+        new VerifiedPaperDatasetSnapshot($this->manifest(), ['not-an-event']);
     }
 
     public function testBaselineAcceptsCertifiableHyperliquidModelledBookDataset(): void
@@ -365,6 +434,9 @@ final class PaperDatasetVerifierTest extends TestCase
     {
         $pathBearingParameters = [
             'verify' => 'datasetDirectory',
+            'verifyForBaseline' => 'datasetDirectory',
+            'verifyBaselineSnapshot' => 'datasetDirectory',
+            'verifySnapshot' => 'datasetDirectory',
             'assertNoSymlinkComponents' => 'path',
             'readRegularFile' => 'path',
             'assertRegularFileSnapshot' => 'path',
