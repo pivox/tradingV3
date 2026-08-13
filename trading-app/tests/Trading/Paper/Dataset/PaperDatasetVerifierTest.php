@@ -10,6 +10,7 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\Dataset\PaperDatasetSnapshotLimits;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequest;
@@ -24,6 +25,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperDatasetVerifier::class)]
+#[CoversClass(PaperDatasetSnapshotLimits::class)]
 #[CoversClass(VerifiedPaperDatasetSnapshot::class)]
 #[CoversClass(PaperDatasetManifest::class)]
 #[CoversClass(PaperDatasetRecorder::class)]
@@ -124,6 +126,97 @@ final class PaperDatasetVerifierTest extends TestCase
         $this->expectExceptionMessage('verified_paper_dataset_events_invalid');
 
         new VerifiedPaperDatasetSnapshot($this->manifest(), ['not-an-event']);
+    }
+
+    public function testManifestOnlyVerificationDoesNotCollectOrApplySnapshotLimits(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $expected = $recorder->complete();
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1),
+        );
+
+        self::assertSame($expected->toArray(), $verifier->verify($recorder->datasetDirectory())->toArray());
+        self::assertSame(
+            $expected->toArray(),
+            $verifier->verifyForBaseline($recorder->datasetDirectory())->toArray(),
+        );
+    }
+
+    public function testBaselineSnapshotRejectsManifestEventCountAboveItsBound(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $recorder->complete();
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1024 * 1024),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($recorder->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotRejectsEventsFileAboveItsByteBound(): void
+    {
+        $this->createCompleteDataset();
+        $bytes = filesize($this->eventsPath());
+        self::assertIsInt($bytes);
+        self::assertGreaterThan(1, $bytes);
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(10, $bytes - 1),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotEnforcesItsEventBoundAgainstForgedManifestCount(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $recorder->complete();
+        $this->rewriteManifest(['event_count' => 1]);
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1024 * 1024),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotDoesNotAcceptAPartialEventLimit(): void
+    {
+        $method = new \ReflectionMethod(PaperDatasetVerifier::class, 'verifyBaselineSnapshot');
+
+        self::assertSame(1, $method->getNumberOfParameters());
+    }
+
+    #[DataProvider('invalidSnapshotLimitsProvider')]
+    public function testSnapshotLimitsCanOnlyTightenTheGlobalBounds(int $events, int $bytes): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limits_invalid');
+
+        new PaperDatasetSnapshotLimits($events, $bytes);
+    }
+
+    /** @return iterable<string, array{int, int}> */
+    public static function invalidSnapshotLimitsProvider(): iterable
+    {
+        yield 'zero events' => [0, 1];
+        yield 'too many events' => [PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_EVENTS + 1, 1];
+        yield 'zero bytes' => [1, 0];
+        yield 'too many bytes' => [1, PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_BYTES + 1];
     }
 
     public function testBaselineAcceptsCertifiableHyperliquidModelledBookDataset(): void
