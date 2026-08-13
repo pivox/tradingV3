@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Backtesting;
 
 use App\Trading\Paper\Backtesting\NormalizedBacktestCandle;
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicBook;
 use App\Trading\Paper\Backtesting\NormalizedBacktestPublicTrade;
 use App\Trading\Paper\Backtesting\PaperBacktestAdapterException;
 use App\Trading\Paper\Backtesting\PaperBacktestDataset;
@@ -25,11 +26,100 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperBacktestDatasetAdapter::class)]
 #[CoversClass(PaperBacktestDataset::class)]
 #[CoversClass(NormalizedBacktestCandle::class)]
+#[CoversClass(NormalizedBacktestPublicBook::class)]
 #[CoversClass(NormalizedBacktestPublicTrade::class)]
 #[CoversClass(PaperBacktestAdapterException::class)]
 #[CoversClass(PaperBacktestDatasetEncoder::class)]
 final class PaperBacktestDatasetAdapterTest extends TestCase
 {
+    public function testPublicBookValueAndDatasetAreStrictlySourceBound(): void
+    {
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $book = new NormalizedBacktestPublicBook(
+            str_repeat('b', 64),
+            $dataset->sourceIdentity['source_checksum'],
+            'mainnet',
+            'okx',
+            'BTCUSDT',
+            '2026-08-13T10:00:30.000000Z',
+            '2026-08-13T10:00:30.250000Z',
+            '30000',
+            '2.5',
+            '30001',
+            '3.5',
+            'contracts',
+            '2',
+            '3',
+            'ws_books',
+        );
+
+        self::assertSame([
+            'schema_version' => 'backtest-public-book.v1',
+            'source_record_id' => str_repeat('b', 64),
+            'source_checksum' => $dataset->sourceIdentity['source_checksum'],
+            'source_network' => 'mainnet',
+            'market_data_venue' => 'okx',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'happened_at' => '2026-08-13T10:00:30.000000Z',
+            'available_at' => '2026-08-13T10:00:30.250000Z',
+            'bid_price' => '30000',
+            'bid_quantity' => '2.5',
+            'ask_price' => '30001',
+            'ask_quantity' => '3.5',
+            'quantity_unit' => 'contracts',
+            'bid_order_count' => '2',
+            'ask_order_count' => '3',
+            'origin' => 'ws_books',
+        ], $book->toArray());
+
+        $withBook = new PaperBacktestDataset(
+            $dataset->sourceIdentity,
+            $dataset->candles,
+            [],
+            [$book],
+        );
+        self::assertSame([$book], $withBook->publicBooks);
+
+        foreach ([
+            ['bidPrice' => '30001'],
+            ['quantityUnit' => 'base_asset'],
+            ['sourceChecksum' => 'sha256:' . str_repeat('f', 64)],
+        ] as $override) {
+            try {
+                $candidate = new NormalizedBacktestPublicBook(
+                    str_repeat('c', 64),
+                    $override['sourceChecksum'] ?? $dataset->sourceIdentity['source_checksum'],
+                    'mainnet',
+                    'okx',
+                    'BTCUSDT',
+                    '2026-08-13T10:00:30.000000Z',
+                    '2026-08-13T10:00:30.250000Z',
+                    $override['bidPrice'] ?? '30000',
+                    '2.5',
+                    '30001',
+                    '3.5',
+                    $override['quantityUnit'] ?? 'contracts',
+                    '2',
+                    '3',
+                    'ws_books',
+                );
+                new PaperBacktestDataset(
+                    $dataset->sourceIdentity,
+                    $dataset->candles,
+                    [],
+                    [$candidate, $candidate],
+                );
+                self::fail('Expected strict public-book rejection.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertContains($exception->getMessage(), [
+                    'paper_backtest_public_book_invalid',
+                    'paper_backtest_public_books_invalid',
+                ]);
+            }
+        }
+    }
+
     public function testNormalizesExactOkxGoldenCandle(): void
     {
         $event = $this->okxEvent();
@@ -152,6 +242,101 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         }
     }
 
+    public function testNormalizesAuthenticatedPublicBooksWithVenueSpecificFacts(): void
+    {
+        $okxBook = $this->okxBook();
+        $okx = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxEvent(),
+            $okxBook,
+        ));
+        self::assertSame([[
+            'schema_version' => 'backtest-public-book.v1',
+            'source_record_id' => $okxBook->eventId,
+            'source_checksum' => $okx->sourceIdentity['source_checksum'],
+            'source_network' => 'mainnet',
+            'market_data_venue' => 'okx',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'happened_at' => '2026-08-13T10:00:25.000000Z',
+            'available_at' => '2026-08-13T10:00:25.125000Z',
+            'bid_price' => '30000',
+            'bid_quantity' => '2.5',
+            'ask_price' => '30001',
+            'ask_quantity' => '3.5',
+            'quantity_unit' => 'contracts',
+            'bid_order_count' => '2',
+            'ask_order_count' => '3',
+            'origin' => 'ws_books',
+        ]], array_map(
+            static fn (NormalizedBacktestPublicBook $book): array => $book->toArray(),
+            $okx->publicBooks,
+        ));
+
+        $hyperliquidBook = $this->hyperliquidBook();
+        $hyperliquid = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->hyperliquidEvent(),
+            $hyperliquidBook,
+        ));
+        self::assertSame('base_asset', $hyperliquid->publicBooks[0]->quantityUnit);
+        self::assertNull($hyperliquid->publicBooks[0]->bidOrderCount);
+        self::assertNull($hyperliquid->publicBooks[0]->askOrderCount);
+        self::assertSame('ws_l2_book', $hyperliquid->publicBooks[0]->origin);
+    }
+
+    public function testPublicBookProjectionAndEncoderFailClosed(): void
+    {
+        $candle = $this->okxEvent();
+        $later = $this->okxBook(sequence: '3');
+        $earlier = $this->okxBook(
+            ['source_seq_id' => '41'],
+            new \DateTimeImmutable('2026-08-13T10:00:20.000000Z'),
+            '2',
+        );
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $candle,
+            $later,
+            $earlier,
+        ));
+        $encoded = (new PaperBacktestDatasetEncoder())->publicBooks($dataset);
+        self::assertSame([$earlier->eventId, $later->eventId], array_map(
+            static fn (NormalizedBacktestPublicBook $book): string => $book->sourceRecordId,
+            $dataset->publicBooks,
+        ));
+        self::assertSame(2, substr_count($encoded, "\n"));
+        foreach (['mode', 'setup', 'profile', 'strategy'] as $forbidden) {
+            self::assertStringNotContainsString('"' . $forbidden . '"', $encoded);
+        }
+
+        foreach ([
+            ['origin' => 'private'],
+            ['bid_price' => '30002'],
+            ['bid_size_contracts' => 2.5],
+            ['bid_order_count' => '0'],
+            ['bid_order_count' => '-1'],
+            ['private-sentinel' => 'must-not-leak'],
+        ] as $override) {
+            $this->assertAdapterFailure(
+                $this->snapshot($candle, $this->okxBook($override)),
+                array_key_exists('private-sentinel', $override)
+                    ? 'paper_backtest_payload_shape_invalid'
+                    : 'paper_backtest_public_book_invalid',
+            );
+        }
+
+        foreach ([
+            ['synthetic' => true],
+            ['origin' => 'historical_candle_model'],
+            ['source_time' => '1786615230001'],
+            ['source_book_hash' => str_repeat('g', 64)],
+            ['bid_level_count' => '0'],
+        ] as $override) {
+            $this->assertAdapterFailure(
+                $this->snapshot($this->hyperliquidEvent(), $this->hyperliquidBook($override)),
+                'paper_backtest_public_book_invalid',
+            );
+        }
+    }
+
     public function testPublicTradeEncoderIsDeterministicAndRejectsSemanticDrift(): void
     {
         $candle = $this->okxEvent();
@@ -192,25 +377,16 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
 
     public function testIgnoresNonCandleEventsButRejectsAnEmptyCandleSet(): void
     {
-        $book = PaperMarketEvent::create(
-            PaperMarketDataNetwork::MAINNET,
-            PaperMarketDataVenue::OKX,
-            'BTCUSDT',
-            PaperMarketDataChannel::TOP_OF_BOOK,
-            new \DateTimeImmutable('2026-08-13T10:00:01.000000Z'),
-            new \DateTimeImmutable('2026-08-13T10:00:02.000000Z'),
-            '2',
-            ['native_symbol' => 'BTC-USDT-SWAP', 'private-sentinel' => 'ignored'],
-        );
+        $book = $this->okxBook();
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent(), $book));
         self::assertCount(1, $dataset->candles);
+        self::assertCount(1, $dataset->publicBooks);
 
         try {
             (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($book));
             self::fail('Expected an empty-candle rejection.');
         } catch (PaperBacktestAdapterException $exception) {
             self::assertSame('paper_backtest_candles_empty', $exception->getMessage());
-            self::assertStringNotContainsString('private-sentinel', $exception->getMessage());
         }
     }
 
@@ -254,8 +430,13 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             ],
         );
 
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($candle, $book));
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshotWithQuality(
+            PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_MODELLED_BOOK,
+            $candle,
+            $book,
+        ));
         self::assertCount(1, $dataset->candles);
+        self::assertSame([], $dataset->publicBooks);
     }
 
     public function testRejectsForgedManifestCountAndNativeSymbolProvenance(): void
@@ -400,7 +581,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     {
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
         try {
-            new PaperBacktestDataset($dataset->sourceIdentity, [], []);
+            new PaperBacktestDataset($dataset->sourceIdentity, [], [], []);
             self::fail('Expected empty result rejection.');
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('paper_backtest_candles_empty', $exception->getMessage());
@@ -409,7 +590,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         $source = $dataset->sourceIdentity;
         $source['source_network'] = 'testnet';
         try {
-            new PaperBacktestDataset($source, $dataset->candles, []);
+            new PaperBacktestDataset($source, $dataset->candles, [], []);
             self::fail('Expected source mismatch rejection.');
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('paper_backtest_candle_source_mismatch', $exception->getMessage());
@@ -423,6 +604,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
                 $withTrade->sourceIdentity,
                 $withTrade->candles,
                 [$withTrade->publicTrades[0], $withTrade->publicTrades[0]],
+                [],
             );
             self::fail('Expected duplicate trade rejection.');
         } catch (\InvalidArgumentException $exception) {
@@ -436,6 +618,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
                 $foreignSource,
                 $withTrade->candles,
                 $withTrade->publicTrades,
+                [],
             );
             self::fail('Expected trade source checksum mismatch rejection.');
         } catch (\InvalidArgumentException $exception) {
@@ -505,7 +688,11 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     public function testCheckedInCrossRuntimeFixturesComeFromThePublicEncoder(): void
     {
         $event = $this->okxEvent(['volume_base' => '0.001']);
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($event, $this->okxTrade()));
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $event,
+            $this->okxTrade(),
+            $this->okxBook(),
+        ));
         $encoder = new PaperBacktestDatasetEncoder();
         $fixtureRoot = dirname(__DIR__, 3) . '/Fixtures/paper-backtesting';
 
@@ -520,6 +707,10 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame(
             $encoder->publicTrades($dataset),
             file_get_contents($fixtureRoot . '/public-trades.ndjson'),
+        );
+        self::assertSame(
+            $encoder->publicBooks($dataset),
+            file_get_contents($fixtureRoot . '/public-books.ndjson'),
         );
     }
 
@@ -617,10 +808,86 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         );
     }
 
+    /** @param array<string, mixed> $override */
+    private function okxBook(
+        array $override = [],
+        ?\DateTimeImmutable $exchangeTimestamp = null,
+        string $sequence = '3',
+    ): PaperMarketEvent {
+        $happenedAt = $exchangeTimestamp
+            ?? new \DateTimeImmutable('2026-08-13T10:00:25.000000Z');
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $happenedAt,
+            $happenedAt->modify('+125 milliseconds'),
+            $sequence,
+            array_replace([
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'bid_price' => '30000.00', 'bid_size_contracts' => '2.500',
+                'bid_order_count' => '2', 'ask_price' => '30001.0',
+                'ask_size_contracts' => '3.500', 'ask_order_count' => '3',
+                'source_seq_id' => '42', 'source_prev_seq_id' => '41',
+                'source_epoch' => 1, 'origin' => 'ws_books',
+            ], $override),
+        );
+    }
+
+    /** @param array<string, mixed> $override */
+    private function hyperliquidBook(array $override = []): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'ETHUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            new \DateTimeImmutable('2026-08-13T10:00:30.000000Z'),
+            new \DateTimeImmutable('2026-08-13T10:00:30.100000Z'),
+            '2',
+            array_replace([
+                'native_symbol' => 'ETH', 'bid_price' => '3999.50',
+                'bid_size' => '0.250', 'ask_price' => '4000.50',
+                'ask_size' => '0.500', 'bid_level_count' => '2',
+                'ask_level_count' => '3', 'source_time' => '1786615230000',
+                'source_epoch' => '1', 'source_book_hash' => str_repeat('a', 64),
+                'origin' => 'ws_l2_book', 'synthetic' => false,
+            ], $override),
+        );
+    }
+
     private function snapshot(PaperMarketEvent ...$events): VerifiedPaperDatasetSnapshot
     {
         $event = $events[0];
         return new VerifiedPaperDatasetSnapshot($this->manifest($event, $events), $events);
+    }
+
+    private function snapshotWithQuality(
+        PaperMarketDataQuality $quality,
+        PaperMarketEvent ...$events,
+    ): VerifiedPaperDatasetSnapshot {
+        $event = $events[0];
+        $manifest = $this->manifest($event, $events);
+        return new VerifiedPaperDatasetSnapshot(new PaperDatasetManifest(
+            schemaVersion: $manifest->schemaVersion,
+            recorderVersion: $manifest->recorderVersion,
+            datasetId: $manifest->datasetId,
+            venue: $manifest->venue,
+            network: $manifest->network,
+            symbols: $manifest->symbols,
+            startExchangeTimestamp: $manifest->startExchangeTimestamp,
+            endExchangeTimestamp: $manifest->endExchangeTimestamp,
+            channels: $manifest->channels,
+            eventCount: $manifest->eventCount,
+            sequenceGaps: $manifest->sequenceGaps,
+            quality: $quality,
+            modelName: 'hl_candle_atr_top_v1',
+            modelVersion: '1.0.0',
+            eventsFileSha256: $manifest->eventsFileSha256,
+            state: $manifest->state,
+            lastEventId: $manifest->lastEventId,
+        ), $events);
     }
 
     /** @param list<PaperMarketEvent> $events */

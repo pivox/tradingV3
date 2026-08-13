@@ -11,6 +11,7 @@ use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use Brick\Math\BigDecimal;
@@ -47,6 +48,20 @@ final class PaperBacktestDatasetAdapter
         'trade_id', 'origin',
     ];
 
+    /** @var list<string> */
+    private const OKX_BOOK_KEYS = [
+        'native_symbol', 'bid_price', 'bid_size_contracts', 'bid_order_count',
+        'ask_price', 'ask_size_contracts', 'ask_order_count', 'source_seq_id',
+        'source_prev_seq_id', 'source_epoch', 'origin',
+    ];
+
+    /** @var list<string> */
+    private const HYPERLIQUID_BOOK_KEYS = [
+        'native_symbol', 'bid_price', 'bid_size', 'ask_price', 'ask_size',
+        'bid_level_count', 'ask_level_count', 'source_time', 'source_epoch',
+        'source_book_hash', 'origin', 'synthetic',
+    ];
+
     public function adapt(VerifiedPaperDatasetSnapshot $snapshot): PaperBacktestDataset
     {
         $manifest = $snapshot->manifest;
@@ -55,6 +70,7 @@ final class PaperBacktestDatasetAdapter
 
         $candles = [];
         $publicTrades = [];
+        $publicBooks = [];
         $sourceChecksum = 'sha256:' . $manifest->eventsFileSha256;
         foreach ($snapshot->events as $event) {
             $this->assertEventEnvelope($event, $manifest);
@@ -63,6 +79,16 @@ final class PaperBacktestDatasetAdapter
                 $publicTrades[] = $manifest->venue === PaperMarketDataVenue::OKX
                     ? $this->normalizeOkxTrade($event, $sourceChecksum)
                     : $this->normalizeHyperliquidTrade($event, $sourceChecksum);
+                continue;
+            }
+            if ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
+                if ($manifest->quality !== PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES) {
+                    continue;
+                }
+                $this->assertCandleNativeSymbol($event, $manifest);
+                $publicBooks[] = $manifest->venue === PaperMarketDataVenue::OKX
+                    ? $this->normalizeOkxBook($event, $sourceChecksum)
+                    : $this->normalizeHyperliquidBook($event, $sourceChecksum);
                 continue;
             }
             $timeframe = $this->timeframe($event->channel);
@@ -90,6 +116,11 @@ final class PaperBacktestDatasetAdapter
             NormalizedBacktestPublicTrade $right,
         ): int => [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
             <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
+        usort($publicBooks, static fn (
+            NormalizedBacktestPublicBook $left,
+            NormalizedBacktestPublicBook $right,
+        ): int => [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
+            <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
 
         return new PaperBacktestDataset([
             'source' => 'paper_market_dataset',
@@ -99,7 +130,128 @@ final class PaperBacktestDatasetAdapter
             'source_network' => $manifest->network->value,
             'market_data_venue' => $manifest->venue->value,
             'market_type' => 'perpetual',
-        ], $candles, $publicTrades);
+        ], $candles, $publicTrades, $publicBooks);
+    }
+
+    private function normalizeOkxBook(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicBook {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::OKX_BOOK_KEYS);
+        if (!\in_array($payload['origin'] ?? null, [
+            'rest_initial_snapshot',
+            'rest_resync_snapshot',
+            'ws_books',
+        ], true)
+            || !\is_int($payload['source_epoch'] ?? null)
+            || $payload['source_epoch'] < 1
+            || !$this->unsignedString($payload['source_seq_id'] ?? null)
+            || (($payload['source_prev_seq_id'] ?? null) !== null
+                && !$this->signedSourceString($payload['source_prev_seq_id']))
+            || !$this->positiveUnsignedString($payload['bid_order_count'] ?? null)
+            || !$this->positiveUnsignedString($payload['ask_order_count'] ?? null)
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_book_invalid');
+        }
+        return $this->publicBook(
+            $event,
+            $sourceChecksum,
+            $payload['bid_price'] ?? null,
+            $payload['bid_size_contracts'] ?? null,
+            $payload['ask_price'] ?? null,
+            $payload['ask_size_contracts'] ?? null,
+            'contracts',
+            $payload['bid_order_count'],
+            $payload['ask_order_count'],
+            $payload['origin'],
+        );
+    }
+
+    private function normalizeHyperliquidBook(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicBook {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::HYPERLIQUID_BOOK_KEYS);
+        if (($payload['origin'] ?? null) !== 'ws_l2_book'
+            || ($payload['synthetic'] ?? null) !== false
+            || !$this->unsignedString($payload['source_time'] ?? null)
+            || $payload['source_time'] !== $event->exchangeTimestamp->format('Uv')
+            || !$this->positiveUnsignedString($payload['source_epoch'] ?? null)
+            || !$this->positiveUnsignedString($payload['bid_level_count'] ?? null)
+            || !$this->positiveUnsignedString($payload['ask_level_count'] ?? null)
+            || !\is_string($payload['source_book_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/D', $payload['source_book_hash']) !== 1
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_book_invalid');
+        }
+        return $this->publicBook(
+            $event,
+            $sourceChecksum,
+            $payload['bid_price'] ?? null,
+            $payload['bid_size'] ?? null,
+            $payload['ask_price'] ?? null,
+            $payload['ask_size'] ?? null,
+            'base_asset',
+            null,
+            null,
+            'ws_l2_book',
+        );
+    }
+
+    private function publicBook(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+        mixed $bidPrice,
+        mixed $bidQuantity,
+        mixed $askPrice,
+        mixed $askQuantity,
+        string $quantityUnit,
+        ?string $bidOrderCount,
+        ?string $askOrderCount,
+        string $origin,
+    ): NormalizedBacktestPublicBook {
+        try {
+            return new NormalizedBacktestPublicBook(
+                $event->eventId,
+                $sourceChecksum,
+                $event->sourceNetwork->value,
+                $event->sourceVenue->value,
+                $event->symbol,
+                $event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT),
+                $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT),
+                $this->decimal($bidPrice, true),
+                $this->decimal($bidQuantity, true),
+                $this->decimal($askPrice, true),
+                $this->decimal($askQuantity, true),
+                $quantityUnit,
+                $bidOrderCount,
+                $askOrderCount,
+                $origin,
+            );
+        } catch (PaperBacktestAdapterException|\InvalidArgumentException) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_book_invalid');
+        }
+    }
+
+    private function unsignedString(mixed $value): bool
+    {
+        return \is_string($value)
+            && \strlen($value) <= 128
+            && preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) === 1;
+    }
+
+    private function positiveUnsignedString(mixed $value): bool
+    {
+        return \is_string($value)
+            && \strlen($value) <= 128
+            && preg_match('/\A[1-9][0-9]*\z/D', $value) === 1;
+    }
+
+    private function signedSourceString(mixed $value): bool
+    {
+        return $value === '-1' || $this->unsignedString($value);
     }
 
     private function normalizeOkxTrade(
