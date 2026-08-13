@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import sys
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Iterator, Literal
@@ -26,6 +25,8 @@ from pydantic import (
 
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_PHP_INT_MIN = -(1 << 63)
+_PHP_INT_MAX = (1 << 63) - 1
 _EXPECTED_LAYER_ORDER = (
     "base",
     "mode",
@@ -96,6 +97,8 @@ class FrozenJsonDict(Mapping[str, Any]):
     __slots__ = ("__backing",)
 
     def __init__(self, value: Mapping[str, Any]) -> None:
+        if _has_contiguous_zero_based_integer_string_key_set(value):
+            raise ValueError("canonical_json_ambiguous_integer_key_map")
         data: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
@@ -159,10 +162,28 @@ def _deep_freeze(value: Any) -> Any:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("canonical_json_non_finite_float")
+        if value.is_integer() and not _is_php_integer(value):
+            raise ValueError(
+                "canonical_json_ambiguous_integral_float_out_of_php_range"
+            )
         return value
-    if isinstance(value, (str, int, bool, type(None))):
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not _is_php_integer(value):
+            raise ValueError("canonical_json_integer_out_of_php_range")
+        return value
+    if isinstance(value, (str, bool, type(None))):
         return value
     raise ValueError("canonical_json_value_invalid")
+
+
+def _is_php_integer(value: int | float) -> bool:
+    return _PHP_INT_MIN <= value <= _PHP_INT_MAX
+
+
+def _has_contiguous_zero_based_integer_string_key_set(
+    value: Mapping[object, Any],
+) -> bool:
+    return bool(value) and set(value) == {str(index) for index in range(len(value))}
 
 
 def thaw_json(value: Any) -> Any:
@@ -179,6 +200,8 @@ def _canonical_json_value(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _canonical_json_value(value.model_dump(mode="json"))
     if isinstance(value, Mapping):
+        if _has_contiguous_zero_based_integer_string_key_set(value):
+            raise ValueError("canonical_json_ambiguous_integer_key_map")
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
@@ -192,10 +215,18 @@ def _canonical_json_value(value: Any) -> Any:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("canonical_json_non_finite_float")
-        if value.is_integer() and -sys.maxsize - 1 <= value <= sys.maxsize:
+        if value.is_integer():
+            if not _is_php_integer(value):
+                raise ValueError(
+                    "canonical_json_ambiguous_integral_float_out_of_php_range"
+                )
             return int(value)
         return value
-    if isinstance(value, (str, int, bool, type(None))):
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not _is_php_integer(value):
+            raise ValueError("canonical_json_integer_out_of_php_range")
+        return value
+    if isinstance(value, (str, bool, type(None))):
         return value
     raise ValueError("canonical_json_value_invalid")
 

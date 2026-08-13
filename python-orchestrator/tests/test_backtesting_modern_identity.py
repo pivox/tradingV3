@@ -37,6 +37,9 @@ PUBLISHED_RUN_IDENTITIES = (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "backtesting"
+PHP_INT_MIN = -(1 << 63)
+PHP_INT_MAX = (1 << 63) - 1
+PHP_INT_MAX_FLOAT_BELOW_LIMIT = float.fromhex("0x1.fffffffffffffp+62")
 
 
 def test_php_effective_config_snapshot_golden_parity_and_tamper_detection() -> None:
@@ -334,14 +337,13 @@ def test_canonical_values_reject_ambiguous_or_non_finite_input() -> None:
 def test_config_hash_matches_php_scientific_float_encoding() -> None:
     config = {
         "tiny": 1e-7,
-        "huge": 1e20,
         "negative": -1e-7,
         "mantissa": -1.234567890123456e-7,
     }
 
     # PHP 8.4 / serialize_precision=-1 public calculateConfigHash() fixture.
     assert calculate_config_hash(config, "sha256:" + "b" * 64) == (
-        "sha256:63c116450f4c52b518addcb7338ba265b61dae6bf1839dfd6aae41e6ce2df841"
+        "sha256:f6f30f236d91d6bceee845f06d868fd009bdaf30f4a85731f12a0044744353e8"
     )
 
 
@@ -445,6 +447,118 @@ def test_canonical_hashing_rejects_non_json_inputs_and_covers_scalar_forms() -> 
         calculate_config_hash({"opaque": object()}, catalog_hash)
     with pytest.raises(ValueError, match="effective_config_snapshot must be a mapping"):
         calculate_snapshot_hash(["not", "a", "mapping"])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_hash"),
+    (
+        (
+            PHP_INT_MIN,
+            "sha256:9969c55be4b653411083212fedb03558720a6acea4d41ae8520f0e9428374095",
+        ),
+        (
+            PHP_INT_MAX,
+            "sha256:3496ec5cd57832d13ef6d0421419b6b5b562500a5ac92f89cbbc30aaac9a8e2c",
+        ),
+        (
+            float(PHP_INT_MIN),
+            "sha256:9969c55be4b653411083212fedb03558720a6acea4d41ae8520f0e9428374095",
+        ),
+        (
+            PHP_INT_MAX_FLOAT_BELOW_LIMIT,
+            "sha256:2f4d1f213c4a462e150332f80ac1e2a4f7e8b0e14459bcb151f0dee3c384a578",
+        ),
+    ),
+)
+def test_php_integer_domain_bounds_have_independent_php_hashes(
+    value: int | float, expected_hash: str
+) -> None:
+    catalog_hash = "sha256:" + "b" * 64
+
+    assert PHP_INT_MAX_FLOAT_BELOW_LIMIT == PHP_INT_MAX - 1023
+    assert FrozenJsonDict({"value": value})["value"] == value
+    assert calculate_config_hash({"value": value}, catalog_hash) == expected_hash
+
+
+@pytest.mark.parametrize("value", (PHP_INT_MIN - 1, PHP_INT_MAX + 1))
+def test_php_integer_domain_rejects_out_of_range_ints(value: int) -> None:
+    with pytest.raises(ValueError, match="canonical_json_integer_out_of_php_range"):
+        FrozenJsonDict({"value": value})
+    with pytest.raises(ValueError, match="canonical_json_integer_out_of_php_range"):
+        calculate_config_hash({"value": value}, "sha256:" + "b" * 64)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        float(1 << 63),
+        float.fromhex("-0x1.0000000000001p+63"),
+        1e20,
+    ),
+)
+def test_php_integer_domain_rejects_ambiguous_out_of_range_integral_floats(
+    value: float,
+) -> None:
+    assert value.is_integer()
+    with pytest.raises(
+        ValueError, match="canonical_json_ambiguous_integral_float_out_of_php_range"
+    ):
+        FrozenJsonDict({"value": value})
+    with pytest.raises(
+        ValueError, match="canonical_json_ambiguous_integral_float_out_of_php_range"
+    ):
+        calculate_config_hash({"value": value}, "sha256:" + "b" * 64)
+
+
+@pytest.mark.parametrize(
+    "ambiguous",
+    (
+        {"0": "x"},
+        {"1": "x", "0": "y"},
+    ),
+)
+def test_contiguous_integer_string_key_mappings_are_rejected_independent_of_order(
+    ambiguous: dict[str, str],
+) -> None:
+    catalog_hash = "sha256:" + "b" * 64
+
+    with pytest.raises(ValueError, match="canonical_json_ambiguous_integer_key_map"):
+        FrozenJsonDict(ambiguous)
+    with pytest.raises(ValueError, match="canonical_json_ambiguous_integer_key_map"):
+        calculate_config_hash({"value": ambiguous}, catalog_hash)
+    if tuple(ambiguous) == ("0",):
+        # PHP 8.4 turns decoded {"0":"x"} into the list ["x"]. Rejecting the
+        # Python mapping prevents it from receiving this different PHP hash.
+        assert calculate_config_hash({"value": ["x"]}, catalog_hash) == (
+            "sha256:2f9d3a8adad89944550c6288d00f00ba6973a7436eb934aa0edac01e0e4174db"
+        )
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected_hash"),
+    (
+        (
+            # PHP 8.4 json_encode on the explicit empty object `(object) []`.
+            {},
+            "sha256:47948c903e73b9514f6197841dbc5b5055e1d03901642e88c188ae0292115dfe",
+        ),
+        (
+            {"1": "x"},
+            "sha256:ac57774e0ca6e948702467cf2f5d49c532b70376a0ad80ec15c7d1e4563f1fd2",
+        ),
+        (
+            {"name": "x"},
+            "sha256:c6e88f6a1d2c0efa88e5e3c7ebfdff18fb3779f3eac9c75bb5d759b830d7a32b",
+        ),
+    ),
+)
+def test_empty_noncontiguous_and_nonnumeric_mappings_remain_objects(
+    mapping: dict[str, str], expected_hash: str
+) -> None:
+    catalog_hash = "sha256:" + "b" * 64
+
+    assert dict(FrozenJsonDict(mapping)) == mapping
+    assert calculate_config_hash({"value": mapping}, catalog_hash) == expected_hash
 
 
 @pytest.mark.parametrize(
