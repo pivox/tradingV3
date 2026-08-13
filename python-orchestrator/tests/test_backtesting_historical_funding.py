@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from app.backtesting.historical_funding import (
 UTC = timezone.utc
 DATASET_CHECKSUM = "sha256:" + "a" * 64
 DATASET_ID = "backtest-dataset-" + "a" * 64
+FIXTURES = Path(__file__).parent / "fixtures/backtesting"
 
 
 def _record(at: str, record_id: str = "funding-1", rate: str = "0.0001") -> HistoricalFundingRecord:
@@ -96,3 +98,13 @@ def test_verifier_rejects_tampered_bytes_or_checksum() -> None:
     ):
         with pytest.raises(ValueError, match="historical_funding_schedule_invalid"):
             VerifiedHistoricalFundingSchedule(forged)
+
+
+def test_versioned_schedule_fixture_is_canonical() -> None:
+    payload = (FIXTURES / "historical-funding-schedule.json").read_bytes()
+    artifacts = HistoricalFundingScheduleArtifacts(
+        schedule_json=payload,
+        schedule_checksum="sha256:378bbdd4e7d1b65b5f97454ef69cf33b1e58675bcb710e0b024f9c3044311439",
+    )
+    verified = VerifiedHistoricalFundingSchedule(artifacts)
+    assert verified.records[1].source_record_id == "golden-funding-2"

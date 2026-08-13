@@ -74,12 +74,42 @@ document porte `costs_are_certified=false` et
 `cost_evidence=canonical_plan_projection`. Python ne recalcule aucun cout
 a partir des taux ou du notionnel. `funding_evidence=canonical_plan_provision`
 signifie explicitement qu'il s'agit de la provision conservative du plan, pas
-d'un funding historique realise. Une sortie `holding_expired` n'a pas encore
+d'un funding historique realise.
+
+Lorsqu'un `VerifiedHistoricalFundingSchedule` est fourni explicitement, le
+runtime appelle l'autorite PHP `CanonicalHistoricalFundingSettlement`. Le
+schedule canonique est lie au meme `dataset_id`, checksum, reseau, venue,
+market type et symbole que les bougies. Il exige une grille complete, des
+instants uniques, un mark price exact par instant et
+`available_at <= funding_at`. Le calcul PHP applique uniquement
+`entry_at < funding_at <= exit_at` : un taux positif debite un long et credite
+un short. Le cashflow signe remplace alors la provision du plan dans le net et
+le R, avec `funding_evidence=integrity_bound_historical_schedule` et
+`cost_basis_version=canonical-plan-plus-historical-funding.v1`.
+
+Ce chemin reste `costs_are_certified=false` : le SHA-256 prouve l'integrite et
+la reproductibilite, pas l'authenticite venue, et frais, spread et slippage
+restent des projections du plan. Le lot ne telecharge aucune donnee et n'infere
+jamais le mark price depuis une bougie. L'acquisition publique
+OKX/Hyperliquid, la preuve de couverture et la projection Paper du mark/index
+historique restent requises avant certification. Un schedule absent conserve
+explicitement la provision du plan ; un schedule present mais invalide ne
+provoque jamais de fallback silencieux.
+
+Reproduction directe de l'autorite PHP :
+
+```bash
+php trading-app/bin/console app:backtest:funding:settle \
+  --no-interaction --no-ansi \
+  < /chemin/vers/canonical-historical-funding-request.json
+```
+
+Une sortie `holding_expired` n'a pas encore
 de branche de cout PHP authentifiee et echoue donc fermee au lieu d'inventer un
 PnL.
 
-Restent hors de ce lot : partial fills, fallback taker, funding historique
-horodate, portefeuille multi-plan, PostgreSQL, metriques et rapports de
+Restent hors de ce lot : acquisition et certification du funding historique,
+partial fills, fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
 ## Invariants verrouilles par les contrats v1

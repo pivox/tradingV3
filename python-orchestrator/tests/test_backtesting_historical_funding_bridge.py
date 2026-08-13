@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from app.backtesting.historical_funding_bridge import (
 
 
 UTC = timezone.utc
+FIXTURES = Path(__file__).parent / "fixtures/backtesting"
 
 
 def _request() -> CanonicalHistoricalFundingRequest:
@@ -75,3 +77,12 @@ def test_bridge_is_bounded(tmp_path) -> None:
     noisy.write_text("print('x'*10000)\n")
     with pytest.raises(HistoricalFundingBridgeError, match="output_too_large"):
         HistoricalFundingBridge(("python3", str(noisy)), max_output_bytes=128).settle(_request())
+
+
+def test_php_generated_settlement_fixture_is_strict_and_hash_valid() -> None:
+    from app.backtesting.historical_funding_bridge import CanonicalHistoricalFundingResult
+    result = CanonicalHistoricalFundingResult.model_validate_json(
+        (FIXTURES / "php-historical-funding-settlement.json").read_bytes()
+    )
+    assert result.funding_cashflow_quote == "-0.02497"
+    assert result.applied_source_record_ids == ("golden-funding-2",)
