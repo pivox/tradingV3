@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 from app.backtesting.historical_funding_bridge import (
     CanonicalHistoricalFundingRequest,
     CanonicalHistoricalFundingResult,
+    HistoricalFundingBridge,
     _ordered_json,
 )
 
@@ -42,21 +44,33 @@ def settlement_for(
     return CanonicalHistoricalFundingResult.model_validate(payload)
 
 
-class DeterministicHistoricalFundingBridge:
-    """Protocol-compatible test bridge whose evidence is bound to each request."""
+def trusted_bridge_for(
+    *,
+    cashflow: str = "-0.02497",
+    applied_ids: tuple[str, ...] = ("funding-2",),
+) -> HistoricalFundingBridge:
+    """Patch only transport I/O while preserving the exact trusted bridge type."""
+    bridge = HistoricalFundingBridge()
 
-    def __init__(
-        self,
-        *,
-        cashflow: str = "-0.02497",
-        applied_ids: tuple[str, ...] = ("funding-2",),
-    ) -> None:
-        self._cashflow = cashflow
-        self._applied_ids = applied_ids
+    def run(payload: bytes) -> tuple[int, bytes]:
+        request = json.loads(payload)
+        result = {
+            "schema_version": "canonical-historical-funding-result.v1",
+            **{
+                key: request[key]
+                for key in (
+                    "dataset_id", "dataset_checksum", "schedule_checksum", "plan_hash",
+                    "config_hash", "cost_input_hash", "symbol", "side", "quantity",
+                    "contract_size", "entry_at", "exit_at",
+                )
+            },
+            "applied_source_record_ids": list(applied_ids),
+            "applied_record_count": len(applied_ids),
+            "funding_cashflow_quote": cashflow,
+            "request_hash": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        }
+        result["result_hash"] = "sha256:" + hashlib.sha256(_ordered_json(result)).hexdigest()
+        return 0, _ordered_json(result)
 
-    def settle(self, request: CanonicalHistoricalFundingRequest) -> CanonicalHistoricalFundingResult:
-        return settlement_for(
-            request,
-            cashflow=self._cashflow,
-            applied_ids=self._applied_ids,
-        )
+    bridge._run = run  # type: ignore[method-assign]
+    return bridge

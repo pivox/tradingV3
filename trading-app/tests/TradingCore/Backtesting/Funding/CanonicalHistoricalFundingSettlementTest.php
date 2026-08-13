@@ -50,6 +50,20 @@ final class CanonicalHistoricalFundingSettlementTest extends TestCase
         );
     }
 
+    public function testHashesUseUnescapedUtf8ForCrossLanguageParity(): void
+    {
+        $request = $this->request('long');
+        $request['records'][0]['source_record_id'] = 'funding-é';
+
+        $result = (new CanonicalHistoricalFundingSettlement())->settle($request);
+        $encoded = json_encode(
+            $request,
+            JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+        );
+
+        self::assertSame('sha256:' . hash('sha256', $encoded), $result['request_hash']);
+    }
+
     public function testIncompleteOrLateScheduleFailsClosed(): void
     {
         foreach (['gap', 'late'] as $case) {

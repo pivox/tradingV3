@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Backtesting\Funding;
 
-use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use Brick\Math\BigDecimal;
 
 final class CanonicalHistoricalFundingSettlement
@@ -206,9 +205,17 @@ final class CanonicalHistoricalFundingSettlement
 
     private function canonicalJson(mixed $value): string
     {
-        return CanonicalOrderPlanDecimal::encodeCanonicalJson(
-            $value,
-            'canonical_historical_funding_encoding_invalid',
-        );
+        try {
+            return json_encode(
+                $value,
+                JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+            );
+        } catch (\JsonException $exception) {
+            throw new CanonicalHistoricalFundingSettlementException(
+                'canonical_historical_funding_encoding_invalid',
+                0,
+                $exception,
+            );
+        }
     }
 }

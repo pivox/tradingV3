@@ -108,6 +108,8 @@ def project_plan_bound_net_outcome(
             + _decimal(plan.entry_slippage_cost) + _decimal(plan.stop_slippage_cost)
         )
         historical_net_risk = _decimal(plan.gross_stop_loss) + stop_non_funding_cost - historical_cashflow
+        if historical_net_risk <= 0:
+            raise BacktestNetOutcomeError("backtrader_net_outcome_historical_net_risk_invalid")
         net_r = net_pnl / historical_net_risk
 
     result: dict[str, Any] = {

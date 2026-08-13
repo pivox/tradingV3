@@ -119,6 +119,8 @@ class CanonicalBacktraderRuntime:
         if funding_schedule is not None or funding_bridge is not None:
             if funding_schedule is None or funding_bridge is None or outcome.status != "closed":
                 raise ValueError("backtrader_runtime_historical_funding_evidence_required")
+            if type(funding_bridge) is not HistoricalFundingBridge:
+                raise ValueError("backtrader_runtime_historical_funding_authority_invalid")
             funding_settlement = funding_bridge.settle(
                 canonical_historical_funding_request(plan, outcome, funding_schedule)
             )

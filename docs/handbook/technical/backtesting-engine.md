@@ -78,6 +78,12 @@ d'un funding historique realise.
 
 Lorsqu'un `VerifiedHistoricalFundingSchedule` est fourni explicitement, le
 runtime appelle l'autorite PHP `CanonicalHistoricalFundingSettlement`. Le
+bridge ne permet ni argv personnalise ni implementation substituable : seule
+la commande Symfony canonique peut produire le cashflow consomme par le
+runtime. Son timeout couvre aussi l'ecriture de stdin afin qu'un enfant qui ne
+lit jamais la requete ne puisse bloquer le run. Les hashes PHP/Python utilisent
+le meme JSON UTF-8 non echappe. Un risque net historique nul ou negatif echoue
+ferme avant le calcul de R.
 schedule canonique est lie au meme `dataset_id`, checksum, reseau, venue,
 market type et symbole que les bougies. Il exige une grille complete, des
 instants uniques, un mark price exact par instant et

@@ -18,7 +18,7 @@ from app.backtesting.historical_funding import (
     VerifiedHistoricalFundingSchedule,
     serialize_historical_funding_schedule,
 )
-from tests.funding_support import DeterministicHistoricalFundingBridge
+from tests.funding_support import trusted_bridge_for
 
 
 UTC = timezone.utc
@@ -120,7 +120,7 @@ def test_runtime_invokes_historical_funding_authority_protocol() -> None:
         plan,
         feed,
         funding_schedule=_funding_schedule(feed),
-        funding_bridge=DeterministicHistoricalFundingBridge(applied_ids=("runtime-funding-2",)),
+        funding_bridge=trusted_bridge_for(applied_ids=("runtime-funding-2",)),
     ))
 
     outcome = result["net_outcome"]
@@ -140,7 +140,7 @@ def test_runtime_input_hash_changes_with_historical_schedule() -> None:
         plan,
         feed,
         funding_schedule=_funding_schedule(feed),
-        funding_bridge=DeterministicHistoricalFundingBridge(applied_ids=("runtime-funding-2",)),
+        funding_bridge=trusted_bridge_for(applied_ids=("runtime-funding-2",)),
     ))
     assert plain["input_hash"] != historical["input_hash"]
 
@@ -228,3 +228,19 @@ def test_runtime_binds_plan_to_feed_market_type() -> None:
     plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
     with pytest.raises(ValueError, match="identity_mismatch"):
         CanonicalBacktraderRuntime().run(plan, feed)
+
+
+def test_runtime_rejects_noncanonical_funding_authority() -> None:
+    class ForgedBridge:
+        def settle(self, request):
+            raise AssertionError("untrusted authority must never run")
+
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    with pytest.raises(ValueError, match="funding_authority_invalid"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            funding_schedule=_funding_schedule(feed),
+            funding_bridge=ForgedBridge(),  # type: ignore[arg-type]
+        )

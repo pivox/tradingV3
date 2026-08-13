@@ -217,14 +217,15 @@ def _decimal_string(value: Any) -> str:
 
 
 class HistoricalFundingBridge:
-    def __init__(self, argv: tuple[str, ...] | None = None, *, timeout_seconds: float = 15.0, max_output_bytes: int = _MAX_BYTES) -> None:
-        if argv is None:
-            root = Path(__file__).resolve().parents[3]
-            argv = ("php", str(root / "trading-app/bin/console"), "app:backtest:funding:settle", "--no-interaction", "--no-ansi")
-        if not argv or any(type(item) is not str or not item for item in argv): raise ValueError("historical_funding_bridge_argv_invalid")
+    def __init__(self, *, timeout_seconds: float = 15.0, max_output_bytes: int = _MAX_BYTES) -> None:
         if type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or timeout_seconds <= 0 or type(max_output_bytes) is not int or not 1 <= max_output_bytes <= _MAX_BYTES:
             raise ValueError("historical_funding_bridge_bounds_invalid")
-        self._argv, self._timeout, self._max_output = argv, float(timeout_seconds), max_output_bytes
+        root = Path(__file__).resolve().parents[3]
+        self._argv = (
+            "php", str(root / "trading-app/bin/console"),
+            "app:backtest:funding:settle", "--no-interaction", "--no-ansi",
+        )
+        self._timeout, self._max_output = float(timeout_seconds), max_output_bytes
 
     def settle(self, request: CanonicalHistoricalFundingRequest) -> CanonicalHistoricalFundingResult:
         if not isinstance(request, CanonicalHistoricalFundingRequest): raise TypeError("canonical_historical_funding_request_required")
@@ -242,10 +243,17 @@ class HistoricalFundingBridge:
         return result
 
     def _run(self, payload: bytes) -> tuple[int, bytes]:
+        deadline = time.monotonic() + self._timeout
         try: process = subprocess.Popen(self._argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
         except (OSError, ValueError) as exc: raise HistoricalFundingBridgeError("historical_funding_bridge_process_unavailable") from exc
         assert process.stdin and process.stdout and process.stderr
         output = bytearray(); overflow = threading.Event()
+        def write_stdin() -> None:
+            try:
+                process.stdin.write(payload)
+                process.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
         def read_stdout() -> None:
             while chunk := process.stdout.read(65536):
                 if len(output) + len(chunk) > self._max_output: overflow.set(); return
@@ -255,11 +263,13 @@ class HistoricalFundingBridge:
             while chunk := process.stderr.read(65536):
                 total += len(chunk)
                 if total > self._max_output: overflow.set(); return
-        threads = [threading.Thread(target=read_stdout, daemon=True), threading.Thread(target=drain_stderr, daemon=True)]
+        threads = [
+            threading.Thread(target=write_stdin, daemon=True),
+            threading.Thread(target=read_stdout, daemon=True),
+            threading.Thread(target=drain_stderr, daemon=True),
+        ]
         for thread in threads: thread.start()
         try:
-            process.stdin.write(payload); process.stdin.close()
-            deadline = time.monotonic() + self._timeout
             while process.poll() is None:
                 if overflow.is_set(): raise HistoricalFundingBridgeError("historical_funding_bridge_output_too_large")
                 if time.monotonic() >= deadline: raise HistoricalFundingBridgeError("historical_funding_bridge_timeout")
@@ -269,7 +279,12 @@ class HistoricalFundingBridge:
             if any(thread.is_alive() for thread in threads): raise HistoricalFundingBridgeError("historical_funding_bridge_timeout")
             return process.returncode, bytes(output)
         except HistoricalFundingBridgeError:
-            process.kill(); process.wait(); raise
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            for thread in threads:
+                thread.join(1.0)
+            raise
         finally:
             if process.poll() is not None: process.wait()
             for stream in (process.stdin, process.stdout, process.stderr):

@@ -124,7 +124,7 @@ def _stop_execution() -> BacktestExecutionResult:
     )
 
 
-def _historical_funding():
+def _historical_funding(*, cashflow: str = "-0.02497"):
     feed = _feed()
     records = tuple(
         HistoricalFundingRecord(
@@ -175,7 +175,7 @@ def _historical_funding():
             "interval_seconds": record.interval_seconds,
         } for record in schedule.records),
     )
-    return schedule, settlement_for(request)
+    return schedule, settlement_for(request, cashflow=cashflow)
 
 
 def test_target_outcome_projects_plan_bound_php_cost_components() -> None:
@@ -264,6 +264,19 @@ def test_historical_funding_never_falls_back_after_evidence_mismatch() -> None:
         project_plan_bound_net_outcome(
             _plan(), _target_execution(), _feed(), funding_schedule=schedule,
         )
+
+
+def test_historical_funding_rejects_zero_or_negative_net_risk() -> None:
+    for cashflow in ("4.59185815", "5"):
+        schedule, settlement = _historical_funding(cashflow=cashflow)
+        with pytest.raises(BacktestNetOutcomeError, match="historical_net_risk_invalid"):
+            project_plan_bound_net_outcome(
+                _plan(),
+                _target_execution(),
+                _feed(),
+                funding_schedule=schedule,
+                funding_settlement=settlement,
+            )
 
 
 @pytest.mark.parametrize(
