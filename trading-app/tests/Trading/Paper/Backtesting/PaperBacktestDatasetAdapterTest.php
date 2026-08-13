@@ -346,7 +346,8 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
 
     public function testCheckedInCrossRuntimeFixturesComeFromThePublicEncoder(): void
     {
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $event = $this->okxEvent(['volume_base' => '0.001']);
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($event));
         $encoder = new PaperBacktestDatasetEncoder();
         $fixtureRoot = dirname(__DIR__, 3) . '/Fixtures/paper-backtesting';
 
