@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _HASH = r"^sha256:[0-9a-f]{64}$"
 _DATASET_ID = r"^backtest-dataset-[0-9a-f]{64}$"
 _DECIMAL = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$")
+MAX_HISTORICAL_FUNDING_RECORDS = 10_000
+MAX_HISTORICAL_FUNDING_TEXT_BYTES = 128
 
 
 def _utc(value: datetime) -> datetime:
@@ -58,7 +60,7 @@ class HistoricalFundingRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     schema_version: Literal["historical-funding-record.v1"]
-    source_record_id: str = Field(min_length=1, max_length=256)
+    source_record_id: str = Field(min_length=1, max_length=128)
     source_network: Literal["mainnet", "testnet"]
     market_data_venue: Literal["okx", "hyperliquid"]
     market_type: Literal["perpetual"]
@@ -76,15 +78,28 @@ class HistoricalFundingRecord(BaseModel):
             return _utc(value)
         return _parse_time(value)
 
+    @field_validator("source_record_id")
+    @classmethod
+    def _record_id_bytes(cls, value: str) -> str:
+        if len(value.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("historical_funding_record_id_invalid")
+        return value
+
     @field_validator("funding_rate", mode="before")
     @classmethod
     def _rate(cls, value: object) -> str:
-        return _decimal(value)
+        rendered = _decimal(value)
+        if len(rendered.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("historical_funding_decimal_invalid")
+        return rendered
 
     @field_validator("mark_price", mode="before")
     @classmethod
     def _mark(cls, value: object) -> str:
-        return _decimal(value, positive=True)
+        rendered = _decimal(value, positive=True)
+        if len(rendered.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("historical_funding_decimal_invalid")
+        return rendered
 
     @model_validator(mode="after")
     def _availability(self) -> "HistoricalFundingRecord":
@@ -169,7 +184,7 @@ def _validated_schedule(raw: dict[str, Any]) -> dict[str, Any]:
     coverage_start = _parse_time(raw["coverage_start"])
     coverage_end = _parse_time(raw["coverage_end"])
     values = raw["records"]
-    if not isinstance(values, list) or not values or len(values) > 100_000:
+    if not isinstance(values, list) or not values or len(values) > MAX_HISTORICAL_FUNDING_RECORDS:
         raise ValueError("historical_funding_records_invalid")
     records = tuple(HistoricalFundingRecord.model_validate(item) for item in values)
     identity = (

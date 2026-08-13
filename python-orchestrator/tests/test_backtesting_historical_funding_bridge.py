@@ -141,6 +141,10 @@ def test_bridge_contract_guards_reject_invalid_types_times_and_identity() -> Non
     payload["records"] = "invalid"
     with pytest.raises(ValueError, match="records_invalid"):
         CanonicalHistoricalFundingRequest.model_validate(payload)
+    payload = _request().model_dump()
+    payload["records"] = payload["records"] * 10_001
+    with pytest.raises(ValueError):
+        CanonicalHistoricalFundingRequest.model_validate(payload)
     for field in ("entry_at", "exit_at"):
         payload = dict(_request().__dict__)
         payload[field] = datetime(2026, 8, 10)

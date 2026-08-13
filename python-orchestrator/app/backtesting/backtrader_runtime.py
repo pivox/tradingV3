@@ -121,6 +121,19 @@ class CanonicalBacktraderRuntime:
                 raise ValueError("backtrader_runtime_historical_funding_evidence_required")
             if type(funding_bridge) is not HistoricalFundingBridge:
                 raise ValueError("backtrader_runtime_historical_funding_authority_invalid")
+            try:
+                funding_schedule = VerifiedHistoricalFundingSchedule(funding_schedule.artifacts)
+            except Exception as exc:
+                raise ValueError("backtrader_runtime_historical_funding_schedule_binding_invalid") from exc
+            if (
+                funding_schedule.dataset_id != feed.dataset_id
+                or funding_schedule.dataset_checksum != feed.dataset_checksum
+                or funding_schedule.source_network != feed.source_network
+                or funding_schedule.market_data_venue != feed.market_data_venue
+                or funding_schedule.market_type != feed.market_type
+                or funding_schedule.symbol != feed.symbol
+            ):
+                raise ValueError("backtrader_runtime_historical_funding_schedule_binding_invalid")
             if outcome.status == "closed":
                 funding_settlement = funding_bridge.settle(
                     canonical_historical_funding_request(plan, outcome, funding_schedule)

@@ -83,6 +83,35 @@ final class CanonicalHistoricalFundingSettlementTest extends TestCase
         }
     }
 
+    public function testRecordCountAndByteSizedFieldsAreBounded(): void
+    {
+        $request = $this->request('long');
+        $request['records'] = array_fill(0, 10001, $request['records'][0]);
+        try {
+            (new CanonicalHistoricalFundingSettlement())->settle($request);
+            self::fail('Expected record bound rejection.');
+        } catch (CanonicalHistoricalFundingSettlementException $exception) {
+            self::assertSame('canonical_historical_funding_records_invalid', $exception->getMessage());
+        }
+
+        foreach (['source_record_id' => str_repeat('é', 65), 'funding_rate' => '0.' . str_repeat('1', 127)] as $field => $value) {
+            $request = $this->request('long');
+            $request['records'][0][$field] = $value;
+            $this->expectRecordRejection($request);
+        }
+    }
+
+    /** @param array<string, mixed> $request */
+    private function expectRecordRejection(array $request): void
+    {
+        try {
+            (new CanonicalHistoricalFundingSettlement())->settle($request);
+            self::fail('Expected record rejection.');
+        } catch (CanonicalHistoricalFundingSettlementException $exception) {
+            self::assertStringStartsWith('canonical_historical_funding_', $exception->getMessage());
+        }
+    }
+
     /** @return array<string, mixed> */
     private function request(string $side): array
     {

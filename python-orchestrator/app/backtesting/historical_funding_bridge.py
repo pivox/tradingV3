@@ -16,6 +16,11 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
+from app.backtesting.historical_funding import (
+    MAX_HISTORICAL_FUNDING_RECORDS,
+    MAX_HISTORICAL_FUNDING_TEXT_BYTES,
+)
+
 
 _HASH = r"^sha256:[0-9a-f]{64}$"
 _DATASET = r"^backtest-dataset-[0-9a-f]{64}$"
@@ -51,7 +56,7 @@ def _decimal(value: Any, *, positive: bool = False) -> str:
 
 class CanonicalFundingRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    source_record_id: str = Field(min_length=1, max_length=256)
+    source_record_id: str = Field(min_length=1, max_length=128)
     funding_at: datetime
     available_at: datetime
     funding_rate: str
@@ -65,13 +70,28 @@ class CanonicalFundingRecord(BaseModel):
     @field_serializer("funding_at", "available_at")
     def _serialize_times(self, value: datetime) -> str: return _json_time(value)
 
+    @field_validator("source_record_id")
+    @classmethod
+    def _record_id_bytes(cls, value: str) -> str:
+        if len(value.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("canonical_historical_funding_record_id_invalid")
+        return value
+
     @field_validator("funding_rate", mode="before")
     @classmethod
-    def _rate(cls, value: Any) -> str: return _decimal(value)
+    def _rate(cls, value: Any) -> str:
+        rendered = _decimal(value)
+        if len(rendered.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("canonical_historical_funding_decimal_invalid")
+        return rendered
 
     @field_validator("mark_price", mode="before")
     @classmethod
-    def _mark(cls, value: Any) -> str: return _decimal(value, positive=True)
+    def _mark(cls, value: Any) -> str:
+        rendered = _decimal(value, positive=True)
+        if len(rendered.encode()) > MAX_HISTORICAL_FUNDING_TEXT_BYTES:
+            raise ValueError("canonical_historical_funding_decimal_invalid")
+        return rendered
 
 
 class CanonicalHistoricalFundingRequest(BaseModel):
@@ -91,7 +111,10 @@ class CanonicalHistoricalFundingRequest(BaseModel):
     exit_at: datetime
     coverage_start: datetime
     coverage_end: datetime
-    records: tuple[CanonicalFundingRecord, ...] = Field(min_length=1, max_length=100_000)
+    records: tuple[CanonicalFundingRecord, ...] = Field(
+        min_length=1,
+        max_length=MAX_HISTORICAL_FUNDING_RECORDS,
+    )
 
     @field_validator("records", mode="before")
     @classmethod

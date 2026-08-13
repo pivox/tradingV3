@@ -8,6 +8,8 @@ use Brick\Math\BigDecimal;
 
 final class CanonicalHistoricalFundingSettlement
 {
+    private const MAX_RECORDS = 10000;
+    private const MAX_TEXT_BYTES = 128;
     private const HASH = '/\Asha256:[0-9a-f]{64}\z/D';
     private const DECIMAL = '/\A(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\z/D';
     private const SIGNED_DECIMAL = '/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\z/D';
@@ -118,7 +120,7 @@ final class CanonicalHistoricalFundingSettlement
      */
     private function records(array $records, \DateTimeImmutable $coverageStart, \DateTimeImmutable $coverageEnd): array
     {
-        if (!array_is_list($records) || $records === [] || count($records) > 100000) {
+        if (!array_is_list($records) || $records === [] || count($records) > self::MAX_RECORDS) {
             throw new CanonicalHistoricalFundingSettlementException('canonical_historical_funding_records_invalid');
         }
         $normalized = [];
@@ -130,6 +132,7 @@ final class CanonicalHistoricalFundingSettlement
                 'source_record_id', 'funding_at', 'available_at', 'funding_rate',
                 'mark_price', 'interval_seconds',
             ] || !\is_string($record['source_record_id']) || $record['source_record_id'] === ''
+                || strlen($record['source_record_id']) > self::MAX_TEXT_BYTES
                 || isset($ids[$record['source_record_id']]) || !\is_int($record['interval_seconds'])
                 || $record['interval_seconds'] < 1 || $record['interval_seconds'] > 604800
             ) {
@@ -181,7 +184,8 @@ final class CanonicalHistoricalFundingSettlement
 
     private function positiveDecimal(mixed $value): BigDecimal
     {
-        if (!\is_string($value) || preg_match(self::DECIMAL, $value) !== 1 || !BigDecimal::of($value)->isPositive()) {
+        if (!\is_string($value) || strlen($value) > self::MAX_TEXT_BYTES
+            || preg_match(self::DECIMAL, $value) !== 1 || !BigDecimal::of($value)->isPositive()) {
             throw new CanonicalHistoricalFundingSettlementException('canonical_historical_funding_decimal_invalid');
         }
         return BigDecimal::of($value);
@@ -189,7 +193,8 @@ final class CanonicalHistoricalFundingSettlement
 
     private function signedDecimal(mixed $value): BigDecimal
     {
-        if (!\is_string($value) || preg_match(self::SIGNED_DECIMAL, $value) !== 1
+        if (!\is_string($value) || strlen($value) > self::MAX_TEXT_BYTES
+            || preg_match(self::SIGNED_DECIMAL, $value) !== 1
             || (str_starts_with($value, '-') && BigDecimal::of($value)->isZero())
         ) {
             throw new CanonicalHistoricalFundingSettlementException('canonical_historical_funding_decimal_invalid');

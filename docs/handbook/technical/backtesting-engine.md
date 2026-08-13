@@ -102,6 +102,11 @@ historique restent requises avant certification. Un schedule absent conserve
 explicitement la provision du plan ; un schedule present mais invalide ne
 provoque jamais de fallback silencieux.
 
+Le contrat accepte au plus 10 000 instants. Les identifiants de record et les
+decimaux sont bornes a 128 octets, ce qui rend cette cardinalite compatible
+avec la limite d'artefact et de protocole de 8 MiB au lieu d'annoncer une
+capacite que la serialisation ne pourrait pas transporter.
+
 Reproduction directe de l'autorite PHP :
 
 ```bash

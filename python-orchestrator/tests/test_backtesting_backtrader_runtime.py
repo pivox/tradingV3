@@ -14,6 +14,7 @@ from app.backtesting.backtrader_runtime import _canonical
 from app.backtesting.contracts import MarketType
 from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
 from app.backtesting.historical_funding import (
+    HistoricalFundingScheduleArtifacts,
     HistoricalFundingRecord,
     VerifiedHistoricalFundingSchedule,
     serialize_historical_funding_schedule,
@@ -265,3 +266,26 @@ def test_runtime_preserves_unfilled_result_with_paired_funding_evidence() -> Non
     assert result["net_outcome"] is None
     assert result["events"] == []
     assert result["funding_schedule_checksum"] == _funding_schedule(feed).schedule_checksum
+
+
+def test_runtime_rejects_unfilled_schedule_bound_to_another_dataset() -> None:
+    feed = _feed(unfilled=True)
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    schedule = _funding_schedule(feed)
+    raw = json.loads(schedule.artifacts.schedule_json)
+    raw["dataset_checksum"] = "sha256:" + "f" * 64
+    raw["dataset_id"] = "backtest-dataset-" + "f" * 64
+    payload = json.dumps(raw, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    checksum = "sha256:" + __import__("hashlib").sha256(payload).hexdigest()
+    unrelated = VerifiedHistoricalFundingSchedule(HistoricalFundingScheduleArtifacts(
+        schedule_json=payload,
+        schedule_checksum=checksum,
+    ))
+
+    with pytest.raises(ValueError, match="schedule_binding_invalid"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            funding_schedule=unrelated,
+            funding_bridge=trusted_bridge_for(),
+        )

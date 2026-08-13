@@ -143,6 +143,23 @@ def test_schedule_shape_identity_and_coverage_guards_fail_closed() -> None:
             coverage_start=datetime(2026, 8, 10, tzinfo=UTC),
             coverage_end=datetime(2026, 8, 10, 8, tzinfo=UTC), records=(),
         )
+    raw = json.loads(_artifacts().schedule_json)
+    raw["records"] = [raw["records"][0]] * 10_001
+    with pytest.raises(ValueError, match="records_invalid"):
+        _validated_schedule(raw)
+
+
+def test_record_byte_bounds_keep_maximum_schedule_within_artifact_cap() -> None:
+    base = _record("2026-08-10T08:00:00+00:00").model_dump()
+    for field, value in (
+        ("source_record_id", "é" * 65),
+        ("funding_rate", "0." + "1" * 127),
+        ("mark_price", "1" * 129),
+    ):
+        payload = dict(base)
+        payload[field] = value
+        with pytest.raises(ValueError):
+            HistoricalFundingRecord.model_validate(payload)
 
 
 def test_verifier_rejects_wrong_object_and_noncanonical_file_shape() -> None:
