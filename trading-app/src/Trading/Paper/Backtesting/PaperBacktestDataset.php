@@ -12,11 +12,15 @@ final readonly class PaperBacktestDataset
     /** @var list<NormalizedBacktestCandle> */
     public array $candles;
 
+    /** @var list<NormalizedBacktestPublicTrade> */
+    public array $publicTrades;
+
     /**
      * @param array<string, string> $sourceIdentity
      * @param array<array-key, mixed> $candles
+     * @param array<array-key, mixed> $publicTrades
      */
-    public function __construct(array $sourceIdentity, array $candles)
+    public function __construct(array $sourceIdentity, array $candles, array $publicTrades)
     {
         $expectedKeys = [
             'source', 'source_schema_version', 'source_build_version', 'source_checksum',
@@ -49,11 +53,27 @@ final readonly class PaperBacktestDataset
                 throw new \InvalidArgumentException('paper_backtest_candle_source_mismatch');
             }
         }
+        $tradeIds = [];
+        $sourceIds = [];
+        foreach ($publicTrades as $trade) {
+            if (!$trade instanceof NormalizedBacktestPublicTrade
+                || $trade->sourceNetwork !== $sourceIdentity['source_network']
+                || $trade->marketDataVenue !== $sourceIdentity['market_data_venue']
+                || $trade->sourceChecksum !== $sourceIdentity['source_checksum']
+                || isset($sourceIds[$trade->sourceRecordId])
+                || isset($tradeIds[$trade->symbol . '|' . $trade->venueTradeId])
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_public_trades_invalid');
+            }
+            $sourceIds[$trade->sourceRecordId] = true;
+            $tradeIds[$trade->symbol . '|' . $trade->venueTradeId] = true;
+        }
         if ($candles === []) {
             throw new \InvalidArgumentException('paper_backtest_candles_empty');
         }
 
         $this->sourceIdentity = [...$sourceIdentity];
         $this->candles = array_values($candles);
+        $this->publicTrades = array_values($publicTrades);
     }
 }

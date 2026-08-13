@@ -35,6 +35,18 @@ final class PaperBacktestDatasetAdapter
         'low', 'close', 'volume', 'trade_count', 'confirmed', 'origin',
     ];
 
+    /** @var list<string> */
+    private const OKX_TRADE_KEYS = [
+        'native_symbol', 'trade_id', 'price', 'size_contracts', 'taker_side',
+        'aggregate_count', 'source', 'source_seq_id', 'origin',
+    ];
+
+    /** @var list<string> */
+    private const HYPERLIQUID_TRADE_KEYS = [
+        'native_symbol', 'side', 'price', 'size', 'transaction_hash', 'block_time',
+        'trade_id', 'origin',
+    ];
+
     public function adapt(VerifiedPaperDatasetSnapshot $snapshot): PaperBacktestDataset
     {
         $manifest = $snapshot->manifest;
@@ -42,8 +54,17 @@ final class PaperBacktestDatasetAdapter
         $this->assertManifestSymbols($manifest);
 
         $candles = [];
+        $publicTrades = [];
+        $sourceChecksum = 'sha256:' . $manifest->eventsFileSha256;
         foreach ($snapshot->events as $event) {
             $this->assertEventEnvelope($event, $manifest);
+            if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $this->assertCandleNativeSymbol($event, $manifest);
+                $publicTrades[] = $manifest->venue === PaperMarketDataVenue::OKX
+                    ? $this->normalizeOkxTrade($event, $sourceChecksum)
+                    : $this->normalizeHyperliquidTrade($event, $sourceChecksum);
+                continue;
+            }
             $timeframe = $this->timeframe($event->channel);
             if ($timeframe === null) {
                 continue;
@@ -64,16 +85,120 @@ final class PaperBacktestDatasetAdapter
             return [$left->marketDataVenue, $left->symbol, self::DURATIONS[$left->timeframe], $left->openAt, $left->sourceRecordId]
                 <=> [$right->marketDataVenue, $right->symbol, self::DURATIONS[$right->timeframe], $right->openAt, $right->sourceRecordId];
         });
+        usort($publicTrades, static fn (
+            NormalizedBacktestPublicTrade $left,
+            NormalizedBacktestPublicTrade $right,
+        ): int => [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
+            <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
 
         return new PaperBacktestDataset([
             'source' => 'paper_market_dataset',
             'source_schema_version' => 'paper-market-dataset.v2',
             'source_build_version' => $manifest->recorderVersion,
-            'source_checksum' => 'sha256:' . $manifest->eventsFileSha256,
+            'source_checksum' => $sourceChecksum,
             'source_network' => $manifest->network->value,
             'market_data_venue' => $manifest->venue->value,
             'market_type' => 'perpetual',
-        ], $candles);
+        ], $candles, $publicTrades);
+    }
+
+    private function normalizeOkxTrade(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicTrade
+    {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::OKX_TRADE_KEYS);
+        if (!\in_array($payload['origin'] ?? null, [
+            'rest_history',
+            'rest_recovery',
+            'ws_aggregated',
+        ], true)
+            || !\is_string($payload['trade_id'] ?? null)
+            || \strlen($payload['trade_id']) > 128
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['trade_id']) !== 1
+            || !\in_array($payload['taker_side'] ?? null, ['buy', 'sell'], true)
+            || !\is_string($payload['source'] ?? null)
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['source']) !== 1
+            || ($payload['aggregate_count'] !== null && (!\is_string($payload['aggregate_count'])
+                || preg_match('/\A[1-9][0-9]*\z/D', $payload['aggregate_count']) !== 1))
+            || ($payload['source_seq_id'] !== null && (!\is_string($payload['source_seq_id'])
+                || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['source_seq_id']) !== 1))
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_trade_invalid');
+        }
+        return $this->publicTrade(
+            $event,
+            $sourceChecksum,
+            $payload['trade_id'],
+            $payload['taker_side'],
+            $payload['price'] ?? null,
+            $payload['size_contracts'] ?? null,
+            'contracts',
+        );
+    }
+
+    private function normalizeHyperliquidTrade(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicTrade
+    {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::HYPERLIQUID_TRADE_KEYS);
+        if (($payload['origin'] ?? null) !== 'ws_trades'
+            || !\is_string($payload['trade_id'] ?? null)
+            || \strlen($payload['trade_id']) > 63
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['trade_id']) !== 1
+            || !\in_array($payload['side'] ?? null, ['buy', 'sell'], true)
+            || !\is_string($payload['transaction_hash'] ?? null)
+            || preg_match('/\A0x[0-9a-fA-F]{1,128}\z/D', $payload['transaction_hash']) !== 1
+            || !\is_string($payload['block_time'] ?? null)
+            || \strlen($payload['block_time']) > 64
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $payload['block_time']) !== 1
+            || $payload['block_time'] !== $event->exchangeTimestamp->format('Uv')
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_trade_invalid');
+        }
+        return $this->publicTrade(
+            $event,
+            $sourceChecksum,
+            $payload['block_time'] . ':' . $payload['trade_id'],
+            $payload['side'],
+            $payload['price'] ?? null,
+            $payload['size'] ?? null,
+            'base_asset',
+        );
+    }
+
+    private function publicTrade(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+        string $tradeId,
+        string $side,
+        mixed $price,
+        mixed $quantity,
+        string $unit,
+    ): NormalizedBacktestPublicTrade {
+        try {
+            $normalizedPrice = $this->decimal($price, true);
+            $normalizedQuantity = $this->decimal($quantity, true);
+        } catch (PaperBacktestAdapterException) {
+            throw new PaperBacktestAdapterException('paper_backtest_public_trade_invalid');
+        }
+        return new NormalizedBacktestPublicTrade(
+            $event->eventId,
+            $sourceChecksum,
+            $event->sourceNetwork->value,
+            $event->sourceVenue->value,
+            $event->symbol,
+            $tradeId,
+            $event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT),
+            $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT),
+            $side,
+            $normalizedPrice,
+            $normalizedQuantity,
+            $unit,
+        );
     }
 
     /** @param list<PaperMarketEvent> $events */
