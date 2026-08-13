@@ -125,6 +125,27 @@ Restent hors de ce lot : acquisition et certification du funding historique,
 partial fills, fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
+### Tape public d'execution
+
+La fondation des partial fills est separee du simulateur. L'adapter Paper v2
+projette les evenements `public_trade` verifies en records
+`backtest-public-trade.v1` : identite source et venue, instant exchange,
+instant de disponibilite, cote agresseur, prix, quantite et unite venue exacte
+(`contracts` pour OKX, `base_asset` pour Hyperliquid). Ces records partagent le
+checksum source des bougies, puis Python les lie au `dataset_id` et au
+`dataset_checksum` normalises dans un tape canonique immuable.
+
+Le tape est ordonne par `available_at`, puis temps exchange et identite source.
+Un consommateur ne peut donc observer un trade avant sa reception, y compris
+si cette reception arrive apres la fin de sa couverture exchange. Les records
+dont le temps exchange est hors couverture du dataset sont rejetes, comme un
+tape depassant 40 000 records ou 64 MiB. Les IDs source et venue sont uniques :
+ID de trade pour OKX, couple `block_time:trade_id` pour Hyperliquid. Les bytes
+NDJSON sont lies par SHA-256. Cette preuve ne dit pas que le volume public etait
+disponible pour notre ordre : elle n'invente ni priorite de file, ni fill, ni
+conversion de quantite, ni fallback. Ces semantiques restent a definir dans un
+modele d'execution versionne.
+
 ## Invariants verrouilles par les contrats v1
 
 ### Dataset versionne

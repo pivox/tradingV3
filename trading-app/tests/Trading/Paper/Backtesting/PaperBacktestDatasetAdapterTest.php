@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Backtesting;
 
 use App\Trading\Paper\Backtesting\NormalizedBacktestCandle;
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicTrade;
 use App\Trading\Paper\Backtesting\PaperBacktestAdapterException;
 use App\Trading\Paper\Backtesting\PaperBacktestDataset;
 use App\Trading\Paper\Backtesting\PaperBacktestDatasetAdapter;
@@ -24,6 +25,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperBacktestDatasetAdapter::class)]
 #[CoversClass(PaperBacktestDataset::class)]
 #[CoversClass(NormalizedBacktestCandle::class)]
+#[CoversClass(NormalizedBacktestPublicTrade::class)]
 #[CoversClass(PaperBacktestAdapterException::class)]
 #[CoversClass(PaperBacktestDatasetEncoder::class)]
 final class PaperBacktestDatasetAdapterTest extends TestCase
@@ -86,6 +88,99 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             'volume' => '7.25',
             'complete' => true,
         ], $dataset->candles[0]->toArray());
+    }
+
+    public function testNormalizesPublicTradesWithExplicitVenueQuantityUnits(): void
+    {
+        $candle = $this->okxEvent();
+        $okxTrade = $this->okxTrade();
+        $okx = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($candle, $okxTrade));
+        self::assertSame([[
+            'schema_version' => 'backtest-public-trade.v1',
+            'source_record_id' => $okxTrade->eventId,
+            'source_network' => 'mainnet',
+            'market_data_venue' => 'okx',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'venue_trade_id' => '42',
+            'happened_at' => '2026-08-13T10:00:30.000000Z',
+            'available_at' => '2026-08-13T10:00:30.250000Z',
+            'aggressor_side' => 'buy',
+            'price' => '30000.5',
+            'quantity' => '2.5',
+            'quantity_unit' => 'contracts',
+        ]], array_map(static fn (NormalizedBacktestPublicTrade $trade): array => $trade->toArray(), $okx->publicTrades));
+
+        $hlCandle = $this->hyperliquidEvent();
+        $hlTrade = $this->hyperliquidTrade();
+        $hl = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($hlCandle, $hlTrade));
+        self::assertSame('base_asset', $hl->publicTrades[0]->quantityUnit);
+        self::assertSame('sell', $hl->publicTrades[0]->aggressorSide);
+        self::assertSame('1786615230000:84', $hl->publicTrades[0]->venueTradeId);
+
+        $this->assertAdapterFailure(
+            $this->snapshot($hlCandle, $this->hyperliquidTrade([
+                'block_time' => str_repeat('9', 129),
+            ])),
+            'paper_backtest_public_trade_invalid',
+        );
+        $this->assertAdapterFailure(
+            $this->snapshot($hlCandle, $this->hyperliquidTrade([
+                'block_time' => str_repeat('9', 64),
+                'trade_id' => str_repeat('8', 64),
+            ])),
+            'paper_backtest_public_trade_invalid',
+        );
+    }
+
+    public function testAcceptsEveryVerifiedOkxPublicTradeOrigin(): void
+    {
+        foreach (['rest_history', 'rest_recovery', 'ws_aggregated'] as $origin) {
+            $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+                $this->okxEvent(),
+                $this->okxTrade(['origin' => $origin]),
+            ));
+
+            self::assertSame('42', $dataset->publicTrades[0]->venueTradeId);
+        }
+    }
+
+    public function testPublicTradeEncoderIsDeterministicAndRejectsSemanticDrift(): void
+    {
+        $candle = $this->okxEvent();
+        $later = $this->okxTrade(sequence: '3');
+        $earlier = $this->okxTrade(
+            ['trade_id' => '41', 'taker_side' => 'sell'],
+            new \DateTimeImmutable('2026-08-13T10:00:20.000000Z'),
+            '2',
+        );
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($candle, $later, $earlier));
+        $encoded = (new PaperBacktestDatasetEncoder())->publicTrades($dataset);
+
+        self::assertSame(['41', '42'], array_map(
+            static fn (NormalizedBacktestPublicTrade $trade): string => $trade->venueTradeId,
+            $dataset->publicTrades,
+        ));
+        self::assertSame(2, substr_count($encoded, "\n"));
+        foreach (['mode', 'setup', 'profile', 'strategy'] as $forbidden) {
+            self::assertStringNotContainsString('"' . $forbidden . '"', $encoded);
+        }
+
+        foreach ([
+            ['taker_side' => 'unknown'],
+            ['price' => '3e4'],
+            ['size_contracts' => 2.5],
+            ['origin' => 'private'],
+            ['trade_id' => str_repeat('9', 129)],
+            ['private-sentinel' => 'must-not-leak'],
+        ] as $override) {
+            $this->assertAdapterFailure(
+                $this->snapshot($candle, $this->okxTrade($override)),
+                str_contains(json_encode($override, JSON_THROW_ON_ERROR), 'private-sentinel')
+                    ? 'paper_backtest_payload_shape_invalid'
+                    : 'paper_backtest_public_trade_invalid',
+            );
+        }
     }
 
     public function testIgnoresNonCandleEventsButRejectsAnEmptyCandleSet(): void
@@ -298,7 +393,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     {
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
         try {
-            new PaperBacktestDataset($dataset->sourceIdentity, []);
+            new PaperBacktestDataset($dataset->sourceIdentity, [], []);
             self::fail('Expected empty result rejection.');
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('paper_backtest_candles_empty', $exception->getMessage());
@@ -307,10 +402,24 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         $source = $dataset->sourceIdentity;
         $source['source_network'] = 'testnet';
         try {
-            new PaperBacktestDataset($source, $dataset->candles);
+            new PaperBacktestDataset($source, $dataset->candles, []);
             self::fail('Expected source mismatch rejection.');
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('paper_backtest_candle_source_mismatch', $exception->getMessage());
+        }
+
+        $withTrade = (new PaperBacktestDatasetAdapter())->adapt(
+            $this->snapshot($this->okxEvent(), $this->okxTrade()),
+        );
+        try {
+            new PaperBacktestDataset(
+                $withTrade->sourceIdentity,
+                $withTrade->candles,
+                [$withTrade->publicTrades[0], $withTrade->publicTrades[0]],
+            );
+            self::fail('Expected duplicate trade rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_backtest_public_trades_invalid', $exception->getMessage());
         }
 
         $candle = $dataset->candles[0];
@@ -325,6 +434,34 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         } catch (\InvalidArgumentException $exception) {
             self::assertSame('paper_backtest_candle_time_invalid', $exception->getMessage());
             self::assertStringNotContainsString('private-sentinel', $exception->getMessage());
+        }
+    }
+
+    public function testPublicTradeValueRejectsNonCanonicalOrOversizedVenueIds(): void
+    {
+        $trade = (new PaperBacktestDatasetAdapter())->adapt(
+            $this->snapshot($this->okxEvent(), $this->okxTrade()),
+        )->publicTrades[0];
+
+        foreach (['042', str_repeat('9', 129)] as $venueTradeId) {
+            try {
+                new NormalizedBacktestPublicTrade(
+                    $trade->sourceRecordId,
+                    $trade->sourceNetwork,
+                    $trade->marketDataVenue,
+                    $trade->symbol,
+                    $venueTradeId,
+                    $trade->happenedAt,
+                    $trade->availableAt,
+                    $trade->aggressorSide,
+                    $trade->price,
+                    $trade->quantity,
+                    $trade->quantityUnit,
+                );
+                self::fail('Expected a non-canonical venue trade ID rejection.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('paper_backtest_public_trade_invalid', $exception->getMessage());
+            }
         }
     }
 
@@ -347,7 +484,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     public function testCheckedInCrossRuntimeFixturesComeFromThePublicEncoder(): void
     {
         $event = $this->okxEvent(['volume_base' => '0.001']);
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($event));
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($event, $this->okxTrade()));
         $encoder = new PaperBacktestDatasetEncoder();
         $fixtureRoot = dirname(__DIR__, 3) . '/Fixtures/paper-backtesting';
 
@@ -358,6 +495,10 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame(
             $encoder->candles($dataset),
             file_get_contents($fixtureRoot . '/candles.ndjson'),
+        );
+        self::assertSame(
+            $encoder->publicTrades($dataset),
+            file_get_contents($fixtureRoot . '/public-trades.ndjson'),
         );
     }
 
@@ -412,6 +553,49 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         );
     }
 
+    /** @param array<string, mixed> $override */
+    private function okxTrade(
+        array $override = [],
+        ?\DateTimeImmutable $exchangeTimestamp = null,
+        string $sequence = '2',
+    ): PaperMarketEvent {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            $exchangeTimestamp ?? new \DateTimeImmutable('2026-08-13T10:00:30.000000Z'),
+            ($exchangeTimestamp ?? new \DateTimeImmutable('2026-08-13T10:00:30.000000Z'))->modify('+250 milliseconds'),
+            $sequence,
+            array_replace([
+                'native_symbol' => 'BTC-USDT-SWAP', 'trade_id' => '42',
+                'price' => '30000.500', 'size_contracts' => '2.500',
+                'taker_side' => 'buy', 'aggregate_count' => null,
+                'source' => '0', 'source_seq_id' => null, 'origin' => 'rest_history',
+            ], $override),
+        );
+    }
+
+    /** @param array<string, mixed> $override */
+    private function hyperliquidTrade(array $override = []): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'ETHUSDT',
+            PaperMarketDataChannel::PUBLIC_TRADE,
+            new \DateTimeImmutable('2026-08-13T10:00:30.000000Z'),
+            new \DateTimeImmutable('2026-08-13T10:00:30.100000Z'),
+            '2',
+            array_replace([
+                'native_symbol' => 'ETH', 'side' => 'sell', 'price' => '4000.50',
+                'size' => '0.250', 'transaction_hash' => '0xabc',
+                'block_time' => '1786615230000', 'trade_id' => '84',
+                'origin' => 'ws_trades',
+            ], $override),
+        );
+    }
+
     private function snapshot(PaperMarketEvent ...$events): VerifiedPaperDatasetSnapshot
     {
         $event = $events[0];
@@ -425,6 +609,11 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         ?int $eventCount = null,
         ?string $nativeSymbol = null,
     ): PaperDatasetManifest {
+        $exchangeTimes = array_map(
+            static fn (PaperMarketEvent $item): \DateTimeImmutable => $item->exchangeTimestamp,
+            $events,
+        );
+        usort($exchangeTimes, static fn (\DateTimeImmutable $left, \DateTimeImmutable $right): int => $left <=> $right);
         return new PaperDatasetManifest(
             schemaVersion: 2,
             recorderVersion: 'paper-recorder.v2',
@@ -432,9 +621,9 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             venue: $event->sourceVenue,
             network: $event->sourceNetwork,
             symbols: [$event->symbol => $nativeSymbol ?? $event->payload['native_symbol']],
-            startExchangeTimestamp: $event->exchangeTimestamp,
-            endExchangeTimestamp: $events[array_key_last($events)]->exchangeTimestamp,
-            channels: array_values(array_unique(array_map(static fn (PaperMarketEvent $item): string => $item->channel->value, $events))),
+            startExchangeTimestamp: $exchangeTimes[0],
+            endExchangeTimestamp: $exchangeTimes[array_key_last($exchangeTimes)],
+            channels: $this->sortedChannels($events),
             eventCount: $eventCount ?? count($events),
             sequenceGaps: [],
             quality: PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
@@ -444,6 +633,19 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             state: PaperDatasetState::COMPLETE,
             lastEventId: $events[array_key_last($events)]->eventId,
         );
+    }
+
+    /** @param list<PaperMarketEvent> $events
+     *  @return list<string>
+     */
+    private function sortedChannels(array $events): array
+    {
+        $channels = array_values(array_unique(array_map(
+            static fn (PaperMarketEvent $item): string => $item->channel->value,
+            $events,
+        )));
+        sort($channels, SORT_STRING);
+        return $channels;
     }
 
     private function assertAdapterFailure(

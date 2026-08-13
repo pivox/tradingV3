@@ -30,6 +30,17 @@ final class PaperBacktestDatasetEncoder
         return $encoded;
     }
 
+    public function publicTrades(PaperBacktestDataset $dataset): string
+    {
+        $encoded = '';
+        foreach ($dataset->publicTrades as $trade) {
+            $value = $trade->toArray();
+            $this->assertNoStrategyIdentity($value);
+            $encoded .= CanonicalJson::encode($value) . "\n";
+        }
+        return $encoded;
+    }
+
     private function assertNoStrategyIdentity(mixed $value): void
     {
         if (!\is_array($value)) {
