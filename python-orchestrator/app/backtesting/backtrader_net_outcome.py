@@ -10,6 +10,12 @@ from typing import Any
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import BacktestExecutionResult, execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
+from app.backtesting.historical_funding import VerifiedHistoricalFundingSchedule
+from app.backtesting.historical_funding_bridge import (
+    CanonicalHistoricalFundingResult,
+    canonical_historical_funding_request,
+    settlement_matches_request,
+)
 
 
 _COST_BASIS_VERSION = "canonical-order-plan-bound-costs.v1"
@@ -23,6 +29,9 @@ def project_plan_bound_net_outcome(
     envelope: CanonicalBacktestOrderPlan,
     execution: BacktestExecutionResult,
     feed: VerifiedBacktraderFeedAdapter,
+    *,
+    funding_schedule: VerifiedHistoricalFundingSchedule | None = None,
+    funding_settlement: CanonicalHistoricalFundingResult | None = None,
 ) -> str:
     envelope = _revalidate_plan(envelope)
     _verify_dataset_evidence(envelope, execution, feed)
@@ -71,7 +80,10 @@ def project_plan_bound_net_outcome(
         gross_pnl = -_decimal(plan.gross_stop_loss)
         net_pnl = -_decimal(plan.total_stop_loss)
         net_r = Decimal(-1)
-    total_cost = sum(
+    historical = _historical_funding(
+        envelope, execution, feed, funding_schedule, funding_settlement
+    )
+    projected_non_funding_cost = sum(
         (
             entry_fee,
             exit_fee,
@@ -79,19 +91,31 @@ def project_plan_bound_net_outcome(
             exit_spread,
             entry_slippage,
             exit_slippage,
-            funding,
         ),
         Decimal(0),
     )
+    total_cost = projected_non_funding_cost + funding
     if gross_pnl - total_cost != net_pnl:
         raise BacktestNetOutcomeError("backtrader_net_outcome_cost_mismatch")
+    if historical is not None:
+        historical_cashflow = _decimal(historical.funding_cashflow_quote)
+        net_pnl = gross_pnl - projected_non_funding_cost + historical_cashflow
+        total_cost = projected_non_funding_cost - historical_cashflow
 
     result: dict[str, Any] = {
-        "schema_version": "canonical-backtest-planned-net-outcome.v1",
+        "schema_version": (
+            "canonical-backtest-historical-net-outcome.v1"
+            if historical is not None
+            else "canonical-backtest-planned-net-outcome.v1"
+        ),
         "cost_basis_version": _COST_BASIS_VERSION,
         "cost_evidence": "canonical_plan_projection",
         "costs_are_certified": False,
-        "funding_evidence": "canonical_plan_provision",
+        "funding_evidence": (
+            "integrity_bound_historical_schedule"
+            if historical is not None
+            else "canonical_plan_provision"
+        ),
         "dataset_id": envelope.dataset_id,
         "dataset_checksum": envelope.dataset_checksum,
         "plan_hash": plan.plan_hash,
@@ -120,14 +144,75 @@ def project_plan_bound_net_outcome(
         "exit_spread_cost_quote": exit_spread,
         "entry_slippage_cost_quote": entry_slippage,
         "exit_slippage_cost_quote": exit_slippage,
-        "planned_adverse_funding_cost_quote": funding,
-        "total_planned_cost_quote": total_cost,
+        **(
+            {
+                "funding_schedule_checksum": funding_schedule.schedule_checksum,
+                "funding_settlement_hash": historical.result_hash,
+                "applied_funding_source_record_ids": historical.applied_source_record_ids,
+                "historical_funding_cashflow_quote": _decimal(historical.funding_cashflow_quote),
+                "total_execution_cost_quote": total_cost,
+            }
+            if historical is not None
+            else {
+                "planned_adverse_funding_cost_quote": funding,
+                "total_planned_cost_quote": total_cost,
+            }
+        ),
         "net_pnl_quote": net_pnl,
         "net_r": net_r,
         "result_is_live_proof": False,
     }
     result["outcome_hash"] = _hash(result)
     return _canonical_json(result) + "\n"
+
+
+def _historical_funding(
+    envelope: CanonicalBacktestOrderPlan,
+    execution: BacktestExecutionResult,
+    feed: VerifiedBacktraderFeedAdapter,
+    schedule: VerifiedHistoricalFundingSchedule | None,
+    settlement: CanonicalHistoricalFundingResult | None,
+) -> CanonicalHistoricalFundingResult | None:
+    if schedule is None and settlement is None:
+        return None
+    if schedule is None or settlement is None:
+        raise BacktestNetOutcomeError("backtrader_net_outcome_historical_funding_evidence_required")
+    plan = envelope.plan
+    entry, terminal = execution.events
+    try:
+        schedule = VerifiedHistoricalFundingSchedule(schedule.artifacts)
+        settlement = CanonicalHistoricalFundingResult.model_validate(
+            settlement.model_dump(mode="json")
+        )
+    except Exception as exc:
+        raise BacktestNetOutcomeError(
+            "backtrader_net_outcome_historical_funding_evidence_mismatch"
+        ) from exc
+    if (
+        not isinstance(schedule, VerifiedHistoricalFundingSchedule)
+        or not isinstance(settlement, CanonicalHistoricalFundingResult)
+        or schedule.dataset_id != feed.dataset_id
+        or schedule.dataset_checksum != feed.dataset_checksum
+        or schedule.source_network != feed.source_network
+        or schedule.market_data_venue != feed.market_data_venue
+        or schedule.market_type != feed.market_type
+        or schedule.symbol != feed.symbol
+    ):
+        raise BacktestNetOutcomeError("backtrader_net_outcome_historical_funding_evidence_mismatch")
+    expected_ids = tuple(
+        record.source_record_id
+        for record in schedule.records
+        if entry.happened_at < record.funding_at <= terminal.happened_at
+    )
+    request = canonical_historical_funding_request(envelope, execution, schedule)
+    if (
+        not settlement_matches_request(settlement, request)
+        or
+        settlement.applied_source_record_ids != expected_ids
+        or settlement.request_hash != request.request_hash()
+    ):
+        raise BacktestNetOutcomeError("backtrader_net_outcome_historical_funding_evidence_mismatch")
+    return settlement
 
 
 def _revalidate_plan(envelope: CanonicalBacktestOrderPlan) -> CanonicalBacktestOrderPlan:

@@ -7,6 +7,15 @@ from pathlib import Path
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, _php_plan_hash
 from app.backtesting.backtrader_execution import BacktestExecutionEvent, BacktestExecutionResult
 from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
+from app.backtesting.historical_funding import (
+    HistoricalFundingRecord,
+    VerifiedHistoricalFundingSchedule,
+    serialize_historical_funding_schedule,
+)
+from app.backtesting.historical_funding_bridge import (
+    CanonicalHistoricalFundingRequest,
+    HistoricalFundingBridge,
+)
 import pytest
 
 from app.backtesting.backtrader_net_outcome import (
@@ -115,6 +124,60 @@ def _stop_execution() -> BacktestExecutionResult:
     )
 
 
+def _historical_funding():
+    feed = _feed()
+    records = tuple(
+        HistoricalFundingRecord(
+            schema_version="historical-funding-record.v1",
+            source_record_id=f"funding-{minute}",
+            source_network=feed.source_network,
+            market_data_venue=feed.market_data_venue,
+            market_type="perpetual",
+            symbol=feed.symbol,
+            funding_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            funding_rate="0.0001",
+            mark_price="100",
+            interval_seconds=60,
+        )
+        for minute in (1, 2)
+    )
+    schedule = VerifiedHistoricalFundingSchedule(serialize_historical_funding_schedule(
+        dataset_id=feed.dataset_id,
+        dataset_checksum=feed.dataset_checksum,
+        coverage_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+        coverage_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+        records=records,
+    ))
+    plan = _plan().plan
+    request = CanonicalHistoricalFundingRequest(
+        schema_version="canonical-historical-funding-request.v1",
+        dataset_id=feed.dataset_id,
+        dataset_checksum=feed.dataset_checksum,
+        schedule_checksum=schedule.schedule_checksum,
+        plan_hash=plan.plan_hash,
+        config_hash=plan.config_hash,
+        cost_input_hash=plan.cost_input_hash,
+        symbol=plan.symbol,
+        side=plan.side,
+        quantity=str(Decimal(str(plan.quantity)).normalize()),
+        contract_size=str(Decimal(str(plan.contract_size)).normalize()),
+        entry_at=_target_execution().events[0].happened_at,
+        exit_at=_target_execution().events[1].happened_at,
+        coverage_start=schedule.coverage_start,
+        coverage_end=schedule.coverage_end,
+        records=tuple({
+            "source_record_id": record.source_record_id,
+            "funding_at": record.funding_at,
+            "available_at": record.available_at,
+            "funding_rate": record.funding_rate,
+            "mark_price": record.mark_price,
+            "interval_seconds": record.interval_seconds,
+        } for record in schedule.records),
+    )
+    return schedule, HistoricalFundingBridge().settle(request)
+
+
 def test_target_outcome_projects_plan_bound_php_cost_components() -> None:
     encoded = project_plan_bound_net_outcome(_plan(), _target_execution(), _feed())
     outcome = json.loads(encoded)
@@ -162,6 +225,41 @@ def test_stop_outcome_is_signed_and_reconciles_plan_bound_risk_components() -> N
     assert outcome["total_planned_cost_quote"] == 0.37195312
     assert outcome["net_pnl_quote"] == -4.61685312
     assert outcome["net_r"] == -1
+
+
+def test_historical_funding_replaces_only_plan_provision_and_binds_lineage() -> None:
+    schedule, settlement = _historical_funding()
+    outcome = json.loads(project_plan_bound_net_outcome(
+        _plan(), _target_execution(), _feed(),
+        funding_schedule=schedule,
+        funding_settlement=settlement,
+    ))
+
+    assert outcome["schema_version"] == "canonical-backtest-historical-net-outcome.v1"
+    assert outcome["funding_evidence"] == "integrity_bound_historical_schedule"
+    assert outcome["funding_schedule_checksum"] == schedule.schedule_checksum
+    assert outcome["funding_settlement_hash"] == settlement.result_hash
+    assert outcome["applied_funding_source_record_ids"] == ["funding-2"]
+    assert outcome["historical_funding_cashflow_quote"] == -0.02497
+    assert "planned_adverse_funding_cost_quote" not in outcome
+    assert outcome["total_execution_cost_quote"] == 0.37926933
+    assert outcome["net_pnl_quote"] == 5.86323067
+    assert outcome["costs_are_certified"] is False
+
+
+def test_historical_funding_never_falls_back_after_evidence_mismatch() -> None:
+    schedule, settlement = _historical_funding()
+    forged = settlement.model_copy(update={"dataset_checksum": "sha256:" + "f" * 64})
+    with pytest.raises(BacktestNetOutcomeError, match="historical_funding_evidence_mismatch"):
+        project_plan_bound_net_outcome(
+            _plan(), _target_execution(), _feed(),
+            funding_schedule=schedule,
+            funding_settlement=forged,
+        )
+    with pytest.raises(BacktestNetOutcomeError, match="historical_funding_evidence_required"):
+        project_plan_bound_net_outcome(
+            _plan(), _target_execution(), _feed(), funding_schedule=schedule,
+        )
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -99,6 +100,7 @@ class HistoricalFundingScheduleArtifacts(BaseModel):
     schedule_checksum: str = Field(pattern=_HASH)
 
 
+@dataclass(frozen=True, init=False)
 class VerifiedHistoricalFundingSchedule:
     def __init__(self, artifacts: HistoricalFundingScheduleArtifacts) -> None:
         try:
@@ -120,17 +122,20 @@ class VerifiedHistoricalFundingSchedule:
         except Exception as exc:
             raise ValueError("historical_funding_schedule_invalid") from exc
 
-        self.artifacts = artifacts
-        self.dataset_id = verified["dataset_id"]
-        self.dataset_checksum = verified["dataset_checksum"]
-        self.source_network = verified["source_network"]
-        self.market_data_venue = verified["market_data_venue"]
-        self.market_type = verified["market_type"]
-        self.symbol = verified["symbol"]
-        self.coverage_start = verified["coverage_start"]
-        self.coverage_end = verified["coverage_end"]
-        self.records = verified["records"]
-        self.schedule_checksum = artifacts.schedule_checksum
+        for field, value in {
+            "artifacts": artifacts,
+            "dataset_id": verified["dataset_id"],
+            "dataset_checksum": verified["dataset_checksum"],
+            "source_network": verified["source_network"],
+            "market_data_venue": verified["market_data_venue"],
+            "market_type": verified["market_type"],
+            "symbol": verified["symbol"],
+            "coverage_start": verified["coverage_start"],
+            "coverage_end": verified["coverage_end"],
+            "records": verified["records"],
+            "schedule_checksum": artifacts.schedule_checksum,
+        }.items():
+            object.__setattr__(self, field, value)
 
 
 def _validated_schedule(raw: dict[str, Any]) -> dict[str, Any]:

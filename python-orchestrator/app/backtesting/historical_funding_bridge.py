@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
@@ -132,6 +133,45 @@ class CanonicalHistoricalFundingResult(BaseModel):
 
 
 class HistoricalFundingBridgeError(RuntimeError): pass
+
+
+def canonical_historical_funding_request(envelope: Any, execution: Any, schedule: Any) -> CanonicalHistoricalFundingRequest:
+    plan = envelope.plan
+    entry, terminal = execution.events
+    return CanonicalHistoricalFundingRequest(
+        schema_version="canonical-historical-funding-request.v1",
+        dataset_id=envelope.dataset_id, dataset_checksum=envelope.dataset_checksum,
+        schedule_checksum=schedule.schedule_checksum, plan_hash=plan.plan_hash,
+        config_hash=plan.config_hash, cost_input_hash=plan.cost_input_hash,
+        symbol=plan.symbol, side=plan.side,
+        quantity=_decimal_string(plan.quantity), contract_size=_decimal_string(plan.contract_size),
+        entry_at=entry.happened_at, exit_at=terminal.happened_at,
+        coverage_start=schedule.coverage_start, coverage_end=schedule.coverage_end,
+        records=tuple({
+            "source_record_id": record.source_record_id, "funding_at": record.funding_at,
+            "available_at": record.available_at, "funding_rate": record.funding_rate,
+            "mark_price": record.mark_price, "interval_seconds": record.interval_seconds,
+        } for record in schedule.records),
+    )
+
+
+def settlement_matches_request(
+    result: CanonicalHistoricalFundingResult,
+    request: CanonicalHistoricalFundingRequest,
+) -> bool:
+    return all(
+        getattr(result, field) == getattr(request, field)
+        for field in (
+            "dataset_id", "dataset_checksum", "schedule_checksum", "plan_hash",
+            "config_hash", "cost_input_hash", "symbol", "side", "quantity",
+            "contract_size",
+        )
+    ) and result.entry_at == _json_time(request.entry_at) and result.exit_at == _json_time(request.exit_at)
+
+
+def _decimal_string(value: Any) -> str:
+    rendered = format(Decimal(str(value)), "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
 
 
 class HistoricalFundingBridge:

@@ -15,6 +15,11 @@ from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_net_outcome import project_plan_bound_net_outcome
+from app.backtesting.historical_funding import VerifiedHistoricalFundingSchedule
+from app.backtesting.historical_funding_bridge import (
+    HistoricalFundingBridge,
+    canonical_historical_funding_request,
+)
 
 
 _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
@@ -68,6 +73,9 @@ class CanonicalBacktraderRuntime:
         self,
         plan: CanonicalBacktestOrderPlan,
         feed: VerifiedBacktraderFeedAdapter,
+        *,
+        funding_schedule: VerifiedHistoricalFundingSchedule | None = None,
+        funding_bridge: HistoricalFundingBridge | None = None,
     ) -> str:
         wire_plan = plan.model_dump(mode="json", by_alias=True)
         for optional_key in ("cancelAfterAt", "holdingExpiresAt", "orderBookInputHash"):
@@ -107,9 +115,22 @@ class CanonicalBacktraderRuntime:
             raise ValueError("backtrader_runtime_delivery_invalid")
 
         outcome = execute_plan(plan, tuple(feed.bars[index] for index in delivered))
+        funding_settlement = None
+        if funding_schedule is not None or funding_bridge is not None:
+            if funding_schedule is None or funding_bridge is None or outcome.status != "closed":
+                raise ValueError("backtrader_runtime_historical_funding_evidence_required")
+            funding_settlement = funding_bridge.settle(
+                canonical_historical_funding_request(plan, outcome, funding_schedule)
+            )
         net_outcome = (
             json.loads(
-                project_plan_bound_net_outcome(plan, outcome, feed),
+                project_plan_bound_net_outcome(
+                    plan,
+                    outcome,
+                    feed,
+                    funding_schedule=funding_schedule,
+                    funding_settlement=funding_settlement,
+                ),
                 parse_float=Decimal,
                 parse_int=Decimal,
             )

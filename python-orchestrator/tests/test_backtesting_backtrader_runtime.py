@@ -13,6 +13,12 @@ from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
 from app.backtesting.backtrader_runtime import _canonical
 from app.backtesting.contracts import MarketType
 from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
+from app.backtesting.historical_funding import (
+    HistoricalFundingRecord,
+    VerifiedHistoricalFundingSchedule,
+    serialize_historical_funding_schedule,
+)
+from app.backtesting.historical_funding_bridge import HistoricalFundingBridge
 
 
 UTC = timezone.utc
@@ -53,6 +59,32 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
     )
 
 
+def _funding_schedule(feed: VerifiedBacktraderFeedAdapter) -> VerifiedHistoricalFundingSchedule:
+    records = tuple(
+        HistoricalFundingRecord(
+            schema_version="historical-funding-record.v1",
+            source_record_id=f"runtime-funding-{minute}",
+            source_network=feed.source_network,
+            market_data_venue=feed.market_data_venue,
+            market_type="perpetual",
+            symbol=feed.symbol,
+            funding_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            funding_rate="0.0001",
+            mark_price="100",
+            interval_seconds=60,
+        )
+        for minute in (1, 2)
+    )
+    return VerifiedHistoricalFundingSchedule(serialize_historical_funding_schedule(
+        dataset_id=feed.dataset_id,
+        dataset_checksum=feed.dataset_checksum,
+        coverage_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+        coverage_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+        records=records,
+    ))
+
+
 def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     feed = _feed()
     plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
@@ -79,6 +111,24 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     golden = Path(__file__).parent / "fixtures/backtesting/backtrader-runtime-result.json"
     if golden.exists():
         assert first == golden.read_text(encoding="utf-8")
+
+
+def test_runtime_invokes_php_historical_funding_authority() -> None:
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    result = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=HistoricalFundingBridge(),
+    ))
+
+    outcome = result["net_outcome"]
+    assert outcome["schema_version"] == "canonical-backtest-historical-net-outcome.v1"
+    assert outcome["funding_evidence"] == "integrity_bound_historical_schedule"
+    assert outcome["applied_funding_source_record_ids"] == ["runtime-funding-2"]
+    assert outcome["historical_funding_cashflow_quote"] == -0.02497
+    assert outcome["costs_are_certified"] is False
 
 
 def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
