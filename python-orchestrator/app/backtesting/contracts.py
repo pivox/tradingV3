@@ -10,10 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping as MappingAbc
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from math import isclose, isfinite
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Literal, Mapping
 
 from pydantic import (
     BaseModel,
@@ -59,6 +59,15 @@ class IntraBarPolicy(str, Enum):
     REJECT_AMBIGUOUS_TRADE = "reject_ambiguous_trade"
 
 
+_TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+}
+
+
 def _canonical_hash(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(_deep_thaw(payload), sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -98,6 +107,30 @@ def _require_utc(value: datetime) -> datetime:
     if value.utcoffset() != timezone.utc.utcoffset(value):
         raise ValueError("datetime must be UTC-aware")
     return value.astimezone(timezone.utc)
+
+
+def _canonical_manifest_datetime(value: datetime) -> str:
+    return _require_utc(value).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _dataset_checksum_from_manifest_core(
+    manifest_core: Mapping[str, Any],
+    candles_checksum: str,
+    quality_report_checksum: str,
+) -> str:
+    checksum_payload = json.dumps(
+        {
+            "candles_checksum": candles_checksum,
+            "manifest_core": manifest_core,
+            "quality_report_checksum": quality_report_checksum,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
 
 
 class FrozenDict(MappingAbc):
@@ -149,25 +182,81 @@ def _deep_thaw(value: Any) -> Any:
     return value
 
 
-class DatasetDescriptor(BaseModel):
-    """Immutable descriptor for a versioned backtest dataset."""
+class DatasetStreamCoverage(BaseModel):
+    """Exact immutable coverage for one venue/market/symbol/timeframe stream."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    dataset_id: str = Field(..., min_length=1)
-    source: str = Field(..., min_length=1)
-    exchange: str = Field(..., min_length=1)
+    market_data_venue: str = Field(..., min_length=1)
     market_type: MarketType
+    symbol: str = Field(..., min_length=1)
+    timeframe: Literal["1m", "5m", "15m", "1h", "4h"]
+    first_open_at: datetime
+    last_close_at: datetime
+    record_count: int = Field(..., ge=1)
+
+    @field_validator("first_open_at", "last_close_at")
+    @classmethod
+    def _validate_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "DatasetStreamCoverage":
+        if self.last_close_at <= self.first_open_at:
+            raise ValueError("stream last_close_at must follow first_open_at")
+        duration_seconds = _TIMEFRAME_SECONDS[self.timeframe]
+        duration = timedelta(seconds=duration_seconds)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        if (self.first_open_at - epoch) % duration != timedelta(0):
+            raise ValueError("stream first_open_at must align to UTC timeframe grid")
+        if (
+            self.last_close_at - self.first_open_at
+            != (self.record_count * duration)
+        ):
+            raise ValueError("stream duration must equal record_count times timeframe")
+        return self
+
+
+def _stream_coverage_sort_key(
+    stream: DatasetStreamCoverage,
+) -> tuple[str, str, str, int]:
+    return (
+        stream.market_data_venue,
+        stream.market_type.value,
+        stream.symbol,
+        _TIMEFRAME_SECONDS[stream.timeframe],
+    )
+
+
+class DatasetDescriptor(BaseModel):
+    """Immutable facts reconstructed from a canonical dataset manifest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    dataset_id: str = Field(..., pattern=r"^backtest-dataset-[0-9a-f]{64}$")
+    schema_version: Literal["backtest-dataset-manifest.v1"]
+    record_schema_version: Literal["backtest-candle.v1"]
+    quality_report_schema_version: Literal["backtest-dataset-quality.v1"]
+    build_version: str = Field(..., min_length=1)
+    source: str = Field(..., min_length=1)
+    source_schema_version: str = Field(..., min_length=1)
+    source_build_version: str = Field(..., min_length=1)
+    source_checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    source_network: str = Field(..., min_length=1)
+    market_data_venue: str = Field(..., min_length=1)
+    market_type: MarketType
+    streams: tuple[DatasetStreamCoverage, ...] = Field(..., min_length=1)
     symbols: tuple[str, ...] = Field(..., min_length=1)
     timeframes: tuple[str, ...] = Field(..., min_length=1)
     start_at: datetime
     end_at: datetime
-    missing_ranges: tuple[str, ...] = ()
+    record_count: int = Field(..., ge=1)
+    candles_checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    quality_report_checksum: str = Field(..., pattern=_SHA256_PATTERN)
     quality_flags: tuple[str, ...] = ()
-    build_version: str = Field(..., min_length=1)
-    checksum: str = Field(..., pattern=_SHA256_PATTERN)
+    dataset_checksum: str = Field(..., pattern=_SHA256_PATTERN)
 
-    @field_validator("symbols", "timeframes", "missing_ranges", "quality_flags", mode="before")
+    @field_validator("symbols", "timeframes", "quality_flags", mode="before")
     @classmethod
     def _normalize_tuple(cls, value: Any) -> tuple[str, ...]:
         return _normalize_string_tuple(value)
@@ -181,7 +270,250 @@ class DatasetDescriptor(BaseModel):
     def _validate_bounds(self) -> "DatasetDescriptor":
         if self.end_at <= self.start_at:
             raise ValueError("dataset end_at must be after start_at")
+        if self.streams != tuple(sorted(self.streams, key=_stream_coverage_sort_key)):
+            raise ValueError("dataset streams must be unique and canonically sorted")
+        stream_keys = tuple(_stream_coverage_sort_key(item) for item in self.streams)
+        if len(set(stream_keys)) != len(stream_keys):
+            raise ValueError("dataset streams must be unique and canonically sorted")
+        if any(
+            item.market_data_venue != self.market_data_venue
+            or item.market_type is not self.market_type
+            for item in self.streams
+        ):
+            raise ValueError("dataset stream source must match dataset source")
+        if self.symbols != tuple(sorted(set(self.symbols))):
+            raise ValueError("dataset symbols must be unique and sorted")
+        if any(item not in _TIMEFRAME_SECONDS for item in self.timeframes):
+            raise ValueError("dataset contains unsupported timeframe")
+        if self.timeframes != tuple(
+            sorted(set(self.timeframes), key=_TIMEFRAME_SECONDS.__getitem__)
+        ):
+            raise ValueError("dataset timeframes must be unique and duration-sorted")
+        if self.symbols != tuple(sorted({item.symbol for item in self.streams})):
+            raise ValueError("dataset symbols must derive from streams")
+        if self.timeframes != tuple(
+            sorted(
+                {item.timeframe for item in self.streams},
+                key=_TIMEFRAME_SECONDS.__getitem__,
+            )
+        ):
+            raise ValueError("dataset timeframes must derive from streams")
+        if self.start_at != min(item.first_open_at for item in self.streams):
+            raise ValueError("dataset start_at must derive from streams")
+        if self.end_at != max(item.last_close_at for item in self.streams):
+            raise ValueError("dataset end_at must derive from streams")
+        if self.record_count != sum(item.record_count for item in self.streams):
+            raise ValueError("dataset record_count must derive from streams")
+        checksum_hex = self.dataset_checksum.removeprefix("sha256:")
+        if self.dataset_id != f"backtest-dataset-{checksum_hex}":
+            raise ValueError("dataset_id must derive from dataset_checksum")
+        manifest_core = {
+            "build_version": self.build_version,
+            "coverage": {
+                "end_at": _canonical_manifest_datetime(self.end_at),
+                "record_count": self.record_count,
+                "start_at": _canonical_manifest_datetime(self.start_at),
+                "streams": [
+                    {
+                        "first_open_at": _canonical_manifest_datetime(
+                            item.first_open_at
+                        ),
+                        "last_close_at": _canonical_manifest_datetime(
+                            item.last_close_at
+                        ),
+                        "market_data_venue": item.market_data_venue,
+                        "market_type": item.market_type.value,
+                        "record_count": item.record_count,
+                        "symbol": item.symbol,
+                        "timeframe": item.timeframe,
+                    }
+                    for item in self.streams
+                ],
+                "symbols": list(self.symbols),
+                "timeframes": list(self.timeframes),
+            },
+            "quality_flags": list(self.quality_flags),
+            "quality_report_schema_version": self.quality_report_schema_version,
+            "record_schema_version": self.record_schema_version,
+            "schema_version": self.schema_version,
+            "source": {
+                "market_data_venue": self.market_data_venue,
+                "market_type": self.market_type.value,
+                "source": self.source,
+                "source_build_version": self.source_build_version,
+                "source_checksum": self.source_checksum,
+                "source_network": self.source_network,
+                "source_schema_version": self.source_schema_version,
+            },
+        }
+        expected_checksum = _dataset_checksum_from_manifest_core(
+            manifest_core,
+            self.candles_checksum,
+            self.quality_report_checksum,
+        )
+        if self.dataset_checksum != expected_checksum:
+            raise ValueError("dataset checksum does not bind descriptor facts")
         return self
+
+    @classmethod
+    def from_manifest(cls, manifest: Mapping[str, Any]) -> "DatasetDescriptor":
+        """Reconstruct the descriptor solely from exact manifest facts."""
+
+        expected_top_level = {
+            "artifacts",
+            "build_version",
+            "coverage",
+            "dataset_checksum",
+            "dataset_id",
+            "quality_flags",
+            "quality_report_schema_version",
+            "record_schema_version",
+            "schema_version",
+            "source",
+        }
+        if set(manifest) != expected_top_level:
+            raise ValueError("dataset manifest fields are invalid")
+        source = manifest["source"]
+        coverage = manifest["coverage"]
+        artifacts = manifest["artifacts"]
+        if not isinstance(source, MappingAbc) or set(source) != {
+            "market_data_venue",
+            "market_type",
+            "source",
+            "source_build_version",
+            "source_checksum",
+            "source_network",
+            "source_schema_version",
+        }:
+            raise ValueError("dataset manifest source is invalid")
+        if not isinstance(coverage, MappingAbc) or set(coverage) != {
+            "end_at",
+            "record_count",
+            "start_at",
+            "streams",
+            "symbols",
+            "timeframes",
+        }:
+            raise ValueError("dataset manifest coverage is invalid")
+        if not isinstance(artifacts, MappingAbc) or set(artifacts) != {
+            "candles.ndjson",
+            "quality-report.json",
+        }:
+            raise ValueError("dataset manifest artifacts are invalid")
+
+        string_fields = (
+            (manifest, "dataset_id"),
+            (manifest, "schema_version"),
+            (manifest, "record_schema_version"),
+            (manifest, "quality_report_schema_version"),
+            (manifest, "build_version"),
+            (manifest, "dataset_checksum"),
+            (source, "source"),
+            (source, "source_schema_version"),
+            (source, "source_build_version"),
+            (source, "source_checksum"),
+            (source, "source_network"),
+            (source, "market_data_venue"),
+            (source, "market_type"),
+            (coverage, "start_at"),
+            (coverage, "end_at"),
+            (artifacts, "candles.ndjson"),
+            (artifacts, "quality-report.json"),
+        )
+        if any(type(container[key]) is not str for container, key in string_fields):
+            raise ValueError("dataset manifest string scalar is invalid")
+        if type(coverage["record_count"]) is not int:
+            raise ValueError("record_count must be an integer")
+        for name in ("symbols", "timeframes"):
+            value = coverage[name]
+            if type(value) is not list or any(type(item) is not str for item in value):
+                raise ValueError(f"{name} must be an array of strings")
+        streams = coverage["streams"]
+        expected_stream_fields = {
+            "first_open_at",
+            "last_close_at",
+            "market_data_venue",
+            "market_type",
+            "record_count",
+            "symbol",
+            "timeframe",
+        }
+        if type(streams) is not list or not streams:
+            raise ValueError("streams must be a non-empty array")
+        for stream in streams:
+            if type(stream) is not dict or set(stream) != expected_stream_fields:
+                raise ValueError("dataset manifest stream is invalid")
+            if any(
+                type(stream[name]) is not str
+                for name in expected_stream_fields - {"record_count"}
+            ) or type(stream["record_count"]) is not int:
+                raise ValueError("dataset manifest stream scalar is invalid")
+        quality_flags = manifest["quality_flags"]
+        if type(quality_flags) is not list or any(
+            type(item) is not str for item in quality_flags
+        ):
+            raise ValueError("quality_flags must be an array of strings")
+
+        manifest_core = {
+            key: value
+            for key, value in manifest.items()
+            if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+        }
+        expected_checksum = _dataset_checksum_from_manifest_core(
+            manifest_core,
+            artifacts["candles.ndjson"],
+            artifacts["quality-report.json"],
+        )
+        if manifest["dataset_checksum"] != expected_checksum:
+            raise ValueError("dataset checksum does not bind manifest facts")
+
+        def parse_utc(value: str) -> datetime:
+            if not value.endswith("Z"):
+                raise ValueError("manifest datetime must use canonical UTC Z suffix")
+            parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+            return _require_utc(parsed)
+
+        try:
+            market_type = MarketType(source["market_type"])
+        except ValueError as exc:
+            raise ValueError("dataset manifest market_type is invalid") from exc
+        parsed_streams = tuple(
+            DatasetStreamCoverage(
+                market_data_venue=item["market_data_venue"],
+                market_type=MarketType(item["market_type"]),
+                symbol=item["symbol"],
+                timeframe=item["timeframe"],
+                first_open_at=parse_utc(item["first_open_at"]),
+                last_close_at=parse_utc(item["last_close_at"]),
+                record_count=item["record_count"],
+            )
+            for item in streams
+        )
+
+        return cls(
+            dataset_id=manifest["dataset_id"],
+            schema_version=manifest["schema_version"],
+            record_schema_version=manifest["record_schema_version"],
+            quality_report_schema_version=manifest["quality_report_schema_version"],
+            build_version=manifest["build_version"],
+            source=source["source"],
+            source_schema_version=source["source_schema_version"],
+            source_build_version=source["source_build_version"],
+            source_checksum=source["source_checksum"],
+            source_network=source["source_network"],
+            market_data_venue=source["market_data_venue"],
+            market_type=market_type,
+            streams=parsed_streams,
+            symbols=tuple(coverage["symbols"]),
+            timeframes=tuple(coverage["timeframes"]),
+            start_at=parse_utc(coverage["start_at"]),
+            end_at=parse_utc(coverage["end_at"]),
+            record_count=coverage["record_count"],
+            candles_checksum=artifacts["candles.ndjson"],
+            quality_report_checksum=artifacts["quality-report.json"],
+            quality_flags=tuple(quality_flags),
+            dataset_checksum=manifest["dataset_checksum"],
+        )
 
 
 class EffectiveConfigSnapshot(BaseModel):
@@ -260,6 +592,22 @@ class BacktestRunRequest(BaseModel):
             raise ValueError("period_end must be after period_start")
         if self.period_start < self.dataset.start_at or self.period_end > self.dataset.end_at:
             raise ValueError("period must stay inside dataset bounds")
+        streams_by_key = {
+            (item.symbol, item.timeframe): item for item in self.dataset.streams
+        }
+        requested_streams: list[DatasetStreamCoverage] = []
+        for symbol in self.symbols:
+            for timeframe in self.timeframes:
+                stream = streams_by_key.get((symbol, timeframe))
+                if stream is None:
+                    raise ValueError("requested symbol/timeframe stream is not in dataset")
+                requested_streams.append(stream)
+        if any(
+            self.period_start < item.first_open_at
+            or self.period_end > item.last_close_at
+            for item in requested_streams
+        ):
+            raise ValueError("period must stay inside each requested stream bounds")
         return self
 
     @computed_field
