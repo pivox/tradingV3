@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
+from copy import deepcopy
+import pytest
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
@@ -65,3 +67,10 @@ def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
     ).lower()
     for forbidden in ("rsi", "macd", "position_sizer", "risk_rate *", "entryzonecalculator"):
         assert re.search(rf"\b{re.escape(forbidden)}\b", source) is None
+
+
+def test_runtime_rejects_plan_feed_identity_mismatch() -> None:
+    forged = deepcopy(json.loads(FIXTURE.read_text()))
+    forged["timeframe"] = "5m"
+    with pytest.raises(ValueError, match="identity_mismatch"):
+        CanonicalBacktraderRuntime().run(CanonicalBacktestOrderPlan.model_validate(forged), _feed())

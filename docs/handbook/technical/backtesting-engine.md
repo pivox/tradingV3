@@ -6,7 +6,7 @@ Contrats v1, Dataset Builder deterministe, frontiere d'identite moderne,
 projection des indicateurs Paper et pont canonique vers les regles TradingCore
 livres pour #191.
 
-Ce lot ne livre pas encore un moteur Backtrader executable. Il fixe la frontiere
+Le premier runtime Backtrader executable est livre derriere ces frontieres. Il fixe la frontiere
 de contrat entre les futurs composants :
 
 ```text
@@ -41,8 +41,33 @@ Le backtesting #191 est implemente en lots atomiques. Les lots livres fixent :
   la qualite et les conflits de publication ;
 - cette page d'architecture.
 
-Backtrader sera branche derriere ces contrats dans un lot suivant. Les resultats
-de backtest ne seront jamais presentes comme preuve live.
+Les resultats de backtest ne sont jamais presentes comme preuve live.
+
+### Runtime Backtrader canonique v1
+
+`CanonicalBacktestOrderPlanProjection` expose le `CanonicalOrderPlan` PHP
+authentifie sans recalcul Python des regles, de la zone, du risque, du levier ou
+des couts. Le miroir Pydantic refuse les champs absents/inconnus, les valeurs non
+finies, une identite autre que `fake` local/test et toute divergence de
+`plan_hash`.
+
+`VerifiedBacktraderFeedAdapter` accepte un seul flux `CandleRecord` continu et
+verifie. Les bougies sont livrees a Cerebro a `available_at`, jamais a leur
+ouverture ou avant leur cloture. `CanonicalBacktraderRuntime` utilise Backtrader
+`1.9.78.123` uniquement comme horloge d'iteration et transmet les barres a une
+machine d'etat pure.
+
+La v1 accepte un plan limit, un full fill au prix authentifie, attache le stop
+full-size dans le meme evenement, puis ferme integralement au stop ou au premier
+target. Si stop et target sont atteignables dans la meme bougie,
+`conservative_stop_first` gagne. Une bougie qui chevauche l'expiration est
+ambigue et rejetee. Une position encore ouverte en fin de dataset est egalement
+rejetee, sans fermeture optimiste.
+
+Restent hors de ce lot : partial fills, fallback taker, application des couts
+observes/funding au ledger, portefeuille multi-plan, PostgreSQL, metriques et
+rapports de certification. Aucun endpoint prive ni execution mainnet n'est
+ajoute.
 
 ## Invariants verrouilles par les contrats v1
 

@@ -44,6 +44,11 @@ def test_same_bar_stop_and_target_is_stop_first() -> None:
     assert result.events[-1].price == 98.4
 
 
+def test_stop_without_target_uses_stop_reason() -> None:
+    result = execute_plan(_plan(), (_bar(0, high=101, low=99), _bar(1, high=101, low=98)))
+    assert result.reason_code == "stop_filled"
+
+
 def test_unfilled_plan_expires_without_trade() -> None:
     result = execute_plan(_plan(), (_bar(0, high=100, low=99), _bar(1, high=100, low=99), _bar(2, high=100, low=99)))
     assert result.status == "not_executed"
@@ -76,3 +81,26 @@ def test_bar_crossing_plan_creation_cannot_retroactively_fill() -> None:
     result = execute_plan(_plan(), (bar,))
     assert result.status == "not_executed"
     assert result.reason_code == "entry_not_filled"
+
+
+def test_holding_boundary_closes_at_next_bar_open() -> None:
+    envelope = _plan()
+    envelope = envelope.model_copy(
+        update={
+            "plan": envelope.plan.model_copy(
+                update={"holding_expires_at": "2026-08-10T12:01:00.000000+00:00"}
+            )
+        }
+    )
+    result = execute_plan(envelope, (_bar(0, high=101, low=99), _bar(1, high=101, low=99, opened=100.5)))
+    assert result.reason_code == "holding_expired"
+    assert result.events[-1].price == 100.5
+
+
+def test_bar_available_before_creation_is_ignored_and_late_bar_expires() -> None:
+    early = _bar(0, high=101, low=99)
+    early = VerifiedBacktraderBar(**{**early.__dict__, "available_at": early.open_at - timedelta(seconds=1)})
+    assert execute_plan(_plan(), (early,)).reason_code == "entry_not_filled"
+
+    late = _bar(3, high=101, low=99)
+    assert execute_plan(_plan(), (late,)).reason_code == "entry_expired"

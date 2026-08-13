@@ -65,3 +65,12 @@ def test_adapter_rejects_noncanonical_or_mixed_stream(records) -> None:
             period_start=datetime(2026, 1, 1, tzinfo=UTC),
             period_end=datetime(2026, 1, 2, tzinfo=UTC),
         )
+
+
+def test_adapter_rejects_empty_scope() -> None:
+    with pytest.raises(BacktraderFeedError, match="scope_invalid"):
+        VerifiedBacktraderFeedAdapter(
+            (), dataset_id="bad", dataset_checksum="bad",
+            period_start=datetime(2026, 1, 1, tzinfo=UTC),
+            period_end=datetime(2026, 1, 2, tzinfo=UTC),
+        )
