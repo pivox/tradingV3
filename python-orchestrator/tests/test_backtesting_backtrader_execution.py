@@ -62,6 +62,14 @@ def test_entry_bar_touching_stop_attaches_then_executes_stop_conservatively() ->
     assert result.events[1].price == Decimal("98.4")
 
 
+def test_entry_bar_touching_only_target_closes_immediately() -> None:
+    result = execute_plan(_plan(), (_bar(0, high=103, low=99),))
+
+    assert [event.kind for event in result.events] == ["entry_filled", "target_filled"]
+    assert result.reason_code == "target_filled"
+    assert result.events[-1].price == Decimal("102.6")
+
+
 def test_stop_without_target_uses_stop_reason() -> None:
     result = execute_plan(_plan(), (_bar(0, high=101, low=99), _bar(1, high=101, low=98)))
     assert result.reason_code == "stop_filled"
@@ -160,6 +168,26 @@ def test_bar_straddling_holding_boundary_is_ambiguous() -> None:
     )
     with pytest.raises(BacktestExecutionError, match="holding_window_ambiguous"):
         execute_plan(envelope, (_bar(0, high=101, low=99), _bar(1, high=103, low=99)))
+
+
+def test_delayed_pre_holding_bar_cannot_fill_after_holding_deadline() -> None:
+    envelope = _plan().model_copy(
+        update={
+            "plan": _plan().plan.model_copy(
+                update={"holding_expires_at": "2026-08-10T12:02:30.000000+00:00"}
+            )
+        }
+    )
+    delayed = _bar(1, high=103, low=99)
+    delayed = VerifiedBacktraderBar(
+        **{
+            **delayed.__dict__,
+            "available_at": datetime(2026, 8, 10, 12, 3, tzinfo=UTC),
+        }
+    )
+
+    with pytest.raises(BacktestExecutionError, match="holding_delivery_ambiguous"):
+        execute_plan(envelope, (_bar(0, high=101, low=99), delayed))
 
 
 def test_bar_available_before_creation_is_ignored_and_late_bar_expires() -> None:

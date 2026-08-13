@@ -71,20 +71,28 @@ def execute_plan(
                     if plan.side == "long"
                     else _decimal(bar.high) >= stop_price
                 )
-                target_hit = any(
-                    _decimal(bar.high) >= Decimal(str(target.price))
-                    if plan.side == "long"
-                    else _decimal(bar.low) <= Decimal(str(target.price))
+                hit_targets = tuple(
+                    target
                     for target in plan.targets
+                    if (
+                        _decimal(bar.high) >= Decimal(str(target.price))
+                        if plan.side == "long"
+                        else _decimal(bar.low) <= Decimal(str(target.price))
+                    )
                 )
                 if stop_hit:
                     events.append(_event("stop_filled", bar, plan.stop_price, envelope))
-                    reason = "conservative_stop_first" if target_hit else "stop_filled"
+                    reason = "conservative_stop_first" if hit_targets else "stop_filled"
                     return BacktestExecutionResult("closed", reason, tuple(events))
+                if hit_targets:
+                    events.append(_event("target_filled", bar, hit_targets[0].price, envelope))
+                    return BacktestExecutionResult("closed", "target_filled", tuple(events))
                 continue
             continue
         if holding is not None and bar.open_at < holding < bar.close_at:
             raise BacktestExecutionError("backtrader_holding_window_ambiguous")
+        if holding is not None and bar.close_at <= holding <= bar.available_at:
+            raise BacktestExecutionError("backtrader_holding_delivery_ambiguous")
         if holding is not None and bar.open_at >= holding:
             events.append(_event("holding_expired", bar, _decimal(bar.open), envelope))
             return BacktestExecutionResult("closed", "holding_expired", tuple(events))
