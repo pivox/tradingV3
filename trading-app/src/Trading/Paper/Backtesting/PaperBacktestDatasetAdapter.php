@@ -7,10 +7,12 @@ namespace App\Trading\Paper\Backtesting;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
+use App\Trading\Paper\Hyperliquid\HyperliquidPaperInstrumentMap;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use Brick\Math\BigDecimal;
 
 final class PaperBacktestDatasetAdapter
@@ -40,11 +42,11 @@ final class PaperBacktestDatasetAdapter
 
         $candles = [];
         foreach ($snapshot->events as $event) {
+            $this->assertEventProvenance($event, $manifest);
             $timeframe = $this->timeframe($event->channel);
             if ($timeframe === null) {
                 continue;
             }
-            $this->assertEventProvenance($event, $manifest);
             $candles[] = $manifest->venue === PaperMarketDataVenue::OKX
                 ? $this->normalizeOkx($event, $timeframe)
                 : $this->normalizeHyperliquid($event, $timeframe);
@@ -112,12 +114,20 @@ final class PaperBacktestDatasetAdapter
     private function assertEventProvenance(PaperMarketEvent $event, PaperDatasetManifest $manifest): void
     {
         $nativeSymbol = $event->payload['native_symbol'] ?? null;
+        try {
+            $expectedNativeSymbol = $manifest->venue === PaperMarketDataVenue::OKX
+                ? (new OkxPaperInstrumentMap())->nativeInstrumentId($event->symbol)
+                : (new HyperliquidPaperInstrumentMap())->nativeCoin($event->symbol);
+        } catch (\InvalidArgumentException) {
+            throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+        }
         if ($event->schemaVersion !== PaperMarketEvent::SCHEMA_VERSION
             || $event->sourceNetwork !== $manifest->network
             || $event->sourceVenue !== $manifest->venue
             || !isset($manifest->symbols[$event->symbol])
             || !\is_string($nativeSymbol)
             || $manifest->symbols[$event->symbol] !== $nativeSymbol
+            || $nativeSymbol !== $expectedNativeSymbol
         ) {
             throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
         }

@@ -110,6 +110,27 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         }
     }
 
+    public function testRejectsMixedProvenanceEvenForIgnoredNonCandleEvents(): void
+    {
+        $foreignBook = PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            new \DateTimeImmutable('2026-08-13T10:00:01.000000Z'),
+            new \DateTimeImmutable('2026-08-13T10:00:02.000000Z'),
+            '2',
+            ['native_symbol' => 'BTC'],
+        );
+        $candle = $this->okxEvent();
+        $manifest = $this->manifest($candle, [$candle, $foreignBook]);
+
+        $this->assertAdapterFailure(
+            new VerifiedPaperDatasetSnapshot($manifest, [$candle, $foreignBook]),
+            'paper_backtest_event_provenance_invalid',
+        );
+    }
+
     public function testRejectsForgedManifestCountAndNativeSymbolProvenance(): void
     {
         $event = $this->okxEvent();
@@ -147,6 +168,23 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             [$event],
         );
         $this->assertAdapterFailure($nativeMismatch, 'paper_backtest_event_provenance_invalid');
+
+        $colluding = $this->okxEvent(['native_symbol' => 'BOGUS']);
+        $colludingSnapshot = new VerifiedPaperDatasetSnapshot(
+            $this->manifest($colluding, [$colluding], nativeSymbol: 'BOGUS'),
+            [$colluding],
+        );
+        $this->assertAdapterFailure($colludingSnapshot, 'paper_backtest_event_provenance_invalid');
+
+        $colludingHyperliquid = $this->hyperliquidEvent(['native_symbol' => 'BOGUS']);
+        $this->assertAdapterFailure(new VerifiedPaperDatasetSnapshot(
+            $this->manifest(
+                $colludingHyperliquid,
+                [$colludingHyperliquid],
+                nativeSymbol: 'BOGUS',
+            ),
+            [$colludingHyperliquid],
+        ), 'paper_backtest_event_provenance_invalid');
         self::assertSame(1, $snapshot->manifest->eventCount);
     }
 
