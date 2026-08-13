@@ -298,6 +298,24 @@ def test_candle_rejects_noncanonical_decimal_representations(
         _candle(**{field: value})
 
 
+def test_candle_accepts_canonical_sub_unit_decimals() -> None:
+    candle = _candle(
+        open="0.5",
+        high="1",
+        low="0.25",
+        close="0.75",
+        volume="0.001",
+    )
+
+    assert (candle.open, candle.high, candle.low, candle.close, candle.volume) == (
+        "0.5",
+        "1",
+        "0.25",
+        "0.75",
+        "0.001",
+    )
+
+
 @pytest.mark.parametrize("field", ("open", "high", "low", "close"))
 def test_candle_requires_positive_prices(field: str) -> None:
     with pytest.raises(ValidationError, match="price must be positive"):

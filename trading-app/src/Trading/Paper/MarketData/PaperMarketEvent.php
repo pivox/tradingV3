@@ -80,6 +80,8 @@ final readonly class PaperMarketEvent
         public ?string $sequence,
         public array $payload,
         public string $payloadHash,
+        private int $canonicalNodeCount,
+        private int $canonicalKeyCount,
     ) {
     }
 
@@ -112,7 +114,8 @@ final readonly class PaperMarketEvent
 
         self::assertValidSequence($sequence);
         PaperMarketEventRedactor::assertSafe($payload);
-        $payload = self::detachPayload($payload);
+        $detachedPayload = self::detachPayload($payload);
+        $payload = $detachedPayload['payload'];
 
         $exchangeTimestampUtc = self::normalizeTimestamp($exchangeTimestamp);
         $receivedTimestampUtc = self::normalizeTimestamp($receivedTimestamp);
@@ -155,6 +158,8 @@ final readonly class PaperMarketEvent
             sequence: $sequence,
             payload: $payload,
             payloadHash: $payloadHash,
+            canonicalNodeCount: self::CANONICAL_ENVELOPE_NODES + $detachedPayload['nodes'],
+            canonicalKeyCount: self::CANONICAL_ENVELOPE_KEYS + $detachedPayload['keys'],
         );
     }
 
@@ -213,7 +218,8 @@ final readonly class PaperMarketEvent
 
         self::assertValidSequence($data['sequence']);
         PaperMarketEventRedactor::assertSafe($data['payload']);
-        $payload = self::detachPayload($data['payload']);
+        $detachedPayload = self::detachPayload($data['payload']);
+        $payload = $detachedPayload['payload'];
         $exchangeTimestamp = self::parseTimestamp($data['exchange_timestamp']);
         $receivedTimestamp = self::parseTimestamp($data['received_timestamp']);
         $payloadHash = hash('sha256', CanonicalJson::encodeWithReservedBudget(
@@ -263,7 +269,22 @@ final readonly class PaperMarketEvent
             sequence: $data['sequence'],
             payload: $payload,
             payloadHash: $payloadHash,
+            canonicalNodeCount: ($schemaVersion === self::SCHEMA_VERSION
+                ? self::CANONICAL_ENVELOPE_NODES
+                : self::LEGACY_CANONICAL_ENVELOPE_NODES) + $detachedPayload['nodes'],
+            canonicalKeyCount: ($schemaVersion === self::SCHEMA_VERSION
+                ? self::CANONICAL_ENVELOPE_KEYS
+                : self::LEGACY_CANONICAL_ENVELOPE_KEYS) + $detachedPayload['keys'],
         );
+    }
+
+    /** @return array{nodes: int, keys: int} */
+    public function canonicalComplexity(): array
+    {
+        return [
+            'nodes' => $this->canonicalNodeCount,
+            'keys' => $this->canonicalKeyCount,
+        ];
     }
 
     /**
@@ -365,14 +386,24 @@ final readonly class PaperMarketEvent
     /**
      * @param array<array-key, mixed> $payload
      *
-     * @return array<array-key, mixed>
+     * @return array{payload: array<array-key, mixed>, nodes: int, keys: int}
      */
     private static function detachPayload(#[\SensitiveParameter] array $payload): array
     {
         $nodeCount = 0;
         $byteCount = 0;
+        $keyCount = 0;
 
-        return self::detachPayloadWithinBudget($payload, $nodeCount, $byteCount);
+        return [
+            'payload' => self::detachPayloadWithinBudget(
+                $payload,
+                $nodeCount,
+                $byteCount,
+                $keyCount,
+            ),
+            'nodes' => $nodeCount,
+            'keys' => $keyCount,
+        ];
     }
 
     /**
@@ -385,10 +416,15 @@ final readonly class PaperMarketEvent
         array $payload,
         int &$nodeCount,
         int &$byteCount,
+        int &$keyCount,
     ): array {
         self::consumeDetachNode($nodeCount);
         $detached = [];
+        $isList = array_is_list($payload);
         foreach ($payload as $key => $value) {
+            if (!$isList) {
+                ++$keyCount;
+            }
             if (\is_string($key)) {
                 if (\strlen($key) > PaperMarketEventRedactor::MAX_PAYLOAD_KEY_BYTES) {
                     throw new \InvalidArgumentException('paper_market_payload_key_too_large');
@@ -398,7 +434,12 @@ final readonly class PaperMarketEvent
             }
 
             if (\is_array($value)) {
-                $detached[$key] = self::detachPayloadWithinBudget($value, $nodeCount, $byteCount);
+                $detached[$key] = self::detachPayloadWithinBudget(
+                    $value,
+                    $nodeCount,
+                    $byteCount,
+                    $keyCount,
+                );
 
                 continue;
             }

@@ -7,10 +7,13 @@ namespace App\Tests\Trading\Paper\Dataset;
 use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
 use App\Trading\Paper\Dataset\PaperDatasetLineReader;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\Dataset\PaperDatasetSnapshotLimits;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
+use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
 use App\Trading\Paper\Hyperliquid\Historical\HyperliquidHistoricalRequest;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
@@ -21,8 +24,11 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Process\Process;
 
 #[CoversClass(PaperDatasetVerifier::class)]
+#[CoversClass(PaperDatasetSnapshotLimits::class)]
+#[CoversClass(VerifiedPaperDatasetSnapshot::class)]
 #[CoversClass(PaperDatasetManifest::class)]
 #[CoversClass(PaperDatasetRecorder::class)]
 #[CoversClass(PaperMarketEvent::class)]
@@ -55,6 +61,528 @@ final class PaperDatasetVerifierTest extends TestCase
         file_put_contents($this->eventsPath(), '{"payload":{"bid":"private-sentinel"}');
 
         $this->assertVerificationFailsWithoutPayload('paper_dataset_event_invalid', ['private-sentinel']);
+    }
+
+    public function testBaselineSnapshotReturnsTheManifestAndExactOrderedVerifiedEvents(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $candle = PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::CANDLE_1M,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T10:00:00.000000Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T10:01:00.000001Z'),
+            sequence: '1',
+            payload: [
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'bar' => '1m',
+                'open' => '30000',
+                'high' => '30001',
+                'low' => '29999',
+                'close' => '30000.5',
+                'volume_contracts' => '10',
+                'volume_base' => '0.001',
+                'volume_quote' => '30',
+                'confirmed' => true,
+                'origin' => 'rest_history_candles',
+            ],
+        );
+        $book = $this->event(sequence: '1', microseconds: 1);
+        $recorder->append($candle);
+        $recorder->append($book);
+        $expectedManifest = $recorder->complete();
+
+        $snapshot = (new PaperDatasetVerifier())->verifyBaselineSnapshot(
+            $recorder->datasetDirectory(),
+        );
+
+        self::assertSame($expectedManifest->toArray(), $snapshot->manifest->toArray());
+        self::assertContainsOnlyInstancesOf(PaperMarketEvent::class, $snapshot->events);
+        self::assertSame(
+            [
+                CanonicalJson::encode($candle->toArray()),
+                CanonicalJson::encode($book->toArray()),
+            ],
+            array_map(
+                static fn (PaperMarketEvent $event): string => CanonicalJson::encode($event->toArray()),
+                $snapshot->events,
+            ),
+        );
+
+        $callerEvents = $snapshot->events;
+        array_pop($callerEvents);
+        self::assertCount(2, $snapshot->events);
+    }
+
+    public function testBaselineSnapshotDefensivelyCopiesAndValidatesItsEventList(): void
+    {
+        $events = ['source-key' => $this->event(sequence: '1', microseconds: 1)];
+        $snapshot = new VerifiedPaperDatasetSnapshot($this->manifest(), $events);
+        array_pop($events);
+
+        self::assertCount(1, $snapshot->events);
+        self::assertSame([0], array_keys($snapshot->events));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('verified_paper_dataset_events_invalid');
+
+        new VerifiedPaperDatasetSnapshot($this->manifest(), ['not-an-event']);
+    }
+
+    public function testManifestOnlyVerificationDoesNotCollectOrApplySnapshotLimits(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $expected = $recorder->complete();
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1, 1, 1),
+        );
+
+        self::assertSame($expected->toArray(), $verifier->verify($recorder->datasetDirectory())->toArray());
+        self::assertSame(
+            $expected->toArray(),
+            $verifier->verifyForBaseline($recorder->datasetDirectory())->toArray(),
+        );
+    }
+
+    public function testBaselineSnapshotRejectsManifestEventCountAboveItsBound(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $recorder->complete();
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1024 * 1024),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($recorder->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotRejectsEventsFileAboveItsByteBound(): void
+    {
+        $this->createCompleteDataset();
+        $bytes = filesize($this->eventsPath());
+        self::assertIsInt($bytes);
+        self::assertGreaterThan(1, $bytes);
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(10, $bytes - 1),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotCountsBytesReadAfterInitialStatIncludingBlankLines(): void
+    {
+        $this->createCompleteDataset();
+        $initial = file_get_contents($this->eventsPath());
+        self::assertIsString($initial);
+        $filesystem = new GrowingVerifierEventsFilesystem(
+            $this->eventsPath(),
+            str_repeat(' ', 256) . "\n",
+        );
+        $limit = strlen($initial) + 8;
+        $verifier = new PaperDatasetVerifier(
+            filesystem: $filesystem,
+            snapshotLimits: new PaperDatasetSnapshotLimits(
+                maximumEvents: 100,
+                maximumBytes: $limit,
+            ),
+        );
+
+        try {
+            $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+            self::fail('Expected a growing snapshot byte rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_snapshot_limit_exceeded', $exception->getMessage());
+            self::assertLessThan(32, $filesystem->lineReadCount);
+        }
+
+        self::assertSame($initial . str_repeat(' ', 256) . "\n", file_get_contents($this->eventsPath()));
+    }
+
+    public function testBaselineSnapshotRejectsBlankLinesThatCannotBeReconstructedFromEvents(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $manifest = $recorder->complete();
+        $eventsPath = $recorder->datasetDirectory() . '/events.ndjson';
+        $events = file_get_contents($eventsPath);
+        self::assertIsString($events);
+        $events .= " \t\n";
+        self::assertSame(strlen($events), file_put_contents($eventsPath, $events));
+        $forged = new PaperDatasetManifest(
+            schemaVersion: $manifest->schemaVersion,
+            recorderVersion: $manifest->recorderVersion,
+            datasetId: $manifest->datasetId,
+            venue: $manifest->venue,
+            network: $manifest->network,
+            symbols: $manifest->symbols,
+            startExchangeTimestamp: $manifest->startExchangeTimestamp,
+            endExchangeTimestamp: $manifest->endExchangeTimestamp,
+            channels: $manifest->channels,
+            eventCount: $manifest->eventCount,
+            sequenceGaps: $manifest->sequenceGaps,
+            quality: $manifest->quality,
+            modelName: $manifest->modelName,
+            modelVersion: $manifest->modelVersion,
+            eventsFileSha256: hash('sha256', $events),
+            state: $manifest->state,
+            lastEventId: $manifest->lastEventId,
+        );
+        self::assertIsInt(file_put_contents(
+            $recorder->datasetDirectory() . '/manifest.json',
+            (new PaperDatasetManifestCodec())->encode($forged),
+        ));
+        $verifier = new PaperDatasetVerifier();
+        self::assertSame(
+            $forged->toArray(),
+            $verifier->verifyForBaseline($recorder->datasetDirectory())->toArray(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_blank_line_invalid');
+        $verifier->verifyBaselineSnapshot($recorder->datasetDirectory());
+    }
+
+    #[DataProvider('tightStructuralSnapshotLimitsProvider')]
+    public function testBaselineSnapshotEnforcesItsStructuralBounds(
+        int $maximumNodes,
+        int $maximumKeys,
+    ): void {
+        $this->createCompleteDataset();
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(
+                maximumNodes: $maximumNodes,
+                maximumKeys: $maximumKeys,
+            ),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotEnforcesItsEventBoundAgainstForgedManifestCount(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $recorder->append($this->event(sequence: '2', microseconds: 2));
+        $recorder->complete();
+        $this->rewriteManifest(['event_count' => 1]);
+        $verifier = new PaperDatasetVerifier(
+            snapshotLimits: new PaperDatasetSnapshotLimits(1, 1024 * 1024),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limit_exceeded');
+
+        $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+    }
+
+    public function testBaselineSnapshotDoesNotAcceptAPartialEventLimit(): void
+    {
+        $method = new \ReflectionMethod(PaperDatasetVerifier::class, 'verifyBaselineSnapshot');
+
+        self::assertSame(1, $method->getNumberOfParameters());
+    }
+
+    #[DataProvider('invalidSnapshotLimitsProvider')]
+    public function testSnapshotLimitsCanOnlyTightenTheGlobalBounds(
+        int $events,
+        int $bytes,
+        int $nodes,
+        int $keys,
+    ): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_limits_invalid');
+
+        new PaperDatasetSnapshotLimits($events, $bytes, $nodes, $keys);
+    }
+
+    public function testDefaultSnapshotBudgetRejectsBeforePhpMemoryExhaustion(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $datasetRoot = $this->testRoot . '/snapshot-memory-guard';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+$root = %s;
+$directory = $root . '/dataset-memory-guard';
+mkdir($root, 0700);
+mkdir($directory, 0700);
+$eventsPath = $directory . '/events.ndjson';
+$handle = fopen($eventsPath, 'wb');
+chmod($eventsPath, 0600);
+$checksum = hash_init('sha256');
+$first = null;
+$last = null;
+$lastEventId = null;
+$padding = str_repeat('x!', 350_000);
+$payload = ['ask' => '30001', 'bid' => '29999', 'padding' => $padding];
+$payloadHash = hash('sha256', App\Trading\Paper\MarketData\CanonicalJson::encode($payload));
+
+for ($index = 0; $index < 25; ++$index) {
+    $exchangeAt = (new DateTimeImmutable('2026-07-19T10:00:00.000000Z'))->modify('+' . $index . ' seconds');
+    $exchangeTimestamp = $exchangeAt->format('Y-m-d\TH:i:s.u\Z');
+    $sequence = (string) ($index + 1);
+    $eventId = hash('sha256', implode('|', [
+        '2',
+        'mainnet',
+        'okx',
+        'BTCUSDT',
+        'top_of_book',
+        $exchangeTimestamp,
+        $sequence,
+    ]));
+    $event = [
+        'schema_version' => 2,
+        'event_id' => $eventId,
+        'source_network' => 'mainnet',
+        'source_venue' => 'okx',
+        'symbol' => 'BTCUSDT',
+        'channel' => 'top_of_book',
+        'exchange_timestamp' => $exchangeTimestamp,
+        'received_timestamp' => $exchangeAt->modify('+1 second')->format('Y-m-d\TH:i:s.u\Z'),
+        'sequence' => $sequence,
+        'payload' => $payload,
+        'payload_hash' => $payloadHash,
+    ];
+    $line = App\Trading\Paper\MarketData\CanonicalJson::encode($event) . "\n";
+    fwrite($handle, $line);
+    hash_update($checksum, $line);
+    $first ??= $exchangeAt;
+    $last = $exchangeAt;
+    $lastEventId = $eventId;
+}
+fclose($handle);
+if (filesize($eventsPath) <= App\Trading\Paper\Dataset\PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_BYTES) {
+    fwrite(STDOUT, 'fixture_under_snapshot_byte_limit');
+    exit(4);
+}
+
+$manifest = new App\Trading\Paper\Dataset\PaperDatasetManifest(
+    schemaVersion: App\Trading\Paper\Dataset\PaperDatasetManifest::SCHEMA_VERSION,
+    recorderVersion: '1.0.0',
+    datasetId: 'dataset-memory-guard',
+    venue: App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+    network: App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
+    symbols: ['BTCUSDT' => 'BTC-USDT-SWAP'],
+    startExchangeTimestamp: $first,
+    endExchangeTimestamp: $last,
+    channels: ['top_of_book'],
+    eventCount: 25,
+    sequenceGaps: [],
+    quality: App\Trading\Paper\MarketData\PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+    modelName: null,
+    modelVersion: null,
+    eventsFileSha256: hash_final($checksum),
+    state: App\Trading\Paper\Dataset\PaperDatasetState::COMPLETE,
+    lastEventId: $lastEventId,
+);
+$manifestPath = $directory . '/manifest.json';
+file_put_contents(
+    $manifestPath,
+    (new App\Trading\Paper\Dataset\PaperDatasetManifestCodec())->encode($manifest),
+);
+chmod($manifestPath, 0600);
+
+try {
+    (new App\Trading\Paper\Dataset\PaperDatasetVerifier())->verifyBaselineSnapshot($directory);
+} catch (RuntimeException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit($exception->getMessage() === 'paper_dataset_snapshot_limit_exceeded' ? 0 : 2);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(3);
+PHP,
+            var_export($autoload, true),
+            var_export($datasetRoot, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=128M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(60.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_dataset_snapshot_limit_exceeded', $process->getOutput());
+    }
+
+    public function testDenseSnapshotBudgetRejectsBeforePhpMemoryExhaustion(): void
+    {
+        $autoload = dirname(__DIR__, 4) . '/vendor/autoload.php';
+        $datasetRoot = $this->testRoot . '/snapshot-dense-memory-guard';
+        $script = sprintf(
+            <<<'PHP'
+require %s;
+
+$root = %s;
+$directory = $root . '/dataset-dense-memory-guard';
+mkdir($root, 0700);
+mkdir($directory, 0700);
+$eventsPath = $directory . '/events.ndjson';
+$handle = fopen($eventsPath, 'wb');
+chmod($eventsPath, 0600);
+$checksum = hash_init('sha256');
+$first = null;
+$last = null;
+$lastEventId = null;
+$payload = ['data' => array_fill(0, 19_000, 0)];
+$payloadHash = hash('sha256', App\Trading\Paper\MarketData\CanonicalJson::encode($payload));
+
+for ($index = 0; $index < 400; ++$index) {
+    $exchangeAt = (new DateTimeImmutable('2026-07-19T10:00:00.000000Z'))->modify('+' . $index . ' seconds');
+    $exchangeTimestamp = $exchangeAt->format('Y-m-d\TH:i:s.u\Z');
+    $sequence = (string) ($index + 1);
+    $eventId = hash('sha256', implode('|', [
+        '2', 'mainnet', 'okx', 'BTCUSDT', 'top_of_book', $exchangeTimestamp, $sequence,
+    ]));
+    $line = App\Trading\Paper\MarketData\CanonicalJson::encode([
+        'schema_version' => 2,
+        'event_id' => $eventId,
+        'source_network' => 'mainnet',
+        'source_venue' => 'okx',
+        'symbol' => 'BTCUSDT',
+        'channel' => 'top_of_book',
+        'exchange_timestamp' => $exchangeTimestamp,
+        'received_timestamp' => $exchangeAt->modify('+1 second')->format('Y-m-d\TH:i:s.u\Z'),
+        'sequence' => $sequence,
+        'payload' => $payload,
+        'payload_hash' => $payloadHash,
+    ]) . "\n";
+    fwrite($handle, $line);
+    hash_update($checksum, $line);
+    $first ??= $exchangeAt;
+    $last = $exchangeAt;
+    $lastEventId = $eventId;
+}
+fclose($handle);
+$bytes = filesize($eventsPath);
+if ($bytes >= App\Trading\Paper\Dataset\PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_BYTES) {
+    fwrite(STDOUT, 'fixture_over_snapshot_byte_limit:' . $bytes);
+    exit(4);
+}
+
+$manifest = new App\Trading\Paper\Dataset\PaperDatasetManifest(
+    schemaVersion: App\Trading\Paper\Dataset\PaperDatasetManifest::SCHEMA_VERSION,
+    recorderVersion: '1.0.0',
+    datasetId: 'dataset-dense-memory-guard',
+    venue: App\Trading\Paper\MarketData\PaperMarketDataVenue::OKX,
+    network: App\Trading\Paper\MarketData\PaperMarketDataNetwork::MAINNET,
+    symbols: ['BTCUSDT' => 'BTC-USDT-SWAP'],
+    startExchangeTimestamp: $first,
+    endExchangeTimestamp: $last,
+    channels: ['top_of_book'],
+    eventCount: 400,
+    sequenceGaps: [],
+    quality: App\Trading\Paper\MarketData\PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES,
+    modelName: null,
+    modelVersion: null,
+    eventsFileSha256: hash_final($checksum),
+    state: App\Trading\Paper\Dataset\PaperDatasetState::COMPLETE,
+    lastEventId: $lastEventId,
+);
+$manifestPath = $directory . '/manifest.json';
+file_put_contents(
+    $manifestPath,
+    (new App\Trading\Paper\Dataset\PaperDatasetManifestCodec())->encode($manifest),
+);
+chmod($manifestPath, 0600);
+
+try {
+    (new App\Trading\Paper\Dataset\PaperDatasetVerifier())->verifyBaselineSnapshot($directory);
+} catch (RuntimeException $exception) {
+    fwrite(STDOUT, $exception->getMessage());
+    exit($exception->getMessage() === 'paper_dataset_snapshot_limit_exceeded' ? 0 : 2);
+}
+
+fwrite(STDOUT, 'unexpected_success');
+exit(3);
+PHP,
+            var_export($autoload, true),
+            var_export($datasetRoot, true),
+        );
+        $process = new Process([
+            PHP_BINARY,
+            '-d',
+            'memory_limit=128M',
+            '-d',
+            'xdebug.mode=off',
+            '-d',
+            'display_errors=0',
+            '-d',
+            'log_errors=0',
+            '-r',
+            $script,
+        ]);
+        $process->setTimeout(60.0);
+        $process->run();
+
+        self::assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        self::assertSame('', $process->getErrorOutput());
+        self::assertSame('paper_dataset_snapshot_limit_exceeded', $process->getOutput());
+    }
+
+    /** @return iterable<string, array{int, int, int, int}> */
+    public static function invalidSnapshotLimitsProvider(): iterable
+    {
+        yield 'zero events' => [0, 1, 1, 1];
+        yield 'too many events' => [
+            PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_EVENTS + 1,
+            1,
+            1,
+            1,
+        ];
+        yield 'zero bytes' => [1, 0, 1, 1];
+        yield 'too many bytes' => [
+            1,
+            PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_BYTES + 1,
+            1,
+            1,
+        ];
+        yield 'zero nodes' => [1, 1, 0, 1];
+        yield 'too many nodes' => [
+            1,
+            1,
+            PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_NODES + 1,
+            1,
+        ];
+        yield 'zero keys' => [1, 1, 1, 0];
+        yield 'too many keys' => [
+            1,
+            1,
+            1,
+            PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_KEYS + 1,
+        ];
+    }
+
+    /** @return iterable<string, array{int, int}> */
+    public static function tightStructuralSnapshotLimitsProvider(): iterable
+    {
+        yield 'nodes' => [1, PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_KEYS];
+        yield 'keys' => [PaperDatasetFormatLimits::MAX_BACKTEST_SNAPSHOT_NODES, 1];
     }
 
     public function testBaselineAcceptsCertifiableHyperliquidModelledBookDataset(): void
@@ -365,6 +893,9 @@ final class PaperDatasetVerifierTest extends TestCase
     {
         $pathBearingParameters = [
             'verify' => 'datasetDirectory',
+            'verifyForBaseline' => 'datasetDirectory',
+            'verifyBaselineSnapshot' => 'datasetDirectory',
+            'verifySnapshot' => 'datasetDirectory',
             'assertNoSymlinkComponents' => 'path',
             'readRegularFile' => 'path',
             'assertRegularFileSnapshot' => 'path',
@@ -848,6 +1379,33 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
         }
 
         return parent::checksum($handle, $operation);
+    }
+}
+
+final class GrowingVerifierEventsFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $lineReadCount = 0;
+    private bool $grown = false;
+
+    public function __construct(
+        private readonly string $eventsPath,
+        private readonly string $appendedContents,
+    ) {
+    }
+
+    /** @param resource $handle */
+    public function readLine($handle, int $length, string $operation): string|false
+    {
+        if (!$this->grown && $operation === 'paper_dataset_verifier_events_read_failed') {
+            $this->grown = true;
+            $written = file_put_contents($this->eventsPath, $this->appendedContents, \FILE_APPEND);
+            if ($written !== \strlen($this->appendedContents)) {
+                throw new \RuntimeException('Unable to inject growing verifier events file.');
+            }
+        }
+        ++$this->lineReadCount;
+
+        return parent::readLine($handle, $length, $operation);
     }
 }
 

@@ -27,18 +27,52 @@ final class PaperDatasetVerifier
     private const FILE_TYPE_MASK = 0170000;
 
     private readonly PaperDatasetLineReader $lineReader;
+    private readonly PaperDatasetSnapshotLimits $snapshotLimits;
 
     public function __construct(
         private readonly PaperDatasetManifestCodec $codec = new PaperDatasetManifestCodec(),
         private readonly PaperDatasetRecorderFilesystem $filesystem = new PaperDatasetRecorderFilesystem(),
+        ?PaperDatasetSnapshotLimits $snapshotLimits = null,
     ) {
         $this->lineReader = new PaperDatasetLineReader($this->filesystem);
+        $this->snapshotLimits = $snapshotLimits ?? new PaperDatasetSnapshotLimits();
     }
 
     public function verify(
         #[\SensitiveParameter] string $datasetDirectory,
         ?int $eventLimit = null,
     ): PaperDatasetManifest {
+        return $this->verifySnapshot($datasetDirectory, $eventLimit, false)['manifest'];
+    }
+
+    public function verifyForBaseline(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit = null,
+    ): PaperDatasetManifest {
+        $verified = $this->verifySnapshot($datasetDirectory, $eventLimit, false);
+        $this->assertBaselineManifest($verified['manifest']);
+
+        return $verified['manifest'];
+    }
+
+    public function verifyBaselineSnapshot(
+        #[\SensitiveParameter] string $datasetDirectory,
+    ): VerifiedPaperDatasetSnapshot {
+        $verified = $this->verifySnapshot($datasetDirectory, null, true);
+        $this->assertBaselineManifest($verified['manifest']);
+        if ($verified['events'] === null) {
+            throw new \LogicException('paper_dataset_snapshot_events_unavailable');
+        }
+
+        return new VerifiedPaperDatasetSnapshot($verified['manifest'], $verified['events']);
+    }
+
+    /** @return array{manifest: PaperDatasetManifest, events: list<PaperMarketEvent>|null} */
+    private function verifySnapshot(
+        #[\SensitiveParameter] string $datasetDirectory,
+        ?int $eventLimit,
+        bool $collectEvents,
+    ): array {
         $this->assertNoSymlinkComponents($datasetDirectory);
         $unresolvedRoot = dirname($datasetDirectory);
         $rootPin = $this->openPinnedDirectory($unresolvedRoot, 'paper_dataset_directory_invalid');
@@ -100,8 +134,11 @@ final class PaperDatasetVerifier
                 throw new \RuntimeException('paper_dataset_not_complete');
             }
             $this->assertHyperliquidHistoricalCoverageIdentity($manifest, false);
+            if ($collectEvents && $manifest->eventCount > $this->snapshotLimits->maximumEvents) {
+                throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+            }
 
-            $facts = $this->scan($eventsPath, $manifest, $eventLimit);
+            $facts = $this->scan($eventsPath, $manifest, $eventLimit, $collectEvents);
             $assertDirectories();
             if ($manifest->eventsFileSha256 === null
                 || !hash_equals($manifest->eventsFileSha256, $facts['events_checksum'])
@@ -144,7 +181,7 @@ final class PaperDatasetVerifier
             );
             $assertDirectories();
 
-            return $manifest;
+            return ['manifest' => $manifest, 'events' => $facts['events']];
         } finally {
             if ($datasetPin !== null) {
                 fclose($datasetPin['handle']);
@@ -153,11 +190,8 @@ final class PaperDatasetVerifier
         }
     }
 
-    public function verifyForBaseline(
-        #[\SensitiveParameter] string $datasetDirectory,
-        ?int $eventLimit = null,
-    ): PaperDatasetManifest {
-        $manifest = $this->verify($datasetDirectory, $eventLimit);
+    private function assertBaselineManifest(PaperDatasetManifest $manifest): void
+    {
         if (!$manifest->hasCertifiableNetworkProvenance()) {
             throw new \RuntimeException('paper_dataset_network_provenance_uncertifiable');
         }
@@ -167,8 +201,6 @@ final class PaperDatasetVerifier
             throw new \RuntimeException('paper_dataset_hyperliquid_model_invalid');
         }
         $this->assertHyperliquidHistoricalCoverageIdentity($manifest, true);
-
-        return $manifest;
     }
 
     private function assertHyperliquidHistoricalCoverageIdentity(
@@ -555,6 +587,7 @@ final class PaperDatasetVerifier
      *   end_exchange_timestamp: \DateTimeImmutable|null,
      *   channels: list<string>,
      *   sequence_gaps: array<string, int>,
+     *   events: list<PaperMarketEvent>|null,
      *   events_checksum: string,
      *   events_bytes: int,
      *   events_identity: array{dev: int, ino: int}
@@ -564,6 +597,7 @@ final class PaperDatasetVerifier
         #[\SensitiveParameter] string $eventsPath,
         #[\SensitiveParameter] PaperDatasetManifest $manifest,
         ?int $eventLimit,
+        bool $collectEvents,
     ): array {
         /** @var array<string, true> $identities */
         $identities = [];
@@ -573,6 +607,11 @@ final class PaperDatasetVerifier
         $sequenceGaps = [];
         /** @var list<string> $channels */
         $channels = [];
+        /** @var list<PaperMarketEvent>|null $events */
+        $events = $collectEvents ? [] : null;
+        $snapshotNodes = 0;
+        $snapshotKeys = 0;
+        $snapshotBytes = 0;
         $count = 0;
         $lastEventId = null;
         $start = null;
@@ -612,17 +651,35 @@ final class PaperDatasetVerifier
             ) {
                 throw new \RuntimeException('paper_dataset_events_read_failed');
             }
+            if ($collectEvents && $statistics['size'] > $this->snapshotLimits->maximumBytes) {
+                throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+            }
             while (($line = $this->lineReader->read(
                 $handle,
                 'paper_dataset_verifier_events_read_failed',
                 'paper_dataset_event_invalid',
             )) !== false) {
+                if ($collectEvents) {
+                    $lineBytes = \strlen($line);
+                    if ($lineBytes > $this->snapshotLimits->maximumBytes
+                        || $snapshotBytes > $this->snapshotLimits->maximumBytes - $lineBytes
+                    ) {
+                        throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+                    }
+                    $snapshotBytes += $lineBytes;
+                }
                 hash_update($checksumContext, $line);
                 if (trim($line) === '') {
+                    if ($collectEvents) {
+                        throw new \RuntimeException('paper_dataset_snapshot_blank_line_invalid');
+                    }
                     continue;
                 }
                 if ($eventLimit !== null && $count >= $eventLimit) {
                     throw new \RuntimeException('paper_dataset_event_limit_exceeded');
+                }
+                if ($collectEvents && $count >= $this->snapshotLimits->maximumEvents) {
+                    throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
                 }
 
                 $raw = substr($line, 0, -1);
@@ -638,6 +695,18 @@ final class PaperDatasetVerifier
                 }
                 if (!array_key_exists($event->symbol, $manifest->symbols)) {
                     throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
+                }
+                if ($collectEvents) {
+                    $complexity = $event->canonicalComplexity();
+                    if ($complexity['nodes'] > $this->snapshotLimits->maximumNodes
+                        || $snapshotNodes > $this->snapshotLimits->maximumNodes - $complexity['nodes']
+                        || $complexity['keys'] > $this->snapshotLimits->maximumKeys
+                        || $snapshotKeys > $this->snapshotLimits->maximumKeys - $complexity['keys']
+                    ) {
+                        throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+                    }
+                    $snapshotNodes += $complexity['nodes'];
+                    $snapshotKeys += $complexity['keys'];
                 }
                 $historicalCoverage = $this->assertHyperliquidHistoricalEvent($event, $manifest);
                 if ($liveOrdinals instanceof HyperliquidPaperSourceOrdinal) {
@@ -697,6 +766,9 @@ final class PaperDatasetVerifier
                 }
 
                 ++$count;
+                if ($events !== null) {
+                    $events[] = $event;
+                }
                 $lastEventId = $event->eventId;
                 $channels[] = $event->channel->value;
                 $start = $start === null || $event->exchangeTimestamp < $start ? $event->exchangeTimestamp : $start;
@@ -762,6 +834,7 @@ final class PaperDatasetVerifier
             'end_exchange_timestamp' => $end,
             'channels' => $channels,
             'sequence_gaps' => $sequenceGaps,
+            'events' => $events,
             'events_checksum' => $parsedChecksum,
             'events_bytes' => $statistics['size'],
             'events_identity' => [

@@ -115,6 +115,28 @@ final class PaperMarketEventTest extends TestCase
         self::assertTrue((new \ReflectionClass(PaperMarketEvent::class))->getConstructor()?->isPrivate());
     }
 
+    public function testCanonicalComplexityCountsNestedMapsAndListsAndSurvivesRoundTrip(): void
+    {
+        $event = self::event(payload: [
+            'book' => [
+                ['price' => '1', 'size' => '2'],
+                ['price' => '3', 'size' => '4'],
+            ],
+            'meta' => ['source' => 'rest'],
+        ]);
+        $expected = ['nodes' => 21, 'keys' => 18];
+
+        self::assertSame($expected, $event->canonicalComplexity());
+        self::assertSame(
+            $expected,
+            PaperMarketEvent::fromArray($event->toArray())->canonicalComplexity(),
+        );
+
+        $callerCopy = $event->canonicalComplexity();
+        $callerCopy['nodes'] = 0;
+        self::assertSame($expected, $event->canonicalComplexity());
+    }
+
     public function testReadsLegacyV1EventAsUnknownNetworkWithoutChangingCanonicalBytes(): void
     {
         $legacy = [

@@ -10,4 +10,16 @@ final class PaperDatasetFormatLimits
 {
     public const MAX_CANONICAL_EVENT_LINE_BYTES = (CanonicalJson::MAX_BYTES * 6) + 200_000;
     public const MAX_MANIFEST_BYTES = 65_536;
+
+    /** Keeps object/index overhead bounded under the supported 128 MiB PHP memory limit. */
+    public const MAX_BACKTEST_SNAPSHOT_EVENTS = 10_000;
+
+    /** Leaves at least seven raw-byte budgets for decoding, objects, verifier indexes and PHP runtime. */
+    public const MAX_BACKTEST_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+
+    /** Bounds aggregate PHP array/value overhead independently from compact NDJSON bytes. */
+    public const MAX_BACKTEST_SNAPSHOT_NODES = 250_000;
+
+    /** Associative keys carry additional string/hash-table overhead beyond their value nodes. */
+    public const MAX_BACKTEST_SNAPSHOT_KEYS = 150_000;
 }

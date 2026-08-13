@@ -31,7 +31,7 @@ _QUALITY_SCHEMA_VERSION = "backtest-dataset-quality.v1"
 _MANIFEST_SCHEMA_VERSION = "backtest-dataset-manifest.v1"
 _DATASET_BUILD_VERSION = "backtest-dataset-builder.v1"
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
-_CANONICAL_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*(?:\.[0-9]*[1-9])?)$")
+_CANONICAL_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$")
 
 
 class Timeframe(str, Enum):

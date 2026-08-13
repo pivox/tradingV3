@@ -42,10 +42,32 @@ de backtest ne seront jamais presentes comme preuve live.
 
 Le builder ne lit pas directement les exports PHP Paper. Son entree est une
 `DatasetSourceIdentity` dont la source a deja ete authentifiee par son
-proprietaire, suivie uniquement de `CandleRecord` normalises. Un futur adapter
-devra verifier explicitement les `manifest.json` et `events.ndjson` Paper avant
-de franchir cette frontiere ; le builder Python ne duplique pas
-`PaperDatasetVerifier`.
+proprietaire, suivie uniquement de `CandleRecord` normalises. L'adapter PHP
+livre par ce lot consomme exclusivement un `VerifiedPaperDatasetSnapshot`
+construit pendant la lecture epinglee de `PaperDatasetVerifier` : il ne verifie
+pas un fichier puis ne le rouvre jamais. Le snapshot en memoire est borne en
+octets, evenements, noeuds et cles afin d'echouer avec un code stable avant un
+epuisement memoire, y compris pour un JSON structurellement dense. Le builder
+Python ne duplique pas l'authentification de `PaperDatasetVerifier`.
+
+`PaperBacktestDatasetAdapter` revalide le manifeste et ses evenements, recalcule
+le checksum NDJSON canonique, ancre les symboles natifs sur les catalogues OKX
+et Hyperliquid, puis normalise uniquement les candles confirmees `1m`, `5m`,
+`15m` et `1h`. Les autres evenements certifies sont ignores apres validation de
+leur enveloppe. Les payloads candle restent specifiques a chaque venue :
+
+- OKX utilise le timestamp exchange comme ouverture et derive la cloture
+  exclusive ; le volume normalise est `volume_base` ;
+- Hyperliquid exige `start_time`, la cloture inclusive exacte
+  `start + duree - 1 ms`, et sa concordance avec le timestamp exchange ; le
+  volume normalise est `volume`.
+
+Dans les deux cas, `available_at = max(received_timestamp, close_at)` interdit
+le look-ahead sur un historique recu a l'ouverture. `source_record_id` est
+l'`event_id`, `market_type` vaut `perpetual`, et l'identite source lie schema,
+version recorder, reseau, venue et `sha256` des evenements verifies. L'encodeur
+PHP produit du JSON/NDJSON canonique; une fixture byte-for-byte est ensuite
+validee par les modeles Python stricts et par `DatasetBuilder`.
 
 Chaque `CandleRecord` est strict, immuable et refuse les champs inconnus. Il
 porte `backtest-candle.v1`, la provenance, le reseau, la venue de market data,
@@ -241,7 +263,7 @@ reelle lorsque les donnees seront disponibles.
 ## Hors scope de ce lot
 
 - execution Backtrader ;
-- adapter verifie pour les fichiers PHP Paper bruts ;
+- publication filesystem et commande operateur de l'adapter Paper ;
 - adapter TradingCore ;
 - simulation maker/taker ;
 - partial fills ;
@@ -255,7 +277,7 @@ tests golden dedies.
 
 Le Dataset Builder est independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. Il ne rend donc aucun mode moderne executable.
-Avant cela, la PR3 de #191 doit remplacer la frontiere runtime legacy `Profile`
+Avant cela, un lot ulterieur de #191 doit remplacer la frontiere runtime legacy `Profile`
 par les identites exactes `mode_id`, `mode_version`, `setup_id`,
 `setup_version`, `side` et le snapshot immuable #133/#303.
 
