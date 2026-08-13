@@ -69,6 +69,11 @@ type. `DatasetBuilder.analyze()` produit toujours un rapport type et ordonne.
 `build()` echoue ferme sur entree vide, identite mixte ou incoherente,
 duplicate exact ou conflictuel, trou, overlap ou chronologie invalide. Il ne
 deduplique pas, ne selectionne pas de gagnant et ne remplit aucun trou.
+Dans un groupe d'identite, les repetitions de chaque variante canonique au-dela
+de sa premiere occurrence alimentent `exact_duplicate_count`, tandis que les
+variantes canoniques distinctes au-dela de la premiere alimentent
+`conflicting_duplicate_count`. `A,A,B` produit donc `exact=1` et
+`conflicting=1`, quel que soit l'ordre d'entree.
 
 Les records eligibles sont ordonnes par venue, market type, symbole, duree
 numerique du timeframe, `open_at`, puis `source_record_id`. Le serializer emet

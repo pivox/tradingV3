@@ -77,6 +77,12 @@ exposes the report for diagnosis, but produces no manifest and cannot be
 published. There is no silent row deletion, winner selection, fill-forward, or
 optimistic default.
 
+Duplicate counts preserve both defect classes within one identity group. The
+exact count is the sum of repeated records beyond the first occurrence of each
+canonical record variant. The conflicting count is the number of distinct
+canonical variants beyond the first. Thus `A,A,B` reports one exact and one
+conflicting duplicate, independently of input order.
+
 The analyzer keeps defensive `stream_overlap` and
 `invalid_stream_chronology` flags for future normalized-record implementations
 and source adapters. They are unreachable through the current strict

@@ -424,11 +424,13 @@ class DatasetBuilder:
         for duplicates in identities.values():
             if len(duplicates) < 2:
                 continue
-            first = duplicates[0]
-            if all(item == first for item in duplicates[1:]):
-                exact_duplicate_count += len(duplicates) - 1
-            else:
-                conflicting_duplicate_count += len(duplicates) - 1
+            variant_counts: dict[bytes, int] = defaultdict(int)
+            for duplicate in duplicates:
+                variant_counts[_canonical_json(duplicate)] += 1
+            exact_duplicate_count += sum(
+                count - 1 for count in variant_counts.values()
+            )
+            conflicting_duplicate_count += len(variant_counts) - 1
         if exact_duplicate_count:
             flags.add("exact_duplicate")
         if conflicting_duplicate_count:

@@ -491,6 +491,37 @@ def test_builder_reports_conflicting_duplicate_without_selecting_a_winner() -> N
     assert report.streams[0].observed_count == 1
 
 
+@pytest.mark.parametrize(
+    ("variant_names", "expected_exact", "expected_conflicting", "expected_flags"),
+    (
+        (("a", "a", "b"), 1, 1, ("exact_duplicate", "conflicting_duplicate")),
+        (("a", "a", "a"), 2, 0, ("exact_duplicate",)),
+        (("a", "b", "c"), 0, 2, ("conflicting_duplicate",)),
+    ),
+)
+def test_builder_counts_exact_repetitions_and_conflicting_variants_separately(
+    variant_names: tuple[str, ...],
+    expected_exact: int,
+    expected_conflicting: int,
+    expected_flags: tuple[str, ...],
+) -> None:
+    variants = {
+        "a": _candle_at(0, source_record_id="source-a", close="101"),
+        "b": _candle_at(0, source_record_id="source-b", close="100.5"),
+        "c": _candle_at(0, source_record_id="source-c", close="100.75"),
+    }
+    records = tuple(variants[name] for name in variant_names)
+    builder = DatasetBuilder(_source())
+
+    report = builder.analyze(records)
+    reversed_report = builder.analyze(reversed(records))
+
+    assert report.exact_duplicate_count == expected_exact
+    assert report.conflicting_duplicate_count == expected_conflicting
+    assert report.quality_flags == expected_flags
+    assert report == reversed_report
+
+
 def test_builder_reports_one_gap_only_inside_the_observed_bounds() -> None:
     records = (_candle_at(0), _candle_at(2))
 
