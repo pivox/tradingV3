@@ -14,8 +14,8 @@ from app.backtesting.historical_funding import (
 )
 from app.backtesting.historical_funding_bridge import (
     CanonicalHistoricalFundingRequest,
-    HistoricalFundingBridge,
 )
+from tests.funding_support import settlement_for
 import pytest
 
 from app.backtesting.backtrader_net_outcome import (
@@ -175,7 +175,7 @@ def _historical_funding():
             "interval_seconds": record.interval_seconds,
         } for record in schedule.records),
     )
-    return schedule, HistoricalFundingBridge().settle(request)
+    return schedule, settlement_for(request)
 
 
 def test_target_outcome_projects_plan_bound_php_cost_components() -> None:

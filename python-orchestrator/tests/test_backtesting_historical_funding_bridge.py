@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -38,8 +39,24 @@ def _request() -> CanonicalHistoricalFundingRequest:
     })
 
 
-def test_real_php_bridge_returns_hash_bound_settlement() -> None:
-    result = HistoricalFundingBridge().settle(_request())
+def test_child_process_bridge_returns_hash_bound_settlement_without_php_runtime(tmp_path) -> None:
+    authority = tmp_path / "authority.py"
+    authority.write_text(
+        "import hashlib,json,sys\n"
+        "r=json.load(sys.stdin)\n"
+        "o={'schema_version':'canonical-historical-funding-result.v1',"
+        "'dataset_id':r['dataset_id'],'dataset_checksum':r['dataset_checksum'],"
+        "'schedule_checksum':r['schedule_checksum'],'plan_hash':r['plan_hash'],"
+        "'config_hash':r['config_hash'],'cost_input_hash':r['cost_input_hash'],"
+        "'symbol':r['symbol'],'side':r['side'],'quantity':r['quantity'],"
+        "'contract_size':r['contract_size'],'entry_at':r['entry_at'],'exit_at':r['exit_at'],"
+        "'applied_source_record_ids':['funding-1'],'applied_record_count':1,"
+        "'funding_cashflow_quote':'-0.01','request_hash':'sha256:'+hashlib.sha256("
+        "json.dumps(r,separators=(',',':')).encode()).hexdigest()}\n"
+        "o['result_hash']='sha256:'+hashlib.sha256(json.dumps(o,separators=(',',':')).encode()).hexdigest()\n"
+        "print(json.dumps(o,separators=(',',':')))\n"
+    )
+    result = HistoricalFundingBridge((sys.executable, str(authority))).settle(_request())
     assert result.funding_cashflow_quote == "-0.01"
     assert result.applied_source_record_ids == ("funding-1",)
     assert result.dataset_id == _request().dataset_id

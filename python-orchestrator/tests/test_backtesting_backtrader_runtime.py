@@ -18,7 +18,7 @@ from app.backtesting.historical_funding import (
     VerifiedHistoricalFundingSchedule,
     serialize_historical_funding_schedule,
 )
-from app.backtesting.historical_funding_bridge import HistoricalFundingBridge
+from tests.funding_support import DeterministicHistoricalFundingBridge
 
 
 UTC = timezone.utc
@@ -113,14 +113,14 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
         assert first == golden.read_text(encoding="utf-8")
 
 
-def test_runtime_invokes_php_historical_funding_authority() -> None:
+def test_runtime_invokes_historical_funding_authority_protocol() -> None:
     feed = _feed()
     plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
     result = json.loads(CanonicalBacktraderRuntime().run(
         plan,
         feed,
         funding_schedule=_funding_schedule(feed),
-        funding_bridge=HistoricalFundingBridge(),
+        funding_bridge=DeterministicHistoricalFundingBridge(applied_ids=("runtime-funding-2",)),
     ))
 
     outcome = result["net_outcome"]
@@ -137,7 +137,10 @@ def test_runtime_input_hash_changes_with_historical_schedule() -> None:
     plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
     plain = json.loads(CanonicalBacktraderRuntime().run(plan, feed))
     historical = json.loads(CanonicalBacktraderRuntime().run(
-        plan, feed, funding_schedule=_funding_schedule(feed), funding_bridge=HistoricalFundingBridge(),
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=DeterministicHistoricalFundingBridge(applied_ids=("runtime-funding-2",)),
     ))
     assert plain["input_hash"] != historical["input_hash"]
 
