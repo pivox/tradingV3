@@ -131,6 +131,29 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         );
     }
 
+    public function testIgnoresCertifiedHyperliquidModelledBookWithoutNativeSymbol(): void
+    {
+        $candle = $this->hyperliquidEvent();
+        $book = PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'ETHUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            new \DateTimeImmutable('2026-08-13T10:05:00.000000Z'),
+            new \DateTimeImmutable('2026-08-13T10:05:00.000000Z'),
+            '2',
+            [
+                'bid_price' => '3999', 'bid_size' => '1', 'ask_price' => '4001',
+                'ask_size' => '1', 'model_name' => 'hl_candle_atr_top_v1',
+                'model_version' => '1.0.0', 'origin' => 'historical_candle_model',
+                'source_candle_start' => '1786615200000', 'synthetic' => true,
+            ],
+        );
+
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($candle, $book));
+        self::assertCount(1, $dataset->candles);
+    }
+
     public function testRejectsForgedManifestCountAndNativeSymbolProvenance(): void
     {
         $event = $this->okxEvent();

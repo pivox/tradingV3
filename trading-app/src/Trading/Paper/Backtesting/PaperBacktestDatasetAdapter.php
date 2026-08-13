@@ -39,14 +39,16 @@ final class PaperBacktestDatasetAdapter
     {
         $manifest = $snapshot->manifest;
         $this->assertManifest($manifest, $snapshot->events);
+        $this->assertManifestSymbols($manifest);
 
         $candles = [];
         foreach ($snapshot->events as $event) {
-            $this->assertEventProvenance($event, $manifest);
+            $this->assertEventEnvelope($event, $manifest);
             $timeframe = $this->timeframe($event->channel);
             if ($timeframe === null) {
                 continue;
             }
+            $this->assertCandleNativeSymbol($event, $manifest);
             $candles[] = $manifest->venue === PaperMarketDataVenue::OKX
                 ? $this->normalizeOkx($event, $timeframe)
                 : $this->normalizeHyperliquid($event, $timeframe);
@@ -111,24 +113,37 @@ final class PaperBacktestDatasetAdapter
         }
     }
 
-    private function assertEventProvenance(PaperMarketEvent $event, PaperDatasetManifest $manifest): void
+    private function assertManifestSymbols(PaperDatasetManifest $manifest): void
     {
-        $nativeSymbol = $event->payload['native_symbol'] ?? null;
-        try {
-            $expectedNativeSymbol = $manifest->venue === PaperMarketDataVenue::OKX
-                ? (new OkxPaperInstrumentMap())->nativeInstrumentId($event->symbol)
-                : (new HyperliquidPaperInstrumentMap())->nativeCoin($event->symbol);
-        } catch (\InvalidArgumentException) {
-            throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+        foreach ($manifest->symbols as $symbol => $nativeSymbol) {
+            try {
+                $expectedNativeSymbol = $manifest->venue === PaperMarketDataVenue::OKX
+                    ? (new OkxPaperInstrumentMap())->nativeInstrumentId($symbol)
+                    : (new HyperliquidPaperInstrumentMap())->nativeCoin($symbol);
+            } catch (\InvalidArgumentException) {
+                throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+            }
+            if ($nativeSymbol !== $expectedNativeSymbol) {
+                throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+            }
         }
+    }
+
+    private function assertEventEnvelope(PaperMarketEvent $event, PaperDatasetManifest $manifest): void
+    {
         if ($event->schemaVersion !== PaperMarketEvent::SCHEMA_VERSION
             || $event->sourceNetwork !== $manifest->network
             || $event->sourceVenue !== $manifest->venue
             || !isset($manifest->symbols[$event->symbol])
-            || !\is_string($nativeSymbol)
-            || $manifest->symbols[$event->symbol] !== $nativeSymbol
-            || $nativeSymbol !== $expectedNativeSymbol
         ) {
+            throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+        }
+    }
+
+    private function assertCandleNativeSymbol(PaperMarketEvent $event, PaperDatasetManifest $manifest): void
+    {
+        $nativeSymbol = $event->payload['native_symbol'] ?? null;
+        if (!\is_string($nativeSymbol) || $manifest->symbols[$event->symbol] !== $nativeSymbol) {
             throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
         }
     }
