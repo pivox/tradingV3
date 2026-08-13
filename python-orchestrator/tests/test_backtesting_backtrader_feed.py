@@ -72,3 +72,13 @@ def test_adapter_rejects_empty_scope() -> None:
             period_start=datetime(2026, 1, 1, tzinfo=UTC),
             period_end=datetime(2026, 1, 2, tzinfo=UTC),
         )
+
+
+def test_adapter_rejects_nonmonotonic_availability() -> None:
+    with pytest.raises(BacktraderFeedError, match="stream_invalid"):
+        VerifiedBacktraderFeedAdapter(
+            _artifacts((_candle(0, delay=400), _candle(1))),
+            symbol="BTCUSDT", timeframe="5m",
+            period_start=datetime(2026, 1, 1, tzinfo=UTC),
+            period_end=datetime(2026, 1, 2, tzinfo=UTC),
+        )

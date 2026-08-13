@@ -76,6 +76,7 @@ class VerifiedBacktraderFeedAdapter:
         )
         seen_ids: set[str] = set()
         previous: CandleRecord | None = None
+        previous_available_at: datetime | None = None
         bars: list[VerifiedBacktraderBar] = []
         for record in records:
             if (
@@ -90,11 +91,16 @@ class VerifiedBacktraderFeedAdapter:
                 or record.source_record_id in seen_ids
                 or record.open_at < period_start
                 or record.available_at > period_end
+                or (
+                    previous_available_at is not None
+                    and record.available_at <= previous_available_at
+                )
                 or (previous is not None and record.open_at != previous.close_at)
             ):
                 raise BacktraderFeedError("backtrader_feed_stream_invalid")
             seen_ids.add(record.source_record_id)
             previous = record
+            previous_available_at = record.available_at
             bars.append(
                 VerifiedBacktraderBar(
                     source_record_id=record.source_record_id,

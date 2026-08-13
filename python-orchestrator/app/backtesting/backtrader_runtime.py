@@ -53,6 +53,14 @@ class CanonicalBacktraderRuntime:
         plan: CanonicalBacktestOrderPlan,
         feed: VerifiedBacktraderFeedAdapter,
     ) -> str:
+        plan = CanonicalBacktestOrderPlan.model_validate_json(
+            json.dumps(
+                plan.model_dump(mode="json", by_alias=True, exclude_none=True),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+        )
         if (
             plan.dataset_id != feed.dataset_id
             or plan.dataset_checksum != feed.dataset_checksum

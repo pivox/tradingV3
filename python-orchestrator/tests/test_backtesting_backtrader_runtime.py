@@ -86,3 +86,16 @@ def test_runtime_rejects_plan_feed_identity_mismatch() -> None:
     forged["timeframe"] = "5m"
     with pytest.raises(ValueError, match="identity_mismatch"):
         CanonicalBacktraderRuntime().run(CanonicalBacktestOrderPlan.model_validate(forged), _feed())
+
+
+def test_runtime_revalidates_a_forged_model_instance() -> None:
+    feed = _feed()
+    plan = _plan().model_copy(
+        update={
+            "dataset_id": feed.dataset_id,
+            "dataset_checksum": feed.dataset_checksum,
+            "plan": _plan().plan.model_copy(update={"stop_price": 101.0}),
+        }
+    )
+    with pytest.raises(ValueError, match="plan_hash_mismatch"):
+        CanonicalBacktraderRuntime().run(plan, feed)
