@@ -15,6 +15,7 @@ from app.modern_trading_contracts import (
     CanonicalEffectiveConfigLayer,
     CanonicalEffectiveConfigRequest,
     CanonicalEffectiveConfigSnapshot,
+    FrozenJsonDict,
     ModernTradingIdentity,
     calculate_config_hash,
     calculate_snapshot_hash,
@@ -393,6 +394,24 @@ def test_frozen_json_backing_cannot_be_mutated_or_rebound() -> None:
     assert calculate_snapshot_hash(snapshot) == snapshot.snapshot_hash
 
 
+def test_frozen_json_deletion_and_invalid_nested_values_fail_closed() -> None:
+    frozen = FrozenJsonDict({"nested": {"value": 1}})
+
+    with pytest.raises(TypeError, match="immutable"):
+        del frozen["nested"]
+    with pytest.raises(TypeError, match="immutable"):
+        del frozen._data
+
+    for invalid in (
+        {0: "non-string-key"},
+        {"nested": {"unordered"}},
+        {"nested": float("inf")},
+        {"nested": object()},
+    ):
+        with pytest.raises(ValueError, match="canonical_json"):
+            FrozenJsonDict(invalid)  # type: ignore[arg-type]
+
+
 def test_frozen_snapshot_round_trips_through_pickle_without_losing_hashes() -> None:
     snapshot = CanonicalEffectiveConfigSnapshot(**_snapshot_payload())
 
@@ -412,6 +431,60 @@ def test_snapshot_hash_fields_reject_bytes_before_string_coercion(field: str) ->
 
     with pytest.raises(ValidationError, match="effective_config_snapshot_hash_type_invalid"):
         CanonicalEffectiveConfigSnapshot(**payload)
+
+
+def test_canonical_hashing_rejects_non_json_inputs_and_covers_scalar_forms() -> None:
+    catalog_hash = "sha256:" + "b" * 64
+
+    assert calculate_config_hash(
+        {"disabled": None, "ratio": 0.5}, catalog_hash
+    ).startswith("sha256:")
+    with pytest.raises(ValueError, match="canonical_json_value_invalid"):
+        calculate_config_hash({"unordered": {"value"}}, catalog_hash)
+    with pytest.raises(ValueError, match="canonical_json_value_invalid"):
+        calculate_config_hash({"opaque": object()}, catalog_hash)
+    with pytest.raises(ValueError, match="effective_config_snapshot must be a mapping"):
+        calculate_snapshot_hash(["not", "a", "mapping"])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    (
+        ("non_mapping", "model_type"),
+        ("non_boolean_executable", "effective_config_snapshot_executable_invalid"),
+        ("spaced_layer", "effective_config_snapshot_layer_value_invalid"),
+        ("blank_provenance_key", "effective_config_snapshot_provenance_invalid"),
+        ("spaced_ordered_file", "effective_config_snapshot_layer_files_mismatch"),
+        ("blank_blocker", "effective_config_snapshot_blocker_invalid"),
+        ("non_mapping_config_root", "effective_config_snapshot_roots_invalid"),
+    ),
+)
+def test_snapshot_rejects_ambiguous_scalar_and_metadata_shapes(
+    mutation: str, reason: str
+) -> None:
+    if mutation == "non_mapping":
+        payload: object = []
+    else:
+        payload = _snapshot_payload()
+        if mutation == "non_boolean_executable":
+            payload["executable"] = 1
+        elif mutation == "spaced_layer":
+            payload["ordered_layers"][0]["path"] = " /base.yaml"
+        elif mutation == "blank_provenance_key":
+            payload["provenance"][""] = payload["provenance"].pop("mode.mode_id")
+        elif mutation == "spaced_ordered_file":
+            payload["ordered_files"][0] = " /base.yaml"
+        elif mutation == "blank_blocker":
+            payload["blockers"] = [""]
+        else:
+            payload["config"]["units"] = "percentage_points"
+            payload["config_hash"] = calculate_config_hash(
+                payload["config"], payload["condition_catalog_hash"]
+            )
+            payload["snapshot_hash"] = calculate_snapshot_hash(payload)
+
+    with pytest.raises(ValidationError, match=reason):
+        CanonicalEffectiveConfigSnapshot.model_validate(payload)
 
 
 @pytest.mark.parametrize(
