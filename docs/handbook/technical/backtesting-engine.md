@@ -64,10 +64,23 @@ target. Si stop et target sont atteignables dans la meme bougie,
 ambigue et rejetee. Une position encore ouverte en fin de dataset est egalement
 rejetee, sans fermeture optimiste.
 
-Restent hors de ce lot : partial fills, fallback taker, application des couts
-observes/funding au ledger, portefeuille multi-plan, PostgreSQL, metriques et
-rapports de certification. Aucun endpoint prive ni execution mainnet n'est
-ajoute.
+Pour une sortie au stop ou a un target canonique,
+`backtrader_net_outcome.py` selectionne la branche de cout liee par hash dans
+le plan PHP. Il publie le brut, les fees, spread, slippage, la provision
+funding adverse, le net et le R exacts, puis lie le document au dataset,
+`plan_hash`, `config_hash` et `cost_input_hash`. Comme ces SHA-256 sont
+recalculables et ne constituent pas une attestation PHP non falsifiable, le
+document porte `costs_are_certified=false` et
+`cost_evidence=canonical_plan_projection`. Python ne recalcule aucun cout
+a partir des taux ou du notionnel. `funding_evidence=canonical_plan_provision`
+signifie explicitement qu'il s'agit de la provision conservative du plan, pas
+d'un funding historique realise. Une sortie `holding_expired` n'a pas encore
+de branche de cout PHP authentifiee et echoue donc fermee au lieu d'inventer un
+PnL.
+
+Restent hors de ce lot : partial fills, fallback taker, funding historique
+horodate, portefeuille multi-plan, PostgreSQL, metriques et rapports de
+certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
 ## Invariants verrouilles par les contrats v1
 
@@ -479,14 +492,13 @@ quantifiee exploitable. Cela ne bloque pas ce lot de contrats #191 : le moteur e
 prepare maintenant, puis les couts et la calibration seront compares a la baseline
 reelle lorsque les donnees seront disponibles.
 
-## Hors scope de ce lot
+## Hors scope restant
 
-- execution Backtrader ;
 - publication filesystem et commande operateur de l'adapter Paper ;
 - simulation maker/taker ;
 - partial fills ;
 - funding historique ;
-- couts, slippage, frais, borrow et liquidation ;
+- couts arbitraires hors branches stop/targets authentifiees, borrow et liquidation ;
 - ledger de trades et resultats de backtest ;
 - rapports de metrics ;
 - simulation 100 trades ;
@@ -499,7 +511,8 @@ Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. La frontiere de run utilise desormais les
 identites exactes, le snapshot immuable #133/#303 et la projection
 d'indicateurs PHP. Elle ne rend pas encore un mode moderne executable de bout
-en bout : Backtrader, les fills, les couts et le ledger restent differes.
+en bout : les partial fills, le funding historique et le ledger durable restent
+differes.
 
 Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal

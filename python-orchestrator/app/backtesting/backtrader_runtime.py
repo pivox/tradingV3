@@ -14,6 +14,7 @@ import backtrader as bt
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
+from app.backtesting.backtrader_net_outcome import project_plan_bound_net_outcome
 
 
 _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
@@ -106,6 +107,15 @@ class CanonicalBacktraderRuntime:
             raise ValueError("backtrader_runtime_delivery_invalid")
 
         outcome = execute_plan(plan, tuple(feed.bars[index] for index in delivered))
+        net_outcome = (
+            json.loads(
+                project_plan_bound_net_outcome(plan, outcome, feed),
+                parse_float=Decimal,
+                parse_int=Decimal,
+            )
+            if outcome.status == "closed"
+            else None
+        )
         events = [
             {
                 "config_hash": event.config_hash,
@@ -132,6 +142,7 @@ class CanonicalBacktraderRuntime:
             "engine_version": _ENGINE_VERSION,
             "events": events,
             "input_hash": _hash(input_payload),
+            "net_outcome": net_outcome,
             "reason_code": outcome.reason_code,
             "result_is_live_proof": False,
             "schema_version": "canonical-backtrader-result.v1",
