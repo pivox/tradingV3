@@ -609,6 +609,8 @@ final class PaperDatasetVerifier
         $channels = [];
         /** @var list<PaperMarketEvent>|null $events */
         $events = $collectEvents ? [] : null;
+        $snapshotNodes = 0;
+        $snapshotKeys = 0;
         $count = 0;
         $lastEventId = null;
         $start = null;
@@ -680,6 +682,18 @@ final class PaperDatasetVerifier
                 }
                 if (!array_key_exists($event->symbol, $manifest->symbols)) {
                     throw new \RuntimeException('paper_dataset_event_symbol_mismatch');
+                }
+                if ($collectEvents) {
+                    $complexity = $event->canonicalComplexity();
+                    if ($complexity['nodes'] > $this->snapshotLimits->maximumNodes
+                        || $snapshotNodes > $this->snapshotLimits->maximumNodes - $complexity['nodes']
+                        || $complexity['keys'] > $this->snapshotLimits->maximumKeys
+                        || $snapshotKeys > $this->snapshotLimits->maximumKeys - $complexity['keys']
+                    ) {
+                        throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+                    }
+                    $snapshotNodes += $complexity['nodes'];
+                    $snapshotKeys += $complexity['keys'];
                 }
                 $historicalCoverage = $this->assertHyperliquidHistoricalEvent($event, $manifest);
                 if ($liveOrdinals instanceof HyperliquidPaperSourceOrdinal) {

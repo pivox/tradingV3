@@ -16,4 +16,10 @@ final class PaperDatasetFormatLimits
 
     /** Leaves at least seven raw-byte budgets for decoding, objects, verifier indexes and PHP runtime. */
     public const MAX_BACKTEST_SNAPSHOT_BYTES = 16 * 1024 * 1024;
+
+    /** Bounds aggregate PHP array/value overhead independently from compact NDJSON bytes. */
+    public const MAX_BACKTEST_SNAPSHOT_NODES = 250_000;
+
+    /** Associative keys carry additional string/hash-table overhead beyond their value nodes. */
+    public const MAX_BACKTEST_SNAPSHOT_KEYS = 150_000;
 }
