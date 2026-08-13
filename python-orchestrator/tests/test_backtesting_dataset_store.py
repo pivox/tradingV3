@@ -206,6 +206,50 @@ def test_artifact_replaced_during_collective_stability_check_is_rejected(
     )
 
 
+class _MutateAfterInitialReadsPublisher(DatasetPublisher):
+    def __init__(self, root: Path, *, chmod_target: bool = False) -> None:
+        super().__init__(root)
+        self._read_count = 0
+        self._chmod_target = chmod_target
+
+    def _read_open_private_file(self, descriptor: int) -> bytes:
+        payload = super()._read_open_private_file(descriptor)
+        self._read_count += 1
+        if self._read_count == 3:
+            if self._chmod_target:
+                _target(self._root).chmod(0o755)
+            else:
+                candles = _target(self._root) / "candles.ndjson"
+                changed = bytearray(candles.read_bytes())
+                changed[0] = ord(" ")
+                candles.write_bytes(bytes(changed))
+        return payload
+
+
+def test_in_place_artifact_mutation_after_initial_reads_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+    DatasetPublisher(root).publish(_artifacts())
+
+    with pytest.raises(DatasetPublicationConflict):
+        _MutateAfterInitialReadsPublisher(root).publish(_artifacts())
+
+    assert (_target(root) / "candles.ndjson").read_bytes() != (
+        _artifacts().candles_ndjson
+    )
+
+
+def test_target_mode_change_after_initial_reads_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    DatasetPublisher(root).publish(_artifacts())
+
+    with pytest.raises(DatasetPublicationConflict):
+        _MutateAfterInitialReadsPublisher(root, chmod_target=True).publish(_artifacts())
+
+    assert stat.S_IMODE(_target(root).stat().st_mode) == 0o755
+
+
 class _FailBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         raise OSError("injected before rename")

@@ -413,7 +413,8 @@ class DatasetPublisher:
                 artifact_descriptors.append((filename, descriptor, metadata))
                 if self._read_open_private_file(descriptor) != getattr(artifacts, attribute):
                     raise DatasetPublicationConflict()
-            for filename, _, metadata in artifact_descriptors:
+            for filename, descriptor, metadata in artifact_descriptors:
+                opened_artifact = os.fstat(descriptor)
                 current_artifact = os.stat(
                     filename,
                     dir_fd=target_fd,
@@ -423,16 +424,41 @@ class DatasetPublisher:
                     not stat.S_ISREG(current_artifact.st_mode)
                     or stat.S_IMODE(current_artifact.st_mode) != 0o600
                     or current_artifact.st_nlink != 1
+                    or not stat.S_ISREG(opened_artifact.st_mode)
+                    or stat.S_IMODE(opened_artifact.st_mode) != 0o600
+                    or opened_artifact.st_nlink != 1
                     or (current_artifact.st_dev, current_artifact.st_ino)
+                    != (metadata.st_dev, metadata.st_ino)
+                    or (opened_artifact.st_dev, opened_artifact.st_ino)
                     != (metadata.st_dev, metadata.st_ino)
                 ):
                     raise DatasetPublicationConflict()
             if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
                 raise DatasetPublicationConflict()
+            for (_, descriptor, _), (_, attribute) in zip(
+                artifact_descriptors,
+                _ARTIFACT_PAYLOADS,
+                strict=True,
+            ):
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if self._read_open_private_file(descriptor) != getattr(
+                    artifacts,
+                    attribute,
+                ):
+                    raise DatasetPublicationConflict()
             current = os.stat(target_name, dir_fd=root_fd, follow_symlinks=False)
-            if (current.st_dev, current.st_ino) != (
-                target_metadata.st_dev,
-                target_metadata.st_ino,
+            opened_target = os.fstat(target_fd)
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or not stat.S_ISDIR(opened_target.st_mode)
+                or stat.S_IMODE(current.st_mode) != 0o700
+                or stat.S_IMODE(opened_target.st_mode) != 0o700
+                or current.st_nlink < 1
+                or opened_target.st_nlink < 1
+                or (current.st_dev, current.st_ino)
+                != (target_metadata.st_dev, target_metadata.st_ino)
+                or (opened_target.st_dev, opened_target.st_ino)
+                != (target_metadata.st_dev, target_metadata.st_ino)
             ):
                 raise DatasetPublicationConflict()
             return DatasetPublicationStatus.ALREADY_PUBLISHED
