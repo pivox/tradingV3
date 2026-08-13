@@ -171,7 +171,7 @@ Describe verifier-owned snapshotting, venue-specific candle normalization,
 `available_at`, provenance fields, and the explicit deferral of modern run
 identity and Backtrader runtime.
 
-- [ ] **Step 2: Run PHP verification**
+- [x] **Step 2: Run PHP verification**
 
 ```bash
 cd trading-app
@@ -181,7 +181,7 @@ php bin/phpunit tests/Trading/Paper/Dataset/PaperDatasetVerifierTest.php \
 
 Expected: all focused PHP tests pass.
 
-- [ ] **Step 3: Run Python verification and coverage**
+- [x] **Step 3: Run Python verification and coverage**
 
 ```bash
 cd python-orchestrator
@@ -196,7 +196,7 @@ python3 -m pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fai
 
 Expected: both focused seeds pass; full suite reaches at least 95% coverage.
 
-- [ ] **Step 4: Run static hygiene**
+- [x] **Step 4: Run static hygiene**
 
 ```bash
 php -l trading-app/src/Trading/Paper/Backtesting/*.php
@@ -207,7 +207,7 @@ git status --short --branch
 
 Expected: no syntax/diff error and a clean worktree after the final commit.
 
-- [ ] **Step 5: Update this checklist and commit docs**
+- [x] **Step 5: Update this checklist and commit docs**
 
 Mark completed steps, record commit ids and verification totals, then:
 
@@ -217,8 +217,14 @@ git add docs/handbook/technical/backtesting-engine.md \
 git commit -m "docs(#191): document verified Paper adaptation"
 ```
 
-- [ ] **Step 6: Request local review before PR**
+- [x] **Step 6: Request local review before PR**
 
 Review `origin/main...HEAD` for contract drift, look-ahead, provenance loss,
 TOCTOU, leaked paths/payloads and any legacy alias. Resolve all blockers before
 opening the PR.
+
+Verification finale du lot : PHP 72 tests / 281 assertions; Python 164 tests
+sous `PYTHONHASHSEED=1` et `987654`; suite Python complete 722 tests passes,
+3 skips et couverture 95.81%. Revues locales specification et qualite
+approuvees apres correction des contrats de provenance et des decimales
+sub-unitaires inter-runtime.
