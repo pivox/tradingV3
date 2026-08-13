@@ -14,6 +14,7 @@ use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\TradingCore\Backtesting\Indicator\CanonicalFourHourAggregator;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectionException;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjector;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
@@ -22,18 +23,83 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(CanonicalIndicatorProjector::class)]
+#[CoversClass(CanonicalIndicatorProjection::class)]
 final class CanonicalIndicatorProjectorTest extends TestCase
 {
+    public function testReturnsCanonicalProjectionResultObject(): void
+    {
+        self::assertInstanceOf(CanonicalIndicatorProjection::class, $this->projector()->project($this->request(['1m'])));
+    }
+
+    public function testResultHasExactSchemaAndCanonicalEvidenceHashes(): void
+    {
+        $request = $this->request(['1m']);
+        $result = $this->projector()->project($request)->toArray();
+
+        self::assertSame([
+            'schema_version', 'request_id', 'evaluated_at', 'environment', 'indicator_engine_version',
+            'dataset_binding', 'symbol', 'requested_timeframes', 'snapshots_by_timeframe',
+            'input_hash', 'result_hash',
+        ], array_keys($result));
+        self::assertSame('canonical-indicator-projection-result.v1', $result['schema_version']);
+        self::assertSame('sha256:' . hash('sha256', CanonicalJson::encode($request)), $result['input_hash']);
+
+        $withoutResultHash = $result;
+        unset($withoutResultHash['result_hash']);
+        self::assertSame(
+            'sha256:' . hash('sha256', CanonicalJson::encode($withoutResultHash)),
+            $result['result_hash'],
+        );
+    }
+
+    public function testResultIsReadonlyAndToArrayIsDefensive(): void
+    {
+        $result = $this->projector()->project($this->request(['1m']));
+        $reflection = new \ReflectionClass($result);
+        $constructor = $reflection->getConstructor();
+        self::assertTrue($reflection->isFinal());
+        self::assertTrue($reflection->isReadOnly());
+        self::assertNotNull($constructor);
+        self::assertTrue($constructor->isPrivate());
+
+        $expected = $result->toArray();
+        $copy = $result->toArray();
+        $copy['dataset_binding']['market_data_venue'] = 'forged';
+        $copy['snapshots_by_timeframe']['1m']['snapshot_identity']['exchange'] = 'forged';
+
+        self::assertSame($expected, $result->toArray());
+    }
+
+    public function testEverySubmittedCandleIsBoundIntoInputAndResultHashes(): void
+    {
+        $request = $this->request(['1m']);
+        $mutatedRequest = $request;
+        $mutatedRequest['candles_by_timeframe']['1m'][0]['volume'] = '10.01';
+
+        $original = $this->projector()->project($request)->toArray();
+        $mutated = $this->projector()->project($mutatedRequest)->toArray();
+
+        self::assertNotSame($original['input_hash'], $mutated['input_hash']);
+        self::assertNotSame($original['result_hash'], $mutated['result_hash']);
+        self::assertSame(
+            $original['snapshots_by_timeframe']['1m']['snapshot_identity'],
+            $mutated['snapshots_by_timeframe']['1m']['snapshot_identity'],
+        );
+    }
+
     public function testProjectsOneNativeWindowWithFakeExecutionIdentityAndSourceEvidence(): void
     {
         $request = $this->request(['1m']);
-        $result = $this->projector()->project($request);
+        $result = $this->projector()->project($request)->toArray();
 
         self::assertSame([
-            'request_id', 'evaluated_at', 'environment', 'indicator_engine_version',
-            'dataset_binding', 'symbol', 'requested_timeframes', 'snapshots_by_timeframe',
+            'schema_version', 'request_id', 'evaluated_at', 'environment', 'indicator_engine_version',
+            'dataset_binding', 'symbol', 'requested_timeframes', 'snapshots_by_timeframe', 'input_hash', 'result_hash',
         ], array_keys($result));
-        self::assertSame(array_intersect_key($request, array_flip(array_slice(array_keys($result), 0, 7))), array_slice($result, 0, 7));
+        self::assertSame(
+            array_intersect_key($request, array_flip(['request_id', 'evaluated_at', 'environment', 'indicator_engine_version', 'dataset_binding', 'symbol', 'requested_timeframes'])),
+            array_intersect_key($result, array_flip(['request_id', 'evaluated_at', 'environment', 'indicator_engine_version', 'dataset_binding', 'symbol', 'requested_timeframes'])),
+        );
         self::assertSame(['1m'], array_keys($result['snapshots_by_timeframe']));
 
         $snapshot = $result['snapshots_by_timeframe']['1m'];
@@ -56,7 +122,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
 
     public function testProjectsMultipleNativeWindowsInRequestedDurationOrder(): void
     {
-        $result = $this->projector()->project($this->request(['1m', '15m', '1h']));
+        $result = $this->projector()->project($this->request(['1m', '15m', '1h']))->toArray();
 
         self::assertSame(['1m', '15m', '1h'], array_keys($result['snapshots_by_timeframe']));
         self::assertSame('2026-01-01T04:09:00.000000Z', $result['snapshots_by_timeframe']['1m']['kline_time']);
@@ -67,7 +133,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     public function testProjectsFourHourWindowFromExactlyOneThousandHourlySourceCandles(): void
     {
         $request = $this->request(['4h']);
-        $result = $this->projector()->project($request);
+        $result = $this->projector()->project($request)->toArray();
 
         self::assertSame(['4h'], $result['requested_timeframes']);
         self::assertSame(['4h'], array_keys($result['snapshots_by_timeframe']));
@@ -98,7 +164,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     public function testProjectsNativeHourlySuffixAlongsideDerivedFourHourWindow(): void
     {
         $request = $this->request(['1h', '4h']);
-        $result = $this->projector()->project($request);
+        $result = $this->projector()->project($request)->toArray();
 
         self::assertSame(['1h', '4h'], array_keys($result['snapshots_by_timeframe']));
         $nativeWindow = new \App\TradingCore\Backtesting\Indicator\CanonicalIndicatorWindow(
@@ -120,7 +186,7 @@ final class CanonicalIndicatorProjectorTest extends TestCase
         $request = $this->request(['5m', '4h']);
 
         self::assertSame(['5m', '1h'], array_keys($request['candles_by_timeframe']));
-        self::assertSame(['5m', '4h'], array_keys($this->projector()->project($request)['snapshots_by_timeframe']));
+        self::assertSame(['5m', '4h'], array_keys($this->projector()->project($request)->toArray()['snapshots_by_timeframe']));
     }
 
     #[DataProvider('invalidFourHourSourceCountProvider')]
@@ -155,8 +221,8 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     {
         $request = $this->request(['1h', '4h']);
 
-        $first = $this->projector()->project($request);
-        $second = $this->projector()->project($request);
+        $first = $this->projector()->project($request)->toArray();
+        $second = $this->projector()->project($request)->toArray();
 
         self::assertSame($first, $second);
         self::assertSame(CanonicalJson::encode($first), CanonicalJson::encode($second));
@@ -165,8 +231,8 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     public function testIdenticalReplayProducesIdenticalCanonicalResult(): void
     {
         $request = $this->request(['1m', '5m']);
-        $first = $this->projector()->project($request);
-        $second = $this->projector()->project($request);
+        $first = $this->projector()->project($request)->toArray();
+        $second = $this->projector()->project($request)->toArray();
 
         self::assertSame($first, $second);
         self::assertSame(CanonicalJson::encode($first), CanonicalJson::encode($second));

@@ -43,8 +43,8 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
     ) {
     }
 
-    /** @param array<string, mixed> $request @return array<string, mixed> */
-    public function project(#[\SensitiveParameter] array $request): array
+    /** @param array<string, mixed> $request */
+    public function project(#[\SensitiveParameter] array $request): CanonicalIndicatorProjection
     {
         $this->assertExactKeys($request, self::REQUEST_KEYS, 'canonical_indicator_request_shape_invalid');
         if (($request['schema_version'] ?? null) !== 'canonical-indicator-projection-request.v1') {
@@ -159,7 +159,8 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
             ];
         }
 
-        return [
+        $normalizedRequest = [
+            'schema_version' => 'canonical-indicator-projection-request.v1',
             'request_id' => $requestId,
             'evaluated_at' => $evaluatedAt,
             'environment' => $environment,
@@ -167,8 +168,10 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
             'dataset_binding' => $binding,
             'symbol' => $symbol,
             'requested_timeframes' => $timeframes,
-            'snapshots_by_timeframe' => $snapshots,
+            'candles_by_timeframe' => $candlesByTimeframe,
         ];
+
+        return CanonicalIndicatorProjection::fromValidatedRequest($normalizedRequest, $snapshots);
     }
 
     /** @return array{dataset_id:string,dataset_checksum:string,candles_checksum:string,quality_report_checksum:string,source_checksum:string,source_network:string,market_data_venue:string,market_type:string} */

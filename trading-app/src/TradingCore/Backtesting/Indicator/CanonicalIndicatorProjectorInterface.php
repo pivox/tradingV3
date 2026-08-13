@@ -9,7 +9,6 @@ interface CanonicalIndicatorProjectorInterface
     /**
      * @param array<string, mixed> $request
      *
-     * @return array<string, mixed>
      */
-    public function project(#[\SensitiveParameter] array $request): array;
+    public function project(#[\SensitiveParameter] array $request): CanonicalIndicatorProjection;
 }
