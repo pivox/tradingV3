@@ -274,6 +274,19 @@ def test_config_hash_matches_php_scientific_float_encoding() -> None:
     )
 
 
+def test_config_hash_matches_php_line_separator_escaping() -> None:
+    config = {
+        "line": "x\u2028y\u2029z",
+        "ordinary": "café/path",
+    }
+
+    # PHP 8.4 public calculateConfigHash() fixture. JSON_UNESCAPED_UNICODE
+    # preserves ordinary Unicode but PHP still escapes both line separators.
+    assert calculate_config_hash(config, "sha256:" + "b" * 64) == (
+        "sha256:973a2fe8c70c76473942ba036637284caf00e40f48a471fcfada91cd5a78beee"
+    )
+
+
 def test_snapshot_validates_hashes_layers_provenance_and_deep_immutability() -> None:
     payload = _snapshot_payload()
     snapshot = CanonicalEffectiveConfigSnapshot(**payload)

@@ -63,4 +63,3 @@ Tests cover the published matrix, aliases and unpublished versions, side and env
 - Invoke the canonical PHP TradingCore rule path from the Python runtime.
 - Implement deterministic Backtrader execution, conservative intrabar handling, costs, funding, fills, and canonical results.
 - PostgreSQL replay/certification and the 50-trade-per-cell evidence requirement.
-

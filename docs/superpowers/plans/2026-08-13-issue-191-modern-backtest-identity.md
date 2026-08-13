@@ -60,4 +60,3 @@
 - [ ] Run `python -m compileall -q app tests`, `git diff --check`, and inspect the full diff for legacy `Profile` leakage.
 - [ ] Request one code review. If it produces no actionable feedback, do not create artificial extra cycles; if it produces findings, fix them and request follow-up only for the corrected areas.
 - [ ] Open a focused PR linked to #191, wait for all required CI, resolve every thread, and merge without enabling real-mainnet execution.
-

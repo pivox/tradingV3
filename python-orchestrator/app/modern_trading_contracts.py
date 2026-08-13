@@ -185,11 +185,16 @@ def _encode_php_float(value: float) -> str:
     return f"{mantissa}e{sign}{abs(exponent)}"
 
 
+def _encode_php_json_string(value: str) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return encoded.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
 def _encode_canonical_value(value: Any) -> str:
     normalized = _canonical_json_value(value)
     if isinstance(normalized, Mapping):
         return "{" + ",".join(
-            json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            _encode_php_json_string(key)
             + ":"
             + _encode_canonical_value(normalized[key])
             for key in sorted(normalized)
@@ -207,7 +212,7 @@ def _encode_canonical_value(value: Any) -> str:
     if isinstance(normalized, float):
         return _encode_php_float(normalized)
     if isinstance(normalized, str):
-        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        return _encode_php_json_string(normalized)
     raise ValueError("canonical_json_value_invalid")
 
 
