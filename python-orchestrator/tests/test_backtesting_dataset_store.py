@@ -311,6 +311,42 @@ class _SwapDuringNoReplacePublisher(DatasetPublisher):
         super()._atomic_rename_no_replace(root_fd, staging_name, target_name)
 
 
+class _SwapThenFailNoReplacePublisher(DatasetPublisher):
+    def _atomic_rename_no_replace(
+        self,
+        root_fd: int,
+        staging_name: str,
+        target_name: str,
+    ) -> None:
+        os.rename(
+            staging_name,
+            staging_name + "-parked",
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+        )
+        os.mkdir(staging_name, 0o700, dir_fd=root_fd)
+        raise OSError(errno.EIO, "injected rename failure after staging swap")
+
+
+def test_cleanup_preserves_swapped_staging_after_rename_failure(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(OSError) as rejected:
+        _SwapThenFailNoReplacePublisher(root).publish(_artifacts())
+
+    assert rejected.value.errno == errno.EIO
+    assert not _target(root).exists()
+    replacement = tuple(root.glob(".*.staging-*"))
+    replacement = tuple(path for path in replacement if not path.name.endswith("-parked"))
+    parked = tuple(root.glob(".*.staging-*-parked"))
+    assert len(replacement) == 1
+    assert tuple(replacement[0].iterdir()) == ()
+    assert len(parked) == 1
+    assert {item.name for item in parked[0].iterdir()} == _ARTIFACT_NAMES
+
+
 def test_post_rename_verification_rejects_swap_after_identity_check(
     tmp_path: Path,
 ) -> None:

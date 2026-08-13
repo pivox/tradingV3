@@ -362,13 +362,58 @@ class DatasetPublisher:
             except FileNotFoundError:
                 return
         assert staging_fd is not None
+        opened = os.fstat(staging_fd)
+        staging_identity = (opened.st_dev, opened.st_ino)
+        if not DatasetPublisher._named_directory_matches_fd(
+            root_fd,
+            staging_name,
+            staging_fd,
+        ):
+            if owns_fd:
+                os.close(staging_fd)
+            return
         try:
             for name in os.listdir(staging_fd):
                 os.unlink(name, dir_fd=staging_fd)
         finally:
             if owns_fd:
                 os.close(staging_fd)
+        if not DatasetPublisher._named_directory_matches_identity(
+            root_fd,
+            staging_name,
+            staging_identity,
+        ):
+            return
         os.rmdir(staging_name, dir_fd=root_fd)
+
+    @staticmethod
+    def _named_directory_matches_fd(
+        root_fd: int,
+        name: str,
+        directory_fd: int,
+    ) -> bool:
+        opened = os.fstat(directory_fd)
+        return DatasetPublisher._named_directory_matches_identity(
+            root_fd,
+            name,
+            (opened.st_dev, opened.st_ino),
+        )
+
+    @staticmethod
+    def _named_directory_matches_identity(
+        root_fd: int,
+        name: str,
+        expected_identity: tuple[int, int],
+    ) -> bool:
+        try:
+            named = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return (
+            stat.S_ISDIR(named.st_mode)
+            and stat.S_IMODE(named.st_mode) == 0o700
+            and (named.st_dev, named.st_ino) == expected_identity
+        )
 
 
 def _atomic_rename_no_replace(root_fd: int, source: str, target: str) -> None:

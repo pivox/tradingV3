@@ -108,6 +108,12 @@ cible est reverifiee integralement apres celui-ci. Une substitution dans cette
 ultime fenetre ne peut donc jamais produire un faux statut de succes ; elle
 echoue fermee sans supprimer le repertoire inconnu ni le staging original
 deplace par un acteur concurrent.
+Le cleanup applique la meme comparaison device/inode avant de supprimer les
+fichiers via le fd puis la revalide immediatement avant le `rmdir` nomme. Si le
+nom disparait ou change, le cleanup est abandonne afin de preserver le staging
+deplace et son remplacement. POSIX ne fournit pas de `rmdir` par fd ; cette
+double verification reduit la fenetre residuelle et privilegie toujours la
+fuite recuperable a une suppression incertaine.
 
 `DatasetDescriptor` identifie le jeu de donnees derive par :
 
