@@ -102,6 +102,18 @@ class HistoricalFundingScheduleArtifacts(BaseModel):
 
 @dataclass(frozen=True, init=False)
 class VerifiedHistoricalFundingSchedule:
+    artifacts: HistoricalFundingScheduleArtifacts
+    dataset_id: str
+    dataset_checksum: str
+    source_network: str
+    market_data_venue: str
+    market_type: str
+    symbol: str
+    coverage_start: datetime
+    coverage_end: datetime
+    records: tuple[HistoricalFundingRecord, ...]
+    schedule_checksum: str
+
     def __init__(self, artifacts: HistoricalFundingScheduleArtifacts) -> None:
         try:
             if not isinstance(artifacts, HistoricalFundingScheduleArtifacts):

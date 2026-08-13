@@ -158,12 +158,14 @@ class CanonicalBacktraderRuntime:
             "plan_hash": plan.plan.plan_hash,
             "source_record_ids": [bar.source_record_id for bar in feed.bars],
             "timeframe": feed.timeframe,
+            **({"funding_schedule_checksum": funding_schedule.schedule_checksum} if funding_schedule is not None else {}),
         }
         result = {
             "engine_version": _ENGINE_VERSION,
             "events": events,
             "input_hash": _hash(input_payload),
             "net_outcome": net_outcome,
+            **({"funding_schedule_checksum": funding_schedule.schedule_checksum} if funding_schedule is not None else {}),
             "reason_code": outcome.reason_code,
             "result_is_live_proof": False,
             "schema_version": "canonical-backtrader-result.v1",

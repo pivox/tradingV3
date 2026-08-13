@@ -19,6 +19,7 @@ from app.backtesting.historical_funding_bridge import (
 
 
 _COST_BASIS_VERSION = "canonical-order-plan-bound-costs.v1"
+_HISTORICAL_COST_BASIS_VERSION = "canonical-plan-plus-historical-funding.v1"
 
 
 class BacktestNetOutcomeError(ValueError):
@@ -101,6 +102,13 @@ def project_plan_bound_net_outcome(
         historical_cashflow = _decimal(historical.funding_cashflow_quote)
         net_pnl = gross_pnl - projected_non_funding_cost + historical_cashflow
         total_cost = projected_non_funding_cost - historical_cashflow
+        stop_non_funding_cost = (
+            _decimal(plan.entry_fee) + _decimal(plan.stop_exit_fee)
+            + _decimal(plan.entry_spread_cost) + _decimal(plan.stop_spread_cost)
+            + _decimal(plan.entry_slippage_cost) + _decimal(plan.stop_slippage_cost)
+        )
+        historical_net_risk = _decimal(plan.gross_stop_loss) + stop_non_funding_cost - historical_cashflow
+        net_r = net_pnl / historical_net_risk
 
     result: dict[str, Any] = {
         "schema_version": (
@@ -108,8 +116,8 @@ def project_plan_bound_net_outcome(
             if historical is not None
             else "canonical-backtest-planned-net-outcome.v1"
         ),
-        "cost_basis_version": _COST_BASIS_VERSION,
-        "cost_evidence": "canonical_plan_projection",
+        "cost_basis_version": _HISTORICAL_COST_BASIS_VERSION if historical is not None else _COST_BASIS_VERSION,
+        "cost_evidence": "canonical_plan_projection_with_historical_funding" if historical is not None else "canonical_plan_projection",
         "costs_are_certified": False,
         "funding_evidence": (
             "integrity_bound_historical_schedule"
@@ -160,6 +168,7 @@ def project_plan_bound_net_outcome(
         ),
         "net_pnl_quote": net_pnl,
         "net_r": net_r,
+        **({"net_r_evidence": "historical_funding_with_plan_bound_stop_costs"} if historical is not None else {}),
         "result_is_live_proof": False,
     }
     result["outcome_hash"] = _hash(result)

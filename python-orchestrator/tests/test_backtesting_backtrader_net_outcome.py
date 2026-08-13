@@ -233,17 +233,21 @@ def test_historical_funding_replaces_only_plan_provision_and_binds_lineage() -> 
         _plan(), _target_execution(), _feed(),
         funding_schedule=schedule,
         funding_settlement=settlement,
-    ))
+    ), parse_float=Decimal)
 
     assert outcome["schema_version"] == "canonical-backtest-historical-net-outcome.v1"
     assert outcome["funding_evidence"] == "integrity_bound_historical_schedule"
     assert outcome["funding_schedule_checksum"] == schedule.schedule_checksum
     assert outcome["funding_settlement_hash"] == settlement.result_hash
     assert outcome["applied_funding_source_record_ids"] == ["funding-2"]
-    assert outcome["historical_funding_cashflow_quote"] == -0.02497
+    assert outcome["historical_funding_cashflow_quote"] == Decimal("-0.02497")
     assert "planned_adverse_funding_cost_quote" not in outcome
-    assert outcome["total_execution_cost_quote"] == 0.37926933
-    assert outcome["net_pnl_quote"] == 5.86323067
+    assert outcome["total_execution_cost_quote"] == Decimal("0.37926933")
+    assert outcome["net_pnl_quote"] == Decimal("5.86323067")
+    assert outcome["net_r"] == Decimal("1.269969442115795451472457341")
+    assert outcome["net_r_evidence"] == "historical_funding_with_plan_bound_stop_costs"
+    assert outcome["cost_basis_version"] == "canonical-plan-plus-historical-funding.v1"
+    assert outcome["cost_evidence"] == "canonical_plan_projection_with_historical_funding"
     assert outcome["costs_are_certified"] is False
 
 

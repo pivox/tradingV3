@@ -129,6 +129,17 @@ def test_runtime_invokes_php_historical_funding_authority() -> None:
     assert outcome["applied_funding_source_record_ids"] == ["runtime-funding-2"]
     assert outcome["historical_funding_cashflow_quote"] == -0.02497
     assert outcome["costs_are_certified"] is False
+    assert result["funding_schedule_checksum"] == _funding_schedule(feed).schedule_checksum
+
+
+def test_runtime_input_hash_changes_with_historical_schedule() -> None:
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    plain = json.loads(CanonicalBacktraderRuntime().run(plan, feed))
+    historical = json.loads(CanonicalBacktraderRuntime().run(
+        plan, feed, funding_schedule=_funding_schedule(feed), funding_bridge=HistoricalFundingBridge(),
+    ))
+    assert plain["input_hash"] != historical["input_hash"]
 
 
 def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
