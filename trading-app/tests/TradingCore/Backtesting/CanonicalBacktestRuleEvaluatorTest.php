@@ -164,6 +164,26 @@ final class CanonicalBacktestRuleEvaluatorTest extends TestCase
         );
     }
 
+    public function testCanonicalHashUsesTheExactSharedPhpInt64FloatBoundary(): void
+    {
+        self::assertSame(
+            'sha256:fcef4235cdc956a7cecf9de9fea0896ff0f1fb291e6ec6144caf784e9870bf0d',
+            CanonicalBacktestRuleEvaluator::canonicalHash(['boundary' => -9_223_372_036_854_775_808.0]),
+        );
+
+        foreach ([
+            'positive 2^63' => 9_223_372_036_854_775_808.0,
+            'below negative 2^63' => -9_223_372_036_854_777_856.0,
+        ] as $label => $value) {
+            try {
+                CanonicalBacktestRuleEvaluator::canonicalHash(['boundary' => $value]);
+                self::fail('Expected int64 boundary rejection: ' . $label);
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('canonical_backtest_rule_input_invalid', $exception->getMessage(), $label);
+            }
+        }
+    }
+
     public function testCanonicalInputUsesTheProtocolEightMebibyteBudgetRatherThanPaperEventLimits(): void
     {
         $request = $this->validRequest();

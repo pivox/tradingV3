@@ -15,6 +15,8 @@ final readonly class CanonicalBacktestRuleEvaluator
 {
     private const MAX_CANONICAL_BYTES = 8_388_608;
     private const MAX_CANONICAL_DEPTH = 128;
+    private const PHP_INT64_MIN_AS_FLOAT = -9_223_372_036_854_775_808.0;
+    private const PHP_INT64_MAX_EXCLUSIVE_AS_FLOAT = 9_223_372_036_854_775_808.0;
 
     private const REQUEST_KEYS = [
         'schema_version',
@@ -383,7 +385,11 @@ final readonly class CanonicalBacktestRuleEvaluator
                 throw new \InvalidArgumentException('canonical_backtest_rule_input_invalid');
             }
             if (floor($value) === $value) {
-                if ($value < PHP_INT_MIN || $value > PHP_INT_MAX) {
+                // PHP_INT_MAX cannot be compared safely to a float: it rounds to +2^63,
+                // whose cast wraps to PHP_INT_MIN. Use exact binary64 power-of-two bounds.
+                if ($value < self::PHP_INT64_MIN_AS_FLOAT
+                    || $value >= self::PHP_INT64_MAX_EXCLUSIVE_AS_FLOAT
+                ) {
                     throw new \InvalidArgumentException('canonical_backtest_rule_input_invalid');
                 }
 
