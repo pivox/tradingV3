@@ -26,7 +26,7 @@ final class CanonicalHistoricalFundingSettlement
             $exitAt = $this->time($request['exit_at']);
             $coverageStart = $this->time($request['coverage_start']);
             $coverageEnd = $this->time($request['coverage_end']);
-            if ($exitAt <= $entryAt || $entryAt < $coverageStart || $exitAt > $coverageEnd) {
+            if ($exitAt < $entryAt || $entryAt < $coverageStart || $exitAt > $coverageEnd) {
                 throw new CanonicalHistoricalFundingSettlementException('canonical_historical_funding_coverage_invalid');
             }
             $quantity = $this->positiveDecimal($request['quantity']);

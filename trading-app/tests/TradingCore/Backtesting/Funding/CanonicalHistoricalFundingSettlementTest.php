@@ -39,6 +39,19 @@ final class CanonicalHistoricalFundingSettlementTest extends TestCase
         self::assertSame('-0.01', $result['funding_cashflow_quote']);
     }
 
+    public function testZeroDurationSameCandlePositionSettlesWithoutFunding(): void
+    {
+        $request = $this->request('long');
+        $request['entry_at'] = '2026-08-10T08:00:00.000000Z';
+        $request['exit_at'] = '2026-08-10T08:00:00.000000Z';
+
+        $result = (new CanonicalHistoricalFundingSettlement())->settle($request);
+
+        self::assertSame([], $result['applied_source_record_ids']);
+        self::assertSame(0, $result['applied_record_count']);
+        self::assertSame('0', $result['funding_cashflow_quote']);
+    }
+
     public function testNegativeRateCreditsLong(): void
     {
         $request = $this->request('long');

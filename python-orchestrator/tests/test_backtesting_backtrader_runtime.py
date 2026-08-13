@@ -44,11 +44,11 @@ def _record(index: int, high: str, low: str) -> CandleRecord:
     )
 
 
-def _feed(*, unfilled: bool = False) -> VerifiedBacktraderFeedAdapter:
+def _feed(*, unfilled: bool = False, same_candle: bool = False) -> VerifiedBacktraderFeedAdapter:
     records = (
         (_record(0, "100", "99"), _record(1, "100", "99"), _record(2, "100", "99"))
         if unfilled
-        else (_record(0, "101", "99"), _record(1, "103", "99"))
+        else ((_record(0, "103", "99"),) if same_candle else (_record(0, "101", "99"), _record(1, "103", "99")))
     )
     source = DatasetSourceIdentity(
         source="paper-okx", source_schema_version="paper.v2",
@@ -289,3 +289,20 @@ def test_runtime_rejects_unfilled_schedule_bound_to_another_dataset() -> None:
             funding_schedule=unrelated,
             funding_bridge=trusted_bridge_for(),
         )
+
+
+def test_runtime_settles_same_candle_close_with_zero_funding() -> None:
+    feed = _feed(same_candle=True)
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    result = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=trusted_bridge_for(cashflow="0", applied_ids=()),
+    ))
+
+    assert result["status"] == "closed"
+    assert [event["kind"] for event in result["events"]] == ["entry_filled", "target_filled"]
+    assert result["events"][0]["happened_at"] == result["events"][1]["happened_at"]
+    assert result["net_outcome"]["historical_funding_cashflow_quote"] == 0
+    assert result["net_outcome"]["applied_funding_source_record_ids"] == []
