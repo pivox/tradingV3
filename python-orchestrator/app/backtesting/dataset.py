@@ -19,7 +19,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.backtesting.contracts import DatasetDescriptor, MarketType
+from app.backtesting.contracts import (
+    DatasetDescriptor,
+    MarketType,
+    _dataset_checksum_from_manifest_core,
+)
 
 
 _CANDLE_SCHEMA_VERSION = "backtest-candle.v1"
@@ -583,28 +587,13 @@ def _manifest_core(result: DatasetBuildResult) -> dict[str, Any]:
     }
 
 
-def _dataset_checksum(
-    manifest_core: Mapping[str, Any],
-    candles_checksum: str,
-    quality_report_checksum: str,
-) -> str:
-    checksum_payload = _canonical_json(
-        {
-            "candles_checksum": candles_checksum,
-            "manifest_core": manifest_core,
-            "quality_report_checksum": quality_report_checksum,
-        }
-    )
-    return _sha256(checksum_payload)
-
-
 def _manifest(
     result: DatasetBuildResult,
     candles_checksum: str,
     quality_report_checksum: str,
 ) -> dict[str, Any]:
     core = _json_value(_manifest_core(result))
-    dataset_checksum = _dataset_checksum(
+    dataset_checksum = _dataset_checksum_from_manifest_core(
         core,
         candles_checksum,
         quality_report_checksum,

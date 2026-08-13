@@ -672,6 +672,15 @@ def test_descriptor_is_derived_from_and_agrees_with_manifest_facts() -> None:
     assert "created_at" not in manifest
 
 
+def test_descriptor_constructor_rejects_facts_not_bound_by_checksum() -> None:
+    descriptor = DatasetSerializer.serialize(
+        DatasetBuilder(_source()).build(_golden_records())
+    ).descriptor
+
+    with pytest.raises(ValidationError, match="dataset checksum does not bind descriptor facts"):
+        DatasetDescriptor(**{**descriptor.model_dump(), "record_count": 999})
+
+
 @pytest.mark.parametrize(
     ("path", "replacement"),
     (

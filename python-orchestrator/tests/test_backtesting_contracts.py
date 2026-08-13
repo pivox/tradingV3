@@ -43,8 +43,8 @@ def _dataset() -> DatasetDescriptor:
         "coverage": {
             "symbols": ["BTCUSDT", "ETHUSDT"],
             "timeframes": ["1m", "5m", "15m"],
-            "start_at": "2026-01-01T00:00:00Z",
-            "end_at": "2026-01-31T00:00:00Z",
+            "start_at": "2026-01-01T00:00:00.000000Z",
+            "end_at": "2026-01-31T00:00:00.000000Z",
             "record_count": 100,
         },
         "quality_flags": [],

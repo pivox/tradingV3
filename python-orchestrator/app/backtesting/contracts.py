@@ -100,6 +100,30 @@ def _require_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _canonical_manifest_datetime(value: datetime) -> str:
+    return _require_utc(value).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _dataset_checksum_from_manifest_core(
+    manifest_core: Mapping[str, Any],
+    candles_checksum: str,
+    quality_report_checksum: str,
+) -> str:
+    checksum_payload = json.dumps(
+        {
+            "candles_checksum": candles_checksum,
+            "manifest_core": manifest_core,
+            "quality_report_checksum": quality_report_checksum,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
+
+
 class FrozenDict(MappingAbc):
     """Recursive immutable mapping for config snapshots."""
 
@@ -208,6 +232,36 @@ class DatasetDescriptor(BaseModel):
         checksum_hex = self.dataset_checksum.removeprefix("sha256:")
         if self.dataset_id != f"backtest-dataset-{checksum_hex}":
             raise ValueError("dataset_id must derive from dataset_checksum")
+        manifest_core = {
+            "build_version": self.build_version,
+            "coverage": {
+                "end_at": _canonical_manifest_datetime(self.end_at),
+                "record_count": self.record_count,
+                "start_at": _canonical_manifest_datetime(self.start_at),
+                "symbols": list(self.symbols),
+                "timeframes": list(self.timeframes),
+            },
+            "quality_flags": list(self.quality_flags),
+            "quality_report_schema_version": self.quality_report_schema_version,
+            "record_schema_version": self.record_schema_version,
+            "schema_version": self.schema_version,
+            "source": {
+                "market_data_venue": self.market_data_venue,
+                "market_type": self.market_type.value,
+                "source": self.source,
+                "source_build_version": self.source_build_version,
+                "source_checksum": self.source_checksum,
+                "source_network": self.source_network,
+                "source_schema_version": self.source_schema_version,
+            },
+        }
+        expected_checksum = _dataset_checksum_from_manifest_core(
+            manifest_core,
+            self.candles_checksum,
+            self.quality_report_checksum,
+        )
+        if self.dataset_checksum != expected_checksum:
+            raise ValueError("dataset checksum does not bind descriptor facts")
         return self
 
     @classmethod
@@ -293,17 +347,11 @@ class DatasetDescriptor(BaseModel):
             for key, value in manifest.items()
             if key not in {"artifacts", "dataset_checksum", "dataset_id"}
         }
-        checksum_payload = json.dumps(
-            {
-                "candles_checksum": artifacts["candles.ndjson"],
-                "manifest_core": manifest_core,
-                "quality_report_checksum": artifacts["quality-report.json"],
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        expected_checksum = "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
+        expected_checksum = _dataset_checksum_from_manifest_core(
+            manifest_core,
+            artifacts["candles.ndjson"],
+            artifacts["quality-report.json"],
+        )
         if manifest["dataset_checksum"] != expected_checksum:
             raise ValueError("dataset checksum does not bind manifest facts")
 
