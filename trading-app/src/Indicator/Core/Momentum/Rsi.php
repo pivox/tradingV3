@@ -51,6 +51,36 @@ final class Rsi implements IndicatorInterface
         return $this->calculate($closes, $period);
     }
 
+    /** @param float[] $closes */
+    public function calculatePhp(array $closes, int $period = 14): ?float
+    {
+        $n = count($closes);
+        if ($n < $period + 1) {
+            return null;
+        }
+
+        $gains = 0.0;
+        $losses = 0.0;
+        for ($i = 1; $i <= $period; $i++) {
+            $change = $closes[$i] - $closes[$i - 1];
+            $change >= 0.0 ? $gains += $change : $losses -= $change;
+        }
+        $averageGain = $gains / $period;
+        $averageLoss = $losses / $period;
+
+        for ($i = $period + 1; $i < $n; $i++) {
+            $change = $closes[$i] - $closes[$i - 1];
+            $gain = $change > 0.0 ? $change : 0.0;
+            $loss = $change < 0.0 ? -$change : 0.0;
+            $averageGain = (($averageGain * ($period - 1)) + $gain) / $period;
+            $averageLoss = (($averageLoss * ($period - 1)) + $loss) / $period;
+        }
+
+        $relativeStrength = $averageLoss == 0.0 ? INF : $averageGain / $averageLoss;
+
+        return 100.0 - (100.0 / (1.0 + $relativeStrength));
+    }
+
     /**
      * Retourne la série RSI complète (vide si insuffisant).
      * @param float[] $closes

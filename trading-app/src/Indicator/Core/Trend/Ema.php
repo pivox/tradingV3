@@ -41,12 +41,22 @@ class Ema implements IndicatorInterface
             $arr = \trader_ema($prices, $period);
             return is_array($arr) ? array_values(array_map('floatval', $arr)) : [];
         }
+
+        return $this->calculateSeriesPhp($prices, $period);
+    }
+
+    /**
+     * @param float[] $prices
+     * @return list<float>
+     */
+    public function calculateSeriesPhp(array $prices, int $period): array
+    {
         $n = count($prices);
         if ($n < 1) return [];
-        if ($period <= 1) return array_values($prices);
+        if ($period <= 1) return array_values(array_map('floatval', $prices));
         $k = 2 / ($period + 1);
         $ema = [];
-        $cur = $prices[0];
+        $cur = (float) $prices[0];
         $ema[] = $cur;
         for ($i = 1; $i < $n; $i++) {
             $cur = $prices[$i] * $k + $cur * (1 - $k);
@@ -69,6 +79,25 @@ class Ema implements IndicatorInterface
 
         foreach ($prices as $price) {
             $ema = $price * $k + $ema * (1 - $k);
+        }
+
+        return $ema;
+    }
+
+    /** @param float[] $prices */
+    public function calculatePhp(array $prices, int $period): ?float
+    {
+        if ($prices === [] || $period <= 0) {
+            return null;
+        }
+        if ($period <= 1) {
+            return (float) end($prices);
+        }
+
+        $multiplier = 2.0 / ($period + 1.0);
+        $ema = $prices[0];
+        foreach ($prices as $price) {
+            $ema = ($price * $multiplier) + ($ema * (1.0 - $multiplier));
         }
 
         return $ema;

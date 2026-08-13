@@ -32,6 +32,15 @@ from app.backtesting.tradingcore_bridge import (
     CanonicalIndicatorSnapshot,
     TradingCoreBridgeError,
 )
+from app.backtesting.indicator_bridge import (
+    BacktestIndicatorBridge,
+    CanonicalIndicatorDatasetBinding,
+    CanonicalIndicatorProjectionRequest,
+    CanonicalIndicatorProjectionResult,
+    CanonicalProjectedIndicatorSnapshot,
+    IndicatorBridgeError,
+    VerifiedIndicatorWindowBuilder,
+)
 
 __all__ = (
     "CandleRecord",
@@ -56,4 +65,11 @@ __all__ = (
     "CanonicalBacktestRuleResult",
     "CanonicalIndicatorSnapshot",
     "TradingCoreBridgeError",
+    "BacktestIndicatorBridge",
+    "CanonicalIndicatorDatasetBinding",
+    "CanonicalIndicatorProjectionRequest",
+    "CanonicalIndicatorProjectionResult",
+    "CanonicalProjectedIndicatorSnapshot",
+    "IndicatorBridgeError",
+    "VerifiedIndicatorWindowBuilder",
 )

@@ -1,0 +1,946 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from copy import deepcopy
+import hashlib
+import json
+import os
+import signal
+import stat
+import sys
+import textwrap
+from decimal import Decimal
+from pathlib import Path
+from typing import Literal
+
+import pytest
+from pydantic import ValidationError
+
+from app.backtesting.dataset import (
+    CandleRecord,
+    DatasetArtifacts,
+    DatasetBuilder,
+    DatasetSerializer,
+    DatasetSourceIdentity,
+    Timeframe,
+)
+from app.backtesting.contracts import MarketType
+from app.backtesting.indicator_bridge import (
+    BacktestIndicatorBridge,
+    CanonicalIndicatorDatasetBinding,
+    CanonicalIndicatorProjectionRequest,
+    CanonicalIndicatorProjectionResult,
+    CanonicalProjectedIndicatorSnapshot,
+    IndicatorBridgeError,
+    VerifiedIndicatorWindowBuilder,
+)
+from app.backtesting.tradingcore_bridge import (
+    CanonicalBacktestRuleRequest,
+    CanonicalIndicatorSnapshot,
+)
+from app.modern_trading_contracts import _canonical_json
+
+
+UTC = timezone.utc
+EVALUATED_AT = "2026-02-12T20:00:00.000000Z"
+REPOSITORY = Path(__file__).resolve().parents[2]
+SNAPSHOT = Path(__file__).parent / "fixtures/backtesting/php-effective-config-snapshot.json"
+
+
+def _record(
+    venue: Literal["okx", "hyperliquid"],
+    network: Literal["mainnet", "testnet"],
+    timeframe: Timeframe,
+    index: int,
+    *,
+    count: int,
+    symbol: str = "BTCUSDT",
+    available_delay: timedelta = timedelta(0),
+) -> CandleRecord:
+    # The 1h fixture has 1,004 records so its freshest 1,000-record suffix is
+    # aligned to a UTC four-hour boundary.
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    if timeframe is not Timeframe.ONE_HOUR:
+        start = datetime(2026, 2, 1, tzinfo=UTC)
+    open_at = start + index * timeframe.duration
+    close_at = open_at + timeframe.duration
+    base = 30_000 + index
+    source_record_id = hashlib.sha256(
+        f"{venue}-{network}-{symbol}-{timeframe.value}-{index:05d}".encode()
+    ).hexdigest()
+    return CandleRecord(
+        source_record_id=source_record_id,
+        source_network=network,
+        market_data_venue=venue,
+        market_type=MarketType.PERPETUAL,
+        symbol=symbol,
+        timeframe=timeframe,
+        open_at=open_at,
+        close_at=close_at,
+        available_at=close_at + available_delay,
+        open=str(base),
+        high=str(base + 3),
+        low=str(base - 2),
+        close=str(base + 1),
+        volume=str(10 + (index % 17)),
+        complete=True,
+    )
+
+
+def _artifacts(
+    venue: Literal["okx", "hyperliquid"] = "okx",
+    network: Literal["mainnet", "testnet"] = "mainnet",
+    *,
+    hourly_count: int = 1004,
+    include_four_hour_source: bool = False,
+) -> DatasetArtifacts:
+    source = DatasetSourceIdentity(
+        source=f"paper-{venue}",
+        source_schema_version="paper-public-candles.v2",
+        source_build_version="fixture.v1",
+        source_checksum="sha256:" + "d" * 64,
+        source_network=network,
+        market_data_venue=venue,
+        market_type=MarketType.PERPETUAL,
+    )
+    records: list[CandleRecord] = []
+    for timeframe in (
+        Timeframe.ONE_MINUTE,
+        Timeframe.FIVE_MINUTES,
+        Timeframe.FIFTEEN_MINUTES,
+    ):
+        records.extend(
+            _record(venue, network, timeframe, index, count=255)
+            for index in range(255)
+        )
+    records.extend(
+        _record(venue, network, Timeframe.ONE_HOUR, index, count=hourly_count)
+        for index in range(hourly_count)
+    )
+    if include_four_hour_source:
+        records.extend(
+            _record(venue, network, Timeframe.FOUR_HOURS, index, count=250)
+            for index in range(250)
+        )
+    return DatasetSerializer.serialize(DatasetBuilder(source).build(records))
+
+
+def test_indicator_bridge_public_api_exists() -> None:
+    assert BacktestIndicatorBridge.DEFAULT_TIMEOUT_SECONDS == 15.0
+    assert CanonicalIndicatorProjectionRequest is not None
+    assert CanonicalIndicatorProjectionResult is not None
+    assert IndicatorBridgeError is not None
+    assert VerifiedIndicatorWindowBuilder is not None
+
+
+def test_backtesting_package_exports_indicator_bridge_api() -> None:
+    import app.backtesting as package
+
+    assert package.BacktestIndicatorBridge is BacktestIndicatorBridge
+    assert package.CanonicalIndicatorProjectionRequest is CanonicalIndicatorProjectionRequest
+    assert package.CanonicalIndicatorProjectionResult is CanonicalIndicatorProjectionResult
+    assert package.IndicatorBridgeError is IndicatorBridgeError
+    assert package.VerifiedIndicatorWindowBuilder is VerifiedIndicatorWindowBuilder
+
+
+def test_request_model_is_strict_frozen_and_duration_ordered() -> None:
+    artifacts = _artifacts()
+    request = VerifiedIndicatorWindowBuilder().build(
+        artifacts,
+        request_id="projection-1",
+        symbol="BTCUSDT",
+        requested_timeframes=("1m", "1h", "4h"),
+        evaluated_at=EVALUATED_AT,
+        environment="test",
+    )
+    with pytest.raises(ValidationError):
+        request.symbol = "ETHUSDT"  # type: ignore[misc]
+    payload = request.model_dump(mode="json")
+    payload["unexpected"] = True
+    with pytest.raises(ValidationError):
+        CanonicalIndicatorProjectionRequest.model_validate(payload)
+    for invalid in (("5m", "1m"), ("1m", "1m"), ("1m", "30m"), ()):
+        payload = request.model_dump(mode="json")
+        payload["requested_timeframes"] = invalid
+        with pytest.raises(ValidationError, match="requested_timeframes"):
+            CanonicalIndicatorProjectionRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["candles_by_timeframe"]["1m"].pop(),
+        lambda value: value["candles_by_timeframe"]["1m"].__setitem__(0, "bad"),
+        lambda value: value["candles_by_timeframe"]["1m"][0].update(extra=True),
+        lambda value: value["candles_by_timeframe"]["1m"][0].update(
+            source_record_id="not-a-hash"
+        ),
+        lambda value: value["candles_by_timeframe"]["1m"][0].update(volume="-1"),
+        lambda value: value["candles_by_timeframe"]["1m"][0].update(
+            source_network="testnet"
+        ),
+        lambda value: value["candles_by_timeframe"]["1m"][0].update(
+            available_at="2026-02-13T00:00:00.000000Z"
+        ),
+        lambda value: value["candles_by_timeframe"]["1m"][1].update(
+            open_at="2026-02-01T04:16:00.000000Z",
+            close_at="2026-02-01T04:17:00.000000Z",
+            available_at="2026-02-01T04:17:00.000000Z",
+        ),
+        lambda value: value["candles_by_timeframe"].update(
+            {"4h": value["candles_by_timeframe"]["1h"][-250:]}
+        ),
+    ],
+)
+def test_request_model_rejects_forged_candle_windows(mutate) -> None:
+    payload = _request().model_dump(mode="json")
+    mutate(payload)
+    with pytest.raises(ValidationError, match="canonical_indicator"):
+        CanonicalIndicatorProjectionRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("venue", "network"),
+    [("okx", "mainnet"), ("hyperliquid", "testnet")],
+)
+def test_verified_builder_binds_descriptor_and_selects_exact_freshest_windows(
+    venue: Literal["okx", "hyperliquid"],
+    network: Literal["mainnet", "testnet"],
+) -> None:
+    artifacts = _artifacts(venue, network)
+    request = VerifiedIndicatorWindowBuilder().build(
+        artifacts,
+        request_id=f"projection-{venue}",
+        symbol="BTCUSDT",
+        requested_timeframes=("1m", "5m", "15m", "1h", "4h"),
+        evaluated_at=EVALUATED_AT,
+        environment="local",
+    )
+
+    assert request.dataset_binding.model_dump(mode="json") == {
+        "dataset_id": artifacts.descriptor.dataset_id,
+        "dataset_checksum": artifacts.descriptor.dataset_checksum,
+        "candles_checksum": artifacts.descriptor.candles_checksum,
+        "quality_report_checksum": artifacts.descriptor.quality_report_checksum,
+        "source_checksum": artifacts.descriptor.source_checksum,
+        "source_network": network,
+        "market_data_venue": venue,
+        "market_type": "perpetual",
+    }
+    windows = request.model_dump(mode="json")["candles_by_timeframe"]
+    assert list(windows) == ["1m", "5m", "15m", "1h"]
+    assert [len(windows[key]) for key in windows] == [250, 250, 250, 1000]
+    assert windows["1m"][0]["open_at"] == "2026-02-01T00:05:00.000000Z"
+    assert windows["1h"][0]["open_at"] == "2026-01-01T04:00:00.000000Z"
+    assert windows["1h"][-1]["close_at"] <= EVALUATED_AT
+    assert windows["1h"][-1]["available_at"] <= EVALUATED_AT
+    assert "4h" not in windows
+
+
+def test_builder_verifies_artifacts_before_parsing_or_slicing(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifacts = _artifacts()
+    observed: list[DatasetArtifacts] = []
+
+    def reject_first(cls: type[DatasetSerializer], value: DatasetArtifacts):
+        observed.append(value)
+        raise RuntimeError("verification-sentinel")
+
+    monkeypatch.setattr(DatasetSerializer, "verify", classmethod(reject_first))
+    with pytest.raises(RuntimeError, match="verification-sentinel"):
+        VerifiedIndicatorWindowBuilder().build(
+            artifacts,
+            request_id="projection-verify-first",
+            symbol="BTCUSDT",
+            requested_timeframes=("1m",),
+            evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+    assert observed == [artifacts]
+
+
+def test_builder_sanitizes_corrupt_artifact_failure() -> None:
+    artifacts = _artifacts()
+    tampered = artifacts.model_copy(
+        update={"candles_ndjson": artifacts.candles_ndjson.replace(b'"30000"', b'"99999"', 1)}
+    )
+    with pytest.raises(IndicatorBridgeError, match="indicator_bridge_dataset_invalid$"):
+        VerifiedIndicatorWindowBuilder().build(
+            tampered,
+            request_id="projection-corrupt",
+            symbol="BTCUSDT",
+            requested_timeframes=("1m",),
+            evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+
+
+def test_builder_rejects_insufficient_hourly_coverage_and_never_uses_source_4h() -> None:
+    artifacts = _artifacts(hourly_count=999, include_four_hour_source=True)
+    with pytest.raises(IndicatorBridgeError, match="indicator_bridge_window_insufficient"):
+        VerifiedIndicatorWindowBuilder().build(
+            artifacts,
+            request_id="projection-short",
+            symbol="BTCUSDT",
+            requested_timeframes=("4h",),
+            evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+    misaligned = _artifacts(hourly_count=1001)
+    with pytest.raises(IndicatorBridgeError, match="four_hour_alignment_invalid"):
+        VerifiedIndicatorWindowBuilder().build(
+            misaligned,
+            request_id="projection-misaligned",
+            symbol="BTCUSDT",
+            requested_timeframes=("4h",),
+            evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+
+
+def test_builder_rejects_wrong_boundary_types_and_uncertifiable_symbol() -> None:
+    builder = VerifiedIndicatorWindowBuilder()
+    with pytest.raises(TypeError, match="dataset_artifacts_required"):
+        builder.build(  # type: ignore[arg-type]
+            object(), request_id="x", symbol="BTCUSDT",
+            requested_timeframes=("1m",), evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+    with pytest.raises(IndicatorBridgeError, match="symbol_invalid"):
+        builder.build(
+            _artifacts(), request_id="x", symbol="SOLUSDT",
+            requested_timeframes=("1m",), evaluated_at=EVALUATED_AT,
+            environment="test",
+        )
+
+
+def test_strict_models_reject_coercion_and_forged_binding() -> None:
+    request_payload = _request().model_dump(mode="json")
+    for field in ("schema_version", "request_id", "environment", "symbol"):
+        forged = deepcopy(request_payload)
+        forged[field] = 1
+        with pytest.raises(ValidationError):
+            CanonicalIndicatorProjectionRequest.model_validate(forged)
+    for invalid in (1, [1], {}):
+        forged = deepcopy(request_payload)
+        forged["candles_by_timeframe"] = invalid
+        with pytest.raises(ValidationError):
+            CanonicalIndicatorProjectionRequest.model_validate(forged)
+    for invalid in (("1m", 1), "1m"):
+        forged = deepcopy(request_payload)
+        forged["requested_timeframes"] = invalid
+        with pytest.raises(ValidationError, match="requested_timeframes_invalid"):
+            CanonicalIndicatorProjectionRequest.model_validate(forged)
+    forged = deepcopy(request_payload)
+    forged["evaluated_at"] = "2026-02-30T00:00:00.000000Z"
+    with pytest.raises(ValidationError, match="evaluated_at_invalid"):
+        CanonicalIndicatorProjectionRequest.model_validate(forged)
+    with pytest.raises(ValidationError, match="dataset_binding_invalid"):
+        CanonicalIndicatorDatasetBinding.model_validate(
+            {**request_payload["dataset_binding"], "dataset_id": "backtest-dataset-" + "f" * 64}
+        )
+    with pytest.raises(ValidationError, match="dataset_binding_invalid"):
+        CanonicalIndicatorDatasetBinding.model_validate(
+            {**request_payload["dataset_binding"], "source_checksum": 1}
+        )
+
+
+def test_snapshot_and_result_models_reject_malformed_shapes() -> None:
+    request = _request()
+    payload = _result_payload(request)
+    snapshot = payload["snapshots_by_timeframe"]["1m"]
+    for invalid in ([], {"timeframe": "1m"}):
+        forged = deepcopy(snapshot)
+        forged["snapshot_identity"] = invalid
+        with pytest.raises(ValidationError, match="snapshot_identity_invalid"):
+            CanonicalProjectedIndicatorSnapshot.model_validate(forged)
+    forged = deepcopy(snapshot)
+    forged["window_hash"] = 1
+    with pytest.raises(ValidationError, match="snapshot_string_type_invalid"):
+        CanonicalProjectedIndicatorSnapshot.model_validate(forged)
+    for invalid in ([], {}, {"1m": snapshot}):
+        forged_result = deepcopy(payload)
+        forged_result["snapshots_by_timeframe"] = invalid
+        if invalid == {"1m": snapshot}:
+            forged_result["requested_timeframes"] = ["1m", "4h"]
+        with pytest.raises(ValidationError, match="snapshots_shape_invalid"):
+            CanonicalIndicatorProjectionResult.model_validate(forged_result)
+    forged_result = deepcopy(payload)
+    forged_result["request_id"] = 1
+    with pytest.raises(ValidationError, match="result_string_type_invalid"):
+        CanonicalIndicatorProjectionResult.model_validate(forged_result)
+
+
+def _request(
+    venue: Literal["okx", "hyperliquid"] = "okx",
+    network: Literal["mainnet", "testnet"] = "mainnet",
+) -> CanonicalIndicatorProjectionRequest:
+    return VerifiedIndicatorWindowBuilder().build(
+        _artifacts(venue, network),
+        request_id=f"projection-{venue}",
+        symbol="BTCUSDT",
+        requested_timeframes=("1m", "1h", "4h"),
+        evaluated_at=EVALUATED_AT,
+        environment="test",
+    )
+
+
+def _golden_request(
+    venue: Literal["okx", "hyperliquid"],
+    network: Literal["mainnet", "testnet"],
+) -> CanonicalIndicatorProjectionRequest:
+    return VerifiedIndicatorWindowBuilder().build(
+        _artifacts(venue, network),
+        request_id=f"golden-{venue}",
+        symbol="BTCUSDT",
+        requested_timeframes=("4h",),
+        evaluated_at=EVALUATED_AT,
+        environment="test",
+    )
+
+
+def _hash(payload: dict) -> str:
+    return "sha256:" + hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
+
+
+def _result_payload(request: CanonicalIndicatorProjectionRequest) -> dict:
+    windows = request.model_dump(mode="json")["candles_by_timeframe"]
+    kline_times = {
+        timeframe: windows[timeframe][-1]["open_at"]
+        for timeframe in request.requested_timeframes
+        if timeframe != "4h"
+    }
+    if "4h" in request.requested_timeframes:
+        kline_times["4h"] = windows["1h"][-4]["open_at"]
+    snapshots = {}
+    for timeframe in request.requested_timeframes:
+        duration_seconds = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "1h": 3_600,
+            "4h": 14_400,
+        }[timeframe]
+        kline_timestamp = int(
+            datetime.fromisoformat(
+                kline_times[timeframe].removesuffix("Z") + "+00:00"
+            ).timestamp()
+        )
+        series_timestamps = [
+            kline_timestamp - duration_seconds * offset
+            for offset in range(249, -1, -1)
+        ]
+        macd_hist_series = [index / 1000 for index in range(60)]
+        snapshots[timeframe] = {
+            "close": 31_000.5,
+            "high_series": [31_001.0 + index for index in range(60)],
+            "low_series": [30_999.0 + index for index in range(60)],
+            "rsi": 55.0,
+            "ema_20": 30_990.0,
+            "ema_50": 30_980.0,
+            "ema_200": 30_900.0,
+            "macd_hist": macd_hist_series[-1],
+            "vwap": 30_995.0,
+            "atr": 10.0,
+            "adx": {"14": 25.0, "15": 24.0},
+            "ma9": 30_997.0,
+            "ma21": 30_990.0,
+            "bb_upper": 31_100.0,
+            "bb_middle": 31_000.0,
+            "bb_lower": 30_900.0,
+            "ema": {
+                "9": 30_997.0,
+                "20": 30_990.0,
+                "21": 30_989.0,
+                "50": 30_980.0,
+                "200": 30_900.0,
+            },
+            "ema_prev": {
+                "9": 30_996.0,
+                "20": 30_989.0,
+                "21": 30_988.0,
+                "50": 30_979.0,
+                "200": 30_899.0,
+            },
+            "ema_200_slope": 1.0,
+            "ema_200_series": [30_899.0, 30_900.0],
+            "ema_200_series_timestamps": series_timestamps[-2:],
+            "macd": {"macd": 0.2, "signal": 0.141, "hist": macd_hist_series[-1]},
+            "macd_hist_series": macd_hist_series,
+            "macd_hist_series_timestamps": series_timestamps[-60:],
+            "macd_line_signal_series": macd_hist_series,
+            "macd_line_signal_series_timestamps": series_timestamps[-60:],
+            "macd_hist_last3": macd_hist_series[-3:],
+            "series_order": "oldest_to_newest",
+            "series_timestamps": series_timestamps,
+            "pullback_age_bars": None,
+            "volume_ratio": 1.2,
+            "ma_21_plus_k_atr": 31_003.0,
+            "snapshot_identity": {
+                "timeframe": timeframe,
+                "symbol": request.symbol,
+                "exchange": "fake",
+                "environment": request.environment,
+                "market_type": "perpetual",
+            },
+            "kline_time": kline_times[timeframe],
+            "window_hash": _expected_window_hash(request, timeframe),
+            "indicator_engine_version": "php_fallback_v1",
+        }
+    payload = {
+        "schema_version": "canonical-indicator-projection-result.v1",
+        "request_id": request.request_id,
+        "evaluated_at": request.evaluated_at,
+        "environment": request.environment,
+        "indicator_engine_version": "php_fallback_v1",
+        "dataset_binding": request.dataset_binding.model_dump(mode="json"),
+        "symbol": request.symbol,
+        "requested_timeframes": list(request.requested_timeframes),
+        "snapshots_by_timeframe": snapshots,
+        "input_hash": request.input_hash(),
+    }
+    payload["result_hash"] = _hash(payload)
+    return payload
+
+
+def _all_timeframe_request() -> CanonicalIndicatorProjectionRequest:
+    return VerifiedIndicatorWindowBuilder().build(
+        _artifacts(),
+        request_id="projection-all-timeframes",
+        symbol="BTCUSDT",
+        requested_timeframes=("1m", "5m", "15m", "1h", "4h"),
+        evaluated_at=EVALUATED_AT,
+        environment="test",
+    )
+
+
+def _paper_hash(value) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _expected_window_hash(
+    request: CanonicalIndicatorProjectionRequest, timeframe: str
+) -> str:
+    windows = request.model_dump(mode="json")["candles_by_timeframe"]
+    if timeframe != "4h":
+        source = windows[timeframe]
+        if timeframe == "1h" and "4h" in request.requested_timeframes:
+            source = source[-250:]
+        return _paper_hash(source)
+    derived = []
+    for offset in range(0, 1000, 4):
+        components = windows["1h"][offset : offset + 4]
+        record = {
+            "schema_version": "canonical-derived-indicator-candle.v1",
+            "component_source_record_ids": [item["source_record_id"] for item in components],
+            "source_network": components[0]["source_network"],
+            "market_data_venue": components[0]["market_data_venue"],
+            "market_type": "perpetual",
+            "symbol": request.symbol,
+            "timeframe": "4h",
+            "open_at": components[0]["open_at"],
+            "close_at": components[-1]["close_at"],
+            "available_at": max(item["available_at"] for item in components),
+            "open": components[0]["open"],
+            "high": _decimal(max(Decimal(item["high"]) for item in components)),
+            "low": _decimal(min(Decimal(item["low"]) for item in components)),
+            "close": components[-1]["close"],
+            "volume": _decimal(sum(Decimal(item["volume"]) for item in components)),
+            "complete": True,
+            "origin": "aggregate_1h_utc",
+        }
+        derived.append({"derived_record_id": _paper_hash(record).removeprefix("sha256:"), **record})
+    return _paper_hash(derived)
+
+
+def _script(tmp_path: Path, source: str, *, name: str = "child.py") -> str:
+    path = tmp_path / name
+    path.write_text("#!/usr/bin/env python3\n" + textwrap.dedent(source))
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return str(path)
+
+
+def test_result_is_frozen_strict_hash_bound_and_rule_snapshot_compatible() -> None:
+    request = _request()
+    payload = _result_payload(request)
+    result = CanonicalIndicatorProjectionResult.model_validate(payload)
+    with pytest.raises(ValidationError):
+        result.symbol = "ETHUSDT"  # type: ignore[misc]
+    assert tuple(result.snapshots_by_timeframe) == request.requested_timeframes
+    for snapshot in result.snapshots_by_timeframe.values():
+        CanonicalIndicatorSnapshot.model_validate(dict(snapshot))
+
+    forged = deepcopy(payload)
+    forged["snapshots_by_timeframe"]["1m"]["close"] = 1.0
+    with pytest.raises(ValidationError, match="result_hash"):
+        CanonicalIndicatorProjectionResult.model_validate(forged)
+
+
+def test_result_requires_the_complete_php_snapshot_contract_for_every_timeframe() -> None:
+    request = _all_timeframe_request()
+    payload = _result_payload(request)
+    assert CanonicalIndicatorProjectionResult.model_validate(payload)
+
+    required_indicator_fields = {
+        "close",
+        "high_series",
+        "low_series",
+        "rsi",
+        "ema_20",
+        "ema_50",
+        "ema_200",
+        "macd_hist",
+        "vwap",
+        "atr",
+        "adx",
+        "ma9",
+        "ma21",
+        "bb_upper",
+        "bb_middle",
+        "bb_lower",
+        "ema",
+        "ema_prev",
+        "ema_200_slope",
+        "ema_200_series",
+        "ema_200_series_timestamps",
+        "macd",
+        "macd_hist_series",
+        "macd_hist_series_timestamps",
+        "macd_line_signal_series",
+        "macd_line_signal_series_timestamps",
+        "macd_hist_last3",
+        "series_order",
+        "series_timestamps",
+        "pullback_age_bars",
+        "volume_ratio",
+        "ma_21_plus_k_atr",
+    }
+    for timeframe in request.requested_timeframes:
+        assert required_indicator_fields < set(
+            payload["snapshots_by_timeframe"][timeframe]
+        )
+        for missing in required_indicator_fields:
+            forged = deepcopy(payload)
+            forged["snapshots_by_timeframe"][timeframe].pop(missing)
+            forged.pop("result_hash")
+            forged["result_hash"] = _hash(forged)
+            with pytest.raises(ValidationError, match="snapshot"):
+                CanonicalIndicatorProjectionResult.model_validate(forged)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda snapshot: snapshot["series_timestamps"].__setitem__(-1, 0),
+        lambda snapshot: snapshot["ema_200_series_timestamps"].__setitem__(0, 0),
+        lambda snapshot: snapshot["macd_hist_series_timestamps"].__setitem__(-1, 0),
+        lambda snapshot: snapshot["macd_line_signal_series_timestamps"].__setitem__(0, 0),
+        lambda snapshot: snapshot["macd_hist_last3"].__setitem__(-1, -1.0),
+        lambda snapshot: snapshot["macd_line_signal_series"].__setitem__(-1, -1.0),
+    ],
+)
+def test_result_rejects_rehashed_misaligned_php_series(mutate) -> None:
+    payload = _result_payload(_all_timeframe_request())
+    mutate(payload["snapshots_by_timeframe"]["5m"])
+    payload.pop("result_hash")
+    payload["result_hash"] = _hash(payload)
+
+    with pytest.raises(ValidationError, match="snapshot_series_alignment_invalid"):
+        CanonicalIndicatorProjectionResult.model_validate(payload)
+
+
+def test_bridge_uses_fixed_shell_free_argv_and_canonical_stdin(tmp_path: Path) -> None:
+    request = _request()
+    response = _canonical_json(_result_payload(request))
+    script = _script(
+        tmp_path,
+        f"""
+        import json, sys
+        payload = sys.stdin.buffer.read()
+        json.loads(payload)
+        sys.stdout.write({response!r} + "\\n")
+        """,
+    )
+    bridge = BacktestIndicatorBridge((sys.executable, script))
+    result = bridge.project(request)
+    assert bridge.argv == (sys.executable, script)
+    assert result.input_hash == request.input_hash()
+    assert BacktestIndicatorBridge().argv[-3:] == (
+        "app:backtest:indicators:project",
+        "--no-interaction",
+        "--no-ansi",
+    )
+
+
+def test_bridge_child_environment_is_minimal_and_drops_parent_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _request()
+    response = _canonical_json(_result_payload(request))
+    monkeypatch.setenv("INDICATOR_BRIDGE_SECRET_SENTINEL", "must-not-leak")
+    script = _script(
+        tmp_path,
+        f"""
+        import os, sys
+        expected = {{"LANG", "LC_ALL", "PATH", "__CF_USER_TEXT_ENCODING"}}
+        if set(os.environ) != expected or "INDICATOR_BRIDGE_SECRET_SENTINEL" in os.environ:
+            sys.exit(9)
+        if os.environ["LANG"] != "C.UTF-8" or os.environ["LC_ALL"] != "C.UTF-8":
+            sys.exit(10)
+        print({response!r})
+        """,
+        name="environment.py",
+    )
+    assert BacktestIndicatorBridge((sys.executable, script)).project(request).request_id == request.request_id
+
+
+def test_bridge_is_frozen_after_construction() -> None:
+    bridge = BacktestIndicatorBridge((sys.executable,))
+    with pytest.raises((AttributeError, TypeError)):
+        bridge._timeout = 99  # type: ignore[misc]
+    with pytest.raises((AttributeError, TypeError)):
+        bridge.extra = True  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        bridge._environment["PATH"] = "/forged"  # type: ignore[index]
+
+
+def test_bridge_rejects_invalid_argv_and_request_type() -> None:
+    for argv in ((), ("",), (1,)):  # type: ignore[list-item]
+        with pytest.raises(ValueError, match="indicator_bridge_argv_invalid"):
+            BacktestIndicatorBridge(argv)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="projection_request_required"):
+        BacktestIndicatorBridge(("php",)).project(object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        ("import sys; sys.exit(2)", "process_failed"),
+        ("print('not-json')", "result_invalid"),
+        ("print('{} {}')", "result_invalid"),
+        ("print('[]')", "result_invalid"),
+        ("print('{\"a\":1,\"a\":2}')", "result_invalid"),
+        ("import sys; sys.stdout.buffer.write(b'\\xff')", "result_invalid"),
+        ("pass", "result_invalid"),
+    ],
+)
+def test_bridge_rejects_process_and_strict_json_failures(
+    source: str, reason: str, tmp_path: Path
+) -> None:
+    script = _script(tmp_path, source)
+    with pytest.raises(IndicatorBridgeError, match=f"indicator_bridge_{reason}$"):
+        BacktestIndicatorBridge((sys.executable, script)).project(_request())
+
+
+def test_bridge_handles_missing_executable_timeout_and_independent_bounds(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    with pytest.raises(IndicatorBridgeError, match="process_unavailable"):
+        BacktestIndicatorBridge((str(tmp_path / "missing"),)).project(request)
+    sleeper = _script(tmp_path, "import time; time.sleep(2)", name="sleep.py")
+    with pytest.raises(IndicatorBridgeError, match="timeout"):
+        BacktestIndicatorBridge(
+            (sys.executable, sleeper), timeout_seconds=0.05
+        ).project(request)
+    noisy = _script(tmp_path, "print('x' * 10000)", name="stdout.py")
+    with pytest.raises(IndicatorBridgeError, match="output_too_large"):
+        BacktestIndicatorBridge(
+            (sys.executable, noisy), max_output_bytes=100
+        ).project(request)
+    noisy_err = _script(
+        tmp_path,
+        "import sys; sys.stderr.write('sensitive-child-data' * 1000)",
+        name="stderr.py",
+    )
+    with pytest.raises(IndicatorBridgeError, match="output_too_large") as failure:
+        BacktestIndicatorBridge(
+            (sys.executable, noisy_err), max_output_bytes=100
+        ).project(request)
+    assert "sensitive-child-data" not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("source", "timeout_seconds", "max_output_bytes", "reason"),
+    [
+        (
+            "import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)']); "
+            "time.sleep(2)",
+            0.05,
+            1024,
+            "timeout",
+        ),
+        ("print('x' * 10000)", 2.0, 100, "output_too_large"),
+    ],
+)
+def test_bridge_kills_the_isolated_process_group_on_bounded_failure(
+    source: str,
+    timeout_seconds: float,
+    max_output_bytes: int,
+    reason: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_killpg = os.killpg
+    killed_groups: list[tuple[int, signal.Signals]] = []
+
+    def recording_killpg(process_group_id: int, sig: signal.Signals) -> None:
+        killed_groups.append((process_group_id, sig))
+        real_killpg(process_group_id, sig)
+
+    monkeypatch.setattr(
+        "app.backtesting.indicator_bridge.os.killpg", recording_killpg
+    )
+    script = _script(tmp_path, source, name=f"{reason}.py")
+
+    with pytest.raises(IndicatorBridgeError, match=f"indicator_bridge_{reason}$"):
+        BacktestIndicatorBridge(
+            (sys.executable, script),
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        ).project(_request())
+
+    assert len(killed_groups) == 1
+    process_group_id, sig = killed_groups[0]
+    assert process_group_id > 0
+    assert sig == signal.SIGKILL
+
+
+def test_bridge_rejects_oversized_input_before_starting_process(tmp_path: Path) -> None:
+    request = _request().model_copy(update={"request_id": "x" * (8 * 1024 * 1024)})
+    with pytest.raises(IndicatorBridgeError, match="indicator_bridge_input_too_large$"):
+        BacktestIndicatorBridge((str(tmp_path / "must-not-start"),)).project(request)
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), True, "15"])
+def test_bridge_rejects_invalid_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="indicator_bridge_bounds_invalid"):
+        BacktestIndicatorBridge(("php",), timeout_seconds=timeout)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "limit", [float("nan"), float("inf"), True, 1.5, 8 * 1024 * 1024 + 1]
+)
+def test_bridge_rejects_invalid_output_limit(limit: object) -> None:
+    with pytest.raises(ValueError, match="indicator_bridge_bounds_invalid"):
+        BacktestIndicatorBridge(("php",), max_output_bytes=limit)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (lambda value: value.update(symbol="ETHUSDT"), "result_invalid"),
+        (
+            lambda value: value["dataset_binding"].update(
+                source_network="testnet"
+            ),
+            "result_identity_mismatch",
+        ),
+        (
+            lambda value: value.update(input_hash="sha256:" + "f" * 64),
+            "result_identity_mismatch",
+        ),
+        (
+            lambda value: value["snapshots_by_timeframe"]["1m"].update(
+                window_hash="forged"
+            ),
+            "result_invalid",
+        ),
+        (
+            lambda value: value["snapshots_by_timeframe"]["1m"][
+                "snapshot_identity"
+            ].update(exchange="okx"),
+            "result_invalid",
+        ),
+    ],
+)
+def test_bridge_rejects_forged_hashes_and_identity(
+    mutate, reason: str, tmp_path: Path
+) -> None:
+    request = _request()
+    payload = _result_payload(request)
+    mutate(payload)
+    payload.pop("result_hash")
+    payload["result_hash"] = _hash(payload)
+    script = _script(tmp_path, f"print({_canonical_json(payload)!r})")
+    with pytest.raises(IndicatorBridgeError, match=f"indicator_bridge_{reason}$"):
+        BacktestIndicatorBridge((sys.executable, script)).project(request)
+
+
+def test_bridge_rejects_kline_identity_drift(tmp_path: Path) -> None:
+    request = _request()
+    payload = _result_payload(request)
+    payload["snapshots_by_timeframe"]["1m"]["kline_time"] = (
+        payload["snapshots_by_timeframe"]["1h"]["kline_time"]
+    )
+    payload.pop("result_hash")
+    payload["result_hash"] = _hash(payload)
+    script = _script(tmp_path, f"print({_canonical_json(payload)!r})")
+    with pytest.raises(IndicatorBridgeError, match="result_invalid"):
+        BacktestIndicatorBridge((sys.executable, script)).project(request)
+
+
+@pytest.mark.parametrize("timeframe", ["1m", "4h"])
+def test_bridge_rejects_well_formed_forged_window_hash(
+    timeframe: str, tmp_path: Path
+) -> None:
+    request = _request()
+    payload = _result_payload(request)
+    assert payload["snapshots_by_timeframe"][timeframe]["window_hash"] == _expected_window_hash(
+        request, timeframe
+    )
+    payload["snapshots_by_timeframe"][timeframe]["window_hash"] = "sha256:" + "f" * 64
+    payload.pop("result_hash")
+    payload["result_hash"] = _hash(payload)
+    script = _script(tmp_path, f"print({_canonical_json(payload)!r})")
+    with pytest.raises(IndicatorBridgeError, match="window_hash_mismatch"):
+        BacktestIndicatorBridge((sys.executable, script)).project(request)
+
+
+@pytest.mark.parametrize(
+    ("venue", "network"),
+    [("okx", "mainnet"), ("hyperliquid", "testnet")],
+)
+@pytest.mark.skipif(
+    not (REPOSITORY / "trading-app/vendor/autoload.php").exists(),
+    reason="Symfony dependencies unavailable",
+)
+def test_real_symfony_projection_is_byte_deterministic_and_rule_compatible(
+    venue: Literal["okx", "hyperliquid"],
+    network: Literal["mainnet", "testnet"],
+) -> None:
+    request = _golden_request(venue, network)
+    bridge = BacktestIndicatorBridge()
+    request_bytes = _canonical_json(request.model_dump(mode="json")).encode()
+    first = bridge._run_bounded(request_bytes)
+    second = bridge._run_bounded(request_bytes)
+    assert first == second
+    assert first[0] == 0
+    assert first[2] == b""
+    projected = bridge.project(request)
+    assert projected == bridge.project(request)
+    for snapshot in projected.snapshots_by_timeframe.values():
+        CanonicalIndicatorSnapshot.model_validate(dict(snapshot))
+    rule_request = CanonicalBacktestRuleRequest.model_validate(
+        {
+            "schema_version": "canonical-backtest-rule-request.v1",
+            "request_id": f"rule-{venue}",
+            "effective_config_snapshot": json.loads(SNAPSHOT.read_text()),
+            "symbol": request.symbol,
+            "market_type": "perpetual",
+            "evaluated_at": request.evaluated_at.removesuffix(".000000Z") + "Z",
+            "indicators_by_timeframe": projected.model_dump(mode="json")[
+                "snapshots_by_timeframe"
+            ],
+        }
+    )
+    assert tuple(rule_request.indicators_by_timeframe) == request.requested_timeframes

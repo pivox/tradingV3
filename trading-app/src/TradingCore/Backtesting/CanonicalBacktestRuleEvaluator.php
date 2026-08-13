@@ -250,7 +250,13 @@ final readonly class CanonicalBacktestRuleEvaluator implements CanonicalBacktest
     /** @param array<string,mixed> $payload */
     public static function canonicalHash(#[\SensitiveParameter] array $payload): string
     {
-        return 'sha256:' . hash('sha256', self::encodeCanonicalValue($payload));
+        return 'sha256:' . hash('sha256', self::canonicalJson($payload));
+    }
+
+    /** @param array<string,mixed> $payload */
+    public static function canonicalJson(#[\SensitiveParameter] array $payload): string
+    {
+        return self::encodeCanonicalValue($payload);
     }
 
     /**
@@ -349,14 +355,16 @@ final readonly class CanonicalBacktestRuleEvaluator implements CanonicalBacktest
                     $value,
                 )) . ']';
             }
-            foreach (array_keys($value) as $key) {
-                if (!\is_string($key)) {
-                    throw new \InvalidArgumentException('canonical_backtest_rule_input_invalid');
-                }
-            }
-            ksort($value, SORT_STRING);
-            $members = [];
+            $membersByKey = [];
             foreach ($value as $key => $item) {
+                $membersByKey[] = [(string) $key, $item];
+            }
+            usort(
+                $membersByKey,
+                static fn (array $left, array $right): int => strcmp($left[0], $right[0]),
+            );
+            $members = [];
+            foreach ($membersByKey as [$key, $item]) {
                 $members[] = self::encodeScalar($key) . ':' . self::encodeValue($item, $depth + 1);
             }
 
