@@ -670,6 +670,9 @@ final class PaperDatasetVerifier
                 }
                 hash_update($checksumContext, $line);
                 if (trim($line) === '') {
+                    if ($collectEvents) {
+                        throw new \RuntimeException('paper_dataset_snapshot_blank_line_invalid');
+                    }
                     continue;
                 }
                 if ($eventLimit !== null && $count >= $eventLimit) {

@@ -7,6 +7,7 @@ namespace App\Tests\Trading\Paper\Dataset;
 use App\Trading\Paper\Dataset\PaperDatasetFormatLimits;
 use App\Trading\Paper\Dataset\PaperDatasetLineReader;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorder;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Dataset\PaperDatasetState;
@@ -185,7 +186,7 @@ final class PaperDatasetVerifierTest extends TestCase
         self::assertIsString($initial);
         $filesystem = new GrowingVerifierEventsFilesystem(
             $this->eventsPath(),
-            str_repeat(" \n", 256),
+            str_repeat(' ', 256) . "\n",
         );
         $limit = strlen($initial) + 8;
         $verifier = new PaperDatasetVerifier(
@@ -204,7 +205,51 @@ final class PaperDatasetVerifierTest extends TestCase
             self::assertLessThan(32, $filesystem->lineReadCount);
         }
 
-        self::assertSame($initial . str_repeat(" \n", 256), file_get_contents($this->eventsPath()));
+        self::assertSame($initial . str_repeat(' ', 256) . "\n", file_get_contents($this->eventsPath()));
+    }
+
+    public function testBaselineSnapshotRejectsBlankLinesThatCannotBeReconstructedFromEvents(): void
+    {
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append($this->event(sequence: '1', microseconds: 1));
+        $manifest = $recorder->complete();
+        $eventsPath = $recorder->datasetDirectory() . '/events.ndjson';
+        $events = file_get_contents($eventsPath);
+        self::assertIsString($events);
+        $events .= " \t\n";
+        self::assertSame(strlen($events), file_put_contents($eventsPath, $events));
+        $forged = new PaperDatasetManifest(
+            schemaVersion: $manifest->schemaVersion,
+            recorderVersion: $manifest->recorderVersion,
+            datasetId: $manifest->datasetId,
+            venue: $manifest->venue,
+            network: $manifest->network,
+            symbols: $manifest->symbols,
+            startExchangeTimestamp: $manifest->startExchangeTimestamp,
+            endExchangeTimestamp: $manifest->endExchangeTimestamp,
+            channels: $manifest->channels,
+            eventCount: $manifest->eventCount,
+            sequenceGaps: $manifest->sequenceGaps,
+            quality: $manifest->quality,
+            modelName: $manifest->modelName,
+            modelVersion: $manifest->modelVersion,
+            eventsFileSha256: hash('sha256', $events),
+            state: $manifest->state,
+            lastEventId: $manifest->lastEventId,
+        );
+        self::assertIsInt(file_put_contents(
+            $recorder->datasetDirectory() . '/manifest.json',
+            (new PaperDatasetManifestCodec())->encode($forged),
+        ));
+        $verifier = new PaperDatasetVerifier();
+        self::assertSame(
+            $forged->toArray(),
+            $verifier->verifyForBaseline($recorder->datasetDirectory())->toArray(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('paper_dataset_snapshot_blank_line_invalid');
+        $verifier->verifyBaselineSnapshot($recorder->datasetDirectory());
     }
 
     #[DataProvider('tightStructuralSnapshotLimitsProvider')]
