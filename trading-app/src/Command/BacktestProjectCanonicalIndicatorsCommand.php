@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
-use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluatorInterface;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectorInterface;
 use App\TradingCore\Backtesting\Json\StrictJsonObjectDecoder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -12,11 +12,11 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
-#[AsCommand(name: 'app:backtest:rules:evaluate')]
-final class BacktestEvaluateCanonicalRulesCommand extends Command
+#[AsCommand(name: 'app:backtest:indicators:project')]
+final class BacktestProjectCanonicalIndicatorsCommand extends Command
 {
     public function __construct(
-        private readonly CanonicalBacktestRuleEvaluatorInterface $evaluator,
+        private readonly CanonicalIndicatorProjectorInterface $projector,
         private readonly StrictJsonObjectDecoder $decoder,
         private readonly ?\Closure $stdinReader = null,
     ) {
@@ -30,6 +30,7 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
         } catch (\Throwable) {
             return $this->invalid($output, 'input_read_failed');
         }
+
         try {
             $request = $this->decoder->decode($payload);
         } catch (\InvalidArgumentException $exception) {
@@ -37,15 +38,15 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
         }
 
         try {
-            $evaluation = $this->evaluator->evaluate($request);
+            $projection = $this->projector->project($request);
             $encoded = json_encode(
-                $evaluation->toArray(),
+                $projection->toArray(),
                 JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
             );
         } catch (\Throwable $exception) {
             $reason = $exception->getMessage();
-            if (preg_match('/\Acanonical_[a-z0-9_:.\-]{1,160}\z/D', $reason) !== 1) {
-                $reason = 'evaluation_failed';
+            if (preg_match('/\Acanonical_indicator_[a-z0-9_:.\-]{1,160}\z/D', $reason) !== 1) {
+                $reason = 'projection_failed';
             }
 
             return $this->invalid($output, $reason);
@@ -80,9 +81,8 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
     private function invalid(OutputInterface $output, string $reason): int
     {
         $error = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
-        $error->writeln('canonical_backtest_rule_command_invalid:' . $reason);
+        $error->writeln('canonical_indicator_projection_command_invalid:' . $reason);
 
         return Command::INVALID;
     }
-
 }

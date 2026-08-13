@@ -7,6 +7,7 @@ namespace App\Tests\Command;
 use App\Command\BacktestEvaluateCanonicalRulesCommand;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluation;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluatorInterface;
+use App\TradingCore\Backtesting\Json\StrictJsonObjectDecoder;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -97,6 +98,11 @@ final class BacktestEvaluateCanonicalRulesCommandTest extends TestCase
         yield 'scalar root' => ['scalar root', 'true', 'root_object_required'];
         yield 'duplicate root key' => ['duplicate root key', '{"a":1,"a":2}', 'duplicate_object_key'];
         yield 'duplicate nested key' => ['duplicate nested key', '{"a":{"b":1,"b":2}}', 'duplicate_object_key'];
+        yield 'equivalent escaped duplicate key' => [
+            'equivalent escaped duplicate key',
+            '{"a":1,"\u0061":2}',
+            'duplicate_object_key',
+        ];
         yield 'invalid utf8' => ['invalid utf8', "{\"a\":\"\xFF\"}", 'json_invalid'];
     }
 
@@ -191,6 +197,7 @@ final class BacktestEvaluateCanonicalRulesCommandTest extends TestCase
     {
         $command = new BacktestEvaluateCanonicalRulesCommand(
             $this->evaluator(static fn (array $request): CanonicalBacktestRuleEvaluation => self::evaluation(true, 'unexpected')),
+            new StrictJsonObjectDecoder(),
             static function (): string {
                 throw new \RuntimeException('reader exploded');
             },
@@ -207,6 +214,7 @@ final class BacktestEvaluateCanonicalRulesCommandTest extends TestCase
     {
         $tester = new CommandTester(new BacktestEvaluateCanonicalRulesCommand(
             $evaluator,
+            new StrictJsonObjectDecoder(),
             static fn (): string => $payload,
         ));
         $tester->execute([], ['capture_stderr_separately' => true]);
