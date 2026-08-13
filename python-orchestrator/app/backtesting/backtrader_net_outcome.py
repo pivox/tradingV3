@@ -37,8 +37,11 @@ def project_plan_bound_net_outcome(
     entry_event, terminal_event = execution.events
     _verify_event_lineage(envelope, entry_event)
     _verify_event_lineage(envelope, terminal_event)
-    if execute_plan(envelope, feed.bars) != execution:
+    replayed_execution = execute_plan(envelope, feed.bars)
+    if replayed_execution != execution:
         raise BacktestNetOutcomeError("backtrader_net_outcome_execution_evidence_mismatch")
+    execution = replayed_execution
+    entry_event, terminal_event = execution.events
 
     target = None
     if terminal_event.kind == "target_filled":

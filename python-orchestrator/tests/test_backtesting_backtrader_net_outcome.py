@@ -298,6 +298,24 @@ def test_rejects_fill_that_does_not_match_execution_replayed_from_feed() -> None
         )
 
 
+def test_projection_uses_canonical_replayed_trace_bytes() -> None:
+    canonical = project_plan_bound_net_outcome(_plan(), _target_execution(), _feed())
+    execution = _target_execution()
+    equivalent = replace(
+        execution,
+        events=(
+            replace(execution.events[0], price=Decimal("100.10")),
+            replace(
+                execution.events[1],
+                price=Decimal("102.60"),
+                happened_at=datetime.fromisoformat("2026-08-10T13:02:00+01:00"),
+            ),
+        ),
+    )
+
+    assert project_plan_bound_net_outcome(_plan(), equivalent, _feed()) == canonical
+
+
 def test_rejects_feed_identity_mismatch() -> None:
     feed = _feed()
     object.__setattr__(feed, "dataset_checksum", "sha256:" + "b" * 64)
