@@ -92,6 +92,8 @@ instants uniques, un mark price exact par instant et
 un short. Le cashflow signe remplace alors la provision du plan dans le net et
 le R, avec `funding_evidence=integrity_bound_historical_schedule` et
 `cost_basis_version=canonical-plan-plus-historical-funding.v1`.
+Une entree et une sortie dans la meme bougie partagent leur instant canonique :
+ce trace de duree nulle est valide et ne traverse aucun instant de funding.
 
 Ce chemin reste `costs_are_certified=false` : le SHA-256 prouve l'integrite et
 la reproductibilite, pas l'authenticite venue, et frais, spread et slippage
