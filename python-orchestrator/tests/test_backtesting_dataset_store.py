@@ -138,6 +138,44 @@ class _FailBeforeRenamePublisher(DatasetPublisher):
         raise OSError("injected before rename")
 
 
+class _FailSecondWritePublisher(DatasetPublisher):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self._write_count = 0
+
+    def _write_private_file(self, parent_fd: int, name: str, payload: bytes) -> None:
+        self._write_count += 1
+        if self._write_count == 2:
+            raise OSError("injected second write")
+        super()._write_private_file(parent_fd, name, payload)
+
+
+class _FailStagingFsyncPublisher(DatasetPublisher):
+    def _fsync_staging(self, staging_fd: int) -> None:
+        raise OSError("injected staging fsync")
+
+
+@pytest.mark.parametrize(
+    ("publisher_type", "message"),
+    (
+        (_FailSecondWritePublisher, "injected second write"),
+        (_FailStagingFsyncPublisher, "injected staging fsync"),
+    ),
+)
+def test_write_or_staging_fsync_failure_always_cleans_staging(
+    tmp_path: Path,
+    publisher_type: type[DatasetPublisher],
+    message: str,
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(OSError, match=message):
+        publisher_type(root).publish(_artifacts())
+
+    assert not _target(root).exists()
+    assert not tuple(root.glob(".*.staging-*"))
+
+
 class _CreateEmptyTargetPublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         target.mkdir(mode=0o700)
@@ -197,6 +235,46 @@ def test_root_swapped_for_symlink_never_redirects_publication(tmp_path: Path) ->
 
     assert marker.read_bytes() == b"preserved"
     assert {item.name for item in outside.iterdir()} == {"marker"}
+
+
+class _MoveRootBeforeRenamePublisher(DatasetPublisher):
+    def _before_atomic_rename(self, staging: Path, target: Path) -> None:
+        parked = self._root.with_name(self._root.name + "-parked")
+        self._root.rename(parked)
+        self._root.mkdir(mode=0o700)
+
+
+def test_root_move_before_rename_fails_closed_and_cleans_anchored_staging(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+    parked = tmp_path / "datasets-parked"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _MoveRootBeforeRenamePublisher(root).publish(_artifacts())
+
+    assert tuple(root.iterdir()) == ()
+    assert not (_target(parked)).exists()
+    assert not tuple(parked.glob(".*.staging-*"))
+
+
+class _MoveRootAfterRenamePublisher(DatasetPublisher):
+    def _after_atomic_rename(self) -> None:
+        parked = self._root.with_name(self._root.name + "-parked")
+        self._root.rename(parked)
+        self._root.mkdir(mode=0o700)
+
+
+def test_root_move_after_rename_never_reports_false_success(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    parked = tmp_path / "datasets-parked"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _MoveRootAfterRenamePublisher(root).publish(_artifacts())
+
+    assert tuple(root.iterdir()) == ()
+    assert (_target(parked) / "manifest.json").read_bytes() == _artifacts().manifest_json
+    assert not tuple(parked.glob(".*.staging-*"))
 
 
 def test_hardlinked_existing_artifact_is_not_idempotent(tmp_path: Path) -> None:

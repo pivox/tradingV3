@@ -66,19 +66,23 @@ class DatasetPublisher:
         self._after_prepare_root()
         root_fd = self._open_private_root()
         try:
-            return self._publish_anchored(root_fd, artifacts)
+            root_metadata = os.fstat(root_fd)
+            root_identity = (root_metadata.st_dev, root_metadata.st_ino)
+            return self._publish_anchored(root_fd, root_identity, artifacts)
         finally:
             os.close(root_fd)
 
     def _publish_anchored(
         self,
         root_fd: int,
+        root_identity: tuple[int, int],
         artifacts: DatasetArtifacts,
     ) -> DatasetPublicationResult:
         dataset_id = artifacts.descriptor.dataset_id
         target = self._root / dataset_id
         existing = self._existing_status(root_fd, dataset_id, artifacts)
         if existing is not None:
+            self._assert_root_path_stable(root_identity)
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
                 target=target,
@@ -87,19 +91,20 @@ class DatasetPublisher:
 
         staging_name, staging_fd = self._create_staging(root_fd, dataset_id)
         try:
-            for filename, attribute in _ARTIFACT_PAYLOADS:
-                self._write_private_file(
-                    staging_fd,
-                    filename,
-                    getattr(artifacts, attribute),
-                )
-            os.fsync(staging_fd)
-        finally:
-            os.close(staging_fd)
+            try:
+                for filename, attribute in _ARTIFACT_PAYLOADS:
+                    self._write_private_file(
+                        staging_fd,
+                        filename,
+                        getattr(artifacts, attribute),
+                    )
+                self._fsync_staging(staging_fd)
+            finally:
+                os.close(staging_fd)
 
-        try:
             existing = self._existing_status(root_fd, dataset_id, artifacts)
             if existing is not None:
+                self._assert_root_path_stable(root_identity)
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
                     target=target,
@@ -108,6 +113,7 @@ class DatasetPublisher:
 
             staging_path = self._root / staging_name
             self._before_atomic_rename(staging_path, target)
+            self._assert_root_path_stable(root_identity)
             try:
                 _atomic_rename_no_replace(root_fd, staging_name, dataset_id)
             except OSError as exc:
@@ -116,12 +122,15 @@ class DatasetPublisher:
                 existing = self._existing_status(root_fd, dataset_id, artifacts)
                 if existing is None:
                     raise DatasetPublicationConflict() from exc
+                self._assert_root_path_stable(root_identity)
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
                     target=target,
                     status=existing,
                 )
             os.fsync(root_fd)
+            self._after_atomic_rename()
+            self._assert_root_path_stable(root_identity)
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
                 target=target,
@@ -135,6 +144,9 @@ class DatasetPublisher:
 
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         """Test hook invoked after durable staging and immediately before rename."""
+
+    def _after_atomic_rename(self) -> None:
+        """Test hook invoked before validating the final path for success."""
 
     def _prepare_root(self) -> None:
         try:
@@ -152,6 +164,18 @@ class DatasetPublisher:
             os.close(root_fd)
             raise DatasetPublicationConflict()
         return root_fd
+
+    def _assert_root_path_stable(self, expected_identity: tuple[int, int]) -> None:
+        current_fd = self._open_private_root()
+        try:
+            metadata = os.fstat(current_fd)
+            if (metadata.st_dev, metadata.st_ino) != expected_identity:
+                raise DatasetPublicationConflict()
+        finally:
+            os.close(current_fd)
+
+    def _fsync_staging(self, staging_fd: int) -> None:
+        os.fsync(staging_fd)
 
     def _existing_status(
         self,
