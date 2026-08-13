@@ -134,8 +134,10 @@ A failed build or failed staging write leaves no published target.
 Failure cleanup removes no filesystem entry, not even fd-relative contents: it
 only closes retained descriptors. It preserves an empty, partial or complete
 private staging directory for a janitor operating outside concurrent
-publication. Successful publication leaves no staging directory because the
-atomic rename turns that directory into the immutable target.
+publication. A `PUBLISHED` result leaves no staging directory because the
+atomic rename turns that directory into the immutable target. A concurrent
+loser returning `ALREADY_PUBLISHED` preserves its complete staging directory
+for that janitor.
 
 The implementation uses the existing Pydantic dependency for contracts and
 only the Python standard library for Decimal validation, ordering, canonical

@@ -301,8 +301,9 @@ git commit -m "docs(#191): document deterministic dataset reproduction"
   `ad94a026`, `db4822a2`, `378bc58a`, `a43fc5a4`, `982efb8c`, `bb76611e`,
   `f52e2240`. Failure cleanup only closes descriptors and preserves the private
   staging, including its contents, for a separately governed non-concurrent
-  janitor; successful publication renames the staging directory and leaves no
-  leak.
+  janitor. A `PUBLISHED` result renames the staging directory and leaves no
+  leak; a concurrent loser returning `ALREADY_PUBLISHED` preserves its complete
+  staging for that janitor.
 - Atomic no-replace uses `renameatx_np(RENAME_EXCL)` on macOS and
   `renameat2(RENAME_NOREPLACE)` on Linux. Unsupported platforms fail closed.
 - Golden artifacts are checked in under

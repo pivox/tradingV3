@@ -114,8 +114,9 @@ avec le remplacement de l'entree interne visee. Le publisher ferme seulement
 ses descripteurs et preserve donc le staging prive `0700`, vide, partiel ou
 complet selon le point d'echec. Un janitor peut le retirer ulterieurement, hors
 publication concurrente et selon une politique explicite. Une publication
-reussie ne fuit pas de staging : le repertoire est lui-meme renomme atomiquement
-en cible.
+`PUBLISHED` ne fuit pas de staging : le repertoire est lui-meme renomme
+atomiquement en cible. En revanche, un publisher concurrent perdant qui retourne
+`ALREADY_PUBLISHED` preserve son staging complet pour ce meme janitor.
 
 `DatasetDescriptor` identifie le jeu de donnees derive par :
 
