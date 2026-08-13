@@ -1,0 +1,305 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Trading\Paper\Backtesting;
+
+use App\Trading\Paper\Dataset\PaperDatasetManifest;
+use App\Trading\Paper\Dataset\PaperDatasetState;
+use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
+use Brick\Math\BigDecimal;
+
+final class PaperBacktestDatasetAdapter
+{
+    private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
+    private const MAX_DECIMAL_LENGTH = 256;
+
+    /** @var array<string, int> */
+    private const DURATIONS = ['1m' => 60, '5m' => 300, '15m' => 900, '1h' => 3600];
+
+    /** @var list<string> */
+    private const OKX_KEYS = [
+        'native_symbol', 'bar', 'open', 'high', 'low', 'close',
+        'volume_contracts', 'volume_base', 'volume_quote', 'confirmed', 'origin',
+    ];
+
+    /** @var list<string> */
+    private const HYPERLIQUID_KEYS = [
+        'native_symbol', 'interval', 'start_time', 'close_time', 'open', 'high',
+        'low', 'close', 'volume', 'trade_count', 'confirmed', 'origin',
+    ];
+
+    public function adapt(VerifiedPaperDatasetSnapshot $snapshot): PaperBacktestDataset
+    {
+        $manifest = $snapshot->manifest;
+        $this->assertManifest($manifest, $snapshot->events);
+
+        $candles = [];
+        foreach ($snapshot->events as $event) {
+            $timeframe = $this->timeframe($event->channel);
+            if ($timeframe === null) {
+                continue;
+            }
+            $this->assertEventProvenance($event, $manifest);
+            $candles[] = $manifest->venue === PaperMarketDataVenue::OKX
+                ? $this->normalizeOkx($event, $timeframe)
+                : $this->normalizeHyperliquid($event, $timeframe);
+        }
+        if ($candles === []) {
+            throw new PaperBacktestAdapterException('paper_backtest_candles_empty');
+        }
+
+        usort($candles, static function (
+            NormalizedBacktestCandle $left,
+            NormalizedBacktestCandle $right,
+        ): int {
+            return [$left->marketDataVenue, $left->symbol, self::DURATIONS[$left->timeframe], $left->openAt, $left->sourceRecordId]
+                <=> [$right->marketDataVenue, $right->symbol, self::DURATIONS[$right->timeframe], $right->openAt, $right->sourceRecordId];
+        });
+
+        return new PaperBacktestDataset([
+            'source' => 'paper_market_dataset',
+            'source_schema_version' => 'paper-market-dataset.v2',
+            'source_build_version' => $manifest->recorderVersion,
+            'source_checksum' => 'sha256:' . $manifest->eventsFileSha256,
+            'source_network' => $manifest->network->value,
+            'market_data_venue' => $manifest->venue->value,
+            'market_type' => 'perpetual',
+        ], $candles);
+    }
+
+    /** @param list<PaperMarketEvent> $events */
+    private function assertManifest(PaperDatasetManifest $manifest, array $events): void
+    {
+        $checksum = hash_init('sha256');
+        $channels = [];
+        $start = null;
+        $end = null;
+        foreach ($events as $event) {
+            hash_update($checksum, CanonicalJson::encode($event->toArray()) . "\n");
+            $channels[] = $event->channel->value;
+            $start = $start === null || $event->exchangeTimestamp < $start
+                ? $event->exchangeTimestamp : $start;
+            $end = $end === null || $event->exchangeTimestamp > $end
+                ? $event->exchangeTimestamp : $end;
+        }
+        $channels = array_values(array_unique($channels));
+        sort($channels, \SORT_STRING);
+        $lastEventId = $events === [] ? null : $events[array_key_last($events)]->eventId;
+        if ($manifest->schemaVersion !== PaperDatasetManifest::SCHEMA_VERSION
+            || $manifest->state !== PaperDatasetState::COMPLETE
+            || !$manifest->network->isCertifiable()
+            || !\in_array($manifest->venue, [PaperMarketDataVenue::OKX, PaperMarketDataVenue::HYPERLIQUID], true)
+            || $manifest->recorderVersion === ''
+            || trim($manifest->recorderVersion) !== $manifest->recorderVersion
+            || $manifest->eventCount !== \count($events)
+            || $manifest->eventsFileSha256 === null
+            || preg_match('/\A[0-9a-f]{64}\z/D', $manifest->eventsFileSha256) !== 1
+            || !hash_equals($manifest->eventsFileSha256, hash_final($checksum))
+            || $manifest->lastEventId !== $lastEventId
+            || $manifest->startExchangeTimestamp != $start
+            || $manifest->endExchangeTimestamp != $end
+            || $manifest->channels !== $channels
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_manifest_invalid');
+        }
+    }
+
+    private function assertEventProvenance(PaperMarketEvent $event, PaperDatasetManifest $manifest): void
+    {
+        $nativeSymbol = $event->payload['native_symbol'] ?? null;
+        if ($event->schemaVersion !== PaperMarketEvent::SCHEMA_VERSION
+            || $event->sourceNetwork !== $manifest->network
+            || $event->sourceVenue !== $manifest->venue
+            || !isset($manifest->symbols[$event->symbol])
+            || !\is_string($nativeSymbol)
+            || $manifest->symbols[$event->symbol] !== $nativeSymbol
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_event_provenance_invalid');
+        }
+    }
+
+    private function normalizeOkx(PaperMarketEvent $event, string $timeframe): NormalizedBacktestCandle
+    {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::OKX_KEYS);
+        if (($payload['bar'] ?? null) !== $timeframe
+            || ($payload['confirmed'] ?? null) !== true
+            || !\in_array($payload['origin'] ?? null, ['rest_history', 'rest_warmup', 'ws_candle'], true)
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_okx_payload_invalid');
+        }
+
+        $openAt = $event->exchangeTimestamp;
+        $this->assertGrid($openAt, self::DURATIONS[$timeframe]);
+        $closeAt = $openAt->modify('+' . self::DURATIONS[$timeframe] . ' seconds');
+        $this->decimal($payload['volume_contracts'] ?? null, false);
+        $this->decimal($payload['volume_quote'] ?? null, false);
+
+        return $this->candle(
+            $event,
+            $timeframe,
+            $openAt,
+            $closeAt,
+            $payload,
+            $payload['volume_base'] ?? null,
+        );
+    }
+
+    private function normalizeHyperliquid(PaperMarketEvent $event, string $timeframe): NormalizedBacktestCandle
+    {
+        $payload = $event->payload;
+        $this->assertExactKeys($payload, self::HYPERLIQUID_KEYS);
+        if (($payload['interval'] ?? null) !== $timeframe
+            || ($payload['confirmed'] ?? null) !== true
+            || !\in_array($payload['origin'] ?? null, ['rest_candle_snapshot', 'ws_candle'], true)
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_hyperliquid_payload_invalid');
+        }
+
+        $start = $this->unsignedInteger($payload['start_time'] ?? null);
+        $close = $this->unsignedInteger($payload['close_time'] ?? null);
+        $durationMilliseconds = self::DURATIONS[$timeframe] * 1000;
+        if ($start % $durationMilliseconds !== 0 || $close !== $start + $durationMilliseconds - 1) {
+            throw new PaperBacktestAdapterException('paper_backtest_candle_time_invalid');
+        }
+        $openAt = $this->fromMilliseconds($start);
+        $inclusiveCloseAt = $this->fromMilliseconds($close);
+        if ($event->exchangeTimestamp != $inclusiveCloseAt) {
+            throw new PaperBacktestAdapterException('paper_backtest_candle_time_invalid');
+        }
+        $closeAt = $openAt->modify('+' . self::DURATIONS[$timeframe] . ' seconds');
+        $this->unsignedInteger($payload['trade_count'] ?? null);
+
+        return $this->candle($event, $timeframe, $openAt, $closeAt, $payload, $payload['volume'] ?? null);
+    }
+
+    /** @param array<array-key, mixed> $payload */
+    private function candle(
+        PaperMarketEvent $event,
+        string $timeframe,
+        \DateTimeImmutable $openAt,
+        \DateTimeImmutable $closeAt,
+        array $payload,
+        mixed $volumeValue,
+    ): NormalizedBacktestCandle {
+        $open = $this->decimal($payload['open'] ?? null, true);
+        $high = $this->decimal($payload['high'] ?? null, true);
+        $low = $this->decimal($payload['low'] ?? null, true);
+        $close = $this->decimal($payload['close'] ?? null, true);
+        $volume = $this->decimal($volumeValue, false);
+        if (BigDecimal::of($low)->isGreaterThan(BigDecimal::of($open))
+            || BigDecimal::of($low)->isGreaterThan(BigDecimal::of($close))
+            || BigDecimal::of($high)->isLessThan(BigDecimal::of($open))
+            || BigDecimal::of($high)->isLessThan(BigDecimal::of($close))
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_candle_geometry_invalid');
+        }
+        $availableAt = $event->receivedTimestamp > $closeAt ? $event->receivedTimestamp : $closeAt;
+
+        return new NormalizedBacktestCandle(
+            $event->eventId,
+            $event->sourceNetwork->value,
+            $event->sourceVenue->value,
+            $event->symbol,
+            $timeframe,
+            $openAt->format(self::TIMESTAMP_FORMAT),
+            $closeAt->format(self::TIMESTAMP_FORMAT),
+            $availableAt->format(self::TIMESTAMP_FORMAT),
+            $open,
+            $high,
+            $low,
+            $close,
+            $volume,
+        );
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param list<string> $expected
+     */
+    private function assertExactKeys(array $payload, array $expected): void
+    {
+        $keys = array_keys($payload);
+        if (!array_is_list($keys)) {
+            throw new PaperBacktestAdapterException('paper_backtest_payload_shape_invalid');
+        }
+        foreach ($keys as $key) {
+            if (!\is_string($key)) {
+                throw new PaperBacktestAdapterException('paper_backtest_payload_shape_invalid');
+            }
+        }
+        sort($keys);
+        sort($expected);
+        if ($keys !== $expected) {
+            throw new PaperBacktestAdapterException('paper_backtest_payload_shape_invalid');
+        }
+    }
+
+    private function decimal(mixed $value, bool $positive): string
+    {
+        if (!\is_string($value)
+            || \strlen($value) > self::MAX_DECIMAL_LENGTH
+            || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_decimal_invalid');
+        }
+        $decimal = BigDecimal::of($value)->stripTrailingZeros();
+        if (($positive && !$decimal->isPositive()) || (!$positive && $decimal->isNegative())) {
+            throw new PaperBacktestAdapterException('paper_backtest_decimal_invalid');
+        }
+
+        return (string) $decimal;
+    }
+
+    private function unsignedInteger(mixed $value): int
+    {
+        $maximum = (string) \PHP_INT_MAX;
+        if (!\is_string($value)
+            || preg_match('/\A(?:0|[1-9][0-9]*)\z/D', $value) !== 1
+            || \strlen($value) > \strlen($maximum)
+            || (\strlen($value) === \strlen($maximum) && strcmp($value, $maximum) > 0)
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_unsigned_integer_invalid');
+        }
+
+        return (int) $value;
+    }
+
+    private function assertGrid(\DateTimeImmutable $timestamp, int $duration): void
+    {
+        if ($timestamp->getOffset() !== 0
+            || $timestamp->format('u') !== '000000'
+            || ((int) $timestamp->format('U')) % $duration !== 0
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_candle_time_invalid');
+        }
+    }
+
+    private function fromMilliseconds(int $milliseconds): \DateTimeImmutable
+    {
+        $source = intdiv($milliseconds, 1000) . '.'
+            . str_pad((string) (($milliseconds % 1000) * 1000), 6, '0', \STR_PAD_LEFT);
+        $timestamp = \DateTimeImmutable::createFromFormat('!U.u', $source, new \DateTimeZone('UTC'));
+        if ($timestamp === false) {
+            throw new PaperBacktestAdapterException('paper_backtest_candle_time_invalid');
+        }
+
+        return $timestamp->setTimezone(new \DateTimeZone('UTC'));
+    }
+
+    private function timeframe(PaperMarketDataChannel $channel): ?string
+    {
+        return match ($channel) {
+            PaperMarketDataChannel::CANDLE_1M => '1m',
+            PaperMarketDataChannel::CANDLE_5M => '5m',
+            PaperMarketDataChannel::CANDLE_15M => '15m',
+            PaperMarketDataChannel::CANDLE_1H => '1h',
+            default => null,
+        };
+    }
+}
