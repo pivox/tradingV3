@@ -171,14 +171,48 @@ def _canonical_json_value(value: Any) -> Any:
     raise ValueError("canonical_json_value_invalid")
 
 
+def _encode_php_float(value: float) -> str:
+    """Match PHP json_encode with serialize_precision=-1 for finite floats."""
+
+    encoded = repr(value)
+    if "e" not in encoded:
+        return encoded
+    mantissa, exponent_text = encoded.split("e", 1)
+    if "." not in mantissa:
+        mantissa += ".0"
+    exponent = int(exponent_text)
+    sign = "+" if exponent >= 0 else "-"
+    return f"{mantissa}e{sign}{abs(exponent)}"
+
+
+def _encode_canonical_value(value: Any) -> str:
+    normalized = _canonical_json_value(value)
+    if isinstance(normalized, Mapping):
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            + ":"
+            + _encode_canonical_value(normalized[key])
+            for key in sorted(normalized)
+        ) + "}"
+    if isinstance(normalized, list):
+        return "[" + ",".join(_encode_canonical_value(item) for item in normalized) + "]"
+    if normalized is None:
+        return "null"
+    if normalized is True:
+        return "true"
+    if normalized is False:
+        return "false"
+    if isinstance(normalized, int):
+        return str(normalized)
+    if isinstance(normalized, float):
+        return _encode_php_float(normalized)
+    if isinstance(normalized, str):
+        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+    raise ValueError("canonical_json_value_invalid")
+
+
 def _canonical_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        _canonical_json_value(payload),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-        allow_nan=False,
-    )
+    return _encode_canonical_value(payload)
 
 
 def calculate_config_hash(config: Mapping[str, Any], condition_catalog_hash: str) -> str:
@@ -246,6 +280,24 @@ class ModernTradingIdentity(BaseModel):
 
 class CanonicalEffectiveConfigRequest(ModernTradingIdentity):
     """Exact identity requested from the canonical six-layer resolver."""
+
+    execution_capability: Literal["fake", "paper", "backtest", "private_mainnet"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def _validate_execution_capability(self) -> "CanonicalEffectiveConfigRequest":
+        if self.execution_capability == "private_mainnet":
+            raise ValueError("private_mainnet_execution_forbidden")
+        if (
+            (self.mode_id, self.mode_version)
+            in {("day_trading", "1.1.0"), ("scalping", "1.1.0")}
+            and self.execution_capability is None
+        ):
+            raise ValueError(f"{self.mode_id}_shadow_capability_required")
+        if self.execution_capability == "backtest" and self.exchange != "fake":
+            raise ValueError(f"{self.mode_id}_backtest_requires_fake_exchange")
+        return self
 
 
 class CanonicalEffectiveConfigLayer(BaseModel):

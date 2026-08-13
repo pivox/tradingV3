@@ -41,7 +41,7 @@ def test_full_php_133_snapshot_shape_round_trips_unchanged_with_hash_parity():
         for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")
     ]
     payload = {
-        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long", "execution_capability": "backtest"},
         "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
         "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
         "provenance": {"mode.mode_id": layers[1]}, "executable": True, "blockers": [],
@@ -249,7 +249,7 @@ def _canonical_identity_payload():
     config_hash = calculate_config_hash(config, catalog_hash)
     layers = [{"type": kind, "name": kind, "path": f"/{kind}.yaml", "required": True} for kind in ("base", "mode", "setup", "exchange", "mode_exchange", "environment")]
     snapshot = {
-        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long"},
+        "request": {"mode_id": "scalping", "mode_version": "1.1.0", "setup_id": "scalping.pullback.long", "setup_version": "1.1.0", "exchange": "fake", "environment": "test", "side": "long", "execution_capability": "backtest"},
         "config": config, "config_hash": config_hash, "condition_catalog_hash": catalog_hash,
         "ordered_layers": layers, "ordered_files": [layer["path"] for layer in layers],
         "provenance": {"mode.mode_id": layers[1]},
@@ -318,6 +318,7 @@ def test_canonical_effective_config_request_accepts_php_exchange_environment_pai
         exchange=exchange,
         environment=environment,
         side="long",
+        execution_capability="backtest" if exchange == "fake" else "paper",
     )
 
     assert request.exchange == exchange
@@ -334,6 +335,7 @@ def test_canonical_effective_config_request_rejects_invalid_exchange_environment
             exchange="fake",
             environment="demo",
             side="long",
+            execution_capability="backtest",
         )
 
 

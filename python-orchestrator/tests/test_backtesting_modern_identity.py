@@ -172,9 +172,76 @@ def test_modern_identity_forbids_extra_fields_and_is_immutable() -> None:
 
 
 def test_effective_config_request_reuses_the_exact_modern_identity_contract() -> None:
-    request = CanonicalEffectiveConfigRequest(**_identity_payload())
+    request = CanonicalEffectiveConfigRequest(
+        **_identity_payload(), execution_capability="backtest"
+    )
 
-    assert request.model_dump() == _identity_payload()
+    assert request.model_dump() == {
+        **_identity_payload(),
+        "execution_capability": "backtest",
+    }
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        {
+            "mode_id": "scalping",
+            "mode_version": "1.1.0",
+            "setup_id": "scalping.pullback.long",
+            "setup_version": "1.1.0",
+            "exchange": "fake",
+            "environment": "test",
+            "side": "long",
+        },
+        {
+            "mode_id": "day_trading",
+            "mode_version": "1.1.0",
+            "setup_id": "day_trading.trend_continuation.long",
+            "setup_version": "1.1.0",
+            "exchange": "fake",
+            "environment": "test",
+            "side": "long",
+        },
+    ),
+)
+def test_shadow_110_request_requires_an_explicit_execution_capability(
+    identity: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError, match="shadow_capability_required"):
+        CanonicalEffectiveConfigRequest(**identity)
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    (
+        ({"execution_capability": "private_mainnet"}, "private_mainnet_execution_forbidden"),
+        (
+            {"exchange": "okx", "environment": "demo", "execution_capability": "backtest"},
+            "backtest_requires_fake_exchange",
+        ),
+    ),
+)
+def test_shadow_request_rejects_private_mainnet_and_non_fake_backtest(
+    override: dict[str, str], reason: str
+) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        CanonicalEffectiveConfigRequest(**{**_identity_payload(), **override})
+
+
+def test_php_backtest_snapshot_accepts_exact_execution_capability_and_hash() -> None:
+    payload = _snapshot_payload()
+    payload["request"]["execution_capability"] = "backtest"
+    # Generated independently with PHP 8.4 and the public
+    # CanonicalEffectiveConfigSnapshot::calculateSnapshotHash() API.
+    payload["snapshot_hash"] = (
+        "sha256:3348aba268943bdbe77cb7a529894e9ca0c4d6e614a6955bddeaefe0aced5a7b"
+    )
+
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+
+    assert snapshot.request.execution_capability == "backtest"
+    assert snapshot.snapshot_hash == payload["snapshot_hash"]
 
 
 def test_canonical_values_reject_ambiguous_or_non_finite_input() -> None:
@@ -191,6 +258,20 @@ def test_canonical_values_reject_ambiguous_or_non_finite_input() -> None:
     payload["blockers"] = {"unordered"}
     with pytest.raises(ValidationError, match="effective_config_snapshot_sequence_invalid"):
         CanonicalEffectiveConfigSnapshot(**payload)
+
+
+def test_config_hash_matches_php_scientific_float_encoding() -> None:
+    config = {
+        "tiny": 1e-7,
+        "huge": 1e20,
+        "negative": -1e-7,
+        "mantissa": -1.234567890123456e-7,
+    }
+
+    # PHP 8.4 / serialize_precision=-1 public calculateConfigHash() fixture.
+    assert calculate_config_hash(config, "sha256:" + "b" * 64) == (
+        "sha256:63c116450f4c52b518addcb7338ba265b61dae6bf1839dfd6aae41e6ce2df841"
+    )
 
 
 def test_snapshot_validates_hashes_layers_provenance_and_deep_immutability() -> None:
@@ -291,7 +372,7 @@ def _identity_payload() -> dict[str, str]:
 
 
 def _snapshot_payload() -> dict:
-    request = _identity_payload()
+    request = {**_identity_payload(), "execution_capability": "backtest"}
     config = {
         "schema_version": "effective-trading-config.v2",
         "units": {
