@@ -59,6 +59,21 @@ def execute_plan(
             if bar.low <= plan.entry_price <= bar.high:
                 events.append(_event("entry_filled", bar, plan.entry_price, envelope))
                 entered = True
+                stop_hit = (
+                    bar.low <= plan.stop_price
+                    if plan.side == "long"
+                    else bar.high >= plan.stop_price
+                )
+                target_hit = any(
+                    bar.high >= target.price
+                    if plan.side == "long"
+                    else bar.low <= target.price
+                    for target in plan.targets
+                )
+                if stop_hit:
+                    events.append(_event("stop_filled", bar, plan.stop_price, envelope))
+                    reason = "conservative_stop_first" if target_hit else "stop_filled"
+                    return BacktestExecutionResult("closed", reason, tuple(events))
                 continue
             continue
         if holding is not None and bar.open_at >= holding:

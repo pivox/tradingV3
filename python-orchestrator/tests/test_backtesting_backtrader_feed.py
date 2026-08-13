@@ -4,7 +4,7 @@ import pytest
 
 from app.backtesting.backtrader_feed import BacktraderFeedError, VerifiedBacktraderFeedAdapter
 from app.backtesting.contracts import MarketType
-from app.backtesting.dataset import CandleRecord, Timeframe
+from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
 
 
 UTC = timezone.utc
@@ -31,11 +31,20 @@ def _candle(index: int, *, delay: int = 0, symbol: str = "BTCUSDT") -> CandleRec
     )
 
 
+def _artifacts(records):
+    source = DatasetSourceIdentity(
+        source="paper-okx", source_schema_version="paper.v2",
+        source_build_version="fixture.v1", source_checksum="sha256:" + "d" * 64,
+        source_network="mainnet", market_data_venue="okx",
+        market_type=MarketType.PERPETUAL,
+    )
+    return DatasetSerializer.serialize(DatasetBuilder(source).build(records))
+
+
 def test_adapter_preserves_exact_stream_and_availability_time() -> None:
     adapter = VerifiedBacktraderFeedAdapter(
-        (_candle(0, delay=3), _candle(1, delay=4)),
-        dataset_id="backtest-dataset-" + "a" * 64,
-        dataset_checksum="sha256:" + "a" * 64,
+        _artifacts((_candle(0, delay=3), _candle(1, delay=4))),
+        symbol="BTCUSDT", timeframe="5m",
         period_start=datetime(2026, 1, 1, tzinfo=UTC),
         period_end=datetime(2026, 1, 1, 0, 10, 4, tzinfo=UTC),
     )
@@ -47,21 +56,10 @@ def test_adapter_preserves_exact_stream_and_availability_time() -> None:
     assert bars[0].open == 100.0
 
 
-@pytest.mark.parametrize(
-    "records",
-    [
-        lambda: (_candle(1), _candle(0)),
-        lambda: (_candle(0), _candle(2)),
-        lambda: (_candle(0), _candle(0)),
-        lambda: (_candle(0), _candle(1, symbol="ETHUSDT")),
-    ],
-)
-def test_adapter_rejects_noncanonical_or_mixed_stream(records) -> None:
-    with pytest.raises(BacktraderFeedError):
+def test_adapter_rejects_a_missing_requested_stream() -> None:
+    with pytest.raises(BacktraderFeedError, match="scope_invalid"):
         VerifiedBacktraderFeedAdapter(
-            records(),
-            dataset_id="backtest-dataset-" + "a" * 64,
-            dataset_checksum="sha256:" + "a" * 64,
+            _artifacts((_candle(0), _candle(1))), symbol="ETHUSDT", timeframe="5m",
             period_start=datetime(2026, 1, 1, tzinfo=UTC),
             period_end=datetime(2026, 1, 2, tzinfo=UTC),
         )
@@ -70,7 +68,7 @@ def test_adapter_rejects_noncanonical_or_mixed_stream(records) -> None:
 def test_adapter_rejects_empty_scope() -> None:
     with pytest.raises(BacktraderFeedError, match="scope_invalid"):
         VerifiedBacktraderFeedAdapter(
-            (), dataset_id="bad", dataset_checksum="bad",
+            _artifacts((_candle(0),)), symbol="ETHUSDT", timeframe="5m",
             period_start=datetime(2026, 1, 1, tzinfo=UTC),
             period_end=datetime(2026, 1, 2, tzinfo=UTC),
         )

@@ -44,6 +44,13 @@ def test_same_bar_stop_and_target_is_stop_first() -> None:
     assert result.events[-1].price == 98.4
 
 
+def test_entry_bar_touching_stop_attaches_then_executes_stop_conservatively() -> None:
+    result = execute_plan(_plan(), (_bar(0, high=103, low=98),))
+    assert [event.kind for event in result.events] == ["entry_filled", "stop_filled"]
+    assert result.reason_code == "conservative_stop_first"
+    assert result.events[0].stop_price == result.events[1].price == 98.4
+
+
 def test_stop_without_target_uses_stop_reason() -> None:
     result = execute_plan(_plan(), (_bar(0, high=101, low=99), _bar(1, high=101, low=98)))
     assert result.reason_code == "stop_filled"

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from app.backtesting.dataset import CandleRecord
+from app.backtesting.dataset import CandleRecord, DatasetArtifacts, DatasetSerializer
 
 
 class BacktraderFeedError(ValueError):
@@ -38,16 +38,27 @@ class VerifiedBacktraderFeedAdapter:
 
     def __init__(
         self,
-        records: tuple[CandleRecord, ...],
+        artifacts: DatasetArtifacts,
         *,
-        dataset_id: str,
-        dataset_checksum: str,
+        symbol: str,
+        timeframe: str,
         period_start: datetime,
         period_end: datetime,
     ) -> None:
+        try:
+            descriptor = DatasetSerializer.verify(artifacts)
+            records = tuple(
+                CandleRecord.model_validate_json(line)
+                for line in artifacts.candles_ndjson.rstrip(b"\n").split(b"\n")
+            )
+        except Exception as exc:
+            raise BacktraderFeedError("backtrader_feed_artifacts_invalid") from exc
+        records = tuple(
+            record for record in records
+            if record.symbol == symbol and record.timeframe.value == timeframe
+        )
         if (
             not records
-            or dataset_id != "backtest-dataset-" + dataset_checksum.removeprefix("sha256:")
             or period_start.tzinfo is None
             or period_start.utcoffset() != timezone.utc.utcoffset(period_start)
             or period_end.tzinfo is None
@@ -98,8 +109,8 @@ class VerifiedBacktraderFeedAdapter:
                 )
             )
         object.__setattr__(self, "bars", tuple(bars))
-        object.__setattr__(self, "dataset_id", dataset_id)
-        object.__setattr__(self, "dataset_checksum", dataset_checksum)
+        object.__setattr__(self, "dataset_id", descriptor.dataset_id)
+        object.__setattr__(self, "dataset_checksum", descriptor.dataset_checksum)
         object.__setattr__(self, "symbol", first.symbol)
         object.__setattr__(self, "timeframe", first.timeframe.value)
         object.__setattr__(self, "source_network", first.source_network)

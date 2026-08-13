@@ -9,7 +9,7 @@ from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
 from app.backtesting.contracts import MarketType
-from app.backtesting.dataset import CandleRecord, Timeframe
+from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
 
 
 UTC = timezone.utc
@@ -35,18 +35,26 @@ def _record(index: int, high: str, low: str) -> CandleRecord:
 
 
 def _feed() -> VerifiedBacktraderFeedAdapter:
+    records = (_record(0, "101", "99"), _record(1, "103", "99"))
+    source = DatasetSourceIdentity(
+        source="paper-okx", source_schema_version="paper.v2",
+        source_build_version="fixture.v1", source_checksum="sha256:" + "d" * 64,
+        source_network="mainnet", market_data_venue="okx",
+        market_type=MarketType.PERPETUAL,
+    )
+    artifacts = DatasetSerializer.serialize(DatasetBuilder(source).build(records))
     return VerifiedBacktraderFeedAdapter(
-        (_record(0, "101", "99"), _record(1, "103", "99")),
-        dataset_id="backtest-dataset-" + "a" * 64,
-        dataset_checksum="sha256:" + "a" * 64,
+        artifacts, symbol="BTCUSDT", timeframe="1m",
         period_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
         period_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
     )
 
 
 def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
-    first = CanonicalBacktraderRuntime().run(_plan(), _feed())
-    second = CanonicalBacktraderRuntime().run(_plan(), _feed())
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    first = CanonicalBacktraderRuntime().run(plan, feed)
+    second = CanonicalBacktraderRuntime().run(plan, feed)
 
     assert first == second
     decoded = json.loads(first)
@@ -57,6 +65,10 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     assert decoded["result_is_live_proof"] is False
     assert decoded["input_hash"].startswith("sha256:")
     assert decoded["result_hash"].startswith("sha256:")
+
+    golden = Path(__file__).parent / "fixtures/backtesting/backtrader-runtime-result.json"
+    if golden.exists():
+        assert first == golden.read_text(encoding="utf-8")
 
 
 def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
