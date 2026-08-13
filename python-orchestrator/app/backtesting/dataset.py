@@ -308,6 +308,8 @@ class DatasetBuildResult(BaseModel):
 
     @model_validator(mode="after")
     def _validate_derived_facts(self) -> "DatasetBuildResult":
+        if self.records != tuple(sorted(self.records, key=_record_sort_key)):
+            raise ValueError("records must use canonical order")
         recomputed_report = DatasetBuilder(self.source_identity).analyze(self.records)
         if recomputed_report != self.quality_report:
             raise ValueError("quality report must match records and source identity")
@@ -702,6 +704,11 @@ class DatasetSerializer:
                 _canonical_json(manifest["source"])
             )
             result = DatasetBuilder(source).build(records)
+            canonical_candles = b"".join(
+                _canonical_json(record) + b"\n" for record in result.records
+            )
+            if tuple(records) != result.records or artifacts.candles_ndjson != canonical_candles:
+                raise ValueError("candles are not in canonical order")
             if result.quality_report != report:
                 raise ValueError("quality report does not match candle records")
 

@@ -574,6 +574,13 @@ def test_build_result_rejects_forged_quality_evidence(forgery: str) -> None:
         DatasetBuildResult(**payload)
 
 
+def test_build_result_rejects_forged_record_order() -> None:
+    result = DatasetBuilder(_source()).build(_golden_records())
+
+    with pytest.raises(ValidationError, match="records must use canonical order"):
+        DatasetBuildResult(**{**result.model_dump(), "records": tuple(reversed(result.records))})
+
+
 def test_serializer_matches_golden_bytes_and_is_permutation_invariant() -> None:
     builder = DatasetBuilder(_source())
     forward = DatasetSerializer.serialize(builder.build(_golden_records()))
@@ -663,6 +670,71 @@ def test_descriptor_is_derived_from_and_agrees_with_manifest_facts() -> None:
         )
     assert "generated_at" not in manifest
     assert "created_at" not in manifest
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    (
+        (("coverage", "record_count"), 4),
+        (("coverage", "end_at"), "2026-01-01T00:06:00.000000Z"),
+        (("source", "source_network"), "testnet"),
+    ),
+)
+def test_descriptor_rejects_manifest_facts_not_bound_by_dataset_checksum(
+    path: tuple[str, str], replacement: object
+) -> None:
+    manifest = json.loads((_FIXTURE_DIR / "manifest-v1.json").read_bytes())
+    manifest[path[0]][path[1]] = replacement
+
+    with pytest.raises(ValueError, match="dataset checksum does not bind manifest"):
+        DatasetDescriptor.from_manifest(manifest)
+
+
+@pytest.mark.parametrize("record_count", (True, "3", 3.0))
+def test_descriptor_rejects_coerced_manifest_record_count(record_count: object) -> None:
+    manifest = json.loads((_FIXTURE_DIR / "manifest-v1.json").read_bytes())
+    manifest["coverage"]["record_count"] = record_count
+
+    with pytest.raises(ValueError, match="record_count must be an integer"):
+        DatasetDescriptor.from_manifest(manifest)
+
+
+def test_verifier_rejects_reordered_candles_with_fully_recomputed_graph() -> None:
+    artifacts = DatasetSerializer.serialize(
+        DatasetBuilder(_source()).build(_golden_records())
+    )
+    lines = artifacts.candles_ndjson.rstrip(b"\n").split(b"\n")
+    reordered_candles = b"\n".join(reversed(lines)) + b"\n"
+    manifest = json.loads(artifacts.manifest_json)
+    manifest["artifacts"]["candles.ndjson"] = _sha256(reordered_candles)
+    core = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+    }
+    manifest["dataset_checksum"] = _sha256(
+        _canonical_json(
+            {
+                "candles_checksum": manifest["artifacts"]["candles.ndjson"],
+                "manifest_core": core,
+                "quality_report_checksum": manifest["artifacts"][
+                    "quality-report.json"
+                ],
+            }
+        )
+    )
+    manifest["dataset_id"] = "backtest-dataset-" + manifest[
+        "dataset_checksum"
+    ].removeprefix("sha256:")
+    forged = DatasetArtifacts(
+        candles_ndjson=reordered_candles,
+        quality_report_json=artifacts.quality_report_json,
+        manifest_json=_canonical_json(manifest) + b"\n",
+        descriptor=DatasetDescriptor.from_manifest(manifest),
+    )
+
+    with pytest.raises(DatasetArtifactVerificationError):
+        DatasetSerializer.verify(forged)
 
 
 @pytest.mark.parametrize(

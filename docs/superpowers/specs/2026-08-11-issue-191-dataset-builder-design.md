@@ -35,7 +35,9 @@ complete = true
 
 The supported v1 timeframes are `1m`, `5m`, `15m`, `1h`, and `4h`. Timestamps
 must be UTC-aware. A candle covers `[open_at, close_at)`, its duration must equal
-its timeframe, and `available_at >= close_at`. This last field is the data
+its timeframe, and its `open_at` must lie on the UTC Unix-epoch grid for that
+timeframe (`epoch_seconds mod timeframe_seconds = 0`). `available_at >= close_at`.
+This last field is the data
 availability boundary: a consumer evaluating instant `t` may see only records
 whose `available_at <= t`. A mutable or incomplete candle is invalid.
 
@@ -74,6 +76,12 @@ input makes the report ineligible and rejects the build. The typed rejection
 exposes the report for diagnosis, but produces no manifest and cannot be
 published. There is no silent row deletion, winner selection, fill-forward, or
 optimistic default.
+
+The analyzer keeps defensive `stream_overlap` and
+`invalid_stream_chronology` flags for future normalized-record implementations
+and source adapters. They are unreachable through the current strict
+`CandleRecord` boundary because UTC grid alignment and exact duration reject
+such records earlier.
 
 ## Canonical artifacts and checksum graph
 

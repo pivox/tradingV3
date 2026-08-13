@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from math import inf, nan
 
@@ -24,37 +26,54 @@ def _dt(value: str) -> datetime:
 
 
 def _dataset() -> DatasetDescriptor:
-    return DatasetDescriptor.from_manifest(
+    manifest = {
+        "schema_version": "backtest-dataset-manifest.v1",
+        "record_schema_version": "backtest-candle.v1",
+        "quality_report_schema_version": "backtest-dataset-quality.v1",
+        "build_version": "backtest-dataset-builder.v1",
+        "source": {
+            "source": "fixture",
+            "source_schema_version": "fixture-candles.v1",
+            "source_build_version": "fixture-builder.v1",
+            "source_checksum": "sha256:" + "d" * 64,
+            "source_network": "fake",
+            "market_data_venue": "fake",
+            "market_type": "perpetual",
+        },
+        "coverage": {
+            "symbols": ["BTCUSDT", "ETHUSDT"],
+            "timeframes": ["1m", "5m", "15m"],
+            "start_at": "2026-01-01T00:00:00Z",
+            "end_at": "2026-01-31T00:00:00Z",
+            "record_count": 100,
+        },
+        "quality_flags": [],
+        "artifacts": {
+            "candles.ndjson": "sha256:" + "b" * 64,
+            "quality-report.json": "sha256:" + "c" * 64,
+        },
+        "dataset_checksum": "",
+        "dataset_id": "",
+    }
+    manifest_core = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+    }
+    checksum_payload = json.dumps(
         {
-            "schema_version": "backtest-dataset-manifest.v1",
-            "record_schema_version": "backtest-candle.v1",
-            "quality_report_schema_version": "backtest-dataset-quality.v1",
-            "build_version": "backtest-dataset-builder.v1",
-            "source": {
-                "source": "fixture",
-                "source_schema_version": "fixture-candles.v1",
-                "source_build_version": "fixture-builder.v1",
-                "source_checksum": "sha256:" + "d" * 64,
-                "source_network": "fake",
-                "market_data_venue": "fake",
-                "market_type": "perpetual",
-            },
-            "coverage": {
-                "symbols": ["BTCUSDT", "ETHUSDT"],
-                "timeframes": ["1m", "5m", "15m"],
-                "start_at": "2026-01-01T00:00:00Z",
-                "end_at": "2026-01-31T00:00:00Z",
-                "record_count": 100,
-            },
-            "quality_flags": [],
-            "artifacts": {
-                "candles.ndjson": "sha256:" + "b" * 64,
-                "quality-report.json": "sha256:" + "c" * 64,
-            },
-            "dataset_checksum": "sha256:" + "a" * 64,
-            "dataset_id": "backtest-dataset-" + "a" * 64,
-        }
-    )
+            "candles_checksum": manifest["artifacts"]["candles.ndjson"],
+            "manifest_core": manifest_core,
+            "quality_report_checksum": manifest["artifacts"]["quality-report.json"],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    checksum = "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
+    manifest["dataset_checksum"] = checksum
+    manifest["dataset_id"] = "backtest-dataset-" + checksum.removeprefix("sha256:")
+    return DatasetDescriptor.from_manifest(manifest)
 
 
 def _config(profile: Profile = Profile.SCALPER) -> EffectiveConfigSnapshot:

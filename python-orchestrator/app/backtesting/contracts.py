@@ -152,7 +152,7 @@ def _deep_thaw(value: Any) -> Any:
 class DatasetDescriptor(BaseModel):
     """Immutable facts reconstructed from a canonical dataset manifest."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     dataset_id: str = Field(..., pattern=r"^backtest-dataset-[0-9a-f]{64}$")
     schema_version: Literal["backtest-dataset-manifest.v1"]
@@ -255,6 +255,69 @@ class DatasetDescriptor(BaseModel):
         }:
             raise ValueError("dataset manifest artifacts are invalid")
 
+        string_fields = (
+            (manifest, "dataset_id"),
+            (manifest, "schema_version"),
+            (manifest, "record_schema_version"),
+            (manifest, "quality_report_schema_version"),
+            (manifest, "build_version"),
+            (manifest, "dataset_checksum"),
+            (source, "source"),
+            (source, "source_schema_version"),
+            (source, "source_build_version"),
+            (source, "source_checksum"),
+            (source, "source_network"),
+            (source, "market_data_venue"),
+            (source, "market_type"),
+            (coverage, "start_at"),
+            (coverage, "end_at"),
+            (artifacts, "candles.ndjson"),
+            (artifacts, "quality-report.json"),
+        )
+        if any(type(container[key]) is not str for container, key in string_fields):
+            raise ValueError("dataset manifest string scalar is invalid")
+        if type(coverage["record_count"]) is not int:
+            raise ValueError("record_count must be an integer")
+        for name in ("symbols", "timeframes"):
+            value = coverage[name]
+            if type(value) is not list or any(type(item) is not str for item in value):
+                raise ValueError(f"{name} must be an array of strings")
+        quality_flags = manifest["quality_flags"]
+        if type(quality_flags) is not list or any(
+            type(item) is not str for item in quality_flags
+        ):
+            raise ValueError("quality_flags must be an array of strings")
+
+        manifest_core = {
+            key: value
+            for key, value in manifest.items()
+            if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+        }
+        checksum_payload = json.dumps(
+            {
+                "candles_checksum": artifacts["candles.ndjson"],
+                "manifest_core": manifest_core,
+                "quality_report_checksum": artifacts["quality-report.json"],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        expected_checksum = "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
+        if manifest["dataset_checksum"] != expected_checksum:
+            raise ValueError("dataset checksum does not bind manifest facts")
+
+        def parse_utc(value: str) -> datetime:
+            if not value.endswith("Z"):
+                raise ValueError("manifest datetime must use canonical UTC Z suffix")
+            parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+            return _require_utc(parsed)
+
+        try:
+            market_type = MarketType(source["market_type"])
+        except ValueError as exc:
+            raise ValueError("dataset manifest market_type is invalid") from exc
+
         return cls(
             dataset_id=manifest["dataset_id"],
             schema_version=manifest["schema_version"],
@@ -267,15 +330,15 @@ class DatasetDescriptor(BaseModel):
             source_checksum=source["source_checksum"],
             source_network=source["source_network"],
             market_data_venue=source["market_data_venue"],
-            market_type=source["market_type"],
-            symbols=coverage["symbols"],
-            timeframes=coverage["timeframes"],
-            start_at=coverage["start_at"],
-            end_at=coverage["end_at"],
+            market_type=market_type,
+            symbols=tuple(coverage["symbols"]),
+            timeframes=tuple(coverage["timeframes"]),
+            start_at=parse_utc(coverage["start_at"]),
+            end_at=parse_utc(coverage["end_at"]),
             record_count=coverage["record_count"],
             candles_checksum=artifacts["candles.ndjson"],
             quality_report_checksum=artifacts["quality-report.json"],
-            quality_flags=manifest["quality_flags"],
+            quality_flags=tuple(quality_flags),
             dataset_checksum=manifest["dataset_checksum"],
         )
 
