@@ -72,6 +72,7 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     assert decoded["net_outcome"]["net_pnl_quote"] == 5.8632057
     assert decoded["net_outcome"]["funding_evidence"] == "canonical_plan_provision"
     assert decoded["net_outcome"]["outcome_hash"].startswith("sha256:")
+    assert '"total_planned_cost_quote":0.37929430' in first
 
     golden = Path(__file__).parent / "fixtures/backtesting/backtrader-runtime-result.json"
     if golden.exists():

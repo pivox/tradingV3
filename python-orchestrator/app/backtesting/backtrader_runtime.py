@@ -108,7 +108,11 @@ class CanonicalBacktraderRuntime:
 
         outcome = execute_plan(plan, tuple(feed.bars[index] for index in delivered))
         net_outcome = (
-            json.loads(settle_authenticated_outcome(plan, outcome))
+            json.loads(
+                settle_authenticated_outcome(plan, outcome),
+                parse_float=Decimal,
+                parse_int=Decimal,
+            )
             if outcome.status == "closed"
             else None
         )
