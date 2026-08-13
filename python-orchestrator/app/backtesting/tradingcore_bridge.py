@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import subprocess
 import threading
@@ -245,7 +246,13 @@ class BacktestTradingCoreBridge:
             )
         if not argv or any(type(item) is not str or not item for item in argv):
             raise ValueError("tradingcore_bridge_argv_invalid")
-        if timeout_seconds <= 0 or max_output_bytes < 1:
+        if (
+            type(timeout_seconds) not in (int, float)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+            or type(max_output_bytes) is not int
+            or not 1 <= max_output_bytes <= _MAX_BYTES
+        ):
             raise ValueError("tradingcore_bridge_bounds_invalid")
         self._argv = argv
         self._timeout = float(timeout_seconds)

@@ -183,6 +183,18 @@ def test_bridge_handles_missing_executable_timeout_and_bounded_outputs(tmp_path:
         BacktestTradingCoreBridge((sys.executable, noisy_err), max_output_bytes=100).evaluate(request)
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), True, "15"])
+def test_bridge_rejects_unbounded_or_coerced_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="bounds_invalid"):
+        BacktestTradingCoreBridge(("php",), timeout_seconds=timeout)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("limit", [float("nan"), float("inf"), True, 1.5, 8 * 1024 * 1024 + 1])
+def test_bridge_rejects_unbounded_or_coerced_output_limit(limit: object) -> None:
+    with pytest.raises(ValueError, match="bounds_invalid"):
+        BacktestTradingCoreBridge(("php",), max_output_bytes=limit)  # type: ignore[arg-type]
+
+
 def test_bridge_rejects_identity_drift_even_with_valid_result_hash(tmp_path: Path) -> None:
     request = CanonicalBacktestRuleRequest.model_validate(request_payload())
     payload = result_payload(request)
