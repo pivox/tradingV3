@@ -48,6 +48,44 @@ def _manifest() -> dict[str, object]:
             "start_at": "2026-01-01T00:00:00.000000Z",
             "end_at": "2026-01-31T00:00:00.000000Z",
             "record_count": 100,
+            "streams": [
+                {
+                    "first_open_at": "2026-01-01T00:00:00.000000Z",
+                    "last_close_at": "2026-01-31T00:00:00.000000Z",
+                    "market_data_venue": "fake",
+                    "market_type": "perpetual",
+                    "record_count": 40,
+                    "symbol": "BTCUSDT",
+                    "timeframe": "1m",
+                },
+                {
+                    "first_open_at": "2026-01-01T00:00:00.000000Z",
+                    "last_close_at": "2026-01-31T00:00:00.000000Z",
+                    "market_data_venue": "fake",
+                    "market_type": "perpetual",
+                    "record_count": 30,
+                    "symbol": "BTCUSDT",
+                    "timeframe": "5m",
+                },
+                {
+                    "first_open_at": "2026-01-01T00:00:00.000000Z",
+                    "last_close_at": "2026-01-31T00:00:00.000000Z",
+                    "market_data_venue": "fake",
+                    "market_type": "perpetual",
+                    "record_count": 20,
+                    "symbol": "BTCUSDT",
+                    "timeframe": "15m",
+                },
+                {
+                    "first_open_at": "2026-01-01T00:00:00.000000Z",
+                    "last_close_at": "2026-01-31T00:00:00.000000Z",
+                    "market_data_venue": "fake",
+                    "market_type": "perpetual",
+                    "record_count": 10,
+                    "symbol": "ETHUSDT",
+                    "timeframe": "5m",
+                },
+            ],
         },
         "quality_flags": [],
         "artifacts": {
@@ -57,6 +95,10 @@ def _manifest() -> dict[str, object]:
         "dataset_checksum": "",
         "dataset_id": "",
     }
+    return _bind_manifest(manifest)
+
+
+def _bind_manifest(manifest: dict[str, object]) -> dict[str, object]:
     manifest_core = {
         key: value
         for key, value in manifest.items()
@@ -493,3 +535,61 @@ def test_contracts_reject_non_utc_offset_empty_config_and_invalid_stops() -> Non
         _ledger_entry(initial_stop=100.0)
     with pytest.raises(ValidationError, match="short initial_stop must be above"):
         _ledger_entry(direction=Direction.SHORT, initial_stop=99.0)
+
+
+def test_run_request_requires_each_exact_symbol_timeframe_stream() -> None:
+    payload = {
+        "dataset": _dataset(),
+        "config": _config(),
+        "profile": Profile.SCALPER,
+        "symbols": ("ETHUSDT",),
+        "timeframes": ("5m",),
+        "period_start": _dt("2026-01-02T00:00:00"),
+        "period_end": _dt("2026-01-03T00:00:00"),
+        "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+        "engine_version": "backtest-contracts-v1",
+        "random_seed": 191,
+        "cost_model_version": "net-cost-v1",
+    }
+
+    assert BacktestRunRequest(**payload).symbols == ("ETHUSDT",)
+    with pytest.raises(ValidationError, match="stream is not in dataset"):
+        BacktestRunRequest(**{**payload, "timeframes": ("1m",)})
+    with pytest.raises(ValidationError, match="stream is not in dataset"):
+        BacktestRunRequest(
+            **{
+                **payload,
+                "symbols": ("BTCUSDT", "ETHUSDT"),
+                "timeframes": ("1m", "5m"),
+            }
+        )
+
+
+def test_run_request_period_must_fit_every_selected_stream() -> None:
+    manifest = _manifest()
+    eth_stream = manifest["coverage"]["streams"][3]  # type: ignore[index]
+    eth_stream["first_open_at"] = "2026-01-10T00:00:00.000000Z"
+    eth_stream["last_close_at"] = "2026-01-20T00:00:00.000000Z"
+    dataset = DatasetDescriptor.from_manifest(_bind_manifest(manifest))
+    payload = {
+        "dataset": dataset,
+        "config": _config(),
+        "profile": Profile.SCALPER,
+        "symbols": ("ETHUSDT",),
+        "timeframes": ("5m",),
+        "period_start": _dt("2026-01-10T00:00:00"),
+        "period_end": _dt("2026-01-20T00:00:00"),
+        "git_commit_sha": "12c9a9fbe369b49afd3d98e495991a21381e8b7b",
+        "engine_version": "backtest-contracts-v1",
+        "random_seed": 191,
+        "cost_model_version": "net-cost-v1",
+    }
+
+    assert BacktestRunRequest(**payload).period_end == _dt("2026-01-20T00:00:00")
+    with pytest.raises(ValidationError, match="each requested stream bounds"):
+        BacktestRunRequest(
+            **{
+                **payload,
+                "period_start": _dt("2026-01-09T23:59:00"),
+            }
+        )

@@ -142,8 +142,11 @@ git commit -m "feat(#191): reject dataset gaps and duplicates"
 Assert that equivalent record permutations produce byte-identical files and
 checksums. Recompute every checksum from checked-in fixture bytes. Assert the
 descriptor derives schema/build versions, source checksum, network/venue,
-symbols, timeframes, bounds, record count, report checksum, quality flags, and
-dataset checksum; mutation of any artifact must fail cross-verification.
+exact canonical stream coverage, symbols, timeframes, bounds, record count,
+report checksum, quality flags, and dataset checksum; mutation of any artifact
+must fail cross-verification. Assert a run cannot infer an absent
+symbol/timeframe combination from flattened lists and must remain inside every
+requested stream's own bounds.
 
 - [x] **Step 2: Verify RED**
 
@@ -166,7 +169,9 @@ manifest containing that checksum. No generated timestamp or caller-provided
 derived fact is permitted.
 
 Extend `DatasetDescriptor` without adding a strategy identity. Validate that a
-descriptor reconstructed from the manifest agrees with every derived fact.
+descriptor reconstructed from the manifest agrees with every derived fact,
+including canonical unique per-stream coverage from which aggregate facts are
+derived.
 
 - [x] **Step 4: Generate and verify golden fixtures**
 

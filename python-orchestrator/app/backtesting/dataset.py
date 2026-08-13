@@ -578,6 +578,18 @@ def _manifest_core(result: DatasetBuildResult) -> dict[str, Any]:
             "end_at": result.end_at,
             "record_count": result.record_count,
             "start_at": result.start_at,
+            "streams": tuple(
+                {
+                    "first_open_at": stream.first_open_at,
+                    "last_close_at": stream.last_close_at,
+                    "market_data_venue": stream.market_data_venue,
+                    "market_type": stream.market_type,
+                    "record_count": stream.observed_count,
+                    "symbol": stream.symbol,
+                    "timeframe": stream.timeframe,
+                }
+                for stream in result.quality_report.streams
+            ),
             "symbols": result.symbols,
             "timeframes": tuple(item.value for item in result.timeframes),
         },

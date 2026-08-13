@@ -145,6 +145,29 @@ def _fixture_artifacts() -> DatasetArtifacts:
     )
 
 
+def _bind_manifest(manifest: dict[str, object]) -> dict[str, object]:
+    core = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
+    }
+    manifest["dataset_checksum"] = _sha256(
+        _canonical_json(
+            {
+                "candles_checksum": manifest["artifacts"]["candles.ndjson"],  # type: ignore[index]
+                "manifest_core": core,
+                "quality_report_checksum": manifest["artifacts"][
+                    "quality-report.json"
+                ],  # type: ignore[index]
+            }
+        )
+    )
+    manifest["dataset_id"] = "backtest-dataset-" + manifest[
+        "dataset_checksum"
+    ].removeprefix("sha256:")  # type: ignore[union-attr]
+    return manifest
+
+
 def _rebind_artifacts(
     artifacts: DatasetArtifacts,
     *,
@@ -165,25 +188,7 @@ def _rebind_artifacts(
         "candles.ndjson": _sha256(candles),
         "quality-report.json": _sha256(report),
     }
-    core = {
-        key: value
-        for key, value in manifest.items()
-        if key not in {"artifacts", "dataset_checksum", "dataset_id"}
-    }
-    manifest["dataset_checksum"] = _sha256(
-        _canonical_json(
-            {
-                "candles_checksum": manifest["artifacts"]["candles.ndjson"],
-                "manifest_core": core,
-                "quality_report_checksum": manifest["artifacts"][
-                    "quality-report.json"
-                ],
-            }
-        )
-    )
-    manifest["dataset_id"] = "backtest-dataset-" + manifest[
-        "dataset_checksum"
-    ].removeprefix("sha256:")
+    _bind_manifest(manifest)
     return DatasetArtifacts(
         candles_ndjson=candles,
         quality_report_json=report,
@@ -766,7 +771,9 @@ def test_descriptor_constructor_rejects_facts_not_bound_by_checksum() -> None:
     ).descriptor
 
     with pytest.raises(ValidationError, match="dataset checksum does not bind descriptor facts"):
-        DatasetDescriptor(**{**descriptor.model_dump(), "record_count": 999})
+        DatasetDescriptor(
+            **{**descriptor.model_dump(), "source_build_version": "forged.v1"}
+        )
 
 
 @pytest.mark.parametrize(
@@ -794,6 +801,60 @@ def test_descriptor_rejects_coerced_manifest_record_count(record_count: object) 
 
     with pytest.raises(ValueError, match="record_count must be an integer"):
         DatasetDescriptor.from_manifest(manifest)
+
+
+@pytest.mark.parametrize("forgery", ("order", "duplicate", "flattened"))
+def test_descriptor_rejects_stream_coverage_forgery_with_rebound_checksum(
+    forgery: str,
+) -> None:
+    manifest = json.loads((_FIXTURE_DIR / "manifest-v1.json").read_bytes())
+    streams = manifest["coverage"]["streams"]
+    if forgery == "order":
+        manifest["coverage"]["streams"] = list(reversed(streams))
+    elif forgery == "duplicate":
+        manifest["coverage"]["streams"] = [streams[0], streams[0]]
+        manifest["coverage"]["symbols"] = ["BTCUSDT"]
+        manifest["coverage"]["timeframes"] = ["1m"]
+        manifest["coverage"]["end_at"] = streams[0]["last_close_at"]
+        manifest["coverage"]["record_count"] = 4
+    else:
+        manifest["coverage"]["symbols"] = ["BTCUSDT"]
+    _bind_manifest(manifest)
+
+    with pytest.raises((ValueError, ValidationError), match="streams|derive"):
+        DatasetDescriptor.from_manifest(manifest)
+
+
+def test_manifest_stream_coverage_is_exact_and_checksum_bound() -> None:
+    artifacts = DatasetSerializer.serialize(
+        DatasetBuilder(_source()).build(_golden_records())
+    )
+    manifest = json.loads(artifacts.manifest_json)
+
+    assert manifest["coverage"]["streams"] == [
+        {
+            "first_open_at": "2026-01-01T00:00:00.000000Z",
+            "last_close_at": "2026-01-01T00:02:00.000000Z",
+            "market_data_venue": "fake",
+            "market_type": "perpetual",
+            "record_count": 2,
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+        },
+        {
+            "first_open_at": "2026-01-01T00:00:00.000000Z",
+            "last_close_at": "2026-01-01T00:05:00.000000Z",
+            "market_data_venue": "fake",
+            "market_type": "perpetual",
+            "record_count": 1,
+            "symbol": "ETHUSDT",
+            "timeframe": "5m",
+        },
+    ]
+    forged = json.loads(artifacts.manifest_json)
+    forged["coverage"]["streams"][0]["record_count"] = 99
+    with pytest.raises(ValueError, match="dataset checksum does not bind manifest"):
+        DatasetDescriptor.from_manifest(forged)
 
 
 def test_verifier_rejects_reordered_candles_with_fully_recomputed_graph() -> None:

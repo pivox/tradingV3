@@ -114,9 +114,15 @@ JSON uses sorted keys, compact separators, explicit UTC timestamps, canonical
 decimal strings, and no wall-clock-generated value. `candles.ndjson` is hashed
 first. The report is then serialized and hashed. The manifest binds the record
 schema/build versions, source identity and source checksum, derived coverage,
-record count, candle checksum, and report checksum. The dataset checksum is the
-SHA-256 of the canonical manifest core plus the two already computed artifact
-checksums, avoiding a self-referential hash.
+record count, candle checksum, and report checksum. Coverage includes one
+canonical entry per exact `(venue, market_type, symbol, timeframe)` stream with
+its first open, last close and observed record count. Aggregate symbols,
+timeframes, bounds and count are derived from those entries. A run may request
+only combinations present in this catalog, and its half-open execution period
+`[period_start, period_end)` must fit every requested stream's
+`[first_open_at, last_close_at)` coverage. The dataset checksum is the SHA-256
+of the canonical manifest core plus the two already computed artifact checksums,
+avoiding a self-referential hash.
 
 Input order, process hash seed, locale, working directory, and current time must
 not change any artifact byte or checksum. `DatasetDescriptor` is derived from

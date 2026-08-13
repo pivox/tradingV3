@@ -18,6 +18,7 @@ from app.backtesting.dataset import (
     MissingRange,
     Timeframe,
 )
+from app.backtesting.contracts import DatasetStreamCoverage
 from app.backtesting.dataset_store import (
     DatasetPublicationConflict,
     DatasetPublicationResult,
@@ -39,6 +40,7 @@ __all__ = (
     "DatasetPublisher",
     "DatasetSourceIdentity",
     "DatasetStreamQuality",
+    "DatasetStreamCoverage",
     "DatasetSerializer",
     "MissingRange",
     "Timeframe",

@@ -59,6 +59,15 @@ class IntraBarPolicy(str, Enum):
     REJECT_AMBIGUOUS_TRADE = "reject_ambiguous_trade"
 
 
+_TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "4h": 14400,
+}
+
+
 def _canonical_hash(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(_deep_thaw(payload), sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -173,6 +182,42 @@ def _deep_thaw(value: Any) -> Any:
     return value
 
 
+class DatasetStreamCoverage(BaseModel):
+    """Exact immutable coverage for one venue/market/symbol/timeframe stream."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    market_data_venue: str = Field(..., min_length=1)
+    market_type: MarketType
+    symbol: str = Field(..., min_length=1)
+    timeframe: Literal["1m", "5m", "15m", "1h", "4h"]
+    first_open_at: datetime
+    last_close_at: datetime
+    record_count: int = Field(..., ge=1)
+
+    @field_validator("first_open_at", "last_close_at")
+    @classmethod
+    def _validate_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "DatasetStreamCoverage":
+        if self.last_close_at <= self.first_open_at:
+            raise ValueError("stream last_close_at must follow first_open_at")
+        return self
+
+
+def _stream_coverage_sort_key(
+    stream: DatasetStreamCoverage,
+) -> tuple[str, str, str, int]:
+    return (
+        stream.market_data_venue,
+        stream.market_type.value,
+        stream.symbol,
+        _TIMEFRAME_SECONDS[stream.timeframe],
+    )
+
+
 class DatasetDescriptor(BaseModel):
     """Immutable facts reconstructed from a canonical dataset manifest."""
 
@@ -190,6 +235,7 @@ class DatasetDescriptor(BaseModel):
     source_network: str = Field(..., min_length=1)
     market_data_venue: str = Field(..., min_length=1)
     market_type: MarketType
+    streams: tuple[DatasetStreamCoverage, ...] = Field(..., min_length=1)
     symbols: tuple[str, ...] = Field(..., min_length=1)
     timeframes: tuple[str, ...] = Field(..., min_length=1)
     start_at: datetime
@@ -214,21 +260,40 @@ class DatasetDescriptor(BaseModel):
     def _validate_bounds(self) -> "DatasetDescriptor":
         if self.end_at <= self.start_at:
             raise ValueError("dataset end_at must be after start_at")
+        if self.streams != tuple(sorted(self.streams, key=_stream_coverage_sort_key)):
+            raise ValueError("dataset streams must be unique and canonically sorted")
+        stream_keys = tuple(_stream_coverage_sort_key(item) for item in self.streams)
+        if len(set(stream_keys)) != len(stream_keys):
+            raise ValueError("dataset streams must be unique and canonically sorted")
+        if any(
+            item.market_data_venue != self.market_data_venue
+            or item.market_type is not self.market_type
+            for item in self.streams
+        ):
+            raise ValueError("dataset stream source must match dataset source")
         if self.symbols != tuple(sorted(set(self.symbols))):
             raise ValueError("dataset symbols must be unique and sorted")
-        timeframe_order = {
-            "1m": 60,
-            "5m": 300,
-            "15m": 900,
-            "1h": 3600,
-            "4h": 14400,
-        }
-        if any(item not in timeframe_order for item in self.timeframes):
+        if any(item not in _TIMEFRAME_SECONDS for item in self.timeframes):
             raise ValueError("dataset contains unsupported timeframe")
         if self.timeframes != tuple(
-            sorted(set(self.timeframes), key=timeframe_order.__getitem__)
+            sorted(set(self.timeframes), key=_TIMEFRAME_SECONDS.__getitem__)
         ):
             raise ValueError("dataset timeframes must be unique and duration-sorted")
+        if self.symbols != tuple(sorted({item.symbol for item in self.streams})):
+            raise ValueError("dataset symbols must derive from streams")
+        if self.timeframes != tuple(
+            sorted(
+                {item.timeframe for item in self.streams},
+                key=_TIMEFRAME_SECONDS.__getitem__,
+            )
+        ):
+            raise ValueError("dataset timeframes must derive from streams")
+        if self.start_at != min(item.first_open_at for item in self.streams):
+            raise ValueError("dataset start_at must derive from streams")
+        if self.end_at != max(item.last_close_at for item in self.streams):
+            raise ValueError("dataset end_at must derive from streams")
+        if self.record_count != sum(item.record_count for item in self.streams):
+            raise ValueError("dataset record_count must derive from streams")
         checksum_hex = self.dataset_checksum.removeprefix("sha256:")
         if self.dataset_id != f"backtest-dataset-{checksum_hex}":
             raise ValueError("dataset_id must derive from dataset_checksum")
@@ -238,6 +303,22 @@ class DatasetDescriptor(BaseModel):
                 "end_at": _canonical_manifest_datetime(self.end_at),
                 "record_count": self.record_count,
                 "start_at": _canonical_manifest_datetime(self.start_at),
+                "streams": [
+                    {
+                        "first_open_at": _canonical_manifest_datetime(
+                            item.first_open_at
+                        ),
+                        "last_close_at": _canonical_manifest_datetime(
+                            item.last_close_at
+                        ),
+                        "market_data_venue": item.market_data_venue,
+                        "market_type": item.market_type.value,
+                        "record_count": item.record_count,
+                        "symbol": item.symbol,
+                        "timeframe": item.timeframe,
+                    }
+                    for item in self.streams
+                ],
                 "symbols": list(self.symbols),
                 "timeframes": list(self.timeframes),
             },
@@ -299,6 +380,7 @@ class DatasetDescriptor(BaseModel):
             "end_at",
             "record_count",
             "start_at",
+            "streams",
             "symbols",
             "timeframes",
         }:
@@ -336,6 +418,26 @@ class DatasetDescriptor(BaseModel):
             value = coverage[name]
             if type(value) is not list or any(type(item) is not str for item in value):
                 raise ValueError(f"{name} must be an array of strings")
+        streams = coverage["streams"]
+        expected_stream_fields = {
+            "first_open_at",
+            "last_close_at",
+            "market_data_venue",
+            "market_type",
+            "record_count",
+            "symbol",
+            "timeframe",
+        }
+        if type(streams) is not list or not streams:
+            raise ValueError("streams must be a non-empty array")
+        for stream in streams:
+            if type(stream) is not dict or set(stream) != expected_stream_fields:
+                raise ValueError("dataset manifest stream is invalid")
+            if any(
+                type(stream[name]) is not str
+                for name in expected_stream_fields - {"record_count"}
+            ) or type(stream["record_count"]) is not int:
+                raise ValueError("dataset manifest stream scalar is invalid")
         quality_flags = manifest["quality_flags"]
         if type(quality_flags) is not list or any(
             type(item) is not str for item in quality_flags
@@ -365,6 +467,18 @@ class DatasetDescriptor(BaseModel):
             market_type = MarketType(source["market_type"])
         except ValueError as exc:
             raise ValueError("dataset manifest market_type is invalid") from exc
+        parsed_streams = tuple(
+            DatasetStreamCoverage(
+                market_data_venue=item["market_data_venue"],
+                market_type=MarketType(item["market_type"]),
+                symbol=item["symbol"],
+                timeframe=item["timeframe"],
+                first_open_at=parse_utc(item["first_open_at"]),
+                last_close_at=parse_utc(item["last_close_at"]),
+                record_count=item["record_count"],
+            )
+            for item in streams
+        )
 
         return cls(
             dataset_id=manifest["dataset_id"],
@@ -379,6 +493,7 @@ class DatasetDescriptor(BaseModel):
             source_network=source["source_network"],
             market_data_venue=source["market_data_venue"],
             market_type=market_type,
+            streams=parsed_streams,
             symbols=tuple(coverage["symbols"]),
             timeframes=tuple(coverage["timeframes"]),
             start_at=parse_utc(coverage["start_at"]),
@@ -467,6 +582,22 @@ class BacktestRunRequest(BaseModel):
             raise ValueError("period_end must be after period_start")
         if self.period_start < self.dataset.start_at or self.period_end > self.dataset.end_at:
             raise ValueError("period must stay inside dataset bounds")
+        streams_by_key = {
+            (item.symbol, item.timeframe): item for item in self.dataset.streams
+        }
+        requested_streams: list[DatasetStreamCoverage] = []
+        for symbol in self.symbols:
+            for timeframe in self.timeframes:
+                stream = streams_by_key.get((symbol, timeframe))
+                if stream is None:
+                    raise ValueError("requested symbol/timeframe stream is not in dataset")
+                requested_streams.append(stream)
+        if any(
+            self.period_start < item.first_open_at
+            or self.period_end > item.last_close_at
+            for item in requested_streams
+        ):
+            raise ValueError("period must stay inside each requested stream bounds")
         return self
 
     @computed_field

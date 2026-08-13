@@ -131,6 +131,8 @@ atomiquement en cible. En revanche, un publisher concurrent perdant qui retourne
 - schema record/rapport/manifeste et build version ;
 - source, version, checksum, reseau et venue de market data ;
 - market type ;
+- couverture exacte et bornee de chaque flux
+  `(venue, market_type, symbole, timeframe)` avec son nombre de records ;
 - symboles ;
 - timeframes ;
 - periode UTC ;
@@ -138,8 +140,12 @@ atomiquement en cible. En revanche, un publisher concurrent perdant qui retourne
 - flags qualite ;
 - checksums bougies, rapport et dataset.
 
-La periode doit etre bornee (`end_at > start_at`) et les runs ne peuvent pas
-sortir des bornes du dataset.
+Les listes agregees de symboles/timeframes, la periode et le nombre de records
+sont derives de ces flux et ne peuvent pas les contredire. La periode doit etre
+bornee (`end_at > start_at`). Un run exige chaque combinaison cartesienne
+`symbole x timeframe` qu'il demande dans le catalogue de flux et sa periode
+doit tenir dans les bornes propres de chacun ; la presence separee d'un symbole
+et d'un timeframe ne forge donc jamais une combinaison absente.
 
 ### Config effective
 
