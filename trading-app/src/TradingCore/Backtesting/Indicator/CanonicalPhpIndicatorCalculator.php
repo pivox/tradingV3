@@ -86,6 +86,10 @@ final readonly class CanonicalPhpIndicatorCalculator
             $ohlc[] = ['high' => $high, 'low' => $low, 'close' => $close];
             $seriesTimestamps[] = $candle->openTimestamp()->getTimestamp();
         }
+        $totalVolume = array_sum($volumes);
+        if (!\is_finite($totalVolume) || $totalVolume <= 0.0) {
+            throw new CanonicalIndicatorProjectionException('canonical_indicator_calculation_invalid');
+        }
 
         $close = $this->finiteFloat($closes[array_key_last($closes)]);
         $bollinger = $this->bollinger->calculatePhp($closes, 20, 2.0);

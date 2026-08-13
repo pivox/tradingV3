@@ -191,6 +191,24 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         }
     }
 
+    public function testItRejectsAnAllZeroVolumeWindowBecauseVwapIsUnavailable(): void
+    {
+        $calculator = new CanonicalPhpIndicatorCalculator(
+            new Rsi(),
+            new Macd(),
+            new Ema(),
+            new Adx(),
+            new Sma(),
+            new AtrCalculator(null),
+            new Vwap(),
+            new Bollinger(),
+        );
+
+        $this->expectException(CanonicalIndicatorProjectionException::class);
+        $this->expectExceptionMessage('canonical_indicator_calculation_invalid');
+        $calculator->calculate($this->window('0'));
+    }
+
     /** @param array<string|int, mixed> $context */
     private function assertFiniteNumericContext(array $context): void
     {
@@ -217,7 +235,7 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         }
     }
 
-    private function window(): CanonicalIndicatorWindow
+    private function window(?string $volume = null): CanonicalIndicatorWindow
     {
         $records = [];
         $start = new \DateTimeImmutable('2026-01-01T00:00:00.000000Z');
@@ -248,7 +266,7 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
                 'high' => $this->decimal($high),
                 'low' => $this->decimal($low),
                 'close' => $this->decimal($close),
-                'volume' => $this->decimal(10.0 + (($i * 13) % 29) + (($i % 4) * 0.25)),
+                'volume' => $volume ?? $this->decimal(10.0 + (($i * 13) % 29) + (($i % 4) * 0.25)),
                 'complete' => true,
             ];
         }

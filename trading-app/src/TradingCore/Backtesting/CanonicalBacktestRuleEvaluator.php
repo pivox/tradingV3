@@ -349,14 +349,16 @@ final readonly class CanonicalBacktestRuleEvaluator implements CanonicalBacktest
                     $value,
                 )) . ']';
             }
-            foreach (array_keys($value) as $key) {
-                if (!\is_string($key)) {
-                    throw new \InvalidArgumentException('canonical_backtest_rule_input_invalid');
-                }
-            }
-            ksort($value, SORT_STRING);
-            $members = [];
+            $membersByKey = [];
             foreach ($value as $key => $item) {
+                $membersByKey[] = [(string) $key, $item];
+            }
+            usort(
+                $membersByKey,
+                static fn (array $left, array $right): int => strcmp($left[0], $right[0]),
+            );
+            $members = [];
+            foreach ($membersByKey as [$key, $item]) {
                 $members[] = self::encodeScalar($key) . ':' . self::encodeValue($item, $depth + 1);
             }
 

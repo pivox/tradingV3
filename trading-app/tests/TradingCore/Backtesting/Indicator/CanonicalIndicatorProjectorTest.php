@@ -13,6 +13,7 @@ use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Indicator\CanonicalFourHourAggregator;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectionException;
@@ -42,14 +43,39 @@ final class CanonicalIndicatorProjectorTest extends TestCase
             'input_hash', 'result_hash',
         ], array_keys($result));
         self::assertSame('canonical-indicator-projection-result.v1', $result['schema_version']);
-        self::assertSame('sha256:' . hash('sha256', CanonicalJson::encode($request)), $result['input_hash']);
+        self::assertSame(CanonicalBacktestRuleEvaluator::canonicalHash($request), $result['input_hash']);
 
         $withoutResultHash = $result;
         unset($withoutResultHash['result_hash']);
         self::assertSame(
-            'sha256:' . hash('sha256', CanonicalJson::encode($withoutResultHash)),
+            CanonicalBacktestRuleEvaluator::canonicalHash($withoutResultHash),
             $result['result_hash'],
         );
+    }
+
+    public function testInputAndResultHashesUseTheSameIntegralFloatCanonicalProtocol(): void
+    {
+        $projection = CanonicalIndicatorProjection::fromValidatedRequest([
+            'schema_version' => 'canonical-indicator-projection-request.v1',
+            'request_id' => 'integral-float-hash-probe',
+            'evaluated_at' => '2026-02-12T00:00:00.000000Z',
+            'environment' => 'test',
+            'indicator_engine_version' => 'php_fallback_v1',
+            'dataset_binding' => [],
+            'symbol' => 'BTCUSDT',
+            'requested_timeframes' => ['1m'],
+            'candles_by_timeframe' => ['1m' => []],
+        ], [
+            '1m' => ['integral_float' => 1.0],
+        ])->toArray();
+        $withoutResultHash = $projection;
+        unset($withoutResultHash['result_hash']);
+
+        $sharedProtocolHash = CanonicalBacktestRuleEvaluator::canonicalHash($withoutResultHash);
+        $paperJsonHash = 'sha256:' . hash('sha256', CanonicalJson::encode($withoutResultHash));
+
+        self::assertNotSame($paperJsonHash, $sharedProtocolHash);
+        self::assertSame($sharedProtocolHash, $projection['result_hash']);
     }
 
     public function testResultIsReadonlyAndToArrayIsDefensive(): void

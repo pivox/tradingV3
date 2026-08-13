@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Backtesting\Indicator;
 
-use App\Trading\Paper\MarketData\CanonicalJson;
 use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 
 final readonly class CanonicalIndicatorProjection
@@ -78,7 +77,7 @@ final readonly class CanonicalIndicatorProjection
             'snapshots_by_timeframe' => $snapshotsByTimeframe,
             'input_hash' => $inputHash,
         ];
-        $result['result_hash'] = 'sha256:' . hash('sha256', CanonicalJson::encode($result));
+        $result['result_hash'] = CanonicalBacktestRuleEvaluator::canonicalHash($result);
 
         /** @var array<string, mixed> $defensiveResult */
         $defensiveResult = self::copy($result);
