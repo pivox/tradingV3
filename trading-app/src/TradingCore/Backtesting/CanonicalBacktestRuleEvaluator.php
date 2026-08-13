@@ -174,7 +174,17 @@ final readonly class CanonicalBacktestRuleEvaluator
         }
 
         try {
-            $canonicalInput = $this->encodeCanonical($request);
+            $normalizedRequest = self::normalizeIntegralFloats($request, 0);
+            if (!\is_array($normalizedRequest)) {
+                throw new \LogicException('The normalized canonical request must remain an array.');
+            }
+            $normalizedIndicators = $normalizedRequest['indicators_by_timeframe'] ?? null;
+            $normalizedSnapshot = $normalizedRequest['effective_config_snapshot'] ?? null;
+            if (!\is_array($normalizedIndicators) || !\is_array($normalizedSnapshot)) {
+                throw new \LogicException('Canonical request mappings must survive normalization.');
+            }
+            $canonicalSnapshot = CanonicalEffectiveConfigSnapshot::fromArray($normalizedSnapshot, $identity);
+            $canonicalInput = $this->encodeCanonical($normalizedRequest);
         } catch (\Throwable $exception) {
             throw new \InvalidArgumentException('canonical_backtest_rule_input_invalid', 0, $exception);
         }
@@ -205,7 +215,7 @@ final readonly class CanonicalBacktestRuleEvaluator
             'effective_config_snapshot' => $canonicalSnapshot->toArray(),
         ]);
 
-        $runtimeResult = $this->runtime->evaluate($lineage, $indicators, $evaluatedAt);
+        $runtimeResult = $this->runtime->evaluate($lineage, $normalizedIndicators, $evaluatedAt);
         $trace = $runtimeResult->trace;
         unset($trace['plan_cache_hit']);
         if (array_key_exists('evaluated_at', $trace)) {
@@ -371,11 +381,14 @@ final readonly class CanonicalBacktestRuleEvaluator
         }
     }
 
-    private static function normalizeIntegralFloats(mixed $value): mixed
+    private static function normalizeIntegralFloats(mixed $value, int $depth = 0): mixed
     {
+        if ($depth > self::MAX_CANONICAL_DEPTH) {
+            throw new \InvalidArgumentException('canonical_backtest_rule_input_depth_exceeded');
+        }
         if (\is_array($value)) {
             foreach ($value as $key => $item) {
-                $value[$key] = self::normalizeIntegralFloats($item);
+                $value[$key] = self::normalizeIntegralFloats($item, $depth + 1);
             }
 
             return $value;

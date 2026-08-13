@@ -195,6 +195,34 @@ final class CanonicalBacktestRuleEvaluatorTest extends TestCase
         self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $result['input_hash']);
     }
 
+    public function testRuntimeEvaluatesTheSameIntegralFloatNormalizationThatIsHashed(): void
+    {
+        $floatRequest = $this->validRequest();
+        $floatRequest['indicators_by_timeframe']['1h']['type_probe'] = 42.0;
+        $integerRequest = $floatRequest;
+        $integerRequest['indicators_by_timeframe']['1h']['type_probe'] = 42;
+        $evaluator = $this->evaluatorWithConditions($this->typeSensitiveConditions());
+
+        $floatResult = $evaluator->evaluate($floatRequest)->toArray();
+        $integerResult = $evaluator->evaluate($integerRequest)->toArray();
+
+        self::assertTrue($floatResult['passed']);
+        self::assertSame($integerResult, $floatResult);
+        self::assertSame($integerResult['input_hash'], $floatResult['input_hash']);
+    }
+
+    public function testNormalizationStopsAtTheProtocolDepthBeforeInspectingDeeperValues(): void
+    {
+        $nested = new \stdClass();
+        for ($depth = 0; $depth < 129; ++$depth) {
+            $nested = [$nested];
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('canonical_backtest_rule_input_depth_exceeded');
+        CanonicalBacktestRuleEvaluator::canonicalHash(['nested' => $nested]);
+    }
+
     #[DataProvider('invalidRequestProvider')]
     public function testItRejectsNonExactLegacyAndIllTypedRequests(string $label, callable $mutate, string $reason): void
     {
@@ -367,6 +395,32 @@ final class CanonicalBacktestRuleEvaluatorTest extends TestCase
             public function evaluate(array $context): ConditionResult
             {
                 return new ConditionResult($this->id, $this->passes);
+            }
+        }, $ids);
+    }
+
+    /** @return list<ConditionInterface> */
+    private function typeSensitiveConditions(): array
+    {
+        $ids = (new ConditionCatalogLoader())->loadFile(
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+        )->conditionIds();
+
+        return array_map(static fn (string $id): ConditionInterface => new class($id) implements ConditionInterface {
+            public function __construct(private readonly string $id) {}
+
+            public function getName(): string
+            {
+                return $this->id;
+            }
+
+            /** @param array<string,mixed> $context */
+            public function evaluate(array $context): ConditionResult
+            {
+                $passed = $this->id !== 'adx_min_for_trend'
+                    || \is_int($context['type_probe'] ?? null);
+
+                return new ConditionResult($this->id, $passed);
             }
         }, $ids);
     }
