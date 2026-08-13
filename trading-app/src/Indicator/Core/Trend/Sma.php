@@ -39,6 +39,17 @@ final class Sma implements IndicatorInterface
         return array_sum($slice) / $period;
     }
 
+    /** @param float[] $prices */
+    public function calculatePhp(array $prices, int $period): ?float
+    {
+        $n = count($prices);
+        if ($n < $period || $period <= 0) {
+            return null;
+        }
+
+        return array_sum(array_slice($prices, -$period)) / $period;
+    }
+
     /**
      * Série complète SMA (alignée sur fenêtres complètes).
      * @param float[] $prices

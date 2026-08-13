@@ -73,4 +73,23 @@ class Ema implements IndicatorInterface
 
         return $ema;
     }
+
+    /** @param float[] $prices */
+    public function calculatePhp(array $prices, int $period): ?float
+    {
+        if ($prices === [] || $period <= 0) {
+            return null;
+        }
+        if ($period <= 1) {
+            return (float) end($prices);
+        }
+
+        $multiplier = 2.0 / ($period + 1.0);
+        $ema = $prices[0];
+        foreach ($prices as $price) {
+            $ema = ($price * $multiplier) + ($ema * (1.0 - $multiplier));
+        }
+
+        return $ema;
+    }
 }

@@ -55,6 +55,29 @@ final class Bollinger implements IndicatorInterface
     }
 
     /**
+     * @param float[] $closes
+     * @return array{upper: ?float, lower: ?float, middle: ?float, width: ?float}
+     */
+    public function calculatePhp(array $closes, int $period = 20, float $stdev = 2.0): array
+    {
+        $window = array_slice($closes, -$period);
+        if ($period <= 0 || count($window) !== $period) {
+            return ['upper' => null, 'lower' => null, 'middle' => null, 'width' => null];
+        }
+
+        $middle = array_sum($window) / $period;
+        $variance = 0.0;
+        foreach ($window as $close) {
+            $variance += ($close - $middle) ** 2;
+        }
+        $deviation = sqrt($variance / $period);
+        $upper = $middle + ($stdev * $deviation);
+        $lower = $middle - ($stdev * $deviation);
+
+        return ['upper' => $upper, 'lower' => $lower, 'middle' => $middle, 'width' => $upper - $lower];
+    }
+
+    /**
      * Séries complètes (upper/lower/middle/width).
      * @param float[] $closes
      * @return array{upper: float[], lower: float[], middle: float[], width: float[]}

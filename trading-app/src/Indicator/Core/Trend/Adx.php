@@ -39,6 +39,47 @@ class Adx implements IndicatorInterface
     }
 
     /**
+     * @param float[] $highs
+     * @param float[] $lows
+     * @param float[] $closes
+     */
+    public function calculatePhp(array $highs, array $lows, array $closes, int $period = 14): ?float
+    {
+        $n = count($closes);
+        if ($n <= $period) {
+            return null;
+        }
+
+        $trs = $plusDM = $minusDM = [];
+        for ($i = 1; $i < $n; $i++) {
+            $up = $highs[$i] - $highs[$i - 1];
+            $down = $lows[$i - 1] - $lows[$i];
+            $trs[] = max($highs[$i] - $lows[$i], abs($highs[$i] - $closes[$i - 1]), abs($lows[$i] - $closes[$i - 1]));
+            $plusDM[] = $up > $down && $up > 0.0 ? $up : 0.0;
+            $minusDM[] = $down > $up && $down > 0.0 ? $down : 0.0;
+        }
+
+        $atr = array_sum(array_slice($trs, 0, $period)) / $period;
+        $plus = array_sum(array_slice($plusDM, 0, $period)) / $period;
+        $minus = array_sum(array_slice($minusDM, 0, $period)) / $period;
+        $adx = null;
+        for ($i = $period - 1, $count = count($trs); $i < $count; $i++) {
+            if ($i >= $period) {
+                $atr = (($atr * ($period - 1)) + $trs[$i]) / $period;
+                $plus = (($plus * ($period - 1)) + $plusDM[$i]) / $period;
+                $minus = (($minus * ($period - 1)) + $minusDM[$i]) / $period;
+            }
+            $plusDI = $atr == 0.0 ? 0.0 : 100.0 * ($plus / $atr);
+            $minusDI = $atr == 0.0 ? 0.0 : 100.0 * ($minus / $atr);
+            $sum = $plusDI + $minusDI;
+            $dx = $sum == 0.0 ? 0.0 : 100.0 * abs($plusDI - $minusDI) / $sum;
+            $adx = $adx === null ? $dx : (($adx * ($period - 1)) + $dx) / $period;
+        }
+
+        return $adx;
+    }
+
+    /**
      * Séries complètes (ADX, +DI, -DI) – utile pour debug/comparaison.
      * Lissage Wilder, premier ADX = premier DX (style BitMart).
      * @return array{adx: float[], plus_di: float[], minus_di: float[]}

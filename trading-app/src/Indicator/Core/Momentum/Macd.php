@@ -67,6 +67,23 @@ final class Macd implements IndicatorInterface
     }
 
     /**
+     * @param float[] $closes
+     * @return array{macd: ?float, signal: ?float, hist: ?float}
+     */
+    public function calculatePhp(array $closes, int $fast = 12, int $slow = 26, int $signal = 9): array
+    {
+        $full = $this->calculateFullPhp($closes, $fast, $slow, $signal);
+        if ($full['macd'] === [] || $full['signal'] === []) {
+            return ['macd' => null, 'signal' => null, 'hist' => null];
+        }
+
+        $macd = (float) end($full['macd']);
+        $signalValue = (float) end($full['signal']);
+
+        return ['macd' => $macd, 'signal' => $signalValue, 'hist' => $macd - $signalValue];
+    }
+
+    /**
      * Séries MACD complètes.
      * @param float[] $closes
      * @return array{macd: float[]|null[], signal: float[]|null[], hist: float[]|null[]}
@@ -132,7 +149,7 @@ final class Macd implements IndicatorInterface
      * @param float[] $closes
      * @return array{macd: float[], signal: float[], hist: float[]}
      */
-    private function calculateFullPhp(array $closes, int $fast, int $slow, int $signal): array
+    public function calculateFullPhp(array $closes, int $fast, int $slow, int $signal): array
     {
         $n = count($closes);
         if ($n < max($fast, $slow) + $signal) {

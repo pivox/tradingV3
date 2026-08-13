@@ -151,6 +151,35 @@ final class AtrCalculator implements IndicatorInterface
         return $atr;
     }
 
+    /**
+     * Deterministic PHP-only Wilder ATR.
+     *
+     * @param array<int, array{high: float, low: float, close: float}> $ohlc
+     */
+    public function computePhp(array $ohlc, int $period = 14): ?float
+    {
+        $n = count($ohlc);
+        if ($period <= 0 || $n < $period + 1) {
+            return null;
+        }
+
+        $trueRanges = [];
+        for ($i = 1; $i < $n; $i++) {
+            $trueRanges[] = max(
+                $ohlc[$i]['high'] - $ohlc[$i]['low'],
+                abs($ohlc[$i]['high'] - $ohlc[$i - 1]['close']),
+                abs($ohlc[$i]['low'] - $ohlc[$i - 1]['close']),
+            );
+        }
+
+        $atr = array_sum(array_slice($trueRanges, 0, $period)) / $period;
+        for ($i = $period, $count = count($trueRanges); $i < $count; $i++) {
+            $atr = (($atr * ($period - 1)) + $trueRanges[$i]) / $period;
+        }
+
+        return $atr;
+    }
+
 
     /**
      * Calcule la série ATR complète (Wilder ou Simple) pour chaque point disponible après amorçage.
