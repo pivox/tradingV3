@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import timezone
 from typing import Any
 
@@ -37,11 +38,11 @@ class _VerifiedBars(bt.feed.DataBase):
             return False
         bar = self.p.bars[self._index]
         self.lines.datetime[0] = bt.date2num(bar.available_at.astimezone(timezone.utc))
-        self.lines.open[0] = bar.open
-        self.lines.high[0] = bar.high
-        self.lines.low[0] = bar.low
-        self.lines.close[0] = bar.close
-        self.lines.volume[0] = bar.volume
+        self.lines.open[0] = _backtrader_float(bar.open)
+        self.lines.high[0] = _backtrader_float(bar.high)
+        self.lines.low[0] = _backtrader_float(bar.low)
+        self.lines.close[0] = _backtrader_float(bar.close)
+        self.lines.volume[0] = _backtrader_float(bar.volume)
         self.lines.openinterest[0] = 0.0
         self._index += 1
         return True
@@ -53,9 +54,13 @@ class CanonicalBacktraderRuntime:
         plan: CanonicalBacktestOrderPlan,
         feed: VerifiedBacktraderFeedAdapter,
     ) -> str:
+        wire_plan = plan.model_dump(mode="json", by_alias=True)
+        for optional_key in ("cancelAfterAt", "holdingExpiresAt", "orderBookInputHash"):
+            if wire_plan["plan"].get(optional_key) is None:
+                wire_plan["plan"].pop(optional_key)
         plan = CanonicalBacktestOrderPlan.model_validate_json(
             json.dumps(
-                plan.model_dump(mode="json", by_alias=True, exclude_none=True),
+                wire_plan,
                 ensure_ascii=False,
                 allow_nan=False,
                 separators=(",", ":"),
@@ -66,6 +71,7 @@ class CanonicalBacktraderRuntime:
             or plan.dataset_checksum != feed.dataset_checksum
             or plan.timeframe != feed.timeframe
             or plan.plan.symbol != feed.symbol
+            or plan.plan.market_type != feed.market_type
         ):
             raise ValueError("backtrader_runtime_identity_mismatch")
 
@@ -119,3 +125,10 @@ class CanonicalBacktraderRuntime:
         }
         result["result_hash"] = _hash(result)
         return _canonical(result) + "\n"
+
+
+def _backtrader_float(value: Any) -> float:
+    converted = float(value)
+    if not math.isfinite(converted):
+        raise ValueError("backtrader_runtime_number_out_of_range")
+    return converted

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -54,6 +55,21 @@ def test_adapter_preserves_exact_stream_and_availability_time() -> None:
     assert [bar.source_record_id for bar in bars] == ["record-0", "record-1"]
     assert bars[0].close_at < bars[0].available_at
     assert bars[0].open == 100.0
+    assert isinstance(bars[0].open, Decimal)
+
+
+def test_adapter_preserves_sub_float_price_precision() -> None:
+    candle = CandleRecord.model_validate({
+        **_candle(0).model_dump(),
+        "close": "100",
+        "high": "100.09999999999999999",
+    })
+    adapter = VerifiedBacktraderFeedAdapter(
+        _artifacts((candle,)), symbol="BTCUSDT", timeframe="5m",
+        period_start=datetime(2026, 1, 1, tzinfo=UTC),
+        period_end=datetime(2026, 1, 1, 0, 5, tzinfo=UTC),
+    )
+    assert adapter.bars[0].high == Decimal("100.09999999999999999")
 
 
 def test_adapter_rejects_a_missing_requested_stream() -> None:

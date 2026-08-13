@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
@@ -46,6 +47,8 @@ def execute_plan(
     holding = datetime.fromisoformat(plan.holding_expires_at) if plan.holding_expires_at else None
     events: list[BacktestExecutionEvent] = []
     entered = False
+    entry_price = Decimal(str(plan.entry_price))
+    stop_price = Decimal(str(plan.stop_price))
     for bar in bars:
         if bar.available_at < created:
             continue
@@ -56,18 +59,20 @@ def execute_plan(
                 raise BacktestExecutionError("backtrader_entry_window_ambiguous")
             if bar.open_at >= entry_deadline:
                 return BacktestExecutionResult("not_executed", "entry_expired", ())
-            if bar.low <= plan.entry_price <= bar.high:
+            if _decimal(bar.low) <= entry_price <= _decimal(bar.high):
                 events.append(_event("entry_filled", bar, plan.entry_price, envelope))
                 entered = True
+                if holding is not None and bar.open_at < holding < bar.close_at:
+                    raise BacktestExecutionError("backtrader_holding_window_ambiguous")
                 stop_hit = (
-                    bar.low <= plan.stop_price
+                    _decimal(bar.low) <= stop_price
                     if plan.side == "long"
-                    else bar.high >= plan.stop_price
+                    else _decimal(bar.high) >= stop_price
                 )
                 target_hit = any(
-                    bar.high >= target.price
+                    _decimal(bar.high) >= Decimal(str(target.price))
                     if plan.side == "long"
-                    else bar.low <= target.price
+                    else _decimal(bar.low) <= Decimal(str(target.price))
                     for target in plan.targets
                 )
                 if stop_hit:
@@ -76,16 +81,24 @@ def execute_plan(
                     return BacktestExecutionResult("closed", reason, tuple(events))
                 continue
             continue
+        if holding is not None and bar.open_at < holding < bar.close_at:
+            raise BacktestExecutionError("backtrader_holding_window_ambiguous")
         if holding is not None and bar.open_at >= holding:
-            events.append(_event("holding_expired", bar, bar.open, envelope))
+            events.append(_event("holding_expired", bar, float(bar.open), envelope))
             return BacktestExecutionResult("closed", "holding_expired", tuple(events))
         stop_hit = (
-            bar.low <= plan.stop_price if plan.side == "long" else bar.high >= plan.stop_price
+            _decimal(bar.low) <= stop_price
+            if plan.side == "long"
+            else _decimal(bar.high) >= stop_price
         )
         hit_targets = tuple(
             target
             for target in plan.targets
-            if (bar.high >= target.price if plan.side == "long" else bar.low <= target.price)
+            if (
+                _decimal(bar.high) >= Decimal(str(target.price))
+                if plan.side == "long"
+                else _decimal(bar.low) <= Decimal(str(target.price))
+            )
         )
         if stop_hit:
             events.append(_event("stop_filled", bar, plan.stop_price, envelope))
@@ -99,6 +112,10 @@ def execute_plan(
     if bars and bars[-1].close_at >= entry_deadline:
         return BacktestExecutionResult("not_executed", "entry_expired", ())
     return BacktestExecutionResult("not_executed", "entry_not_filled", ())
+
+
+def _decimal(value: Decimal | float) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value))
 
 
 def _event(

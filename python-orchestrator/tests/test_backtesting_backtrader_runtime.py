@@ -5,7 +5,7 @@ import re
 from copy import deepcopy
 import pytest
 
-from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
+from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, _php_plan_hash
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
 from app.backtesting.contracts import MarketType
@@ -98,4 +98,37 @@ def test_runtime_revalidates_a_forged_model_instance() -> None:
         }
     )
     with pytest.raises(ValueError, match="plan_hash_mismatch"):
+        CanonicalBacktraderRuntime().run(plan, feed)
+
+
+def test_runtime_revalidation_preserves_hash_bearing_null_caps() -> None:
+    feed = _feed()
+    payload = json.loads(FIXTURE.read_text())
+    payload["plan"]["symbolLeverageCap"] = None
+    payload["plan"]["marketMaxQuantity"] = None
+    unsigned = {key: value for key, value in payload["plan"].items() if key != "planHash"}
+    payload["plan"]["planHash"] = _php_plan_hash(unsigned)
+    payload.update(dataset_id=feed.dataset_id, dataset_checksum=feed.dataset_checksum, timeframe="1m")
+    result = CanonicalBacktraderRuntime().run(CanonicalBacktestOrderPlan.model_validate(payload), feed)
+    assert json.loads(result)["status"] == "closed"
+
+
+def test_runtime_binds_plan_to_feed_market_type() -> None:
+    records = tuple(
+        item.model_copy(update={"market_type": MarketType.SPOT})
+        for item in (_record(0, "101", "99"), _record(1, "103", "99"))
+    )
+    source = DatasetSourceIdentity(
+        source="paper-okx", source_schema_version="paper.v2",
+        source_build_version="fixture.v1", source_checksum="sha256:" + "e" * 64,
+        source_network="mainnet", market_data_venue="okx", market_type=MarketType.SPOT,
+    )
+    artifacts = DatasetSerializer.serialize(DatasetBuilder(source).build(records))
+    feed = VerifiedBacktraderFeedAdapter(
+        artifacts, symbol="BTCUSDT", timeframe="1m",
+        period_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+        period_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+    )
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    with pytest.raises(ValueError, match="identity_mismatch"):
         CanonicalBacktraderRuntime().run(plan, feed)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, CanonicalBacktestPlan
+from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, CanonicalBacktestPlan, _php_plan_hash
 
 
 FIXTURE = Path(__file__).parent / "fixtures/backtesting/php-canonical-order-plan.json"
@@ -20,14 +20,7 @@ def _payload() -> dict:
 
 def _rehash(plan: dict) -> None:
     unsigned = {key: value for key, value in plan.items() if key != "planHash"}
-    normalized = {}
-    for key, value in unsigned.items():
-        normalized[key] = value
-        if key == "expiresAt":
-            normalized.setdefault("cancelAfterAt", None)
-            normalized.setdefault("holdingExpiresAt", None)
-    encoded = json.dumps(normalized, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-    plan["planHash"] = "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+    plan["planHash"] = _php_plan_hash(unsigned)
 
 
 def test_php_golden_is_strict_frozen_and_hash_bound() -> None:
@@ -94,6 +87,11 @@ def test_low_level_strict_validators_reject_coercions() -> None:
     ):
         with pytest.raises(ValueError):
             callback(value)
+
+
+def test_php_plan_hash_matches_preserve_zero_fraction_scientific_encoding() -> None:
+    expected = "sha256:" + hashlib.sha256(b'{"small":1.0e-7,"one":1.0}').hexdigest()
+    assert _php_plan_hash({"small": 1e-7, "one": 1.0}) == expected
 
 
 def test_rejects_invalid_target_id_and_dataset_binding() -> None:

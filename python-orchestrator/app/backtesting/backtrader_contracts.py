@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.modern_trading_contracts import ModernTradingIdentity
+from app.modern_trading_contracts import ModernTradingIdentity, _encode_php_float
 
 
 _HASH = r"^sha256:[0-9a-f]{64}$"
@@ -41,13 +41,37 @@ def _php_plan_hash(payload: dict[str, Any]) -> str:
         if key == "expiresAt":
             normalized.setdefault("cancelAfterAt", None)
             normalized.setdefault("holdingExpiresAt", None)
-    encoded = json.dumps(
-        normalized,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    ).encode()
+    encoded = _encode_php_plan_value(normalized).encode()
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _encode_php_plan_value(value: Any) -> str:
+    """Match CanonicalOrderPlan's ordered PHP JSON encoding exactly."""
+
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=True, separators=(",", ":"))
+            + ":"
+            + _encode_php_plan_value(item)
+            for key, item in value.items()
+        ) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_encode_php_plan_value(item) for item in value) + "]"
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("canonical_backtest_plan_number_invalid")
+        return _encode_php_float(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    raise ValueError("canonical_backtest_plan_hash_value_invalid")
 
 
 class CanonicalBacktestOrderPlanTarget(BaseModel):

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 
@@ -42,6 +43,15 @@ def test_same_bar_stop_and_target_is_stop_first() -> None:
     assert result.reason_code == "conservative_stop_first"
     assert result.events[-1].kind == "stop_filled"
     assert result.events[-1].price == 98.4
+
+
+def test_sub_float_high_does_not_trigger_target_early() -> None:
+    almost = _bar(1, high=Decimal("102.59999999999999999"), low=99)
+    exact = _bar(2, high=Decimal("102.6"), low=99)
+    result = execute_plan(_plan(), (_bar(0, high=101, low=99), almost, exact))
+
+    assert result.reason_code == "target_filled"
+    assert result.events[-1].source_record_id == "bar-2"
 
 
 def test_entry_bar_touching_stop_attaches_then_executes_stop_conservatively() -> None:
@@ -102,6 +112,18 @@ def test_holding_boundary_closes_at_next_bar_open() -> None:
     result = execute_plan(envelope, (_bar(0, high=101, low=99), _bar(1, high=101, low=99, opened=100.5)))
     assert result.reason_code == "holding_expired"
     assert result.events[-1].price == 100.5
+
+
+def test_bar_straddling_holding_boundary_is_ambiguous() -> None:
+    envelope = _plan().model_copy(
+        update={
+            "plan": _plan().plan.model_copy(
+                update={"holding_expires_at": "2026-08-10T12:01:30.000000+00:00"}
+            )
+        }
+    )
+    with pytest.raises(BacktestExecutionError, match="holding_window_ambiguous"):
+        execute_plan(envelope, (_bar(0, high=101, low=99), _bar(1, high=103, low=99)))
 
 
 def test_bar_available_before_creation_is_ignored_and_late_bar_expires() -> None:

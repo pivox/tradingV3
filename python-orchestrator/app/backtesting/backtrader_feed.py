@@ -19,11 +19,11 @@ class VerifiedBacktraderBar:
     open_at: datetime
     close_at: datetime
     available_at: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class VerifiedBacktraderFeedAdapter:
     timeframe: str
     source_network: str
     market_data_venue: str
+    market_type: str
 
     def __init__(
         self,
@@ -107,11 +108,11 @@ class VerifiedBacktraderFeedAdapter:
                     open_at=record.open_at,
                     close_at=record.close_at,
                     available_at=record.available_at,
-                    open=float(Decimal(record.open)),
-                    high=float(Decimal(record.high)),
-                    low=float(Decimal(record.low)),
-                    close=float(Decimal(record.close)),
-                    volume=float(Decimal(record.volume)),
+                    open=Decimal(record.open),
+                    high=Decimal(record.high),
+                    low=Decimal(record.low),
+                    close=Decimal(record.close),
+                    volume=Decimal(record.volume),
                 )
             )
         object.__setattr__(self, "bars", tuple(bars))
@@ -121,3 +122,4 @@ class VerifiedBacktraderFeedAdapter:
         object.__setattr__(self, "timeframe", first.timeframe.value)
         object.__setattr__(self, "source_network", first.source_network)
         object.__setattr__(self, "market_data_venue", first.market_data_venue)
+        object.__setattr__(self, "market_type", first.market_type.value)
