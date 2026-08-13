@@ -183,6 +183,36 @@ def test_staging_creation_failure_cleans_directory_before_returning(
     assert not tuple(root.glob(".*.staging-*"))
 
 
+def test_real_emfile_during_staging_open_cleans_without_reopening(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    target = root / artifacts.descriptor.dataset_id
+    real_open = os.open
+
+    def fail_every_staging_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if isinstance(path, str) and ".staging-" in path:
+            raise OSError(errno.EMFILE, "too many open files")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_every_staging_open)
+
+    with pytest.raises(OSError) as rejected:
+        DatasetPublisher(root).publish(artifacts)
+
+    assert rejected.value.errno == errno.EMFILE
+    assert not target.exists()
+    assert not tuple(root.glob(".*.staging-*"))
+
+
 @pytest.mark.parametrize(
     ("publisher_type", "message"),
     (

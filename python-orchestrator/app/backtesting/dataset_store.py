@@ -227,9 +227,11 @@ class DatasetPublisher:
                 self._validate_staging(staging_fd)
                 return name, staging_fd
             except Exception:
-                if staging_fd is not None:
-                    os.close(staging_fd)
-                self._cleanup_staging(root_fd, name)
+                try:
+                    self._cleanup_staging(root_fd, name, staging_fd)
+                finally:
+                    if staging_fd is not None:
+                        os.close(staging_fd)
                 raise
         raise DatasetPublicationConflict()
 
@@ -287,16 +289,38 @@ class DatasetPublisher:
             os.close(descriptor)
 
     @staticmethod
-    def _cleanup_staging(root_fd: int, staging_name: str) -> None:
-        try:
-            staging_fd = os.open(staging_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
-        except FileNotFoundError:
-            return
+    def _cleanup_staging(
+        root_fd: int,
+        staging_name: str,
+        staging_fd: int | None = None,
+    ) -> None:
+        owns_fd = False
+        if staging_fd is None:
+            try:
+                os.rmdir(staging_name, dir_fd=root_fd)
+                return
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                    raise
+        if staging_fd is None:
+            try:
+                staging_fd = os.open(
+                    staging_name,
+                    _DIRECTORY_FLAGS,
+                    dir_fd=root_fd,
+                )
+                owns_fd = True
+            except FileNotFoundError:
+                return
+        assert staging_fd is not None
         try:
             for name in os.listdir(staging_fd):
                 os.unlink(name, dir_fd=staging_fd)
         finally:
-            os.close(staging_fd)
+            if owns_fd:
+                os.close(staging_fd)
         os.rmdir(staging_name, dir_fd=root_fd)
 
 
