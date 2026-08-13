@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping as MappingAbc
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from math import isclose, isfinite
 from typing import Any, Iterator, Literal, Mapping
@@ -204,6 +204,16 @@ class DatasetStreamCoverage(BaseModel):
     def _validate_bounds(self) -> "DatasetStreamCoverage":
         if self.last_close_at <= self.first_open_at:
             raise ValueError("stream last_close_at must follow first_open_at")
+        duration_seconds = _TIMEFRAME_SECONDS[self.timeframe]
+        duration = timedelta(seconds=duration_seconds)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        if (self.first_open_at - epoch) % duration != timedelta(0):
+            raise ValueError("stream first_open_at must align to UTC timeframe grid")
+        if (
+            self.last_close_at - self.first_open_at
+            != (self.record_count * duration)
+        ):
+            raise ValueError("stream duration must equal record_count times timeframe")
         return self
 
 

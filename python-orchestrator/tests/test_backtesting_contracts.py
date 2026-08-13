@@ -47,14 +47,14 @@ def _manifest() -> dict[str, object]:
             "timeframes": ["1m", "5m", "15m"],
             "start_at": "2026-01-01T00:00:00.000000Z",
             "end_at": "2026-01-31T00:00:00.000000Z",
-            "record_count": 100,
+            "record_count": 63360,
             "streams": [
                 {
                     "first_open_at": "2026-01-01T00:00:00.000000Z",
                     "last_close_at": "2026-01-31T00:00:00.000000Z",
                     "market_data_venue": "fake",
                     "market_type": "perpetual",
-                    "record_count": 40,
+                    "record_count": 43200,
                     "symbol": "BTCUSDT",
                     "timeframe": "1m",
                 },
@@ -63,7 +63,7 @@ def _manifest() -> dict[str, object]:
                     "last_close_at": "2026-01-31T00:00:00.000000Z",
                     "market_data_venue": "fake",
                     "market_type": "perpetual",
-                    "record_count": 30,
+                    "record_count": 8640,
                     "symbol": "BTCUSDT",
                     "timeframe": "5m",
                 },
@@ -72,7 +72,7 @@ def _manifest() -> dict[str, object]:
                     "last_close_at": "2026-01-31T00:00:00.000000Z",
                     "market_data_venue": "fake",
                     "market_type": "perpetual",
-                    "record_count": 20,
+                    "record_count": 2880,
                     "symbol": "BTCUSDT",
                     "timeframe": "15m",
                 },
@@ -81,7 +81,7 @@ def _manifest() -> dict[str, object]:
                     "last_close_at": "2026-01-31T00:00:00.000000Z",
                     "market_data_venue": "fake",
                     "market_type": "perpetual",
-                    "record_count": 10,
+                    "record_count": 8640,
                     "symbol": "ETHUSDT",
                     "timeframe": "5m",
                 },
@@ -570,6 +570,8 @@ def test_run_request_period_must_fit_every_selected_stream() -> None:
     eth_stream = manifest["coverage"]["streams"][3]  # type: ignore[index]
     eth_stream["first_open_at"] = "2026-01-10T00:00:00.000000Z"
     eth_stream["last_close_at"] = "2026-01-20T00:00:00.000000Z"
+    eth_stream["record_count"] = 2880
+    manifest["coverage"]["record_count"] = 57600  # type: ignore[index]
     dataset = DatasetDescriptor.from_manifest(_bind_manifest(manifest))
     payload = {
         "dataset": dataset,
@@ -593,3 +595,23 @@ def test_run_request_period_must_fit_every_selected_stream() -> None:
                 "period_start": _dt("2026-01-09T23:59:00"),
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    (
+        ({"record_count": 43201}, "duration must equal record_count"),
+        (
+            {"first_open_at": _dt("2026-01-01T00:00:30")},
+            "must align to UTC timeframe grid",
+        ),
+    ),
+)
+def test_stream_coverage_constructor_rejects_duration_or_grid_forgery(
+    update: dict[str, object],
+    message: str,
+) -> None:
+    stream = _dataset().streams[0].model_copy(update=update)
+
+    with pytest.raises(ValueError, match=message):
+        stream._validate_bounds()

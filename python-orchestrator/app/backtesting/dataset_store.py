@@ -446,6 +446,30 @@ class DatasetPublisher:
                     attribute,
                 ):
                     raise DatasetPublicationConflict()
+            for filename, descriptor, metadata in artifact_descriptors:
+                final_opened = os.fstat(descriptor)
+                final_named = os.stat(
+                    filename,
+                    dir_fd=target_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(final_opened.st_mode)
+                    or not stat.S_ISREG(final_named.st_mode)
+                    or stat.S_IMODE(final_opened.st_mode) != 0o600
+                    or stat.S_IMODE(final_named.st_mode) != 0o600
+                    or final_opened.st_nlink != 1
+                    or final_named.st_nlink != 1
+                    or (final_opened.st_dev, final_opened.st_ino)
+                    != (metadata.st_dev, metadata.st_ino)
+                    or (final_named.st_dev, final_named.st_ino)
+                    != (metadata.st_dev, metadata.st_ino)
+                ):
+                    raise DatasetPublicationConflict()
+            if set(os.listdir(target_fd)) != {
+                name for name, _ in _ARTIFACT_PAYLOADS
+            }:
+                raise DatasetPublicationConflict()
             current = os.stat(target_name, dir_fd=root_fd, follow_symlinks=False)
             opened_target = os.fstat(target_fd)
             if (

@@ -120,7 +120,9 @@ its first open, last close and observed record count. Aggregate symbols,
 timeframes, bounds and count are derived from those entries. A run may request
 only combinations present in this catalog, and its half-open execution period
 `[period_start, period_end)` must fit every requested stream's
-`[first_open_at, last_close_at)` coverage. The dataset checksum is the SHA-256
+`[first_open_at, last_close_at)` coverage. Each stream starts on its UTC
+timeframe grid and, because eligible inputs are gapless, must satisfy exactly
+`last_close_at - first_open_at = record_count * timeframe_duration`. The dataset checksum is the SHA-256
 of the canonical manifest core plus the two already computed artifact checksums,
 avoiding a self-referential hash.
 

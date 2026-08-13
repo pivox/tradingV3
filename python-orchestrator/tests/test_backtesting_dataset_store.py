@@ -250,6 +250,38 @@ def test_target_mode_change_after_initial_reads_is_rejected(tmp_path: Path) -> N
     assert stat.S_IMODE(_target(root).stat().st_mode) == 0o755
 
 
+class _SwapDuringSecondReadPassPublisher(DatasetPublisher):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self._read_count = 0
+
+    def _read_open_private_file(self, descriptor: int) -> bytes:
+        payload = super()._read_open_private_file(descriptor)
+        self._read_count += 1
+        if self._read_count == 4:
+            quality = _target(self._root) / "quality-report.json"
+            quality.rename(_target(self._root) / "quality-report-original")
+            quality.write_bytes(b"corrupt")
+            quality.chmod(0o600)
+        return payload
+
+
+def test_artifact_swap_during_second_read_pass_fails_final_stability_check(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+    DatasetPublisher(root).publish(_artifacts())
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapDuringSecondReadPassPublisher(root).publish(_artifacts())
+
+    target = _target(root)
+    assert (target / "quality-report.json").read_bytes() == b"corrupt"
+    assert (target / "quality-report-original").read_bytes() == (
+        _artifacts().quality_report_json
+    )
+
+
 class _FailBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         raise OSError("injected before rename")

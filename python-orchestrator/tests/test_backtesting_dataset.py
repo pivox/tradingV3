@@ -857,6 +857,32 @@ def test_manifest_stream_coverage_is_exact_and_checksum_bound() -> None:
         DatasetDescriptor.from_manifest(forged)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("record_count", 3, "duration must equal record_count"),
+        (
+            "first_open_at",
+            "2026-01-01T00:00:30.000000Z",
+            "must align to UTC timeframe grid",
+        ),
+    ),
+)
+def test_descriptor_rejects_rebound_stream_duration_or_grid_forgery(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    manifest = json.loads((_FIXTURE_DIR / "manifest-v1.json").read_bytes())
+    manifest["coverage"]["streams"][0][field] = value
+    if field == "record_count":
+        manifest["coverage"]["record_count"] = 4
+    _bind_manifest(manifest)
+
+    with pytest.raises((ValueError, ValidationError), match=message):
+        DatasetDescriptor.from_manifest(manifest)
+
+
 def test_verifier_rejects_reordered_candles_with_fully_recomputed_graph() -> None:
     artifacts = DatasetSerializer.serialize(
         DatasetBuilder(_source()).build(_golden_records())

@@ -171,7 +171,8 @@ derived fact is permitted.
 Extend `DatasetDescriptor` without adding a strategy identity. Validate that a
 descriptor reconstructed from the manifest agrees with every derived fact,
 including canonical unique per-stream coverage from which aggregate facts are
-derived.
+derived. Bind each eligible stream's UTC grid alignment and exact gapless
+duration/count equation into the same validation boundary.
 
 - [x] **Step 4: Generate and verify golden fixtures**
 

@@ -142,7 +142,9 @@ atomiquement en cible. En revanche, un publisher concurrent perdant qui retourne
 
 Les listes agregees de symboles/timeframes, la periode et le nombre de records
 sont derives de ces flux et ne peuvent pas les contredire. La periode doit etre
-bornee (`end_at > start_at`). Un run exige chaque combinaison cartesienne
+bornee (`end_at > start_at`). Chaque debut de flux est aligne sur la grille UTC
+de son timeframe et sa couverture sans gap verifie exactement
+`last_close - first_open = record_count * duree_timeframe`. Un run exige chaque combinaison cartesienne
 `symbole x timeframe` qu'il demande dans le catalogue de flux et sa periode
 doit tenir dans les bornes propres de chacun ; la presence separee d'un symbole
 et d'un timeframe ne forge donc jamais une combinaison absente.
