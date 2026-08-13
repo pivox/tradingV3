@@ -143,7 +143,12 @@ missing component is created as a random private `.dataset-root-*` directory,
 opened and flushed, then atomically renamed without replacement and followed by
 a parent-directory flush. Every retained path identity is checked before
 success. Exact-target verification retains all three artifact fds until a final
-collective name/inode/type/mode/link-count and target-directory stability pass.
+collective name/inode/type/mode/link-count/size/mtime/ctime and target-directory
+stability pass around its second content read. This detects in-place mutations
+during validation. It is deliberately a finite snapshot: portable POSIX calls
+cannot prevent a hostile same-UID writer from mutating bytes after the final
+observation, so storage ownership or external coordination must exclude such
+writes for post-return immutability.
 Every `ALREADY_PUBLISHED` path flushes the dataset root after that exact
 observation and before its final anchored-path check and return. A root path
 component won by a concurrent creator is likewise adopted only after flushing

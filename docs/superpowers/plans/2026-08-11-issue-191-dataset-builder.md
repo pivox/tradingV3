@@ -313,9 +313,12 @@ git commit -m "docs(#191): document deterministic dataset reproduction"
   no-follow fds; missing path components use durable atomic `.dataset-root-*`
   publication and any losing/interrupted private component is also preserved
   for the janitor. Existing artifact equality is accepted only after a
-  collective retained-fd identity stability pass, followed by a root-directory
-  flush on every `ALREADY_PUBLISHED` path. Concurrently won root components are
-  adopted only after their parent directory is flushed.
+  collective retained-fd identity and size/mtime/ctime stability pass around a
+  second content read, followed by a root-directory flush on every
+  `ALREADY_PUBLISHED` path. This finite snapshot detects concurrent validation
+  mutations; storage ownership/coordination remains required against hostile
+  same-UID writes after the last observation. Concurrently won root components
+  are adopted only after their parent directory is flushed.
 - Atomic no-replace uses `renameatx_np(RENAME_EXCL)` on macOS and
   `renameat2(RENAME_NOREPLACE)` on Linux. Unsupported platforms fail closed.
 - Golden artifacts are checked in under

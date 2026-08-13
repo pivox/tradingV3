@@ -332,6 +332,52 @@ def test_artifact_swap_during_second_read_pass_fails_final_stability_check(
     )
 
 
+class _MutateAfterCleanSecondCandleReadPublisher(DatasetPublisher):
+    def __init__(self, root: Path, *, restore_bytes: bool) -> None:
+        super().__init__(root)
+        self._read_count = 0
+        self._restore_bytes = restore_bytes
+
+    def _read_open_private_file(self, descriptor: int) -> bytes:
+        payload = super()._read_open_private_file(descriptor)
+        self._read_count += 1
+        if self._read_count == 4:
+            candles = _target(self._root) / "candles.ndjson"
+            before = candles.stat()
+            changed = bytearray(payload)
+            changed[0] = ord(" ")
+            candles.write_bytes(bytes(changed))
+            if self._restore_bytes:
+                candles.write_bytes(payload)
+                os.utime(
+                    candles,
+                    ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+                )
+        return payload
+
+
+@pytest.mark.parametrize("restore_bytes", (False, True))
+def test_in_place_mutation_after_clean_second_read_is_detected_by_metadata(
+    tmp_path: Path,
+    restore_bytes: bool,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    DatasetPublisher(root).publish(artifacts)
+
+    with pytest.raises(DatasetPublicationConflict):
+        _MutateAfterCleanSecondCandleReadPublisher(
+            root,
+            restore_bytes=restore_bytes,
+        ).publish(artifacts)
+
+    actual = (_target(root) / "candles.ndjson").read_bytes()
+    if restore_bytes:
+        assert actual == artifacts.candles_ndjson
+    else:
+        assert actual != artifacts.candles_ndjson
+
+
 class _FailBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         raise OSError("injected before rename")

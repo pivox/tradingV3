@@ -106,11 +106,17 @@ est d'abord cree sous un nom prive aleatoire `.dataset-root-*`, ouvert et
 Un target existant est idempotent seulement si les trois noms, bytes, modes et
 single-links sont exacts ; les trois fd d'artefacts restent ouverts jusqu'a une
 validation collective finale de leurs identites et de celle du repertoire.
+Cette passe compare aussi taille, `mtime_ns` et `ctime_ns` avant/apres la
+seconde lecture afin de detecter les ecritures in-place pendant la validation.
 Chaque adoption `ALREADY_PUBLISHED` effectue ensuite un `fsync` du repertoire
 racine avant la derniere verification du chemin. De meme, un composant racine
 cree par un concurrent n'est adopte qu'apres `fsync` de son parent.
 Fichier change/manquant/supplementaire, symlink, hardlink ou course concurrente
 conflictuelle est preserve et rejete.
+Cette garantie reste un snapshot fini : aucun mecanisme POSIX portable ne peut
+interdire a un acteur hostile du meme UID d'ecrire apres la derniere observation.
+L'immuabilite au-dela du retour exige donc une propriete/coordination de stockage
+qui exclut ces ecritures concurrentes.
 Le fd du staging est lie a son nom par device/inode juste avant le rename et la
 cible est reverifiee integralement apres celui-ci. Une substitution dans cette
 ultime fenetre ne peut donc jamais produire un faux statut de succes ; elle

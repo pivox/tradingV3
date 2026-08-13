@@ -466,6 +466,10 @@ class DatasetPublisher:
                     raise DatasetPublicationConflict()
             if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
                 raise DatasetPublicationConflict()
+            second_pass_metadata = tuple(
+                os.fstat(descriptor)
+                for _, descriptor, _ in artifact_descriptors
+            )
             for (_, descriptor, _), (_, attribute) in zip(
                 artifact_descriptors,
                 _ARTIFACT_PAYLOADS,
@@ -477,7 +481,11 @@ class DatasetPublisher:
                     attribute,
                 ):
                     raise DatasetPublicationConflict()
-            for filename, descriptor, metadata in artifact_descriptors:
+            for (filename, descriptor, _), metadata in zip(
+                artifact_descriptors,
+                second_pass_metadata,
+                strict=True,
+            ):
                 final_opened = os.fstat(descriptor)
                 final_named = os.stat(
                     filename,
@@ -495,6 +503,12 @@ class DatasetPublisher:
                     != (metadata.st_dev, metadata.st_ino)
                     or (final_named.st_dev, final_named.st_ino)
                     != (metadata.st_dev, metadata.st_ino)
+                    or final_opened.st_size != metadata.st_size
+                    or final_named.st_size != metadata.st_size
+                    or final_opened.st_mtime_ns != metadata.st_mtime_ns
+                    or final_named.st_mtime_ns != metadata.st_mtime_ns
+                    or final_opened.st_ctime_ns != metadata.st_ctime_ns
+                    or final_named.st_ctime_ns != metadata.st_ctime_ns
                 ):
                     raise DatasetPublicationConflict()
             if set(os.listdir(target_fd)) != {
