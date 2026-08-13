@@ -8,6 +8,7 @@ use App\Trading\Paper\Backtesting\NormalizedBacktestCandle;
 use App\Trading\Paper\Backtesting\PaperBacktestAdapterException;
 use App\Trading\Paper\Backtesting\PaperBacktestDataset;
 use App\Trading\Paper\Backtesting\PaperBacktestDatasetAdapter;
+use App\Trading\Paper\Backtesting\PaperBacktestDatasetEncoder;
 use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\VerifiedPaperDatasetSnapshot;
@@ -24,6 +25,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperBacktestDataset::class)]
 #[CoversClass(NormalizedBacktestCandle::class)]
 #[CoversClass(PaperBacktestAdapterException::class)]
+#[CoversClass(PaperBacktestDatasetEncoder::class)]
 final class PaperBacktestDatasetAdapterTest extends TestCase
 {
     public function testNormalizesExactOkxGoldenCandle(): void
@@ -324,6 +326,38 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             self::assertSame('paper_backtest_candle_time_invalid', $exception->getMessage());
             self::assertStringNotContainsString('private-sentinel', $exception->getMessage());
         }
+    }
+
+    public function testEncoderEmitsCanonicalCrossRuntimeBytes(): void
+    {
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $encoder = new PaperBacktestDatasetEncoder();
+        $source = $encoder->sourceIdentity($dataset);
+        $candles = $encoder->candles($dataset);
+
+        self::assertSame(CanonicalJson::encode($dataset->sourceIdentity) . "\n", $source);
+        self::assertSame(CanonicalJson::encode($dataset->candles[0]->toArray()) . "\n", $candles);
+        self::assertStringEndsWith("\n", $source);
+        self::assertStringEndsWith("\n", $candles);
+        foreach (['mode', 'setup', 'profile', 'strategy'] as $forbidden) {
+            self::assertStringNotContainsString('"' . $forbidden . '"', $source . $candles);
+        }
+    }
+
+    public function testCheckedInCrossRuntimeFixturesComeFromThePublicEncoder(): void
+    {
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $encoder = new PaperBacktestDatasetEncoder();
+        $fixtureRoot = dirname(__DIR__, 3) . '/Fixtures/paper-backtesting';
+
+        self::assertSame(
+            $encoder->sourceIdentity($dataset),
+            file_get_contents($fixtureRoot . '/source-identity.json'),
+        );
+        self::assertSame(
+            $encoder->candles($dataset),
+            file_get_contents($fixtureRoot . '/candles.ndjson'),
+        );
     }
 
     /** @param array<string, mixed> $override */
