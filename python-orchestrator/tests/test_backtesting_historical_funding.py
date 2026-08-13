@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -108,3 +108,54 @@ def test_versioned_schedule_fixture_is_canonical() -> None:
     )
     verified = VerifiedHistoricalFundingSchedule(artifacts)
     assert verified.records[1].source_record_id == "golden-funding-2"
+
+
+def test_timestamp_and_decimal_guards_fail_closed() -> None:
+    from app.backtesting.historical_funding import _decimal, _parse_time, _utc
+    for value in (datetime(2026, 8, 10), datetime(2026, 8, 10, tzinfo=timezone(timedelta(hours=1)))):
+        with pytest.raises(ValueError, match="timestamp_invalid"):
+            _utc(value)
+    for value, positive in (("-0", False), ("0", True), (1, False)):
+        with pytest.raises(ValueError, match="decimal_invalid"):
+            _decimal(value, positive=positive)
+    for value in (1, "2026-08-10T08:00:00+00:00", "2026-99-99T08:00:00Z"):
+        with pytest.raises(ValueError, match="timestamp_invalid"):
+            _parse_time(value)
+
+
+def test_schedule_shape_identity_and_coverage_guards_fail_closed() -> None:
+    from app.backtesting.historical_funding import _json_value, _validated_schedule
+    raw = json.loads(_artifacts().schedule_json)
+    mutations = []
+    missing_schema = dict(raw); missing_schema.pop("schema_version"); mutations.append(missing_schema)
+    wrong_dataset = dict(raw); wrong_dataset["dataset_id"] = "backtest-dataset-" + "b" * 64; mutations.append(wrong_dataset)
+    empty = dict(raw); empty["records"] = []; mutations.append(empty)
+    mixed = json.loads(json.dumps(raw)); mixed["records"][1]["symbol"] = "ETHUSDT"; mutations.append(mixed)
+    duplicate_id = json.loads(json.dumps(raw)); duplicate_id["records"][1]["source_record_id"] = "funding-1"; mutations.append(duplicate_id)
+    duplicate_time = json.loads(json.dumps(raw)); duplicate_time["records"][1]["funding_at"] = raw["records"][0]["funding_at"]; mutations.append(duplicate_time)
+    for mutation in mutations:
+        with pytest.raises(ValueError):
+            _validated_schedule(_json_value(mutation))
+
+    with pytest.raises(ValueError, match="records_invalid"):
+        serialize_historical_funding_schedule(
+            dataset_id=DATASET_ID, dataset_checksum=DATASET_CHECKSUM,
+            coverage_start=datetime(2026, 8, 10, tzinfo=UTC),
+            coverage_end=datetime(2026, 8, 10, 8, tzinfo=UTC), records=(),
+        )
+
+
+def test_verifier_rejects_wrong_object_and_noncanonical_file_shape() -> None:
+    with pytest.raises(ValueError, match="schedule_invalid"):
+        VerifiedHistoricalFundingSchedule(object())  # type: ignore[arg-type]
+    artifacts = _artifacts()
+    for payload in (
+        artifacts.schedule_json.rstrip(b"\n"),
+        artifacts.schedule_json + b"\n",
+        b"[]\n",
+    ):
+        checksum = "sha256:" + __import__("hashlib").sha256(payload).hexdigest()
+        with pytest.raises(ValueError, match="schedule_invalid"):
+            VerifiedHistoricalFundingSchedule(HistoricalFundingScheduleArtifacts(
+                schedule_json=payload, schedule_checksum=checksum,
+            ))
