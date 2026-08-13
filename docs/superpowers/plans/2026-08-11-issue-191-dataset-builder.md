@@ -6,7 +6,8 @@
 
 **Architecture:** Accept only normalized `CandleRecord` values from an already verified source, validate and order them in a pure builder, then serialize exact NDJSON/report/manifest bytes through a separate publisher. Dataset construction remains independent of all legacy and modern strategy identities.
 
-**Tech Stack:** Python 3.11+, existing Pydantic 2, `decimal`, `datetime`, `json`, `hashlib`, `pathlib`, `tempfile`, `os`, pytest.
+**Tech Stack:** Python 3.11+, existing Pydantic 2, `decimal`, `datetime`, `json`,
+`hashlib`, `pathlib`, `os`, `ctypes`, `secrets`, pytest.
 
 ---
 
@@ -17,7 +18,7 @@
 - Create: `python-orchestrator/tests/test_backtesting_dataset.py`
 - Modify: `python-orchestrator/app/backtesting/__init__.py`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Add table-driven tests for the five exact timeframes, frozen/unknown-field
 rejection, UTC-only timestamps, exact timeframe duration, `available_at >=
@@ -25,7 +26,7 @@ close_at`, `complete=true`, canonical decimal grammar, positive OHLC,
 non-negative volume, and `low <= open, close <= high`. Assert the public record
 and report schemas expose no `profile`, mode, setup, or alias field.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -36,7 +37,7 @@ python3 -m pytest tests/test_backtesting_dataset.py -q
 
 Expected: collection fails because `app.backtesting.dataset` does not exist.
 
-- [ ] **Step 3: Implement immutable contracts**
+- [x] **Step 3: Implement immutable contracts**
 
 In `dataset.py`, add:
 
@@ -56,7 +57,7 @@ validated strings. Represent timeframes with their exact duration rather than
 lexicographic order. `DatasetBuildRejected` must expose only its stable reason
 code and typed report, never raw source content.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
@@ -68,7 +69,7 @@ python3 -m py_compile app/backtesting/dataset.py
 
 Expected: all new contract tests pass and compilation exits zero.
 
-- [ ] **Step 5: Commit contracts**
+- [x] **Step 5: Commit contracts**
 
 ```bash
 git add python-orchestrator/app/backtesting/dataset.py python-orchestrator/app/backtesting/__init__.py python-orchestrator/tests/test_backtesting_dataset.py
@@ -81,7 +82,7 @@ git commit -m "feat(#191): define normalized backtest candle contracts"
 - Modify: `python-orchestrator/app/backtesting/dataset.py`
 - Modify: `python-orchestrator/tests/test_backtesting_dataset.py`
 
-- [ ] **Step 1: Write failing quality tests**
+- [x] **Step 1: Write failing quality tests**
 
 Cover empty input, mixed network/venue/market type, one complete stream,
 multi-symbol/multi-timeframe streams, exact duplicate, conflicting duplicate,
@@ -89,7 +90,7 @@ one and multiple contiguous missing ranges, and input permutations. Assert gaps
 are derived only inside observed bounds and all report collections have stable
 canonical ordering.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 cd python-orchestrator
@@ -98,7 +99,7 @@ python3 -m pytest tests/test_backtesting_dataset.py -q
 
 Expected: quality tests fail because `DatasetBuilder` is absent.
 
-- [ ] **Step 3: Implement `DatasetBuilder.analyze()` and `build()`**
+- [x] **Step 3: Implement `DatasetBuilder.analyze()` and `build()`**
 
 Materialize the sequence once. Group by `(market_data_venue, market_type,
 symbol, timeframe)`, sort by numeric timeframe duration and UTC `open_at`, and
@@ -108,7 +109,7 @@ raises `DatasetBuildRejected` for any flag and otherwise derives exact bounds,
 counts, symbols, timeframes, and ordered records. Never deduplicate, fill, or
 select a duplicate winner.
 
-- [ ] **Step 4: Verify GREEN and determinism**
+- [x] **Step 4: Verify GREEN and determinism**
 
 ```bash
 cd python-orchestrator
@@ -118,7 +119,7 @@ PYTHONHASHSEED=987654 python3 -m pytest tests/test_backtesting_dataset.py -q
 
 Expected: both runs pass with identical golden report assertions.
 
-- [ ] **Step 5: Commit quality analysis**
+- [x] **Step 5: Commit quality analysis**
 
 ```bash
 git add python-orchestrator/app/backtesting/dataset.py python-orchestrator/tests/test_backtesting_dataset.py
@@ -136,7 +137,7 @@ git commit -m "feat(#191): reject dataset gaps and duplicates"
 - Create: `python-orchestrator/tests/fixtures/backtesting/quality-report-v1.json`
 - Create: `python-orchestrator/tests/fixtures/backtesting/manifest-v1.json`
 
-- [ ] **Step 1: Write failing golden-byte and descriptor tests**
+- [x] **Step 1: Write failing golden-byte and descriptor tests**
 
 Assert that equivalent record permutations produce byte-identical files and
 checksums. Recompute every checksum from checked-in fixture bytes. Assert the
@@ -144,7 +145,7 @@ descriptor derives schema/build versions, source checksum, network/venue,
 symbols, timeframes, bounds, record count, report checksum, quality flags, and
 dataset checksum; mutation of any artifact must fail cross-verification.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 cd python-orchestrator
@@ -154,7 +155,7 @@ python3 -m pytest tests/test_backtesting_contracts.py tests/test_backtesting_dat
 Expected: serialization and descriptor assertions fail because no artifacts are
 emitted and the descriptor lacks the derived fields.
 
-- [ ] **Step 3: Implement canonical bytes and checksum graph**
+- [x] **Step 3: Implement canonical bytes and checksum graph**
 
 Serialize compact sorted-key UTF-8 JSON with one newline per record/file.
 Compute `candles.ndjson`, then its SHA-256; serialize the typed report and its
@@ -167,7 +168,7 @@ derived fact is permitted.
 Extend `DatasetDescriptor` without adding a strategy identity. Validate that a
 descriptor reconstructed from the manifest agrees with every derived fact.
 
-- [ ] **Step 4: Generate and verify golden fixtures**
+- [x] **Step 4: Generate and verify golden fixtures**
 
 Generate fixtures through the implementation's public serializer, review the
 exact bytes, then run:
@@ -180,7 +181,7 @@ python3 -m py_compile app/backtesting/contracts.py app/backtesting/dataset.py
 
 Expected: all contract, golden-byte, mutation, and checksum tests pass.
 
-- [ ] **Step 5: Commit deterministic serialization**
+- [x] **Step 5: Commit deterministic serialization**
 
 ```bash
 git add python-orchestrator/app/backtesting/contracts.py python-orchestrator/app/backtesting/dataset.py python-orchestrator/tests/test_backtesting_contracts.py python-orchestrator/tests/test_backtesting_dataset.py python-orchestrator/tests/fixtures/backtesting
@@ -194,14 +195,14 @@ git commit -m "feat(#191): serialize checksummed backtest datasets"
 - Create: `python-orchestrator/tests/test_backtesting_dataset_store.py`
 - Modify: `python-orchestrator/app/backtesting/__init__.py`
 
-- [ ] **Step 1: Write failing filesystem tests**
+- [x] **Step 1: Write failing filesystem tests**
 
 Using `tmp_path`, cover successful private publication, exact repeat as a
 no-op, same `dataset_id` with different bytes, changed/missing/extra artifact,
 symlinked target/artifact, injected failure before rename, and cleanup of the
 staging directory. Assert conflicts preserve all pre-existing bytes.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 cd python-orchestrator
@@ -210,16 +211,17 @@ python3 -m pytest tests/test_backtesting_dataset_store.py -q
 
 Expected: collection fails because `dataset_store.py` does not exist.
 
-- [ ] **Step 3: Implement `DatasetPublisher`**
+- [x] **Step 3: Implement `DatasetPublisher`**
 
 Create a mode-`0700` sibling staging directory, write only the three approved
 mode-`0600` artifacts, flush and `fsync` files and directories, and publish with
 one atomic rename. Verify an existing target without following symlinks. Return
 an idempotent status only when all names and bytes match exactly; otherwise
-raise a stable conflict without replacement. Accept only an eligible
-`DatasetBuildResult`.
+raise a stable conflict without replacement. Accept only `DatasetArtifacts`
+whose build, ordering, report, manifest and checksum graph were cross-verified
+by `DatasetSerializer`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ```bash
 cd python-orchestrator
@@ -229,7 +231,7 @@ python3 -m py_compile app/backtesting/dataset_store.py
 
 Expected: all publication, failure-injection, and preservation tests pass.
 
-- [ ] **Step 5: Commit publication**
+- [x] **Step 5: Commit publication**
 
 ```bash
 git add python-orchestrator/app/backtesting/dataset_store.py python-orchestrator/app/backtesting/__init__.py python-orchestrator/tests/test_backtesting_dataset_store.py
@@ -242,7 +244,7 @@ git commit -m "feat(#191): publish immutable backtest datasets"
 - Modify: `docs/handbook/technical/backtesting-engine.md`
 - Modify: `docs/superpowers/plans/2026-08-11-issue-191-dataset-builder.md`
 
-- [ ] **Step 1: Document the delivered contract**
+- [x] **Step 1: Document the delivered contract**
 
 Describe normalized pre-verified input, exact CandleRecord grammar, availability
 and look-ahead boundary, quality rejection policy, canonical ordering/checksum
@@ -251,7 +253,7 @@ that raw PHP Paper files require a later verified adapter and that no modern
 mode is runnable before PR3 replaces the legacy `Profile` boundary with exact
 mode/setup identities and the #133/#303 snapshot.
 
-- [ ] **Step 2: Run focused and full Python verification**
+- [x] **Step 2: Run focused and full Python verification**
 
 ```bash
 cd python-orchestrator
@@ -265,7 +267,7 @@ git diff --check
 Expected: every command exits zero with no test failure, compile error, or
 whitespace error.
 
-- [ ] **Step 3: Confirm the legacy isolation guard**
+- [x] **Step 3: Confirm the legacy isolation guard**
 
 ```bash
 rg -n "regular|scalper|scalper_micro|profile|mode_id|setup_id" \
@@ -278,9 +280,32 @@ rg -n "regular|scalper|scalper_micro|profile|mode_id|setup_id" \
 Expected: no production dataset field or alias mapping; documentation/test
 assertion text may mention the forbidden names.
 
-- [ ] **Step 4: Commit documentation and completed checklist**
+- [x] **Step 4: Commit documentation and completed checklist**
 
 ```bash
 git add docs/handbook/technical/backtesting-engine.md docs/superpowers/plans/2026-08-11-issue-191-dataset-builder.md
 git commit -m "docs(#191): document deterministic dataset reproduction"
 ```
+
+## Delivery evidence
+
+- Task 1 contracts: `bdc78652`.
+- Task 2 quality analysis: `b4b88876`; strict/non-forgeable boundary fixes:
+  `82b0a919`.
+- Task 3 canonical serialization: `8f3b139d`; review fixes for canonical order,
+  strict manifest facts and descriptor checksum binding: `03cdaa9c`, `83bfffe9`.
+- Task 4 publication: `b9876be6`; review fixes for no-replace publication,
+  anchored root `dirfd`, path identity, symlink/hardlink races and staging cleanup:
+  `ad94a026`, `db4822a2`, `378bc58a`, `a43fc5a4`, `982efb8c`.
+- Atomic no-replace uses `renameatx_np(RENAME_EXCL)` on macOS and
+  `renameat2(RENAME_NOREPLACE)` on Linux. Unsupported platforms fail closed.
+- Golden artifacts are checked in under
+  `python-orchestrator/tests/fixtures/backtesting/` and are generated through
+  the public serializer.
+- Focused deterministic gate after Task 4: 92 tests passed with
+  `PYTHONHASHSEED=1` and `PYTHONHASHSEED=987654`.
+- Task 5 final gate: 92 focused tests passed; the full Python suite passed with
+  652 tests, 3 environment-dependent skips and 2 dependency deprecation
+  warnings. `py_compile` and `git diff --check` exited zero.
+- The legacy isolation grep returned only negative test fixtures/assertions;
+  `dataset.py` and `dataset_store.py` contain no strategy identity or alias.
