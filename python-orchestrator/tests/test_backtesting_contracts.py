@@ -347,6 +347,38 @@ def test_ledger_carries_exact_identity_and_rejects_direction_divergence() -> Non
         )
 
 
+@pytest.mark.parametrize(
+    ("exchange", "environment"),
+    (
+        ("fake", "mainnet"),
+        ("okx", "demo"),
+        ("okx", "mainnet"),
+        ("hyperliquid", "testnet"),
+        ("hyperliquid", "mainnet"),
+    ),
+)
+def test_standalone_backtest_ledger_rejects_non_fake_execution_targets(
+    exchange: str, environment: str
+) -> None:
+    with pytest.raises(
+        ValidationError, match="backtest_ledger_execution_target_invalid"
+    ):
+        BacktestTradeLedgerEntry(
+            **_modern_ledger_payload(exchange=exchange, environment=environment)
+        )
+
+
+@pytest.mark.parametrize("environment", ("local", "test"))
+def test_standalone_backtest_ledger_accepts_fake_environments(
+    environment: str,
+) -> None:
+    entry = BacktestTradeLedgerEntry(
+        **_modern_ledger_payload(exchange="fake", environment=environment)
+    )
+
+    assert (entry.exchange, entry.environment) == ("fake", environment)
+
+
 def test_ledger_rejects_legacy_profile_and_unknown_identity_fields() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
         BacktestTradeLedgerEntry(**_modern_ledger_payload(profile="scalper"))

@@ -749,6 +749,8 @@ class BacktestTradeLedgerEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ledger(self) -> "BacktestTradeLedgerEntry":
+        if self.exchange != "fake" or self.environment not in {"local", "test"}:
+            raise ValueError("backtest_ledger_execution_target_invalid")
         try:
             ModernTradingIdentity(
                 mode_id=self.mode_id,
