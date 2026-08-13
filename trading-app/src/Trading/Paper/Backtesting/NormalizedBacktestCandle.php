@@ -10,6 +10,7 @@ final readonly class NormalizedBacktestCandle
 {
     public const SCHEMA_VERSION = 'backtest-candle.v1';
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
+    private const MAX_DECIMAL_LENGTH = 256;
 
     /** @var array<string, int> */
     private const DURATIONS = ['1m' => 60, '5m' => 300, '15m' => 900, '1h' => 3600];
@@ -48,7 +49,9 @@ final readonly class NormalizedBacktestCandle
             throw new \InvalidArgumentException('paper_backtest_candle_time_invalid');
         }
         foreach ([$open, $high, $low, $close, $volume] as $decimal) {
-            if (preg_match('/\A(?:0|[1-9][0-9]*(?:\.[0-9]*[1-9])?)\z/D', $decimal) !== 1) {
+            if (\strlen($decimal) > self::MAX_DECIMAL_LENGTH
+                || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\z/D', $decimal) !== 1
+            ) {
                 throw new \InvalidArgumentException('paper_backtest_candle_decimal_invalid');
             }
         }
@@ -91,11 +94,15 @@ final readonly class NormalizedBacktestCandle
 
     private static function timestamp(string $value): \DateTimeImmutable
     {
-        $timestamp = \DateTimeImmutable::createFromFormat(
-            '!' . self::TIMESTAMP_FORMAT,
-            $value,
-            new \DateTimeZone('UTC'),
-        );
+        try {
+            $timestamp = \DateTimeImmutable::createFromFormat(
+                '!' . self::TIMESTAMP_FORMAT,
+                $value,
+                new \DateTimeZone('UTC'),
+            );
+        } catch (\ValueError) {
+            throw new \InvalidArgumentException('paper_backtest_candle_time_invalid');
+        }
         $errors = \DateTimeImmutable::getLastErrors();
         if ($timestamp === false
             || ($errors !== false && ($errors['warning_count'] !== 0 || $errors['error_count'] !== 0))

@@ -218,6 +218,53 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame($dataset->candles[0]->sourceRecordId, $dataset->candles[1]->sourceRecordId);
     }
 
+    public function testAcceptsCanonicalSubUnitPricesAndVolume(): void
+    {
+        $event = $this->okxEvent([
+            'open' => '0.5', 'high' => '1.0', 'low' => '0.25', 'close' => '0.75',
+            'volume_base' => '0.001',
+        ]);
+        $candle = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($event))->candles[0];
+
+        self::assertSame(['0.5', '1', '0.25', '0.75', '0.001'], [
+            $candle->open, $candle->high, $candle->low, $candle->close, $candle->volume,
+        ]);
+    }
+
+    public function testStrictValuesRejectEmptyOrContradictorySourcesAndBadTimestamp(): void
+    {
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        try {
+            new PaperBacktestDataset($dataset->sourceIdentity, []);
+            self::fail('Expected empty result rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_backtest_candles_empty', $exception->getMessage());
+        }
+
+        $source = $dataset->sourceIdentity;
+        $source['source_network'] = 'testnet';
+        try {
+            new PaperBacktestDataset($source, $dataset->candles);
+            self::fail('Expected source mismatch rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_backtest_candle_source_mismatch', $exception->getMessage());
+        }
+
+        $candle = $dataset->candles[0];
+        try {
+            new NormalizedBacktestCandle(
+                $candle->sourceRecordId, $candle->sourceNetwork, $candle->marketDataVenue,
+                $candle->symbol, $candle->timeframe, "private-sentinel\0", $candle->closeAt,
+                $candle->availableAt, $candle->open, $candle->high, $candle->low,
+                $candle->close, $candle->volume,
+            );
+            self::fail('Expected timestamp rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_backtest_candle_time_invalid', $exception->getMessage());
+            self::assertStringNotContainsString('private-sentinel', $exception->getMessage());
+        }
+    }
+
     /** @param array<string, mixed> $override */
     private function okxEvent(
         array $override = [],

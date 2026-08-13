@@ -43,6 +43,14 @@ final readonly class PaperBacktestDataset
             if (!$candle instanceof NormalizedBacktestCandle) {
                 throw new \InvalidArgumentException('paper_backtest_candles_invalid');
             }
+            if ($candle->sourceNetwork !== $sourceIdentity['source_network']
+                || $candle->marketDataVenue !== $sourceIdentity['market_data_venue']
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_candle_source_mismatch');
+            }
+        }
+        if ($candles === []) {
+            throw new \InvalidArgumentException('paper_backtest_candles_empty');
         }
 
         $this->sourceIdentity = [...$sourceIdentity];
