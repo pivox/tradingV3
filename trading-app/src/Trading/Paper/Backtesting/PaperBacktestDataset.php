@@ -15,12 +15,21 @@ final readonly class PaperBacktestDataset
     /** @var list<NormalizedBacktestPublicTrade> */
     public array $publicTrades;
 
+    /** @var list<NormalizedBacktestPublicBook> */
+    public array $publicBooks;
+
     /**
      * @param array<string, string> $sourceIdentity
      * @param array<array-key, mixed> $candles
      * @param array<array-key, mixed> $publicTrades
+     * @param array<array-key, mixed> $publicBooks
      */
-    public function __construct(array $sourceIdentity, array $candles, array $publicTrades)
+    public function __construct(
+        array $sourceIdentity,
+        array $candles,
+        array $publicTrades,
+        array $publicBooks,
+    )
     {
         $expectedKeys = [
             'source', 'source_schema_version', 'source_build_version', 'source_checksum',
@@ -68,6 +77,18 @@ final readonly class PaperBacktestDataset
             $sourceIds[$trade->sourceRecordId] = true;
             $tradeIds[$trade->symbol . '|' . $trade->venueTradeId] = true;
         }
+        $bookSourceIds = [];
+        foreach ($publicBooks as $book) {
+            if (!$book instanceof NormalizedBacktestPublicBook
+                || $book->sourceNetwork !== $sourceIdentity['source_network']
+                || $book->marketDataVenue !== $sourceIdentity['market_data_venue']
+                || $book->sourceChecksum !== $sourceIdentity['source_checksum']
+                || isset($bookSourceIds[$book->sourceRecordId])
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_public_books_invalid');
+            }
+            $bookSourceIds[$book->sourceRecordId] = true;
+        }
         if ($candles === []) {
             throw new \InvalidArgumentException('paper_backtest_candles_empty');
         }
@@ -75,5 +96,6 @@ final readonly class PaperBacktestDataset
         $this->sourceIdentity = [...$sourceIdentity];
         $this->candles = array_values($candles);
         $this->publicTrades = array_values($publicTrades);
+        $this->publicBooks = array_values($publicBooks);
     }
 }

@@ -147,6 +147,35 @@ disponible pour notre ordre : elle n'invente ni priorite de file, ni fill, ni
 conversion de quantite, ni fallback. Ces semantiques restent a definir dans un
 modele d'execution versionne.
 
+### Tape public de carnet L1
+
+Le second prerequis des partial fills reste lui aussi separe du simulateur.
+Pour un snapshot Paper v2 de qualite `recorded_public_book_and_trades`, PHP
+projette les evenements `top_of_book` publics reels en records
+`backtest-public-book.v1`. `PaperBacktestDatasetEncoder::publicBooks()` emet le
+NDJSON canonique; `serialize_public_book_tape()` puis
+`VerifiedPublicBookTape` le lient au meme `dataset_id`, checksum de dataset et
+checksum exact du snapshot source que les bougies.
+
+OKX conserve les quantites visibles en `contracts` ainsi que les compteurs
+d'ordres fournis par la venue. Hyperliquid conserve les quantites visibles en
+`base_asset`; ses comptes de niveaux servent a authentifier le payload source
+mais ne deviennent jamais des comptes d'ordres. Les records Hyperliquid ont
+donc explicitement `bid_order_count=null` et `ask_order_count=null`. Le carnet
+historique derive des bougies est synthetique et reste exclu.
+
+Prix, quantites, spread positif, origines publiques, checksum source,
+chronologie, couverture par stream du symbole, unicite et ordre canonique sont
+verifies fail-closed. Le tape est borne a 30 000 records et 64 MiB; son plafond
+est teste contre la taille maximale autorisee d'un record. Une reception apres
+la fin de la couverture exchange reste admise et explicite dans `available_at`.
+
+Cette preuve est un L1, pas une preuve d'execution. Elle ne reconstruit aucune
+profondeur, ne convertit aucun contrat et ne permet pas de deduire notre rang
+de file, meme lorsque les compteurs OKX sont presents. Aucun full fill,
+partial fill ou fallback taker ne peut etre produit sans un contrat de
+conversion d'instrument et un modele d'execution/queue versionne separes.
+
 ## Invariants verrouilles par les contrats v1
 
 ### Dataset versionne
@@ -164,8 +193,9 @@ Python ne duplique pas l'authentification de `PaperDatasetVerifier`.
 `PaperBacktestDatasetAdapter` revalide le manifeste et ses evenements, recalcule
 le checksum NDJSON canonique, ancre les symboles natifs sur les catalogues OKX
 et Hyperliquid, puis normalise uniquement les candles confirmees `1m`, `5m`,
-`15m` et `1h`. Les autres evenements certifies sont ignores apres validation de
-leur enveloppe. Les payloads candle restent specifiques a chaque venue :
+`15m` et `1h`, les trades publics et les carnets L1 reels. Les autres
+evenements certifies sont ignores apres validation de leur enveloppe. Les
+payloads candle restent specifiques a chaque venue :
 
 - OKX utilise le timestamp exchange comme ouverture et derive la cloture
   exclusive ; le volume normalise est `volume_base` ;
@@ -592,6 +622,8 @@ python3 -m pytest -q \
   tests/test_backtesting_contracts.py \
   tests/test_backtesting_tradingcore_bridge.py \
   tests/test_backtesting_indicator_bridge.py \
+  tests/test_backtesting_public_execution_tape.py \
+  tests/test_backtesting_public_book_tape.py \
   tests/test_schemas.py \
   tests/test_symfony_client.py
 PYTHONHASHSEED=1 python3 -m pytest \

@@ -41,6 +41,17 @@ final class PaperBacktestDatasetEncoder
         return $encoded;
     }
 
+    public function publicBooks(PaperBacktestDataset $dataset): string
+    {
+        $encoded = '';
+        foreach ($dataset->publicBooks as $book) {
+            $value = $book->toArray();
+            $this->assertNoStrategyIdentity($value);
+            $encoded .= CanonicalJson::encode($value) . "\n";
+        }
+        return $encoded;
+    }
+
     private function assertNoStrategyIdentity(mixed $value): void
     {
         if (!\is_array($value)) {
