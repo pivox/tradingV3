@@ -11,7 +11,7 @@ use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
-final readonly class CanonicalBacktestRuleEvaluator
+final readonly class CanonicalBacktestRuleEvaluator implements CanonicalBacktestRuleEvaluatorInterface
 {
     private const MAX_CANONICAL_BYTES = 8_388_608;
     private const MAX_CANONICAL_DEPTH = 128;
