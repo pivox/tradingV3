@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import app.backtesting.dataset_store as dataset_store
 from app.backtesting.contracts import DatasetDescriptor
 from app.backtesting.dataset import DatasetArtifacts, DatasetArtifactVerificationError
 from app.backtesting.dataset_store import (
@@ -139,6 +140,70 @@ def test_symlinked_artifact_conflicts_without_following_it(tmp_path: Path) -> No
 
     assert outside.read_bytes() == _artifacts().candles_ndjson
     assert (target / "candles.ndjson").is_symlink()
+
+
+class _SwapArtifactAfterReadPublisher(DatasetPublisher):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self._swapped = False
+
+    def _read_open_private_file(self, descriptor: int) -> bytes:
+        payload = super()._read_open_private_file(descriptor)
+        if not self._swapped:
+            self._swapped = True
+            artifact = _target(self._root) / "candles.ndjson"
+            artifact.rename(artifact.with_name("candles-original"))
+            artifact.write_bytes(payload)
+            artifact.chmod(0o600)
+        return payload
+
+
+def test_artifact_replaced_after_read_never_becomes_idempotent(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    DatasetPublisher(root).publish(_artifacts())
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapArtifactAfterReadPublisher(root).publish(_artifacts())
+
+    assert (_target(root) / "candles-original").read_bytes() == (
+        _artifacts().candles_ndjson
+    )
+
+
+def test_artifact_replaced_during_collective_stability_check_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    DatasetPublisher(root).publish(artifacts)
+    target = _target(root)
+    real_stat = os.stat
+    swapped = False
+
+    def swap_before_first_named_stability_stat(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal swapped
+        if path == "candles.ndjson" and dir_fd is not None and not swapped:
+            swapped = True
+            quality = target / "quality-report.json"
+            quality.rename(target / "quality-report-original")
+            quality.write_bytes(artifacts.quality_report_json)
+            quality.chmod(0o600)
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "stat", swap_before_first_named_stability_stat)
+
+    with pytest.raises(DatasetPublicationConflict):
+        DatasetPublisher(root).publish(artifacts)
+
+    assert (target / "quality-report-original").read_bytes() == (
+        artifacts.quality_report_json
+    )
 
 
 class _FailBeforeRenamePublisher(DatasetPublisher):
@@ -430,6 +495,96 @@ def test_root_swapped_for_symlink_never_redirects_publication(tmp_path: Path) ->
     assert {item.name for item in outside.iterdir()} == {"marker"}
 
 
+class _SwapRootForDirectoryPublisher(DatasetPublisher):
+    def _after_prepare_root(self) -> None:
+        parked = self._root.with_name(self._root.name + "-parked")
+        self._root.rename(parked)
+        self._root.mkdir(mode=0o700)
+
+
+def test_root_replaced_by_private_directory_between_stat_and_open_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapRootForDirectoryPublisher(root).publish(_artifacts())
+
+    assert tuple(root.iterdir()) == ()
+    assert tuple((tmp_path / "datasets-parked").iterdir()) == ()
+
+
+class _SwapPrivateComponentPublisher(DatasetPublisher):
+    def _after_private_component_mkdir(
+        self,
+        parent_fd: int,
+        private_name: str,
+    ) -> None:
+        os.rename(
+            private_name,
+            private_name + "-parked",
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.mkdir(private_name, 0o700, dir_fd=parent_fd)
+
+
+def test_private_component_replaced_after_identity_capture_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapPrivateComponentPublisher(root).publish(_artifacts())
+
+    assert not root.exists()
+    private_entries = tuple(tmp_path.glob(".dataset-root-*"))
+    assert len(private_entries) == 2
+    assert all(path.is_dir() for path in private_entries)
+
+
+def test_missing_root_components_are_fsynced_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "level-one" / "level-two" / "datasets"
+    real_mkdir = os.mkdir
+    real_fsync = os.fsync
+    events: list[tuple[str, int]] = []
+    created: list[tuple[int, int]] = []
+
+    def record_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        assert dir_fd is not None
+        parent_inode = os.fstat(dir_fd).st_ino
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        child = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+        created.append((parent_inode, child.st_ino))
+        events.append(("mkdir", child.st_ino))
+
+    def record_fsync(descriptor: int) -> None:
+        events.append(("fsync", os.fstat(descriptor).st_ino))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "mkdir", record_mkdir)
+    monkeypatch.setattr(os, "fsync", record_fsync)
+
+    assert DatasetPublisher(root).publish(_artifacts()).status is (
+        DatasetPublicationStatus.PUBLISHED
+    )
+
+    assert len(created) == 4  # three root components plus publication staging
+    for parent_inode, child_inode in created[:3]:
+        mkdir_index = events.index(("mkdir", child_inode))
+        child_fsync = events.index(("fsync", child_inode), mkdir_index + 1)
+        parent_fsync = events.index(("fsync", parent_inode), child_fsync + 1)
+        assert mkdir_index < child_fsync < parent_fsync
+
+
 class _MoveRootBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         parked = self._root.with_name(self._root.name + "-parked")
@@ -539,3 +694,71 @@ def test_publisher_verifies_artifacts_before_touching_root(tmp_path: Path) -> No
         DatasetPublisher(root).publish(artifacts)
 
     assert not root.exists()
+
+
+class _FakeRenameFunction:
+    def __init__(self, result: int = 0) -> None:
+        self.result = result
+        self.calls: list[tuple[object, ...]] = []
+        self.argtypes: list[object] = []
+        self.restype: object = None
+
+    def __call__(self, *args: object) -> int:
+        self.calls.append(args)
+        return self.result
+
+
+class _FakeLibc:
+    def __init__(self, function_name: str, result: int = 0) -> None:
+        setattr(self, function_name, _FakeRenameFunction(result))
+
+
+@pytest.mark.parametrize(
+    ("platform", "function_name", "flag"),
+    (("darwin", "renameatx_np", 0x4), ("linux", "renameat2", 0x1)),
+)
+def test_atomic_no_replace_uses_platform_exclusive_primitive(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    function_name: str,
+    flag: int,
+) -> None:
+    libc = _FakeLibc(function_name)
+    monkeypatch.setattr(dataset_store.sys, "platform", platform)
+    monkeypatch.setattr(dataset_store.ctypes, "CDLL", lambda *args, **kwargs: libc)
+
+    dataset_store._atomic_rename_no_replace(17, "source", "target")
+
+    function = getattr(libc, function_name)
+    assert function.calls == [(17, b"source", 17, b"target", flag)]
+
+
+def test_atomic_no_replace_fails_closed_without_supported_primitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dataset_store.ctypes, "CDLL", lambda *args, **kwargs: object())
+
+    monkeypatch.setattr(dataset_store.sys, "platform", "linux")
+    with pytest.raises(OSError) as missing:
+        dataset_store._atomic_rename_no_replace(17, "source", "target")
+    assert missing.value.errno == errno.ENOTSUP
+
+    monkeypatch.setattr(dataset_store.sys, "platform", "win32")
+    with pytest.raises(OSError) as unsupported:
+        dataset_store._atomic_rename_no_replace(17, "source", "target")
+    assert unsupported.value.errno == errno.ENOTSUP
+
+
+def test_atomic_no_replace_propagates_native_errno(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = _FakeLibc("renameat2", result=-1)
+    monkeypatch.setattr(dataset_store.sys, "platform", "linux")
+    monkeypatch.setattr(dataset_store.ctypes, "CDLL", lambda *args, **kwargs: libc)
+    monkeypatch.setattr(dataset_store.ctypes, "get_errno", lambda: errno.EEXIST)
+
+    with pytest.raises(OSError) as rejected:
+        dataset_store._atomic_rename_no_replace(17, "source", "target")
+
+    assert rejected.value.errno == errno.EEXIST
+    assert rejected.value.filename == "target"

@@ -55,34 +55,40 @@ class DatasetPublisher:
     """Publish verified bytes once through an anchored private root dirfd."""
 
     def __init__(self, root: Path) -> None:
-        self._root = Path(root)
+        self._root = Path(os.path.abspath(os.fspath(root)))
 
     def publish(self, artifacts: DatasetArtifacts) -> DatasetPublicationResult:
         if not isinstance(artifacts, DatasetArtifacts):
             raise TypeError("DatasetPublisher accepts only DatasetArtifacts")
         DatasetSerializer.verify(artifacts)
 
-        self._prepare_root()
-        self._after_prepare_root()
-        root_fd = self._open_private_root()
+        root_names, root_fds, root_identities = self._prepare_and_open_root()
+        root_fd = root_fds[-1]
         try:
-            root_metadata = os.fstat(root_fd)
-            root_identity = (root_metadata.st_dev, root_metadata.st_ino)
-            return self._publish_anchored(root_fd, root_identity, artifacts)
+            return self._publish_anchored(
+                root_fd,
+                root_names,
+                root_fds,
+                root_identities,
+                artifacts,
+            )
         finally:
-            os.close(root_fd)
+            for descriptor in reversed(root_fds):
+                os.close(descriptor)
 
     def _publish_anchored(
         self,
         root_fd: int,
-        root_identity: tuple[int, int],
+        root_names: tuple[str, ...],
+        root_fds: tuple[int, ...],
+        root_identities: tuple[tuple[int, int], ...],
         artifacts: DatasetArtifacts,
     ) -> DatasetPublicationResult:
         dataset_id = artifacts.descriptor.dataset_id
         target = self._root / dataset_id
         existing = self._existing_status(root_fd, dataset_id, artifacts)
         if existing is not None:
-            self._assert_root_path_stable(root_identity)
+            self._assert_root_path_stable(root_names, root_fds, root_identities)
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
                 target=target,
@@ -103,7 +109,7 @@ class DatasetPublisher:
 
             existing = self._existing_status(root_fd, dataset_id, artifacts)
             if existing is not None:
-                self._assert_root_path_stable(root_identity)
+                self._assert_root_path_stable(root_names, root_fds, root_identities)
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
                     target=target,
@@ -112,7 +118,7 @@ class DatasetPublisher:
 
             staging_path = self._root / staging_name
             self._before_atomic_rename(staging_path, target)
-            self._assert_root_path_stable(root_identity)
+            self._assert_root_path_stable(root_names, root_fds, root_identities)
             try:
                 self._assert_staging_identity(root_fd, staging_name, staging_fd)
             except DatasetPublicationConflict:
@@ -127,7 +133,7 @@ class DatasetPublisher:
                 existing = self._existing_status(root_fd, dataset_id, artifacts)
                 if existing is None:
                     raise DatasetPublicationConflict() from exc
-                self._assert_root_path_stable(root_identity)
+                self._assert_root_path_stable(root_names, root_fds, root_identities)
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
                     target=target,
@@ -139,7 +145,7 @@ class DatasetPublisher:
             ):
                 raise DatasetPublicationConflict()
             self._after_atomic_rename()
-            self._assert_root_path_stable(root_identity)
+            self._assert_root_path_stable(root_names, root_fds, root_identities)
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
                 target=target,
@@ -161,31 +167,188 @@ class DatasetPublisher:
     def _after_atomic_rename(self) -> None:
         """Test hook invoked before validating the final path for success."""
 
-    def _prepare_root(self) -> None:
-        try:
-            self._root.mkdir(parents=True, mode=0o700)
-        except FileExistsError:
-            pass
-
-    def _open_private_root(self) -> int:
-        try:
-            root_fd = os.open(self._root, _DIRECTORY_FLAGS)
-        except OSError as exc:
-            raise DatasetPublicationConflict() from exc
-        metadata = os.fstat(root_fd)
-        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
-            os.close(root_fd)
+    def _prepare_and_open_root(
+        self,
+    ) -> tuple[tuple[str, ...], tuple[int, ...], tuple[tuple[int, int], ...]]:
+        parts = self._root.parts
+        if len(parts) < 2 or parts[0] != os.path.sep:
             raise DatasetPublicationConflict()
-        return root_fd
-
-    def _assert_root_path_stable(self, expected_identity: tuple[int, int]) -> None:
-        current_fd = self._open_private_root()
+        names = tuple(parts[1:])
+        descriptors = [os.open(os.path.sep, _DIRECTORY_FLAGS)]
+        identities: list[tuple[int, int]] = []
         try:
-            metadata = os.fstat(current_fd)
-            if (metadata.st_dev, metadata.st_ino) != expected_identity:
+            for index, name in enumerate(names):
+                parent_fd = descriptors[-1]
+                child_fd = self._open_or_create_directory(parent_fd, name)
+                child_metadata = os.fstat(child_fd)
+                child_identity = (child_metadata.st_dev, child_metadata.st_ino)
+                is_root = index == len(names) - 1
+                if is_root:
+                    os.close(child_fd)
+                    self._after_prepare_root()
+                    root_fd = self._open_observed_directory(parent_fd, name)
+                    root_metadata = os.fstat(root_fd)
+                    if (
+                        (root_metadata.st_dev, root_metadata.st_ino)
+                        != child_identity
+                        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+                    ):
+                        os.close(root_fd)
+                        raise DatasetPublicationConflict()
+                    descriptors.append(root_fd)
+                    identities.append(child_identity)
+                    return names, tuple(descriptors), tuple(identities)
+                descriptors.append(child_fd)
+                identities.append(child_identity)
+        except Exception:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+            raise
+        raise DatasetPublicationConflict()
+
+    def _open_or_create_directory(self, parent_fd: int, name: str) -> int:
+        while True:
+            try:
+                return DatasetPublisher._open_observed_directory(parent_fd, name)
+            except FileNotFoundError:
+                return self._create_directory_component(parent_fd, name)
+            except OSError as exc:
+                raise DatasetPublicationConflict() from exc
+
+    def _create_directory_component(self, parent_fd: int, name: str) -> int:
+        for _ in range(100):
+            private_name = f".dataset-root-{secrets.token_hex(16)}"
+            try:
+                os.mkdir(private_name, 0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                continue
+            observed = os.stat(
+                private_name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            expected_identity = (observed.st_dev, observed.st_ino)
+            self._after_private_component_mkdir(parent_fd, private_name)
+            private_fd = self._open_observed_directory(
+                parent_fd,
+                private_name,
+                expected_identity,
+            )
+            try:
+                os.fsync(private_fd)
+                os.fsync(parent_fd)
+                try:
+                    _atomic_rename_no_replace(parent_fd, private_name, name)
+                except OSError as exc:
+                    if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                        raise
+                    winner_fd = self._open_observed_directory(parent_fd, name)
+                    os.close(private_fd)
+                    return winner_fd
+                self._assert_named_directory_identity(
+                    parent_fd,
+                    name,
+                    private_fd,
+                    expected_identity,
+                )
+                os.fsync(parent_fd)
+                return private_fd
+            except Exception:
+                os.close(private_fd)
+                raise
+        raise DatasetPublicationConflict()
+
+    def _after_private_component_mkdir(
+        self,
+        parent_fd: int,
+        private_name: str,
+    ) -> None:
+        """Test hook after the private component identity is captured."""
+
+    @staticmethod
+    def _open_observed_directory(
+        parent_fd: int,
+        name: str,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> int:
+        observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(observed.st_mode):
+            raise DatasetPublicationConflict()
+        if expected_identity is not None and (
+            observed.st_dev,
+            observed.st_ino,
+        ) != expected_identity:
+            raise DatasetPublicationConflict()
+        descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        try:
+            opened = os.fstat(descriptor)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            identities = {
+                (observed.st_dev, observed.st_ino),
+                (opened.st_dev, opened.st_ino),
+                (current.st_dev, current.st_ino),
+            }
+            if (
+                len(identities) != 1
+                or not stat.S_ISDIR(opened.st_mode)
+                or not stat.S_ISDIR(current.st_mode)
+            ):
                 raise DatasetPublicationConflict()
-        finally:
-            os.close(current_fd)
+            return descriptor
+        except Exception:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _assert_named_directory_identity(
+        parent_fd: int,
+        name: str,
+        descriptor: int,
+        expected_identity: tuple[int, int],
+    ) -> None:
+        opened = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != expected_identity
+            or (named.st_dev, named.st_ino) != expected_identity
+        ):
+            raise DatasetPublicationConflict()
+
+    @staticmethod
+    def _assert_root_path_stable(
+        names: tuple[str, ...],
+        descriptors: tuple[int, ...],
+        expected_identities: tuple[tuple[int, int], ...],
+    ) -> None:
+        for index, (name, expected_identity) in enumerate(
+            zip(names, expected_identities, strict=True)
+        ):
+            opened = os.fstat(descriptors[index + 1])
+            try:
+                named = os.stat(
+                    name,
+                    dir_fd=descriptors[index],
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise DatasetPublicationConflict() from exc
+            is_root = index == len(names) - 1
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or not stat.S_ISDIR(named.st_mode)
+                or (opened.st_dev, opened.st_ino) != expected_identity
+                or (named.st_dev, named.st_ino) != expected_identity
+                or (
+                    is_root
+                    and (
+                        stat.S_IMODE(opened.st_mode) != 0o700
+                        or stat.S_IMODE(named.st_mode) != 0o700
+                    )
+                )
+            ):
+                raise DatasetPublicationConflict()
 
     def _fsync_staging(self, staging_fd: int) -> None:
         os.fsync(staging_fd)
@@ -236,6 +399,7 @@ class DatasetPublisher:
             return None
         except OSError as exc:
             raise DatasetPublicationConflict() from exc
+        artifact_descriptors: list[tuple[str, int, os.stat_result]] = []
         try:
             target_metadata = os.fstat(target_fd)
             if not stat.S_ISDIR(target_metadata.st_mode) or stat.S_IMODE(
@@ -245,10 +409,26 @@ class DatasetPublisher:
             if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
                 raise DatasetPublicationConflict()
             for filename, attribute in _ARTIFACT_PAYLOADS:
-                if self._read_private_file(target_fd, filename) != getattr(
-                    artifacts, attribute
+                descriptor, metadata = self._open_private_file(target_fd, filename)
+                artifact_descriptors.append((filename, descriptor, metadata))
+                if self._read_open_private_file(descriptor) != getattr(artifacts, attribute):
+                    raise DatasetPublicationConflict()
+            for filename, _, metadata in artifact_descriptors:
+                current_artifact = os.stat(
+                    filename,
+                    dir_fd=target_fd,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(current_artifact.st_mode)
+                    or stat.S_IMODE(current_artifact.st_mode) != 0o600
+                    or current_artifact.st_nlink != 1
+                    or (current_artifact.st_dev, current_artifact.st_ino)
+                    != (metadata.st_dev, metadata.st_ino)
                 ):
                     raise DatasetPublicationConflict()
+            if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
+                raise DatasetPublicationConflict()
             current = os.stat(target_name, dir_fd=root_fd, follow_symlinks=False)
             if (current.st_dev, current.st_ino) != (
                 target_metadata.st_dev,
@@ -259,6 +439,8 @@ class DatasetPublisher:
         except OSError as exc:
             raise DatasetPublicationConflict() from exc
         finally:
+            for _, descriptor, _ in artifact_descriptors:
+                os.close(descriptor)
             os.close(target_fd)
 
     def _create_staging(self, root_fd: int, dataset_id: str) -> tuple[str, int]:
@@ -313,7 +495,10 @@ class DatasetPublisher:
             os.close(descriptor)
 
     @staticmethod
-    def _read_private_file(parent_fd: int, name: str) -> bytes:
+    def _open_private_file(
+        parent_fd: int,
+        name: str,
+    ) -> tuple[int, os.stat_result]:
         flags = (
             os.O_RDONLY
             | getattr(os, "O_NOFOLLOW", 0)
@@ -328,12 +513,17 @@ class DatasetPublisher:
                 or metadata.st_nlink != 1
             ):
                 raise DatasetPublicationConflict()
-            chunks: list[bytes] = []
-            while chunk := os.read(descriptor, 64 * 1024):
-                chunks.append(chunk)
-            return b"".join(chunks)
-        finally:
+            return descriptor, metadata
+        except Exception:
             os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _read_open_private_file(descriptor: int) -> bytes:
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 64 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     @staticmethod
     def _cleanup_staging(

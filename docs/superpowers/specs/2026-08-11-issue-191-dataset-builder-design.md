@@ -130,11 +130,20 @@ directory, and atomically renames it to `<root>/<dataset_id>`. It never mutates
 a published dataset. If the target already contains the three exact verified
 bytes, publication is an idempotent no-op. Any missing, changed, extra, or
 symlinked artifact at that identity is a stable conflict and remains untouched.
+A root path is traversed from `/` through retained no-follow directory fds. A
+missing component is created as a random private `.dataset-root-*` directory,
+opened and flushed, then atomically renamed without replacement and followed by
+a parent-directory flush. Every retained path identity is checked before
+success. Exact-target verification retains all three artifact fds until a final
+collective name/inode/type/mode/link-count and target-directory stability pass.
 A failed build or failed staging write leaves no published target.
 Failure cleanup removes no filesystem entry, not even fd-relative contents: it
 only closes retained descriptors. It preserves an empty, partial or complete
 private staging directory for a janitor operating outside concurrent
-publication. A `PUBLISHED` result leaves no staging directory because the
+publication. Private `.dataset-root-*` directories left by a losing concurrent
+creator or an interrupted root build use the same janitor policy and are never
+removed by the publisher. A `PUBLISHED` result leaves no dataset staging
+directory because the
 atomic rename turns that directory into the immutable target. A concurrent
 loser returning `ALREADY_PUBLISHED` preserves its complete staging directory
 for that janitor.

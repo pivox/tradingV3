@@ -99,10 +99,15 @@ fichiers et repertoires, puis un rename atomique sans remplacement :
 `renameatx_np(RENAME_EXCL)` sur macOS et
 `renameat2(RENAME_NOREPLACE)` sur Linux. Une plateforme sans primitive sure
 echoue fermee. Toutes les operations sont ancrees sur un `dirfd`
-`O_DIRECTORY|O_NOFOLLOW` dont l'identite device/inode est revalidee avant tout
-succes. Un target existant est idempotent seulement si les trois noms, bytes,
-modes et single-links sont exacts ; fichier change/manquant/supplementaire,
-symlink, hardlink ou course concurrente conflictuelle est preserve et rejete.
+`O_DIRECTORY|O_NOFOLLOW` depuis `/`. Chaque composant du chemin reste ouvert et
+son identite device/inode est revalidee avant tout succes. Un composant manquant
+est d'abord cree sous un nom prive aleatoire `.dataset-root-*`, ouvert et
+`fsync`, puis publie par rename atomique sans remplacement et `fsync` du parent.
+Un target existant est idempotent seulement si les trois noms, bytes, modes et
+single-links sont exacts ; les trois fd d'artefacts restent ouverts jusqu'a une
+validation collective finale de leurs identites et de celle du repertoire.
+Fichier change/manquant/supplementaire, symlink, hardlink ou course concurrente
+conflictuelle est preserve et rejete.
 Le fd du staging est lie a son nom par device/inode juste avant le rename et la
 cible est reverifiee integralement apres celui-ci. Une substitution dans cette
 ultime fenetre ne peut donc jamais produire un faux statut de succes ; elle
@@ -113,7 +118,9 @@ nom, ni fichier via fd. Meme une suppression relative a un fd pourrait courir
 avec le remplacement de l'entree interne visee. Le publisher ferme seulement
 ses descripteurs et preserve donc le staging prive `0700`, vide, partiel ou
 complet selon le point d'echec. Un janitor peut le retirer ulterieurement, hors
-publication concurrente et selon une politique explicite. Une publication
+publication concurrente et selon une politique explicite. Les repertoires
+prives `.dataset-root-*` perdants ou interrompus suivent la meme politique et
+ne sont jamais supprimes par le publisher. Une publication
 `PUBLISHED` ne fuit pas de staging : le repertoire est lui-meme renomme
 atomiquement en cible. En revanche, un publisher concurrent perdant qui retourne
 `ALREADY_PUBLISHED` preserve son staging complet pour ce meme janitor.

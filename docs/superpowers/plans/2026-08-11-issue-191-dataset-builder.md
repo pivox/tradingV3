@@ -303,7 +303,11 @@ git commit -m "docs(#191): document deterministic dataset reproduction"
   staging, including its contents, for a separately governed non-concurrent
   janitor. A `PUBLISHED` result renames the staging directory and leaves no
   leak; a concurrent loser returning `ALREADY_PUBLISHED` preserves its complete
-  staging for that janitor.
+  staging for that janitor. Root traversal is anchored from `/` through retained
+  no-follow fds; missing path components use durable atomic `.dataset-root-*`
+  publication and any losing/interrupted private component is also preserved
+  for the janitor. Existing artifact equality is accepted only after a
+  collective retained-fd identity stability pass.
 - Atomic no-replace uses `renameatx_np(RENAME_EXCL)` on macOS and
   `renameat2(RENAME_NOREPLACE)` on Linux. Unsupported platforms fail closed.
 - Golden artifacts are checked in under
