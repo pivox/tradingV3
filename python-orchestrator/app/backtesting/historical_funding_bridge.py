@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import subprocess
 import threading
 import time
@@ -19,6 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 _HASH = r"^sha256:[0-9a-f]{64}$"
 _DATASET = r"^backtest-dataset-[0-9a-f]{64}$"
 _MAX_BYTES = 8 * 1024 * 1024
+_POSITIVE_DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$")
+_SIGNED_DECIMAL = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$")
+_UTC_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 
 def _time(value: datetime) -> datetime:
@@ -33,6 +37,16 @@ def _json_time(value: datetime) -> str:
 
 def _ordered_json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
+
+
+def _decimal(value: Any, *, positive: bool = False) -> str:
+    pattern = _POSITIVE_DECIMAL if positive else _SIGNED_DECIMAL
+    if type(value) is not str or pattern.fullmatch(value) is None:
+        raise ValueError("canonical_historical_funding_decimal_invalid")
+    number = Decimal(value)
+    if (positive and number <= 0) or (number == 0 and value.startswith("-")):
+        raise ValueError("canonical_historical_funding_decimal_invalid")
+    return value
 
 
 class CanonicalFundingRecord(BaseModel):
@@ -50,6 +64,14 @@ class CanonicalFundingRecord(BaseModel):
 
     @field_serializer("funding_at", "available_at")
     def _serialize_times(self, value: datetime) -> str: return _json_time(value)
+
+    @field_validator("funding_rate", mode="before")
+    @classmethod
+    def _rate(cls, value: Any) -> str: return _decimal(value)
+
+    @field_validator("mark_price", mode="before")
+    @classmethod
+    def _mark(cls, value: Any) -> str: return _decimal(value, positive=True)
 
 
 class CanonicalHistoricalFundingRequest(BaseModel):
@@ -84,6 +106,10 @@ class CanonicalHistoricalFundingRequest(BaseModel):
 
     @field_serializer("entry_at", "exit_at", "coverage_start", "coverage_end")
     def _serialize_times(self, value: datetime) -> str: return _json_time(value)
+
+    @field_validator("quantity", "contract_size", mode="before")
+    @classmethod
+    def _positive_decimals(cls, value: Any) -> str: return _decimal(value, positive=True)
 
     @model_validator(mode="after")
     def _binding(self) -> "CanonicalHistoricalFundingRequest":
@@ -122,6 +148,22 @@ class CanonicalHistoricalFundingResult(BaseModel):
         if not isinstance(value, (list, tuple)):
             raise ValueError("canonical_historical_funding_result_ids_invalid")
         return tuple(value)
+
+    @field_validator("quantity", "contract_size", mode="before")
+    @classmethod
+    def _positive_decimals(cls, value: Any) -> str: return _decimal(value, positive=True)
+
+    @field_validator("funding_cashflow_quote", mode="before")
+    @classmethod
+    def _cashflow(cls, value: Any) -> str: return _decimal(value)
+
+    @field_validator("entry_at", "exit_at", mode="before")
+    @classmethod
+    def _wire_times(cls, value: Any) -> str:
+        if type(value) is not str or _UTC_TIME.fullmatch(value) is None:
+            raise ValueError("canonical_historical_funding_result_time_invalid")
+        datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+        return value
 
     @model_validator(mode="after")
     def _hash(self) -> "CanonicalHistoricalFundingResult":

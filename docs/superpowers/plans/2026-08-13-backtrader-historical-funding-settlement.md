@@ -71,4 +71,3 @@
 - [ ] Document reproduction, trust limits, sign convention, and explicit deferred acquisition/certification.
 - [ ] Run targeted PHP/Python tests, dependency checks, full Python suite/coverage, relevant PHP suites, and `git diff --check`.
 - [ ] Perform local code review, push, open a ready PR referencing #191, request one real GitHub review, address concrete feedback, and merge when checks and threads are clean.
-

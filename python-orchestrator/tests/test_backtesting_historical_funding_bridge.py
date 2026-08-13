@@ -86,3 +86,26 @@ def test_php_generated_settlement_fixture_is_strict_and_hash_valid() -> None:
     )
     assert result.funding_cashflow_quote == "-0.02497"
     assert result.applied_source_record_ids == ("golden-funding-2",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("quantity", "1e0"), ("contract_size", "1.0")),
+)
+def test_request_rejects_noncanonical_positive_decimals(field: str, value: str) -> None:
+    payload = _request().model_dump()
+    payload[field] = value
+    with pytest.raises(ValueError):
+        CanonicalHistoricalFundingRequest.model_validate(payload)
+
+
+def test_result_rejects_noncanonical_cashflow_even_with_rebound_hash() -> None:
+    from app.backtesting.historical_funding_bridge import CanonicalHistoricalFundingResult, _ordered_json
+    import hashlib
+    payload = json.loads((FIXTURES / "php-historical-funding-settlement.json").read_bytes())
+    payload["funding_cashflow_quote"] = "-0.024970"
+    payload["result_hash"] = "sha256:" + hashlib.sha256(
+        _ordered_json({key: value for key, value in payload.items() if key != "result_hash"})
+    ).hexdigest()
+    with pytest.raises(ValueError):
+        CanonicalHistoricalFundingResult.model_validate(payload)
