@@ -2,8 +2,9 @@
 
 ## Statut
 
-Contrats v1, Dataset Builder deterministe, frontiere d'identite moderne et pont
-canonique vers les regles TradingCore livres pour #191.
+Contrats v1, Dataset Builder deterministe, frontiere d'identite moderne,
+projection des indicateurs Paper et pont canonique vers les regles TradingCore
+livres pour #191.
 
 Ce lot ne livre pas encore un moteur Backtrader executable. Il fixe la frontiere
 de contrat entre les futurs composants :
@@ -33,11 +34,14 @@ Le backtesting #191 est implemente en lots atomiques. Les lots livres fixent :
 - le protocole PHP et son pont subprocess Python dans
   `trading-app/src/TradingCore/Backtesting` et
   `python-orchestrator/app/backtesting/tradingcore_bridge.py` ;
+- la projection deterministe des fenetres Paper verifiees dans
+  `trading-app/src/TradingCore/Backtesting/Indicator` et son pont Python
+  `python-orchestrator/app/backtesting/indicator_bridge.py` ;
 - des fixtures golden et des tests unitaires verrouillant les bytes, les checksums,
   la qualite et les conflits de publication ;
 - cette page d'architecture.
 
-Backtrader sera branche derriere ces contrats dans une PR suivante. Les resultats
+Backtrader sera branche derriere ces contrats dans un lot suivant. Les resultats
 de backtest ne seront jamais presentes comme preuve live.
 
 ## Invariants verrouilles par les contrats v1
@@ -332,28 +336,57 @@ remplace par l'instant fourni. A requete, code et catalogues identiques, deux
 invocations produisent donc les memes bytes sur `stdout`, y compris pour un
 no-trade.
 
-### Dependance du prochain lot : bougies Paper vers indicateurs PHP
+### Projection livre : bougies Paper vers indicateurs PHP
 
-Ce pont ne fabrique pas encore `indicators_by_timeframe`. Le lot #191 suivant
-doit projeter les bougies du dataset Paper verifie vers les indicateurs possedes
-par PHP avant toute evaluation. Pour chaque symbole et timeframe, la fenetre
-doit contenir au moins 250 bougies cloturees, continues et ordonnees ; une
-bougie n'est visible a `evaluated_at` que si `complete=true` et
-`available_at <= evaluated_at`.
+Le `VerifiedIndicatorWindowBuilder` execute d'abord
+`DatasetSerializer.verify()` sur les artefacts complets, puis seulement
+selectionne le suffixe admissible le plus recent a `evaluated_at`. Il ne peut
+donc ni lire ni slicer un dataset non verifie. Chaque timeframe natif demande
+exactement 250 bougies `backtest-candle.v1` ; `4h` demande exactement 1 000
+bougies `1h`, agregees en 250 bougies `4h` alignees UTC. Si `1h` et `4h` sont
+demandees ensemble, elles coexistent dans la meme requete : les 1 000 bougies
+horaires servent au `4h` et leur suffixe de 250 bougies sert au snapshot `1h`.
+Il n'existe ni source native `4h`, ni backfill, ni substitution de timeframe,
+ni calcul sur bougie ouverte.
 
-Le `4h` doit etre agrege canoniquement depuis quatre bougies `1h` fermees,
-alignees sur la grille UTC, sans gap ni recouvrement. Son `available_at` est au
-moins le maximum des quatre sources et sa disponibilite doit elle aussi preceder
-ou egaler `evaluated_at`. Aucun backfill depuis le futur, calcul sur bougie
-ouverte ou substitution de timeframe n'est permis.
+La projection PHP valide forme, provenance, chronologie, disponibilite et
+valeurs finies avant de calculer exactement 250 barres par snapshot. Le
+calculateur est exclusivement `php_fallback_v1` : il ne branche pas sur
+`php-trader`, afin qu'une meme preuve Paper produise les memes indicateurs sur
+tous les hotes. Les sorties contiennent la forme canonique attendue par les
+regles, `kline_time`, `window_hash`, `input_hash` et `result_hash`; les deux
+derniers lient respectivement la requete normalisee et le resultat complet hors
+son propre hash.
 
-La projection doit enfin rester liee au `dataset_id`, aux checksums, au reseau,
-a la venue de market data, au market type et au symbole du
-`DatasetDescriptor`. L'identite d'execution des snapshots reste volontairement
-`exchange=fake`; elle ne doit jamais effacer la provenance OKX ou Hyperliquid du
-dataset. Dataset, venue ou reseau mixtes/incompatibles doivent rejeter avant
-l'appel du pont. Tant que cette projection et ce binding ne sont pas livres,
-le pont ne constitue pas un moteur Backtrader executable de bout en bout.
+La provenance de marche (`source_network`, `market_data_venue`, checksums,
+`dataset_id` et `market_type=perpetual`) reste dans `dataset_binding`. En
+revanche, chaque `snapshot_identity` porte intentionnellement `exchange=fake`:
+une source OKX ou Hyperliquid est une provenance de donnees, jamais une identite
+d'execution ou un ordre sur cette venue.
+
+Le sous-processus Python est gele apres construction : argv sans shell,
+environnement minimal deterministe, timeout de 15 secondes et lecture bornee de
+`stdout`/`stderr`. Entree et sortie ont une limite de 8 MiB, le decodeur PHP
+refuse plus de 128 niveaux, plus de 20 000 tokens structurels, les cles JSON
+dupliquees et tout contenu invalide. Les erreurs de taille, profondeur, tokens,
+sortie, I/O ou timeout sont stables et fail-closed; aucun resultat partiel,
+retry ou fallback n'est produit.
+
+La reproduction operateur du protocole est la commande Symfony suivante; elle
+lit un unique objet JSON sur stdin et ecrit un unique resultat canonique sur
+stdout :
+
+```bash
+cd trading-app
+php bin/console app:backtest:indicators:project --no-interaction --no-ansi < request.json
+```
+
+Le controle Python de retour recalcule, a titre de preuve uniquement, les
+`window_hash` des fenetres natives et derivees et les compare a la reponse PHP.
+Il derive en memoire la seule representation `4h` necessaire a cette preuve,
+sans generer de bougie source et sans calculer d'indicateur. PHP reste la seule
+autorite de calcul; son projecteur demeure l'autorite canonique d'agregation
+`4h`.
 
 ### Reproductibilite
 
@@ -425,10 +458,11 @@ reelle lorsque les donnees seront disponibles.
 
 - execution Backtrader ;
 - publication filesystem et commande operateur de l'adapter Paper ;
-- projection des bougies Paper en indicateurs PHP ;
 - simulation maker/taker ;
 - partial fills ;
 - funding historique ;
+- couts, slippage, frais, borrow et liquidation ;
+- ledger de trades et resultats de backtest ;
 - rapports de metrics ;
 - simulation 100 trades ;
 - validation statistique.
@@ -438,10 +472,9 @@ tests golden dedies.
 
 Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. La frontiere de run utilise desormais les
-identites exactes et le snapshot immuable #133/#303, mais ce contrat seul ne
-rend pas encore un mode moderne executable de bout en bout : le pont de regles
-TradingCore est livre, mais la projection d'indicateurs, l'execution Backtrader
-et le simulateur restent differes.
+identites exactes, le snapshot immuable #133/#303 et la projection
+d'indicateurs PHP. Elle ne rend pas encore un mode moderne executable de bout
+en bout : Backtrader, les fills, les couts et le ledger restent differes.
 
 Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
@@ -455,6 +488,7 @@ python3 -m pytest -q \
   tests/test_backtesting_modern_identity.py \
   tests/test_backtesting_contracts.py \
   tests/test_backtesting_tradingcore_bridge.py \
+  tests/test_backtesting_indicator_bridge.py \
   tests/test_schemas.py \
   tests/test_symfony_client.py
 PYTHONHASHSEED=1 python3 -m pytest \
@@ -468,5 +502,14 @@ PYTHONHASHSEED=987654 python3 -m pytest \
 python3 -m pytest -q
 python3 -m compileall -q app tests
 cd ..
+cd trading-app
+php bin/phpunit \
+  tests/TradingCore/Backtesting/Indicator \
+  tests/TradingCore/Backtesting/Json \
+  tests/Command/BacktestProjectCanonicalIndicatorsCommandTest.php \
+  tests/Command/BacktestEvaluateCanonicalRulesCommandTest.php \
+  tests/MtfValidator/Policy/CanonicalSetupRuleRuntimeTest.php
+cd ..
+python3 -m mkdocs build --strict
 git diff --check
 ```
