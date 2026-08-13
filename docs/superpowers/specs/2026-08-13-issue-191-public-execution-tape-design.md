@@ -9,10 +9,10 @@ aggressor direction from OHLCV volume.
 ## Boundary
 
 The already verified Paper v2 snapshot remains the source authority. PHP
-projects only `public_trade` events into canonical records containing source
-identity, venue trade identity, exact event/availability timestamps, aggressor
-side, price, quantity and the venue-owned quantity unit. Candles and trades are
-separate outputs of the same source checksum.
+projects only `public_trade` events into canonical records containing the exact
+source snapshot checksum, venue trade identity, exact event/availability
+timestamps, aggressor side, price, quantity and the venue-owned quantity unit.
+Candles and trades are separate outputs of the same source checksum.
 
 Python validates the PHP records, binds them to the exact normalized candle
 `dataset_id`/checksum and emits an immutable canonical tape manifest plus
@@ -24,8 +24,9 @@ NDJSON. The tape checksum binds all source facts and exact trade bytes.
 - only perpetual BTCUSDT/ETHUSDT records already admitted by Paper v2;
 - `available_at >= happened_at`; consumers may only see a trade at
   `available_at`;
-- event time belongs to `[dataset.start_at, dataset.end_at)`; reception may be
-  later and remains explicit as the only consumer visibility boundary;
+- event time belongs to at least one exact stream interval for its symbol;
+  reception may be later and remains explicit as the only consumer visibility
+  boundary;
 - unique source record and venue trade identities;
 - strict canonical decimals and explicit `contracts` versus `base_asset` unit;
 - OKX identity is the numeric trade ID; Hyperliquid identity is the venue's

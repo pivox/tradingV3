@@ -51,6 +51,7 @@ class PublicTradeRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
     schema_version: Literal["backtest-public-trade.v1"]
     source_record_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_checksum: str = Field(pattern=_HASH)
     source_network: Literal["mainnet", "testnet"]
     market_data_venue: Literal["okx", "hyperliquid"]
     market_type: Literal["perpetual"]
@@ -189,11 +190,14 @@ def _serialize(
         or len(venue_ids) != len(records)
         or any(
             item.source_network != dataset.source_network
+            or item.source_checksum != dataset.source_checksum
             or item.market_data_venue != dataset.market_data_venue
             or item.market_type != dataset.market_type.value
-            or item.symbol not in dataset.symbols
-            or item.happened_at < dataset.start_at
-            or item.happened_at >= dataset.end_at
+            or not any(
+                stream.symbol == item.symbol
+                and stream.first_open_at <= item.happened_at < stream.last_close_at
+                for stream in dataset.streams
+            )
             for item in records
         )
     ):

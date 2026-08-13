@@ -13,6 +13,7 @@ final readonly class NormalizedBacktestPublicTrade
 
     public function __construct(
         public string $sourceRecordId,
+        public string $sourceChecksum,
         public string $sourceNetwork,
         public string $marketDataVenue,
         public string $symbol,
@@ -25,6 +26,7 @@ final readonly class NormalizedBacktestPublicTrade
         public string $quantityUnit,
     ) {
         if (preg_match('/\A[0-9a-f]{64}\z/D', $sourceRecordId) !== 1
+            || preg_match('/\Asha256:[0-9a-f]{64}\z/D', $sourceChecksum) !== 1
             || !\in_array($sourceNetwork, ['mainnet', 'testnet'], true)
             || !\in_array($marketDataVenue, ['okx', 'hyperliquid'], true)
             || !\in_array($symbol, ['BTCUSDT', 'ETHUSDT'], true)
@@ -54,6 +56,7 @@ final readonly class NormalizedBacktestPublicTrade
         return [
             'schema_version' => self::SCHEMA_VERSION,
             'source_record_id' => $this->sourceRecordId,
+            'source_checksum' => $this->sourceChecksum,
             'source_network' => $this->sourceNetwork,
             'market_data_venue' => $this->marketDataVenue,
             'market_type' => 'perpetual',

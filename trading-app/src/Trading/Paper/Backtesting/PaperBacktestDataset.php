@@ -59,6 +59,7 @@ final readonly class PaperBacktestDataset
             if (!$trade instanceof NormalizedBacktestPublicTrade
                 || $trade->sourceNetwork !== $sourceIdentity['source_network']
                 || $trade->marketDataVenue !== $sourceIdentity['market_data_venue']
+                || $trade->sourceChecksum !== $sourceIdentity['source_checksum']
                 || isset($sourceIds[$trade->sourceRecordId])
                 || isset($tradeIds[$trade->symbol . '|' . $trade->venueTradeId])
             ) {

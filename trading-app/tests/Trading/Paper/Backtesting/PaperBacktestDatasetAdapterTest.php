@@ -98,6 +98,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame([[
             'schema_version' => 'backtest-public-trade.v1',
             'source_record_id' => $okxTrade->eventId,
+            'source_checksum' => $okx->sourceIdentity['source_checksum'],
             'source_network' => 'mainnet',
             'market_data_venue' => 'okx',
             'market_type' => 'perpetual',
@@ -422,6 +423,19 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             self::assertSame('paper_backtest_public_trades_invalid', $exception->getMessage());
         }
 
+        $foreignSource = $withTrade->sourceIdentity;
+        $foreignSource['source_checksum'] = 'sha256:' . str_repeat('f', 64);
+        try {
+            new PaperBacktestDataset(
+                $foreignSource,
+                $withTrade->candles,
+                $withTrade->publicTrades,
+            );
+            self::fail('Expected trade source checksum mismatch rejection.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_backtest_public_trades_invalid', $exception->getMessage());
+        }
+
         $candle = $dataset->candles[0];
         try {
             new NormalizedBacktestCandle(
@@ -447,6 +461,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             try {
                 new NormalizedBacktestPublicTrade(
                     $trade->sourceRecordId,
+                    $trade->sourceChecksum,
                     $trade->sourceNetwork,
                     $trade->marketDataVenue,
                     $trade->symbol,

@@ -55,13 +55,14 @@ final class PaperBacktestDatasetAdapter
 
         $candles = [];
         $publicTrades = [];
+        $sourceChecksum = 'sha256:' . $manifest->eventsFileSha256;
         foreach ($snapshot->events as $event) {
             $this->assertEventEnvelope($event, $manifest);
             if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
                 $this->assertCandleNativeSymbol($event, $manifest);
                 $publicTrades[] = $manifest->venue === PaperMarketDataVenue::OKX
-                    ? $this->normalizeOkxTrade($event)
-                    : $this->normalizeHyperliquidTrade($event);
+                    ? $this->normalizeOkxTrade($event, $sourceChecksum)
+                    : $this->normalizeHyperliquidTrade($event, $sourceChecksum);
                 continue;
             }
             $timeframe = $this->timeframe($event->channel);
@@ -94,14 +95,17 @@ final class PaperBacktestDatasetAdapter
             'source' => 'paper_market_dataset',
             'source_schema_version' => 'paper-market-dataset.v2',
             'source_build_version' => $manifest->recorderVersion,
-            'source_checksum' => 'sha256:' . $manifest->eventsFileSha256,
+            'source_checksum' => $sourceChecksum,
             'source_network' => $manifest->network->value,
             'market_data_venue' => $manifest->venue->value,
             'market_type' => 'perpetual',
         ], $candles, $publicTrades);
     }
 
-    private function normalizeOkxTrade(PaperMarketEvent $event): NormalizedBacktestPublicTrade
+    private function normalizeOkxTrade(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicTrade
     {
         $payload = $event->payload;
         $this->assertExactKeys($payload, self::OKX_TRADE_KEYS);
@@ -125,6 +129,7 @@ final class PaperBacktestDatasetAdapter
         }
         return $this->publicTrade(
             $event,
+            $sourceChecksum,
             $payload['trade_id'],
             $payload['taker_side'],
             $payload['price'] ?? null,
@@ -133,7 +138,10 @@ final class PaperBacktestDatasetAdapter
         );
     }
 
-    private function normalizeHyperliquidTrade(PaperMarketEvent $event): NormalizedBacktestPublicTrade
+    private function normalizeHyperliquidTrade(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+    ): NormalizedBacktestPublicTrade
     {
         $payload = $event->payload;
         $this->assertExactKeys($payload, self::HYPERLIQUID_TRADE_KEYS);
@@ -152,6 +160,7 @@ final class PaperBacktestDatasetAdapter
         }
         return $this->publicTrade(
             $event,
+            $sourceChecksum,
             $payload['block_time'] . ':' . $payload['trade_id'],
             $payload['side'],
             $payload['price'] ?? null,
@@ -162,6 +171,7 @@ final class PaperBacktestDatasetAdapter
 
     private function publicTrade(
         PaperMarketEvent $event,
+        string $sourceChecksum,
         string $tradeId,
         string $side,
         mixed $price,
@@ -176,6 +186,7 @@ final class PaperBacktestDatasetAdapter
         }
         return new NormalizedBacktestPublicTrade(
             $event->eventId,
+            $sourceChecksum,
             $event->sourceNetwork->value,
             $event->sourceVenue->value,
             $event->symbol,

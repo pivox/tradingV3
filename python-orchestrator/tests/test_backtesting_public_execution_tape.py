@@ -44,6 +44,7 @@ def _dataset():
 def _trade(record_id: str = "1" * 64, trade_id: str = "42") -> PublicTradeRecord:
     return PublicTradeRecord(
         schema_version="backtest-public-trade.v1", source_record_id=record_id,
+        source_checksum="sha256:" + "a" * 64,
         source_network="mainnet", market_data_venue="okx", market_type="perpetual",
         symbol="BTCUSDT", venue_trade_id=trade_id,
         happened_at=datetime(2026, 8, 13, 10, 0, 30, tzinfo=UTC),
@@ -97,6 +98,13 @@ def test_tape_rejects_an_unrelated_dataset_even_with_valid_bytes() -> None:
         VerifiedPublicExecutionTape(artifacts, dataset=unrelated)
 
 
+def test_tape_rejects_a_trade_from_another_authenticated_source_snapshot() -> None:
+    foreign = _trade().model_copy(update={"source_checksum": "sha256:" + "b" * 64})
+
+    with pytest.raises(ValueError, match="public_execution_tape_records_invalid"):
+        serialize_public_execution_tape(dataset=_dataset(), records=(foreign,))
+
+
 @pytest.mark.parametrize(
     "updates",
     (
@@ -130,6 +138,56 @@ def test_tape_keeps_a_trade_received_after_its_exchange_coverage() -> None:
     )
 
     assert tape.records[0].available_at > _dataset().end_at
+
+
+def test_tape_rejects_a_trade_outside_its_symbol_stream_coverage() -> None:
+    source = DatasetSourceIdentity(
+        source="paper_market_dataset",
+        source_schema_version="paper-market-dataset.v2",
+        source_build_version="paper-recorder.v2",
+        source_checksum="sha256:" + "a" * 64,
+        source_network="mainnet",
+        market_data_venue="okx",
+        market_type=MarketType.PERPETUAL,
+    )
+    btc = CandleRecord(
+        source_record_id="c" * 64,
+        source_network="mainnet",
+        market_data_venue="okx",
+        market_type=MarketType.PERPETUAL,
+        symbol="BTCUSDT",
+        timeframe=Timeframe.ONE_MINUTE,
+        open_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+        close_at=datetime(2026, 8, 13, 10, 1, tzinfo=UTC),
+        available_at=datetime(2026, 8, 13, 10, 1, tzinfo=UTC),
+        open="30000",
+        high="30100",
+        low="29900",
+        close="30050",
+        volume="12.5",
+        complete=True,
+    )
+    eth = btc.model_copy(
+        update={
+            "source_record_id": "d" * 64,
+            "symbol": "ETHUSDT",
+            "timeframe": Timeframe.ONE_HOUR,
+            "close_at": datetime(2026, 8, 13, 11, tzinfo=UTC),
+            "available_at": datetime(2026, 8, 13, 11, tzinfo=UTC),
+        }
+    )
+    dataset = DatasetSerializer.verify(
+        DatasetSerializer.serialize(DatasetBuilder(source).build((btc, eth)))
+    )
+    trade = _trade().model_copy(
+        update={
+            "happened_at": datetime(2026, 8, 13, 10, 30, tzinfo=UTC),
+            "available_at": datetime(2026, 8, 13, 10, 30, tzinfo=UTC),
+        }
+    )
+
+    with pytest.raises(ValueError, match="public_execution_tape_records_invalid"):
+        serialize_public_execution_tape(dataset=dataset, records=(trade,))
 
 
 def test_tape_rejects_more_records_than_the_bounded_artifact_can_guarantee() -> None:
