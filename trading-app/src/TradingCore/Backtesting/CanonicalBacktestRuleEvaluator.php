@@ -250,7 +250,13 @@ final readonly class CanonicalBacktestRuleEvaluator implements CanonicalBacktest
     /** @param array<string,mixed> $payload */
     public static function canonicalHash(#[\SensitiveParameter] array $payload): string
     {
-        return 'sha256:' . hash('sha256', self::encodeCanonicalValue($payload));
+        return 'sha256:' . hash('sha256', self::canonicalJson($payload));
+    }
+
+    /** @param array<string,mixed> $payload */
+    public static function canonicalJson(#[\SensitiveParameter] array $payload): string
+    {
+        return self::encodeCanonicalValue($payload);
     }
 
     /**

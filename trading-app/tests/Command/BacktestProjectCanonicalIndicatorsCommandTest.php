@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Command;
 
 use App\Command\BacktestProjectCanonicalIndicatorsCommand;
+use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectorInterface;
 use App\TradingCore\Backtesting\Json\StrictJsonObjectDecoder;
@@ -35,7 +36,7 @@ final class BacktestProjectCanonicalIndicatorsCommandTest extends TestCase
             'schema_version' => 'canonical-indicator-projection-request.v1',
             'request_id' => 'request-1',
         ], $observed);
-        self::assertSame(json_encode($projection->toArray(), self::jsonFlags()) . "\n", $tester->getDisplay());
+        self::assertSame(CanonicalBacktestRuleEvaluator::canonicalJson($projection->toArray()) . "\n", $tester->getDisplay());
         self::assertSame('', $tester->getErrorOutput());
         self::assertSame(1, substr_count($tester->getDisplay(), "\n"));
     }
@@ -51,6 +52,28 @@ final class BacktestProjectCanonicalIndicatorsCommandTest extends TestCase
         self::assertSame($first->getDisplay(), $second->getDisplay());
         self::assertSame('', $first->getErrorOutput());
         self::assertSame('', $second->getErrorOutput());
+    }
+
+    public function testItUsesCanonicalRuleBridgeSerializationForNestedProjectionValues(): void
+    {
+        $projection = self::projection([
+            'z_integral' => 1.0,
+            'a_nested' => ['z' => 2.0, 'a' => 3],
+        ]);
+        $plain = json_encode($projection->toArray(), self::jsonFlags()) . "\n";
+        $canonical = CanonicalBacktestRuleEvaluator::canonicalJson($projection->toArray()) . "\n";
+
+        $tester = $this->runCommand(
+            '{"request_id":"request-1"}',
+            $this->projector(static fn (array $request): CanonicalIndicatorProjection => $projection),
+        );
+
+        self::assertNotSame($plain, $canonical);
+        self::assertSame($canonical, $tester->getDisplay());
+        self::assertStringContainsString(
+            '"snapshots_by_timeframe":{"1m":{"a_nested":{"a":3,"z":2},"z_integral":1}}',
+            $tester->getDisplay(),
+        );
     }
 
     #[DataProvider('invalidInputProvider')]
@@ -190,7 +213,8 @@ final class BacktestProjectCanonicalIndicatorsCommandTest extends TestCase
         };
     }
 
-    private static function projection(): CanonicalIndicatorProjection
+    /** @param array<string, mixed> $snapshot */
+    private static function projection(array $snapshot = ['close' => 100.5]): CanonicalIndicatorProjection
     {
         return CanonicalIndicatorProjection::fromValidatedRequest([
             'schema_version' => 'canonical-indicator-projection-request.v1',
@@ -211,7 +235,7 @@ final class BacktestProjectCanonicalIndicatorsCommandTest extends TestCase
             'symbol' => 'BTCUSDT',
             'requested_timeframes' => ['1m'],
             'candles_by_timeframe' => ['1m' => []],
-        ], ['1m' => ['close' => 100.5]]);
+        ], ['1m' => $snapshot]);
     }
 
     private static function jsonFlags(): int

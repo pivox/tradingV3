@@ -164,6 +164,21 @@ final class CanonicalBacktestRuleEvaluatorTest extends TestCase
         );
     }
 
+    public function testCanonicalJsonSortsNestedObjectKeysAndNormalizesIntegralFloats(): void
+    {
+        $payload = [
+            'z' => 1.0,
+            'nested' => ['z' => 2.0, 'a' => 'value'],
+            'a' => true,
+        ];
+        $plain = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        $canonical = CanonicalBacktestRuleEvaluator::canonicalJson($payload);
+
+        self::assertSame('{"a":true,"nested":{"a":"value","z":2},"z":1}', $canonical);
+        self::assertNotSame($plain, $canonical);
+    }
+
     public function testCanonicalHashUsesTheExactSharedPhpInt64FloatBoundary(): void
     {
         self::assertSame(

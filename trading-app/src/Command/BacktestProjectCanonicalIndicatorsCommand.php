@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Command;
 
+use App\TradingCore\Backtesting\CanonicalBacktestRuleEvaluator;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectorInterface;
 use App\TradingCore\Backtesting\Json\StrictJsonObjectDecoder;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -39,10 +40,7 @@ final class BacktestProjectCanonicalIndicatorsCommand extends Command
 
         try {
             $projection = $this->projector->project($request);
-            $encoded = json_encode(
-                $projection->toArray(),
-                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
-            );
+            $encoded = CanonicalBacktestRuleEvaluator::canonicalJson($projection->toArray());
         } catch (\Throwable $exception) {
             $reason = $exception->getMessage();
             if (preg_match('/\Acanonical_indicator_[a-z0-9_:.\-]{1,160}\z/D', $reason) !== 1) {
