@@ -16,6 +16,8 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand(name: 'app:backtest:funding:settle')]
 final class BacktestSettleHistoricalFundingCommand extends Command
 {
+    private const MAX_FUNDING_STRUCTURE_TOKENS = 700_018;
+
     public function __construct(
         private readonly CanonicalHistoricalFundingSettlement $settlement,
         private readonly StrictJsonObjectDecoder $decoder,
@@ -25,7 +27,11 @@ final class BacktestSettleHistoricalFundingCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         try {
-            $request = $this->decoder->decode($this->readInput());
+            // Envelope: 18 tokens; each of the at most 100,000 records adds 7.
+            $request = $this->decoder->decode(
+                $this->readInput(),
+                self::MAX_FUNDING_STRUCTURE_TOKENS,
+            );
             $encoded = CanonicalOrderPlanDecimal::encodeCanonicalJson(
                 $this->settlement->settle($request),
                 'canonical_historical_funding_encoding_invalid',

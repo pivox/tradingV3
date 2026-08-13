@@ -15,8 +15,14 @@ final class StrictJsonObjectDecoder
     private const MAX_STRUCTURE_TOKENS = 32_768;
 
     /** @return array<string, mixed> */
-    public function decode(#[\SensitiveParameter] string $payload): array
+    public function decode(
+        #[\SensitiveParameter] string $payload,
+        int $maxStructureTokens = self::MAX_STRUCTURE_TOKENS,
+    ): array
     {
+        if ($maxStructureTokens < 1 || $maxStructureTokens > 1_000_000) {
+            throw new \InvalidArgumentException('json_structure_bound_invalid');
+        }
         if (strlen($payload) > self::MAX_INPUT_BYTES) {
             throw new \InvalidArgumentException('input_too_large');
         }
@@ -25,7 +31,7 @@ final class StrictJsonObjectDecoder
         }
 
         try {
-            $this->assertNoDuplicateKeysAndBoundDepth($payload);
+            $this->assertNoDuplicateKeysAndBoundDepth($payload, $maxStructureTokens);
             $decoded = json_decode($payload, true, self::MAX_JSON_DEPTH + 1, JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
             throw new \InvalidArgumentException(
@@ -41,7 +47,7 @@ final class StrictJsonObjectDecoder
         return $decoded;
     }
 
-    private function assertNoDuplicateKeysAndBoundDepth(string $json): void
+    private function assertNoDuplicateKeysAndBoundDepth(string $json, int $maxStructureTokens): void
     {
         /** @var list<array{type:'object'|'list',keys:array<string,true>,expecting_key:bool}> $stack */
         $stack = [];
@@ -86,7 +92,7 @@ final class StrictJsonObjectDecoder
                 continue;
             }
             if ($char === '{' || $char === '[') {
-                $this->consumeStructureToken($structureTokens);
+                $this->consumeStructureToken($structureTokens, $maxStructureTokens);
                 $stack[] = [
                     'type' => $char === '{' ? 'object' : 'list',
                     'keys' => [],
@@ -102,7 +108,7 @@ final class StrictJsonObjectDecoder
                 continue;
             }
             if ($char === ',') {
-                $this->consumeStructureToken($structureTokens);
+                $this->consumeStructureToken($structureTokens, $maxStructureTokens);
                 $top = array_key_last($stack);
                 if ($top !== null && $stack[$top]['type'] === 'object') {
                     $stack[$top]['expecting_key'] = true;
@@ -111,10 +117,10 @@ final class StrictJsonObjectDecoder
         }
     }
 
-    private function consumeStructureToken(int &$tokens): void
+    private function consumeStructureToken(int &$tokens, int $maxStructureTokens): void
     {
         ++$tokens;
-        if ($tokens > self::MAX_STRUCTURE_TOKENS) {
+        if ($tokens > $maxStructureTokens) {
             throw new \InvalidArgumentException('json_structure_too_large');
         }
     }

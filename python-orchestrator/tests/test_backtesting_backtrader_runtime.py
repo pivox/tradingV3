@@ -43,8 +43,12 @@ def _record(index: int, high: str, low: str) -> CandleRecord:
     )
 
 
-def _feed() -> VerifiedBacktraderFeedAdapter:
-    records = (_record(0, "101", "99"), _record(1, "103", "99"))
+def _feed(*, unfilled: bool = False) -> VerifiedBacktraderFeedAdapter:
+    records = (
+        (_record(0, "100", "99"), _record(1, "100", "99"), _record(2, "100", "99"))
+        if unfilled
+        else (_record(0, "101", "99"), _record(1, "103", "99"))
+    )
     source = DatasetSourceIdentity(
         source="paper-okx", source_schema_version="paper.v2",
         source_build_version="fixture.v1", source_checksum="sha256:" + "d" * 64,
@@ -55,7 +59,7 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
     return VerifiedBacktraderFeedAdapter(
         artifacts, symbol="BTCUSDT", timeframe="1m",
         period_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
-        period_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+        period_end=datetime(2026, 8, 10, 12, len(records), tzinfo=UTC),
     )
 
 
@@ -244,3 +248,20 @@ def test_runtime_rejects_noncanonical_funding_authority() -> None:
             funding_schedule=_funding_schedule(feed),
             funding_bridge=ForgedBridge(),  # type: ignore[arg-type]
         )
+
+
+def test_runtime_preserves_unfilled_result_with_paired_funding_evidence() -> None:
+    feed = _feed(unfilled=True)
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    result = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=trusted_bridge_for(applied_ids=("must-not-be-applied",)),
+    ))
+
+    assert result["status"] == "not_executed"
+    assert result["reason_code"] == "entry_expired"
+    assert result["net_outcome"] is None
+    assert result["events"] == []
+    assert result["funding_schedule_checksum"] == _funding_schedule(feed).schedule_checksum

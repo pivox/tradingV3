@@ -102,6 +102,11 @@ final class StrictJsonObjectDecoderTest extends TestCase
         $this->decoder->decode($this->wideObject(32_769));
     }
 
+    public function testItSupportsAnExplicitLargerTokenBoundForBoundedProtocols(): void
+    {
+        self::assertCount(32_769, $this->decoder->decode($this->wideObject(32_769), 32_769));
+    }
+
     public function testItAcceptsTheLargestSupportedIndicatorProjectionRequest(): void
     {
         $payload = json_encode($this->completeSupportedIndicatorProjectionRequest(), JSON_THROW_ON_ERROR);

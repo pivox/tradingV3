@@ -36,6 +36,33 @@ final class BacktestSettleHistoricalFundingCommandTest extends TestCase
         }
     }
 
+    public function testItAcceptsARequestBeyondTheSharedDecoderDefaultTokenLimit(): void
+    {
+        $request = $this->request();
+        $start = new \DateTimeImmutable('2026-08-10T00:00:00.000000Z');
+        $request['coverage_start'] = $start->format('Y-m-d\TH:i:s.u\Z');
+        $request['entry_at'] = $request['coverage_start'];
+        $request['records'] = [];
+        for ($index = 1; $index <= 5000; ++$index) {
+            $at = $start->modify('+' . $index . ' seconds')->format('Y-m-d\TH:i:s.u\Z');
+            $request['records'][] = [
+                'source_record_id' => 'funding-' . $index,
+                'funding_at' => $at,
+                'available_at' => $at,
+                'funding_rate' => '0.0001',
+                'mark_price' => '100',
+                'interval_seconds' => 1,
+            ];
+        }
+        $request['coverage_end'] = $request['records'][4999]['funding_at'];
+        $request['exit_at'] = $request['coverage_end'];
+
+        $tester = $this->runCommand(json_encode($request, JSON_THROW_ON_ERROR));
+
+        self::assertSame(Command::SUCCESS, $tester->getStatusCode(), $tester->getErrorOutput());
+        self::assertStringContainsString('"applied_record_count":5000', $tester->getDisplay());
+    }
+
     private function runCommand(string $payload): CommandTester
     {
         $tester = new CommandTester(new BacktestSettleHistoricalFundingCommand(
