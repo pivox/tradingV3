@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import pickle
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -31,6 +33,42 @@ PUBLISHED_RUN_IDENTITIES = (
     ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.long", "1.0.0", "long"),
     ("micro_scalping", "1.0.0", "micro_scalping.momentum_ofi.short", "1.0.0", "short"),
 )
+
+FIXTURES = Path(__file__).parent / "fixtures" / "backtesting"
+
+
+def test_php_effective_config_snapshot_golden_parity_and_tamper_detection() -> None:
+    payload = json.loads(
+        (FIXTURES / "php-effective-config-snapshot.json").read_text(encoding="utf-8")
+    )
+
+    assert calculate_config_hash(
+        payload["config"], payload["condition_catalog_hash"]
+    ) == payload["config_hash"]
+    assert calculate_snapshot_hash(payload) == payload["snapshot_hash"]
+    snapshot = CanonicalEffectiveConfigSnapshot(**payload)
+    assert snapshot.request.execution_capability == "backtest"
+    evidence = snapshot.config["environment"]["evidence"]
+    assert evidence["unicode"] == "café/path"
+    assert evidence["integral_float"] == 3.0
+    assert evidence["scientific"] == 1e-7
+    assert evidence["line_separators"] == "x\u2028y\u2029z"
+    assert snapshot.model_dump()["provenance"] == payload["provenance"]
+    layer_payloads = [layer.model_dump() for layer in snapshot.ordered_layers]
+    assert all(layer in layer_payloads for layer in snapshot.provenance.values())
+
+    for path, value in (
+        (("config", "environment", "evidence", "unicode"), "cafe/path"),
+        (("request", "execution_capability"), "paper"),
+        (("ordered_files", 2), "/setup-X.yaml"),
+    ):
+        forged = deepcopy(payload)
+        target = forged
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
+        with pytest.raises(ValidationError):
+            CanonicalEffectiveConfigSnapshot(**forged)
 
 
 @pytest.mark.parametrize(
