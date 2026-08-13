@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -153,6 +154,33 @@ class _FailSecondWritePublisher(DatasetPublisher):
 class _FailStagingFsyncPublisher(DatasetPublisher):
     def _fsync_staging(self, staging_fd: int) -> None:
         raise OSError("injected staging fsync")
+
+
+class _FailStagingOpenPublisher(DatasetPublisher):
+    def _open_staging(self, root_fd: int, staging_name: str) -> int:
+        raise OSError(errno.EMFILE, "injected staging open")
+
+
+class _FailStagingMetadataPublisher(DatasetPublisher):
+    def _validate_staging(self, staging_fd: int) -> None:
+        raise DatasetPublicationConflict()
+
+
+@pytest.mark.parametrize(
+    "publisher_type",
+    (_FailStagingOpenPublisher, _FailStagingMetadataPublisher),
+)
+def test_staging_creation_failure_cleans_directory_before_returning(
+    tmp_path: Path,
+    publisher_type: type[DatasetPublisher],
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises((OSError, DatasetPublicationConflict)):
+        publisher_type(root).publish(_artifacts())
+
+    assert not _target(root).exists()
+    assert not tuple(root.glob(".*.staging-*"))
 
 
 @pytest.mark.parametrize(

@@ -214,23 +214,34 @@ class DatasetPublisher:
         finally:
             os.close(target_fd)
 
-    @staticmethod
-    def _create_staging(root_fd: int, dataset_id: str) -> tuple[str, int]:
+    def _create_staging(self, root_fd: int, dataset_id: str) -> tuple[str, int]:
         for _ in range(100):
             name = f".{dataset_id}.staging-{secrets.token_hex(16)}"
             try:
                 os.mkdir(name, 0o700, dir_fd=root_fd)
             except FileExistsError:
                 continue
-            staging_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_fd)
-            metadata = os.fstat(staging_fd)
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(
-                metadata.st_mode
-            ) != 0o700:
-                os.close(staging_fd)
-                raise DatasetPublicationConflict()
-            return name, staging_fd
+            staging_fd: int | None = None
+            try:
+                staging_fd = self._open_staging(root_fd, name)
+                self._validate_staging(staging_fd)
+                return name, staging_fd
+            except Exception:
+                if staging_fd is not None:
+                    os.close(staging_fd)
+                self._cleanup_staging(root_fd, name)
+                raise
         raise DatasetPublicationConflict()
+
+    def _open_staging(self, root_fd: int, staging_name: str) -> int:
+        return os.open(staging_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+
+    def _validate_staging(self, staging_fd: int) -> None:
+        metadata = os.fstat(staging_fd)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(
+            metadata.st_mode
+        ) != 0o700:
+            raise DatasetPublicationConflict()
 
     @staticmethod
     def _write_private_file(parent_fd: int, name: str, payload: bytes) -> None:
