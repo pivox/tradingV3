@@ -466,6 +466,7 @@ class DatasetPublisher:
                     raise DatasetPublicationConflict()
             if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
                 raise DatasetPublicationConflict()
+            target_second_pass_metadata = os.fstat(target_fd)
             second_pass_metadata = tuple(
                 os.fstat(descriptor)
                 for _, descriptor, _ in artifact_descriptors
@@ -525,9 +526,23 @@ class DatasetPublisher:
                 or current.st_nlink < 1
                 or opened_target.st_nlink < 1
                 or (current.st_dev, current.st_ino)
-                != (target_metadata.st_dev, target_metadata.st_ino)
+                != (
+                    target_second_pass_metadata.st_dev,
+                    target_second_pass_metadata.st_ino,
+                )
                 or (opened_target.st_dev, opened_target.st_ino)
-                != (target_metadata.st_dev, target_metadata.st_ino)
+                != (
+                    target_second_pass_metadata.st_dev,
+                    target_second_pass_metadata.st_ino,
+                )
+                or current.st_size != target_second_pass_metadata.st_size
+                or opened_target.st_size != target_second_pass_metadata.st_size
+                or current.st_mtime_ns != target_second_pass_metadata.st_mtime_ns
+                or opened_target.st_mtime_ns
+                != target_second_pass_metadata.st_mtime_ns
+                or current.st_ctime_ns != target_second_pass_metadata.st_ctime_ns
+                or opened_target.st_ctime_ns
+                != target_second_pass_metadata.st_ctime_ns
             ):
                 raise DatasetPublicationConflict()
             return DatasetPublicationStatus.ALREADY_PUBLISHED

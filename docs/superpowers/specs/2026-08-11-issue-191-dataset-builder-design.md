@@ -145,7 +145,10 @@ a parent-directory flush. Every retained path identity is checked before
 success. Exact-target verification retains all three artifact fds until a final
 collective name/inode/type/mode/link-count/size/mtime/ctime and target-directory
 stability pass around its second content read. This detects in-place mutations
-during validation. It is deliberately a finite snapshot: portable POSIX calls
+during validation. The target directory itself is snapshotted before that pass
+and rechecked afterward for identity, type, mode, links, size, mtime and ctime,
+detecting late entry swaps even when the original entry is restored. It is
+deliberately a finite snapshot: portable POSIX calls
 cannot prevent a hostile same-UID writer from mutating bytes after the final
 observation, so storage ownership or external coordination must exclude such
 writes for post-return immutability.

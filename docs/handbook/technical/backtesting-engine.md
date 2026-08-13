@@ -108,6 +108,9 @@ single-links sont exacts ; les trois fd d'artefacts restent ouverts jusqu'a une
 validation collective finale de leurs identites et de celle du repertoire.
 Cette passe compare aussi taille, `mtime_ns` et `ctime_ns` avant/apres la
 seconde lecture afin de detecter les ecritures in-place pendant la validation.
+Le repertoire cible est snapshotte au meme point et ses identite, mode, liens,
+taille, `mtime_ns` et `ctime_ns` sont revalides apres tous les artefacts, ce qui
+detecte aussi un echange d'entree tardif meme restaure.
 Chaque adoption `ALREADY_PUBLISHED` effectue ensuite un `fsync` du repertoire
 racine avant la derniere verification du chemin. De meme, un composant racine
 cree par un concurrent n'est adopte qu'apres `fsync` de son parent.

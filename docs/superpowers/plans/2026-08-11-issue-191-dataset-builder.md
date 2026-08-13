@@ -314,7 +314,8 @@ git commit -m "docs(#191): document deterministic dataset reproduction"
   publication and any losing/interrupted private component is also preserved
   for the janitor. Existing artifact equality is accepted only after a
   collective retained-fd identity and size/mtime/ctime stability pass around a
-  second content read, followed by a root-directory flush on every
+  second content read, plus an equivalent target-directory snapshot that catches
+  late entry swaps, followed by a root-directory flush on every
   `ALREADY_PUBLISHED` path. This finite snapshot detects concurrent validation
   mutations; storage ownership/coordination remains required against hostile
   same-UID writes after the last observation. Concurrently won root components

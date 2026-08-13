@@ -378,6 +378,61 @@ def test_in_place_mutation_after_clean_second_read_is_detected_by_metadata(
         assert actual != artifacts.candles_ndjson
 
 
+@pytest.mark.parametrize("restore_entry", (False, True))
+def test_entry_swap_after_individual_final_check_is_detected_by_target_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restore_entry: bool,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    DatasetPublisher(root).publish(artifacts)
+    target = _target(root)
+    target_before = target.stat()
+    real_stat = os.stat
+    quality_stat_count = 0
+
+    def swap_candles_on_final_quality_stat(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal quality_stat_count
+        if path == "quality-report.json" and dir_fd is not None:
+            quality_stat_count += 1
+            if quality_stat_count == 2:
+                candles = target / "candles.ndjson"
+                original = target / "candles-original"
+                candles.rename(original)
+                candles.write_bytes(b"corrupt")
+                candles.chmod(0o600)
+                if restore_entry:
+                    candles.unlink()
+                    original.rename(candles)
+                os.utime(
+                    target,
+                    ns=(
+                        target_before.st_atime_ns,
+                        target_before.st_mtime_ns + 1_000_000_000,
+                    ),
+                )
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "stat", swap_candles_on_final_quality_stat)
+
+    with pytest.raises(DatasetPublicationConflict):
+        DatasetPublisher(root).publish(artifacts)
+
+    if restore_entry:
+        assert (target / "candles.ndjson").read_bytes() == artifacts.candles_ndjson
+    else:
+        assert (target / "candles.ndjson").read_bytes() == b"corrupt"
+        assert (target / "candles-original").read_bytes() == (
+            artifacts.candles_ndjson
+        )
+
+
 class _FailBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         raise OSError("injected before rename")
