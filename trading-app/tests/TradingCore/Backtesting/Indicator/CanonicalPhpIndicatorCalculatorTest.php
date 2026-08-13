@@ -14,12 +14,15 @@ use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorCandle;
+use App\TradingCore\Backtesting\Indicator\CanonicalFiniteSeriesValidator;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectionException;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorWindow;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(CanonicalPhpIndicatorCalculator::class)]
+#[CoversClass(CanonicalFiniteSeriesValidator::class)]
 final class CanonicalPhpIndicatorCalculatorTest extends TestCase
 {
     private const GOLDEN_DELTA = 1.0e-12;
@@ -43,6 +46,8 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
 
         self::assertSame([
             'close',
+            'high_series',
+            'low_series',
             'rsi',
             'ema_20',
             'ema_50',
@@ -75,6 +80,19 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         ], array_keys($first));
         self::assertSame([14, 15], array_keys($first['adx']));
         $this->assertFiniteNumericContext($first);
+
+        $expectedHighs = array_map(
+            static fn (CanonicalIndicatorCandle $candle): float => (float) $candle->high,
+            array_slice($window->candles(), -60),
+        );
+        $expectedLows = array_map(
+            static fn (CanonicalIndicatorCandle $candle): float => (float) $candle->low,
+            array_slice($window->candles(), -60),
+        );
+        self::assertCount(60, $first['high_series']);
+        self::assertCount(60, $first['low_series']);
+        self::assertSame($expectedHighs, $first['high_series']);
+        self::assertSame($expectedLows, $first['low_series']);
 
         self::assertSame(125.23, $first['close']);
         // Golden vector independently derived from the documented PHP/Wilder
@@ -152,6 +170,25 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         self::assertNull($first['pullback_age_bars']);
         self::assertEqualsWithDelta(1.1857292759706191, $first['volume_ratio'], self::GOLDEN_DELTA);
         self::assertEqualsWithDelta(124.5057376377151, $first['ma_21_plus_k_atr'], self::GOLDEN_DELTA);
+    }
+
+    public function testMacdFullSeriesValidationRejectsInvalidValuesInsteadOfFilteringThem(): void
+    {
+        self::assertTrue(
+            class_exists(CanonicalFiniteSeriesValidator::class),
+            'The calculator needs a directly testable strict finite-series boundary.',
+        );
+        $validator = new CanonicalFiniteSeriesValidator();
+        self::assertSame([0.25, -0.5, 0.75], $validator->validate([0.25, -0.5, 0.75]));
+
+        foreach ([null, 1, '1.0', INF, -INF, NAN] as $invalid) {
+            try {
+                $validator->validate([0.25, $invalid, 0.75]);
+                self::fail('Invalid MACD series values must not be silently filtered.');
+            } catch (CanonicalIndicatorProjectionException $exception) {
+                self::assertSame('canonical_indicator_calculation_invalid', $exception->getMessage());
+            }
+        }
     }
 
     /** @param array<string|int, mixed> $context */

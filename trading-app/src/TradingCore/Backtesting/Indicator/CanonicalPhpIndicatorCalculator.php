@@ -32,12 +32,15 @@ final readonly class CanonicalPhpIndicatorCalculator
         private Vwap $vwap,
         private Bollinger $bollinger,
         private CanonicalPullbackAgeCalculator $pullbackAgeCalculator = new CanonicalPullbackAgeCalculator(),
+        private CanonicalFiniteSeriesValidator $finiteSeriesValidator = new CanonicalFiniteSeriesValidator(),
     ) {
     }
 
     /**
      * @return array{
      *     close: float,
+     *     high_series: list<float>,
+     *     low_series: list<float>,
      *     rsi: float,
      *     ema_20: float,
      *     ema_50: float,
@@ -99,14 +102,13 @@ final readonly class CanonicalPhpIndicatorCalculator
             $ema[$period] = $this->finiteFloat($this->ema->calculatePhp($closes, $period));
             $emaPrev[$period] = $this->finiteFloat($this->ema->calculatePhp($previousCloses, $period));
         }
-        $macdFull = $this->macd->calculateFullPhp($closes, 12, 26, 9);
-        $macdHistSeries = array_slice(array_values(array_map(
-            'floatval',
-            array_filter(
-                $macdFull['hist'],
-                static fn (mixed $value): bool => is_numeric($value) && is_finite((float) $value),
-            ),
-        )), -60);
+        $rawMacdFull = $this->macd->calculateFullPhp($closes, 12, 26, 9);
+        $macdFull = [
+            'macd' => $this->finiteSeriesValidator->validate($rawMacdFull['macd']),
+            'signal' => $this->finiteSeriesValidator->validate($rawMacdFull['signal']),
+            'hist' => $this->finiteSeriesValidator->validate($rawMacdFull['hist']),
+        ];
+        $macdHistSeries = array_slice($macdFull['hist'], -60);
         $macdHistSeriesTimestamps = $macdHistSeries === []
             ? []
             : array_slice($seriesTimestamps, -count($macdHistSeries));
@@ -128,6 +130,8 @@ final readonly class CanonicalPhpIndicatorCalculator
         $ma21 = $this->finiteFloat($this->sma->calculatePhp($closes, 21));
         $result = [
             'close' => $close,
+            'high_series' => array_slice($highs, -60),
+            'low_series' => array_slice($lows, -60),
             'rsi' => $this->finiteFloat($this->rsi->calculatePhp($closes, 14)),
             'ema_20' => $ema[20],
             'ema_50' => $ema[50],
