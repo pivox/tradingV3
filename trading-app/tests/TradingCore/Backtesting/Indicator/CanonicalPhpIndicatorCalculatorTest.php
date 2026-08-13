@@ -21,6 +21,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(CanonicalPhpIndicatorCalculator::class)]
 final class CanonicalPhpIndicatorCalculatorTest extends TestCase
 {
+    private const GOLDEN_DELTA = 1.0e-12;
+
     public function testItCalculatesFiniteDeterministicScalarIndicators(): void
     {
         $window = $this->window();
@@ -70,6 +72,22 @@ final class CanonicalPhpIndicatorCalculatorTest extends TestCase
         }
 
         self::assertSame(125.23, $first['close']);
+        // Golden vector independently derived from the documented PHP/Wilder
+        // fallback formulas against the exact 250-candle fixture below (v1).
+        self::assertEqualsWithDelta(92.231526237754949, $first['rsi'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(124.054413712443889, $first['ema_20'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(122.545613533078054, $first['ema_50'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(115.852119009884632, $first['ema_200'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(-0.018424765194933, $first['macd_hist'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(112.568424120520518, $first['vwap'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(0.388296351355937, $first['atr'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(82.900568639307565, $first['adx'][14], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(82.797417887093317, $first['adx'][15], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(124.612222222222215, $first['ma9'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(124.000952380952384, $first['ma21'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(125.230046021109644, $first['bb_upper'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(124.048500000000018, $first['bb_middle'], self::GOLDEN_DELTA);
+        self::assertEqualsWithDelta(122.866953978890393, $first['bb_lower'], self::GOLDEN_DELTA);
         self::assertSame($first, $second);
         self::assertGreaterThan($first['bb_lower'], $first['bb_middle']);
         self::assertGreaterThan($first['bb_middle'], $first['bb_upper']);
