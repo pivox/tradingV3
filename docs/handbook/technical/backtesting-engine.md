@@ -2,8 +2,8 @@
 
 ## Statut
 
-Contrats v1, Dataset Builder deterministe et frontiere d'identite moderne livres
-pour #191.
+Contrats v1, Dataset Builder deterministe, frontiere d'identite moderne et pont
+canonique vers les regles TradingCore livres pour #191.
 
 Ce lot ne livre pas encore un moteur Backtrader executable. Il fixe la frontiere
 de contrat entre les futurs composants :
@@ -30,6 +30,9 @@ Le backtesting #191 est implemente en lots atomiques. Les lots livres fixent :
 - des contrats Pydantic immuables dans `python-orchestrator/app/backtesting/contracts.py` ;
 - un builder et un serializer purs dans `python-orchestrator/app/backtesting/dataset.py` ;
 - un publisher prive et atomique dans `python-orchestrator/app/backtesting/dataset_store.py` ;
+- le protocole PHP et son pont subprocess Python dans
+  `trading-app/src/TradingCore/Backtesting` et
+  `python-orchestrator/app/backtesting/tradingcore_bridge.py` ;
 - des fixtures golden et des tests unitaires verrouillant les bytes, les checksums,
   la qualite et les conflits de publication ;
 - cette page d'architecture.
@@ -220,6 +223,138 @@ La venue de donnees du dataset est independante de l'exchange simule. Un run
 avec `exchange=fake` peut donc rejouer un dataset Paper verifie provenant
 d'OKX ou d'Hyperliquid sans pretendre avoir execute un ordre sur cette venue.
 
+### Pont canonique vers les regles TradingCore
+
+Le pont evalue un setup moderne sur des snapshots d'indicateurs deja calcules.
+Python ne reimplemente aucune regle : `BacktestTradingCoreBridge` lance, avec un
+`argv` fixe et `shell=false`, la commande Symfony suivante :
+
+```text
+php trading-app/bin/console app:backtest:rules:evaluate --no-interaction --no-ansi
+```
+
+Depuis la racine du depot, une invocation peut etre reproduite sans argument ni
+fichier temporaire impose par le protocole :
+
+```bash
+php trading-app/bin/console app:backtest:rules:evaluate \
+  --no-interaction --no-ansi \
+  < /chemin/vers/request.json \
+  > /tmp/canonical-rule-result.json \
+  2> /tmp/canonical-rule-error.log
+status=$?
+```
+
+Le document JSON UTF-8 complet est lu sur `stdin`. Le schema d'entree exact est
+`canonical-backtest-rule-request.v1` et contient uniquement :
+
+- `schema_version` et `request_id` ;
+- le `effective_config_snapshot` canonique complet #133/#303 ;
+- `symbol`, `market_type` et `evaluated_at` en UTC termine par `Z` ;
+- `indicators_by_timeframe`, mapping non vide indexe uniquement par `1m`, `5m`,
+  `15m`, `1h` ou `4h`.
+
+Chaque snapshot d'indicateurs contient au minimum `kline_time` et
+`snapshot_identity`. Cette identite a exactement les champs `timeframe`,
+`symbol`, `exchange`, `environment` et `market_type`; elle doit correspondre a
+la requete, avec `exchange=fake` et `environment=local|test`. Les champs
+d'indicateurs propres aux conditions restent controles par le catalogue et le
+runtime PHP. Un champ critique absent, non fini ou stale produit un resultat
+fail-closed, jamais une valeur optimiste par defaut.
+
+Le schema de sortie exact est `canonical-backtest-rule-result.v1`. Il lie
+`request_id`, l'identite moderne complete (`mode_id`, `mode_version`, `setup_id`,
+`setup_version`, `side`, `exchange`, `environment`), `market_type`, `symbol`, les
+trois hashes de config, `evaluated_at`, puis `passed`, `reason_code`, `trace`,
+`input_hash` et `result_hash`.
+
+#### Sorties et codes de retour
+
+Un setup qui passe et un setup qui ne produit aucun trade sont tous deux des
+succes de protocole : la commande sort avec le code `0`, ecrit exactement un
+objet JSON compact suivi d'une newline sur `stdout` et n'ecrit rien sur
+`stderr`. Le cas no-trade est porte par `passed=false` et un `reason_code`
+explicite ; il ne doit pas etre confondu avec une panne du pont.
+
+Une entree ou une evaluation invalide sort avec le code Symfony
+`Command::INVALID`, donc `2`, n'ecrit rien sur `stdout` et ecrit une seule ligne
+stable sur `stderr` :
+
+```text
+canonical_backtest_rule_command_invalid:<reason>
+```
+
+Les raisons de cadrage CLI incluent `input_read_failed`, `input_too_large`,
+`input_blank`, `duplicate_object_key`, `json_depth_exceeded`,
+`json_structure_too_large`, `json_invalid` et `root_object_required`. Les
+rejets de l'evaluateur utilisent exclusivement un code filtre
+`canonical_*`; une exception non sure devient `evaluation_failed`. Aucun
+payload ni diagnostic interne du processus enfant n'est recopie par le pont
+Python.
+
+Cote Python, executable absent, I/O, timeout, depassement de sortie, code non
+nul, JSON de sortie invalide et derive d'identite/hashes deviennent
+respectivement des `TradingCoreBridgeError` stables. En particulier, tout code
+non nul, y compris `2`, devient `tradingcore_bridge_process_failed` : le detail
+reste sur le canal operateur `stderr`, pas dans un resultat de backtest.
+
+#### Bornes et isolation
+
+Les gardes sont cumulatives et fail-closed :
+
+- entree canonique et `stdin` limites a 8 MiB (`8 388 608` octets) ;
+- JSON PHP limite a une profondeur de 128 et a 20 000 tokens structurels
+  (ouvertures de conteneurs et virgules), avec rejet des cles dupliquees ;
+- timeout subprocess Python de 15 secondes par defaut ;
+- `stdout` et `stderr` lus concurremment et limites chacun a 8 MiB par defaut ;
+  la limite configurable doit rester entre 1 octet et 8 MiB ;
+- processus tue sur timeout, depassement ou erreur I/O.
+
+Le snapshot est re-resolu en PHP puis compare byte-semantiquement a la config
+soumise avant d'appeler `CanonicalSetupRuleRuntime`. Seules les cellules
+`exchange=fake`, `environment=local|test`, `execution_capability=backtest`,
+`executable=true` et sans blocker sont admises. Le pont ne fait aucun retry,
+aucun fallback et n'accede ni a une base de donnees, ni a une API exchange, ni
+a un chemin d'ordres, de portefeuille, de Paper execution ou de mainnet.
+
+#### Hashes et determinisme
+
+`input_hash` est le SHA-256 prefixe `sha256:` du document d'entree canonique :
+objets tries par cle, scalaires compatibles PHP/Python et valeurs finies. Le
+resultat reprend les trois preuves du snapshot (`config_hash`,
+`condition_catalog_hash`, `snapshot_hash`). `result_hash` couvre de la meme
+facon tout le resultat sauf lui-meme. Le pont Python recalcule les hashes et
+reverifie tous les champs lies a la requete.
+
+La lineage replay est derivee de `input_hash`; le champ runtime non deterministe
+`plan_cache_hit` est retire de la trace et son eventuel `evaluated_at` est
+remplace par l'instant fourni. A requete, code et catalogues identiques, deux
+invocations produisent donc les memes bytes sur `stdout`, y compris pour un
+no-trade.
+
+### Dependance du prochain lot : bougies Paper vers indicateurs PHP
+
+Ce pont ne fabrique pas encore `indicators_by_timeframe`. Le lot #191 suivant
+doit projeter les bougies du dataset Paper verifie vers les indicateurs possedes
+par PHP avant toute evaluation. Pour chaque symbole et timeframe, la fenetre
+doit contenir au moins 250 bougies cloturees, continues et ordonnees ; une
+bougie n'est visible a `evaluated_at` que si `complete=true` et
+`available_at <= evaluated_at`.
+
+Le `4h` doit etre agrege canoniquement depuis quatre bougies `1h` fermees,
+alignees sur la grille UTC, sans gap ni recouvrement. Son `available_at` est au
+moins le maximum des quatre sources et sa disponibilite doit elle aussi preceder
+ou egaler `evaluated_at`. Aucun backfill depuis le futur, calcul sur bougie
+ouverte ou substitution de timeframe n'est permis.
+
+La projection doit enfin rester liee au `dataset_id`, aux checksums, au reseau,
+a la venue de market data, au market type et au symbole du
+`DatasetDescriptor`. L'identite d'execution des snapshots reste volontairement
+`exchange=fake`; elle ne doit jamais effacer la provenance OKX ou Hyperliquid du
+dataset. Dataset, venue ou reseau mixtes/incompatibles doivent rejeter avant
+l'appel du pont. Tant que cette projection et ce binding ne sont pas livres,
+le pont ne constitue pas un moteur Backtrader executable de bout en bout.
+
 ### Reproductibilite
 
 `BacktestRunRequest` porte :
@@ -290,7 +425,7 @@ reelle lorsque les donnees seront disponibles.
 
 - execution Backtrader ;
 - publication filesystem et commande operateur de l'adapter Paper ;
-- adapter TradingCore ;
+- projection des bougies Paper en indicateurs PHP ;
 - simulation maker/taker ;
 - partial fills ;
 - funding historique ;
@@ -304,8 +439,9 @@ tests golden dedies.
 Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. La frontiere de run utilise desormais les
 identites exactes et le snapshot immuable #133/#303, mais ce contrat seul ne
-rend aucun mode moderne executable : l'adapter TradingCore, l'execution
-Backtrader et le simulateur restent differes.
+rend pas encore un mode moderne executable de bout en bout : le pont de regles
+TradingCore est livre, mais la projection d'indicateurs, l'execution Backtrader
+et le simulateur restent differes.
 
 Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
@@ -318,6 +454,7 @@ cd python-orchestrator
 python3 -m pytest -q \
   tests/test_backtesting_modern_identity.py \
   tests/test_backtesting_contracts.py \
+  tests/test_backtesting_tradingcore_bridge.py \
   tests/test_schemas.py \
   tests/test_symfony_client.py
 PYTHONHASHSEED=1 python3 -m pytest \

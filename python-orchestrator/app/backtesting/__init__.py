@@ -25,6 +25,13 @@ from app.backtesting.dataset_store import (
     DatasetPublicationStatus,
     DatasetPublisher,
 )
+from app.backtesting.tradingcore_bridge import (
+    BacktestTradingCoreBridge,
+    CanonicalBacktestRuleRequest,
+    CanonicalBacktestRuleResult,
+    CanonicalIndicatorSnapshot,
+    TradingCoreBridgeError,
+)
 
 __all__ = (
     "CandleRecord",
@@ -44,4 +51,9 @@ __all__ = (
     "DatasetSerializer",
     "MissingRange",
     "Timeframe",
+    "BacktestTradingCoreBridge",
+    "CanonicalBacktestRuleRequest",
+    "CanonicalBacktestRuleResult",
+    "CanonicalIndicatorSnapshot",
+    "TradingCoreBridgeError",
 )
