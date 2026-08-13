@@ -16,6 +16,7 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
 {
     private const MAX_INPUT_BYTES = 8_388_608;
     private const MAX_JSON_DEPTH = 128;
+    private const MAX_STRUCTURE_TOKENS = 20_000;
 
     public function __construct(
         private readonly CanonicalBacktestRuleEvaluatorInterface $evaluator,
@@ -45,6 +46,8 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
             return $this->invalid($output, 'duplicate_object_key');
         } catch (JsonDepthException) {
             return $this->invalid($output, 'json_depth_exceeded');
+        } catch (JsonStructureException) {
+            return $this->invalid($output, 'json_structure_too_large');
         } catch (\JsonException $exception) {
             return $this->invalid(
                 $output,
@@ -108,6 +111,7 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
     {
         /** @var list<array{type:'object'|'list',keys:array<string,true>,expecting_key:bool}> $stack */
         $stack = [];
+        $structureTokens = 0;
         $length = strlen($json);
         for ($offset = 0; $offset < $length; ++$offset) {
             $char = $json[$offset];
@@ -148,6 +152,7 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
                 continue;
             }
             if ($char === '{' || $char === '[') {
+                $this->consumeStructureToken($structureTokens);
                 $stack[] = [
                     'type' => $char === '{' ? 'object' : 'list',
                     'keys' => [],
@@ -163,6 +168,7 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
                 continue;
             }
             if ($char === ',') {
+                $this->consumeStructureToken($structureTokens);
                 $top = array_key_last($stack);
                 if ($top !== null && $stack[$top]['type'] === 'object') {
                     $stack[$top]['expecting_key'] = true;
@@ -170,7 +176,16 @@ final class BacktestEvaluateCanonicalRulesCommand extends Command
             }
         }
     }
+
+    private function consumeStructureToken(int &$tokens): void
+    {
+        ++$tokens;
+        if ($tokens > self::MAX_STRUCTURE_TOKENS) {
+            throw new JsonStructureException();
+        }
+    }
 }
 
 final class DuplicateJsonKeyException extends \RuntimeException {}
 final class JsonDepthException extends \RuntimeException {}
+final class JsonStructureException extends \RuntimeException {}

@@ -130,6 +130,32 @@ final class BacktestEvaluateCanonicalRulesCommandTest extends TestCase
         self::assertSame('', $tester->getErrorOutput());
     }
 
+    public function testItRejectsPathologicallyWideJsonBeforeDecodeOrEvaluation(): void
+    {
+        $members = [];
+        for ($index = 0; $index < 20_001; ++$index) {
+            $members[] = '"k' . $index . '":0';
+        }
+        $payload = '{' . implode(',', $members) . '}';
+        self::assertLessThan(8_388_608, strlen($payload));
+        $calls = 0;
+        $tester = $this->runCommand($payload, $this->evaluator(
+            static function (array $request) use (&$calls): CanonicalBacktestRuleEvaluation {
+                ++$calls;
+
+                return self::evaluation(true, 'unexpected');
+            },
+        ));
+
+        self::assertSame(Command::INVALID, $tester->getStatusCode());
+        self::assertSame('', $tester->getDisplay());
+        self::assertSame(
+            "canonical_backtest_rule_command_invalid:json_structure_too_large\n",
+            $tester->getErrorOutput(),
+        );
+        self::assertSame(0, $calls);
+    }
+
     public function testItRejectsJsonBeyondDepth128BeforeEvaluation(): void
     {
         $payload = str_repeat('{"a":', 129) . 'null' . str_repeat('}', 129);
