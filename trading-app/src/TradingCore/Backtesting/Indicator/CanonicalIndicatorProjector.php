@@ -34,8 +34,13 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
     /** @var list<string> */
     private const NATIVE_TIMEFRAMES = ['1m', '5m', '15m', '1h'];
 
-    public function __construct(private CanonicalPhpIndicatorCalculator $calculator)
-    {
+    /** @var list<string> */
+    private const OUTPUT_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h'];
+
+    public function __construct(
+        private CanonicalPhpIndicatorCalculator $calculator,
+        private CanonicalFourHourAggregator $fourHourAggregator,
+    ) {
     }
 
     /** @param array<string, mixed> $request @return array<string, mixed> */
@@ -89,7 +94,7 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
         $candlesByTimeframe = $request['candles_by_timeframe'] ?? null;
         if (!\is_array($candlesByTimeframe)
             || array_is_list($candlesByTimeframe)
-            || array_keys($candlesByTimeframe) !== $timeframes
+            || array_keys($candlesByTimeframe) !== $this->sourceTimeframes($timeframes)
         ) {
             throw new CanonicalIndicatorProjectionException('canonical_indicator_candles_shape_invalid');
         }
@@ -99,20 +104,45 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
             'market_data_venue' => $binding['market_data_venue'],
             'market_type' => $binding['market_type'],
         ];
-        $snapshots = [];
-        foreach ($timeframes as $timeframe) {
-            $records = $candlesByTimeframe[$timeframe];
-            if (!\is_array($records)) {
+        $fourHourWindow = null;
+        if (\in_array('4h', $timeframes, true)) {
+            $hourlyRecords = $candlesByTimeframe['1h'];
+            if (!\is_array($hourlyRecords)) {
                 throw new CanonicalIndicatorProjectionException('canonical_indicator_candles_shape_invalid');
             }
-            /** @var list<array<string, mixed>> $records */
-            $window = new CanonicalIndicatorWindow(
-                $records,
+            /** @var list<array<string, mixed>> $hourlyRecords */
+            $fourHourWindow = $this->fourHourAggregator->aggregate(
+                $hourlyRecords,
                 $sourceBinding,
                 $symbol,
-                $timeframe,
                 $evaluatedAt,
             );
+        }
+
+        $snapshots = [];
+        foreach ($timeframes as $timeframe) {
+            if ($timeframe === '4h') {
+                if (!$fourHourWindow instanceof CanonicalIndicatorWindow) {
+                    throw new \LogicException('Four-hour window was not aggregated.');
+                }
+                $window = $fourHourWindow;
+            } else {
+                $records = $candlesByTimeframe[$timeframe];
+                if (!\is_array($records)) {
+                    throw new CanonicalIndicatorProjectionException('canonical_indicator_candles_shape_invalid');
+                }
+                if ($timeframe === '1h' && $fourHourWindow instanceof CanonicalIndicatorWindow) {
+                    $records = array_slice($records, -250);
+                }
+                /** @var list<array<string, mixed>> $records */
+                $window = new CanonicalIndicatorWindow(
+                    $records,
+                    $sourceBinding,
+                    $symbol,
+                    $timeframe,
+                    $evaluatedAt,
+                );
+            }
             $latest = $window->candles()[array_key_last($window->candles())];
             $snapshots[$timeframe] = [
                 ...$this->calculator->calculate($window),
@@ -177,7 +207,7 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
             throw new CanonicalIndicatorProjectionException('canonical_indicator_requested_timeframes_invalid');
         }
         $expected = [];
-        foreach (self::NATIVE_TIMEFRAMES as $timeframe) {
+        foreach (self::OUTPUT_TIMEFRAMES as $timeframe) {
             if (\in_array($timeframe, $value, true)) {
                 $expected[] = $timeframe;
             }
@@ -188,6 +218,25 @@ final readonly class CanonicalIndicatorProjector implements CanonicalIndicatorPr
 
         /** @var list<string> $value */
         return $value;
+    }
+
+    /**
+     * @param list<string> $requested
+     *
+     * @return list<string>
+     */
+    private function sourceTimeframes(array $requested): array
+    {
+        $expected = [];
+        foreach (self::NATIVE_TIMEFRAMES as $timeframe) {
+            if (\in_array($timeframe, $requested, true)
+                || ($timeframe === '1h' && \in_array('4h', $requested, true))
+            ) {
+                $expected[] = $timeframe;
+            }
+        }
+
+        return $expected;
     }
 
     /**

@@ -13,6 +13,7 @@ use App\Indicator\Core\Trend\Sma;
 use App\Indicator\Core\Volatility\Bollinger;
 use App\Indicator\Core\Volume\Vwap;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\TradingCore\Backtesting\Indicator\CanonicalFourHourAggregator;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjectionException;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjector;
 use App\TradingCore\Backtesting\Indicator\CanonicalPhpIndicatorCalculator;
@@ -61,6 +62,104 @@ final class CanonicalIndicatorProjectorTest extends TestCase
         self::assertSame('2026-01-01T04:09:00.000000Z', $result['snapshots_by_timeframe']['1m']['kline_time']);
         self::assertSame('2026-01-03T14:15:00.000000Z', $result['snapshots_by_timeframe']['15m']['kline_time']);
         self::assertSame('2026-01-11T09:00:00.000000Z', $result['snapshots_by_timeframe']['1h']['kline_time']);
+    }
+
+    public function testProjectsFourHourWindowFromExactlyOneThousandHourlySourceCandles(): void
+    {
+        $request = $this->request(['4h']);
+        $result = $this->projector()->project($request);
+
+        self::assertSame(['4h'], $result['requested_timeframes']);
+        self::assertSame(['4h'], array_keys($result['snapshots_by_timeframe']));
+
+        $snapshot = $result['snapshots_by_timeframe']['4h'];
+        self::assertSame([
+            'timeframe' => '4h',
+            'symbol' => 'BTCUSDT',
+            'exchange' => 'fake',
+            'environment' => 'test',
+            'market_type' => 'perpetual',
+        ], $snapshot['snapshot_identity']);
+        self::assertSame('2026-02-11T12:00:00.000000Z', $snapshot['kline_time']);
+        self::assertSame('php_fallback_v1', $snapshot['indicator_engine_version']);
+        self::assertSame(200.23, $snapshot['close']);
+        self::assertArrayHasKey('rsi', $snapshot);
+        self::assertArrayHasKey('macd_hist_series', $snapshot);
+
+        $derivedWindow = (new CanonicalFourHourAggregator())->aggregate(
+            $request['candles_by_timeframe']['1h'],
+            $this->sourceBinding($request),
+            'BTCUSDT',
+            $request['evaluated_at'],
+        );
+        self::assertSame($derivedWindow->windowHash(), $snapshot['window_hash']);
+    }
+
+    public function testProjectsNativeHourlySuffixAlongsideDerivedFourHourWindow(): void
+    {
+        $request = $this->request(['1h', '4h']);
+        $result = $this->projector()->project($request);
+
+        self::assertSame(['1h', '4h'], array_keys($result['snapshots_by_timeframe']));
+        $nativeWindow = new \App\TradingCore\Backtesting\Indicator\CanonicalIndicatorWindow(
+            array_slice($request['candles_by_timeframe']['1h'], -250),
+            $this->sourceBinding($request),
+            'BTCUSDT',
+            '1h',
+            $request['evaluated_at'],
+        );
+        self::assertSame($nativeWindow->windowHash(), $result['snapshots_by_timeframe']['1h']['window_hash']);
+        self::assertSame('2026-02-11T15:00:00.000000Z', $result['snapshots_by_timeframe']['1h']['kline_time']);
+        self::assertSame(200.23, $result['snapshots_by_timeframe']['1h']['close']);
+        self::assertSame('2026-02-11T12:00:00.000000Z', $result['snapshots_by_timeframe']['4h']['kline_time']);
+        self::assertSame(200.23, $result['snapshots_by_timeframe']['4h']['close']);
+    }
+
+    public function testUsesExactNativeSourceKeysWhenNativeAndDerivedOutputsCoexist(): void
+    {
+        $request = $this->request(['5m', '4h']);
+
+        self::assertSame(['5m', '1h'], array_keys($request['candles_by_timeframe']));
+        self::assertSame(['5m', '4h'], array_keys($this->projector()->project($request)['snapshots_by_timeframe']));
+    }
+
+    #[DataProvider('invalidFourHourSourceCountProvider')]
+    public function testRejectsInvalidFourHourHourlySourceCounts(int $count): void
+    {
+        $request = $this->request(['4h']);
+        $request['candles_by_timeframe']['1h'] = array_slice($request['candles_by_timeframe']['1h'], 0, $count);
+        if ($count === 1001) {
+            $request['candles_by_timeframe']['1h'][] = $this->records('1h', 1001)[1000];
+        }
+
+        $this->assertProjectionFailure($request, 'canonical_indicator_four_hour_count_invalid');
+    }
+
+    /** @return iterable<string, array{int}> */
+    public static function invalidFourHourSourceCountProvider(): iterable
+    {
+        yield 'native-sized 250' => [250];
+        yield 'one short 999' => [999];
+        yield 'one extra 1001' => [1001];
+    }
+
+    public function testValidatesOldHourlyPrefixBeforeProjectingNativeSuffix(): void
+    {
+        $request = $this->request(['1h', '4h']);
+        $request['candles_by_timeframe']['1h'][0]['market_data_venue'] = 'hyperliquid';
+
+        $this->assertProjectionFailure($request, 'canonical_indicator_source_binding_mismatch');
+    }
+
+    public function testFourHourReplayIsDeterministic(): void
+    {
+        $request = $this->request(['1h', '4h']);
+
+        $first = $this->projector()->project($request);
+        $second = $this->projector()->project($request);
+
+        self::assertSame($first, $second);
+        self::assertSame(CanonicalJson::encode($first), CanonicalJson::encode($second));
     }
 
     public function testIdenticalReplayProducesIdenticalCanonicalResult(): void
@@ -112,10 +211,14 @@ final class CanonicalIndicatorProjectorTest extends TestCase
         yield 'empty timeframes' => [static function (array &$request): void { $request['requested_timeframes'] = []; $request['candles_by_timeframe'] = []; }, 'canonical_indicator_requested_timeframes_invalid'];
         yield 'duplicate timeframes' => [static function (array &$request): void { $request['requested_timeframes'] = ['1m', '1m']; }, 'canonical_indicator_requested_timeframes_invalid'];
         yield 'timeframes out of order' => [static function (array &$request): void { $request['requested_timeframes'] = ['5m', '1m']; $request['candles_by_timeframe'] = ['5m' => $request['candles_by_timeframe']['1m'], '1m' => $request['candles_by_timeframe']['1m']]; }, 'canonical_indicator_requested_timeframes_invalid'];
-        yield 'unsupported 4h in native lot' => [static function (array &$request): void { $request['requested_timeframes'] = ['4h']; $request['candles_by_timeframe'] = ['4h' => $request['candles_by_timeframe']['1m']]; }, 'canonical_indicator_requested_timeframes_invalid'];
+        yield 'four hour out of duration order' => [static function (array &$request): void { $request = self::fourHourRequestFrom($request, ['4h', '1h']); }, 'canonical_indicator_requested_timeframes_invalid'];
+        yield 'duplicate four hour' => [static function (array &$request): void { $request = self::fourHourRequestFrom($request, ['4h', '4h']); }, 'canonical_indicator_requested_timeframes_invalid'];
         yield 'timeframes scalar' => [static function (array &$request): void { $request['requested_timeframes'] = '1m'; }, 'canonical_indicator_requested_timeframes_invalid'];
         yield 'missing candles' => [static function (array &$request): void { $request['requested_timeframes'] = ['1m', '5m']; }, 'canonical_indicator_candles_shape_invalid'];
         yield 'extraneous candles' => [static function (array &$request): void { $request['candles_by_timeframe']['5m'] = $request['candles_by_timeframe']['1m']; }, 'canonical_indicator_candles_shape_invalid'];
+        yield 'illegal derived source key' => [static function (array &$request): void { $request = self::fourHourRequestFrom($request, ['4h']); $request['candles_by_timeframe'] = ['4h' => $request['candles_by_timeframe']['1h']]; }, 'canonical_indicator_candles_shape_invalid'];
+        yield 'extraneous native source for four hour' => [static function (array &$request): void { $request = self::fourHourRequestFrom($request, ['4h']); $request['candles_by_timeframe']['5m'] = $request['candles_by_timeframe']['1h']; }, 'canonical_indicator_candles_shape_invalid'];
+        yield 'missing hourly source for four hour' => [static function (array &$request): void { $request = self::fourHourRequestFrom($request, ['4h']); $request['candles_by_timeframe'] = []; }, 'canonical_indicator_candles_shape_invalid'];
     }
 
     /**
@@ -127,14 +230,19 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     {
         $datasetChecksum = 'sha256:' . str_repeat('a', 64);
         $candles = [];
-        foreach ($timeframes as $timeframe) {
-            $candles[$timeframe] = $this->records($timeframe);
+        foreach (['1m', '5m', '15m'] as $timeframe) {
+            if (\in_array($timeframe, $timeframes, true)) {
+                $candles[$timeframe] = $this->records($timeframe);
+            }
+        }
+        if (\in_array('1h', $timeframes, true) || \in_array('4h', $timeframes, true)) {
+            $candles['1h'] = $this->records('1h', \in_array('4h', $timeframes, true) ? 1000 : 250);
         }
 
         return [
             'schema_version' => 'canonical-indicator-projection-request.v1',
             'request_id' => 'indicator-projection-0001',
-            'evaluated_at' => '2026-01-12T00:00:00.000000Z',
+            'evaluated_at' => '2026-02-12T00:00:00.000000Z',
             'environment' => 'test',
             'indicator_engine_version' => 'php_fallback_v1',
             'dataset_binding' => [
@@ -154,14 +262,14 @@ final class CanonicalIndicatorProjectorTest extends TestCase
     }
 
     /** @return list<array<string,mixed>> */
-    private function records(string $timeframe): array
+    private function records(string $timeframe, int $count = 250): array
     {
         $seconds = ['1m' => 60, '5m' => 300, '15m' => 900, '1h' => 3600][$timeframe];
         $start = new \DateTimeImmutable('2026-01-01T00:00:00.000000Z');
         $records = [];
-        for ($index = 0; $index < 250; ++$index) {
+        for ($index = 0; $index < $count; ++$index) {
             $open = 100.0 + ($index * 0.1) + (($index % 7) * 0.03);
-            $close = $index === 249 ? 125.23 : $open + ((($index % 9) - 4) * 0.02);
+            $close = $index === $count - 1 ? 100.33 + ($index * 0.1) : $open + ((($index % 9) - 4) * 0.02);
             $high = max($open, $close) + 0.17 + (($index % 5) * 0.01);
             $low = min($open, $close) - 0.13 - (($index % 3) * 0.01);
             $openAt = $start->modify('+' . ($index * $seconds) . ' seconds');
@@ -194,7 +302,46 @@ final class CanonicalIndicatorProjectorTest extends TestCase
         return new CanonicalIndicatorProjector(new CanonicalPhpIndicatorCalculator(
             new Rsi(), new Macd(), new Ema(), new Adx(), new Sma(),
             new AtrCalculator(null), new Vwap(), new Bollinger(),
-        ));
+        ), new CanonicalFourHourAggregator());
+    }
+
+    /**
+     * @param array<string, mixed> $request
+     *
+     * @return array{source_network: mixed, market_data_venue: mixed, market_type: mixed}
+     */
+    private function sourceBinding(array $request): array
+    {
+        return [
+            'source_network' => $request['dataset_binding']['source_network'],
+            'market_data_venue' => $request['dataset_binding']['market_data_venue'],
+            'market_type' => $request['dataset_binding']['market_type'],
+        ];
+    }
+
+    /** @param array<string, mixed> $request */
+    private function assertProjectionFailure(array $request, string $reason): void
+    {
+        try {
+            $this->projector()->project($request);
+            self::fail('Expected projection request rejection.');
+        } catch (CanonicalIndicatorProjectionException $exception) {
+            self::assertSame($reason, $exception->getMessage());
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $request
+     * @param list<string>         $timeframes
+     *
+     * @return array<string, mixed>
+     */
+    private static function fourHourRequestFrom(array $request, array $timeframes): array
+    {
+        $request['requested_timeframes'] = $timeframes;
+        $request['candles_by_timeframe'] = ['1h' => array_fill(0, 1000, $request['candles_by_timeframe']['1m'][0])];
+
+        return $request;
     }
 
     private function decimal(float $value): string
