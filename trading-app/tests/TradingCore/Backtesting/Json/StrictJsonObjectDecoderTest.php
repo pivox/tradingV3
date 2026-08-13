@@ -89,17 +89,28 @@ final class StrictJsonObjectDecoderTest extends TestCase
         $this->decoder->decode($payload);
     }
 
-    public function testItAcceptsAtMostTwentyThousandStructuralTokens(): void
+    public function testItAcceptsAtMostThirtyTwoThousandSevenHundredSixtyEightStructuralTokens(): void
     {
-        self::assertCount(20_000, $this->decoder->decode($this->wideObject(20_000)));
+        self::assertCount(32_768, $this->decoder->decode($this->wideObject(32_768)));
     }
 
-    public function testItRejectsMoreThanTwentyThousandStructuralTokens(): void
+    public function testItRejectsMoreThanThirtyTwoThousandSevenHundredSixtyEightStructuralTokens(): void
     {
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('json_structure_too_large');
 
-        $this->decoder->decode($this->wideObject(20_001));
+        $this->decoder->decode($this->wideObject(32_769));
+    }
+
+    public function testItAcceptsTheLargestSupportedIndicatorProjectionRequest(): void
+    {
+        $payload = json_encode($this->completeSupportedIndicatorProjectionRequest(), JSON_THROW_ON_ERROR);
+
+        self::assertSame(29_776, $this->structureTokens($payload));
+        self::assertSame(
+            ['1m', '5m', '15m', '1h', '4h'],
+            $this->decoder->decode($payload)['requested_timeframes'],
+        );
     }
 
     private function wideObject(int $members): string
@@ -110,5 +121,59 @@ final class StrictJsonObjectDecoderTest extends TestCase
         }
 
         return '{' . implode(',', $pairs) . '}';
+    }
+
+    /** @return array<string, mixed> */
+    private function completeSupportedIndicatorProjectionRequest(): array
+    {
+        $candle = [
+            'schema_version' => 'backtest-candle.v1',
+            'source_record_id' => str_repeat('a', 64),
+            'source_network' => 'mainnet',
+            'market_data_venue' => 'okx',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'timeframe' => '1m',
+            'open_at' => '2026-01-01T00:00:00.000000Z',
+            'close_at' => '2026-01-01T00:01:00.000000Z',
+            'available_at' => '2026-01-01T00:01:00.000000Z',
+            'open' => '100',
+            'high' => '101',
+            'low' => '99',
+            'close' => '100.5',
+            'volume' => '10',
+            'complete' => true,
+        ];
+
+        return [
+            'schema_version' => 'canonical-indicator-projection-request.v1',
+            'request_id' => 'indicator-projection-0001',
+            'evaluated_at' => '2026-02-12T00:00:00.000000Z',
+            'environment' => 'test',
+            'indicator_engine_version' => 'php_fallback_v1',
+            'dataset_binding' => [
+                'dataset_id' => 'backtest-dataset-' . str_repeat('a', 64),
+                'dataset_checksum' => 'sha256:' . str_repeat('a', 64),
+                'candles_checksum' => 'sha256:' . str_repeat('b', 64),
+                'quality_report_checksum' => 'sha256:' . str_repeat('c', 64),
+                'source_checksum' => 'sha256:' . str_repeat('d', 64),
+                'source_network' => 'mainnet',
+                'market_data_venue' => 'okx',
+                'market_type' => 'perpetual',
+            ],
+            'symbol' => 'BTCUSDT',
+            'requested_timeframes' => ['1m', '5m', '15m', '1h', '4h'],
+            'candles_by_timeframe' => [
+                '1m' => array_fill(0, 250, $candle),
+                '5m' => array_fill(0, 250, $candle),
+                '15m' => array_fill(0, 250, $candle),
+                '1h' => array_fill(0, 1000, $candle),
+            ],
+        ];
+    }
+
+    private function structureTokens(string $payload): int
+    {
+        return substr_count($payload, '{') + substr_count($payload, '[') + substr_count($payload, ',');
     }
 }

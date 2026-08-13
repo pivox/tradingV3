@@ -9,7 +9,10 @@ final class StrictJsonObjectDecoder
     public const MAX_INPUT_BYTES = 8_388_608;
 
     private const MAX_JSON_DEPTH = 128;
-    private const MAX_STRUCTURE_TOKENS = 20_000;
+    // The largest supported indicator projection request has 29,776 structural tokens:
+    // 1m, 5m and 15m windows of 250 candles plus the 1,000 1h candles needed to derive 4h.
+    // Keep a fixed, bounded headroom for envelope evolution while retaining a fail-closed limit.
+    private const MAX_STRUCTURE_TOKENS = 32_768;
 
     /** @return array<string, mixed> */
     public function decode(#[\SensitiveParameter] string $payload): array

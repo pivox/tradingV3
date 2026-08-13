@@ -139,7 +139,7 @@ final class BacktestEvaluateCanonicalRulesCommandTest extends TestCase
     public function testItRejectsPathologicallyWideJsonBeforeDecodeOrEvaluation(): void
     {
         $members = [];
-        for ($index = 0; $index < 20_001; ++$index) {
+        for ($index = 0; $index < 32_769; ++$index) {
             $members[] = '"k' . $index . '":0';
         }
         $payload = '{' . implode(',', $members) . '}';

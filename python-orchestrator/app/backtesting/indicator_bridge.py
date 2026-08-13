@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import signal
 import shutil
 import subprocess
 import threading
@@ -321,13 +322,144 @@ class CanonicalIndicatorProjectionRequest(BaseModel):
 
 class CanonicalProjectedIndicatorSnapshot(BaseModel):
     model_config = ConfigDict(
-        frozen=True, extra="allow", strict=True, arbitrary_types_allowed=True
+        frozen=True, extra="forbid", strict=True, arbitrary_types_allowed=True
     )
 
+    close: int | float
+    high_series: tuple[int | float, ...]
+    low_series: tuple[int | float, ...]
+    rsi: int | float
+    ema_20: int | float
+    ema_50: int | float
+    ema_200: int | float
+    macd_hist: int | float
+    vwap: int | float
+    atr: int | float
+    adx: FrozenJsonDict
+    ma9: int | float
+    ma21: int | float
+    bb_upper: int | float
+    bb_middle: int | float
+    bb_lower: int | float
+    ema: FrozenJsonDict
+    ema_prev: FrozenJsonDict
+    ema_200_slope: int | float
+    ema_200_series: tuple[int | float, ...]
+    ema_200_series_timestamps: tuple[int, ...]
+    macd: FrozenJsonDict
+    macd_hist_series: tuple[int | float, ...]
+    macd_hist_series_timestamps: tuple[int, ...]
+    macd_line_signal_series: tuple[int | float, ...]
+    macd_line_signal_series_timestamps: tuple[int, ...]
+    macd_hist_last3: tuple[int | float, ...]
+    series_order: Literal["oldest_to_newest"]
+    series_timestamps: tuple[int, ...]
+    pullback_age_bars: int | None
+    volume_ratio: int | float | None
+    ma_21_plus_k_atr: int | float
     snapshot_identity: FrozenJsonDict
     kline_time: str
     window_hash: str = Field(pattern=_SHA256_PATTERN)
     indicator_engine_version: Literal["php_fallback_v1"]
+
+    @field_validator(
+        "close",
+        "rsi",
+        "ema_20",
+        "ema_50",
+        "ema_200",
+        "macd_hist",
+        "vwap",
+        "atr",
+        "ma9",
+        "ma21",
+        "bb_upper",
+        "bb_middle",
+        "bb_lower",
+        "ema_200_slope",
+        "ma_21_plus_k_atr",
+        mode="before",
+    )
+    @classmethod
+    def _validate_finite_number(cls, value: Any) -> int | float:
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("canonical_indicator_snapshot_number_invalid")
+        return value
+
+    @field_validator("volume_ratio", mode="before")
+    @classmethod
+    def _validate_optional_finite_number(cls, value: Any) -> int | float | None:
+        if value is None:
+            return None
+        return cls._validate_finite_number(value)
+
+    @field_validator("pullback_age_bars", mode="before")
+    @classmethod
+    def _validate_pullback_age(cls, value: Any) -> int | None:
+        if value is not None and type(value) is not int:
+            raise ValueError("canonical_indicator_snapshot_pullback_age_invalid")
+        return value
+
+    @field_validator(
+        "high_series",
+        "low_series",
+        "ema_200_series",
+        "macd_hist_series",
+        "macd_line_signal_series",
+        "macd_hist_last3",
+        mode="before",
+    )
+    @classmethod
+    def _validate_finite_series(cls, value: Any) -> tuple[int | float, ...]:
+        if not isinstance(value, (list, tuple)) or any(
+            type(item) not in (int, float) or not math.isfinite(item)
+            for item in value
+        ):
+            raise ValueError("canonical_indicator_snapshot_series_invalid")
+        return tuple(value)
+
+    @field_validator(
+        "ema_200_series_timestamps",
+        "macd_hist_series_timestamps",
+        "macd_line_signal_series_timestamps",
+        "series_timestamps",
+        mode="before",
+    )
+    @classmethod
+    def _validate_timestamp_series(cls, value: Any) -> tuple[int, ...]:
+        if not isinstance(value, (list, tuple)) or any(
+            type(item) is not int or item < 0 for item in value
+        ):
+            raise ValueError("canonical_indicator_snapshot_timestamps_invalid")
+        return tuple(value)
+
+    @field_validator("adx", mode="before")
+    @classmethod
+    def _validate_adx(cls, value: Any) -> FrozenJsonDict:
+        return cls._validate_numeric_map(value, {"14", "15"})
+
+    @field_validator("ema", "ema_prev", mode="before")
+    @classmethod
+    def _validate_ema_map(cls, value: Any) -> FrozenJsonDict:
+        return cls._validate_numeric_map(value, {"9", "20", "21", "50", "200"})
+
+    @field_validator("macd", mode="before")
+    @classmethod
+    def _validate_macd_map(cls, value: Any) -> FrozenJsonDict:
+        return cls._validate_numeric_map(value, {"macd", "signal", "hist"})
+
+    @staticmethod
+    def _validate_numeric_map(value: Any, expected: set[str]) -> FrozenJsonDict:
+        if (
+            not isinstance(value, Mapping)
+            or set(value) != expected
+            or any(
+                type(item) not in (int, float) or not math.isfinite(item)
+                for item in value.values()
+            )
+        ):
+            raise ValueError("canonical_indicator_snapshot_numeric_map_invalid")
+        return FrozenJsonDict(value)
 
     @field_validator("snapshot_identity", mode="before")
     @classmethod
@@ -351,6 +483,10 @@ class CanonicalProjectedIndicatorSnapshot(BaseModel):
     def _serialize_identity(self, value: FrozenJsonDict) -> dict[str, Any]:
         return thaw_json(value)
 
+    @field_serializer("adx", "ema", "ema_prev", "macd")
+    def _serialize_numeric_map(self, value: FrozenJsonDict) -> dict[str, Any]:
+        return thaw_json(value)
+
     @field_validator("kline_time", mode="before")
     @classmethod
     def _validate_kline_time(cls, value: Any) -> str:
@@ -369,6 +505,56 @@ class CanonicalProjectedIndicatorSnapshot(BaseModel):
         if isinstance(value, Mapping):
             _canonical_json(value)
         return value
+
+    @model_validator(mode="after")
+    def _validate_php_series_alignment(self) -> "CanonicalProjectedIndicatorSnapshot":
+        timeframe = self.snapshot_identity["timeframe"]
+        duration = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "1h": 3_600,
+            "4h": 14_400,
+        }[timeframe]
+        observed = _parse_utc(self.kline_time).timestamp()
+        if not observed.is_integer():
+            raise ValueError("canonical_indicator_snapshot_series_alignment_invalid")
+        if (
+            len(self.series_timestamps) != 250
+            or any(
+                current - previous != duration
+                for previous, current in zip(
+                    self.series_timestamps, self.series_timestamps[1:]
+                )
+            )
+            or self.series_timestamps[-1] != int(observed)
+            or len(self.high_series) != 60
+            or len(self.low_series) != 60
+            or len(self.ema_200_series) != 2
+            or self.ema_200_series_timestamps != self.series_timestamps[-2:]
+            or len(self.macd_hist_series) != 60
+            or self.macd_hist_series_timestamps != self.series_timestamps[-60:]
+            or self.macd_line_signal_series != self.macd_hist_series
+            or self.macd_line_signal_series_timestamps
+            != self.macd_hist_series_timestamps
+            or self.macd_hist_last3 != self.macd_hist_series[-3:]
+        ):
+            raise ValueError("canonical_indicator_snapshot_series_alignment_invalid")
+
+        ema = thaw_json(self.ema)
+        ema_prev = thaw_json(self.ema_prev)
+        macd = thaw_json(self.macd)
+        if (
+            self.ema_20 != ema["20"]
+            or self.ema_50 != ema["50"]
+            or self.ema_200 != ema["200"]
+            or self.ema_200_series != (ema_prev["200"], ema["200"])
+            or self.ema_200_slope != ema["200"] - ema_prev["200"]
+            or self.macd_hist != macd["hist"]
+            or self.macd_hist != self.macd_hist_series[-1]
+        ):
+            raise ValueError("canonical_indicator_snapshot_value_alignment_invalid")
+        return self
 
 
 class CanonicalIndicatorProjectionResult(BaseModel):
@@ -637,6 +823,7 @@ class BacktestIndicatorBridge:
                 stderr=subprocess.PIPE,
                 shell=False,
                 env=dict(self._environment),
+                start_new_session=True,
             )
         except (OSError, ValueError) as exc:
             raise IndicatorBridgeError("indicator_bridge_process_unavailable") from exc
@@ -699,11 +886,10 @@ class BacktestIndicatorBridge:
                 raise IndicatorBridgeError("indicator_bridge_io_failed")
             return process.returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"])
         except IndicatorBridgeError:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
             process.wait()
             for stream in streams:
                 try:
