@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from app import modern_trading_contracts
 from app.modern_trading_contracts import (
     PUBLISHED_MODE_VERSIONS,
     PUBLISHED_SETUP_VERSIONS,
@@ -57,8 +58,38 @@ def test_php_effective_config_snapshot_golden_parity_and_tamper_detection() -> N
     layer_payloads = [layer.model_dump() for layer in snapshot.ordered_layers]
     assert all(layer in layer_payloads for layer in snapshot.provenance.values())
 
+    one_byte_forgery = deepcopy(payload)
+    one_byte_forgery["config"]["environment"]["evidence"]["unicode"] = "café/pati"
+    assert payload["config"]["environment"]["evidence"]["unicode"] == "café/path"
+    canonical_hash_payload = {
+        "config": payload["config"],
+        "condition_catalog_hash": payload["condition_catalog_hash"],
+    }
+    forged_hash_payload = {
+        **canonical_hash_payload,
+        "config": one_byte_forgery["config"],
+    }
+    canonical_bytes = modern_trading_contracts._canonical_json(  # noqa: SLF001
+        canonical_hash_payload
+    ).encode("utf-8")
+    forged_bytes = modern_trading_contracts._canonical_json(  # noqa: SLF001
+        forged_hash_payload
+    ).encode("utf-8")
+    assert len(canonical_bytes) == len(forged_bytes)
+    byte_differences = [
+        (index, before, after)
+        for index, (before, after) in enumerate(
+            zip(canonical_bytes, forged_bytes, strict=True)
+        )
+        if before != after
+    ]
+    assert [(before, after) for _, before, after in byte_differences] == [
+        (ord("h"), ord("i"))
+    ]
+    with pytest.raises(ValidationError, match="effective_config_snapshot_hash_mismatch"):
+        CanonicalEffectiveConfigSnapshot(**one_byte_forgery)
+
     for path, value in (
-        (("config", "environment", "evidence", "unicode"), "cafe/path"),
         (("request", "execution_capability"), "paper"),
         (("ordered_files", 2), "/setup-X.yaml"),
     ):
