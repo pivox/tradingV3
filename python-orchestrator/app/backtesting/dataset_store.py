@@ -88,11 +88,13 @@ class DatasetPublisher:
         target = self._root / dataset_id
         existing = self._existing_status(root_fd, dataset_id, artifacts)
         if existing is not None:
-            self._assert_root_path_stable(root_names, root_fds, root_identities)
-            return DatasetPublicationResult(
-                dataset_id=dataset_id,
-                target=target,
-                status=existing,
+            return self._already_published_result(
+                root_fd,
+                root_names,
+                root_fds,
+                root_identities,
+                dataset_id,
+                target,
             )
 
         staging_name, staging_fd = self._create_staging(root_fd, dataset_id)
@@ -109,11 +111,13 @@ class DatasetPublisher:
 
             existing = self._existing_status(root_fd, dataset_id, artifacts)
             if existing is not None:
-                self._assert_root_path_stable(root_names, root_fds, root_identities)
-                return DatasetPublicationResult(
-                    dataset_id=dataset_id,
-                    target=target,
-                    status=existing,
+                return self._already_published_result(
+                    root_fd,
+                    root_names,
+                    root_fds,
+                    root_identities,
+                    dataset_id,
+                    target,
                 )
 
             staging_path = self._root / staging_name
@@ -133,11 +137,13 @@ class DatasetPublisher:
                 existing = self._existing_status(root_fd, dataset_id, artifacts)
                 if existing is None:
                     raise DatasetPublicationConflict() from exc
-                self._assert_root_path_stable(root_names, root_fds, root_identities)
-                return DatasetPublicationResult(
-                    dataset_id=dataset_id,
-                    target=target,
-                    status=existing,
+                return self._already_published_result(
+                    root_fd,
+                    root_names,
+                    root_fds,
+                    root_identities,
+                    dataset_id,
+                    target,
                 )
             os.fsync(root_fd)
             if self._existing_status(root_fd, dataset_id, artifacts) is not (
@@ -157,6 +163,27 @@ class DatasetPublisher:
                     self._cleanup_staging(root_fd, staging_name, staging_fd)
             finally:
                 os.close(staging_fd)
+
+    @staticmethod
+    def _already_published_result(
+        root_fd: int,
+        root_names: tuple[str, ...],
+        root_fds: tuple[int, ...],
+        root_identities: tuple[tuple[int, int], ...],
+        dataset_id: str,
+        target: Path,
+    ) -> DatasetPublicationResult:
+        os.fsync(root_fd)
+        DatasetPublisher._assert_root_path_stable(
+            root_names,
+            root_fds,
+            root_identities,
+        )
+        return DatasetPublicationResult(
+            dataset_id=dataset_id,
+            target=target,
+            status=DatasetPublicationStatus.ALREADY_PUBLISHED,
+        )
 
     def _after_prepare_root(self) -> None:
         """Test hook at the path-to-dirfd trust boundary."""
@@ -234,6 +261,7 @@ class DatasetPublisher:
                 private_name,
                 expected_identity,
             )
+            winner_fd: int | None = None
             try:
                 os.fsync(private_fd)
                 os.fsync(parent_fd)
@@ -243,6 +271,7 @@ class DatasetPublisher:
                     if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
                         raise
                     winner_fd = self._open_observed_directory(parent_fd, name)
+                    os.fsync(parent_fd)
                     os.close(private_fd)
                     return winner_fd
                 self._assert_named_directory_identity(
@@ -254,6 +283,8 @@ class DatasetPublisher:
                 os.fsync(parent_fd)
                 return private_fd
             except Exception:
+                if winner_fd is not None:
+                    os.close(winner_fd)
                 os.close(private_fd)
                 raise
         raise DatasetPublicationConflict()

@@ -106,6 +106,9 @@ est d'abord cree sous un nom prive aleatoire `.dataset-root-*`, ouvert et
 Un target existant est idempotent seulement si les trois noms, bytes, modes et
 single-links sont exacts ; les trois fd d'artefacts restent ouverts jusqu'a une
 validation collective finale de leurs identites et de celle du repertoire.
+Chaque adoption `ALREADY_PUBLISHED` effectue ensuite un `fsync` du repertoire
+racine avant la derniere verification du chemin. De meme, un composant racine
+cree par un concurrent n'est adopte qu'apres `fsync` de son parent.
 Fichier change/manquant/supplementaire, symlink, hardlink ou course concurrente
 conflictuelle est preserve et rejete.
 Le fd du staging est lie a son nom par device/inode juste avant le rename et la

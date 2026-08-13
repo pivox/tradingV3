@@ -77,6 +77,56 @@ def test_publisher_is_idempotent_only_for_three_exact_bytes(tmp_path: Path) -> N
     assert second.target == first.target
 
 
+class _DelayExistingObservationPublisher(DatasetPublisher):
+    def __init__(self, root: Path, suppressed_observations: int) -> None:
+        super().__init__(root)
+        self._suppressed_observations = suppressed_observations
+        self._observation_count = 0
+        self.exact_existing_observed = False
+
+    def _existing_status(
+        self,
+        root_fd: int,
+        target_name: str,
+        artifacts: DatasetArtifacts,
+    ) -> DatasetPublicationStatus | None:
+        self._observation_count += 1
+        if self._observation_count <= self._suppressed_observations:
+            return None
+        status = super()._existing_status(root_fd, target_name, artifacts)
+        self.exact_existing_observed = status is not None
+        return status
+
+
+@pytest.mark.parametrize("suppressed_observations", (0, 1, 2))
+def test_every_already_published_path_fsyncs_root_after_exact_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suppressed_observations: int,
+) -> None:
+    root = tmp_path / "datasets"
+    artifacts = _artifacts()
+    DatasetPublisher(root).publish(artifacts)
+    publisher = _DelayExistingObservationPublisher(root, suppressed_observations)
+    real_fsync = os.fsync
+
+    def fail_durable_adoption(descriptor: int) -> None:
+        if publisher.exact_existing_observed:
+            raise OSError(errno.EIO, "injected adopted target fsync")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_durable_adoption)
+
+    with pytest.raises(OSError, match="injected adopted target fsync"):
+        publisher.publish(artifacts)
+
+    assert publisher.exact_existing_observed is True
+    if suppressed_observations:
+        _assert_one_staging(root, _ARTIFACT_NAMES)
+    else:
+        assert not tuple(root.glob(".*.staging-*"))
+
+
 @pytest.mark.parametrize("corruption", ("changed", "missing", "extra"))
 def test_existing_corrupt_dataset_conflicts_without_mutation(
     tmp_path: Path, corruption: str
@@ -617,6 +667,71 @@ def test_private_component_replaced_after_identity_capture_fails_closed(
     private_entries = tuple(tmp_path.glob(".dataset-root-*"))
     assert len(private_entries) == 2
     assert all(path.is_dir() for path in private_entries)
+
+
+class _ConcurrentRootComponentWinnerPublisher(DatasetPublisher):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.private_fd: int | None = None
+        self.winner_fd: int | None = None
+        self._private_name: str | None = None
+
+    def _after_private_component_mkdir(
+        self,
+        parent_fd: int,
+        private_name: str,
+    ) -> None:
+        self._private_name = private_name
+        os.mkdir(self._root.name, 0o700, dir_fd=parent_fd)
+
+    def _open_observed_directory(
+        self,
+        parent_fd: int,
+        name: str,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> int:
+        descriptor = super()._open_observed_directory(
+            parent_fd,
+            name,
+            expected_identity,
+        )
+        if name == self._private_name:
+            self.private_fd = descriptor
+        elif name == self._root.name and self.private_fd is not None:
+            self.winner_fd = descriptor
+        return descriptor
+
+
+def test_concurrent_root_component_winner_requires_parent_fsync_and_closes_fds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "datasets"
+    publisher = _ConcurrentRootComponentWinnerPublisher(root)
+    parent_inode = tmp_path.stat().st_ino
+    parent_fsync_count = 0
+    real_fsync = os.fsync
+
+    def fail_second_parent_fsync(descriptor: int) -> None:
+        nonlocal parent_fsync_count
+        if os.fstat(descriptor).st_ino == parent_inode:
+            parent_fsync_count += 1
+            if parent_fsync_count == 2:
+                raise OSError(errno.EIO, "injected winner parent fsync")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_second_parent_fsync)
+
+    with pytest.raises(OSError, match="injected winner parent fsync"):
+        publisher.publish(_artifacts())
+
+    assert parent_fsync_count == 2
+    assert root.is_dir()
+    for descriptor in (publisher.private_fd, publisher.winner_fd):
+        assert descriptor is not None
+        with pytest.raises(OSError) as closed:
+            os.fstat(descriptor)
+        assert closed.value.errno == errno.EBADF
 
 
 def test_missing_root_components_are_fsynced_before_publication(

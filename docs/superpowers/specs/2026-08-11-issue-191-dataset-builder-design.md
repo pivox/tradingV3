@@ -144,6 +144,10 @@ opened and flushed, then atomically renamed without replacement and followed by
 a parent-directory flush. Every retained path identity is checked before
 success. Exact-target verification retains all three artifact fds until a final
 collective name/inode/type/mode/link-count and target-directory stability pass.
+Every `ALREADY_PUBLISHED` path flushes the dataset root after that exact
+observation and before its final anchored-path check and return. A root path
+component won by a concurrent creator is likewise adopted only after flushing
+its parent directory.
 A failed build or failed staging write leaves no published target.
 Failure cleanup removes no filesystem entry, not even fd-relative contents: it
 only closes retained descriptors. It preserves an empty, partial or complete
