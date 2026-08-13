@@ -178,6 +178,35 @@ final class PaperDatasetVerifierTest extends TestCase
         $verifier->verifyBaselineSnapshot($this->datasetDirectory());
     }
 
+    public function testBaselineSnapshotCountsBytesReadAfterInitialStatIncludingBlankLines(): void
+    {
+        $this->createCompleteDataset();
+        $initial = file_get_contents($this->eventsPath());
+        self::assertIsString($initial);
+        $filesystem = new GrowingVerifierEventsFilesystem(
+            $this->eventsPath(),
+            str_repeat(" \n", 256),
+        );
+        $limit = strlen($initial) + 8;
+        $verifier = new PaperDatasetVerifier(
+            filesystem: $filesystem,
+            snapshotLimits: new PaperDatasetSnapshotLimits(
+                maximumEvents: 100,
+                maximumBytes: $limit,
+            ),
+        );
+
+        try {
+            $verifier->verifyBaselineSnapshot($this->datasetDirectory());
+            self::fail('Expected a growing snapshot byte rejection.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_snapshot_limit_exceeded', $exception->getMessage());
+            self::assertLessThan(32, $filesystem->lineReadCount);
+        }
+
+        self::assertSame($initial . str_repeat(" \n", 256), file_get_contents($this->eventsPath()));
+    }
+
     #[DataProvider('tightStructuralSnapshotLimitsProvider')]
     public function testBaselineSnapshotEnforcesItsStructuralBounds(
         int $maximumNodes,
@@ -1305,6 +1334,33 @@ final class VerifierFaultInjectingPaperDatasetFilesystem extends PaperDatasetRec
         }
 
         return parent::checksum($handle, $operation);
+    }
+}
+
+final class GrowingVerifierEventsFilesystem extends PaperDatasetRecorderFilesystem
+{
+    public int $lineReadCount = 0;
+    private bool $grown = false;
+
+    public function __construct(
+        private readonly string $eventsPath,
+        private readonly string $appendedContents,
+    ) {
+    }
+
+    /** @param resource $handle */
+    public function readLine($handle, int $length, string $operation): string|false
+    {
+        if (!$this->grown && $operation === 'paper_dataset_verifier_events_read_failed') {
+            $this->grown = true;
+            $written = file_put_contents($this->eventsPath, $this->appendedContents, \FILE_APPEND);
+            if ($written !== \strlen($this->appendedContents)) {
+                throw new \RuntimeException('Unable to inject growing verifier events file.');
+            }
+        }
+        ++$this->lineReadCount;
+
+        return parent::readLine($handle, $length, $operation);
     }
 }
 

@@ -611,6 +611,7 @@ final class PaperDatasetVerifier
         $events = $collectEvents ? [] : null;
         $snapshotNodes = 0;
         $snapshotKeys = 0;
+        $snapshotBytes = 0;
         $count = 0;
         $lastEventId = null;
         $start = null;
@@ -658,6 +659,15 @@ final class PaperDatasetVerifier
                 'paper_dataset_verifier_events_read_failed',
                 'paper_dataset_event_invalid',
             )) !== false) {
+                if ($collectEvents) {
+                    $lineBytes = \strlen($line);
+                    if ($lineBytes > $this->snapshotLimits->maximumBytes
+                        || $snapshotBytes > $this->snapshotLimits->maximumBytes - $lineBytes
+                    ) {
+                        throw new \RuntimeException('paper_dataset_snapshot_limit_exceeded');
+                    }
+                    $snapshotBytes += $lineBytes;
+                }
                 hash_update($checksumContext, $line);
                 if (trim($line) === '') {
                     continue;
