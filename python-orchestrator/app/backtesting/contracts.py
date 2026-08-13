@@ -12,29 +12,29 @@ import json
 from collections.abc import Mapping as MappingAbc
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from math import isclose, isfinite
-from typing import Any, Iterator, Literal, Mapping
+from math import isclose
+from typing import Any, Literal, Mapping
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     computed_field,
-    field_serializer,
     field_validator,
     model_validator,
+)
+
+from app.modern_trading_contracts import (
+    CanonicalEffectiveConfigSnapshot,
+    ModeId,
+    ModernTradingIdentity,
+    PublishedVersion,
+    SetupId,
 )
 
 
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _GIT_SHA_PATTERN = r"^[0-9a-f]{40}$"
-_JSON_SCALAR_TYPES = (str, int, float, bool, type(None))
-
-
-class Profile(str, Enum):
-    REGULAR = "regular"
-    SCALPER = "scalper"
-    SCALPER_MICRO = "scalper_micro"
 
 
 class MarketType(str, Enum):
@@ -69,7 +69,7 @@ _TIMEFRAME_SECONDS = {
 
 
 def _canonical_hash(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(_deep_thaw(payload), sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -131,55 +131,6 @@ def _dataset_checksum_from_manifest_core(
         sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(checksum_payload).hexdigest()
-
-
-class FrozenDict(MappingAbc):
-    """Recursive immutable mapping for config snapshots."""
-
-    def __init__(self, value: Mapping[str, Any]) -> None:
-        self._data = {str(key): _deep_freeze(item) for key, item in value.items()}
-
-    def __getitem__(self, key: str) -> Any:
-        return self._data[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._data)
-
-    def __len__(self) -> int:
-        return len(self._data)
-
-    def __repr__(self) -> str:
-        return repr(self._data)
-
-
-def _deep_freeze(value: Any) -> Any:
-    if isinstance(value, FrozenDict):
-        return value
-    if isinstance(value, MappingAbc):
-        return FrozenDict(value)
-    if isinstance(value, list | tuple):
-        return tuple(_deep_freeze(item) for item in value)
-    if isinstance(value, set | frozenset):
-        raise ValueError("effective_config must contain JSON-compatible values")
-    if isinstance(value, float):
-        if not isfinite(value):
-            raise ValueError("effective_config must contain finite floats")
-        return value
-    if isinstance(value, _JSON_SCALAR_TYPES):
-        return value
-    raise ValueError("effective_config must contain JSON-compatible values")
-
-
-def _deep_thaw(value: Any) -> Any:
-    if isinstance(value, FrozenDict):
-        return {key: _deep_thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_deep_thaw(item) for item in value]
-    if isinstance(value, list):
-        return [_deep_thaw(item) for item in value]
-    if isinstance(value, MappingAbc):
-        return {str(key): _deep_thaw(item) for key, item in value.items()}
-    return value
 
 
 class DatasetStreamCoverage(BaseModel):
@@ -516,50 +467,14 @@ class DatasetDescriptor(BaseModel):
         )
 
 
-class EffectiveConfigSnapshot(BaseModel):
-    """Versioned effective config used by a backtest run."""
-
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-
-    profile: Profile
-    config_hash: str = Field(..., pattern=_SHA256_PATTERN)
-    config_version: str = Field(..., min_length=1)
-    source_layers: tuple[str, ...] = Field(..., min_length=1)
-    effective_config: FrozenDict = Field(...)
-
-    @field_validator("source_layers", mode="before")
-    @classmethod
-    def _normalize_layers(cls, value: Any) -> tuple[str, ...]:
-        return _normalize_string_tuple(value)
-
-    @field_validator("effective_config", mode="before")
-    @classmethod
-    def _freeze_config(cls, value: Any) -> FrozenDict:
-        if not isinstance(value, MappingAbc):
-            raise ValueError("effective_config must be a mapping")
-        return FrozenDict(value)
-
-    @field_serializer("effective_config")
-    def _serialize_config(self, value: FrozenDict) -> dict[str, Any]:
-        return _deep_thaw(value)
-
-    @model_validator(mode="after")
-    def _validate_config(self) -> "EffectiveConfigSnapshot":
-        if not self.source_layers:
-            raise ValueError("source_layers must not be empty")
-        if not self.effective_config:
-            raise ValueError("effective_config must not be empty")
-        return self
-
-
 class BacktestRunRequest(BaseModel):
     """Input contract for a deterministic net backtest run."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     dataset: DatasetDescriptor
-    config: EffectiveConfigSnapshot
-    profile: Profile
+    identity: ModernTradingIdentity
+    config: CanonicalEffectiveConfigSnapshot
     symbols: tuple[str, ...] = Field(..., min_length=1)
     timeframes: tuple[str, ...] = Field(..., min_length=1)
     period_start: datetime
@@ -582,8 +497,15 @@ class BacktestRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_scope(self) -> "BacktestRunRequest":
-        if self.config.profile is not self.profile:
-            raise ValueError("config profile must match run profile")
+        snapshot_identity = self.config.request.model_dump(
+            exclude={"execution_capability"}
+        )
+        if self.identity.model_dump() != snapshot_identity:
+            raise ValueError("backtest_identity_snapshot_mismatch")
+        if not self.config.executable or self.config.blockers:
+            raise ValueError("backtest_config_not_executable")
+        if self.config.request.execution_capability != "backtest":
+            raise ValueError("backtest_execution_capability_required")
         if not _tuple_subset(self.symbols, self.dataset.symbols):
             raise ValueError("symbols must be contained in dataset")
         if not _tuple_subset(self.timeframes, self.dataset.timeframes):
@@ -627,14 +549,21 @@ class BacktestTradeLedgerEntry(BaseModel):
     This contract covers executed simulated trades and requires an immediate SL.
     """
 
-    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     backtest_run_id: str = Field(..., min_length=1)
     dataset_id: str = Field(..., min_length=1)
     config_hash: str = Field(..., pattern=_SHA256_PATTERN)
+    condition_catalog_hash: str = Field(..., pattern=_SHA256_PATTERN)
+    snapshot_hash: str = Field(..., pattern=_SHA256_PATTERN)
     git_commit_sha: str = Field(..., pattern=_GIT_SHA_PATTERN)
-    profile: Profile
-    exchange: str = Field(..., min_length=1)
+    mode_id: ModeId
+    mode_version: PublishedVersion
+    setup_id: SetupId
+    setup_version: PublishedVersion
+    exchange: Literal["fake", "okx", "hyperliquid"]
+    environment: Literal["local", "test", "demo", "testnet", "mainnet"]
+    side: Literal["long", "short"]
     market_type: MarketType
     symbol: str = Field(..., min_length=1)
     direction: Direction
@@ -659,6 +588,15 @@ class BacktestTradeLedgerEntry(BaseModel):
     def _normalize_flags(cls, value: Any) -> tuple[str, ...]:
         return _normalize_string_tuple(value)
 
+    @field_validator(
+        "config_hash", "condition_catalog_hash", "snapshot_hash", mode="before"
+    )
+    @classmethod
+    def _reject_coerced_hashes(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            raise ValueError("backtest_ledger_hash_type_invalid")
+        return value
+
     @field_validator("signal_at")
     @classmethod
     def _validate_utc(cls, value: datetime) -> datetime:
@@ -666,6 +604,20 @@ class BacktestTradeLedgerEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ledger(self) -> "BacktestTradeLedgerEntry":
+        try:
+            ModernTradingIdentity(
+                mode_id=self.mode_id,
+                mode_version=self.mode_version,
+                setup_id=self.setup_id,
+                setup_version=self.setup_version,
+                exchange=self.exchange,
+                environment=self.environment,
+                side=self.side,
+            )
+        except ValueError as exc:
+            raise ValueError("backtest_ledger_identity_invalid") from exc
+        if self.direction.value != self.side:
+            raise ValueError("backtest_ledger_direction_side_mismatch")
         if self.initial_stop is None or self.initial_stop <= 0:
             raise ValueError("initial_stop is required and must be positive")
         if self.direction is Direction.LONG and self.initial_stop >= self.entry_price:
