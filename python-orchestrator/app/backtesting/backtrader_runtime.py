@@ -15,6 +15,11 @@ from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
 from app.backtesting.backtrader_execution import execute_plan
 from app.backtesting.backtrader_feed import VerifiedBacktraderBar, VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_net_outcome import project_plan_bound_net_outcome
+from app.backtesting.historical_funding import VerifiedHistoricalFundingSchedule
+from app.backtesting.historical_funding_bridge import (
+    HistoricalFundingBridge,
+    canonical_historical_funding_request,
+)
 
 
 _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
@@ -68,6 +73,9 @@ class CanonicalBacktraderRuntime:
         self,
         plan: CanonicalBacktestOrderPlan,
         feed: VerifiedBacktraderFeedAdapter,
+        *,
+        funding_schedule: VerifiedHistoricalFundingSchedule | None = None,
+        funding_bridge: HistoricalFundingBridge | None = None,
     ) -> str:
         wire_plan = plan.model_dump(mode="json", by_alias=True)
         for optional_key in ("cancelAfterAt", "holdingExpiresAt", "orderBookInputHash"):
@@ -107,9 +115,38 @@ class CanonicalBacktraderRuntime:
             raise ValueError("backtrader_runtime_delivery_invalid")
 
         outcome = execute_plan(plan, tuple(feed.bars[index] for index in delivered))
+        funding_settlement = None
+        if funding_schedule is not None or funding_bridge is not None:
+            if funding_schedule is None or funding_bridge is None:
+                raise ValueError("backtrader_runtime_historical_funding_evidence_required")
+            if type(funding_bridge) is not HistoricalFundingBridge:
+                raise ValueError("backtrader_runtime_historical_funding_authority_invalid")
+            try:
+                funding_schedule = VerifiedHistoricalFundingSchedule(funding_schedule.artifacts)
+            except Exception as exc:
+                raise ValueError("backtrader_runtime_historical_funding_schedule_binding_invalid") from exc
+            if (
+                funding_schedule.dataset_id != feed.dataset_id
+                or funding_schedule.dataset_checksum != feed.dataset_checksum
+                or funding_schedule.source_network != feed.source_network
+                or funding_schedule.market_data_venue != feed.market_data_venue
+                or funding_schedule.market_type != feed.market_type
+                or funding_schedule.symbol != feed.symbol
+            ):
+                raise ValueError("backtrader_runtime_historical_funding_schedule_binding_invalid")
+            if outcome.status == "closed":
+                funding_settlement = funding_bridge.settle(
+                    canonical_historical_funding_request(plan, outcome, funding_schedule)
+                )
         net_outcome = (
             json.loads(
-                project_plan_bound_net_outcome(plan, outcome, feed),
+                project_plan_bound_net_outcome(
+                    plan,
+                    outcome,
+                    feed,
+                    funding_schedule=funding_schedule,
+                    funding_settlement=funding_settlement,
+                ),
                 parse_float=Decimal,
                 parse_int=Decimal,
             )
@@ -137,12 +174,14 @@ class CanonicalBacktraderRuntime:
             "plan_hash": plan.plan.plan_hash,
             "source_record_ids": [bar.source_record_id for bar in feed.bars],
             "timeframe": feed.timeframe,
+            **({"funding_schedule_checksum": funding_schedule.schedule_checksum} if funding_schedule is not None else {}),
         }
         result = {
             "engine_version": _ENGINE_VERSION,
             "events": events,
             "input_hash": _hash(input_payload),
             "net_outcome": net_outcome,
+            **({"funding_schedule_checksum": funding_schedule.schedule_checksum} if funding_schedule is not None else {}),
             "reason_code": outcome.reason_code,
             "result_is_live_proof": False,
             "schema_version": "canonical-backtrader-result.v1",

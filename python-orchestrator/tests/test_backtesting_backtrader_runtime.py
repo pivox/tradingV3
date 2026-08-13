@@ -13,6 +13,13 @@ from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
 from app.backtesting.backtrader_runtime import _canonical
 from app.backtesting.contracts import MarketType
 from app.backtesting.dataset import CandleRecord, DatasetBuilder, DatasetSerializer, DatasetSourceIdentity, Timeframe
+from app.backtesting.historical_funding import (
+    HistoricalFundingScheduleArtifacts,
+    HistoricalFundingRecord,
+    VerifiedHistoricalFundingSchedule,
+    serialize_historical_funding_schedule,
+)
+from tests.funding_support import trusted_bridge_for
 
 
 UTC = timezone.utc
@@ -37,8 +44,12 @@ def _record(index: int, high: str, low: str) -> CandleRecord:
     )
 
 
-def _feed() -> VerifiedBacktraderFeedAdapter:
-    records = (_record(0, "101", "99"), _record(1, "103", "99"))
+def _feed(*, unfilled: bool = False) -> VerifiedBacktraderFeedAdapter:
+    records = (
+        (_record(0, "100", "99"), _record(1, "100", "99"), _record(2, "100", "99"))
+        if unfilled
+        else (_record(0, "101", "99"), _record(1, "103", "99"))
+    )
     source = DatasetSourceIdentity(
         source="paper-okx", source_schema_version="paper.v2",
         source_build_version="fixture.v1", source_checksum="sha256:" + "d" * 64,
@@ -49,8 +60,34 @@ def _feed() -> VerifiedBacktraderFeedAdapter:
     return VerifiedBacktraderFeedAdapter(
         artifacts, symbol="BTCUSDT", timeframe="1m",
         period_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
-        period_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+        period_end=datetime(2026, 8, 10, 12, len(records), tzinfo=UTC),
     )
+
+
+def _funding_schedule(feed: VerifiedBacktraderFeedAdapter) -> VerifiedHistoricalFundingSchedule:
+    records = tuple(
+        HistoricalFundingRecord(
+            schema_version="historical-funding-record.v1",
+            source_record_id=f"runtime-funding-{minute}",
+            source_network=feed.source_network,
+            market_data_venue=feed.market_data_venue,
+            market_type="perpetual",
+            symbol=feed.symbol,
+            funding_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            available_at=datetime(2026, 8, 10, 12, minute, tzinfo=UTC),
+            funding_rate="0.0001",
+            mark_price="100",
+            interval_seconds=60,
+        )
+        for minute in (1, 2)
+    )
+    return VerifiedHistoricalFundingSchedule(serialize_historical_funding_schedule(
+        dataset_id=feed.dataset_id,
+        dataset_checksum=feed.dataset_checksum,
+        coverage_start=datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+        coverage_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
+        records=records,
+    ))
 
 
 def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
@@ -79,6 +116,38 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     golden = Path(__file__).parent / "fixtures/backtesting/backtrader-runtime-result.json"
     if golden.exists():
         assert first == golden.read_text(encoding="utf-8")
+
+
+def test_runtime_invokes_historical_funding_authority_protocol() -> None:
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    result = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=trusted_bridge_for(applied_ids=("runtime-funding-2",)),
+    ))
+
+    outcome = result["net_outcome"]
+    assert outcome["schema_version"] == "canonical-backtest-historical-net-outcome.v1"
+    assert outcome["funding_evidence"] == "integrity_bound_historical_schedule"
+    assert outcome["applied_funding_source_record_ids"] == ["runtime-funding-2"]
+    assert outcome["historical_funding_cashflow_quote"] == -0.02497
+    assert outcome["costs_are_certified"] is False
+    assert result["funding_schedule_checksum"] == _funding_schedule(feed).schedule_checksum
+
+
+def test_runtime_input_hash_changes_with_historical_schedule() -> None:
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    plain = json.loads(CanonicalBacktraderRuntime().run(plan, feed))
+    historical = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=trusted_bridge_for(applied_ids=("runtime-funding-2",)),
+    ))
+    assert plain["input_hash"] != historical["input_hash"]
 
 
 def test_runtime_files_do_not_reimplement_trading_authorities() -> None:
@@ -164,3 +233,59 @@ def test_runtime_binds_plan_to_feed_market_type() -> None:
     plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
     with pytest.raises(ValueError, match="identity_mismatch"):
         CanonicalBacktraderRuntime().run(plan, feed)
+
+
+def test_runtime_rejects_noncanonical_funding_authority() -> None:
+    class ForgedBridge:
+        def settle(self, request):
+            raise AssertionError("untrusted authority must never run")
+
+    feed = _feed()
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    with pytest.raises(ValueError, match="funding_authority_invalid"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            funding_schedule=_funding_schedule(feed),
+            funding_bridge=ForgedBridge(),  # type: ignore[arg-type]
+        )
+
+
+def test_runtime_preserves_unfilled_result_with_paired_funding_evidence() -> None:
+    feed = _feed(unfilled=True)
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    result = json.loads(CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        funding_schedule=_funding_schedule(feed),
+        funding_bridge=trusted_bridge_for(applied_ids=("must-not-be-applied",)),
+    ))
+
+    assert result["status"] == "not_executed"
+    assert result["reason_code"] == "entry_expired"
+    assert result["net_outcome"] is None
+    assert result["events"] == []
+    assert result["funding_schedule_checksum"] == _funding_schedule(feed).schedule_checksum
+
+
+def test_runtime_rejects_unfilled_schedule_bound_to_another_dataset() -> None:
+    feed = _feed(unfilled=True)
+    plan = _plan().model_copy(update={"dataset_id": feed.dataset_id, "dataset_checksum": feed.dataset_checksum})
+    schedule = _funding_schedule(feed)
+    raw = json.loads(schedule.artifacts.schedule_json)
+    raw["dataset_checksum"] = "sha256:" + "f" * 64
+    raw["dataset_id"] = "backtest-dataset-" + "f" * 64
+    payload = json.dumps(raw, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    checksum = "sha256:" + __import__("hashlib").sha256(payload).hexdigest()
+    unrelated = VerifiedHistoricalFundingSchedule(HistoricalFundingScheduleArtifacts(
+        schedule_json=payload,
+        schedule_checksum=checksum,
+    ))
+
+    with pytest.raises(ValueError, match="schedule_binding_invalid"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            funding_schedule=unrelated,
+            funding_bridge=trusted_bridge_for(),
+        )
