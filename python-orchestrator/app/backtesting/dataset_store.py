@@ -91,6 +91,7 @@ class DatasetPublisher:
 
         staging_name, staging_fd = self._create_staging(root_fd, dataset_id)
         renamed = False
+        cleanup_staging = True
         try:
             for filename, attribute in _ARTIFACT_PAYLOADS:
                 self._write_private_file(
@@ -113,7 +114,12 @@ class DatasetPublisher:
             self._before_atomic_rename(staging_path, target)
             self._assert_root_path_stable(root_identity)
             try:
-                _atomic_rename_no_replace(root_fd, staging_name, dataset_id)
+                self._assert_staging_identity(root_fd, staging_name, staging_fd)
+            except DatasetPublicationConflict:
+                cleanup_staging = False
+                raise
+            try:
+                self._atomic_rename_no_replace(root_fd, staging_name, dataset_id)
                 renamed = True
             except OSError as exc:
                 if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
@@ -128,6 +134,10 @@ class DatasetPublisher:
                     status=existing,
                 )
             os.fsync(root_fd)
+            if self._existing_status(root_fd, dataset_id, artifacts) is not (
+                DatasetPublicationStatus.ALREADY_PUBLISHED
+            ):
+                raise DatasetPublicationConflict()
             self._after_atomic_rename()
             self._assert_root_path_stable(root_identity)
             return DatasetPublicationResult(
@@ -137,7 +147,7 @@ class DatasetPublisher:
             )
         finally:
             try:
-                if not renamed:
+                if not renamed and cleanup_staging:
                     self._cleanup_staging(root_fd, staging_name, staging_fd)
             finally:
                 os.close(staging_fd)
@@ -179,6 +189,40 @@ class DatasetPublisher:
 
     def _fsync_staging(self, staging_fd: int) -> None:
         os.fsync(staging_fd)
+
+    def _atomic_rename_no_replace(
+        self,
+        root_fd: int,
+        staging_name: str,
+        target_name: str,
+    ) -> None:
+        _atomic_rename_no_replace(root_fd, staging_name, target_name)
+
+    @staticmethod
+    def _assert_staging_identity(
+        root_fd: int,
+        staging_name: str,
+        staging_fd: int,
+    ) -> None:
+        opened = os.fstat(staging_fd)
+        try:
+            named = os.stat(
+                staging_name,
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise DatasetPublicationConflict() from exc
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or stat.S_IMODE(opened.st_mode) != 0o700
+            or stat.S_IMODE(named.st_mode) != 0o700
+            or opened.st_nlink < 1
+            or named.st_nlink < 1
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise DatasetPublicationConflict()
 
     def _existing_status(
         self,

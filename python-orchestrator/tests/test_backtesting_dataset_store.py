@@ -275,6 +275,57 @@ class _CreateEmptyTargetPublisher(DatasetPublisher):
         target.mkdir(mode=0o700)
 
 
+class _SwapStagingNamePublisher(DatasetPublisher):
+    def _before_atomic_rename(self, staging: Path, target: Path) -> None:
+        parked = staging.with_name(staging.name + "-parked")
+        staging.rename(parked)
+        staging.mkdir(mode=0o700)
+
+
+def test_staging_name_swap_never_publishes_unknown_directory(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapStagingNamePublisher(root).publish(_artifacts())
+
+    assert not _target(root).exists()
+    parked = tuple(root.glob(".*.staging-*-parked"))
+    assert len(parked) == 1
+    assert {item.name for item in parked[0].iterdir()} == _ARTIFACT_NAMES
+
+
+class _SwapDuringNoReplacePublisher(DatasetPublisher):
+    def _atomic_rename_no_replace(
+        self,
+        root_fd: int,
+        staging_name: str,
+        target_name: str,
+    ) -> None:
+        os.rename(
+            staging_name,
+            staging_name + "-parked",
+            src_dir_fd=root_fd,
+            dst_dir_fd=root_fd,
+        )
+        os.mkdir(staging_name, 0o700, dir_fd=root_fd)
+        super()._atomic_rename_no_replace(root_fd, staging_name, target_name)
+
+
+def test_post_rename_verification_rejects_swap_after_identity_check(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapDuringNoReplacePublisher(root).publish(_artifacts())
+
+    assert _target(root).is_dir()
+    assert tuple(_target(root).iterdir()) == ()
+    parked = tuple(root.glob(".*.staging-*-parked"))
+    assert len(parked) == 1
+    assert {item.name for item in parked[0].iterdir()} == _ARTIFACT_NAMES
+
+
 def test_target_created_in_pre_rename_window_is_never_replaced(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
 

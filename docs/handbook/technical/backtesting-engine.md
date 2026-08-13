@@ -103,6 +103,11 @@ echoue fermee. Toutes les operations sont ancrees sur un `dirfd`
 succes. Un target existant est idempotent seulement si les trois noms, bytes,
 modes et single-links sont exacts ; fichier change/manquant/supplementaire,
 symlink, hardlink ou course concurrente conflictuelle est preserve et rejete.
+Le fd du staging est lie a son nom par device/inode juste avant le rename et la
+cible est reverifiee integralement apres celui-ci. Une substitution dans cette
+ultime fenetre ne peut donc jamais produire un faux statut de succes ; elle
+echoue fermee sans supprimer le repertoire inconnu ni le staging original
+deplace par un acteur concurrent.
 
 `DatasetDescriptor` identifie le jeu de donnees derive par :
 
