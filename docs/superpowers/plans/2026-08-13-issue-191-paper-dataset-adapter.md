@@ -17,11 +17,11 @@
 - Modify: `trading-app/src/Trading/Paper/Dataset/PaperDatasetVerifier.php`
 - Test: `trading-app/tests/Trading/Paper/Dataset/PaperDatasetVerifierTest.php`
 
-- [ ] **Step 1: Write a failing snapshot contract test**
+- [x] **Step 1: Write a failing snapshot contract test**
 
 Add a test that builds a complete v2 dataset with one candle and one non-candle event, calls `verifyBaselineSnapshot()`, and asserts the manifest plus the exact two ordered `PaperMarketEvent` objects. Also assert the snapshot arrays cannot be changed through caller aliases.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -32,7 +32,7 @@ php bin/phpunit tests/Trading/Paper/Dataset/PaperDatasetVerifierTest.php --filte
 
 Expected: failure because `verifyBaselineSnapshot()` and `VerifiedPaperDatasetSnapshot` do not exist.
 
-- [ ] **Step 3: Add the frozen snapshot and collect events inside `scan()`**
+- [x] **Step 3: Add the frozen snapshot and collect events inside `scan()`**
 
 Create a `final readonly` result with:
 
@@ -45,7 +45,7 @@ public function __construct(
 
 Validate that every item is a `PaperMarketEvent`, copy with `array_values`, and expose no mutator. Extend the existing private scan result with `events`, appending each already parsed event exactly once. Factor the current verification body into a private method returning the manifest and events so `verify()`, `verifyForBaseline()` and `verifyBaselineSnapshot()` share one pinned read and final stability sequence. Apply the existing baseline provenance/model checks before returning the snapshot.
 
-- [ ] **Step 4: Run the verifier tests and verify GREEN**
+- [x] **Step 4: Run the verifier tests and verify GREEN**
 
 ```bash
 cd trading-app
@@ -54,7 +54,7 @@ php bin/phpunit tests/Trading/Paper/Dataset/PaperDatasetVerifierTest.php
 
 Expected: all tests pass with no warning.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add trading-app/src/Trading/Paper/Dataset/VerifiedPaperDatasetSnapshot.php \
@@ -72,11 +72,11 @@ git commit -m "feat(#191): expose verified Paper event snapshots"
 - Create: `trading-app/src/Trading/Paper/Backtesting/PaperBacktestDatasetAdapter.php`
 - Test: `trading-app/tests/Trading/Paper/Backtesting/PaperBacktestDatasetAdapterTest.php`
 
-- [ ] **Step 1: Write failing OKX and Hyperliquid golden tests**
+- [x] **Step 1: Write failing OKX and Hyperliquid golden tests**
 
 Build verified snapshots with canonical v2 events and assert exact normalized maps. Required assertions include `source_record_id === event_id`, `market_type === perpetual`, exclusive close time, canonical decimal strings, and `available_at === max(received_timestamp, close_at)`.
 
-- [ ] **Step 2: Run the adapter test and verify RED**
+- [x] **Step 2: Run the adapter test and verify RED**
 
 ```bash
 cd trading-app
@@ -85,17 +85,17 @@ php bin/phpunit tests/Trading/Paper/Backtesting/PaperBacktestDatasetAdapterTest.
 
 Expected: failure because the adapter classes do not exist.
 
-- [ ] **Step 3: Implement the minimal typed normalization**
+- [x] **Step 3: Implement the minimal typed normalization**
 
 Implement immutable values whose constructors reject extra/invalid facts. Map channels with the fixed duration table `1m=60`, `5m=300`, `15m=900`, `1h=3600`. Normalize decimals with `BigDecimal::of($value)->stripTrailingZeros()` while rejecting non-string, exponent notation, negative zero, non-positive prices, negative volume and invalid OHLC geometry. Require event schema v2, event/manifest network and venue equality, symbol presence in the manifest map, exact venue payload keys, `confirmed === true`, UTC grid alignment, and exact venue close semantics. Sort output by venue, symbol, duration, open time and event id.
 
 Return source facts exactly as specified in the design, including `sha256:` prefix over the manifest events checksum. Throw `PaperBacktestAdapterException` with stable reason codes only.
 
-- [ ] **Step 4: Add fail-closed parameterized tests**
+- [x] **Step 4: Add fail-closed parameterized tests**
 
 Cover legacy schema, mismatch network/venue/symbol, unsupported or channel/payload timeframe mismatch, false confirmation, malformed/missing volume, decimal exponent/negative zero, geometry, grid, duration and checksum absence. Assert non-candle events are ignored and an all-non-candle snapshot is rejected as `paper_backtest_candles_empty`.
 
-- [ ] **Step 5: Run the adapter suite and verify GREEN**
+- [x] **Step 5: Run the adapter suite and verify GREEN**
 
 ```bash
 cd trading-app
@@ -104,7 +104,7 @@ php bin/phpunit tests/Trading/Paper/Backtesting/PaperBacktestDatasetAdapterTest.
 
 Expected: all adapter tests pass.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 ```bash
 git add trading-app/src/Trading/Paper/Backtesting \
@@ -121,11 +121,11 @@ git commit -m "feat(#191): normalize verified Paper candles"
 - Modify: `trading-app/tests/Trading/Paper/Backtesting/PaperBacktestDatasetAdapterTest.php`
 - Create: `python-orchestrator/tests/test_backtesting_paper_adapter_contract.py`
 
-- [ ] **Step 1: Write a failing canonical encoder test**
+- [x] **Step 1: Write a failing canonical encoder test**
 
 Assert byte-for-byte canonical JSON with sorted keys, no escaped slashes, UTF-8, one final newline, and no `mode`, `setup`, `profile` or `strategy` key recursively.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 cd trading-app
@@ -134,11 +134,11 @@ php bin/phpunit tests/Trading/Paper/Backtesting/PaperBacktestDatasetAdapterTest.
 
 Expected: failure because `PaperBacktestDatasetEncoder` does not exist.
 
-- [ ] **Step 3: Implement the encoder and generate golden fixtures**
+- [x] **Step 3: Implement the encoder and generate golden fixtures**
 
 Reuse `CanonicalJson` for each map. Emit one source identity JSON document and one NDJSON line per candle. Generate fixture bytes through the public adapter/encoder path in the test fixture builder; do not hand-edit hashes or identifiers.
 
-- [ ] **Step 4: Write and run the Python consumer test**
+- [x] **Step 4: Write and run the Python consumer test**
 
 The test must load the two fixtures, validate with `DatasetSourceIdentity` and `CandleRecord`, call `DatasetBuilder(source).build(records)`, and assert eligible exact streams. It must also recursively assert that no legacy/strategy identity key exists.
 
@@ -149,7 +149,7 @@ python3 -m pytest -q tests/test_backtesting_paper_adapter_contract.py
 
 Expected after fixture implementation: pass.
 
-- [ ] **Step 5: Commit Task 3**
+- [x] **Step 5: Commit Task 3**
 
 ```bash
 git add trading-app/src/Trading/Paper/Backtesting/PaperBacktestDatasetEncoder.php \
@@ -165,7 +165,7 @@ git commit -m "test(#191): bind Paper candles across runtimes"
 - Modify: `docs/handbook/technical/backtesting-engine.md`
 - Modify: `docs/superpowers/plans/2026-08-13-issue-191-paper-dataset-adapter.md`
 
-- [ ] **Step 1: Document the authority boundary**
+- [x] **Step 1: Document the authority boundary**
 
 Describe verifier-owned snapshotting, venue-specific candle normalization,
 `available_at`, provenance fields, and the explicit deferral of modern run
