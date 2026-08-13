@@ -97,6 +97,9 @@ final class CanonicalIndicatorWindowTest extends TestCase
         yield 'duplicate' => [static function (array &$records): void {
             $records[100] = $records[99];
         }, 'canonical_indicator_window_chronology_invalid'];
+        yield 'duplicate source identity with contiguous timestamps' => [static function (array &$records): void {
+            $records[100]['source_record_id'] = $records[99]['source_record_id'];
+        }, 'canonical_indicator_source_record_duplicate'];
         yield 'reversal' => [static function (array &$records): void {
             [$records[99], $records[100]] = [$records[100], $records[99]];
         }, 'canonical_indicator_window_chronology_invalid'];

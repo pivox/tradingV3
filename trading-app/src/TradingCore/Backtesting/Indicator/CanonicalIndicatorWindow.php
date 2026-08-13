@@ -46,6 +46,7 @@ final readonly class CanonicalIndicatorWindow
 
         $candles = [];
         $canonicalRecords = [];
+        $recordIds = [];
         $previous = null;
         foreach ($records as $record) {
             $candle = $derived
@@ -66,6 +67,9 @@ final readonly class CanonicalIndicatorWindow
             if ($previous !== null && $candle->openTimestamp() != $previous->closeTimestamp()) {
                 throw new CanonicalIndicatorProjectionException('canonical_indicator_window_chronology_invalid');
             }
+            if (isset($recordIds[$candle->sourceRecordId])) {
+                throw new CanonicalIndicatorProjectionException('canonical_indicator_source_record_duplicate');
+            }
             if ($candle->closeTimestamp() > $evaluationTime) {
                 throw new CanonicalIndicatorProjectionException('canonical_indicator_future_close');
             }
@@ -74,6 +78,7 @@ final readonly class CanonicalIndicatorWindow
             }
             $candles[] = $candle;
             $canonicalRecords[] = $candle->toArray();
+            $recordIds[$candle->sourceRecordId] = true;
             $previous = $candle;
         }
 
