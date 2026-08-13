@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
-import shutil
+import secrets
 import stat
-import tempfile
+import sys
 from enum import Enum
 from pathlib import Path
 
@@ -18,6 +20,12 @@ _ARTIFACT_PAYLOADS = (
     ("candles.ndjson", "candles_ndjson"),
     ("quality-report.json", "quality_report_json"),
     ("manifest.json", "manifest_json"),
+)
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
 )
 
 
@@ -44,7 +52,7 @@ class DatasetPublicationConflict(Exception):
 
 
 class DatasetPublisher:
-    """Publish verified bytes once without following or replacing symlinks."""
+    """Publish verified bytes once through an anchored private root dirfd."""
 
     def __init__(self, root: Path) -> None:
         self._root = Path(root)
@@ -55,9 +63,21 @@ class DatasetPublisher:
         DatasetSerializer.verify(artifacts)
 
         self._prepare_root()
+        self._after_prepare_root()
+        root_fd = self._open_private_root()
+        try:
+            return self._publish_anchored(root_fd, artifacts)
+        finally:
+            os.close(root_fd)
+
+    def _publish_anchored(
+        self,
+        root_fd: int,
+        artifacts: DatasetArtifacts,
+    ) -> DatasetPublicationResult:
         dataset_id = artifacts.descriptor.dataset_id
         target = self._root / dataset_id
-        existing = self._existing_status(target, artifacts)
+        existing = self._existing_status(root_fd, dataset_id, artifacts)
         if existing is not None:
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
@@ -65,19 +85,20 @@ class DatasetPublisher:
                 status=existing,
             )
 
-        staging = Path(
-            tempfile.mkdtemp(
-                prefix=f".{dataset_id}.staging-",
-                dir=self._root,
-            )
-        )
-        os.chmod(staging, 0o700, follow_symlinks=False)
+        staging_name, staging_fd = self._create_staging(root_fd, dataset_id)
         try:
             for filename, attribute in _ARTIFACT_PAYLOADS:
-                self._write_private_file(staging / filename, getattr(artifacts, attribute))
-            self._fsync_directory(staging)
+                self._write_private_file(
+                    staging_fd,
+                    filename,
+                    getattr(artifacts, attribute),
+                )
+            os.fsync(staging_fd)
+        finally:
+            os.close(staging_fd)
 
-            existing = self._existing_status(target, artifacts)
+        try:
+            existing = self._existing_status(root_fd, dataset_id, artifacts)
             if existing is not None:
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
@@ -85,73 +106,118 @@ class DatasetPublisher:
                     status=existing,
                 )
 
-            self._before_atomic_rename(staging, target)
+            staging_path = self._root / staging_name
+            self._before_atomic_rename(staging_path, target)
             try:
-                os.rename(staging, target)
-            except OSError:
-                existing = self._existing_status(target, artifacts)
-                if existing is None:
+                _atomic_rename_no_replace(root_fd, staging_name, dataset_id)
+            except OSError as exc:
+                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
                     raise
+                existing = self._existing_status(root_fd, dataset_id, artifacts)
+                if existing is None:
+                    raise DatasetPublicationConflict() from exc
                 return DatasetPublicationResult(
                     dataset_id=dataset_id,
                     target=target,
                     status=existing,
                 )
-            self._fsync_directory(self._root)
+            os.fsync(root_fd)
             return DatasetPublicationResult(
                 dataset_id=dataset_id,
                 target=target,
                 status=DatasetPublicationStatus.PUBLISHED,
             )
         finally:
-            if _lexists(staging):
-                shutil.rmtree(staging)
+            self._cleanup_staging(root_fd, staging_name)
+
+    def _after_prepare_root(self) -> None:
+        """Test hook at the path-to-dirfd trust boundary."""
 
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         """Test hook invoked after durable staging and immediately before rename."""
 
     def _prepare_root(self) -> None:
-        if _lexists(self._root):
-            metadata = self._root.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise DatasetPublicationConflict()
-            return
-        self._root.mkdir(parents=True, mode=0o700)
+        try:
+            self._root.mkdir(parents=True, mode=0o700)
+        except FileExistsError:
+            pass
+
+    def _open_private_root(self) -> int:
+        try:
+            root_fd = os.open(self._root, _DIRECTORY_FLAGS)
+        except OSError as exc:
+            raise DatasetPublicationConflict() from exc
+        metadata = os.fstat(root_fd)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+            os.close(root_fd)
+            raise DatasetPublicationConflict()
+        return root_fd
 
     def _existing_status(
         self,
-        target: Path,
+        root_fd: int,
+        target_name: str,
         artifacts: DatasetArtifacts,
     ) -> DatasetPublicationStatus | None:
-        if not _lexists(target):
+        try:
+            target_fd = os.open(target_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+        except FileNotFoundError:
             return None
-        metadata = target.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise DatasetPublicationConflict()
-        if stat.S_IMODE(metadata.st_mode) != 0o700:
-            raise DatasetPublicationConflict()
-
-        entries = {entry.name: entry for entry in os.scandir(target)}
-        if set(entries) != {name for name, _ in _ARTIFACT_PAYLOADS}:
-            raise DatasetPublicationConflict()
-        for filename, attribute in _ARTIFACT_PAYLOADS:
-            path = target / filename
-            entry_metadata = path.lstat()
-            if stat.S_ISLNK(entry_metadata.st_mode) or not stat.S_ISREG(
-                entry_metadata.st_mode
+        except OSError as exc:
+            raise DatasetPublicationConflict() from exc
+        try:
+            target_metadata = os.fstat(target_fd)
+            if not stat.S_ISDIR(target_metadata.st_mode) or stat.S_IMODE(
+                target_metadata.st_mode
+            ) != 0o700:
+                raise DatasetPublicationConflict()
+            if set(os.listdir(target_fd)) != {name for name, _ in _ARTIFACT_PAYLOADS}:
+                raise DatasetPublicationConflict()
+            for filename, attribute in _ARTIFACT_PAYLOADS:
+                if self._read_private_file(target_fd, filename) != getattr(
+                    artifacts, attribute
+                ):
+                    raise DatasetPublicationConflict()
+            current = os.stat(target_name, dir_fd=root_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (
+                target_metadata.st_dev,
+                target_metadata.st_ino,
             ):
                 raise DatasetPublicationConflict()
-            if stat.S_IMODE(entry_metadata.st_mode) != 0o600:
-                raise DatasetPublicationConflict()
-            if self._read_without_following(path) != getattr(artifacts, attribute):
-                raise DatasetPublicationConflict()
-        return DatasetPublicationStatus.ALREADY_PUBLISHED
+            return DatasetPublicationStatus.ALREADY_PUBLISHED
+        except OSError as exc:
+            raise DatasetPublicationConflict() from exc
+        finally:
+            os.close(target_fd)
 
     @staticmethod
-    def _write_private_file(path: Path, payload: bytes) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags, 0o600)
+    def _create_staging(root_fd: int, dataset_id: str) -> tuple[str, int]:
+        for _ in range(100):
+            name = f".{dataset_id}.staging-{secrets.token_hex(16)}"
+            try:
+                os.mkdir(name, 0o700, dir_fd=root_fd)
+            except FileExistsError:
+                continue
+            staging_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+            metadata = os.fstat(staging_fd)
+            if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(
+                metadata.st_mode
+            ) != 0o700:
+                os.close(staging_fd)
+                raise DatasetPublicationConflict()
+            return name, staging_fd
+        raise DatasetPublicationConflict()
+
+    @staticmethod
+    def _write_private_file(parent_fd: int, name: str, payload: bytes) -> None:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptor = os.open(name, flags, 0o600, dir_fd=parent_fd)
         try:
             view = memoryview(payload)
             while view:
@@ -163,11 +229,20 @@ class DatasetPublisher:
             os.close(descriptor)
 
     @staticmethod
-    def _read_without_following(path: Path) -> bytes:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
+    def _read_private_file(parent_fd: int, name: str) -> bytes:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
         try:
-            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 1
+            ):
                 raise DatasetPublicationConflict()
             chunks: list[bytes] = []
             while chunk := os.read(descriptor, 64 * 1024):
@@ -177,18 +252,52 @@ class DatasetPublisher:
             os.close(descriptor)
 
     @staticmethod
-    def _fsync_directory(path: Path) -> None:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        descriptor = os.open(path, flags)
+    def _cleanup_staging(root_fd: int, staging_name: str) -> None:
         try:
-            os.fsync(descriptor)
+            staging_fd = os.open(staging_name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+        except FileNotFoundError:
+            return
+        try:
+            for name in os.listdir(staging_fd):
+                os.unlink(name, dir_fd=staging_fd)
         finally:
-            os.close(descriptor)
+            os.close(staging_fd)
+        os.rmdir(staging_name, dir_fd=root_fd)
 
 
-def _lexists(path: Path) -> bool:
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return False
-    return True
+def _atomic_rename_no_replace(root_fd: int, source: str, target: str) -> None:
+    """Atomically rename a directory without ever replacing the target."""
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    if sys.platform == "darwin":
+        function = libc.renameatx_np
+        function.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        function.restype = ctypes.c_int
+        result = function(root_fd, source_bytes, root_fd, target_bytes, 0x4)
+    elif sys.platform.startswith("linux"):
+        try:
+            function = libc.renameat2
+        except AttributeError as exc:
+            raise OSError(errno.ENOTSUP, "atomic no-replace rename unavailable") from exc
+        function.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        function.restype = ctypes.c_int
+        result = function(root_fd, source_bytes, root_fd, target_bytes, 0x1)
+    else:
+        raise OSError(errno.ENOTSUP, "atomic no-replace rename unavailable")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), target)

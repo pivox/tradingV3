@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -101,7 +102,8 @@ def test_existing_corrupt_dataset_conflicts_without_mutation(
 
 def test_symlinked_target_conflicts_without_following_it(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
-    root.mkdir()
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
     outside = tmp_path / "outside"
     outside.mkdir()
     marker = outside / "marker"
@@ -134,6 +136,81 @@ def test_symlinked_artifact_conflicts_without_following_it(tmp_path: Path) -> No
 class _FailBeforeRenamePublisher(DatasetPublisher):
     def _before_atomic_rename(self, staging: Path, target: Path) -> None:
         raise OSError("injected before rename")
+
+
+class _CreateEmptyTargetPublisher(DatasetPublisher):
+    def _before_atomic_rename(self, staging: Path, target: Path) -> None:
+        target.mkdir(mode=0o700)
+
+
+def test_target_created_in_pre_rename_window_is_never_replaced(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+
+    with pytest.raises(DatasetPublicationConflict):
+        _CreateEmptyTargetPublisher(root).publish(_artifacts())
+
+    target = _target(root)
+    assert target.is_dir()
+    assert tuple(target.iterdir()) == ()
+    assert not tuple(root.glob(".*.staging-*"))
+
+
+class _PublishExactWinnerPublisher(DatasetPublisher):
+    def __init__(self, root: Path, artifacts: DatasetArtifacts) -> None:
+        super().__init__(root)
+        self._winner_artifacts = artifacts
+
+    def _before_atomic_rename(self, staging: Path, target: Path) -> None:
+        DatasetPublisher(self._root).publish(self._winner_artifacts)
+
+
+def test_concurrent_exact_winner_becomes_idempotent(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+
+    result = _PublishExactWinnerPublisher(root, _artifacts()).publish(_artifacts())
+
+    assert result.status is DatasetPublicationStatus.ALREADY_PUBLISHED
+    assert result.target == _target(root)
+    assert not tuple(root.glob(".*.staging-*"))
+
+
+class _SwapRootForSymlinkPublisher(DatasetPublisher):
+    def __init__(self, root: Path, outside: Path) -> None:
+        super().__init__(root)
+        self._outside = outside
+
+    def _after_prepare_root(self) -> None:
+        parked = self._root.with_name(self._root.name + "-parked")
+        self._root.rename(parked)
+        self._root.symlink_to(self._outside, target_is_directory=True)
+
+
+def test_root_swapped_for_symlink_never_redirects_publication(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    marker = outside / "marker"
+    marker.write_bytes(b"preserved")
+
+    with pytest.raises(DatasetPublicationConflict):
+        _SwapRootForSymlinkPublisher(root, outside).publish(_artifacts())
+
+    assert marker.read_bytes() == b"preserved"
+    assert {item.name for item in outside.iterdir()} == {"marker"}
+
+
+def test_hardlinked_existing_artifact_is_not_idempotent(tmp_path: Path) -> None:
+    root = tmp_path / "datasets"
+    DatasetPublisher(root).publish(_artifacts())
+    candles = _target(root) / "candles.ndjson"
+    outside_link = tmp_path / "candles-hardlink"
+    os.link(candles, outside_link)
+
+    with pytest.raises(DatasetPublicationConflict):
+        DatasetPublisher(root).publish(_artifacts())
+
+    assert candles.read_bytes() == _artifacts().candles_ndjson
+    assert outside_link.read_bytes() == _artifacts().candles_ndjson
 
 
 def test_failure_before_rename_leaves_no_target_or_staging(tmp_path: Path) -> None:
