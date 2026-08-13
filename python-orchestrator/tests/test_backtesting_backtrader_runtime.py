@@ -7,6 +7,7 @@ from copy import deepcopy
 import pytest
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan, _php_plan_hash
+from app.backtesting.backtrader_net_outcome import BacktestNetOutcomeError
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 from app.backtesting.backtrader_runtime import CanonicalBacktraderRuntime
 from app.backtesting.backtrader_runtime import _canonical
@@ -67,6 +68,10 @@ def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
     assert decoded["result_is_live_proof"] is False
     assert decoded["input_hash"].startswith("sha256:")
     assert decoded["result_hash"].startswith("sha256:")
+    assert decoded["net_outcome"]["schema_version"] == "canonical-backtest-net-outcome.v1"
+    assert decoded["net_outcome"]["net_pnl_quote"] == 5.8632057
+    assert decoded["net_outcome"]["funding_evidence"] == "canonical_plan_provision"
+    assert decoded["net_outcome"]["outcome_hash"].startswith("sha256:")
 
     golden = Path(__file__).parent / "fixtures/backtesting/backtrader-runtime-result.json"
     if golden.exists():
@@ -107,6 +112,22 @@ def test_runtime_revalidates_a_forged_model_instance() -> None:
     )
     with pytest.raises(ValueError, match="plan_hash_mismatch"):
         CanonicalBacktraderRuntime().run(plan, feed)
+
+
+def test_runtime_rejects_holding_exit_without_authenticated_cost_branch() -> None:
+    feed = _feed()
+    payload = json.loads(FIXTURE.read_text())
+    payload["plan"]["holdingExpiresAt"] = "2026-08-10T12:01:00.000000+00:00"
+    unsigned = {key: value for key, value in payload["plan"].items() if key != "planHash"}
+    payload["plan"]["planHash"] = _php_plan_hash(unsigned)
+    payload.update(
+        dataset_id=feed.dataset_id,
+        dataset_checksum=feed.dataset_checksum,
+        timeframe="1m",
+    )
+
+    with pytest.raises(BacktestNetOutcomeError, match="execution_unsupported"):
+        CanonicalBacktraderRuntime().run(CanonicalBacktestOrderPlan.model_validate(payload), feed)
 
 
 def test_runtime_revalidation_preserves_hash_bearing_null_caps() -> None:
