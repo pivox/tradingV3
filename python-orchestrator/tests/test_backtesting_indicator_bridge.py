@@ -41,6 +41,7 @@ from app.modern_trading_contracts import _canonical_json
 
 UTC = timezone.utc
 EVALUATED_AT = "2026-02-12T20:00:00.000000Z"
+REPOSITORY = Path(__file__).resolve().parents[2]
 SNAPSHOT = Path(__file__).parent / "fixtures/backtesting/php-effective-config-snapshot.json"
 
 
@@ -713,6 +714,10 @@ def test_bridge_rejects_well_formed_forged_window_hash(
 @pytest.mark.parametrize(
     ("venue", "network"),
     [("okx", "mainnet"), ("hyperliquid", "testnet")],
+)
+@pytest.mark.skipif(
+    not (REPOSITORY / "trading-app/vendor/autoload.php").exists(),
+    reason="Symfony dependencies unavailable",
 )
 def test_real_symfony_projection_is_byte_deterministic_and_rule_compatible(
     venue: Literal["okx", "hyperliquid"],
