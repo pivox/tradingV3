@@ -122,6 +122,13 @@ class CanonicalTradingIdentity(BaseModel):
             raise ValueError("effective_config_reference_empty")
         return normalized
 
+    @field_validator("config_hash", "condition_catalog_hash", mode="before")
+    @classmethod
+    def _reject_coerced_hashes(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            raise ValueError("canonical_trading_identity_hash_type_invalid")
+        return value
+
     @model_validator(mode="after")
     def _reject_contradictory_resolution(self) -> "CanonicalTradingIdentity":
         snapshot = self.effective_config_snapshot

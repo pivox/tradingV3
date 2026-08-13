@@ -93,25 +93,54 @@ _EXCHANGE_ENVIRONMENTS = {
 class FrozenJsonDict(Mapping[str, Any]):
     """A recursively immutable mapping containing only unambiguous JSON."""
 
+    __slots__ = ("__backing",)
+
     def __init__(self, value: Mapping[str, Any]) -> None:
         data: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ValueError("canonical_json_mapping_keys_must_be_strings")
             data[key] = _deep_freeze(item)
-        self._data = data
+        object.__setattr__(self, "_FrozenJsonDict__backing", MappingProxyType(data))
+
+    @property
+    def _data(self) -> "FrozenJsonDict":
+        """Compatibility view that cannot expose the immutable backing map."""
+
+        return self
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise TypeError("FrozenJsonDict is immutable")
+
+    def __delattr__(self, _name: str) -> None:
+        raise TypeError("FrozenJsonDict is immutable")
+
+    def __setitem__(self, _key: str, _value: Any) -> None:
+        raise TypeError("FrozenJsonDict is immutable")
+
+    def __delitem__(self, _key: str) -> None:
+        raise TypeError("FrozenJsonDict is immutable")
 
     def __getitem__(self, key: str) -> Any:
-        return self._data[key]
+        return self.__backing[key]
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._data)
+        return iter(self.__backing)
 
     def __len__(self) -> int:
-        return len(self._data)
+        return len(self.__backing)
 
     def __repr__(self) -> str:
-        return repr(self._data)
+        return repr(dict(self.__backing))
+
+    def __copy__(self) -> "FrozenJsonDict":
+        return self
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "FrozenJsonDict":
+        return self
+
+    def __reduce__(self) -> tuple[Any, tuple[dict[str, Any]]]:
+        return type(self), (thaw_json(self),)
 
     @classmethod
     def __get_pydantic_json_schema__(cls, _core_schema: Any, _handler: Any) -> dict:
@@ -356,6 +385,15 @@ class CanonicalEffectiveConfigSnapshot(BaseModel):
         executable = value.get("executable")
         if executable is not True and executable is not False:
             raise ValueError("effective_config_snapshot_executable_invalid")
+        return value
+
+    @field_validator(
+        "config_hash", "condition_catalog_hash", "snapshot_hash", mode="before"
+    )
+    @classmethod
+    def _reject_coerced_hashes(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            raise ValueError("effective_config_snapshot_hash_type_invalid")
         return value
 
     @field_validator("config", mode="before")

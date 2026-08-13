@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from copy import deepcopy
 
 import pytest
@@ -299,6 +300,49 @@ def test_snapshot_validates_hashes_layers_provenance_and_deep_immutability() -> 
         snapshot.config["mode"]["mode_id"] = "day_trading"  # type: ignore[index]
     with pytest.raises(TypeError):
         snapshot.provenance["mode.mode_id"]["path"] = "/other.yaml"  # type: ignore[index]
+    assert snapshot.config["environment"]["tags"] == ("paper", "certified")
+
+
+def test_frozen_json_backing_cannot_be_mutated_or_rebound() -> None:
+    snapshot = CanonicalEffectiveConfigSnapshot(**_snapshot_payload())
+    original = snapshot.model_dump(mode="json")
+
+    with pytest.raises(TypeError, match="immutable"):
+        snapshot.config._data["mode"] = {}  # type: ignore[attr-defined,index]
+    with pytest.raises(TypeError, match="immutable"):
+        snapshot.config._data = {}  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="immutable"):
+        snapshot.config["mode"]._data["mode_id"] = "day_trading"  # type: ignore[attr-defined,index]
+    with pytest.raises(TypeError, match="immutable"):
+        snapshot.provenance["mode.mode_id"]._data["path"] = "/forged.yaml"  # type: ignore[attr-defined,index]
+    with pytest.raises(TypeError):
+        snapshot.config._FrozenJsonDict__backing["mode"] = {}  # type: ignore[attr-defined,index]
+    with pytest.raises(TypeError, match="immutable"):
+        snapshot.config._FrozenJsonDict__backing = {}  # type: ignore[attr-defined]
+
+    assert snapshot.model_dump(mode="json") == original
+    assert calculate_snapshot_hash(snapshot) == snapshot.snapshot_hash
+
+
+def test_frozen_snapshot_round_trips_through_pickle_without_losing_hashes() -> None:
+    snapshot = CanonicalEffectiveConfigSnapshot(**_snapshot_payload())
+
+    restored = pickle.loads(pickle.dumps(snapshot))
+
+    assert restored.model_dump(mode="json") == snapshot.model_dump(mode="json")
+    assert calculate_snapshot_hash(restored) == restored.snapshot_hash
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("config_hash", "condition_catalog_hash", "snapshot_hash"),
+)
+def test_snapshot_hash_fields_reject_bytes_before_string_coercion(field: str) -> None:
+    payload = _snapshot_payload()
+    payload[field] = payload[field].encode("ascii")
+
+    with pytest.raises(ValidationError, match="effective_config_snapshot_hash_type_invalid"):
+        CanonicalEffectiveConfigSnapshot(**payload)
 
 
 @pytest.mark.parametrize(

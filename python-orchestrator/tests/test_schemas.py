@@ -220,6 +220,15 @@ def test_canonical_trading_identity_rejects_malformed_hashes(field, value):
         CanonicalTradingIdentity(**payload)
 
 
+@pytest.mark.parametrize("field", ["config_hash", "condition_catalog_hash"])
+def test_canonical_trading_identity_rejects_bytes_hashes_before_coercion(field):
+    payload = _canonical_identity_payload()
+    payload[field] = payload[field].encode("ascii")
+
+    with pytest.raises(ValidationError, match="canonical_trading_identity_hash_type_invalid"):
+        CanonicalTradingIdentity(**payload)
+
+
 @pytest.mark.parametrize(
     "override",
     [
