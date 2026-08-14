@@ -78,7 +78,9 @@ class CanonicalBacktraderRuntime:
         funding_bridge: HistoricalFundingBridge | None = None,
     ) -> str:
         wire_plan = plan.model_dump(mode="json", by_alias=True)
-        for optional_key in ("cancelAfterAt", "holdingExpiresAt", "orderBookInputHash"):
+        for optional_key in (
+            "marketFallback", "cancelAfterAt", "holdingExpiresAt", "orderBookInputHash",
+        ):
             if wire_plan["plan"].get(optional_key) is None:
                 wire_plan["plan"].pop(optional_key)
         plan = CanonicalBacktestOrderPlan.model_validate_json(

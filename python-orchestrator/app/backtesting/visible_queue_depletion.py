@@ -249,6 +249,13 @@ def model_visible_queue_depletion(
         raise VisibleQueueDepletionError("visible_queue_depletion_input_invalid")
     if plan.plan.entry_liquidity_role != "maker":
         raise VisibleQueueDepletionError("visible_queue_depletion_unsupported_liquidity_role")
+    if (
+        plan.schema_version != "canonical-backtest-order-plan.v2"
+        or plan.plan.market_fallback is not False
+    ):
+        raise VisibleQueueDepletionError(
+            "visible_queue_depletion_fallback_policy_missing"
+        )
     _validate_lineage(
         plan, dataset, public_execution_tape, public_book_tape,
         quantity_conversion_tape,

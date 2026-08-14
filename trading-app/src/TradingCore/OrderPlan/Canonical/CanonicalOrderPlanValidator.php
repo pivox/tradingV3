@@ -34,6 +34,9 @@ final readonly class CanonicalOrderPlanValidator
         if ($plan->orderType !== 'limit') {
             throw new CanonicalOrderPlanException('canonical_order_plan_type_invalid');
         }
+        if ($plan->marketFallback) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_market_fallback_forbidden');
+        }
         if (preg_match('/\A[a-z0-9][a-z0-9_.-]*\z/D', $plan->marketType) !== 1) {
             throw new CanonicalOrderPlanException('canonical_order_plan_market_type_invalid');
         }

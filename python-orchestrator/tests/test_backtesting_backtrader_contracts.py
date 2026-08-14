@@ -23,6 +23,22 @@ def _rehash(plan: dict) -> None:
     plan["planHash"] = _php_plan_hash(unsigned)
 
 
+def _v2_payload() -> dict:
+    payload = _payload()
+    payload["schema_version"] = "canonical-backtest-order-plan.v2"
+    payload["plan"] = {
+        key: value
+        for original_key, original_value in payload["plan"].items()
+        for key, value in (
+            ((original_key, original_value), ("marketFallback", False))
+            if original_key == "orderType"
+            else ((original_key, original_value),)
+        )
+    }
+    _rehash(payload["plan"])
+    return payload
+
+
 def test_php_golden_is_strict_frozen_and_hash_bound() -> None:
     payload = _payload()
     projected = CanonicalBacktestOrderPlan.model_validate(payload)
@@ -31,6 +47,28 @@ def test_php_golden_is_strict_frozen_and_hash_bound() -> None:
     assert projected.dataset_id.endswith(projected.dataset_checksum.removeprefix("sha256:"))
     with pytest.raises(ValidationError):
         projected.timeframe = "1m"  # type: ignore[misc]
+
+
+def test_v2_requires_hash_bound_explicit_fallback_prohibition() -> None:
+    projected = CanonicalBacktestOrderPlan.model_validate(_v2_payload())
+
+    assert projected.schema_version == "canonical-backtest-order-plan.v2"
+    assert projected.plan.market_fallback is False
+
+    for schema_version, fallback in (
+        ("canonical-backtest-order-plan.v1", False),
+        ("canonical-backtest-order-plan.v2", None),
+        ("canonical-backtest-order-plan.v2", True),
+    ):
+        payload = _v2_payload()
+        payload["schema_version"] = schema_version
+        if fallback is None:
+            payload["plan"].pop("marketFallback")
+        else:
+            payload["plan"]["marketFallback"] = fallback
+        _rehash(payload["plan"])
+        with pytest.raises(ValidationError, match="fallback_policy_invalid"):
+            CanonicalBacktestOrderPlan.model_validate(payload)
 
 
 @pytest.mark.parametrize(

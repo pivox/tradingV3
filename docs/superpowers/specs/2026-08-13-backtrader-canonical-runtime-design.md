@@ -17,6 +17,11 @@ The runtime is split into three units:
    execution scope, entry zone, quantity, immediate stop, targets, TTL/holding
    boundaries, exact known cost inputs, config/input hashes and the PHP
    `plan_hash`. Unknown or incomplete fields fail closed.
+
+The original v1 envelope remains readable for historical OHLCV replays. Current
+PHP projections emit v2, whose hash-bound `marketFallback=false` field carries
+the explicit modern prohibition. V1 cannot enter public-tape fill modeling,
+and v2 rejects a missing or true fallback value.
 2. `VerifiedBacktraderFeedAdapter` accepts only already verified
    `CandleRecord` values for one exact dataset/symbol/timeframe stream. It
    exposes the bar only at `available_at`, preserves UTC and decimal OHLCV, and
@@ -40,9 +45,10 @@ formula is copied into a Backtrader `Strategy`.
 - Entry is possible only when the bar range crosses `entry_price`, the price is
   inside the authenticated EntryZone, and the plan has not reached
   `expires_at`/`cancel_after_at`.
-- V1 fills the full authenticated quantity at the authenticated limit price.
-  Partial fills and maker-to-taker fallback remain an explicit later lot; the
-  runtime never invents book depth.
+- The legacy OHLCV runtime fills the full authenticated quantity at the
+  authenticated limit price. Public-tape partial fills are modeled by the
+  separate `visible-queue-depletion.v1` boundary. Maker-to-taker fallback is
+  explicitly forbidden by current v2 plans; neither runtime invents one.
 - The stop is attached atomically in the same canonical fill event. An entry
   without a valid protective stop is rejected before the engine starts.
 - After entry, bars are evaluated only when available. A long stop triggers
@@ -87,7 +93,8 @@ Tests are layered:
 
 ## Deferred work
 
-Partial fills, taker fallback, calibrated spread/slippage/funding application,
+Public-tape fill integration, any future newly authorized taker fallback,
+calibrated spread/slippage/funding application,
 multi-plan portfolio reservations, ledger aggregation, metrics, PostgreSQL
 replay and certification reports are later #191 lots. `micro_scalping` remains
 blocked until real spread and OFI evidence exists. Mainnet stays public and

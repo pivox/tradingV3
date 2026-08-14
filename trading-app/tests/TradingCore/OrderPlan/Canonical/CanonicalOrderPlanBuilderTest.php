@@ -40,6 +40,7 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         $plan = (new CanonicalOrderPlanBuilder($clock, $validator))->build(new CanonicalOrderPlanBuildRequest(...$components));
 
         self::assertSame('limit', $plan->orderType);
+        self::assertFalse($plan->marketFallback);
         self::assertSame('day_trading', $plan->modeId);
         self::assertSame('BTCUSDT', $plan->symbol);
         self::assertSame('USDT', $plan->quoteCurrency);
@@ -57,6 +58,19 @@ final class CanonicalOrderPlanBuilderTest extends TestCase
         self::assertSame('sha256:', substr($plan->planHash, 0, 7));
         self::assertContains($components['riskRequest']->instrument->inputHash, $plan->inputHashes);
         self::assertSame($plan, $validator->validate($plan));
+    }
+
+    public function testValidatorRejectsAuthenticatedMarketFallbackEnablement(): void
+    {
+        $clock = new MockClock('2026-08-10T12:00:00+00:00');
+        $validator = new CanonicalOrderPlanValidator($clock);
+        $plan = (new CanonicalOrderPlanBuilder($clock, $validator))->build(
+            new CanonicalOrderPlanBuildRequest(...CanonicalOrderPlanPipelineFixture::accepted()),
+        );
+
+        $this->expectException(CanonicalOrderPlanException::class);
+        $this->expectExceptionMessage('canonical_order_plan_market_fallback_forbidden');
+        $validator->validate($this->authenticatedPlan($plan, ['marketFallback' => true]));
     }
 
     #[DataProvider('scalpingIdentities')]
