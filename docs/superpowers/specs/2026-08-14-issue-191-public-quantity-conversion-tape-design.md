@@ -47,10 +47,12 @@ is convertible only when all of the following are true:
 4. the metadata remains the latest admitted observation for that symbol at the
    source event position.
 
-Equal receipt timestamps are resolved only by dataset position. Events before
-metadata, legacy datasets without metadata, changed metadata with invalid
-ordering, and unknown units fail closed. No current API, static symbol table,
-environment value or legacy profile may supply missing conversion inputs.
+Equal receipt timestamps are resolved only by dataset position. The existing
+adapter may still expose raw v1 trades/books from a legacy dataset, but it emits
+no derived row for an observation before metadata. Artifact construction then
+fails complete-coverage validation. Changed metadata with invalid ordering and
+unknown units likewise produce no certification. No current API, static symbol
+table, environment value or legacy profile may supply missing inputs.
 
 ## Conversion contract
 
@@ -109,8 +111,9 @@ It then:
   checksums covering both content sections and the raw tape checksums.
 
 When a supplied raw tape contains public observations, the conversion artifact
-must cover every one of them. A tape with no public trade or book records is not
-silently represented as conversion evidence.
+must cover every one of them. A legacy raw tape remains readable but cannot be
+promoted to conversion evidence without dated metadata. A tape with no public
+trade or book records is not silently represented as conversion evidence.
 
 ## Failure and security model
 
