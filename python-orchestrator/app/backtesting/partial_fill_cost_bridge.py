@@ -10,15 +10,19 @@ import subprocess
 import threading
 import time
 from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.backtesting.backtrader_contracts import (
+    CanonicalBacktestOrderPlan,
     CanonicalBacktestPlan,
     _encode_php_plan_value,
 )
+from app.backtesting.backtrader_execution import BacktestExecutionResult
+from app.backtesting.visible_queue_depletion import VisibleQueueDepletionResult
 
 
 _HASH = r"^sha256:[0-9a-f]{64}$"
@@ -248,6 +252,154 @@ class PartialFillCostBridgeError(RuntimeError):
     """Raised when the local PHP authority fails closed."""
 
 
+def canonical_partial_fill_cost_request(
+    envelope: CanonicalBacktestOrderPlan,
+    evidence: VisibleQueueDepletionResult,
+    execution: BacktestExecutionResult,
+) -> CanonicalPartialFillCostRequest:
+    try:
+        evidence = VisibleQueueDepletionResult.model_validate(
+            evidence.model_dump(mode="json")
+        )
+    except Exception as exc:
+        raise ValueError("canonical_partial_fill_cost_execution_invalid") from exc
+    if (
+        type(envelope) is not CanonicalBacktestOrderPlan
+        or type(execution) is not BacktestExecutionResult
+        or execution.status != "closed"
+        or len(execution.events) < 2
+        or execution.events[-1].kind not in ("stop_filled", "target_filled")
+    ):
+        raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    plan = envelope.plan
+    if (
+        evidence.dataset_id != envelope.dataset_id
+        or evidence.dataset_checksum != envelope.dataset_checksum
+        or evidence.plan_hash != plan.plan_hash
+        or evidence.config_hash != plan.config_hash
+        or evidence.symbol != plan.symbol
+        or evidence.market_type != plan.market_type
+        or evidence.side != plan.side
+    ):
+        raise ValueError("canonical_partial_fill_cost_execution_invalid")
+
+    positive_fills = tuple(
+        item for item in evidence.trace if Decimal(item.fill_quantity_base) > 0
+    )
+    count = execution.consumed_fill_count
+    entry_events = execution.events[:-1]
+    if count <= 0 or count > len(positive_fills) or len(entry_events) != count:
+        raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    cumulative = Decimal(0)
+    contract_size = Decimal(str(plan.contract_size))
+    total = Decimal(evidence.order_quantity_base)
+    for event, item in zip(entry_events, positive_fills[:count], strict=True):
+        increment = Decimal(item.fill_quantity_base)
+        cumulative += increment
+        expected_kind = (
+            "entry_filled" if cumulative == total else "entry_partially_filled"
+        )
+        if (
+            event.kind != expected_kind
+            or event.source_record_id != item.source_record_id
+            or event.happened_at != datetime.fromisoformat(item.available_at)
+            or event.price != Decimal(evidence.entry_price)
+            or event.quantity_base != increment
+            or Decimal(str(event.quantity)) != increment / contract_size
+            or event.stop_price != plan.stop_price
+            or event.plan_hash != plan.plan_hash
+            or event.config_hash != plan.config_hash
+            or event.dataset_id != envelope.dataset_id
+        ):
+            raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    terminal = execution.events[-1]
+    if (
+        execution.filled_quantity_base != cumulative
+        or execution.cancelled_residual_quantity_base != total - cumulative
+        or terminal.quantity_base != cumulative
+        or Decimal(str(terminal.quantity)) != cumulative / contract_size
+        or terminal.happened_at < entry_events[-1].happened_at
+        or terminal.stop_price != plan.stop_price
+        or terminal.plan_hash != plan.plan_hash
+        or terminal.config_hash != plan.config_hash
+        or terminal.dataset_id != envelope.dataset_id
+    ):
+        raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    target_id = None
+    if terminal.kind == "target_filled":
+        target_id = next(
+            (
+                target.id
+                for target in plan.targets
+                if Decimal(str(target.price)) == terminal.price
+            ),
+            None,
+        )
+        if target_id is None:
+            raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    elif terminal.price != Decimal(str(plan.stop_price)):
+        raise ValueError("canonical_partial_fill_cost_execution_invalid")
+    return CanonicalPartialFillCostRequest(
+        schema_version="canonical-partial-fill-cost-request.v1",
+        dataset_id=envelope.dataset_id,
+        dataset_checksum=envelope.dataset_checksum,
+        plan=plan,
+        maker_fill_result_hash=evidence.result_hash,
+        maker_fill_trace_hash=evidence.trace_hash,
+        filled_quantity_base=_canonical_decimal(cumulative),
+        terminal_kind=terminal.kind,
+        target_id=target_id,
+    )
+
+
+def partial_fill_settlement_matches_request(
+    result: CanonicalPartialFillCostResult,
+    request: CanonicalPartialFillCostRequest,
+) -> bool:
+    plan = request.plan
+    return all(
+        (
+            result.dataset_id == request.dataset_id,
+            result.dataset_checksum == request.dataset_checksum,
+            result.plan_hash == plan.plan_hash,
+            result.config_hash == plan.config_hash,
+            result.cost_input_hash == plan.cost_input_hash,
+            result.maker_fill_result_hash == request.maker_fill_result_hash,
+            result.maker_fill_trace_hash == request.maker_fill_trace_hash,
+            result.mode_id == plan.mode_id,
+            result.mode_version == plan.mode_version,
+            result.setup_id == plan.setup_id,
+            result.setup_version == plan.setup_version,
+            result.symbol == plan.symbol,
+            result.market_type == plan.market_type,
+            result.side == plan.side,
+            Decimal(result.planned_quantity_base) == _plan_base_quantity(plan),
+            result.filled_quantity_base == request.filled_quantity_base,
+            result.terminal_kind == request.terminal_kind,
+            result.target_id == request.target_id,
+            result.request_hash == request.request_hash(),
+            request.target_id is None
+            or Decimal(result.net_r)
+            == Decimal(
+                str(
+                    next(
+                        target.net_r
+                        for target in plan.targets
+                        if target.id == request.target_id
+                    )
+                )
+            ),
+        )
+    )
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
 class PartialFillCostBridge:
     def __init__(
         self,
@@ -288,7 +440,7 @@ class PartialFillCostBridge:
             result = CanonicalPartialFillCostResult.model_validate(raw)
         except Exception as exc:
             raise PartialFillCostBridgeError("partial_fill_cost_bridge_result_invalid") from exc
-        if not self._matches_request(result, request):
+        if not partial_fill_settlement_matches_request(result, request):
             raise PartialFillCostBridgeError("partial_fill_cost_bridge_identity_mismatch")
         return result
 
@@ -297,35 +449,7 @@ class PartialFillCostBridge:
         result: CanonicalPartialFillCostResult,
         request: CanonicalPartialFillCostRequest,
     ) -> bool:
-        plan = request.plan
-        return all(
-            (
-                result.dataset_id == request.dataset_id,
-                result.dataset_checksum == request.dataset_checksum,
-                result.plan_hash == plan.plan_hash,
-                result.config_hash == plan.config_hash,
-                result.cost_input_hash == plan.cost_input_hash,
-                result.maker_fill_result_hash == request.maker_fill_result_hash,
-                result.maker_fill_trace_hash == request.maker_fill_trace_hash,
-                result.mode_id == plan.mode_id,
-                result.mode_version == plan.mode_version,
-                result.setup_id == plan.setup_id,
-                result.setup_version == plan.setup_version,
-                result.symbol == plan.symbol,
-                result.market_type == plan.market_type,
-                result.side == plan.side,
-                Decimal(result.planned_quantity_base) == _plan_base_quantity(plan),
-                result.filled_quantity_base == request.filled_quantity_base,
-                result.terminal_kind == request.terminal_kind,
-                result.target_id == request.target_id,
-                result.request_hash == request.request_hash(),
-                request.target_id is None
-                or Decimal(result.net_r)
-                == Decimal(str(next(
-                    target.net_r for target in plan.targets if target.id == request.target_id
-                ))),
-            )
-        )
+        return partial_fill_settlement_matches_request(result, request)
 
     def _run(self, payload: bytes) -> tuple[int, bytes]:
         deadline = time.monotonic() + self._timeout

@@ -24,6 +24,15 @@ from app.backtesting.historical_funding_bridge import (
     HistoricalFundingBridge,
     canonical_historical_funding_request,
 )
+from app.backtesting.partial_fill_cost_bridge import (
+    CanonicalPartialFillCostResult,
+    PartialFillCostBridge,
+    canonical_partial_fill_cost_request,
+)
+from app.backtesting.partial_fill_net_outcome import project_partial_fill_net_outcome
+from app.backtesting.staged_fill_execution import (
+    execute_plan_from_staged_visible_fills,
+)
 from app.backtesting.visible_queue_depletion import (
     VisibleQueueDepletionResult,
     requires_partial_fill_authority,
@@ -32,6 +41,7 @@ from app.backtesting.visible_queue_depletion import (
 
 _ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v1"
 _VISIBLE_FILL_ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v2"
+_STAGED_FILL_ENGINE_VERSION = "backtrader-1.9.78.123+canonical-runtime.v3"
 
 
 def _canonical(value: Any) -> str:
@@ -86,6 +96,7 @@ class CanonicalBacktraderRuntime:
         funding_schedule: VerifiedHistoricalFundingSchedule | None = None,
         funding_bridge: HistoricalFundingBridge | None = None,
         maker_fill_evidence: VisibleQueueDepletionResult | None = None,
+        partial_fill_cost_bridge: PartialFillCostBridge | None = None,
     ) -> str:
         wire_plan = plan.model_dump(mode="json", by_alias=True)
         for optional_key in (
@@ -114,14 +125,30 @@ class CanonicalBacktraderRuntime:
             raise ValueError("backtrader_runtime_visible_fill_evidence_required")
         if not uses_visible_fill and maker_fill_evidence is not None:
             raise ValueError("backtrader_runtime_visible_fill_evidence_forbidden")
+        uses_staged_fill = False
         if maker_fill_evidence is not None:
             maker_fill_evidence = _validated_visible_fill_evidence(
                 plan, feed, maker_fill_evidence
             )
-            if requires_partial_fill_authority(maker_fill_evidence):
+            uses_staged_fill = requires_partial_fill_authority(maker_fill_evidence)
+            if uses_staged_fill and partial_fill_cost_bridge is None:
                 raise ValueError(
                     "backtrader_runtime_partial_fill_cost_authority_missing"
                 )
+            if uses_staged_fill and type(partial_fill_cost_bridge) is not PartialFillCostBridge:
+                raise ValueError(
+                    "backtrader_runtime_partial_fill_cost_authority_invalid"
+                )
+        if not uses_staged_fill and partial_fill_cost_bridge is not None:
+            raise ValueError(
+                "backtrader_runtime_partial_fill_cost_authority_forbidden"
+            )
+        if uses_staged_fill and (
+            funding_schedule is not None or funding_bridge is not None
+        ):
+            raise ValueError(
+                "backtrader_runtime_staged_historical_funding_forbidden"
+            )
 
         # Cerebro remains the deterministic temporal driver. The strategy only
         # records delivery order; all execution semantics live in the pure state
@@ -146,9 +173,21 @@ class CanonicalBacktraderRuntime:
             outcome = BacktestExecutionResult(
                 "not_executed", "visible_queue_unfilled", ()
             )
+        elif uses_staged_fill:
+            outcome = execute_plan_from_staged_visible_fills(
+                plan, delivered_bars, maker_fill_evidence
+            )
         else:
             outcome = execute_plan_from_visible_fill(
                 plan, delivered_bars, maker_fill_evidence
+            )
+        partial_cost_settlement: CanonicalPartialFillCostResult | None = None
+        if uses_staged_fill and outcome.status == "closed":
+            assert partial_fill_cost_bridge is not None
+            partial_cost_settlement = partial_fill_cost_bridge.settle(
+                canonical_partial_fill_cost_request(
+                    plan, maker_fill_evidence, outcome
+                )
             )
         funding_settlement = None
         if funding_schedule is not None or funding_bridge is not None:
@@ -173,8 +212,24 @@ class CanonicalBacktraderRuntime:
                 funding_settlement = funding_bridge.settle(
                     canonical_historical_funding_request(plan, outcome, funding_schedule)
                 )
-        net_outcome = (
-            json.loads(
+        if outcome.status != "closed":
+            net_outcome = None
+        elif uses_staged_fill:
+            assert maker_fill_evidence is not None
+            assert partial_cost_settlement is not None
+            net_outcome = json.loads(
+                project_partial_fill_net_outcome(
+                    plan,
+                    outcome,
+                    feed,
+                    maker_fill_evidence,
+                    partial_cost_settlement,
+                ),
+                parse_float=Decimal,
+                parse_int=Decimal,
+            )
+        else:
+            net_outcome = json.loads(
                 project_plan_bound_net_outcome(
                     plan,
                     outcome,
@@ -186,9 +241,6 @@ class CanonicalBacktraderRuntime:
                 parse_float=Decimal,
                 parse_int=Decimal,
             )
-            if outcome.status == "closed"
-            else None
-        )
         events = [
             {
                 "config_hash": event.config_hash,
@@ -198,13 +250,22 @@ class CanonicalBacktraderRuntime:
                 "plan_hash": event.plan_hash,
                 "price": event.price,
                 "quantity": event.quantity,
+                **(
+                    {"quantity_base": event.quantity_base}
+                    if event.quantity_base is not None
+                    else {}
+                ),
                 "source_record_id": event.source_record_id,
                 "stop_price": event.stop_price,
             }
             for event in outcome.events
         ]
         engine_version = (
-            _VISIBLE_FILL_ENGINE_VERSION if uses_visible_fill else _ENGINE_VERSION
+            _STAGED_FILL_ENGINE_VERSION
+            if uses_staged_fill
+            else _VISIBLE_FILL_ENGINE_VERSION
+            if uses_visible_fill
+            else _ENGINE_VERSION
         )
         input_payload = {
             "dataset_checksum": feed.dataset_checksum,
@@ -219,12 +280,33 @@ class CanonicalBacktraderRuntime:
                 if maker_fill_evidence is not None
                 else {}
             ),
+            **(
+                {
+                    "partial_fill_cost_request_hash": partial_cost_settlement.request_hash,
+                    "partial_fill_cost_result_hash": partial_cost_settlement.result_hash,
+                }
+                if partial_cost_settlement is not None
+                else {}
+            ),
         }
         result = {
             "engine_version": engine_version,
             "events": events,
             "input_hash": _hash(input_payload),
             "net_outcome": net_outcome,
+            **(
+                {
+                    "cancelled_residual_quantity_base": outcome.cancelled_residual_quantity_base,
+                    "consumed_fill_count": outcome.consumed_fill_count,
+                    "costs_are_certified": False,
+                    "filled_quantity_base": outcome.filled_quantity_base,
+                    "partial_fill_cost_policy_version": partial_cost_settlement.cost_policy_version,
+                    "partial_fill_cost_request_hash": partial_cost_settlement.request_hash,
+                    "partial_fill_cost_result_hash": partial_cost_settlement.result_hash,
+                }
+                if partial_cost_settlement is not None
+                else {}
+            ),
             **({"funding_schedule_checksum": funding_schedule.schedule_checksum} if funding_schedule is not None else {}),
             **(
                 {
@@ -241,7 +323,9 @@ class CanonicalBacktraderRuntime:
             "reason_code": outcome.reason_code,
             "result_is_live_proof": False,
             "schema_version": (
-                "canonical-backtrader-result.v2"
+                "canonical-backtrader-result.v3"
+                if uses_staged_fill
+                else "canonical-backtrader-result.v2"
                 if uses_visible_fill
                 else "canonical-backtrader-result.v1"
             ),

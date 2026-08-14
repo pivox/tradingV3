@@ -3,6 +3,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import re
+import sys
 from copy import deepcopy
 import pytest
 
@@ -27,6 +28,7 @@ from app.backtesting.historical_funding import (
     VerifiedHistoricalFundingSchedule,
     serialize_historical_funding_schedule,
 )
+from app.backtesting.partial_fill_cost_bridge import PartialFillCostBridge
 from app.backtesting.visible_queue_depletion import (
     VisibleQueueDepletionResult,
     _decimal_string as _queue_decimal,
@@ -229,6 +231,38 @@ def _funding_schedule(feed: VerifiedBacktraderFeedAdapter) -> VerifiedHistorical
         coverage_end=datetime(2026, 8, 10, 12, 2, tzinfo=UTC),
         records=records,
     ))
+
+
+def _partial_cost_bridge(tmp_path: Path) -> PartialFillCostBridge:
+    authority = tmp_path / "partial-cost-authority.py"
+    authority.write_text(
+        "from decimal import Decimal\n"
+        "import hashlib,json,sys\n"
+        "r=json.load(sys.stdin);p=r['plan'];q=Decimal(r['filled_quantity_base'])\n"
+        "planned=Decimal(str(p['quantity']))*Decimal(str(p['contractSize']))\n"
+        "target=r['terminal_kind']=='target_filled'\n"
+        "def c(v):\n"
+        " s=format(v,'f').rstrip('0').rstrip('.') if '.' in format(v,'f') else format(v,'f')\n"
+        " return s or '0'\n"
+        "entry_fee=Decimal('0.05005')*q\n"
+        "exit_fee=(Decimal('0.0513') if target else Decimal('0.0492'))*q\n"
+        "entry_spread=Decimal('0.01001')*q\n"
+        "exit_spread=(Decimal('0.01026') if target else Decimal('0.00984'))*q\n"
+        "entry_slippage=Decimal('0.01001')*q\n"
+        "exit_slippage=(Decimal('0.01026') if target else Decimal('0.00984'))*q\n"
+        "funding=Decimal('0.01001')*q\n"
+        "cost=entry_fee+exit_fee+entry_spread+exit_spread+entry_slippage+exit_slippage+funding\n"
+        "gross_stop=Decimal('1.7')*q;total_stop=Decimal('1.84896')*q\n"
+        "gross=(Decimal('2.5')*q if target else -gross_stop)\n"
+        "net=(gross-cost if target else -total_stop)\n"
+        "o={'schema_version':'canonical-partial-fill-cost-result.v1','cost_policy_version':'canonical-plan-partial-quantity.v1','cost_evidence':'canonical_plan_partial_quantity','costs_are_certified':False,'dataset_id':r['dataset_id'],'dataset_checksum':r['dataset_checksum'],'plan_hash':p['planHash'],'config_hash':p['configHash'],'cost_input_hash':p['costInputHash'],'maker_fill_result_hash':r['maker_fill_result_hash'],'maker_fill_trace_hash':r['maker_fill_trace_hash'],'mode_id':p['modeId'],'mode_version':p['modeVersion'],'setup_id':p['setupId'],'setup_version':p['setupVersion'],'symbol':p['symbol'],'market_type':p['marketType'],'side':p['side'],'planned_quantity_base':c(planned),'filled_quantity_base':c(q),'remaining_quantity_base':c(planned-q),'is_partial_fill':q<planned,'terminal_kind':r['terminal_kind'],'target_id':r['target_id'],'gross_pnl_quote':c(gross),'entry_fee_quote':c(entry_fee),'exit_fee_quote':c(exit_fee),'entry_spread_cost_quote':c(entry_spread),'exit_spread_cost_quote':c(exit_spread),'entry_slippage_cost_quote':c(entry_slippage),'exit_slippage_cost_quote':c(exit_slippage),'planned_adverse_funding_cost_quote':c(funding),'total_planned_cost_quote':c(cost),'gross_stop_risk_quote':c(gross_stop),'total_stop_risk_quote':c(total_stop),'net_pnl_quote':c(net),'net_r':('1.2699571651090342' if target else '-1'),'result_is_live_proof':False,'request_hash':'sha256:'+hashlib.sha256(json.dumps(r,separators=(',',':')).encode()).hexdigest()}\n"
+        "o['result_hash']='sha256:'+hashlib.sha256(json.dumps(o,separators=(',',':')).encode()).hexdigest()\n"
+        "print(json.dumps(o,separators=(',',':')))\n",
+        encoding="utf-8",
+    )
+    bridge = PartialFillCostBridge()
+    bridge._argv = (sys.executable, str(authority))
+    return bridge
 
 
 def test_runtime_uses_backtrader_and_is_byte_deterministic() -> None:
@@ -578,6 +612,104 @@ def test_v2_runtime_rejects_staged_fill_without_php_cost_authority() -> None:
             plan,
             feed,
             maker_fill_evidence=_queue_evidence(plan, staged=True),
+        )
+
+
+def test_v3_runtime_executes_partial_fill_through_php_cost_protocol(tmp_path: Path) -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    evidence = _queue_evidence(plan, status="partially_filled")
+
+    result = json.loads(
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            maker_fill_evidence=evidence,
+            partial_fill_cost_bridge=_partial_cost_bridge(tmp_path),
+        )
+    )
+
+    assert result["schema_version"] == "canonical-backtrader-result.v3"
+    assert result["engine_version"].endswith("canonical-runtime.v3")
+    assert [event["kind"] for event in result["events"]] == [
+        "entry_partially_filled",
+        "target_filled",
+    ]
+    assert result["events"][0]["quantity_base"] == 1
+    assert result["events"][1]["quantity_base"] == 1
+    assert result["filled_quantity_base"] == 1
+    assert result["cancelled_residual_quantity_base"] == 1.497
+    assert result["partial_fill_cost_result_hash"].startswith("sha256:")
+    assert result["costs_are_certified"] is False
+    assert result["net_outcome"]["schema_version"] == (
+        "canonical-backtest-partial-fill-net-outcome.v1"
+    )
+    assert result["net_outcome"]["net_pnl_quote"] == 2.3481
+
+
+def test_v3_runtime_executes_all_staged_increments_deterministically(tmp_path: Path) -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    evidence = _queue_evidence(plan, staged=True)
+    bridge = _partial_cost_bridge(tmp_path)
+
+    first = CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        maker_fill_evidence=evidence,
+        partial_fill_cost_bridge=bridge,
+    )
+    second = CanonicalBacktraderRuntime().run(
+        plan,
+        feed,
+        maker_fill_evidence=evidence,
+        partial_fill_cost_bridge=bridge,
+    )
+
+    assert first == second
+    result = json.loads(first)
+    assert [event["kind"] for event in result["events"]] == [
+        "entry_partially_filled",
+        "entry_filled",
+        "target_filled",
+    ]
+    assert result["filled_quantity_base"] == 2.497
+    assert result["cancelled_residual_quantity_base"] == 0
+
+
+def test_v3_runtime_rejects_wrong_or_unnecessary_partial_authority(tmp_path: Path) -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    partial = _queue_evidence(plan, status="partially_filled")
+
+    with pytest.raises(ValueError, match="partial_fill_cost_authority_invalid"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            maker_fill_evidence=partial,
+            partial_fill_cost_bridge=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="partial_fill_cost_authority_forbidden"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            maker_fill_evidence=_queue_evidence(plan),
+            partial_fill_cost_bridge=_partial_cost_bridge(tmp_path),
+        )
+
+
+def test_v3_runtime_forbids_non_tranche_historical_funding(tmp_path: Path) -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+
+    with pytest.raises(ValueError, match="staged_historical_funding_forbidden"):
+        CanonicalBacktraderRuntime().run(
+            plan,
+            feed,
+            maker_fill_evidence=_queue_evidence(plan, status="partially_filled"),
+            partial_fill_cost_bridge=_partial_cost_bridge(tmp_path),
+            funding_schedule=_funding_schedule(feed),
+            funding_bridge=trusted_bridge_for(),
         )
 
 

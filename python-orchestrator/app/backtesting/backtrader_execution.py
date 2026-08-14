@@ -21,7 +21,13 @@ class BacktestExecutionError(ValueError):
 
 @dataclass(frozen=True)
 class BacktestExecutionEvent:
-    kind: Literal["entry_filled", "stop_filled", "target_filled", "holding_expired"]
+    kind: Literal[
+        "entry_partially_filled",
+        "entry_filled",
+        "stop_filled",
+        "target_filled",
+        "holding_expired",
+    ]
     happened_at: datetime
     source_record_id: str
     price: Decimal
@@ -30,6 +36,7 @@ class BacktestExecutionEvent:
     plan_hash: str
     config_hash: str
     dataset_id: str
+    quantity_base: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,9 @@ class BacktestExecutionResult:
     status: Literal["closed", "not_executed"]
     reason_code: str
     events: tuple[BacktestExecutionEvent, ...]
+    filled_quantity_base: Decimal | None = None
+    cancelled_residual_quantity_base: Decimal | None = None
+    consumed_fill_count: int = 0
 
 
 def execute_plan(
