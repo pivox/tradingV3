@@ -128,8 +128,8 @@ Une sortie `holding_expired` n'a pas encore
 de branche de cout PHP authentifiee et echoue donc fermee au lieu d'inventer un
 PnL.
 
-Le runtime distingue maintenant deux frontieres. Un plan historique v1 garde
-le replay OHLCV. Un plan v2 exige un resultat
+Le runtime distingue maintenant trois frontieres. Un plan historique v1 garde
+le replay OHLCV. Un resultat v2 exige un plan v2 et un resultat
 `visible-queue-depletion-result.v1` revalide et lie au meme dataset, plan,
 config, marche et symbole. Un non-fill de file reste `not_executed`; un fill
 atomique utilise le trade public comme source et son `available_at` comme
@@ -138,13 +138,13 @@ comme borne conservative mais une target seule n'est jamais creditee. Les
 bougies dont l'intervalle commence apres le fill reprennent ensuite la
 politique SL/target normale.
 
-Un fill partiel, ou une quantite finalement completee par plusieurs fills
-positifs, echoue avec `partial_fill_cost_authority_missing`. Cette garde est
-intentionnelle : les branches de cout PHP actuelles portent la quantite
-complete du plan et Python ne doit ni les proratiser ni ignorer l'exposition
-entre fills. Les resultats v2 lient le hash du modele de file et les checksums
-des tapes public book, trades et conversions, avec
-`fills_are_certified=false` et `result_is_live_proof=false`.
+Un resultat v3 traite les fills partiels ou echelonnes dans l'ordre exact de
+leur `available_at`. Chaque increment porte sa quantite base exacte et sa source.
+Le stop d'une bougie contenant un nouveau fill ferme conservativement toute la
+quantite cumulee alors exposee ; une target ambigue dans cette bougie n'est pas
+creditee. Le premier stop ou target annule le residuel et les trades publics
+posterieurs ne deviennent pas des fills. Une position encore ouverte a la fin
+du dataset echoue fermee.
 
 Le prochain settlement PHP ne devra pas faire confiance a des composantes de
 cout selectionnees par Python. `CanonicalOrderPlan::fromArray()` rehydrate
@@ -180,10 +180,16 @@ Timeout, sortie ou erreur standard surdimensionnee, JSON duplique ou malforme,
 substitution d'identite et erreur PHP echouent fermes. Le fixture
 `php-partial-fill-cost-settlement.json` fige la parite inter-runtime.
 
-Restent hors de ce runtime : chronologie multi-fill et reservation d'exposition
-entre fills, fallback taker, portefeuille multi-plan, PostgreSQL, metriques et
-rapports de certification. Aucun endpoint prive ni execution mainnet n'est
-ajoute.
+Pour v3, Python reconstruit la requete depuis le prefixe de fills effectivement
+consomme, puis lie les hashes de requete/resultat PHP au resultat runtime et au
+net outcome. L'agregation est exacte ici parce que tous les increments maker
+partagent le prix limite canonique et que les couts planifies sont lineaires en
+quantite. Le funding historique reste interdit sur ces fills : sa duree varie
+par tranche et exige une future autorite dediee.
+
+Restent hors de ce runtime : reservations de portefeuille multi-plan, funding
+historique par tranche, fallback taker, PostgreSQL, metriques et rapports de
+certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
 ### Tape public d'execution
 
@@ -733,7 +739,8 @@ reelle lorsque les donnees seront disponibles.
 ## Hors scope restant
 
 - publication filesystem et commande operateur de l'adapter Paper ;
-- chronologie multi-fill, reservations intermediaires et fallback taker ;
+- reservations portefeuille intermediaires et fallback taker ;
+- funding historique par tranche de fill ;
 - couts arbitraires hors branches stop/targets authentifiees, borrow et liquidation ;
 - ledger de trades et resultats de backtest ;
 - rapports de metrics ;
@@ -747,7 +754,7 @@ Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. La frontiere de run utilise desormais les
 identites exactes, le snapshot immuable #133/#303 et la projection
 d'indicateurs PHP. Elle ne rend pas encore un mode moderne executable de bout
-en bout : la chronologie multi-fill et le ledger durable restent differes.
+en bout : les reservations portefeuille et le ledger durable restent differes.
 
 Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
