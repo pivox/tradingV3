@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -16,7 +18,11 @@ from app.backtesting.partial_fill_cost_bridge import (
     PartialFillCostBridge,
     PartialFillCostBridgeError,
     _ordered_json,
+    canonical_partial_fill_cost_request,
 )
+from app.backtesting.staged_fill_execution import execute_plan_from_staged_visible_fills
+from tests.test_backtesting_backtrader_runtime import _feed, _v2_plan
+from tests.test_backtesting_staged_fill_execution import _evidence
 
 
 FIXTURE = Path(__file__).parent / "fixtures/backtesting/php-canonical-order-plan.json"
@@ -335,3 +341,54 @@ def test_result_requires_positive_planned_and_filled_quantities() -> None:
         ).hexdigest()
         with pytest.raises(ValidationError):
             CanonicalPartialFillCostResult.model_validate(payload)
+
+
+def test_request_builder_binds_consumed_partial_prefix_and_terminal_branch() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    evidence = _evidence(plan, (("a", 0, 45, Decimal("1")),))
+    execution = execute_plan_from_staged_visible_fills(plan, feed.bars, evidence)
+
+    request = canonical_partial_fill_cost_request(plan, evidence, execution)
+
+    assert request.filled_quantity_base == "1"
+    assert request.maker_fill_result_hash == evidence.result_hash
+    assert request.maker_fill_trace_hash == evidence.trace_hash
+    assert request.terminal_kind == "target_filled"
+    assert request.target_id == "tp1"
+
+
+def test_request_builder_uses_only_prefix_exposed_before_stop() -> None:
+    feed = _feed(fill_bar_stop=True)
+    plan = _v2_plan(feed)
+    evidence = _evidence(
+        plan,
+        (("a", 0, 30, Decimal("1")), ("c", 1, 30, Decimal("1.497"))),
+    )
+    execution = execute_plan_from_staged_visible_fills(plan, feed.bars, evidence)
+
+    request = canonical_partial_fill_cost_request(plan, evidence, execution)
+
+    assert request.filled_quantity_base == "1"
+    assert request.terminal_kind == "stop_filled"
+    assert request.target_id is None
+
+
+def test_request_builder_rejects_forged_fill_prefix() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    evidence = _evidence(plan, (("a", 0, 45, Decimal("1")),))
+    execution = execute_plan_from_staged_visible_fills(plan, feed.bars, evidence)
+    fill, terminal = execution.events
+
+    for forged_fill in (
+        replace(fill, source_record_id="f" * 64),
+        replace(fill, happened_at=terminal.happened_at),
+        replace(fill, quantity_base=Decimal("0.5")),
+    ):
+        with pytest.raises(ValueError, match="execution_invalid"):
+            canonical_partial_fill_cost_request(
+                plan,
+                evidence,
+                replace(execution, events=(forged_fill, terminal)),
+            )
