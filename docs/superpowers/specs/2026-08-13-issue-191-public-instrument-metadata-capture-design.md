@@ -23,10 +23,12 @@ This boundary is preferred to either a sidecar or a static symbol table:
 - reading current provider metadata during a later backtest would introduce
   look-ahead and could silently reinterpret historical quantities.
 
-Metadata is observed once for each symbol at the start of every live source
-epoch, before that epoch's snapshot boundary. A reconnect therefore refreshes
-the observation. Historical datasets that lack a dated metadata event remain
-non-convertible and receive no fallback.
+Metadata is observed once for each symbol before its initial snapshot boundary.
+Hyperliquid also refreshes the observation before each reconnect boundary.
+OKX reconnect recovery keeps the initial dated contract observation effective;
+a later lot will capture public instrument-update messages before it permits a
+changed contract to supersede that observation. Historical datasets that lack
+a dated metadata event remain non-convertible and receive no fallback.
 
 ## Versioned normalized contract
 
@@ -65,8 +67,8 @@ identity with different bytes fails closed through the existing ordinal and
 checkpoint machinery.
 
 For OKX, instrument metadata is a regular stream frontier and participates in
-warmup/reconnect transitions. For Hyperliquid, it is emitted through the
-existing immutable pending-event continuation before the two snapshot
+the crash-safe initial warmup transitions. For Hyperliquid, it is emitted
+through the existing immutable pending-event continuation before the two snapshot
 boundaries. Dataset verification recomputes the venue-specific identity,
 validates exact keys and units, and requires metadata to precede the boundary
 for the same symbol and epoch.
@@ -85,8 +87,9 @@ real-order/mainnet execution path is introduced.
 ## Testing
 
 Focused tests cover strict REST response parsing, both venue normalizers,
-initial and reconnect epoch emission, crash/resume acknowledgement, exact
-dataset verification, tampering, invalid units and source ordering. Service
+initial emission on both venues, Hyperliquid reconnect epoch emission,
+crash/resume acknowledgement, exact dataset verification, tampering, invalid
+units and source ordering. Service
 wiring proves both metadata clients resolve to the bounded Paper public clients.
 Broader Paper tests, PHPStan and strict documentation verification guard the
 existing acquisition and replay contracts.

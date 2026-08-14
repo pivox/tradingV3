@@ -8,6 +8,7 @@ use App\Kernel;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Dataset\PaperDatasetRecorderFilesystem;
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportFactoryInterface;
@@ -55,6 +56,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             'clock',
             'manifestCodec',
             'filesystem',
+            'metadataClient',
         ], array_map(
             static fn (\ReflectionParameter $parameter): string => $parameter->getName(),
             $parameters,
@@ -65,6 +67,7 @@ final class HyperliquidPaperPublicServiceWiringTest extends KernelTestCase
             ClockInterface::class,
             PaperDatasetManifestCodec::class,
             PaperDatasetRecorderFilesystem::class,
+            HyperliquidPaperInstrumentMetadataClientInterface::class,
         ], array_map(
             static function (\ReflectionParameter $parameter): string {
                 $type = $parameter->getType();

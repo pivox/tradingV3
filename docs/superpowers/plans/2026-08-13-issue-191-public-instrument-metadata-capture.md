@@ -54,8 +54,8 @@ and SHA-256.
 - Modify: both public live source classes and factories
 - Modify: live checkpoint/source tests for both venues
 
-- [ ] Write failing initial/reconnect tests proving metadata is emitted once per
-  symbol and epoch before its snapshot boundary.
+- [ ] Write failing initial tests for both venues and a reconnect test for
+  Hyperliquid, proving metadata precedes the corresponding snapshot boundary.
 - [ ] Add acknowledgement/crash-resume tests proving no silent metadata skip or
   conflicting replay.
 - [ ] Run focused live-source tests and confirm RED.

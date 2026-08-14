@@ -261,7 +261,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             ['symbol' => 'BTCUSDT', 'reason' => 'initial'],
             ['symbol' => 'ETHUSDT', 'reason' => 'initial'],
         ], $state['remaining_boundaries']);
-        self::assertCount(28, $state['stream_frontiers']);
+        self::assertCount(30, $state['stream_frontiers']);
         self::assertCount(20, $state['overlap_pagination_by_stream']);
         self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
 

@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(OkxPaperPublicRestClientInterface::class)]
 final class OkxPublicEndpointTest extends TestCase
 {
-    public function testEndpointEnumContainsOnlyTheFiveApprovedMarketGetPaths(): void
+    public function testEndpointEnumContainsOnlyTheSixApprovedPublicGetPaths(): void
     {
         self::assertSame(
             [
@@ -22,6 +22,7 @@ final class OkxPublicEndpointTest extends TestCase
                 '/api/v5/market/history-trades',
                 '/api/v5/market/trades',
                 '/api/v5/market/books',
+                '/api/v5/public/instruments',
             ],
             array_map(
                 static fn (OkxPublicEndpoint $endpoint): string => $endpoint->value,
@@ -34,11 +35,13 @@ final class OkxPublicEndpointTest extends TestCase
         self::assertSame(100, OkxPublicEndpoint::HistoryTrades->maximumLimit());
         self::assertSame(500, OkxPublicEndpoint::RecentTrades->maximumLimit());
         self::assertSame(400, OkxPublicEndpoint::OrderBook->maximumLimit());
+        self::assertSame(1, OkxPublicEndpoint::Instruments->maximumLimit());
         self::assertTrue(OkxPublicEndpoint::HistoryCandles->usesHistoryRateLimit());
         self::assertTrue(OkxPublicEndpoint::HistoryTrades->usesHistoryRateLimit());
         self::assertFalse(OkxPublicEndpoint::CurrentCandles->usesHistoryRateLimit());
         self::assertFalse(OkxPublicEndpoint::RecentTrades->usesHistoryRateLimit());
         self::assertFalse(OkxPublicEndpoint::OrderBook->usesHistoryRateLimit());
+        self::assertFalse(OkxPublicEndpoint::Instruments->usesHistoryRateLimit());
     }
 
     public function testRestContractExposesOnlyNamedReadMethods(): void

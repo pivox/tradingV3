@@ -176,6 +176,28 @@ de file, meme lorsque les compteurs OKX sont presents. Aucun full fill,
 partial fill ou fallback taker ne peut etre produit sans un contrat de
 conversion d'instrument et un modele d'execution/queue versionne separes.
 
+### Capture publique des metadonnees instrument
+
+Les nouvelles captures live Paper v2 enregistrent un evenement
+`instrument_metadata` par symbole avant la boundary initiale; Hyperliquid le
+rafraichit aussi avant chaque boundary de reconnexion. Cet evenement est lu uniquement depuis les API
+publiques sans credentials et devient partie integrante des bytes immuables du
+dataset. Un backtest ne relit donc jamais la metadata courante de la venue pour
+reinterpretter un carnet historique.
+
+OKX preserve les tailles en `contracts`, `ctVal`, `ctMult`, leur devise,
+`lotSz`, `minSz`, les maxima marche/limite et `tickSz`; seuls les swaps
+lineaires live, valorises dans l'actif de base et regles en USDT sont admis.
+Hyperliquid preserve les tailles en `base_asset`, l'`asset_id`, `szDecimals` et
+le levier maximum. Sa precision prix reste dynamique : cinq chiffres de
+precision et au plus `6 - szDecimals` decimales, sans tick fixe invente.
+
+Les datasets historiques ou legacy depourvus de cet evenement restent lisibles
+mais non convertibles. Il n'existe aucun fallback par symbole, provider DTO,
+profil ou environnement. Ce lot ne convertit pas encore les contrats, ne
+calcule aucun notionnel et ne simule aucun fill; le prochain lot devra projeter
+ces observations datees dans un tape de conversion distinct et immuable.
+
 ## Invariants verrouilles par les contrats v1
 
 ### Dataset versionne

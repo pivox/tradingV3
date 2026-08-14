@@ -83,6 +83,30 @@ final class HyperliquidPaperSourceOrdinal
     ];
 
     /** @var list<string> */
+    private const INSTRUMENT_METADATA_PAYLOAD_KEYS = [
+        'asset_id',
+        'base_asset',
+        'contract_multiplier',
+        'contract_value',
+        'contract_value_unit',
+        'instrument_type',
+        'maximum_leverage',
+        'metadata_schema_version',
+        'minimum_quantity',
+        'native_symbol',
+        'origin',
+        'price_max_decimals',
+        'price_precision_digits',
+        'quantity_step',
+        'quantity_unit',
+        'quote_asset',
+        'settlement_asset',
+        'size_decimals',
+        'source_epoch',
+        'status',
+    ];
+
+    /** @var list<string> */
     private const CONNECTION_STATE_PAYLOAD_KEYS = [
         'connection_epoch',
         'native_symbol',
@@ -135,6 +159,7 @@ final class HyperliquidPaperSourceOrdinal
         PaperMarketDataChannel::CANDLE_15M,
         PaperMarketDataChannel::CANDLE_1H,
         PaperMarketDataChannel::TOP_OF_BOOK,
+        PaperMarketDataChannel::INSTRUMENT_METADATA,
         PaperMarketDataChannel::PUBLIC_TRADE,
         PaperMarketDataChannel::CONNECTION_STATE,
         PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
@@ -561,6 +586,10 @@ final class HyperliquidPaperSourceOrdinal
                     $event,
                     $validationWitness,
                 ),
+                PaperMarketDataChannel::INSTRUMENT_METADATA => $this->canonicalMetadataIdentity(
+                    $event,
+                    $validationWitness,
+                ),
                 PaperMarketDataChannel::PUBLIC_TRADE => $this->canonicalLiveTradeIdentity(
                     $event,
                     $validationWitness,
@@ -842,6 +871,66 @@ final class HyperliquidPaperSourceOrdinal
             'connection',
             (string) $epoch,
             $state,
+        ]);
+    }
+
+    /** @param array<array-key, mixed>|null $validationWitness */
+    private function canonicalMetadataIdentity(
+        PaperMarketEvent $event,
+        ?array $validationWitness,
+    ): string {
+        if ($validationWitness !== null) {
+            throw new \InvalidArgumentException();
+        }
+        $payload = $event->payload;
+        self::assertExactKeys($payload, self::INSTRUMENT_METADATA_PAYLOAD_KEYS);
+        $coin = $this->canonicalLiveCoin($event, $payload['native_symbol'] ?? null);
+        $assetId = $payload['asset_id'] ?? null;
+        $sizeDecimals = $payload['size_decimals'] ?? null;
+        $epoch = $payload['source_epoch'] ?? null;
+        $maximumLeverage = $payload['maximum_leverage'] ?? null;
+        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+            || ($payload['instrument_type'] ?? null) !== 'perpetual'
+            || ($payload['base_asset'] ?? null) !== $coin
+            || ($payload['quote_asset'] ?? null) !== 'USDC'
+            || ($payload['settlement_asset'] ?? null) !== 'USDC'
+            || ($payload['status'] ?? null) !== 'live'
+            || ($payload['quantity_unit'] ?? null) !== 'base_asset'
+            || ($payload['contract_value'] ?? null) !== '1'
+            || ($payload['contract_multiplier'] ?? null) !== '1'
+            || ($payload['contract_value_unit'] ?? null) !== $coin
+            || ($payload['origin'] ?? null) !== 'rest_meta'
+            || !\is_int($assetId)
+            || $assetId < 0
+            || !\is_int($sizeDecimals)
+            || $sizeDecimals < 0
+            || $sizeDecimals > 6
+            || ($payload['price_precision_digits'] ?? null) !== 5
+            || ($payload['price_max_decimals'] ?? null) !== 6 - $sizeDecimals
+            || !\is_int($epoch)
+            || $epoch < 1
+            || !\is_string($maximumLeverage)
+            || preg_match('/\A[1-9][0-9]*\z/D', $maximumLeverage) !== 1
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $step = $sizeDecimals === 0
+            ? '1'
+            : '0.' . str_repeat('0', $sizeDecimals - 1) . '1';
+        if (($payload['quantity_step'] ?? null) !== $step
+            || ($payload['minimum_quantity'] ?? null) !== $step
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $this->assertEqualEventTimestamps($event);
+        $sourceDigest = hash('sha256', CanonicalJson::encode($payload));
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'instrument_metadata',
+            (string) $epoch,
+            $sourceDigest,
         ]);
     }
 

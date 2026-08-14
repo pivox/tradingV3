@@ -94,6 +94,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
             \Symfony\Component\Clock\ClockInterface::class,
             PaperDatasetManifestCodec::class,
             PaperDatasetRecorderFilesystem::class,
+            \App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface::class,
         ], $dependencyTypes);
         foreach ($dependencyTypes as $dependencyType) {
             self::assertDoesNotMatchRegularExpression(

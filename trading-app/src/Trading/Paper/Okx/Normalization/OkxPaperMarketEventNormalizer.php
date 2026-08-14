@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Okx\Normalization;
 
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
+use Brick\Math\BigDecimal;
 use Symfony\Component\Clock\ClockInterface;
 
 final class OkxPaperMarketEventNormalizer
@@ -108,6 +110,71 @@ final class OkxPaperMarketEventNormalizer
     public function webSocketTrade(#[\SensitiveParameter] array $row): PaperMarketEvent
     {
         return $this->trade($row, 'ws_aggregated', historical: false, aggregationRequired: true);
+    }
+
+    /** @param array<string, mixed> $row */
+    public function instrumentMetadata(
+        #[\SensitiveParameter] array $row,
+        int $sourceEpoch,
+    ): PaperMarketEvent {
+        self::assertExactMetadataKeys($row);
+        $instrumentId = $row['instId'] ?? null;
+        if (!\is_string($instrumentId) || $sourceEpoch < 1) {
+            throw self::invalidInstrumentMetadata('identity');
+        }
+        try {
+            $symbol = $this->instruments->normalizedSymbol($instrumentId);
+        } catch (\Throwable) {
+            throw self::invalidInstrumentMetadata('identity');
+        }
+        $baseAsset = match ($instrumentId) {
+            'BTC-USDT-SWAP' => 'BTC',
+            'ETH-USDT-SWAP' => 'ETH',
+            default => throw self::invalidInstrumentMetadata('identity'),
+        };
+        if (($row['instType'] ?? null) !== 'SWAP'
+            || ($row['ctType'] ?? null) !== 'linear'
+            || ($row['ctValCcy'] ?? null) !== $baseAsset
+            || ($row['settleCcy'] ?? null) !== 'USDT'
+            || ($row['state'] ?? null) !== 'live'
+        ) {
+            throw self::invalidInstrumentMetadata('contract');
+        }
+        $timestamp = $this->receiptTimestamp();
+        $payload = [
+            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'native_symbol' => $instrumentId,
+            'instrument_type' => 'perpetual',
+            'base_asset' => $baseAsset,
+            'quote_asset' => 'USDT',
+            'settlement_asset' => 'USDT',
+            'status' => 'live',
+            'quantity_unit' => 'contracts',
+            'quantity_step' => self::canonicalMetadataDecimal($row['lotSz'] ?? null),
+            'minimum_quantity' => self::canonicalMetadataDecimal($row['minSz'] ?? null),
+            'maximum_market_quantity' => self::canonicalMetadataDecimal($row['maxMktSz'] ?? null),
+            'maximum_limit_quantity' => self::canonicalMetadataDecimal($row['maxLmtSz'] ?? null),
+            'contract_value' => self::canonicalMetadataDecimal($row['ctVal'] ?? null),
+            'contract_multiplier' => self::canonicalMetadataDecimal($row['ctMult'] ?? null),
+            'contract_value_unit' => $baseAsset,
+            'price_tick' => self::canonicalMetadataDecimal($row['tickSz'] ?? null),
+            'source_epoch' => $sourceEpoch,
+            'origin' => 'rest_public_instruments',
+        ];
+        $sourceDigest = hash('sha256', CanonicalJson::encode($payload));
+
+        return $this->event(
+            symbol: $symbol,
+            channel: PaperMarketDataChannel::INSTRUMENT_METADATA,
+            exchangeTimestamp: $timestamp,
+            receivedTimestamp: $timestamp,
+            naturalIdentity: implode('|', [
+                'instrument_metadata',
+                (string) $sourceEpoch,
+                $sourceDigest,
+            ]),
+            payload: $payload,
+        );
     }
 
     public function connectionState(
@@ -414,6 +481,40 @@ final class OkxPaperMarketEventNormalizer
         }
 
         return $value;
+    }
+
+    private static function canonicalMetadataDecimal(#[\SensitiveParameter] mixed $value): string
+    {
+        if (!\is_string($value)
+            || \strlen($value) > 128
+            || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+            || !BigDecimal::of($value)->isGreaterThan(0)
+        ) {
+            throw self::invalidInstrumentMetadata('decimal');
+        }
+
+        return (string) BigDecimal::of($value)->stripTrailingZeros();
+    }
+
+    /** @param array<string, mixed> $row */
+    private static function assertExactMetadataKeys(array $row): void
+    {
+        $expected = [
+            'ctMult', 'ctType', 'ctVal', 'ctValCcy', 'instId', 'instType',
+            'lotSz', 'maxLmtSz', 'maxMktSz', 'minSz', 'settleCcy', 'state',
+            'tickSz',
+        ];
+        $actual = array_keys($row);
+        sort($actual, \SORT_STRING);
+        sort($expected, \SORT_STRING);
+        if ($actual !== $expected) {
+            throw self::invalidInstrumentMetadata('shape');
+        }
+    }
+
+    private static function invalidInstrumentMetadata(string $reason): \InvalidArgumentException
+    {
+        return new \InvalidArgumentException('okx_paper_instrument_metadata_' . $reason . '_invalid');
     }
 
     private function unsignedIntegerString(#[\SensitiveParameter] mixed $value): string

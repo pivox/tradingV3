@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidCandle;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperMarketEventNormalizer;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
@@ -40,6 +41,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
         ?HyperliquidPaperPublicSubscriptionSet $subscriptions = null,
         ?HyperliquidPaperPublicFrameDecoder $decoder = null,
         ?HyperliquidPaperPublicFrameQueue $queue = null,
+        private readonly ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
     ) {
         if ($config->network !== $checkpoint->network) {
             throw new \InvalidArgumentException('hyperliquid_paper_live_checkpoint_mismatch');
@@ -139,6 +141,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
             );
             $this->scheduleHeartbeat();
             yield from $this->yieldCandidates([
+                ...($this->metadataClient === null ? [] : $this->metadataEvents()),
                 $this->normalizer->snapshotBoundary(
                     'BTC',
                     'initial',
@@ -317,6 +320,7 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 );
                 $this->scheduleHeartbeat();
                 yield from $this->yieldCandidates([
+                    ...($this->metadataClient === null ? [] : $this->metadataEvents()),
                     $this->normalizer->snapshotBoundary(
                         'BTC',
                         'reconnect',
@@ -442,6 +446,31 @@ final class HyperliquidPaperPublicLiveSource implements PaperLiveMarketDataSourc
                 ]),
         );
         yield from $this->resumePendingEvents();
+    }
+
+    /** @return list<PaperMarketEvent> */
+    private function metadataEvents(): array
+    {
+        if (!$this->metadataClient instanceof HyperliquidPaperInstrumentMetadataClientInterface) {
+            throw new \LogicException('hyperliquid_paper_metadata_client_required');
+        }
+        $events = [];
+        foreach ($this->metadataClient->instrumentMetadata() as $row) {
+            $events[] = $this->normalizer->instrumentMetadata(
+                $row,
+                $this->checkpoint->sourceEpoch,
+            );
+        }
+        if (\count($events) !== 2
+            || $events[0]->symbol !== 'BTCUSDT'
+            || $events[1]->symbol !== 'ETHUSDT'
+        ) {
+            throw new HyperliquidPaperLiveIntegrityException(
+                'hyperliquid_paper_public_response_invalid',
+            );
+        }
+
+        return $events;
     }
 
     /**

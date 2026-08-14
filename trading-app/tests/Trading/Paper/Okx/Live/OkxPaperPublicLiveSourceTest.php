@@ -15,6 +15,7 @@ use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\Dataset\PaperLiveDatasetCapture;
 use App\Trading\Paper\Dataset\PaperLiveEventConsumerInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
@@ -37,6 +38,28 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(OkxPaperPublicLiveSource::class)]
 final class OkxPaperPublicLiveSourceTest extends TestCase
 {
+    public function testAuthenticatedMetadataPrecedesWarmupMarketEvents(): void
+    {
+        $source = $this->source(
+            Task7RestClient::withInitialDataset(),
+            new Task7Transport(),
+            new Task7Transport(),
+            metadataClient: new StaticOkxPaperMetadataClient(),
+        );
+        $events = $source->events();
+        self::assertInstanceOf(\Generator::class, $events);
+        $events->rewind();
+        $metadata = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $metadata);
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $metadata->channel);
+        self::assertSame('BTCUSDT', $metadata->symbol);
+        self::assertSame(1, $metadata->payload['source_epoch']);
+        $source->acknowledge($metadata->eventId);
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $events->current()?->channel);
+        $source->stop();
+    }
+
     private const DATASET_ID = 'okx-public-live-source-001';
     private const CONFIGURATION_SHA256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -646,17 +669,28 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
     public function testPendingRestartYieldsExactEventBeforeAnyRestContinuation(): void
     {
         $initialRest = Task7RestClient::withInitialDataset();
-        $source = $this->source($initialRest, new Task7Transport(), new Task7Transport());
+        $source = $this->source(
+            $initialRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            metadataClient: new StaticOkxPaperMetadataClient(),
+        );
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
         $pending = $events->current();
-        self::assertNotNull($pending);
+        self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $pending->channel);
 
         unset($events, $source);
         gc_collect_cycles();
 
         $resumedRest = Task7RestClient::withInitialDataset();
-        $resumed = $this->source($resumedRest, new Task7Transport(), new Task7Transport());
+        $resumed = $this->source(
+            $resumedRest,
+            new Task7Transport(),
+            new Task7Transport(),
+            metadataClient: new StaticOkxPaperMetadataClient(),
+        );
         $resumedEvents = $resumed->events();
         self::assertInstanceOf(\Generator::class, $resumedEvents);
         $replayed = $resumedEvents->current();
@@ -672,7 +706,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
 
         $resumed->acknowledge($replayed->eventId);
         $resumedEvents->next();
-        self::assertSame(PaperMarketDataChannel::CANDLE_5M, $resumedEvents->current()?->channel);
+        self::assertSame(PaperMarketDataChannel::CANDLE_1M, $resumedEvents->current()?->channel);
     }
 
     public function testPendingMultiRowRestRestartRecoversSuffixWithAckGatedFrontiers(): void
@@ -8485,6 +8519,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ?OkxPaperPublicSubscriptionSet $subscriptions = null,
         ?OkxPaperPublicFrameQueue $publicQueue = null,
         ?OkxPaperPublicFrameQueue $businessQueue = null,
+        ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
     ): OkxPaperPublicLiveSource {
         $store = $checkpointStore ?? new OkxPaperLiveCheckpointStore($this->testRoot);
         $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
@@ -8507,6 +8542,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             subscriptions: $subscriptions,
             publicQueue: $publicQueue,
             businessQueue: $businessQueue,
+            metadataClient: $metadataClient,
         );
     }
 
@@ -8710,6 +8746,22 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
                 basename($path),
             ) === 1,
         ));
+    }
+}
+
+final class StaticOkxPaperMetadataClient implements OkxPaperInstrumentMetadataClientInterface
+{
+    public function instrumentMetadata(string $instrumentId): array
+    {
+        $base = str_starts_with($instrumentId, 'BTC') ? 'BTC' : 'ETH';
+
+        return [
+            'instId' => $instrumentId, 'instType' => 'SWAP', 'ctType' => 'linear',
+            'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => $base,
+            'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
+            'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'state' => 'live',
+        ];
     }
 }
 

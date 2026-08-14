@@ -14,5 +14,8 @@ interface HyperliquidPaperPublicHttpTransportInterface
      */
     public function postCandleSnapshot(string $uri, array $payload): ResponseInterface;
 
+    /** @param array{type: 'meta'} $payload */
+    public function postMetadata(string $uri, array $payload): ResponseInterface;
+
     public function stream(ResponseInterface $response): ResponseStreamInterface;
 }

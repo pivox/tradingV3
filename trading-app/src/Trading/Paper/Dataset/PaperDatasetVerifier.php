@@ -18,6 +18,7 @@ use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPrudentBookModel;
 use App\Trading\Paper\Hyperliquid\Normalization\HyperliquidPaperSourceOrdinal;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpoint;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLivePolicy;
+use Brick\Math\BigDecimal;
 use Brick\Math\BigInteger;
 
 final class PaperDatasetVerifier
@@ -628,12 +629,18 @@ final class PaperDatasetVerifier
             : null;
         /** @var array<string, int> $liveSnapshotEpochs */
         $liveSnapshotEpochs = [];
+        /** @var array<string, int> $liveMetadataEpochs */
+        $liveMetadataEpochs = [];
         /** @var array<string, int> $liveCandleFrontiers */
         $liveCandleFrontiers = [];
         /** @var list<string> $liveEventIds */
         $liveEventIds = [];
         /** @var list<array{identity_hash: string, assignment_digest: string}> $liveTradeIdentityHistory */
         $liveTradeIdentityHistory = [];
+        /** @var array<string, int> $okxMetadataEpochs */
+        $okxMetadataEpochs = [];
+        /** @var array<string, int> $okxInitialSnapshotEpochs */
+        $okxInitialSnapshotEpochs = [];
 
         $handle = $this->openRegularFile(
             $eventsPath,
@@ -714,10 +721,30 @@ final class PaperDatasetVerifier
                         $event,
                         $liveOrdinals,
                         $liveSnapshotEpochs,
+                        $liveMetadataEpochs,
                         $liveCandleFrontiers,
                         $liveTradeIdentityHistory,
                     );
                     $liveEventIds[] = $event->eventId;
+                }
+                if ($this->isOkxLive($manifest)) {
+                    if ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA) {
+                        $this->assertOkxInstrumentMetadata(
+                            $event,
+                            $okxInitialSnapshotEpochs,
+                            $okxMetadataEpochs,
+                        );
+                    } elseif ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+                        && ($event->payload['reason'] ?? null) === 'initial'
+                    ) {
+                        $epoch = $this->livePositiveInt($event->payload['source_epoch'] ?? null);
+                        if ($okxMetadataEpochs !== []
+                            && ($okxMetadataEpochs[$event->symbol] ?? null) !== $epoch
+                        ) {
+                            throw new \RuntimeException('paper_dataset_okx_instrument_metadata_invalid');
+                        }
+                        $okxInitialSnapshotEpochs[$event->symbol] = $epoch;
+                    }
                 }
                 if ($historicalCoverage !== null) {
                     if ($historicalCoverage->modelledBook) {
@@ -826,6 +853,15 @@ final class PaperDatasetVerifier
                 $liveTradeIdentityHistory,
             );
         }
+        if ($okxMetadataEpochs !== []) {
+            $metadataSymbols = array_keys($okxMetadataEpochs);
+            $manifestSymbols = array_keys($manifest->symbols);
+            sort($metadataSymbols, \SORT_STRING);
+            sort($manifestSymbols, \SORT_STRING);
+            if ($metadataSymbols !== $manifestSymbols) {
+                throw new \RuntimeException('paper_dataset_okx_instrument_metadata_invalid');
+            }
+        }
 
         return [
             'event_count' => $count,
@@ -851,8 +887,86 @@ final class PaperDatasetVerifier
                 === PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES;
     }
 
+    private function isOkxLive(PaperDatasetManifest $manifest): bool
+    {
+        return $manifest->venue === PaperMarketDataVenue::OKX
+            && $manifest->quality
+                === PaperMarketDataQuality::RECORDED_PUBLIC_BOOK_AND_TRADES;
+    }
+
     /**
      * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $metadataEpochs
+     */
+    private function assertOkxInstrumentMetadata(
+        PaperMarketEvent $event,
+        array $snapshotEpochs,
+        array &$metadataEpochs,
+    ): void {
+        try {
+            $payload = $event->payload;
+            $expectedKeys = [
+                'base_asset', 'contract_multiplier', 'contract_value',
+                'contract_value_unit', 'instrument_type', 'maximum_limit_quantity',
+                'maximum_market_quantity', 'metadata_schema_version',
+                'minimum_quantity', 'native_symbol', 'origin', 'price_tick',
+                'quantity_step', 'quantity_unit', 'quote_asset',
+                'settlement_asset', 'source_epoch', 'status',
+            ];
+            $actualKeys = array_keys($payload);
+            sort($actualKeys, \SORT_STRING);
+            sort($expectedKeys, \SORT_STRING);
+            $contract = match ($event->symbol) {
+                'BTCUSDT' => ['native_symbol' => 'BTC-USDT-SWAP', 'base_asset' => 'BTC'],
+                'ETHUSDT' => ['native_symbol' => 'ETH-USDT-SWAP', 'base_asset' => 'ETH'],
+                default => throw new \InvalidArgumentException(),
+            };
+            $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
+            if ($actualKeys !== $expectedKeys
+                || ($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+                || ($payload['native_symbol'] ?? null) !== $contract['native_symbol']
+                || ($payload['instrument_type'] ?? null) !== 'perpetual'
+                || ($payload['base_asset'] ?? null) !== $contract['base_asset']
+                || ($payload['quote_asset'] ?? null) !== 'USDT'
+                || ($payload['settlement_asset'] ?? null) !== 'USDT'
+                || ($payload['status'] ?? null) !== 'live'
+                || ($payload['quantity_unit'] ?? null) !== 'contracts'
+                || ($payload['contract_value_unit'] ?? null) !== $contract['base_asset']
+                || ($payload['origin'] ?? null) !== 'rest_public_instruments'
+                || isset($metadataEpochs[$event->symbol])
+                || isset($snapshotEpochs[$event->symbol])
+                    && $epoch <= $snapshotEpochs[$event->symbol]
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            foreach ([
+                'quantity_step', 'minimum_quantity', 'maximum_market_quantity',
+                'maximum_limit_quantity', 'contract_value', 'contract_multiplier',
+                'price_tick',
+            ] as $field) {
+                $value = $payload[$field] ?? null;
+                if (!\is_string($value)
+                    || \strlen($value) > 128
+                    || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+                    || !BigDecimal::of($value)->isGreaterThan(0)
+                    || (string) BigDecimal::of($value)->stripTrailingZeros() !== $value
+                ) {
+                    throw new \InvalidArgumentException();
+                }
+            }
+            $metadataEpochs[$event->symbol] = $epoch;
+        } catch (\Throwable $exception) {
+            throw new \RuntimeException(
+                'paper_dataset_okx_instrument_metadata_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
+    /**
+     * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $metadataEpochs
      * @param array<string, int> $candleFrontiers
      * @param list<array{identity_hash: string, assignment_digest: string}> $tradeIdentityHistory
      */
@@ -860,6 +974,7 @@ final class PaperDatasetVerifier
         PaperMarketEvent $event,
         HyperliquidPaperSourceOrdinal $ordinals,
         array &$snapshotEpochs,
+        array &$metadataEpochs,
         array &$candleFrontiers,
         array &$tradeIdentityHistory,
     ): void {
@@ -867,6 +982,7 @@ final class PaperDatasetVerifier
             if (!\in_array($event->channel, [
                 PaperMarketDataChannel::PUBLIC_TRADE,
                 PaperMarketDataChannel::TOP_OF_BOOK,
+                PaperMarketDataChannel::INSTRUMENT_METADATA,
                 PaperMarketDataChannel::CANDLE_1M,
                 PaperMarketDataChannel::CANDLE_5M,
                 PaperMarketDataChannel::CANDLE_15M,
@@ -898,6 +1014,13 @@ final class PaperDatasetVerifier
                     $payload,
                     $snapshotEpochs,
                 ),
+                PaperMarketDataChannel::INSTRUMENT_METADATA => $this->liveMetadataIdentity(
+                    $event,
+                    $coin,
+                    $payload,
+                    $snapshotEpochs,
+                    $metadataEpochs,
+                ),
                 PaperMarketDataChannel::CANDLE_1M,
                 PaperMarketDataChannel::CANDLE_5M,
                 PaperMarketDataChannel::CANDLE_15M,
@@ -922,10 +1045,12 @@ final class PaperDatasetVerifier
                     $coin,
                     $payload,
                     $snapshotEpochs,
+                    $metadataEpochs,
                 ),
             };
             if ($event->channel !== PaperMarketDataChannel::SNAPSHOT_BOUNDARY
                 && $event->channel !== PaperMarketDataChannel::CONNECTION_STATE
+                && $event->channel !== PaperMarketDataChannel::INSTRUMENT_METADATA
                 && !isset($snapshotEpochs[$event->symbol])
             ) {
                 throw new \InvalidArgumentException();
@@ -962,6 +1087,39 @@ final class PaperDatasetVerifier
         } catch (\Throwable) {
             throw new \RuntimeException('paper_dataset_hyperliquid_live_event_invalid');
         }
+    }
+
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $metadataEpochs
+     */
+    private function liveMetadataIdentity(
+        PaperMarketEvent $event,
+        string $coin,
+        array $payload,
+        array $snapshotEpochs,
+        array &$metadataEpochs,
+    ): string {
+        $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
+        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+            || ($payload['origin'] ?? null) !== 'rest_meta'
+            || isset($metadataEpochs[$event->symbol])
+                && $epoch <= $metadataEpochs[$event->symbol]
+            || isset($snapshotEpochs[$event->symbol])
+                && $epoch <= $snapshotEpochs[$event->symbol]
+        ) {
+            throw new \InvalidArgumentException();
+        }
+        $metadataEpochs[$event->symbol] = $epoch;
+
+        return implode('|', [
+            $event->sourceNetwork->value,
+            $coin,
+            'instrument_metadata',
+            (string) $epoch,
+            hash('sha256', CanonicalJson::encode($payload)),
+        ]);
     }
 
     /**
@@ -1036,12 +1194,14 @@ final class PaperDatasetVerifier
     /**
      * @param array<array-key, mixed> $payload
      * @param array<string, int> $snapshotEpochs
+     * @param array<string, int> $metadataEpochs
      */
     private function liveSnapshotIdentity(
         PaperMarketEvent $event,
         string $coin,
         array $payload,
         array &$snapshotEpochs,
+        array $metadataEpochs,
     ): string {
         $reason = $this->liveString($payload['reason'] ?? null);
         $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
@@ -1049,6 +1209,8 @@ final class PaperDatasetVerifier
         if (($previous === null && ($reason !== 'initial' || $epoch !== 1))
             || ($previous !== null
                 && ($reason !== 'reconnect' || $epoch <= $previous))
+            || ($metadataEpochs !== []
+                && ($metadataEpochs[$event->symbol] ?? null) !== $epoch)
         ) {
             throw new \InvalidArgumentException();
         }

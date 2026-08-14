@@ -458,6 +458,10 @@ services:
         alias: App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient
         public: true
 
+    App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface:
+        alias: App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient
+        public: true
+
     okx.paper_public.ws_transport_factory:
         class: App\Trading\Paper\Okx\Live\PawlOkxPaperPublicWebSocketTransportFactory
 
@@ -465,7 +469,9 @@ services:
         alias: okx.paper_public.ws_transport_factory
         public: true
 
-    App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory: ~
+    App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSourceFactory:
+        arguments:
+            $metadataClient: '@App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface'
 
     App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfigFactory:
         arguments:
@@ -500,6 +506,10 @@ services:
         alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
         public: true
 
+    App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface:
+        alias: App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient
+        public: true
+
     hyperliquid.paper_public.ws_transport_factory:
         class: App\Trading\Paper\Hyperliquid\Live\PawlHyperliquidPaperPublicWebSocketTransportFactory
 
@@ -508,6 +518,8 @@ services:
         public: true
 
     App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSourceFactory:
+        arguments:
+            $metadataClient: '@App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface'
         public: true
 
     App\Runtime\Safety\ExchangeCallGuardHttpClient:

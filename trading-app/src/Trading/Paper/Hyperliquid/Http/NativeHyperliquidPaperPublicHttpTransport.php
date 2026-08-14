@@ -20,6 +20,17 @@ final class NativeHyperliquidPaperPublicHttpTransport implements HyperliquidPape
 
     public function postCandleSnapshot(string $uri, array $payload): ResponseInterface
     {
+        return $this->post($uri, $payload);
+    }
+
+    public function postMetadata(string $uri, array $payload): ResponseInterface
+    {
+        return $this->post($uri, $payload);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function post(string $uri, array $payload): ResponseInterface
+    {
         return $this->httpClient->request('POST', $uri, [
             'json' => $payload,
             'headers' => [

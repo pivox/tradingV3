@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Hyperliquid\Http;
 
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRateLimiter;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicHttpTransportInterface;
 use App\Trading\Paper\Hyperliquid\Http\NativeHyperliquidPaperPublicHttpTransport;
 use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperPublicRestClient;
@@ -28,6 +29,60 @@ use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 #[CoversClass(HyperliquidPaperPublicRestClient::class)]
 final class HyperliquidPaperPublicRestClientTest extends TestCase
 {
+    public function testReadsExactSupportedUniverseFromPublicMetaRequest(): void
+    {
+        $requests = [];
+        $client = $this->client(new MockHttpClient(function (string $method, string $url, array $options) use (&$requests): MockResponse {
+            $requests[] = [$method, $url, $options];
+
+            return new MockResponse('{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50},{"name":"SOL","szDecimals":2,"maxLeverage":20},{"name":"ETH","szDecimals":4,"maxLeverage":25}]}');
+        }));
+
+        self::assertSame([
+            ['coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 50],
+            ['coin' => 'ETH', 'asset_id' => 2, 'sz_decimals' => 4, 'max_leverage' => 25],
+        ], $client->instrumentMetadata());
+        self::assertInstanceOf(HyperliquidPaperInstrumentMetadataClientInterface::class, $client);
+        self::assertSame('{"type":"meta"}', $requests[0][2]['body']);
+        self::assertStringNotContainsString('authorization', strtolower(json_encode($requests[0][2], JSON_THROW_ON_ERROR)));
+    }
+
+    public function testMetadataRequiresBothSupportedAssetsExactlyOnce(): void
+    {
+        foreach ([
+            '{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}',
+            '{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50},{"name":"BTC","szDecimals":5,"maxLeverage":50},{"name":"ETH","szDecimals":4,"maxLeverage":25}]}',
+            '{"universe":[{"name":"BTC","szDecimals":7,"maxLeverage":50},{"name":"ETH","szDecimals":4,"maxLeverage":25}]}',
+        ] as $body) {
+            $client = $this->client(new MockHttpClient(new MockResponse($body)));
+            try {
+                $client->instrumentMetadata();
+                self::fail('Invalid Hyperliquid metadata must fail closed.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('hyperliquid_paper_public_response_invalid', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testMetadataRetriesRetryableStatusesWithinTheBoundedBudget(): void
+    {
+        $responses = [
+            new MockResponse('wallet=one', ['http_code' => 429]),
+            new MockResponse('wallet=two', ['http_code' => 503]),
+            new MockResponse('{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50},{"name":"ETH","szDecimals":4,"maxLeverage":25}]}'),
+        ];
+        $http = new HyperliquidRecordingHttpClient(new MockHttpClient($responses));
+        $clock = new HyperliquidRecordingClock();
+        $limiter = new HyperliquidRestClientRecordingLimiter();
+        $client = $this->client($http, $limiter, $clock);
+
+        self::assertCount(2, $client->instrumentMetadata());
+        self::assertSame([0.25, 0.5], $clock->sleeps);
+        self::assertSame([[20, 65.0], [20, 65.0], [20, 65.0], [1, 65.0]], $limiter->reservations);
+        self::assertTrue($http->responses[0]->getInfo('canceled'));
+        self::assertTrue($http->responses[1]->getInfo('canceled'));
+    }
+
     public function testPostsTheExactCredentialFreeSnapshotRequestForBothApprovedNetworks(): void
     {
         foreach ([
@@ -104,9 +159,9 @@ final class HyperliquidPaperPublicRestClientTest extends TestCase
 
         $native = new \ReflectionClass(NativeHyperliquidPaperPublicHttpTransport::class);
         self::assertSame([], $native->getConstructor()?->getParameters() ?? []);
-        self::assertSame(['postCandleSnapshot', 'stream'], array_values(array_map(
+        self::assertSame(['postCandleSnapshot', 'postMetadata', 'stream'], array_values(array_map(
             static fn (\ReflectionMethod $method): string => $method->getName(),
-            array_filter($native->getMethods(), static fn (\ReflectionMethod $method): bool => !$method->isConstructor()),
+            array_filter($native->getMethods(), static fn (\ReflectionMethod $method): bool => $method->isPublic() && !$method->isConstructor()),
         )));
 
         $this->expectException(\TypeError::class);
@@ -449,6 +504,18 @@ final class HyperliquidRecordingTransport implements HyperliquidPaperPublicHttpT
         ]);
     }
 
+    public function postMetadata(string $uri, array $payload): ResponseInterface
+    {
+        return $this->http->request('POST', $uri, [
+            'json' => $payload,
+            'headers' => ['Accept' => 'application/json', 'Content-Type' => 'application/json'],
+            'timeout' => 10.0,
+            'max_duration' => 10.0,
+            'max_redirects' => 0,
+            'buffer' => false,
+        ]);
+    }
+
     public function stream(ResponseInterface $response): ResponseStreamInterface
     {
         return $this->http->stream($response);
@@ -464,6 +531,12 @@ final class HyperliquidStatusThrowingTransport implements HyperliquidPaperPublic
     {
         return $this->responses[] = new HyperliquidThrowingStatusResponse(new TransportException('wallet=status-secret'));
     }
+    public function postMetadata(string $uri, array $payload): ResponseInterface
+    {
+        return $this->responses[] = new HyperliquidThrowingStatusResponse(
+            new TransportException('wallet=status-secret'),
+        );
+    }
     public function stream(ResponseInterface $response): ResponseStreamInterface { throw new \LogicException('stream_not_expected'); }
 }
 
@@ -472,6 +545,10 @@ final class HyperliquidStreamThrowingTransport implements HyperliquidPaperPublic
     /** @var list<MockResponse> */
     public array $responses = [];
     public function postCandleSnapshot(string $uri, array $payload): ResponseInterface { return $this->responses[] = new MockResponse('[]'); }
+    public function postMetadata(string $uri, array $payload): ResponseInterface
+    {
+        return $this->responses[] = new MockResponse('[]');
+    }
     public function stream(ResponseInterface $response): ResponseStreamInterface { throw new TransportException('wallet=stream-secret'); }
 }
 

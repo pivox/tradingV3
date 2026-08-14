@@ -69,6 +69,7 @@ final readonly class OkxPaperStreamFrontier
             PaperMarketDataChannel::CANDLE_1H => self::candleFields($event),
             PaperMarketDataChannel::PUBLIC_TRADE => self::tradeFields($event),
             PaperMarketDataChannel::TOP_OF_BOOK => self::bookFields($event),
+            PaperMarketDataChannel::INSTRUMENT_METADATA => self::metadataFields($event),
             PaperMarketDataChannel::CONNECTION_STATE => self::connectionFields($event),
             PaperMarketDataChannel::SNAPSHOT_BOUNDARY => self::boundaryFields($event),
         };
@@ -189,6 +190,24 @@ final readonly class OkxPaperStreamFrontier
         $state = self::requiredString($payload, 'state');
 
         return [$epoch . '|' . $state, ['connection_epoch' => $epoch, 'state' => $state]];
+    }
+
+    /** @return array{string, array<string, mixed>} */
+    private static function metadataFields(PaperMarketEvent $event): array
+    {
+        $payload = $event->payload;
+        $epoch = self::requiredPositiveInteger($payload, 'source_epoch');
+        $schema = self::requiredString($payload, 'metadata_schema_version');
+        if ($schema !== 'paper-instrument-metadata.v1') {
+            throw self::invalid();
+        }
+        $sourceFields = $payload;
+        unset($sourceFields['native_symbol']);
+
+        return [
+            $epoch . '|' . hash('sha256', CanonicalJson::encode($sourceFields)),
+            $sourceFields,
+        ];
     }
 
     /** @return array{string, array<string, mixed>} */

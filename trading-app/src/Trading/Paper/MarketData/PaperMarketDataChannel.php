@@ -11,6 +11,7 @@ enum PaperMarketDataChannel: string
     case CANDLE_15M = 'candle_15m';
     case CANDLE_1H = 'candle_1h';
     case TOP_OF_BOOK = 'top_of_book';
+    case INSTRUMENT_METADATA = 'instrument_metadata';
     case PUBLIC_TRADE = 'public_trade';
     case CONNECTION_STATE = 'connection_state';
     case SNAPSHOT_BOUNDARY = 'snapshot_boundary';
