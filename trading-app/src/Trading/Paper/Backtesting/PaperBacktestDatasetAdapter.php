@@ -62,6 +62,24 @@ final class PaperBacktestDatasetAdapter
         'source_book_hash', 'origin', 'synthetic',
     ];
 
+    /** @var list<string> */
+    private const OKX_METADATA_KEYS = [
+        'metadata_schema_version', 'native_symbol', 'instrument_type', 'base_asset',
+        'quote_asset', 'settlement_asset', 'status', 'quantity_unit', 'quantity_step',
+        'minimum_quantity', 'maximum_market_quantity', 'maximum_limit_quantity',
+        'contract_value', 'contract_multiplier', 'contract_value_unit', 'price_tick',
+        'source_epoch', 'origin',
+    ];
+
+    /** @var list<string> */
+    private const HYPERLIQUID_METADATA_KEYS = [
+        'metadata_schema_version', 'native_symbol', 'instrument_type', 'base_asset',
+        'quote_asset', 'settlement_asset', 'status', 'asset_id', 'quantity_unit',
+        'quantity_step', 'minimum_quantity', 'contract_value', 'contract_multiplier',
+        'contract_value_unit', 'size_decimals', 'price_precision_digits',
+        'price_max_decimals', 'maximum_leverage', 'source_epoch', 'origin',
+    ];
+
     public function adapt(VerifiedPaperDatasetSnapshot $snapshot): PaperBacktestDataset
     {
         $manifest = $snapshot->manifest;
@@ -71,14 +89,47 @@ final class PaperBacktestDatasetAdapter
         $candles = [];
         $publicTrades = [];
         $publicBooks = [];
+        $instrumentMetadata = [];
+        $tradeQuantityConversions = [];
+        $bookQuantityConversions = [];
+        /** @var array<string, NormalizedBacktestInstrumentMetadata> $effectiveMetadata */
+        $effectiveMetadata = [];
         $sourceChecksum = 'sha256:' . $manifest->eventsFileSha256;
-        foreach ($snapshot->events as $event) {
+        foreach ($snapshot->events as $sourceEventPosition => $event) {
             $this->assertEventEnvelope($event, $manifest);
+            if ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA) {
+                $this->assertCandleNativeSymbol($event, $manifest);
+                $metadata = $this->normalizeInstrumentMetadata(
+                    $event,
+                    $sourceChecksum,
+                    $sourceEventPosition,
+                );
+                $instrumentMetadata[] = $metadata;
+                $effectiveMetadata[$event->symbol] = $metadata;
+                continue;
+            }
             if ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
                 $this->assertCandleNativeSymbol($event, $manifest);
-                $publicTrades[] = $manifest->venue === PaperMarketDataVenue::OKX
+                $trade = $manifest->venue === PaperMarketDataVenue::OKX
                     ? $this->normalizeOkxTrade($event, $sourceChecksum)
                     : $this->normalizeHyperliquidTrade($event, $sourceChecksum);
+                $publicTrades[] = $trade;
+                $metadata = $effectiveMetadata[$event->symbol] ?? null;
+                if ($metadata !== null && $metadata->availableAt <= $trade->availableAt) {
+                    $tradeQuantityConversions[] = new NormalizedBacktestTradeQuantityConversion(
+                        $trade->sourceRecordId,
+                        $sourceEventPosition,
+                        $trade->sourceChecksum,
+                        $trade->sourceNetwork,
+                        $trade->marketDataVenue,
+                        $trade->symbol,
+                        $trade->happenedAt,
+                        $trade->availableAt,
+                        $metadata,
+                        $trade->quantity,
+                        $trade->quantityUnit,
+                    );
+                }
                 continue;
             }
             if ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
@@ -86,9 +137,27 @@ final class PaperBacktestDatasetAdapter
                     continue;
                 }
                 $this->assertCandleNativeSymbol($event, $manifest);
-                $publicBooks[] = $manifest->venue === PaperMarketDataVenue::OKX
+                $book = $manifest->venue === PaperMarketDataVenue::OKX
                     ? $this->normalizeOkxBook($event, $sourceChecksum)
                     : $this->normalizeHyperliquidBook($event, $sourceChecksum);
+                $publicBooks[] = $book;
+                $metadata = $effectiveMetadata[$event->symbol] ?? null;
+                if ($metadata !== null && $metadata->availableAt <= $book->availableAt) {
+                    $bookQuantityConversions[] = new NormalizedBacktestBookQuantityConversion(
+                        $book->sourceRecordId,
+                        $sourceEventPosition,
+                        $book->sourceChecksum,
+                        $book->sourceNetwork,
+                        $book->marketDataVenue,
+                        $book->symbol,
+                        $book->happenedAt,
+                        $book->availableAt,
+                        $metadata,
+                        $book->bidQuantity,
+                        $book->askQuantity,
+                        $book->quantityUnit,
+                    );
+                }
                 continue;
             }
             $timeframe = $this->timeframe($event->channel);
@@ -130,7 +199,64 @@ final class PaperBacktestDatasetAdapter
             'source_network' => $manifest->network->value,
             'market_data_venue' => $manifest->venue->value,
             'market_type' => 'perpetual',
-        ], $candles, $publicTrades, $publicBooks);
+        ], $candles, $publicTrades, $publicBooks, $instrumentMetadata,
+            $tradeQuantityConversions, $bookQuantityConversions);
+    }
+
+    private function normalizeInstrumentMetadata(
+        PaperMarketEvent $event,
+        string $sourceChecksum,
+        int $sourceEventPosition,
+    ): NormalizedBacktestInstrumentMetadata {
+        $payload = $event->payload;
+        $this->assertExactKeys(
+            $payload,
+            $event->sourceVenue === PaperMarketDataVenue::OKX
+                ? self::OKX_METADATA_KEYS
+                : self::HYPERLIQUID_METADATA_KEYS,
+        );
+        $baseAsset = $event->symbol === 'BTCUSDT' ? 'BTC' : 'ETH';
+        $nativeSymbol = $event->sourceVenue === PaperMarketDataVenue::OKX
+            ? $baseAsset . '-USDT-SWAP'
+            : $baseAsset;
+        $venueValid = $event->sourceVenue === PaperMarketDataVenue::OKX
+            ? (($payload['quote_asset'] ?? null) === 'USDT'
+                && ($payload['settlement_asset'] ?? null) === 'USDT'
+                && ($payload['origin'] ?? null) === 'rest_public_instruments'
+                && ($payload['quantity_unit'] ?? null) === 'contracts')
+            : (($payload['quote_asset'] ?? null) === 'USDC'
+                && ($payload['settlement_asset'] ?? null) === 'USDC'
+                && ($payload['origin'] ?? null) === 'rest_meta'
+                && ($payload['quantity_unit'] ?? null) === 'base_asset');
+        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+            || ($payload['native_symbol'] ?? null) !== $nativeSymbol
+            || ($payload['instrument_type'] ?? null) !== 'perpetual'
+            || ($payload['base_asset'] ?? null) !== $baseAsset
+            || ($payload['status'] ?? null) !== 'live'
+            || ($payload['contract_value_unit'] ?? null) !== $baseAsset
+            || !\is_int($payload['source_epoch'] ?? null)
+            || !$venueValid
+        ) {
+            throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_invalid');
+        }
+        try {
+            return new NormalizedBacktestInstrumentMetadata(
+                $event->eventId,
+                $sourceChecksum,
+                $event->sourceNetwork->value,
+                $event->sourceVenue->value,
+                $event->symbol,
+                $sourceEventPosition,
+                $event->receivedTimestamp->format(self::TIMESTAMP_FORMAT),
+                $payload['source_epoch'],
+                $payload['quantity_unit'],
+                $this->decimal($payload['contract_value'] ?? null, true),
+                $this->decimal($payload['contract_multiplier'] ?? null, true),
+                $payload['contract_value_unit'],
+            );
+        } catch (PaperBacktestAdapterException|\InvalidArgumentException) {
+            throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_invalid');
+        }
     }
 
     private function normalizeOkxBook(
