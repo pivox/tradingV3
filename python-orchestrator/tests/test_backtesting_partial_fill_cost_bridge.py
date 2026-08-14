@@ -21,6 +21,7 @@ from app.backtesting.partial_fill_cost_bridge import (
     canonical_partial_fill_cost_request,
 )
 from app.backtesting.staged_fill_execution import execute_plan_from_staged_visible_fills
+from app.backtesting.visible_queue_depletion import _hash as _queue_hash
 from tests.test_backtesting_backtrader_runtime import _feed, _v2_plan
 from tests.test_backtesting_staged_fill_execution import _evidence
 
@@ -392,3 +393,62 @@ def test_request_builder_rejects_forged_fill_prefix() -> None:
                 evidence,
                 replace(execution, events=(forged_fill, terminal)),
             )
+
+
+def test_request_builder_rejects_invalid_evidence_execution_and_terminal() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    evidence = _evidence(plan, (("a", 0, 45, Decimal("1")),))
+    execution = execute_plan_from_staged_visible_fills(plan, feed.bars, evidence)
+    fill, terminal = execution.events
+
+    invalid_evidence = evidence.model_copy(
+        update={"result_hash": "sha256:" + "f" * 64}
+    )
+    with pytest.raises(ValueError, match="execution_invalid"):
+        canonical_partial_fill_cost_request(plan, invalid_evidence, execution)
+
+    raw = evidence.model_dump(mode="json")
+    raw["symbol"] = "ETHUSDT"
+    raw["result_hash"] = _queue_hash(
+        {key: value for key, value in raw.items() if key != "result_hash"}
+    )
+    unrelated = type(evidence).model_validate(raw)
+    with pytest.raises(ValueError, match="execution_invalid"):
+        canonical_partial_fill_cost_request(plan, unrelated, execution)
+
+    for forged_execution in (
+        replace(execution, status="not_executed"),  # type: ignore[arg-type]
+        replace(execution, consumed_fill_count=0),
+        replace(
+            execution,
+            events=(fill, replace(terminal, quantity_base=Decimal("0.5"))),
+        ),
+        replace(
+            execution,
+            events=(fill, replace(terminal, price=Decimal("999"))),
+        ),
+    ):
+        with pytest.raises(ValueError, match="execution_invalid"):
+            canonical_partial_fill_cost_request(
+                plan, evidence, forged_execution
+            )
+
+    stop_feed = _feed(fill_bar_stop=True)
+    stop_plan = _v2_plan(stop_feed)
+    stop_evidence = _evidence(stop_plan, (("a", 0, 30, Decimal("1")),))
+    stop_execution = execute_plan_from_staged_visible_fills(
+        stop_plan, stop_feed.bars, stop_evidence
+    )
+    with pytest.raises(ValueError, match="execution_invalid"):
+        canonical_partial_fill_cost_request(
+            stop_plan,
+            stop_evidence,
+            replace(
+                stop_execution,
+                events=(
+                    stop_execution.events[0],
+                    replace(stop_execution.events[1], price=Decimal("99")),
+                ),
+            ),
+        )

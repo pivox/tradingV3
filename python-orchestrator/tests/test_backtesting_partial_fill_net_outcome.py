@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+import hashlib
 import json
 
 import pytest
 
 from app.backtesting.partial_fill_cost_bridge import (
     CanonicalPartialFillCostResult,
+    _ordered_json,
     canonical_partial_fill_cost_request,
 )
 from app.backtesting.partial_fill_net_outcome import (
@@ -88,6 +90,35 @@ def test_projector_rejects_settlement_substitution_and_wrong_evidence() -> None:
     with pytest.raises(PartialFillNetOutcomeError, match="evidence_invalid"):
         project_partial_fill_net_outcome(
             plan, execution, feed, forged_evidence, settlement
+        )
+
+    payload = settlement.model_dump(mode="json")
+    payload["maker_fill_result_hash"] = "sha256:" + "d" * 64
+    payload["result_hash"] = "sha256:" + hashlib.sha256(
+        _ordered_json(
+            {key: value for key, value in payload.items() if key != "result_hash"}
+        )
+    ).hexdigest()
+    unrelated_settlement = CanonicalPartialFillCostResult.model_validate(payload)
+    with pytest.raises(PartialFillNetOutcomeError, match="settlement_invalid"):
+        project_partial_fill_net_outcome(
+            plan, execution, feed, evidence, unrelated_settlement
+        )
+
+
+def test_projector_rejects_feed_identity_or_missing_replay_coverage() -> None:
+    plan, feed, evidence, execution, settlement = _case()
+    object.__setattr__(feed, "market_data_venue", "hyperliquid")
+    with pytest.raises(PartialFillNetOutcomeError, match="evidence_invalid"):
+        project_partial_fill_net_outcome(
+            plan, execution, feed, evidence, settlement
+        )
+
+    plan, feed, evidence, execution, settlement = _case()
+    object.__setattr__(feed, "bars", ())
+    with pytest.raises(PartialFillNetOutcomeError, match="evidence_invalid"):
+        project_partial_fill_net_outcome(
+            plan, execution, feed, evidence, settlement
         )
 
 

@@ -15,6 +15,7 @@ from app.backtesting.visible_queue_depletion import (
     _hash,
 )
 from tests.test_backtesting_backtrader_runtime import _feed, _v2_plan
+from tests.test_backtesting_backtrader_runtime import _queue_evidence
 
 
 UTC = timezone.utc
@@ -197,4 +198,37 @@ def test_staged_execution_rejects_self_hashed_fill_outside_order_window() -> Non
     forged = VisibleQueueDepletionResult.model_validate(raw)
 
     with pytest.raises(BacktestExecutionError, match="visible_fill_evidence_invalid"):
+        execute_plan_from_staged_visible_fills(plan, feed.bars, forged)
+
+
+def test_staged_execution_rejects_atomic_or_undelivered_fill_evidence() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    with pytest.raises(BacktestExecutionError, match="evidence_not_required"):
+        execute_plan_from_staged_visible_fills(
+            plan, feed.bars, _queue_evidence(plan)
+        )
+
+    late = _evidence(plan, (("a", 2, 30, Decimal("1")),))
+    with pytest.raises(BacktestExecutionError, match="fill_not_delivered"):
+        execute_plan_from_staged_visible_fills(plan, feed.bars, late)
+
+
+def test_staged_execution_rejects_non_monotonic_fill_prefix() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    raw = _evidence(
+        plan,
+        (("a", 0, 30, Decimal("1")), ("c", 0, 45, Decimal("1.497"))),
+    ).model_dump(mode="json")
+    raw["trace"][1]["available_at"] = raw["trace"][0]["available_at"]
+    raw["trace"][1]["happened_at"] = raw["trace"][0]["happened_at"]
+    raw["trace"][1]["source_event_position"] = 6
+    raw["trace_hash"] = _hash(tuple(raw["trace"]))
+    raw["result_hash"] = _hash(
+        {key: value for key, value in raw.items() if key != "result_hash"}
+    )
+    forged = VisibleQueueDepletionResult.model_validate(raw)
+
+    with pytest.raises(BacktestExecutionError, match="trace_invalid"):
         execute_plan_from_staged_visible_fills(plan, feed.bars, forged)
