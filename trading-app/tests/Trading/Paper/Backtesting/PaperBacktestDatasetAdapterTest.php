@@ -697,6 +697,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     {
         $event = $this->okxEvent(['volume_base' => '0.001']);
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxMetadata(),
             $event,
             $this->okxTrade(),
             $this->okxBook(),
@@ -721,21 +722,11 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             file_get_contents($fixtureRoot . '/public-books.ndjson'),
         );
         self::assertSame(
-            $encoder->instrumentMetadata((new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
-                $this->okxMetadata(),
-                $event,
-                $this->okxTrade(),
-                $this->okxBook(),
-            ))),
+            $encoder->instrumentMetadata($dataset),
             file_get_contents($fixtureRoot . '/instrument-metadata.ndjson'),
         );
         self::assertSame(
-            $encoder->quantityConversions((new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
-                $this->okxMetadata(),
-                $event,
-                $this->okxTrade(),
-                $this->okxBook(),
-            ))),
+            $encoder->quantityConversions($dataset),
             file_get_contents($fixtureRoot . '/quantity-conversions.ndjson'),
         );
     }
