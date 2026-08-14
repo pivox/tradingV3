@@ -9,12 +9,12 @@ liquidity, or authorize private/mainnet execution.
 
 ## Scope and boundary
 
-The model accepts one `CanonicalBacktestOrderPlan`, its exact
+The model accepts one v2 `CanonicalBacktestOrderPlan`, its exact
 `DatasetDescriptor`, a verified public book tape, a verified public execution
 tape, and their verified quantity-conversion tape. It supports only limit plans
-whose `entryLiquidityRole` is `maker`. Taker plans and market fallback fail
-closed because the canonical plan currently carries no versioned fallback
-authorization.
+whose `entryLiquidityRole` is `maker` and whose hash-bound
+`marketFallback` is exactly false. Taker plans, v1 plans without an explicit
+decision, and every true fallback value fail closed.
 
 All inputs must bind the same dataset ID/checksum, source checksum, source
 network, venue and market type. The plan symbol must be covered by the dataset.

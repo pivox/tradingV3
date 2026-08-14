@@ -228,7 +228,9 @@ def _historical_funding(
 
 def _revalidate_plan(envelope: CanonicalBacktestOrderPlan) -> CanonicalBacktestOrderPlan:
     wire = envelope.model_dump(mode="json", by_alias=True)
-    for optional_key in ("cancelAfterAt", "holdingExpiresAt", "orderBookInputHash"):
+    for optional_key in (
+        "marketFallback", "cancelAfterAt", "holdingExpiresAt", "orderBookInputHash",
+    ):
         if wire["plan"].get(optional_key) is None:
             wire["plan"].pop(optional_key)
     try:

@@ -30,7 +30,7 @@ final readonly class CanonicalBacktestOrderPlanProjection
         }
 
         return [
-            'schema_version' => 'canonical-backtest-order-plan.v1',
+            'schema_version' => 'canonical-backtest-order-plan.v2',
             'dataset_id' => $datasetId,
             'dataset_checksum' => $datasetChecksum,
             'timeframe' => $timeframe,

@@ -69,9 +69,9 @@ final class DayTradingShadowRuntimeTest extends TestCase
         self::assertSame($outcome->orderPlan->planHash, $outcome->evidence['plan_hash']);
         self::assertSame($outcome->reservation->stateHash, $outcome->evidence['reservation_hash']);
         self::assertSame('sha256:b3976b712e505ddc129e0139eeaa43817f0879aa8933dbae81e948e249a3bc68', $outcome->evidence['config_hash']);
-        self::assertSame('sha256:d3c6fa5352473511a16b7dd7992a17705319286d828298c72588ce9159f1f6b0', $outcome->evidence['plan_hash']);
-        self::assertSame('sha256:fbccd332bc743ea8f2d7ef0663f58211177b911df9475e23a181a1000eb60d35', $outcome->evidence['reservation_hash']);
-        self::assertSame('sha256:351f0e9361725441f3e2cd1b0a3f36a3c492dbb19fe8ee2c2b2eebad785f8361', $outcome->reservation->admissionHash);
+        self::assertSame('sha256:4e264071ddc45e55155e75f57449694d4653e92873104989720c1395420a6b1e', $outcome->evidence['plan_hash']);
+        self::assertSame('sha256:3a3d639f7fee11134499267936158a39c5fdbca64ecd6293faa099e1a001e074', $outcome->evidence['reservation_hash']);
+        self::assertSame('sha256:0aa239416bef95baf48ea49c9ec8bfe1704a6d012d3918122218ebb9fec931b3', $outcome->reservation->admissionHash);
     }
 
     public function testUnsupportedIdentityAndForbiddenCapabilitiesKeepExactFacadeReasons(): void

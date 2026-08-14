@@ -152,6 +152,7 @@ def _plan(
 ):
     payload = deepcopy(json.loads(PLAN_FIXTURE.read_text(encoding="utf-8")))
     payload.update(
+        schema_version="canonical-backtest-order-plan.v2",
         dataset_id=dataset.dataset_id,
         dataset_checksum=dataset.dataset_checksum,
         timeframe="1m",
@@ -190,6 +191,16 @@ def _plan(
         ),
         holdingExpiresAt=None,
     )
+    plan = {
+        key: value
+        for original_key, original_value in plan.items()
+        for key, value in (
+            ((original_key, original_value), ("marketFallback", False))
+            if original_key == "orderType"
+            else ((original_key, original_value),)
+        )
+    }
+    payload["plan"] = plan
     plan["planHash"] = _php_plan_hash({key: value for key, value in plan.items() if key != "planHash"})
     return CanonicalBacktestOrderPlan.model_validate(payload)
 
@@ -366,6 +377,25 @@ def test_unsupported_liquidity_role_fails_closed(entry_role: str) -> None:
             plan=_plan(dataset, entry_role=entry_role), dataset=dataset,
             public_execution_tape=execution, public_book_tape=books,
             quantity_conversion_tape=conversions,
+        )
+
+
+def test_v1_plan_without_explicit_fallback_policy_fails_closed() -> None:
+    dataset, execution, books, conversions = _inputs(
+        (_trade(2, second=20, side="sell", price="99", quantity="1"),)
+    )
+    v2 = _plan(dataset).model_dump(mode="json", by_alias=True)
+    v2["schema_version"] = "canonical-backtest-order-plan.v1"
+    v2["plan"].pop("marketFallback")
+    v2["plan"]["planHash"] = _php_plan_hash(
+        {key: value for key, value in v2["plan"].items() if key != "planHash"}
+    )
+    legacy = CanonicalBacktestOrderPlan.model_validate(v2)
+
+    with pytest.raises(VisibleQueueDepletionError, match="fallback_policy_missing"):
+        model_visible_queue_depletion(
+            plan=legacy, dataset=dataset, public_execution_tape=execution,
+            public_book_tape=books, quantity_conversion_tape=conversions,
         )
 
 

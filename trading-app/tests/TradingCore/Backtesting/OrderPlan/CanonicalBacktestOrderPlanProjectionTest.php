@@ -37,7 +37,8 @@ final class CanonicalBacktestOrderPlanProjectionTest extends TestCase
             'timeframe',
             'plan',
         ], array_keys($payload));
-        self::assertSame('canonical-backtest-order-plan.v1', $payload['schema_version']);
+        self::assertSame('canonical-backtest-order-plan.v2', $payload['schema_version']);
+        self::assertFalse($payload['plan']['marketFallback']);
         self::assertSame($plan->planHash, $payload['plan']['planHash']);
         self::assertSame($plan->expectedPlanHash(), $payload['plan']['planHash']);
         self::assertSame($plan->modeId, $payload['plan']['modeId']);

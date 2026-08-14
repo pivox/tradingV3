@@ -51,6 +51,13 @@ des couts. Le miroir Pydantic refuse les champs absents/inconnus, les valeurs no
 finies, une identite autre que `fake` local/test et toute divergence de
 `plan_hash`.
 
+La projection courante emet `canonical-backtest-order-plan.v2`. Son champ
+`marketFallback=false` provient de la politique canonique, participe au
+`plan_hash` et ne peut jamais etre vrai pour les contrats modernes approuves.
+Le lecteur Python conserve v1 pour les replays OHLCV historiques, mais refuse
+un champ v2 dans une enveloppe v1, son absence dans une enveloppe v2 et toute
+valeur vraie. Un plan v1 ne peut pas alimenter le modele de file publique.
+
 `VerifiedBacktraderFeedAdapter` accepte un seul flux `CandleRecord` continu et
 verifie. Les bougies sont livrees a Cerebro a `available_at`, jamais a leur
 ouverture ou avant leur cloture. `CanonicalBacktraderRuntime` utilise Backtrader
@@ -253,8 +260,10 @@ positions source et les checksums des trois tapes. Il porte obligatoirement
 `fills_are_certified=false`,
 `queue_evidence=visible_l1_plus_public_trades` et
 `result_is_live_proof=false` : le L1 public ne prouve ni notre rang reel, ni la
-liquidite cachee, ni un acquittement prive. Le fallback taker reste interdit
-tant qu'une autorisation versionnee n'existe pas dans l'OrderPlan canonique.
+liquidite cachee, ni un acquittement prive. Le fallback taker est explicitement
+interdit par le plan v2 courant. Son ajout futur exigerait une nouvelle decision
+mode/setup et une nouvelle version de politique; aucune configuration legacy ne
+peut le reactiver.
 Ce lot ne remplace pas encore les fills OHLCV du runtime Backtrader et ne
 calcule ni sorties, ni couts, ni PnL.
 

@@ -127,6 +127,7 @@ class CanonicalBacktestPlan(BaseModel):
     quote_currency: str = Field(alias="quoteCurrency")
     side: Literal["long", "short"]
     order_type: Literal["limit"] = Field(alias="orderType")
+    market_fallback: bool | None = Field(alias="marketFallback", default=None)
     quantity: float
     quantity_step: float = Field(alias="quantityStep")
     contract_size: float = Field(alias="contractSize")
@@ -307,7 +308,9 @@ class CanonicalBacktestPlan(BaseModel):
 class CanonicalBacktestOrderPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_version: Literal["canonical-backtest-order-plan.v1"]
+    schema_version: Literal[
+        "canonical-backtest-order-plan.v1", "canonical-backtest-order-plan.v2"
+    ]
     dataset_id: str = Field(pattern=_DATASET_ID)
     dataset_checksum: str = Field(pattern=_HASH)
     timeframe: Literal["1m", "5m", "15m", "1h", "4h"]
@@ -324,4 +327,12 @@ class CanonicalBacktestOrderPlan(BaseModel):
     def _bind_dataset(self) -> "CanonicalBacktestOrderPlan":
         if self.dataset_id != "backtest-dataset-" + self.dataset_checksum.removeprefix("sha256:"):
             raise ValueError("canonical_backtest_order_plan_dataset_invalid")
+        if (
+            self.schema_version == "canonical-backtest-order-plan.v1"
+            and self.plan.market_fallback is not None
+        ) or (
+            self.schema_version == "canonical-backtest-order-plan.v2"
+            and self.plan.market_fallback is not False
+        ):
+            raise ValueError("canonical_backtest_order_plan_fallback_policy_invalid")
         return self
