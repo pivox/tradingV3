@@ -193,6 +193,14 @@ class PublicQuantityConversionTapeArtifacts(BaseModel):
 @dataclass(frozen=True, init=False)
 class VerifiedPublicQuantityConversionTape:
     artifacts: PublicQuantityConversionTapeArtifacts
+    dataset_id: str
+    dataset_checksum: str
+    source_checksum: str
+    source_network: str
+    market_data_venue: str
+    market_type: str
+    public_execution_tape_checksum: str | None
+    public_book_tape_checksum: str | None
     metadata: tuple[InstrumentMetadataRecord, ...]
     conversions: tuple[ConversionRecord, ...]
     tape_checksum: str
@@ -224,10 +232,22 @@ class VerifiedPublicQuantityConversionTape:
                 raise ValueError
         except Exception as exc:
             raise ValueError("public_quantity_conversion_tape_invalid") from exc
-        object.__setattr__(self, "artifacts", artifacts)
-        object.__setattr__(self, "metadata", metadata)
-        object.__setattr__(self, "conversions", conversions)
-        object.__setattr__(self, "tape_checksum", artifacts.tape_checksum)
+        manifest = json.loads(artifacts.manifest_json)
+        for field, value in {
+            "artifacts": artifacts,
+            "dataset_id": manifest["dataset_id"],
+            "dataset_checksum": manifest["dataset_checksum"],
+            "source_checksum": manifest["source_checksum"],
+            "source_network": manifest["source_network"],
+            "market_data_venue": manifest["market_data_venue"],
+            "market_type": manifest["market_type"],
+            "public_execution_tape_checksum": manifest["public_execution_tape_checksum"],
+            "public_book_tape_checksum": manifest["public_book_tape_checksum"],
+            "metadata": metadata,
+            "conversions": conversions,
+            "tape_checksum": artifacts.tape_checksum,
+        }.items():
+            object.__setattr__(self, field, value)
 
 
 def serialize_public_quantity_conversion_tape(
