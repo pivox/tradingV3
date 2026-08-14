@@ -8,6 +8,39 @@ use Psr\Clock\ClockInterface;
 
 final readonly class CanonicalOrderPlan
 {
+    private const WIRE_FIELDS = [
+        'modeId', 'modeVersion', 'setupId', 'setupVersion', 'exchange',
+        'environment', 'symbol', 'marketType', 'quoteCurrency', 'side',
+        'orderType', 'marketFallback', 'quantity', 'quantityStep', 'contractSize',
+        'entryPrice', 'stopPrice', 'tickSize', 'zoneLowerPrice', 'zoneUpperPrice',
+        'targets', 'minimumNetR', 'equityQuote', 'availableBalanceQuote',
+        'riskRate', 'riskBudgetQuote', 'grossStopLoss', 'totalStopLoss',
+        'positionNotional', 'finalLeverage', 'effectiveLeverageCap',
+        'modeLeverageCap', 'exchangeLeverageCap', 'symbolLeverageCap',
+        'minQuantity', 'maxQuantity', 'marketMaxQuantity', 'exchangeMinNotional',
+        'exchangeMaxNotional', 'environmentMaxNotional', 'capsApplied',
+        'makerFeeRate', 'takerFeeRate', 'entryLiquidityRole', 'stopLiquidityRole',
+        'entrySpreadRate', 'stopSpreadRate', 'entrySlippageRate',
+        'stopSlippageRate', 'fundingRate', 'entryFee', 'stopExitFee',
+        'entrySpreadCost', 'stopSpreadCost', 'entrySlippageCost',
+        'stopSlippageCost', 'fundingCost', 'fundingIntervals',
+        'maximumInputAgeSeconds', 'inputObservedAt', 'observedAt',
+        'costObservedAt', 'zoneComputedAt', 'createdAt', 'expiresAt',
+        'cancelAfterAt', 'holdingExpiresAt', 'configHash', 'costInputHash',
+        'orderBookInputHash', 'inputHashes', 'planHash',
+    ];
+
+    private const OPTIONAL_WIRE_FIELDS = [
+        'cancelAfterAt', 'holdingExpiresAt', 'orderBookInputHash',
+    ];
+
+    private const TARGET_FIELDS = [
+        'id', 'price', 'riskMultiple', 'liquidityRole', 'spreadRate',
+        'slippageRate', 'grossReward', 'entryFee', 'targetFee',
+        'entrySpreadCost', 'entrySlippageCost', 'targetSpreadCost',
+        'targetSlippageCost', 'fundingCost', 'netReward', 'netRisk', 'netR',
+    ];
+
     /**
      * @param non-empty-list<CanonicalOrderPlanTarget> $targets
      * @param non-empty-list<string>                  $inputHashes
@@ -128,6 +161,79 @@ final readonly class CanonicalOrderPlan
         }
 
         return $validator->validate(self::fromAcceptedComponents($request, $now));
+    }
+
+    /** @param array<string, mixed> $wire */
+    public static function fromArray(array $wire): self
+    {
+        self::assertWireShape($wire);
+        $values = [];
+        foreach (self::WIRE_FIELDS as $field) {
+            $values[$field] = $wire[$field] ?? null;
+        }
+
+        try {
+            foreach ([
+                'modeId', 'modeVersion', 'setupId', 'setupVersion', 'exchange',
+                'environment', 'symbol', 'marketType', 'quoteCurrency', 'side',
+                'orderType', 'entryLiquidityRole', 'stopLiquidityRole',
+                'configHash', 'costInputHash', 'planHash',
+            ] as $field) {
+                $values[$field] = self::wireString($values[$field]);
+            }
+            if (!\is_bool($values['marketFallback'])) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+            }
+            foreach ([
+                'quantity', 'quantityStep', 'contractSize', 'entryPrice',
+                'stopPrice', 'tickSize', 'zoneLowerPrice', 'zoneUpperPrice',
+                'minimumNetR', 'equityQuote', 'availableBalanceQuote', 'riskRate',
+                'riskBudgetQuote', 'grossStopLoss', 'totalStopLoss',
+                'positionNotional', 'modeLeverageCap', 'exchangeLeverageCap',
+                'minQuantity', 'maxQuantity', 'exchangeMinNotional',
+                'exchangeMaxNotional', 'environmentMaxNotional', 'makerFeeRate',
+                'takerFeeRate', 'entrySpreadRate', 'stopSpreadRate',
+                'entrySlippageRate', 'stopSlippageRate', 'fundingRate',
+                'entryFee', 'stopExitFee', 'entrySpreadCost', 'stopSpreadCost',
+                'entrySlippageCost', 'stopSlippageCost', 'fundingCost',
+            ] as $field) {
+                $values[$field] = self::wireFloat($values[$field]);
+            }
+            foreach (['symbolLeverageCap', 'marketMaxQuantity'] as $field) {
+                $values[$field] = $values[$field] === null ? null : self::wireFloat($values[$field]);
+            }
+            foreach ([
+                'finalLeverage', 'effectiveLeverageCap', 'fundingIntervals',
+                'maximumInputAgeSeconds',
+            ] as $field) {
+                if (!\is_int($values[$field])) {
+                    throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+                }
+            }
+            $values['capsApplied'] = self::stringList($values['capsApplied'], false);
+            $values['inputHashes'] = self::stringList($values['inputHashes'], true);
+            $values['targets'] = self::targets($values['targets']);
+            foreach ([
+                'inputObservedAt', 'observedAt', 'costObservedAt',
+                'zoneComputedAt', 'createdAt', 'expiresAt',
+            ] as $field) {
+                $values[$field] = self::wireTime($values[$field]);
+            }
+            foreach (['cancelAfterAt', 'holdingExpiresAt'] as $field) {
+                $values[$field] = $values[$field] === null ? null : self::wireTime($values[$field]);
+            }
+            if ($values['orderBookInputHash'] !== null) {
+                $values['orderBookInputHash'] = self::wireString($values['orderBookInputHash']);
+            }
+
+            $plan = new self(...$values);
+
+            return CanonicalOrderPlanValidator::validateAt($plan, $plan->createdAt);
+        } catch (CanonicalOrderPlanException $exception) {
+            throw $exception;
+        } catch (\Throwable) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+        }
     }
 
     private static function fromAcceptedComponents(
@@ -340,5 +446,109 @@ final readonly class CanonicalOrderPlan
             $values,
             'canonical_order_plan_hash_encoding_invalid',
         ));
+    }
+
+    /** @param array<string, mixed> $wire */
+    private static function assertWireShape(array $wire): void
+    {
+        $expected = array_values(array_filter(
+            self::WIRE_FIELDS,
+            static fn (string $field): bool => !\in_array($field, self::OPTIONAL_WIRE_FIELDS, true)
+                || array_key_exists($field, $wire),
+        ));
+        if (array_keys($wire) !== $expected) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_shape_invalid');
+        }
+        foreach (self::OPTIONAL_WIRE_FIELDS as $field) {
+            if (array_key_exists($field, $wire) && $wire[$field] === null) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_wire_shape_invalid');
+            }
+        }
+    }
+
+    private static function wireFloat(mixed $value): float
+    {
+        if ((!\is_float($value) && !\is_int($value)) || !\is_finite((float) $value)) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+        }
+
+        return (float) $value;
+    }
+
+    private static function wireString(mixed $value): string
+    {
+        if (!\is_string($value) || $value === '' || strlen($value) > 128) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+        }
+
+        return $value;
+    }
+
+    /** @return list<string> */
+    private static function stringList(mixed $value, bool $nonEmpty): array
+    {
+        if (!\is_array($value) || !array_is_list($value) || ($nonEmpty && $value === [])) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_scalar_invalid');
+        }
+        foreach ($value as $item) {
+            self::wireString($item);
+        }
+
+        return $value;
+    }
+
+    /** @return non-empty-list<CanonicalOrderPlanTarget> */
+    private static function targets(mixed $value): array
+    {
+        if (!\is_array($value) || !array_is_list($value) || $value === []) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_target_invalid');
+        }
+        $targets = [];
+        foreach ($value as $target) {
+            if (!\is_array($target) || array_keys($target) !== self::TARGET_FIELDS
+                || !\is_string($target['id']) || $target['id'] === '' || strlen($target['id']) > 128
+                || !\is_string($target['liquidityRole']) || $target['liquidityRole'] === ''
+                || strlen($target['liquidityRole']) > 128
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_wire_target_invalid');
+            }
+            foreach (array_diff(self::TARGET_FIELDS, ['id', 'liquidityRole']) as $field) {
+                $target[$field] = self::targetFloat($target[$field]);
+            }
+            $targets[] = new CanonicalOrderPlanTarget(...$target);
+        }
+
+        return $targets;
+    }
+
+    private static function targetFloat(mixed $value): float
+    {
+        try {
+            return self::wireFloat($value);
+        } catch (CanonicalOrderPlanException) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_target_invalid');
+        }
+    }
+
+    private static function wireTime(mixed $value): \DateTimeImmutable
+    {
+        if (!\is_string($value)) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_timestamp_invalid');
+        }
+        $time = \DateTimeImmutable::createFromFormat(
+            '!Y-m-d\TH:i:s.uP',
+            $value,
+            new \DateTimeZone('UTC'),
+        );
+        $errors = \DateTimeImmutable::getLastErrors();
+        if (!$time instanceof \DateTimeImmutable
+            || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))
+            || $time->getOffset() !== 0
+            || $time->format('Y-m-d\TH:i:s.uP') !== $value
+        ) {
+            throw new CanonicalOrderPlanException('canonical_order_plan_wire_timestamp_invalid');
+        }
+
+        return $time;
     }
 }
