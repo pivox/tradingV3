@@ -305,7 +305,9 @@ def _serialize(
         or tuple(sorted(metadata, key=lambda item: item.source_event_position)) != metadata
         or tuple(sorted(conversions, key=lambda item: item.source_event_position)) != conversions
         or len({item.source_record_id for item in metadata}) != len(metadata)
+        or len({item.source_event_position for item in metadata}) != len(metadata)
         or len({item.source_record_id for item in conversions}) != len(conversions)
+        or len({item.source_event_position for item in conversions}) != len(conversions)
     ):
         raise ValueError("public_quantity_conversion_records_invalid")
     metadata_by_id = {item.source_record_id: item for item in metadata}

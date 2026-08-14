@@ -162,3 +162,26 @@ def test_serializer_never_silently_drops_an_unknown_conversion_object() -> None:
             metadata=metadata,
             conversions=(metadata[0], *conversions),  # type: ignore[arg-type]
         )
+
+
+def test_source_event_positions_are_unique_evidence_coordinates() -> None:
+    dataset, execution, books, metadata, conversions = _inputs()
+    duplicate_metadata_position = metadata[0].model_copy(
+        update={"source_record_id": "f" * 64}
+    )
+    duplicate_conversion_position = conversions[1].model_copy(
+        update={"source_event_position": conversions[0].source_event_position}
+    )
+
+    for changed_metadata, changed_conversions in (
+        ((metadata[0], duplicate_metadata_position), conversions),
+        (metadata, (conversions[0], duplicate_conversion_position)),
+    ):
+        with pytest.raises(ValueError, match="public_quantity_conversion_records_invalid"):
+            serialize_public_quantity_conversion_tape(
+                dataset=dataset,
+                public_execution_tape=execution,
+                public_book_tape=books,
+                metadata=changed_metadata,
+                conversions=changed_conversions,
+            )
