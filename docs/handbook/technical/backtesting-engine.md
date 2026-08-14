@@ -172,9 +172,18 @@ php trading-app/bin/console app:backtest:partial-fill-cost:settle \
   < /chemin/vers/canonical-partial-fill-cost-request.json
 ```
 
-Restent hors de ce runtime : autorite PHP de cout/risk par fill partiel,
-fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
-certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
+`PartialFillCostBridge` expose cette autorite a Python par un processus local a
+arguments fixes. Ses contrats immuables exigent le plan v2 avec
+`marketFallback=false`, conservent l'ordre wire PHP, puis revalident hashes,
+identites modernes, quantites, branche terminale et reconciliations de cout.
+Timeout, sortie ou erreur standard surdimensionnee, JSON duplique ou malforme,
+substitution d'identite et erreur PHP echouent fermes. Le fixture
+`php-partial-fill-cost-settlement.json` fige la parite inter-runtime.
+
+Restent hors de ce runtime : chronologie multi-fill et reservation d'exposition
+entre fills, fallback taker, portefeuille multi-plan, PostgreSQL, metriques et
+rapports de certification. Aucun endpoint prive ni execution mainnet n'est
+ajoute.
 
 ### Tape public d'execution
 
@@ -724,8 +733,7 @@ reelle lorsque les donnees seront disponibles.
 ## Hors scope restant
 
 - publication filesystem et commande operateur de l'adapter Paper ;
-- autorite de cout/risk pour fills partiels et fallback taker ;
-- funding historique ;
+- chronologie multi-fill, reservations intermediaires et fallback taker ;
 - couts arbitraires hors branches stop/targets authentifiees, borrow et liquidation ;
 - ledger de trades et resultats de backtest ;
 - rapports de metrics ;
@@ -739,8 +747,7 @@ Le Dataset Builder reste independant de toute strategie et n'expose aucun champ
 `profile`, mode, setup ou alias. La frontiere de run utilise desormais les
 identites exactes, le snapshot immuable #133/#303 et la projection
 d'indicateurs PHP. Elle ne rend pas encore un mode moderne executable de bout
-en bout : les partial fills, le funding historique et le ledger durable restent
-differes.
+en bout : la chronologie multi-fill et le ledger durable restent differes.
 
 Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
