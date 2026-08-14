@@ -146,6 +146,14 @@ entre fills. Les resultats v2 lient le hash du modele de file et les checksums
 des tapes public book, trades et conversions, avec
 `fills_are_certified=false` et `result_is_live_proof=false`.
 
+Le prochain settlement PHP ne devra pas faire confiance a des composantes de
+cout selectionnees par Python. `CanonicalOrderPlan::fromArray()` rehydrate
+desormais uniquement la forme wire exacte et ordonnee emise par `toArray()`,
+restaure les champs optionnels a leur position de hash, reconstruit les targets
+et timestamps UTC, verifie `planHash`, puis rejoue le validateur canonique a
+l'instant de creation du plan. Un payload auto-hashe dont l'arithmetique de
+cout ou de risque est fausse reste donc rejete.
+
 Restent hors de ce runtime : autorite PHP de cout/risk par fill partiel,
 fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
