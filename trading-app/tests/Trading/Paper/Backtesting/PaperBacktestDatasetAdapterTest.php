@@ -671,17 +671,25 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
 
     public function testEncoderEmitsCanonicalCrossRuntimeBytes(): void
     {
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxMetadata(),
+            $this->okxEvent(sequence: '2'),
+            $this->okxTrade(sequence: '3'),
+        ));
         $encoder = new PaperBacktestDatasetEncoder();
         $source = $encoder->sourceIdentity($dataset);
         $candles = $encoder->candles($dataset);
+        $metadata = $encoder->instrumentMetadata($dataset);
+        $conversions = $encoder->quantityConversions($dataset);
 
         self::assertSame(CanonicalJson::encode($dataset->sourceIdentity) . "\n", $source);
         self::assertSame(CanonicalJson::encode($dataset->candles[0]->toArray()) . "\n", $candles);
         self::assertStringEndsWith("\n", $source);
         self::assertStringEndsWith("\n", $candles);
+        self::assertSame(CanonicalJson::encode($dataset->instrumentMetadata[0]->toArray()) . "\n", $metadata);
+        self::assertSame(CanonicalJson::encode($dataset->tradeQuantityConversions[0]->toArray()) . "\n", $conversions);
         foreach (['mode', 'setup', 'profile', 'strategy'] as $forbidden) {
-            self::assertStringNotContainsString('"' . $forbidden . '"', $source . $candles);
+            self::assertStringNotContainsString('"' . $forbidden . '"', $source . $candles . $metadata . $conversions);
         }
     }
 
@@ -711,6 +719,24 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame(
             $encoder->publicBooks($dataset),
             file_get_contents($fixtureRoot . '/public-books.ndjson'),
+        );
+        self::assertSame(
+            $encoder->instrumentMetadata((new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+                $this->okxMetadata(),
+                $event,
+                $this->okxTrade(),
+                $this->okxBook(),
+            ))),
+            file_get_contents($fixtureRoot . '/instrument-metadata.ndjson'),
+        );
+        self::assertSame(
+            $encoder->quantityConversions((new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+                $this->okxMetadata(),
+                $event,
+                $this->okxTrade(),
+                $this->okxBook(),
+            ))),
+            file_get_contents($fixtureRoot . '/quantity-conversions.ndjson'),
         );
     }
 
