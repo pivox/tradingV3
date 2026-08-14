@@ -180,3 +180,21 @@ def test_staged_execution_revalidates_evidence_and_requires_a_delivered_terminal
         execute_plan_from_staged_visible_fills(plan, feed.bars, forged)
     with pytest.raises(BacktestExecutionError, match="position_open_at_dataset_end"):
         execute_plan_from_staged_visible_fills(plan, feed.bars, evidence)
+
+
+def test_staged_execution_rejects_self_hashed_fill_outside_order_window() -> None:
+    feed = _feed()
+    plan = _v2_plan(feed)
+    raw = _evidence(plan, (("a", 0, 45, Decimal("1")),)).model_dump(
+        mode="json"
+    )
+    raw["trace"][0]["happened_at"] = "2026-08-10T11:59:40.000000Z"
+    raw["trace"][0]["available_at"] = "2026-08-10T11:59:50.000000Z"
+    raw["trace_hash"] = _hash(tuple(raw["trace"]))
+    raw["result_hash"] = _hash(
+        {key: value for key, value in raw.items() if key != "result_hash"}
+    )
+    forged = VisibleQueueDepletionResult.model_validate(raw)
+
+    with pytest.raises(BacktestExecutionError, match="visible_fill_evidence_invalid"):
+        execute_plan_from_staged_visible_fills(plan, feed.bars, forged)

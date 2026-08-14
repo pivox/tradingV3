@@ -173,6 +173,7 @@ def _validated_evidence(
     except Exception as exc:
         raise BacktestExecutionError("backtrader_visible_fill_evidence_invalid") from exc
     plan = envelope.plan
+    live_at = datetime.fromisoformat(plan.created_at)
     deadline = min(
         datetime.fromisoformat(plan.expires_at),
         datetime.fromisoformat(plan.cancel_after_at)
@@ -191,10 +192,17 @@ def _validated_evidence(
         or evidence.side != plan.side
         or Decimal(evidence.entry_price) != Decimal(str(plan.entry_price))
         or datetime.fromisoformat(evidence.order_live_at)
-        != datetime.fromisoformat(plan.created_at)
+        != live_at
         or datetime.fromisoformat(evidence.effective_deadline_at) != deadline
         or Decimal(evidence.order_quantity_base)
         != Decimal(str(plan.quantity)) * Decimal(str(plan.contract_size))
+        or any(
+            datetime.fromisoformat(item.happened_at) < live_at
+            or datetime.fromisoformat(item.available_at) <= live_at
+            or datetime.fromisoformat(item.happened_at) > deadline
+            or datetime.fromisoformat(item.available_at) > deadline
+            for item in evidence.trace
+        )
     ):
         raise BacktestExecutionError("backtrader_visible_fill_evidence_invalid")
     return evidence
