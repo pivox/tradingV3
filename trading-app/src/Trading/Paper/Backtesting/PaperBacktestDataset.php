@@ -18,17 +18,32 @@ final readonly class PaperBacktestDataset
     /** @var list<NormalizedBacktestPublicBook> */
     public array $publicBooks;
 
+    /** @var list<NormalizedBacktestInstrumentMetadata> */
+    public array $instrumentMetadata;
+
+    /** @var list<NormalizedBacktestTradeQuantityConversion> */
+    public array $tradeQuantityConversions;
+
+    /** @var list<NormalizedBacktestBookQuantityConversion> */
+    public array $bookQuantityConversions;
+
     /**
      * @param array<string, string> $sourceIdentity
      * @param array<array-key, mixed> $candles
      * @param array<array-key, mixed> $publicTrades
      * @param array<array-key, mixed> $publicBooks
+     * @param array<array-key, mixed> $instrumentMetadata
+     * @param array<array-key, mixed> $tradeQuantityConversions
+     * @param array<array-key, mixed> $bookQuantityConversions
      */
     public function __construct(
         array $sourceIdentity,
         array $candles,
         array $publicTrades,
         array $publicBooks,
+        array $instrumentMetadata = [],
+        array $tradeQuantityConversions = [],
+        array $bookQuantityConversions = [],
     )
     {
         $expectedKeys = [
@@ -89,6 +104,29 @@ final readonly class PaperBacktestDataset
             }
             $bookSourceIds[$book->sourceRecordId] = true;
         }
+        foreach ($instrumentMetadata as $metadata) {
+            if (!$metadata instanceof NormalizedBacktestInstrumentMetadata
+                || $metadata->sourceNetwork !== $sourceIdentity['source_network']
+                || $metadata->marketDataVenue !== $sourceIdentity['market_data_venue']
+                || $metadata->sourceChecksum !== $sourceIdentity['source_checksum']
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
+            }
+        }
+        foreach ($tradeQuantityConversions as $conversion) {
+            if (!$conversion instanceof NormalizedBacktestTradeQuantityConversion
+                || !isset($sourceIds[$conversion->sourceRecordId])
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_trade_quantity_conversions_invalid');
+            }
+        }
+        foreach ($bookQuantityConversions as $conversion) {
+            if (!$conversion instanceof NormalizedBacktestBookQuantityConversion
+                || !isset($bookSourceIds[$conversion->sourceRecordId])
+            ) {
+                throw new \InvalidArgumentException('paper_backtest_book_quantity_conversions_invalid');
+            }
+        }
         if ($candles === []) {
             throw new \InvalidArgumentException('paper_backtest_candles_empty');
         }
@@ -97,5 +135,8 @@ final readonly class PaperBacktestDataset
         $this->candles = array_values($candles);
         $this->publicTrades = array_values($publicTrades);
         $this->publicBooks = array_values($publicBooks);
+        $this->instrumentMetadata = array_values($instrumentMetadata);
+        $this->tradeQuantityConversions = array_values($tradeQuantityConversions);
+        $this->bookQuantityConversions = array_values($bookQuantityConversions);
     }
 }

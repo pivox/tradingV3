@@ -194,9 +194,39 @@ precision et au plus `6 - szDecimals` decimales, sans tick fixe invente.
 
 Les datasets historiques ou legacy depourvus de cet evenement restent lisibles
 mais non convertibles. Il n'existe aucun fallback par symbole, provider DTO,
-profil ou environnement. Ce lot ne convertit pas encore les contrats, ne
-calcule aucun notionnel et ne simule aucun fill; le prochain lot devra projeter
-ces observations datees dans un tape de conversion distinct et immuable.
+profil ou environnement.
+
+### Tape public de conversion des quantites
+
+`PaperBacktestDatasetAdapter` parcourt l'ordre immuable des evenements source et
+active une metadata seulement apres sa propre position. Une observation trade
+ou L1 recoit une conversion uniquement si cette metadata concerne exactement
+le meme reseau, venue et symbole, precede l'observation et etait disponible au
+plus tard a sa reception. En cas d'egalite des timestamps de reception, la
+position source tranche. Les rows brutes legacy restent lisibles, mais le tape
+de conversion exige une couverture exacte de tous les trades et carnets fournis
+et refuse donc toute certification partielle.
+
+Les tapes bruts v1 ne sont pas modifies. Le derive
+`backtest-public-quantity-conversion-tape.v1` lie chaque resultat au record
+source, a sa position, au record metadata effectif, au dataset et aux checksums
+des tapes trade/book. Python recalcule independamment chaque formule avant de
+publier les bytes canoniques :
+
+```text
+OKX base_quantity = contracts * ctVal * ctMult
+Hyperliquid base_quantity = sz
+```
+
+OKX documente `ctVal * ctMult` comme la valeur d'un contrat dans `ctValCcy`;
+la capture n'admet ici que les contrats dont cette devise est l'actif de base.
+Hyperliquid documente `sz` en unite de coin, donc en devise de base. Tous les
+calculs utilisent des decimaux arbitraires, sans float, arrondi, quantification
+ni prix courant.
+
+Ce tape authentifie une conversion d'unite, pas une liquidite executable. Il ne
+calcule aucun notionnel ou cout et ne deduit toujours ni profondeur, ni rang de
+file, ni full/partial fill, ni fallback maker/taker.
 
 ## Invariants verrouilles par les contrats v1
 

@@ -52,6 +52,33 @@ final class PaperBacktestDatasetEncoder
         return $encoded;
     }
 
+    public function instrumentMetadata(PaperBacktestDataset $dataset): string
+    {
+        $encoded = '';
+        foreach ($dataset->instrumentMetadata as $metadata) {
+            $value = $metadata->toArray();
+            $this->assertNoStrategyIdentity($value);
+            $encoded .= CanonicalJson::encode($value) . "\n";
+        }
+        return $encoded;
+    }
+
+    public function quantityConversions(PaperBacktestDataset $dataset): string
+    {
+        $rows = [...$dataset->tradeQuantityConversions, ...$dataset->bookQuantityConversions];
+        usort($rows, static fn (
+            NormalizedBacktestTradeQuantityConversion|NormalizedBacktestBookQuantityConversion $left,
+            NormalizedBacktestTradeQuantityConversion|NormalizedBacktestBookQuantityConversion $right,
+        ): int => $left->sourceEventPosition <=> $right->sourceEventPosition);
+        $encoded = '';
+        foreach ($rows as $row) {
+            $value = $row->toArray();
+            $this->assertNoStrategyIdentity($value);
+            $encoded .= CanonicalJson::encode($value) . "\n";
+        }
+        return $encoded;
+    }
+
     private function assertNoStrategyIdentity(mixed $value): void
     {
         if (!\is_array($value)) {

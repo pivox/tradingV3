@@ -671,17 +671,25 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
 
     public function testEncoderEmitsCanonicalCrossRuntimeBytes(): void
     {
-        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxMetadata(),
+            $this->okxEvent(sequence: '2'),
+            $this->okxTrade(sequence: '3'),
+        ));
         $encoder = new PaperBacktestDatasetEncoder();
         $source = $encoder->sourceIdentity($dataset);
         $candles = $encoder->candles($dataset);
+        $metadata = $encoder->instrumentMetadata($dataset);
+        $conversions = $encoder->quantityConversions($dataset);
 
         self::assertSame(CanonicalJson::encode($dataset->sourceIdentity) . "\n", $source);
         self::assertSame(CanonicalJson::encode($dataset->candles[0]->toArray()) . "\n", $candles);
         self::assertStringEndsWith("\n", $source);
         self::assertStringEndsWith("\n", $candles);
+        self::assertSame(CanonicalJson::encode($dataset->instrumentMetadata[0]->toArray()) . "\n", $metadata);
+        self::assertSame(CanonicalJson::encode($dataset->tradeQuantityConversions[0]->toArray()) . "\n", $conversions);
         foreach (['mode', 'setup', 'profile', 'strategy'] as $forbidden) {
-            self::assertStringNotContainsString('"' . $forbidden . '"', $source . $candles);
+            self::assertStringNotContainsString('"' . $forbidden . '"', $source . $candles . $metadata . $conversions);
         }
     }
 
@@ -689,6 +697,7 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
     {
         $event = $this->okxEvent(['volume_base' => '0.001']);
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxMetadata(),
             $event,
             $this->okxTrade(),
             $this->okxBook(),
@@ -712,6 +721,97 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
             $encoder->publicBooks($dataset),
             file_get_contents($fixtureRoot . '/public-books.ndjson'),
         );
+        self::assertSame(
+            $encoder->instrumentMetadata($dataset),
+            file_get_contents($fixtureRoot . '/instrument-metadata.ndjson'),
+        );
+        self::assertSame(
+            $encoder->quantityConversions($dataset),
+            file_get_contents($fixtureRoot . '/quantity-conversions.ndjson'),
+        );
+    }
+
+    public function testProjectsOkxMetadataAndExactEventTimeQuantityConversions(): void
+    {
+        $metadata = $this->okxMetadata();
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $metadata,
+            $this->okxEvent(sequence: '2'),
+            $this->okxTrade(sequence: '3'),
+            $this->okxBook(sequence: '4'),
+        ));
+
+        self::assertCount(1, $dataset->instrumentMetadata);
+        self::assertSame($metadata->eventId, $dataset->instrumentMetadata[0]->sourceRecordId);
+        self::assertSame(0, $dataset->instrumentMetadata[0]->sourceEventPosition);
+        self::assertSame('contracts', $dataset->instrumentMetadata[0]->quantityUnit);
+        self::assertSame('0.01', $dataset->instrumentMetadata[0]->contractValue);
+        self::assertSame('2', $dataset->instrumentMetadata[0]->contractMultiplier);
+
+        self::assertCount(1, $dataset->tradeQuantityConversions);
+        $trade = $dataset->tradeQuantityConversions[0];
+        self::assertSame($dataset->publicTrades[0]->sourceRecordId, $trade->sourceRecordId);
+        self::assertSame(2, $trade->sourceEventPosition);
+        self::assertSame($metadata->eventId, $trade->metadataRecordId);
+        self::assertSame(0, $trade->metadataEventPosition);
+        self::assertSame('2.5', $trade->sourceQuantity);
+        self::assertSame('0.05', $trade->baseQuantity);
+
+        self::assertCount(1, $dataset->bookQuantityConversions);
+        $book = $dataset->bookQuantityConversions[0];
+        self::assertSame($dataset->publicBooks[0]->sourceRecordId, $book->sourceRecordId);
+        self::assertSame(3, $book->sourceEventPosition);
+        self::assertSame('2.5', $book->bidSourceQuantity);
+        self::assertSame('0.05', $book->bidBaseQuantity);
+        self::assertSame('3.5', $book->askSourceQuantity);
+        self::assertSame('0.07', $book->askBaseQuantity);
+    }
+
+    public function testProjectsHyperliquidMetadataAndIdentityQuantityConversions(): void
+    {
+        $metadata = $this->hyperliquidMetadata();
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $metadata,
+            $this->hyperliquidEvent(),
+            $this->hyperliquidTrade(),
+            $this->hyperliquidBook(),
+        ));
+
+        self::assertSame('base_asset', $dataset->instrumentMetadata[0]->quantityUnit);
+        self::assertSame('1', $dataset->instrumentMetadata[0]->contractValue);
+        self::assertSame('1', $dataset->instrumentMetadata[0]->contractMultiplier);
+        self::assertSame('0.25', $dataset->tradeQuantityConversions[0]->sourceQuantity);
+        self::assertSame('0.25', $dataset->tradeQuantityConversions[0]->baseQuantity);
+        self::assertSame('0.25', $dataset->bookQuantityConversions[0]->bidBaseQuantity);
+        self::assertSame('0.5', $dataset->bookQuantityConversions[0]->askBaseQuantity);
+    }
+
+    public function testLegacyRawPublicRowsRemainReadableButHaveNoConversions(): void
+    {
+        $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot(
+            $this->okxEvent(),
+            $this->okxTrade(),
+            $this->okxBook(),
+        ));
+
+        self::assertCount(1, $dataset->publicTrades);
+        self::assertCount(1, $dataset->publicBooks);
+        self::assertSame([], $dataset->instrumentMetadata);
+        self::assertSame([], $dataset->tradeQuantityConversions);
+        self::assertSame([], $dataset->bookQuantityConversions);
+    }
+
+    public function testInstrumentMetadataProjectionRejectsInvalidVenuePrecisionFields(): void
+    {
+        $this->assertAdapterFailure($this->snapshot(
+            $this->okxMetadata(['quantity_step' => '0']),
+            $this->okxEvent(sequence: '2'),
+        ), 'paper_backtest_instrument_metadata_invalid');
+
+        $this->assertAdapterFailure($this->snapshot(
+            $this->hyperliquidMetadata(['price_max_decimals' => 3]),
+            $this->hyperliquidEvent(),
+        ), 'paper_backtest_instrument_metadata_invalid');
     }
 
     /** @param array<string, mixed> $override */
@@ -853,6 +953,80 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
                 'ask_level_count' => '3', 'source_time' => '1786615230000',
                 'source_epoch' => '1', 'source_book_hash' => str_repeat('a', 64),
                 'origin' => 'ws_l2_book', 'synthetic' => false,
+            ], $override),
+        );
+    }
+
+    /** @param array<string, mixed> $override */
+    private function okxMetadata(
+        array $override = [],
+        ?\DateTimeImmutable $receivedAt = null,
+    ): PaperMarketEvent {
+        $timestamp = $receivedAt ?? new \DateTimeImmutable('2026-08-13T09:59:59.000000Z');
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::INSTRUMENT_METADATA,
+            $timestamp,
+            $timestamp,
+            '1',
+            array_replace([
+                'metadata_schema_version' => 'paper-instrument-metadata.v1',
+                'native_symbol' => 'BTC-USDT-SWAP',
+                'instrument_type' => 'perpetual',
+                'base_asset' => 'BTC',
+                'quote_asset' => 'USDT',
+                'settlement_asset' => 'USDT',
+                'status' => 'live',
+                'quantity_unit' => 'contracts',
+                'quantity_step' => '0.1',
+                'minimum_quantity' => '0.1',
+                'maximum_market_quantity' => '1000',
+                'maximum_limit_quantity' => '2000',
+                'contract_value' => '0.01',
+                'contract_multiplier' => '2',
+                'contract_value_unit' => 'BTC',
+                'price_tick' => '0.1',
+                'source_epoch' => 1,
+                'origin' => 'rest_public_instruments',
+            ], $override),
+        );
+    }
+
+    /** @param array<string, mixed> $override */
+    private function hyperliquidMetadata(array $override = []): PaperMarketEvent
+    {
+        $timestamp = new \DateTimeImmutable('2026-08-13T09:59:59.000000Z');
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'ETHUSDT',
+            PaperMarketDataChannel::INSTRUMENT_METADATA,
+            $timestamp,
+            $timestamp,
+            '1',
+            array_replace([
+                'metadata_schema_version' => 'paper-instrument-metadata.v1',
+                'native_symbol' => 'ETH',
+                'instrument_type' => 'perpetual',
+                'base_asset' => 'ETH',
+                'quote_asset' => 'USDC',
+                'settlement_asset' => 'USDC',
+                'status' => 'live',
+                'asset_id' => 1,
+                'quantity_unit' => 'base_asset',
+                'quantity_step' => '0.0001',
+                'minimum_quantity' => '0.0001',
+                'contract_value' => '1',
+                'contract_multiplier' => '1',
+                'contract_value_unit' => 'ETH',
+                'size_decimals' => 4,
+                'price_precision_digits' => 5,
+                'price_max_decimals' => 2,
+                'maximum_leverage' => '50',
+                'source_epoch' => 1,
+                'origin' => 'rest_meta',
             ], $override),
         );
     }
