@@ -121,8 +121,9 @@ Une sortie `holding_expired` n'a pas encore
 de branche de cout PHP authentifiee et echoue donc fermee au lieu d'inventer un
 PnL.
 
-Restent hors de ce lot : acquisition et certification du funding historique,
-partial fills, fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
+Restent hors de ce runtime OHLCV : acquisition et certification du funding
+historique, integration des partial fills publics dans Backtrader, fallback
+taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
 ### Tape public d'execution
@@ -227,6 +228,35 @@ ni prix courant.
 Ce tape authentifie une conversion d'unite, pas une liquidite executable. Il ne
 calcule aucun notionnel ou cout et ne deduit toujours ni profondeur, ni rang de
 file, ni full/partial fill, ni fallback maker/taker.
+
+### Modele maker par depletion de file visible
+
+`visible_queue_depletion.py` ajoute le modele pur
+`visible-queue-depletion.v1`. Il accepte uniquement un plan limit maker et les
+tapes book, trades et conversions qui lient exactement le meme dataset. Au
+placement, le prix doit etre le bid L1 visible pour un long ou l'ask L1 visible
+pour un short. Le `contractSize` du plan doit egaler `ctVal * ctMult` de la
+metadata active; la quantite du plan est ainsi convertie dans la meme unite de
+base que les volumes publics.
+
+La quantite L1 visible avant le placement devient la file devant l'ordre. Les
+trades publics contra-side au prix d'entree vident d'abord cette file puis
+produisent des fills partiels. Un trade qui traverse strictement le niveau
+remplit le reliquat; un trade du meme cote ou au mauvais prix est ignore. Les
+temps exchange et de disponibilite doivent etre dans la fenetre live du plan,
+ce qui interdit le look-ahead et l'application retroactive d'un message livre
+trop tard. Une mise a jour L1 posterieure ne reduit jamais la file : sans donnees
+L2, elle ne permet pas de separer annulation et execution.
+
+Le resultat immuable expose chaque depletion, les quantites avant/apres, les
+positions source et les checksums des trois tapes. Il porte obligatoirement
+`fills_are_certified=false`,
+`queue_evidence=visible_l1_plus_public_trades` et
+`result_is_live_proof=false` : le L1 public ne prouve ni notre rang reel, ni la
+liquidite cachee, ni un acquittement prive. Le fallback taker reste interdit
+tant qu'une autorisation versionnee n'existe pas dans l'OrderPlan canonique.
+Ce lot ne remplace pas encore les fills OHLCV du runtime Backtrader et ne
+calcule ni sorties, ni couts, ni PnL.
 
 ## Invariants verrouilles par les contrats v1
 

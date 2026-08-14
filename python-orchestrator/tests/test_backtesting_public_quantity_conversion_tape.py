@@ -79,6 +79,13 @@ def test_php_fixture_builds_a_dataset_bound_byte_deterministic_tape() -> None:
     assert first == second
     assert verified.metadata == metadata
     assert verified.conversions == conversions
+    assert verified.dataset_id == dataset.dataset_id
+    assert verified.dataset_checksum == dataset.dataset_checksum
+    assert verified.source_checksum == dataset.source_checksum
+    assert verified.source_network == dataset.source_network
+    assert verified.market_data_venue == dataset.market_data_venue
+    assert verified.public_execution_tape_checksum == execution.tape_checksum
+    assert verified.public_book_tape_checksum == books.tape_checksum
     assert first.metadata_ndjson == (FIXTURES / "instrument-metadata.ndjson").read_bytes()
     assert first.conversions_ndjson == (FIXTURES / "quantity-conversions.ndjson").read_bytes()
     assert first.tape_checksum.startswith("sha256:")

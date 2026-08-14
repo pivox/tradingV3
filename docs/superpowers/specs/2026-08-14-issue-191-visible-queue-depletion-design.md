@@ -38,10 +38,13 @@ or missing book, a non-top-of-book price, or missing conversion fails closed.
 
 Policy identity is `visible-queue-depletion.v1`.
 
-Only public trades for the same symbol that become available after the order is
-live and no later than the effective entry deadline are eligible. The effective
-deadline is the earliest of `expiresAt` and `cancelAfterAt` when the latter is
-present. Eligible trades retain verified tape order.
+Only public trades for the same symbol whose exchange event time is at or after
+order-live time, and which become available after order-live time and no later
+than the effective entry deadline, are eligible. Both event and availability
+time must be no later than the deadline, preventing delayed pre-live evidence
+and late delivery from being applied retroactively. The effective deadline is
+the earliest of `expiresAt` and `cancelAfterAt` when the latter is present.
+Eligible trades retain verified tape order.
 
 For a long/buy maker entry, only sell-aggressor trades are contra-side evidence:
 
