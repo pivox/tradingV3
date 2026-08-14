@@ -760,6 +760,18 @@ Aucune execution reelle mainnet n'est autorisee par ce chantier. Un resultat de
 backtest porte toujours `result_is_live_proof=false` et n'ouvre aucun canal
 d'ecriture prive vers une venue.
 
+## Snapshot de microstructure authentifie #308
+
+`build_microstructure_snapshot()` consomme exclusivement les tapes publiques
+verifiees #191 du meme dataset. Le spread provient du dernier L1 disponible et
+l'OFI v1 est le ratio signe des volumes de trades agresseurs sur une fenetre
+explicite. Les identites, checksums, unites, ages, trous de couverture et le
+nombre minimum de trades sont controles avant calcul.
+
+Le schema `canonical-microstructure-snapshot.v1` et son hash sont identiques au
+resultat PHP. Ce lot ne reconstruit aucune profondeur, priorite de file ou
+fillabilite et ne rend pas encore `micro_scalping` executable.
+
 ## Validation locale
 
 ```bash
@@ -771,6 +783,7 @@ python3 -m pytest -q \
   tests/test_backtesting_indicator_bridge.py \
   tests/test_backtesting_public_execution_tape.py \
   tests/test_backtesting_public_book_tape.py \
+  tests/test_backtesting_microstructure_snapshot.py \
   tests/test_schemas.py \
   tests/test_symfony_client.py
 PYTHONHASHSEED=1 python3 -m pytest \

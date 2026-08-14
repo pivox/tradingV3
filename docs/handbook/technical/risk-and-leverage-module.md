@@ -398,3 +398,17 @@ et deleguent tous au meme
 moteur et au meme store atomique. Les golden tests imposent des hashes d'admission
 et d'etat identiques, ainsi que les memes reason codes, pour des inputs identiques.
 Ils n'importent aucune couche legacy ni port d'execution prive mainnet.
+
+## #308 - autorite de microstructure avant activation
+
+`App\TradingCore\Microstructure` derive le spread depuis le dernier carnet L1
+public disponible et definit l'OFI comme
+`(volume_agresseur_buy - volume_agresseur_sell) / volume_total` sur une fenetre
+versionnee. Les quantites restent dans l'unite native homogene de la venue ; le
+ratio ne melange jamais contrats OKX et base asset Hyperliquid.
+
+La policy impose fenetre, ages maximaux, trou maximal et nombre minimum de
+trades. Toute donnee future, perimee, sparse, reordonnee ou d'identite croisee
+rejette. Le snapshot conserve tous les IDs sources consommes et un hash dont le
+golden est commun avec Python. Cette autorite pure ne retire pas encore les
+conditions bloquees ni n'active un port mainnet.
