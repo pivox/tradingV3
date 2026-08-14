@@ -128,9 +128,26 @@ Une sortie `holding_expired` n'a pas encore
 de branche de cout PHP authentifiee et echoue donc fermee au lieu d'inventer un
 PnL.
 
-Restent hors de ce runtime OHLCV : acquisition et certification du funding
-historique, integration des partial fills publics dans Backtrader, fallback
-taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
+Le runtime distingue maintenant deux frontieres. Un plan historique v1 garde
+le replay OHLCV. Un plan v2 exige un resultat
+`visible-queue-depletion-result.v1` revalide et lie au meme dataset, plan,
+config, marche et symbole. Un non-fill de file reste `not_executed`; un fill
+atomique utilise le trade public comme source et son `available_at` comme
+instant d'entree. Sur la bougie qui contient le fill, un stop touche est compte
+comme borne conservative mais une target seule n'est jamais creditee. Les
+bougies dont l'intervalle commence apres le fill reprennent ensuite la
+politique SL/target normale.
+
+Un fill partiel, ou une quantite finalement completee par plusieurs fills
+positifs, echoue avec `partial_fill_cost_authority_missing`. Cette garde est
+intentionnelle : les branches de cout PHP actuelles portent la quantite
+complete du plan et Python ne doit ni les proratiser ni ignorer l'exposition
+entre fills. Les resultats v2 lient le hash du modele de file et les checksums
+des tapes public book, trades et conversions, avec
+`fills_are_certified=false` et `result_is_live_proof=false`.
+
+Restent hors de ce runtime : autorite PHP de cout/risk par fill partiel,
+fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
 
 ### Tape public d'execution
@@ -681,8 +698,7 @@ reelle lorsque les donnees seront disponibles.
 ## Hors scope restant
 
 - publication filesystem et commande operateur de l'adapter Paper ;
-- simulation maker/taker ;
-- partial fills ;
+- autorite de cout/risk pour fills partiels et fallback taker ;
 - funding historique ;
 - couts arbitraires hors branches stop/targets authentifiees, borrow et liquidation ;
 - ledger de trades et resultats de backtest ;

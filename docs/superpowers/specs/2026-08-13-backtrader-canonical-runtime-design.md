@@ -45,10 +45,15 @@ formula is copied into a Backtrader `Strategy`.
 - Entry is possible only when the bar range crosses `entry_price`, the price is
   inside the authenticated EntryZone, and the plan has not reached
   `expires_at`/`cancel_after_at`.
-- The legacy OHLCV runtime fills the full authenticated quantity at the
-  authenticated limit price. Public-tape partial fills are modeled by the
-  separate `visible-queue-depletion.v1` boundary. Maker-to-taker fallback is
-  explicitly forbidden by current v2 plans; neither runtime invents one.
+- The legacy v1 OHLCV runtime fills the full authenticated quantity at the
+  authenticated limit price. A v2 plan requires a hash-bound
+  `visible-queue-depletion.v1` result. An atomic full fill uses the completing
+  public trade availability time. On the containing candle, a stop touch is
+  charged as the conservative bound and a target-only touch is ignored; normal
+  evaluation resumes on later complete candles. Partial or staged fills fail
+  closed until PHP exposes their exact plan-bound cost/risk branch.
+  Maker-to-taker fallback is explicitly forbidden by current v2 plans; neither
+  runtime invents one.
 - The stop is attached atomically in the same canonical fill event. An entry
   without a valid protective stop is rejected before the engine starts.
 - After entry, bars are evaluated only when available. A long stop triggers

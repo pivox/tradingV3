@@ -231,6 +231,20 @@ class VisibleQueueDepletionResult(BaseModel):
         return self
 
 
+def requires_partial_fill_authority(result: VisibleQueueDepletionResult) -> bool:
+    """True when any executed quantity was accumulated rather than atomic."""
+    total = Decimal(result.order_quantity_base)
+    positive_fills = tuple(
+        Decimal(item.fill_quantity_base)
+        for item in result.trace
+        if Decimal(item.fill_quantity_base) > 0
+    )
+    return result.status == "partially_filled" or (
+        result.status == "filled"
+        and (len(positive_fills) != 1 or positive_fills[0] != total)
+    )
+
+
 def model_visible_queue_depletion(
     *,
     plan: CanonicalBacktestOrderPlan,
