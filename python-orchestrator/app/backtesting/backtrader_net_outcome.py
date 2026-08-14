@@ -4,17 +4,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from app.backtesting.backtrader_contracts import CanonicalBacktestOrderPlan
-from app.backtesting.backtrader_execution import BacktestExecutionResult, execute_plan
+from app.backtesting.backtrader_execution import (
+    BacktestExecutionResult,
+    execute_plan,
+    execute_plan_from_visible_fill,
+)
 from app.backtesting.backtrader_feed import VerifiedBacktraderFeedAdapter
 from app.backtesting.historical_funding import VerifiedHistoricalFundingSchedule
 from app.backtesting.historical_funding_bridge import (
     CanonicalHistoricalFundingResult,
     canonical_historical_funding_request,
     settlement_matches_request,
+)
+from app.backtesting.visible_queue_depletion import (
+    VisibleQueueDepletionResult,
+    requires_partial_fill_authority,
 )
 
 
@@ -33,9 +42,13 @@ def project_plan_bound_net_outcome(
     *,
     funding_schedule: VerifiedHistoricalFundingSchedule | None = None,
     funding_settlement: CanonicalHistoricalFundingResult | None = None,
+    maker_fill_evidence: VisibleQueueDepletionResult | None = None,
 ) -> str:
     envelope = _revalidate_plan(envelope)
-    _verify_dataset_evidence(envelope, execution, feed)
+    maker_fill_evidence = _revalidate_maker_fill_evidence(
+        envelope, feed, maker_fill_evidence
+    )
+    _verify_dataset_evidence(envelope, execution, feed, maker_fill_evidence)
     plan = envelope.plan
     if (
         execution.status != "closed"
@@ -47,7 +60,11 @@ def project_plan_bound_net_outcome(
     entry_event, terminal_event = execution.events
     _verify_event_lineage(envelope, entry_event)
     _verify_event_lineage(envelope, terminal_event)
-    replayed_execution = execute_plan(envelope, feed.bars)
+    replayed_execution = (
+        execute_plan(envelope, feed.bars)
+        if maker_fill_evidence is None
+        else execute_plan_from_visible_fill(envelope, feed.bars, maker_fill_evidence)
+    )
     if replayed_execution != execution:
         raise BacktestNetOutcomeError("backtrader_net_outcome_execution_evidence_mismatch")
     execution = replayed_execution
@@ -114,7 +131,11 @@ def project_plan_bound_net_outcome(
 
     result: dict[str, Any] = {
         "schema_version": (
-            "canonical-backtest-historical-net-outcome.v1"
+            "canonical-backtest-historical-net-outcome.v2"
+            if historical is not None and maker_fill_evidence is not None
+            else "canonical-backtest-planned-net-outcome.v2"
+            if maker_fill_evidence is not None
+            else "canonical-backtest-historical-net-outcome.v1"
             if historical is not None
             else "canonical-backtest-planned-net-outcome.v1"
         ),
@@ -140,6 +161,15 @@ def project_plan_bound_net_outcome(
         "symbol": plan.symbol,
         "market_type": plan.market_type,
         "side": plan.side,
+        **(
+            {
+                "fills_are_certified": False,
+                "maker_fill_result_hash": maker_fill_evidence.result_hash,
+                "maker_fill_trace_hash": maker_fill_evidence.trace_hash,
+            }
+            if maker_fill_evidence is not None
+            else {}
+        ),
         "terminal_event_kind": terminal_event.kind,
         "terminal_source_record_id": terminal_event.source_record_id,
         "terminal_happened_at": terminal_event.happened_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
@@ -255,6 +285,7 @@ def _verify_dataset_evidence(
     envelope: CanonicalBacktestOrderPlan,
     execution: BacktestExecutionResult,
     feed: VerifiedBacktraderFeedAdapter,
+    maker_fill_evidence: VisibleQueueDepletionResult | None,
 ) -> None:
     plan = envelope.plan
     if (
@@ -269,10 +300,82 @@ def _verify_dataset_evidence(
     bars = {bar.source_record_id: bar for bar in feed.bars}
     if len(bars) != len(feed.bars):
         raise BacktestNetOutcomeError("backtrader_net_outcome_dataset_evidence_mismatch")
-    for event in execution.events:
+    for index, event in enumerate(execution.events):
+        if maker_fill_evidence is not None and index == 0:
+            total = Decimal(maker_fill_evidence.order_quantity_base)
+            completion = next(
+                (
+                    item
+                    for item in maker_fill_evidence.trace
+                    if Decimal(item.cumulative_fill_quantity_base) == total
+                ),
+                None,
+            )
+            if (
+                completion is None
+                or event.source_record_id != completion.source_record_id
+                or event.happened_at != datetime.fromisoformat(completion.available_at)
+            ):
+                raise BacktestNetOutcomeError(
+                    "backtrader_net_outcome_dataset_evidence_mismatch"
+                )
+            continue
         bar = bars.get(event.source_record_id)
         if bar is None or bar.available_at != event.happened_at:
             raise BacktestNetOutcomeError("backtrader_net_outcome_dataset_evidence_mismatch")
+
+
+def _revalidate_maker_fill_evidence(
+    envelope: CanonicalBacktestOrderPlan,
+    feed: VerifiedBacktraderFeedAdapter,
+    evidence: VisibleQueueDepletionResult | None,
+) -> VisibleQueueDepletionResult | None:
+    if evidence is None:
+        if envelope.schema_version == "canonical-backtest-order-plan.v2":
+            raise BacktestNetOutcomeError(
+                "backtrader_net_outcome_visible_fill_evidence_required"
+            )
+        return None
+    if envelope.schema_version != "canonical-backtest-order-plan.v2":
+        raise BacktestNetOutcomeError(
+            "backtrader_net_outcome_visible_fill_evidence_forbidden"
+        )
+    try:
+        evidence = VisibleQueueDepletionResult.model_validate(
+            evidence.model_dump(mode="json")
+        )
+    except Exception as exc:
+        raise BacktestNetOutcomeError(
+            "backtrader_net_outcome_visible_fill_evidence_invalid"
+        ) from exc
+    plan = envelope.plan
+    deadline = min(
+        datetime.fromisoformat(plan.expires_at),
+        datetime.fromisoformat(plan.cancel_after_at)
+        if plan.cancel_after_at is not None
+        else datetime.fromisoformat(plan.expires_at),
+    )
+    if (
+        evidence.status != "filled"
+        or requires_partial_fill_authority(evidence)
+        or evidence.dataset_id != envelope.dataset_id
+        or evidence.dataset_checksum != envelope.dataset_checksum
+        or evidence.plan_hash != plan.plan_hash
+        or evidence.config_hash != plan.config_hash
+        or evidence.source_network != feed.source_network
+        or evidence.market_data_venue != feed.market_data_venue
+        or evidence.market_type != plan.market_type
+        or evidence.symbol != plan.symbol
+        or evidence.side != plan.side
+        or Decimal(evidence.entry_price) != Decimal(str(plan.entry_price))
+        or datetime.fromisoformat(evidence.order_live_at)
+        != datetime.fromisoformat(plan.created_at)
+        or datetime.fromisoformat(evidence.effective_deadline_at) != deadline
+    ):
+        raise BacktestNetOutcomeError(
+            "backtrader_net_outcome_visible_fill_evidence_invalid"
+        )
+    return evidence
 
 
 def _decimal(value: Decimal | float | int) -> Decimal:
