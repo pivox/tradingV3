@@ -298,7 +298,9 @@ class CanonicalBacktraderRuntime:
                 {
                     "cancelled_residual_quantity_base": outcome.cancelled_residual_quantity_base,
                     "consumed_fill_count": outcome.consumed_fill_count,
+                    "costs_are_certified": False,
                     "filled_quantity_base": outcome.filled_quantity_base,
+                    "partial_fill_cost_policy_version": partial_cost_settlement.cost_policy_version,
                     "partial_fill_cost_request_hash": partial_cost_settlement.request_hash,
                     "partial_fill_cost_result_hash": partial_cost_settlement.result_hash,
                 }

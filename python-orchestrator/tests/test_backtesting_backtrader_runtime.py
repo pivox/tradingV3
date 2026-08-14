@@ -640,6 +640,7 @@ def test_v3_runtime_executes_partial_fill_through_php_cost_protocol(tmp_path: Pa
     assert result["filled_quantity_base"] == 1
     assert result["cancelled_residual_quantity_base"] == 1.497
     assert result["partial_fill_cost_result_hash"].startswith("sha256:")
+    assert result["costs_are_certified"] is False
     assert result["net_outcome"]["schema_version"] == (
         "canonical-backtest-partial-fill-net-outcome.v1"
     )
