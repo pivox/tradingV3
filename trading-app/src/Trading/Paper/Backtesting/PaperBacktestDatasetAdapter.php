@@ -223,11 +223,26 @@ final class PaperBacktestDatasetAdapter
             ? (($payload['quote_asset'] ?? null) === 'USDT'
                 && ($payload['settlement_asset'] ?? null) === 'USDT'
                 && ($payload['origin'] ?? null) === 'rest_public_instruments'
-                && ($payload['quantity_unit'] ?? null) === 'contracts')
+                && ($payload['quantity_unit'] ?? null) === 'contracts'
+                && $this->canonicalPositiveMetadataDecimal($payload['quantity_step'] ?? null)
+                && $this->canonicalPositiveMetadataDecimal($payload['minimum_quantity'] ?? null)
+                && $this->canonicalPositiveMetadataDecimal($payload['maximum_market_quantity'] ?? null)
+                && $this->canonicalPositiveMetadataDecimal($payload['maximum_limit_quantity'] ?? null)
+                && $this->canonicalPositiveMetadataDecimal($payload['price_tick'] ?? null))
             : (($payload['quote_asset'] ?? null) === 'USDC'
                 && ($payload['settlement_asset'] ?? null) === 'USDC'
                 && ($payload['origin'] ?? null) === 'rest_meta'
-                && ($payload['quantity_unit'] ?? null) === 'base_asset');
+                && ($payload['quantity_unit'] ?? null) === 'base_asset'
+                && \is_int($payload['asset_id'] ?? null)
+                && $payload['asset_id'] >= 0
+                && \is_int($payload['size_decimals'] ?? null)
+                && $payload['size_decimals'] >= 0
+                && $payload['size_decimals'] <= 6
+                && ($payload['price_precision_digits'] ?? null) === 5
+                && ($payload['price_max_decimals'] ?? null) === 6 - $payload['size_decimals']
+                && ($payload['quantity_step'] ?? null) === $this->quantityStep($payload['size_decimals'])
+                && ($payload['minimum_quantity'] ?? null) === $payload['quantity_step']
+                && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null));
         if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
             || ($payload['native_symbol'] ?? null) !== $nativeSymbol
             || ($payload['instrument_type'] ?? null) !== 'perpetual'
@@ -257,6 +272,23 @@ final class PaperBacktestDatasetAdapter
         } catch (PaperBacktestAdapterException|\InvalidArgumentException) {
             throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_invalid');
         }
+    }
+
+    private function canonicalPositiveMetadataDecimal(mixed $value): bool
+    {
+        if (!\is_string($value)) {
+            return false;
+        }
+        try {
+            return $this->decimal($value, true) === $value;
+        } catch (PaperBacktestAdapterException) {
+            return false;
+        }
+    }
+
+    private function quantityStep(int $decimals): string
+    {
+        return $decimals === 0 ? '1' : '0.' . str_repeat('0', $decimals - 1) . '1';
     }
 
     private function normalizeOkxBook(

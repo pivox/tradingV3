@@ -801,6 +801,19 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame([], $dataset->bookQuantityConversions);
     }
 
+    public function testInstrumentMetadataProjectionRejectsInvalidVenuePrecisionFields(): void
+    {
+        $this->assertAdapterFailure($this->snapshot(
+            $this->okxMetadata(['quantity_step' => '0']),
+            $this->okxEvent(sequence: '2'),
+        ), 'paper_backtest_instrument_metadata_invalid');
+
+        $this->assertAdapterFailure($this->snapshot(
+            $this->hyperliquidMetadata(['price_max_decimals' => 3]),
+            $this->hyperliquidEvent(),
+        ), 'paper_backtest_instrument_metadata_invalid');
+    }
+
     /** @param array<string, mixed> $override */
     private function okxEvent(
         array $override = [],
