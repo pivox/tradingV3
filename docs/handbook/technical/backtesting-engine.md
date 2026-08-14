@@ -154,6 +154,24 @@ et timestamps UTC, verifie `planHash`, puis rejoue le validateur canonique a
 l'instant de creation du plan. Un payload auto-hashe dont l'arithmetique de
 cout ou de risque est fausse reste donc rejete.
 
+`app:backtest:partial-fill-cost:settle` applique ensuite
+`canonical-plan-partial-quantity.v1` a une quantite exacte en actif de base.
+La requete lie dataset, plan complet, hashes du resultat/trace de file, branche
+stop ou target et quantite remplie. PHP recalcule avec `BigDecimal` les
+notionnels, PnL brut, frais, spread, slippage, funding adverse planifie, risque
+stop et PnL net depuis le plan revalide. Le R target, invariant puisque toutes
+ces composantes sont lineaires dans la quantite, reste celui du plan valide.
+Zero, overfill, target inconnue,
+plan non-Fake ou environnement hors `local/test` echouent fermes. Le resultat
+reste `costs_are_certified=false` : il authentifie l'autorite et le calcul du
+plan, pas la veracite live de la file publique.
+
+```bash
+php trading-app/bin/console app:backtest:partial-fill-cost:settle \
+  --no-interaction --no-ansi \
+  < /chemin/vers/canonical-partial-fill-cost-request.json
+```
+
 Restent hors de ce runtime : autorite PHP de cout/risk par fill partiel,
 fallback taker, portefeuille multi-plan, PostgreSQL, metriques et rapports de
 certification. Aucun endpoint prive ni execution mainnet n'est ajoute.
