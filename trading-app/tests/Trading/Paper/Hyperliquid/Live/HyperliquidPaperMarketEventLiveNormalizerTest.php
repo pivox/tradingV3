@@ -17,6 +17,53 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidPaperSourceOrdinal::class)]
 final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
 {
+    public function testInstrumentMetadataPreservesDynamicPrecisionAndBaseSizeUnits(): void
+    {
+        $event = self::normalizer()->instrumentMetadata([
+            'coin' => 'BTC',
+            'asset_id' => 0,
+            'sz_decimals' => 5,
+            'max_leverage' => 50,
+        ], sourceEpoch: 4);
+
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $event->channel);
+        self::assertSame([
+            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'native_symbol' => 'BTC',
+            'instrument_type' => 'perpetual',
+            'base_asset' => 'BTC',
+            'quote_asset' => 'USDC',
+            'settlement_asset' => 'USDC',
+            'status' => 'live',
+            'asset_id' => 0,
+            'quantity_unit' => 'base_asset',
+            'quantity_step' => '0.00001',
+            'minimum_quantity' => '0.00001',
+            'contract_value' => '1',
+            'contract_multiplier' => '1',
+            'contract_value_unit' => 'BTC',
+            'size_decimals' => 5,
+            'price_precision_digits' => 5,
+            'price_max_decimals' => 1,
+            'maximum_leverage' => '50',
+            'source_epoch' => 4,
+            'origin' => 'rest_meta',
+        ], $event->payload);
+        self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+    }
+
+    public function testInstrumentMetadataRejectsUnknownAssetsAndImpossiblePrecision(): void
+    {
+        foreach ([
+            ['coin' => 'SOL', 'asset_id' => 2, 'sz_decimals' => 2, 'max_leverage' => 20],
+            ['coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 7, 'max_leverage' => 50],
+            ['coin' => 'BTC', 'asset_id' => -1, 'sz_decimals' => 5, 'max_leverage' => 50],
+            ['coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 0],
+        ] as $row) {
+            $this->expectMetadataFailure($row);
+        }
+    }
+
     public function testTradeIdentityIsStablePerNetworkCoinTimeAndTid(): void
     {
         $row = self::trade();
@@ -165,6 +212,17 @@ final class HyperliquidPaperMarketEventLiveNormalizerTest extends TestCase
             'tid' => 42,
             'users' => ['0xa', '0xb'],
         ];
+    }
+
+    /** @param array<string, mixed> $row */
+    private function expectMetadataFailure(array $row): void
+    {
+        try {
+            self::normalizer()->instrumentMetadata($row, 1);
+            self::fail('Invalid Hyperliquid metadata must fail closed.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('hyperliquid_paper_instrument_metadata_invalid', $exception->getMessage());
+        }
     }
 
     private static function candle(): HyperliquidCandle

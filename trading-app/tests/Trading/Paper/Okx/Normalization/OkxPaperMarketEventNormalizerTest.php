@@ -24,6 +24,56 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(OkxPaperInstrumentMap::class)]
 final class OkxPaperMarketEventNormalizerTest extends TestCase
 {
+    public function testInstrumentMetadataPreservesStrictPublicContractUnitsAndEpoch(): void
+    {
+        $event = $this->normalizer()->instrumentMetadata([
+            'instId' => 'BTC-USDT-SWAP',
+            'instType' => 'SWAP',
+            'ctType' => 'linear',
+            'ctVal' => '0.0100',
+            'ctMult' => '1.0',
+            'ctValCcy' => 'BTC',
+            'settleCcy' => 'USDT',
+            'tickSz' => '0.10',
+            'lotSz' => '1.0',
+            'minSz' => '1.0',
+            'maxMktSz' => '10000.0',
+            'maxLmtSz' => '20000.0',
+            'state' => 'live',
+        ], sourceEpoch: 3);
+
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $event->channel);
+        self::assertSame('BTCUSDT', $event->symbol);
+        self::assertSame(self::metadataPayload('BTC-USDT-SWAP', 'BTC', 3), $event->payload);
+        self::assertEquals($event->exchangeTimestamp, $event->receivedTimestamp);
+    }
+
+    public function testInstrumentMetadataFailsClosedOutsideExactLinearLiveBaseValuedSwap(): void
+    {
+        $row = [
+            'instId' => 'BTC-USDT-SWAP', 'instType' => 'SWAP', 'ctType' => 'linear',
+            'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => 'BTC',
+            'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
+            'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'state' => 'live',
+        ];
+
+        foreach ([
+            $row + ['unexpected' => true],
+            array_replace($row, ['ctType' => 'inverse']),
+            array_replace($row, ['ctValCcy' => 'USDT']),
+            array_replace($row, ['state' => 'suspend']),
+            array_replace($row, ['ctVal' => '0']),
+        ] as $invalid) {
+            try {
+                $this->normalizer()->instrumentMetadata($invalid, 1);
+                self::fail('Invalid OKX metadata must fail closed.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertStringStartsWith('okx_paper_instrument_metadata_', $exception->getMessage());
+            }
+        }
+    }
+
     public function testHistoryCandlePreservesEveryDecimalStringAndExcludesTheUnconfirmedRow(): void
     {
         $fixture = $this->fixture('history-candles.json');
@@ -185,6 +235,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         );
 
         $expectedMethods = [
+            'instrumentMetadata' => ['row', 'sourceEpoch'],
             'webSocketCandle' => ['instrumentId', 'bar', 'row'],
             'connectionState' => ['instrumentId', 'state', 'connectionEpoch'],
             'snapshotBoundary' => ['instrumentId', 'reason', 'sourceEpoch', 'sourceSequence'],
@@ -208,6 +259,31 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
         ))->getParameters()[3];
         self::assertTrue($origin->isDefaultValueAvailable());
         self::assertSame('ws_books', $origin->getDefaultValue());
+    }
+
+    /** @return array<string, int|string> */
+    private static function metadataPayload(string $nativeSymbol, string $baseAsset, int $epoch): array
+    {
+        return [
+            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'native_symbol' => $nativeSymbol,
+            'instrument_type' => 'perpetual',
+            'base_asset' => $baseAsset,
+            'quote_asset' => 'USDT',
+            'settlement_asset' => 'USDT',
+            'status' => 'live',
+            'quantity_unit' => 'contracts',
+            'quantity_step' => '1',
+            'minimum_quantity' => '1',
+            'maximum_market_quantity' => '10000',
+            'maximum_limit_quantity' => '20000',
+            'contract_value' => '0.01',
+            'contract_multiplier' => '1',
+            'contract_value_unit' => $baseAsset,
+            'price_tick' => '0.1',
+            'source_epoch' => $epoch,
+            'origin' => 'rest_public_instruments',
+        ];
     }
 
     /** @return iterable<string, array{string, PaperMarketDataChannel, string}> */

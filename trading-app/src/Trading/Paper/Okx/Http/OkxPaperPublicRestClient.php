@@ -10,7 +10,7 @@ use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
-final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClientInterface
+final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClientInterface, OkxPaperInstrumentMetadataClientInterface
 {
     private const REQUEST_TIMEOUT_SECONDS = 10.0;
     private const MAX_RESPONSE_BYTES = 1_048_576;
@@ -106,6 +106,32 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
             'instId' => $instrumentId,
             'sz' => $depth,
         ], $depth);
+    }
+
+    public function instrumentMetadata(string $instrumentId): array
+    {
+        $this->assertInstrumentId($instrumentId);
+        $rows = $this->get(OkxPublicEndpoint::Instruments, [
+            'instType' => 'SWAP',
+            'instId' => $instrumentId,
+        ], 1);
+        if (\count($rows) !== 1 || ($rows[0]['instId'] ?? null) !== $instrumentId) {
+            throw new \RuntimeException('okx_paper_public_response_invalid');
+        }
+        $metadata = [];
+        foreach ([
+            'instId', 'instType', 'ctType', 'ctVal', 'ctMult', 'ctValCcy',
+            'settleCcy', 'tickSz', 'lotSz', 'minSz', 'maxMktSz', 'maxLmtSz',
+            'state',
+        ] as $key) {
+            $value = $rows[0][$key] ?? null;
+            if (!\is_string($value)) {
+                throw new \RuntimeException('okx_paper_public_response_invalid');
+            }
+            $metadata[$key] = $value;
+        }
+
+        return $metadata;
     }
 
     /**

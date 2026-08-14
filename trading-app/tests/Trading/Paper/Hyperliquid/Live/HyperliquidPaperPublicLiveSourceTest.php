@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Hyperliquid\Live;
 
 use App\Trading\Paper\Hyperliquid\HyperliquidPaperPublicConfig;
+use App\Trading\Paper\Hyperliquid\Http\HyperliquidPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperLiveCheckpointStore;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicLiveSource;
 use App\Trading\Paper\Hyperliquid\Live\HyperliquidPaperPublicWebSocketTransportInterface;
@@ -25,6 +26,35 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(HyperliquidPaperPublicLiveSource::class)]
 final class HyperliquidPaperPublicLiveSourceTest extends TestCase
 {
+    public function testAuthenticatedMetadataPrecedesInitialSnapshotBoundaries(): void
+    {
+        $source = $this->source(
+            new DeterministicHyperliquidTransport(self::marketFrames()),
+            metadataClient: new StaticHyperliquidPaperMetadataClient(),
+        );
+        $events = self::generator($source->events());
+        $captured = [];
+        $events->rewind();
+        while ($events->valid() && \count($captured) < 4) {
+            $event = $events->current();
+            self::assertInstanceOf(PaperMarketEvent::class, $event);
+            $captured[] = $event;
+            $source->acknowledge($event->eventId);
+            $events->next();
+        }
+
+        self::assertSame([
+            PaperMarketDataChannel::INSTRUMENT_METADATA,
+            PaperMarketDataChannel::INSTRUMENT_METADATA,
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+            PaperMarketDataChannel::SNAPSHOT_BOUNDARY,
+        ], array_column($captured, 'channel'));
+        self::assertSame(['BTCUSDT', 'ETHUSDT', 'BTCUSDT', 'ETHUSDT'], array_column($captured, 'symbol'));
+        self::assertSame(1, $captured[0]->payload['source_epoch']);
+        self::assertSame(1, $captured[1]->payload['source_epoch']);
+        $source->stop();
+    }
+
     private string $directory;
 
     protected function setUp(): void
@@ -174,18 +204,28 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
     public function testRestartReyieldsExactPendingEventBeforeConnecting(): void
     {
         $firstTransport = new DeterministicHyperliquidTransport([]);
-        $first = $this->source($firstTransport);
+        $first = $this->source(
+            $firstTransport,
+            metadataClient: new StaticHyperliquidPaperMetadataClient(),
+        );
         $firstEvents = self::generator($first->events());
         $firstEvents->rewind();
         $pending = $firstEvents->current();
         self::assertInstanceOf(PaperMarketEvent::class, $pending);
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $pending->channel);
 
         $resumedTransport = new DeterministicHyperliquidTransport([]);
-        $resumed = $this->source($resumedTransport);
+        $resumed = $this->source(
+            $resumedTransport,
+            metadataClient: new StaticHyperliquidPaperMetadataClient(),
+        );
         $resumedEvents = self::generator($resumed->events());
         $resumedEvents->rewind();
 
-        self::assertSame($pending->toArray(), $resumedEvents->current()->toArray());
+        self::assertSame(
+            CanonicalJson::encode($pending->toArray()),
+            CanonicalJson::encode($resumedEvents->current()->toArray()),
+        );
         self::assertSame(0, $resumedTransport->connectCount);
         $resumed->acknowledge($pending->eventId);
     }
@@ -385,18 +425,22 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertSame([], $loop->intervals());
     }
 
-    public function testReconnectBoundariesPrecedeQueuedBookAndCannotCertify(): void
+    public function testReconnectMetadataAndBoundariesPrecedeQueuedBookAndCannotCertify(): void
     {
         $loop = new HyperliquidDeterministicLoop();
         $transport = new DeterministicHyperliquidTransport([]);
-        $source = $this->source($transport, loop: $loop);
+        $source = $this->source(
+            $transport,
+            loop: $loop,
+            metadataClient: new StaticHyperliquidPaperMetadataClient(),
+        );
         $events = self::generator($source->events());
         $events->rewind();
-        for ($index = 0; $index < 2; ++$index) {
+        for ($index = 0; $index < 4; ++$index) {
             $event = $events->current();
             self::assertInstanceOf(PaperMarketEvent::class, $event);
             $source->acknowledge($event->eventId);
-            if ($index === 0) {
+            if ($index < 3) {
                 $events->next();
             }
         }
@@ -416,6 +460,16 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             ],
         ]));
 
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $events->current()->channel);
+        self::assertSame('BTCUSDT', $events->current()->symbol);
+        self::assertSame(2, $events->current()->payload['source_epoch']);
+        $source->acknowledge($events->current()->eventId);
+        $events->next();
+        self::assertSame(PaperMarketDataChannel::INSTRUMENT_METADATA, $events->current()->channel);
+        self::assertSame('ETHUSDT', $events->current()->symbol);
+        self::assertSame(2, $events->current()->payload['source_epoch']);
+        $source->acknowledge($events->current()->eventId);
         $events->next();
         self::assertSame(PaperMarketDataChannel::SNAPSHOT_BOUNDARY, $events->current()->channel);
         self::assertSame('reconnect', $events->current()->payload['reason']);
@@ -502,6 +556,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         DeterministicHyperliquidTransport $transport,
         bool $enabled = true,
         ?LoopInterface $loop = null,
+        ?HyperliquidPaperInstrumentMetadataClientInterface $metadataClient = null,
     ): HyperliquidPaperPublicLiveSource {
         $store = new HyperliquidPaperLiveCheckpointStore($this->directory);
         $checkpoint = $store->loadOrCreate(
@@ -524,6 +579,7 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
             $store,
             $checkpoint,
             $loop ?? new StreamSelectLoop(),
+            metadataClient: $metadataClient,
         );
     }
 
@@ -611,6 +667,17 @@ final class HyperliquidPaperPublicLiveSourceTest extends TestCase
         self::assertInstanceOf(\Generator::class, $events);
 
         return $events;
+    }
+}
+
+final class StaticHyperliquidPaperMetadataClient implements HyperliquidPaperInstrumentMetadataClientInterface
+{
+    public function instrumentMetadata(): array
+    {
+        return [
+            ['coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 50],
+            ['coin' => 'ETH', 'asset_id' => 1, 'sz_decimals' => 4, 'max_leverage' => 25],
+        ];
     }
 }
 

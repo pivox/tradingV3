@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Okx\Http;
 
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRateLimiter;
+use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
@@ -27,6 +28,41 @@ use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 #[CoversClass(OkxPaperPublicRestClient::class)]
 final class OkxPaperPublicRestClientTest extends TestCase
 {
+    public function testReadsOneExactPublicInstrumentWithoutPrivateHeaders(): void
+    {
+        $requests = [];
+        $row = self::okxMetadataRow('BTC-USDT-SWAP');
+        $client = $this->client(new MockHttpClient(function (string $method, string $url, array $options) use (&$requests, $row): MockResponse {
+            $requests[] = [$method, $url, $options];
+
+            return new MockResponse(json_encode(['code' => '0', 'data' => [$row]], JSON_THROW_ON_ERROR));
+        }));
+
+        self::assertSame($row, $client->instrumentMetadata('BTC-USDT-SWAP'));
+        self::assertInstanceOf(OkxPaperInstrumentMetadataClientInterface::class, $client);
+        self::assertSame('https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=BTC-USDT-SWAP', $requests[0][1]);
+        self::assertStringNotContainsString('ok-access-', strtolower(json_encode($requests[0][2], JSON_THROW_ON_ERROR)));
+    }
+
+    public function testInstrumentMetadataRequiresExactlyTheRequestedSupportedRow(): void
+    {
+        foreach ([
+            [],
+            [self::okxMetadataRow('ETH-USDT-SWAP')],
+            [self::okxMetadataRow('BTC-USDT-SWAP'), self::okxMetadataRow('BTC-USDT-SWAP')],
+        ] as $rows) {
+            $client = $this->client(new MockHttpClient(new MockResponse(json_encode([
+                'code' => '0', 'data' => $rows,
+            ], JSON_THROW_ON_ERROR))));
+            try {
+                $client->instrumentMetadata('BTC-USDT-SWAP');
+                self::fail('Invalid instrument metadata response must fail closed.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('okx_paper_public_response_invalid', $exception->getMessage());
+            }
+        }
+    }
+
     public function testNamedMethodsUseOnlyTheFiveAllowlistedGetEndpointsWithoutPrivateHeaders(): void
     {
         $requests = [];
@@ -421,6 +457,18 @@ final class OkxPaperPublicRestClientTest extends TestCase
             ),
             $clock ?? new RecordingClock(),
         );
+    }
+
+    /** @return array<string, string> */
+    private static function okxMetadataRow(string $instrumentId): array
+    {
+        return [
+            'instId' => $instrumentId, 'instType' => 'SWAP', 'ctType' => 'linear',
+            'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => str_starts_with($instrumentId, 'BTC') ? 'BTC' : 'ETH',
+            'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
+            'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'state' => 'live',
+        ];
     }
 
     private function assertTransportFailureIsNormalized(HttpClientInterface $httpClient): void

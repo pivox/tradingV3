@@ -574,6 +574,8 @@ final class OkxPaperLiveCheckpointStore
         $channel = $event->channel->value;
         $origin = $event->payload['origin'] ?? null;
         $valid = $kind === 'rest_fetch' && match ($stage) {
+            'instrument_metadata' => $channel === 'instrument_metadata'
+                && $origin === 'rest_public_instruments',
             'current_candles', 'history_candles' => str_starts_with($channel, 'candle_')
                 && \in_array($origin, ['rest_history', 'rest_warmup'], true),
             'recent_trades', 'history_trades' => $channel === 'public_trade'
@@ -636,6 +638,8 @@ final class OkxPaperLiveCheckpointStore
 
         $origin = $event->payload['origin'] ?? null;
         $transport = match (true) {
+            $channel === 'instrument_metadata'
+                && $origin === 'rest_public_instruments' => 'rest',
             str_starts_with($channel, 'candle_')
                 && \in_array($origin, ['rest_history', 'rest_warmup'], true) => 'rest',
             str_starts_with($channel, 'candle_') && $origin === 'ws_candle' => 'ws',
@@ -1155,6 +1159,16 @@ final class OkxPaperLiveCheckpointStore
         $stage = $transition['stage'] ?? null;
         if (!\is_string($symbol) || !\is_string($stream) || !\is_string($stage)) {
             throw self::invalidCheckpoint();
+        }
+        if ($stage === 'instrument_metadata') {
+            if ($stream !== $symbol . '/rest/instrument_metadata'
+                || ($checkpoint->streamFrontiers[$stream] ?? null) !== null
+                || ($checkpoint->streamFrontiers[$symbol . '/rest/candle_1m'] ?? null) !== null
+            ) {
+                throw self::invalidCheckpoint();
+            }
+
+            return;
         }
 
         $completedPrefix = 0;

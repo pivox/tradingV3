@@ -595,6 +595,7 @@ final readonly class OkxPaperLiveCheckpoint
             'rest/candle_1H',
             'rest/candle_1m',
             'rest/candle_5m',
+            'rest/instrument_metadata',
             'rest/public_trade',
             'rest/top_of_book',
             'ws/candle_15m',
@@ -700,6 +701,7 @@ final readonly class OkxPaperLiveCheckpoint
         $suffix = substr($stream, \strlen($symbol) + 1);
 
         return match ($stage) {
+            'instrument_metadata' => $suffix === 'rest/instrument_metadata',
             'current_candles', 'history_candles' => preg_match('/\A(?:rest|ws)\/candle_(?:1m|5m|15m|1H)\z/D', $suffix) === 1,
             'recent_trades', 'history_trades' => preg_match('/\A(?:rest|ws)\/public_trade\z/D', $suffix) === 1,
             'order_book' => $suffix === 'rest/top_of_book',
@@ -719,6 +721,7 @@ final readonly class OkxPaperLiveCheckpoint
             'warming' => ($kind === 'rest_fetch'
                     && \in_array($stage, [
                         'current_candles',
+                        'instrument_metadata',
                         'recent_trades',
                         'history_candles',
                         'history_trades',
@@ -1464,6 +1467,9 @@ final readonly class OkxPaperLiveCheckpoint
         }
         if ($channel === 'connection_state') {
             return preg_match('/\A[1-9][0-9]*\|(connected|subscribed|reconnecting|stopped)\z/D', $sourceIdentity) === 1;
+        }
+        if ($channel === 'instrument_metadata') {
+            return preg_match('/\A[1-9][0-9]*\|[a-f0-9]{64}\z/D', $sourceIdentity) === 1;
         }
         if ($channel === 'snapshot_boundary') {
             return preg_match(

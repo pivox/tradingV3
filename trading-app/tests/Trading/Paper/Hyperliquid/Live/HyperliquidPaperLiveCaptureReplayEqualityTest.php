@@ -134,6 +134,16 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         );
     }
 
+    public function testInstrumentMetadataAfterItsSnapshotBoundaryIsRejected(): void
+    {
+        $this->assertInvalidLiveCompletion(
+            fn (): array => $this->completeDataset(
+                PaperMarketDataNetwork::MAINNET,
+                metadataAfterSnapshots: true,
+            ),
+        );
+    }
+
     public function testContinuityLostCheckpointCannotCertifyCompleteDataset(): void
     {
         [$directory] = $this->completeDataset(PaperMarketDataNetwork::MAINNET);
@@ -165,6 +175,7 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
         PaperMarketDataNetwork $network,
         bool $omitSnapshots = false,
         bool $syntheticBook = false,
+        bool $metadataAfterSnapshots = false,
     ): array
     {
         $datasetId = 'paper-hyperliquid-equality-' . $network->value;
@@ -212,10 +223,17 @@ final class HyperliquidPaperLiveCaptureReplayEqualityTest extends TestCase
             $ordinals,
             new MockClock('2026-07-29T10:02:00Z'),
         );
-        $events = $omitSnapshots ? [] : [
-            $normalizer->snapshotBoundary('BTC', 'initial', 1),
-            $secondNormalizer->snapshotBoundary('ETH', 'initial', 1),
-        ];
+        $btcMetadata = $normalizer->instrumentMetadata([
+            'coin' => 'BTC', 'asset_id' => 0, 'sz_decimals' => 5, 'max_leverage' => 50,
+        ], 1);
+        $ethMetadata = $secondNormalizer->instrumentMetadata([
+            'coin' => 'ETH', 'asset_id' => 1, 'sz_decimals' => 4, 'max_leverage' => 25,
+        ], 1);
+        $btcSnapshot = $normalizer->snapshotBoundary('BTC', 'initial', 1);
+        $ethSnapshot = $secondNormalizer->snapshotBoundary('ETH', 'initial', 1);
+        $events = $omitSnapshots ? [] : ($metadataAfterSnapshots
+            ? [$btcSnapshot, $ethSnapshot, $btcMetadata, $ethMetadata]
+            : [$btcMetadata, $btcSnapshot, $ethMetadata, $ethSnapshot]);
         $events[] = $marketNormalizer->liveTrade([
                 'coin' => 'BTC',
                 'side' => 'B',

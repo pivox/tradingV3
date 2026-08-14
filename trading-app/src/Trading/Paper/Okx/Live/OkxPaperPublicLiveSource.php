@@ -8,6 +8,7 @@ use App\Trading\Paper\MarketData\PaperLiveMarketDataSourceInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Normalization\OkxMaterializedBookState;
 use App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
@@ -106,6 +107,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ?OkxPaperPublicFrameDecoder $decoder = null,
         ?OkxPaperPublicFrameQueue $publicQueue = null,
         ?OkxPaperPublicFrameQueue $businessQueue = null,
+        private readonly ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
     ) {
         $this->instruments = $instruments ?? new OkxPaperInstrumentMap();
         $this->subscriptions = $subscriptions ?? new OkxPaperPublicSubscriptionSet($this->instruments);
@@ -402,6 +404,28 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
     {
         foreach ($this->checkpoint->remainingSymbols as $symbol) {
             $instrumentId = $this->instruments->nativeInstrumentId($symbol);
+            if ($this->metadataClient instanceof OkxPaperInstrumentMetadataClientInterface) {
+                $metadataStream = $symbol . '/rest/instrument_metadata';
+                $metadataTransition = $this->restTransition(
+                    $symbol,
+                    $metadataStream,
+                    'instrument_metadata',
+                );
+                if ($this->shouldExecuteWarmupTransition($metadataStream, $metadataTransition)) {
+                    $this->ensureTransition('warming', $metadataTransition);
+                    $row = $this->metadataClient->instrumentMetadata($instrumentId);
+                    $event = $this->normalizer->instrumentMetadata(
+                        $row,
+                        $this->checkpoint->sourceEpochs[$symbol],
+                    );
+                    $frontier = OkxPaperStreamFrontier::fromEvent($event);
+                    yield from $this->yieldMarketEvents([[
+                        'event' => $event,
+                        'frontier' => $frontier,
+                        'ordinal_state' => $this->ordinals->snapshot(),
+                    ]], $metadataStream, $metadataTransition);
+                }
+            }
             foreach (['1m', '5m', '15m', '1H'] as $bar) {
                 $stream = $symbol . '/rest/candle_' . $bar;
                 $transition = $this->restTransition($symbol, $stream, 'current_candles');

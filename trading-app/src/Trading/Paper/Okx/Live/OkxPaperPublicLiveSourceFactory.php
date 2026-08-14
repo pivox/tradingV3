@@ -12,6 +12,7 @@ use App\Trading\Paper\Dataset\PaperDatasetState;
 use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\OkxPaperInstrumentMap;
 use App\Trading\Paper\Okx\OkxPaperPublicConfig;
 use React\EventLoop\Loop;
@@ -34,6 +35,7 @@ final readonly class OkxPaperPublicLiveSourceFactory
         private ClockInterface $clock,
         private PaperDatasetManifestCodec $manifestCodec,
         private PaperDatasetRecorderFilesystem $filesystem,
+        private ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
     ) {
     }
 
@@ -79,6 +81,7 @@ final readonly class OkxPaperPublicLiveSourceFactory
                 decoder: $decoder,
                 publicQueue: $publicQueue,
                 businessQueue: $businessQueue,
+                metadataClient: $this->metadataClient,
             );
         } finally {
             fclose($directoryPin['handle']);

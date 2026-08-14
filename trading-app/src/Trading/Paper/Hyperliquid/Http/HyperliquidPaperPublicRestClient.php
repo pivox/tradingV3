@@ -11,7 +11,7 @@ use Symfony\Component\Clock\ClockInterface;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
-final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPaperPublicRestClientInterface
+final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPaperPublicRestClientInterface, HyperliquidPaperInstrumentMetadataClientInterface
 {
     private const MAXIMUM_RESPONSE_BYTES = 1_048_576;
     /** @var list<float> */
@@ -29,6 +29,87 @@ final readonly class HyperliquidPaperPublicRestClient implements HyperliquidPape
     public function network(): PaperMarketDataNetwork
     {
         return $this->config->network;
+    }
+
+    public function instrumentMetadata(): array
+    {
+        if (!$this->config->acquisitionEnabled) {
+            throw new \RuntimeException('hyperliquid_paper_public_acquisition_disabled');
+        }
+        $maximumRetries = \count(self::RETRY_DELAYS_SECONDS);
+        for ($attempt = 0; ; ++$attempt) {
+            $this->rateLimiter->acquireRequest();
+            $response = null;
+            try {
+                $response = $this->transport->postMetadata(
+                    $this->config->infoUri,
+                    ['type' => 'meta'],
+                );
+                $status = $response->getStatusCode();
+                if ($status === 429 || ($status >= 500 && $status <= 599)) {
+                    $response->cancel();
+                    $this->retryOrFail($attempt, $maximumRetries);
+                    continue;
+                }
+                if ($status < 200 || $status > 299) {
+                    $response->cancel();
+                    throw new \RuntimeException(sprintf('hyperliquid_paper_public_http_error_%d', $status));
+                }
+                $body = $this->readBoundedBody($response, self::MAXIMUM_RESPONSE_BYTES);
+                try {
+                    $payload = json_decode($body, true, 512, \JSON_THROW_ON_ERROR);
+                } catch (\JsonException) {
+                    throw new \RuntimeException('hyperliquid_paper_public_response_invalid');
+                }
+                if (!\is_array($payload)
+                    || array_is_list($payload)
+                    || !\is_array($payload['universe'] ?? null)
+                    || !array_is_list($payload['universe'])
+                    || \count($payload['universe']) > 10_000
+                ) {
+                    throw new \RuntimeException('hyperliquid_paper_public_response_invalid');
+                }
+                $selected = [];
+                foreach ($payload['universe'] as $assetId => $asset) {
+                    if (!\is_array($asset) || array_is_list($asset)) {
+                        throw new \RuntimeException('hyperliquid_paper_public_response_invalid');
+                    }
+                    $coin = $asset['name'] ?? null;
+                    if (!\in_array($coin, ['BTC', 'ETH'], true)) {
+                        continue;
+                    }
+                    $sizeDecimals = $asset['szDecimals'] ?? null;
+                    $maxLeverage = $asset['maxLeverage'] ?? null;
+                    if (isset($selected[$coin])
+                        || !\is_int($sizeDecimals)
+                        || $sizeDecimals < 0
+                        || $sizeDecimals > 6
+                        || !\is_int($maxLeverage)
+                        || $maxLeverage < 1
+                    ) {
+                        throw new \RuntimeException('hyperliquid_paper_public_response_invalid');
+                    }
+                    $selected[$coin] = [
+                        'coin' => $coin,
+                        'asset_id' => $assetId,
+                        'sz_decimals' => $sizeDecimals,
+                        'max_leverage' => $maxLeverage,
+                    ];
+                }
+                if (!isset($selected['BTC'], $selected['ETH']) || \count($selected) !== 2) {
+                    throw new \RuntimeException('hyperliquid_paper_public_response_invalid');
+                }
+                $rows = [$selected['BTC'], $selected['ETH']];
+                $this->rateLimiter->acquireResponseRows(2);
+
+                return $rows;
+            } catch (TransportExceptionInterface) {
+                if ($response instanceof ResponseInterface) {
+                    $response->cancel();
+                }
+                $this->retryOrFail($attempt, $maximumRetries);
+            }
+        }
     }
 
     public function candleSnapshot(

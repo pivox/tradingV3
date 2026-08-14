@@ -62,6 +62,84 @@ final class HyperliquidPaperMarketEventNormalizer
         );
     }
 
+    /** @param array<string, mixed> $row */
+    public function instrumentMetadata(
+        #[\SensitiveParameter] array $row,
+        int $sourceEpoch,
+    ): PaperMarketEvent {
+        try {
+            self::assertExactKeys($row, [
+                'asset_id', 'coin', 'max_leverage', 'sz_decimals',
+            ]);
+            $coin = $row['coin'] ?? null;
+            $assetId = $row['asset_id'] ?? null;
+            $sizeDecimals = $row['sz_decimals'] ?? null;
+            $maxLeverage = $row['max_leverage'] ?? null;
+            if (!\is_string($coin)
+                || !\in_array($coin, ['BTC', 'ETH'], true)
+                || !\is_int($assetId)
+                || $assetId < 0
+                || !\is_int($sizeDecimals)
+                || $sizeDecimals < 0
+                || $sizeDecimals > 6
+                || !\is_int($maxLeverage)
+                || $maxLeverage < 1
+                || $sourceEpoch < 1
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $symbol = (new HyperliquidPaperInstrumentMap())->normalizedSymbol($coin);
+            $quantityStep = $sizeDecimals === 0
+                ? '1'
+                : '0.' . str_repeat('0', $sizeDecimals - 1) . '1';
+            $timestamp = $this->receiptTimestamp();
+            $payload = [
+                'metadata_schema_version' => 'paper-instrument-metadata.v1',
+                'native_symbol' => $coin,
+                'instrument_type' => 'perpetual',
+                'base_asset' => $coin,
+                'quote_asset' => 'USDC',
+                'settlement_asset' => 'USDC',
+                'status' => 'live',
+                'asset_id' => $assetId,
+                'quantity_unit' => 'base_asset',
+                'quantity_step' => $quantityStep,
+                'minimum_quantity' => $quantityStep,
+                'contract_value' => '1',
+                'contract_multiplier' => '1',
+                'contract_value_unit' => $coin,
+                'size_decimals' => $sizeDecimals,
+                'price_precision_digits' => 5,
+                'price_max_decimals' => 6 - $sizeDecimals,
+                'maximum_leverage' => (string) $maxLeverage,
+                'source_epoch' => $sourceEpoch,
+                'origin' => 'rest_meta',
+            ];
+            $sourceDigest = hash('sha256', CanonicalJson::encode($payload));
+
+            return $this->event(
+                symbol: $symbol,
+                channel: PaperMarketDataChannel::INSTRUMENT_METADATA,
+                exchangeTimestamp: $timestamp,
+                naturalIdentity: implode('|', [
+                    $this->network->value,
+                    $coin,
+                    'instrument_metadata',
+                    (string) $sourceEpoch,
+                    $sourceDigest,
+                ]),
+                payload: $payload,
+                receivedTimestamp: $timestamp,
+            );
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException(
+                'hyperliquid_paper_instrument_metadata_invalid',
+                0,
+                $exception,
+            );
+        }
+    }
+
     private function normalizedCandle(
         HyperliquidCandle $candle,
         string $origin,

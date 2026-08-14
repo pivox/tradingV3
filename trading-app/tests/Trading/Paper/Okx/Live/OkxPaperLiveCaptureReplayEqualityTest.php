@@ -15,6 +15,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
@@ -58,7 +59,7 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
 
     public function testHealthyPublicFixtureCaptureReplaysAsTheExactNormalizedSequence(): void
     {
-        $clock = new MockClock('2026-07-25T09:00:00.000000Z');
+        $clock = new MockClock('2026-07-25T08:59:59.999999Z');
         $recorder = new PaperDatasetRecorder(
             $this->testRoot . '/paper-market-data',
             self::manifest(),
@@ -89,10 +90,22 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
             $store,
             $checkpoint,
             $loop,
+            metadataClient: new Task9MetadataClient(),
         );
         $consumer = new Task9IdempotentConsumer(
             $recorder->datasetDirectory(),
             function (PaperMarketEvent $event) use ($clock): void {
+                if ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA
+                    && $event->symbol === 'BTCUSDT'
+                ) {
+                    $clock->modify('2026-07-25T09:00:00.000000Z');
+                } elseif ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA
+                    || ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
+                        && $event->symbol === 'BTCUSDT'
+                        && ($event->payload['reason'] ?? null) === 'initial')
+                ) {
+                    $clock->sleep(0.000001);
+                }
                 if ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
                     && $event->symbol === 'ETHUSDT'
                     && ($event->payload['reason'] ?? null) === 'initial'
@@ -3108,6 +3121,34 @@ final class Task9Timer implements TimerInterface
     public function release(): void
     {
         $this->callback = null;
+    }
+}
+
+final class Task9MetadataClient implements OkxPaperInstrumentMetadataClientInterface
+{
+    public function instrumentMetadata(string $instrumentId): array
+    {
+        $baseAsset = match ($instrumentId) {
+            'BTC-USDT-SWAP' => 'BTC',
+            'ETH-USDT-SWAP' => 'ETH',
+            default => throw new \LogicException('task9_instrument_invalid'),
+        };
+
+        return [
+            'instId' => $instrumentId,
+            'instType' => 'SWAP',
+            'ctType' => 'linear',
+            'ctVal' => '0.01',
+            'ctMult' => '1',
+            'ctValCcy' => $baseAsset,
+            'settleCcy' => 'USDT',
+            'tickSz' => '0.1',
+            'lotSz' => '1',
+            'minSz' => '1',
+            'maxMktSz' => '1000',
+            'maxLmtSz' => '2000',
+            'state' => 'live',
+        ];
     }
 }
 
