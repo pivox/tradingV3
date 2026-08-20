@@ -91,6 +91,14 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5.0)
 
 
+def _redacted_log_tail(path: Path, temporary_root: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"log_unavailable:{exc.__class__.__name__}"
+    return content[-4000:].replace(str(temporary_root), "<temporary>")
+
+
 def _initialize_orchestrator_database(environment: dict[str, str]) -> None:
     completed = subprocess.run(
         [
@@ -178,14 +186,21 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
             )
             orchestrator_process: subprocess.Popen[bytes] | None = None
             try:
-                _wait_for_http(
-                    (
-                        f"{symfony_url}/api/exchange/open-state"
-                        "?exchange=fake&market_type=perpetual&dry_run=true"
-                    ),
-                    headers={"X-Fake-Only-Safety-Evidence": "v2"},
-                    expected_json_key="fake_only_safety_evidence",
-                )
+                try:
+                    _wait_for_http(
+                        (
+                            f"{symfony_url}/api/exchange/open-state"
+                            "?exchange=fake&market_type=perpetual&dry_run=true"
+                        ),
+                        headers={"X-Fake-Only-Safety-Evidence": "v2"},
+                        expected_json_key="fake_only_safety_evidence",
+                    )
+                except RuntimeError as exc:
+                    symfony_log.flush()
+                    raise RuntimeError(
+                        f"{exc}; symfony_log_tail="
+                        f"{_redacted_log_tail(symfony_log_path, temporary_root)}"
+                    ) from exc
                 orchestrator_process = subprocess.Popen(
                     [
                         sys.executable,
@@ -204,7 +219,14 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                     stdout=orchestrator_log,
                     stderr=subprocess.STDOUT,
                 )
-                _wait_for_http(f"{orchestrator_url}/healthcheck")
+                try:
+                    _wait_for_http(f"{orchestrator_url}/healthcheck")
+                except RuntimeError as exc:
+                    orchestrator_log.flush()
+                    raise RuntimeError(
+                        f"{exc}; orchestrator_log_tail="
+                        f"{_redacted_log_tail(orchestrator_log_path, temporary_root)}"
+                    ) from exc
 
                 yield (
                     orchestrator_url,
