@@ -317,6 +317,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'disabled_sets' => ['recipe_fake_multi_disabled'],
             'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
             'fresh_database_count' => 2,
+            'fresh_global_fake_state_count' => 2,
             'fresh_process_count' => 4,
             'loopback_http_stacks' => 2,
             'orders_total' => 0,

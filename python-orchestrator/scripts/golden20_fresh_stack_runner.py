@@ -52,6 +52,8 @@ class FreshStackResult:
     report_bytes: bytes
     report: dict[str, Any]
     database_created_from_empty_path: bool
+    global_fake_state_created_from_empty_path: bool
+    global_fake_state_identity: str
     stack_identity: str
     orchestrator_pid: int
     symfony_pid: int
@@ -147,7 +149,7 @@ def _initialize_orchestrator_database(environment: dict[str, str]) -> None:
 
 
 @contextmanager
-def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
+def _fresh_stack() -> Iterator[tuple[str, Path, bool, bool, str, str, int, int]]:
     php_binary = shutil.which("php")
     if php_binary is None:
         raise RuntimeError("php executable is required for golden scenario 20")
@@ -157,9 +159,11 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
         database_path = temporary_root / "orchestrator.sqlite"
         export_dir = temporary_root / "export"
         fake_state_root = temporary_root / "paper-fake-state"
+        global_fake_state_file = temporary_root / "global-fake-state.dat"
         symfony_log_path = temporary_root / "symfony.log"
         orchestrator_log_path = temporary_root / "orchestrator.log"
         database_was_absent = not database_path.exists()
+        global_fake_state_was_absent = not global_fake_state_file.exists()
 
         symfony_port = _available_loopback_port()
         orchestrator_port = _available_loopback_port()
@@ -177,6 +181,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                 "APP_SECRET": "golden20-local-fake-only",
                 "DEFAULT_URI": symfony_url,
                 "LOCK_DSN": "flock",
+                "FAKE_EXCHANGE_STATE_FILE": str(global_fake_state_file),
                 "PAPER_FAKE_STATE_ROOT": str(fake_state_root),
                 "REDIS_ORDER_WATCH_CHANNEL": "golden20-local-order-watch",
                 "FAKE_EXCHANGE_DETERMINISTIC_SEED": GOLDEN_DETERMINISTIC_SEED,
@@ -225,6 +230,10 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                         headers={"X-Fake-Only-Safety-Evidence": "v2"},
                         expected_json_key="fake_only_safety_evidence",
                     )
+                    with httpx.Client(timeout=2.0, trust_env=False) as client:
+                        reset = client.post(f"{symfony_url}/fake-exchange/reset")
+                    if reset.status_code != 200 or not global_fake_state_file.is_file():
+                        raise RuntimeError("fresh global Fake state was not persisted in temporary root")
                 except RuntimeError as exc:
                     symfony_log.flush()
                     raise RuntimeError(
@@ -262,6 +271,8 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                     orchestrator_url,
                     export_dir,
                     database_was_absent and database_path.is_file(),
+                    global_fake_state_was_absent and global_fake_state_file.is_file(),
+                    str(global_fake_state_file),
                     str(database_path),
                     int(orchestrator_process.pid),
                     int(symfony_process.pid),
@@ -277,6 +288,8 @@ def _run_one_fresh_stack() -> FreshStackResult:
         orchestrator_url,
         export_dir,
         database_created_from_empty_path,
+        global_fake_state_created_from_empty_path,
+        global_fake_state_identity,
         stack_identity,
         orchestrator_pid,
         symfony_pid,
@@ -308,6 +321,8 @@ def _run_one_fresh_stack() -> FreshStackResult:
             report_bytes=report_bytes,
             report=report,
             database_created_from_empty_path=database_created_from_empty_path,
+            global_fake_state_created_from_empty_path=global_fake_state_created_from_empty_path,
+            global_fake_state_identity=global_fake_state_identity,
             stack_identity=stack_identity,
             orchestrator_pid=orchestrator_pid,
             symfony_pid=symfony_pid,
@@ -343,6 +358,9 @@ def run_fresh_stacks() -> dict[str, Any]:
         "fresh_database_count": sum(
             int(item.database_created_from_empty_path) for item in (first, second)
         ),
+        "fresh_global_fake_state_count": sum(
+            int(item.global_fake_state_created_from_empty_path) for item in (first, second)
+        ),
         "fresh_process_count": 4 if all(process_id > 0 for process_id in process_ids) else 0,
         "loopback_http_stacks": 2,
         "orders_total": sum(value for value in order_totals if isinstance(value, int)),
@@ -363,6 +381,7 @@ def run_fresh_stacks() -> dict[str, Any]:
         "config_hashes_unique": True,
         "exchange_calls": {"bitmart": 0, "hyperliquid": 0, "okx": 0},
         "fresh_database_count": 2,
+        "fresh_global_fake_state_count": 2,
         "fresh_process_count": 4,
         "orders_total": 0,
         "profiles": ["regular", "scalper", "scalper_micro"],
@@ -376,6 +395,8 @@ def run_fresh_stacks() -> dict[str, Any]:
     }
     if first.stack_identity == second.stack_identity:
         raise RuntimeError("fresh stacks reused the same persistence identity")
+    if first.global_fake_state_identity == second.global_fake_state_identity:
+        raise RuntimeError("fresh stacks reused the same global Fake state identity")
     if any(proof.get(key) != value for key, value in expected_invariants.items()):
         raise RuntimeError(f"fresh-stack invariants failed: {proof!r}")
 

@@ -89,7 +89,7 @@ class FakeExchangeStateStore
     private bool $privateWsConsumptionActive = false;
 
     public function __construct(
-        #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
+        #[Autowire('%env(resolve:FAKE_EXCHANGE_STATE_FILE)%')]
         ?string $stateFile = null,
         #[Autowire('%env(string:FAKE_EXCHANGE_DETERMINISTIC_SEED)%')]
         string $deterministicSeed = self::DEFAULT_DETERMINISTIC_SEED,

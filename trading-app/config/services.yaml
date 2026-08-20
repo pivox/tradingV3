@@ -12,6 +12,7 @@ imports:
 parameters:
     env(PAPER_EXECUTION_ENABLED): '0'
     env(PAPER_FAKE_STATE_ROOT): '%kernel.project_dir%/var/paper-fake-state'
+    env(FAKE_EXCHANGE_STATE_FILE): '%kernel.project_dir%/var/fake_exchange_state.dat'
     app.mtf_log_level: 'info'
     # Configuration pour le backtesting avec une heure fixe
     app.clock.fixed_time: null  # null = temps réel, sinon DateTimeImmutable pour backtesting
