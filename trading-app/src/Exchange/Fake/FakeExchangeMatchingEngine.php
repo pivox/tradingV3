@@ -526,8 +526,14 @@ final readonly class FakeExchangeMatchingEngine
             $this->appendEvent('order.cancelled', $updated, ['reason' => 'reduce_only_position_size_capped']);
         }
 
-        if ($status === ExchangeOrderStatus::FILLED && !$updated->reduceOnly && !$this->isTriggerOrder($updated)) {
-            $updated = $this->createAttachedProtectionOrders($updated);
+        if (!$updated->reduceOnly && !$this->isTriggerOrder($updated)) {
+            $updated = $this->synchronizeAttachedStopAfterFill($updated, $fillQuantityDecimal);
+            if (
+                $updated->status === ExchangeOrderStatus::FILLED
+                && ($updated->metadata['protection_status'] ?? null) !== 'rejected'
+            ) {
+                $updated = $this->createAttachedProtectionOrders($updated);
+            }
         }
 
         return $updated;
@@ -1658,6 +1664,13 @@ final readonly class FakeExchangeMatchingEngine
         if ($stopLoss === null && $takeProfit === null) {
             return $entryOrder;
         }
+
+        if ($stopLoss !== null) {
+            $entryOrder = $this->synchronizeAttachedStopAfterFill($entryOrder, null);
+            if (($entryOrder->metadata['protection_status'] ?? null) === 'rejected') {
+                return $entryOrder;
+            }
+        }
         if ($trailingPolicy instanceof FakeTp1TrailingPolicy) {
             try {
                 $this->assertTp1QuantityBelowProtectedExposure($entryOrder, $trailingPolicy);
@@ -1682,8 +1695,13 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         $metadata = array_replace($entryOrder->metadata, ['attached_protection_processed' => true]);
+        unset(
+            $metadata['partial_protection_order_id'],
+            $metadata['partial_protected_quantity'],
+            $metadata['partial_protected_quantity_decimal'],
+        );
 
-        if ($this->stateStore->consumeProtectionRejectionFlag()) {
+        if ($stopLoss === null && $this->stateStore->consumeProtectionRejectionFlag()) {
             $metadata['protection_status'] = 'rejected';
             $metadata['protection_reject_reason'] = 'protection_rejected_by_scenario';
             $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, $metadata);
@@ -1697,12 +1715,11 @@ final readonly class FakeExchangeMatchingEngine
         $metadata['protection_order_ids'] = [];
 
         if ($stopLoss !== null) {
-            $metadata['protection_order_ids'][] = $this->createProtectionOrder(
-                $entryOrder,
-                ExchangeOrderType::STOP_LOSS,
-                $stopLoss,
-                'sl',
-            )->exchangeOrderId;
+            $existingStop = $this->attachedStopOrder($entryOrder);
+            if (!$existingStop instanceof ExchangeOrderDto) {
+                throw new \LogicException('fake_partial_fill_protection_missing');
+            }
+            $metadata['protection_order_ids'][] = $existingStop->exchangeOrderId;
         }
         if ($takeProfit !== null) {
             $metadata['protection_order_ids'][] = $this->createProtectionOrder(
@@ -1718,6 +1735,170 @@ final readonly class FakeExchangeMatchingEngine
         $this->stateStore->saveOrder($updated);
 
         return $updated;
+    }
+
+    private function synchronizeAttachedStopAfterFill(
+        ExchangeOrderDto $entryOrder,
+        ?string $latestFillQuantityDecimal,
+    ): ExchangeOrderDto {
+        $stopLoss = $this->floatMetadata($entryOrder->metadata, 'attached_stop_loss_price');
+        if ($stopLoss === null || $entryOrder->filledQuantity <= 0.00000001) {
+            return $entryOrder;
+        }
+
+        $targetQuantityDecimal = $this->protectionQuantityDecimal($entryOrder);
+        $existingStop = $this->attachedStopOrder($entryOrder);
+        $alreadyExact = $existingStop instanceof ExchangeOrderDto
+            && self::sameDecimal($this->orderQuantityDecimal($existingStop), $targetQuantityDecimal)
+            && $this->stringMetadata($existingStop->metadata, 'parent_order_id') === $entryOrder->exchangeOrderId;
+        if ($alreadyExact) {
+            return $entryOrder;
+        }
+
+        if ($this->stateStore->consumeProtectionRejectionFlag()) {
+            $metadata = array_replace($entryOrder->metadata, [
+                'protection_status' => 'rejected',
+                'protection_reject_reason' => 'protection_rejected_by_scenario',
+            ]);
+            $updated = $this->withOrderStatus($entryOrder, $entryOrder->status, $metadata);
+            if ($this->isActiveStatus($updated->status)) {
+                $updated = $this->withOrderStatus(
+                    $updated,
+                    ExchangeOrderStatus::CANCELLED,
+                    array_replace($updated->metadata, ['reason' => 'partial_fill_protection_rejected']),
+                );
+                $this->appendEvent('order.cancelled', $updated, [
+                    'reason' => 'partial_fill_protection_rejected',
+                ]);
+            }
+            $this->stateStore->saveOrder($updated);
+            $this->appendEvent('protection_order.rejected', $updated, [
+                'reason' => 'protection_rejected_by_scenario',
+                'operation' => $existingStop instanceof ExchangeOrderDto ? 'resize' : 'create',
+            ]);
+
+            $compensationQuantityDecimal = $existingStop instanceof ExchangeOrderDto
+                ? $latestFillQuantityDecimal
+                : $targetQuantityDecimal;
+            if ($compensationQuantityDecimal === null) {
+                throw new \LogicException('fake_partial_fill_compensation_quantity_unavailable');
+            }
+
+            return $this->compensateRejectedProtection(
+                $updated,
+                (float) $compensationQuantityDecimal,
+                $targetQuantityDecimal,
+            );
+        }
+
+        $stop = $existingStop instanceof ExchangeOrderDto
+            ? $this->resizeAttachedStop($entryOrder, $existingStop, $targetQuantityDecimal)
+            : $this->createProtectionOrder(
+                $entryOrder,
+                ExchangeOrderType::STOP_LOSS,
+                $stopLoss,
+                'sl',
+                $targetQuantityDecimal,
+            );
+        $protectionMetadata = ['protection_status' => 'accepted'];
+        if ($this->isActiveStatus($entryOrder->status)) {
+            $protectionMetadata += [
+                'partial_protection_order_id' => $stop->exchangeOrderId,
+                'partial_protected_quantity' => (float) $targetQuantityDecimal,
+                'partial_protected_quantity_decimal' => $targetQuantityDecimal,
+            ];
+        }
+        $updated = $this->withOrderStatus(
+            $entryOrder,
+            $entryOrder->status,
+            array_replace($entryOrder->metadata, $protectionMetadata),
+        );
+        $this->stateStore->saveOrder($updated);
+
+        return $updated;
+    }
+
+    private function protectionQuantityDecimal(ExchangeOrderDto $entryOrder): string
+    {
+        return self::canonicalFloat($this->protectionQuantity($entryOrder));
+    }
+
+    private function attachedStopOrder(ExchangeOrderDto $entryOrder): ?ExchangeOrderDto
+    {
+        $parentIds = [$entryOrder->exchangeOrderId];
+        $fallbackParentOrderId = $this->stringMetadata($entryOrder->metadata, 'fallback_parent_order_id');
+        if ($fallbackParentOrderId !== null) {
+            $parentIds[] = $fallbackParentOrderId;
+        }
+
+        foreach ($this->stateStore->getOpenOrders($entryOrder->symbol) as $candidate) {
+            if (
+                $candidate->orderType === ExchangeOrderType::STOP_LOSS
+                && $candidate->reduceOnly
+                && $candidate->positionSide === $entryOrder->positionSide
+                && $this->stringMetadata($candidate->metadata, 'protection_kind') === 'sl'
+                && \in_array($this->stringMetadata($candidate->metadata, 'parent_order_id'), $parentIds, true)
+            ) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function resizeAttachedStop(
+        ExchangeOrderDto $entryOrder,
+        ExchangeOrderDto $stop,
+        string $targetQuantityDecimal,
+    ): ExchangeOrderDto {
+        try {
+            $remainingQuantityDecimal = (string) BigDecimal::of($targetQuantityDecimal)
+                ->minus($this->orderFilledQuantityDecimal($stop))
+                ->stripTrailingZeros();
+        } catch (MathException) {
+            throw new \LogicException('fake_partial_fill_protection_quantity_invalid');
+        }
+        if (BigDecimal::of($remainingQuantityDecimal)->isLessThanOrEqualTo(0)) {
+            throw new \LogicException('fake_partial_fill_protection_quantity_invalid');
+        }
+
+        $metadata = array_replace($stop->metadata, [
+            'parent_order_id' => $entryOrder->exchangeOrderId,
+            'parent_client_order_id' => $entryOrder->clientOrderId,
+            'quantity_decimal' => $targetQuantityDecimal,
+            'remaining_quantity_decimal' => $remainingQuantityDecimal,
+        ]);
+        $resized = new ExchangeOrderDto(
+            exchange: $stop->exchange,
+            marketType: $stop->marketType,
+            symbol: $stop->symbol,
+            exchangeOrderId: $stop->exchangeOrderId,
+            clientOrderId: $stop->clientOrderId,
+            side: $stop->side,
+            positionSide: $stop->positionSide,
+            orderType: $stop->orderType,
+            status: $stop->status,
+            quantity: (float) $targetQuantityDecimal,
+            filledQuantity: $stop->filledQuantity,
+            remainingQuantity: (float) $remainingQuantityDecimal,
+            price: $stop->price,
+            averagePrice: $stop->averagePrice,
+            stopPrice: $stop->stopPrice,
+            reduceOnly: $stop->reduceOnly,
+            postOnly: $stop->postOnly,
+            timeInForce: $stop->timeInForce,
+            createdAt: $stop->createdAt,
+            updatedAt: $this->clock->now(),
+            metadata: $metadata,
+        );
+        $this->stateStore->saveOrder($resized);
+        $this->appendEvent('protection_order.resized', $resized, [
+            'parent_order_id' => $entryOrder->exchangeOrderId,
+            'previous_quantity' => $stop->quantity,
+            'protected_quantity' => (float) $targetQuantityDecimal,
+        ]);
+
+        return $resized;
     }
 
     private function protectFallbackParentExposure(ExchangeOrderDto $parent): ExchangeOrderDto
@@ -1746,7 +1927,11 @@ final readonly class FakeExchangeMatchingEngine
         }
     }
 
-    private function compensateRejectedProtection(ExchangeOrderDto $entryOrder): ExchangeOrderDto
+    private function compensateRejectedProtection(
+        ExchangeOrderDto $entryOrder,
+        ?float $exactCompensationQuantity = null,
+        ?string $fillBoundary = null,
+    ): ExchangeOrderDto
     {
         if (!$entryOrder->positionSide instanceof ExchangePositionSide) {
             throw new \LogicException('fake_protection_compensation_position_side_unavailable');
@@ -1757,7 +1942,7 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_protection_compensation_position_unavailable');
         }
         $positionSizeBeforeCompensation = $position->size;
-        $compensationQuantity = $this->protectionQuantity($entryOrder);
+        $compensationQuantity = $exactCompensationQuantity ?? $this->protectionQuantity($entryOrder);
         if ($compensationQuantity <= 0.00000001) {
             throw new \LogicException('fake_protection_compensation_quantity_unavailable');
         }
@@ -1771,7 +1956,11 @@ final readonly class FakeExchangeMatchingEngine
 
         $clientOrderId = 'fake-comp-' . substr(hash(
             'sha256',
-            $entryOrder->exchangeOrderId . ':' . ($entryOrder->clientOrderId ?? ''),
+            implode(':', [
+                $entryOrder->exchangeOrderId,
+                $entryOrder->clientOrderId ?? '',
+                $fillBoundary ?? self::canonicalFloat($compensationQuantity),
+            ]),
         ), 0, 32);
         $leverage = $this->floatMetadata($entryOrder->metadata, 'leverage');
         $marginMode = $this->stringMetadata($entryOrder->metadata, 'margin_mode');
@@ -1815,6 +2004,9 @@ final readonly class FakeExchangeMatchingEngine
             throw new \LogicException('fake_protection_compensation_position_size_mismatch');
         }
         $positionFlatAfterCompensation = $positionSizeAfterCompensation <= 0.00000001;
+        if ($positionFlatAfterCompensation) {
+            $this->cancelAttachedProtectionOrders($entryOrder, 'protection_compensation_flat');
+        }
         $remainingPositionProtected = $positionFlatAfterCompensation || $this->hasStopCoverage(
             $entryOrder->symbol,
             $entryOrder->positionSide,
@@ -1845,6 +2037,24 @@ final readonly class FakeExchangeMatchingEngine
         $this->stateStore->saveOrder($updated);
 
         return $updated;
+    }
+
+    private function cancelAttachedProtectionOrders(ExchangeOrderDto $entryOrder, string $reason): void
+    {
+        $parentIds = [$entryOrder->exchangeOrderId];
+        $fallbackParentOrderId = $this->stringMetadata($entryOrder->metadata, 'fallback_parent_order_id');
+        if ($fallbackParentOrderId !== null) {
+            $parentIds[] = $fallbackParentOrderId;
+        }
+
+        foreach ($this->stateStore->getOpenOrders($entryOrder->symbol) as $candidate) {
+            if (
+                $this->isTriggerOrder($candidate)
+                && \in_array($this->stringMetadata($candidate->metadata, 'parent_order_id'), $parentIds, true)
+            ) {
+                $this->cancelOpenOrder($candidate, $reason);
+            }
+        }
     }
 
     private function hasStopCoverage(
@@ -2482,7 +2692,8 @@ final readonly class FakeExchangeMatchingEngine
                     $this->clock->now(),
                     [
                         'order_id' => $order->exchangeOrderId,
-                        'client_order_id' => $order->clientOrderId,
+                        'client_order_id' => $existing->clientOrderId,
+                        'closing_client_order_id' => $order->clientOrderId,
                         'opening_order_id' => $existing->exchangeOrderId,
                         'opening_client_order_id' => $existing->clientOrderId,
                         'opening_fill_id' => $existing->exchangeFillId,
@@ -2490,6 +2701,7 @@ final readonly class FakeExchangeMatchingEngine
                     ] + $this->certifiedClosePayload($existing, $exitLedger),
                 ));
                 $this->cancelSiblingProtectionOrders($order);
+                $this->cancelActiveProtectionParent($order);
 
                 return;
             }
@@ -2507,6 +2719,7 @@ final readonly class FakeExchangeMatchingEngine
                 }
             } elseif ($this->isTriggerOrder($order)) {
                 $this->cancelSiblingProtectionOrders($order);
+                $this->cancelActiveProtectionParent($order);
             }
 
             return;
@@ -2593,6 +2806,21 @@ final readonly class FakeExchangeMatchingEngine
 
             $this->cancelOpenOrder($candidate, 'sibling_protection_filled');
         }
+    }
+
+    private function cancelActiveProtectionParent(ExchangeOrderDto $filledProtectionOrder): void
+    {
+        $parentOrderId = $this->stringMetadata($filledProtectionOrder->metadata, 'parent_order_id');
+        if ($parentOrderId === null) {
+            return;
+        }
+
+        $parent = $this->stateStore->getOrder($parentOrderId);
+        if (!$parent instanceof ExchangeOrderDto || !$this->isActiveStatus($parent->status)) {
+            return;
+        }
+
+        $this->cancelOpenOrder($parent, 'attached_protection_filled');
     }
 
     /**

@@ -178,12 +178,6 @@ final class FakePaperGoldenScenarioRunner
 
         $cancelled = $adapter->getOrder('BTCUSDT', (string) $placed->exchangeOrderId);
         $position = $adapter->getOpenPositions('BTCUSDT')[0] ?? null;
-        if ($cancelled !== null && $cancelled->filledQuantity > 0.0) {
-            $adapter->placeOrder($this->protectionRequest(
-                quantity: $cancelled->filledQuantity,
-                stopPrice: 24800.0,
-            ));
-        }
         $protectionOrders = $adapter->getOpenOrders('BTCUSDT');
         $protection = $protectionOrders[0] ?? null;
 
@@ -1374,27 +1368,6 @@ final class FakePaperGoldenScenarioRunner
             clientOrderId: $clientOrderId,
             attachedStopLossPrice: $attachedStopLossPrice,
             metadata: $metadata,
-        );
-    }
-
-    private function protectionRequest(float $quantity, float $stopPrice): PlaceOrderRequest
-    {
-        return new PlaceOrderRequest(
-            exchange: Exchange::FAKE,
-            marketType: MarketType::PERPETUAL,
-            symbol: 'BTCUSDT',
-            side: ExchangeOrderSide::SELL,
-            positionSide: ExchangePositionSide::LONG,
-            orderType: ExchangeOrderType::STOP_LOSS,
-            timeInForce: ExchangeTimeInForce::GTC,
-            quantity: $quantity,
-            price: null,
-            stopPrice: $stopPrice,
-            reduceOnly: true,
-            postOnly: false,
-            leverage: 3,
-            marginMode: 'isolated',
-            clientOrderId: 'golden-partial-protection',
         );
     }
 

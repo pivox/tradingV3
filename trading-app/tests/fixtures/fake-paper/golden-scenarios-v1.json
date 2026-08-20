@@ -20,11 +20,14 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testCancelledPartialClientOrderIdReplayPreservesFilledSemantics"],
+      "evidence": [
+        "tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testFirstOrdinaryPartialFillImmediatelyCreatesExactStopProtection",
+        "tests/Exchange/Adapter/FakeExchangeAdapterTest.php::testPartialProtectionSurvivesRestartAndCancelReplayWithoutDuplication"
+      ],
       "gap_codes": [],
       "id": 3,
       "name": "partial_fill_then_cancel",
-      "requirement": "A maker order can partially fill before its remaining quantity is cancelled.",
+      "requirement": "A maker order can partially fill, immediately protect the exposure, then cancel its remaining quantity.",
       "runner": "partial_fill_then_cancel",
       "status": "executable"
     },
