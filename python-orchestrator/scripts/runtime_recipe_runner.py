@@ -156,6 +156,11 @@ class DeterministicSeed:
         if type(value) is dict and all(type(key) is str for key in value):
             if not value:
                 raise ValueError("fake_deterministic_seed_component_invalid")
+            for key in value:
+                if re.fullmatch(r"(?:0|[1-9][0-9]*|-[1-9][0-9]*)", key):
+                    numeric_key = int(key)
+                    if -(2**63) <= numeric_key < 2**63:
+                        raise ValueError("fake_deterministic_seed_component_invalid")
             return {key: self._canonicalize(item) for key, item in value.items()}
         raise ValueError("fake_deterministic_seed_component_invalid")
 
@@ -297,9 +302,16 @@ class RecipeRunner:
                         temporal_available=self.config.temporal_available,
                         temporal_dry_run_command=self.config.temporal_dry_run_command,
                         cleanup=self.config.cleanup,
-                        deterministic_seed=self.deterministic_seed.derive_hex(
-                            "runtime-recipe.demo-child-seed.v1",
-                            {"exchange_scope": exchange_scope, "target_exchange": target_exchange},
+                        deterministic_seed=(
+                            self.config.deterministic_seed
+                            if exchange_scope == "global"
+                            else self.deterministic_seed.derive_hex(
+                                "runtime-recipe.demo-child-seed.v1",
+                                {
+                                    "exchange_scope": exchange_scope,
+                                    "target_exchange": target_exchange,
+                                },
+                            )
                         ),
                     ),
                     http_client=self.http,
@@ -793,8 +805,9 @@ class RecipeRunner:
             f"{BACKEND_DETERMINISM_PROOF_SCHEMA_VERSION}-"
             f"{fixture_hash[7:23]}"
         )
-        first = self._run_dashboard(dashboard_id, recipe_key)
-        replay = self._run_dashboard(dashboard_id, recipe_key)
+        dispatch_key = self._scenario_key(recipe_key)
+        first = self._run_dashboard(dashboard_id, dispatch_key)
+        replay = self._run_dashboard(dashboard_id, dispatch_key)
         detail = self._fetch_run_detail(first)
         observed = {
             item["set_id"]: item
@@ -865,7 +878,7 @@ class RecipeRunner:
                     "dry_run": payload.get("dry_run"),
                     "exchange": payload.get("exchange"),
                     "lineage": {
-                        "orchestration_run_id": first.get("run_id"),
+                        "orchestration_run_id": "OPERATIONAL_RUN_ID_REDACTED",
                         "orchestration_set_id": set_id,
                     },
                     "market_type": payload.get("market_type"),

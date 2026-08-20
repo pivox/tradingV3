@@ -391,7 +391,15 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
 
     assert first["results"][0]["status"] == "PASS"
     assert restarted["results"][0]["status"] == "PASS"
-    assert api.new_run_dispatch_count == 1
+    assert api.new_run_dispatch_count == 2
+    r12_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+    assert r12_keys[0] == r12_keys[1]
+    assert r12_keys[2] == r12_keys[3]
+    assert r12_keys[0] != r12_keys[2]
     assert first_json == (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
     assert first_markdown == (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
 
@@ -414,6 +422,9 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert {tuple(item["symbols"]) for item in recipe["sets"]} == {("BTCUSDT",)}
     assert len({item["config_hash"] for item in recipe["sets"]}) == 3
     assert len({item["lineage"]["orchestration_set_id"] for item in recipe["sets"]}) == 3
+    assert {
+        item["lineage"]["orchestration_run_id"] for item in recipe["sets"]
+    } == {"OPERATIONAL_RUN_ID_REDACTED"}
     assert recipe["disabled_sets"] == ["recipe_fake_multi_disabled"]
     assert recipe["locks"]["orchestration"]["scope"] == (
         "mtf_profile+exchange+market_type+symbol"
@@ -515,7 +526,7 @@ def test_seed_derivation_matches_php_contract_vector():
 
 @pytest.mark.parametrize(
     "component",
-    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}, [], {}],
+    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}, {"1": "bad-key"}, [], {}],
 )
 def test_seed_derivation_rejects_noncanonical_components(component: object):
     with pytest.raises(ValueError, match="fake_deterministic_seed_component_invalid"):
@@ -1270,6 +1281,23 @@ def test_runner_exports_demo_exchange_report_by_exchange(tmp_path: Path, monkeyp
         for request in api.requests
         if isinstance(request["json"], dict)
     )
+
+
+def test_demo_exchange_runner_keeps_backend_seed_for_global_r12(tmp_path: Path):
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="demo-exchanges",
+        ),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    global_r12 = report["exchange_results"]["global"][0]
+
+    assert global_r12["scenario"] == "R12"
+    assert global_r12["status"] == "PASS"
+    assert global_r12["evidence"]["recipe_report"]["determinism"]["backend_verified"] is True
 
 
 def test_demo_exchange_runner_materializes_scenario_iterable_once(
