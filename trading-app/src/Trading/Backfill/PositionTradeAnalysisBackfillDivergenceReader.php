@@ -66,7 +66,7 @@ SELECT
     v2.gross_realized_pnl_usdt AS v2_gross_realized_pnl_usdt,
     v2.net_pnl_usdt AS v2_net_pnl_usdt,
     v1.holding_time_sec AS v1_holding_time_sec,
-    v2.canonical_holding_time_sec AS v2_holding_time_sec,
+    v2.holding_time_sec AS v2_holding_time_sec,
     v1.mfe_pct AS v1_mfe_pct,
     v2.mfe_pct AS v2_mfe_pct,
     v1.mae_pct AS v1_mae_pct,
@@ -77,9 +77,9 @@ SELECT
     v2.close_match_status AS v2_close_match_status,
     v2.close_matched_by AS v2_close_matched_by,
     v2.analysis_status AS v2_analysis_status,
-    v2.canonical_cost_completeness AS v2_cost_completeness,
+    v2.cost_completeness AS v2_cost_completeness,
     v2.position_fully_closed AS v2_position_fully_closed,
-    v2.canonical_pnl_quality_flags AS v2_pnl_quality_flags
+    v2.pnl_quality_flags AS v2_pnl_quality_flags
 FROM position_trade_analysis v1
 FULL OUTER JOIN position_trade_analysis_v2 v2
     ON v2.entry_event_id = v1.entry_event_id
