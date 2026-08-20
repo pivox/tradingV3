@@ -13,7 +13,7 @@ complete local order, fill, position and protection snapshot. After two raw
 events are acknowledged, the client must disconnect and expose
 `requiresResync=true`. A second drain must fail before any further projection.
 
-The runner then calls `ExchangeReconciliationService::reconcileBase()` against
+The runner then calls the canonical `ExchangeReconciliationService::reconcile()` against
 the Fake adapter, verifies the authoritative local snapshot and passes the
 result to `FakeExchangeWsClient::completeSnapshotResync()`. Only after that
 handshake may it reconnect, create a second protected symbol and drain the new

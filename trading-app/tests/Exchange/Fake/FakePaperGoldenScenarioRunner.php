@@ -68,6 +68,7 @@ final class FakePaperGoldenScenarioRunner
         'stop_loss_attach_failure',
         'tp1_then_trailing',
         'gap_at_stop_loss',
+        'websocket_disconnect_resync',
         'duplicate_out_of_order_event',
         'restart_with_open_position',
         'funding',
@@ -104,6 +105,7 @@ final class FakePaperGoldenScenarioRunner
             'stop_loss_attach_failure' => $this->stopLossAttachFailure(),
             'tp1_then_trailing' => $this->tp1ThenTrailing(),
             'gap_at_stop_loss' => $this->gapAtStopLoss(),
+            'websocket_disconnect_resync' => $this->websocketDisconnectResync(),
             'duplicate_out_of_order_event' => $this->duplicateOutOfOrderEvent(),
             'restart_with_open_position' => $this->restartWithOpenPosition(),
             'funding' => $this->funding(),
@@ -725,6 +727,101 @@ final class FakePaperGoldenScenarioRunner
             'order_status' => $stop?->status->value,
             'stop_price' => $stop?->stopPrice,
         ];
+    }
+
+    /** @return array<string,mixed> */
+    private function websocketDisconnectResync(): array
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_paper_golden_disconnect_resync_');
+        if ($stateFile === false) {
+            throw new \RuntimeException('Unable to allocate the disconnect/resync golden state file.');
+        }
+        @unlink($stateFile);
+
+        try {
+            [$state, $adapter] = $this->exchange($stateFile);
+            $adapter->placeOrder($this->request(
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'golden-disconnect-btc',
+                attachedStopLossPrice: 24800.0,
+            ));
+
+            $projectionStore = new GoldenPrivateWsProjectionStore();
+            $bus = new ExchangeEventBus($projectionStore, new NullLogger());
+            $ingestion = new ExchangeWsIngestionService(
+                new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
+                $bus,
+                new NullLogger(),
+            );
+            $client = new FakeExchangeWsClient($state, disconnectAfterAcknowledgedEvents: 2);
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('The disconnect/resync golden scenario did not disconnect.');
+            } catch (FakePrivateWsException $exception) {
+                $disconnectCode = $exception->errorCode;
+                $lastAcknowledgedSequence = $exception->lastAcknowledgedSequence;
+            }
+
+            $projectionCountAtDisconnect = $projectionStore->projectedCount;
+            try {
+                $ingestion->drain($client);
+                throw new \LogicException('Projection resumed before the Fake snapshot reconciliation.');
+            } catch (FakePrivateWsException $exception) {
+                $blockedBeforeSnapshotCode = $exception->errorCode;
+            }
+            $projectionBlockedBeforeSnapshot = $projectionStore->projectedCount === $projectionCountAtDisconnect;
+
+            $reconciliation = (new ExchangeReconciliationService(
+                $bus,
+                $projectionStore,
+                $this->clock(),
+                new NullLogger(),
+            ))->reconcile($adapter);
+            $client->completeSnapshotResync($reconciliation);
+            $client->reconnect();
+
+            $adapter->placeOrder($this->request(
+                symbol: 'ETHUSDT',
+                orderType: ExchangeOrderType::MARKET,
+                price: null,
+                clientOrderId: 'golden-disconnect-eth',
+                attachedStopLossPrice: 1750.0,
+            ));
+            $resumed = $ingestion->drain($client);
+            $empty = $ingestion->drain($client);
+            $signatures = $projectionStore->normalizedSignatures();
+            $unprotectedPositions = $reconciliation->metadata['unprotected_positions'] ?? null;
+            if (!\is_array($unprotectedPositions)) {
+                throw new \LogicException('The disconnect/resync snapshot protection proof is unavailable.');
+            }
+
+            return [
+                'blocked_before_snapshot_code' => $blockedBeforeSnapshotCode,
+                'disconnect_code' => $disconnectCode,
+                'empty_raw_event_count' => $empty->rawEventsRead,
+                'last_acknowledged_sequence' => $lastAcknowledgedSequence,
+                'normalized_projection_count' => \count($signatures),
+                'normalized_projections_unique' => \count($signatures) === \count(array_unique($signatures)),
+                'projection_blocked_before_snapshot' => $projectionBlockedBeforeSnapshot,
+                'projection_digest' => hash('sha256', implode(':', $signatures)),
+                'requires_resync_after_snapshot' => $client->requiresResync(),
+                'resumed_projected_event_count' => $resumed->eventsProjected,
+                'resumed_raw_event_count' => $resumed->rawEventsRead,
+                'snapshot_corrections' => $reconciliation->correctionsApplied,
+                'snapshot_fill_count' => $reconciliation->fillsImported,
+                'snapshot_order_count' => $reconciliation->ordersChecked,
+                'snapshot_position_count' => $reconciliation->positionsChecked,
+                'snapshot_unprotected_position_count' => \count($unprotectedPositions),
+            ];
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+            @unlink($stateFile . '.private-ws-consumer.lock');
+            foreach (glob($stateFile . '.tmp.*') ?: [] as $temporaryFile) {
+                @unlink($temporaryFile);
+            }
+        }
     }
 
     /** @return array<string,mixed> */

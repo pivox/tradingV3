@@ -25,7 +25,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'stop_loss_attach_failure' => ['executable', []],
         'tp1_then_trailing' => ['executable', []],
         'gap_at_stop_loss' => ['executable', []],
-        'websocket_disconnect_resync' => ['partial', ['websocket_disconnect_snapshot_resync_not_exercised']],
+        'websocket_disconnect_resync' => ['executable', []],
         'duplicate_out_of_order_event' => ['executable', []],
         'restart_with_open_position' => ['executable', []],
         'funding' => ['executable', []],
