@@ -63,6 +63,10 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
                 'input_hash' => $snapshot->inputHash,
                 'observed_at' => $ruleInput->observedAt->format(DATE_ATOM),
                 'valid_until' => $ruleInput->validUntil->format(DATE_ATOM),
+                'best_bid' => (float) $snapshot->bestBid,
+                'best_ask' => (float) $snapshot->bestAsk,
+                'spread_bps' => (float) $snapshot->spreadBps,
+                'book_observed_at' => $snapshot->bookHappenedAt,
                 'expected_market_identity' => $marketIdentity->toArray(),
             ]);
         } catch (\Throwable $exception) {

@@ -14,7 +14,7 @@ final class ModeContractValidator
     private const PUBLISHED_VERSIONS = [
         'day_trading' => ['1.0.0', '1.1.0'],
         'scalping' => ['1.0.0', '1.1.0'],
-        'micro_scalping' => ['1.0.0'],
+        'micro_scalping' => ['1.0.0', '1.1.0'],
     ];
     private const GOVERNANCE_TARGETS = [
         'promotion' => 'shadow',
@@ -69,7 +69,7 @@ final class ModeContractValidator
             ));
         }
         $isShadowContract = $document['mode_version'] === '1.1.0'
-            && in_array($document['mode_id'], ['day_trading', 'scalping'], true);
+            && in_array($document['mode_id'], ['day_trading', 'scalping', 'micro_scalping'], true);
 
         $lifecycle = $this->mapping($document, 'lifecycle');
         $this->assertExactKeys($lifecycle, ['status', 'executable', 'rationale'], 'lifecycle');
@@ -163,7 +163,7 @@ final class ModeContractValidator
             }
             $this->assertExactKeys($input, ['kind', 'timeframes', 'fields'], 'data_contract.required_inputs[]');
             $this->assertString($input, 'kind');
-            if (!in_array($input['kind'], ['candles', 'order_book'], true)) {
+            if (!in_array($input['kind'], ['candles', 'order_book', 'public_trades'], true)) {
                 throw new ModeContractException('data_contract required input kind is invalid.');
             }
             foreach ($this->stringList($input, 'timeframes', false) as $timeframe) {
@@ -373,7 +373,12 @@ final class ModeContractValidator
             throw new ModeContractException(sprintf('%s 1.1.0 horizon must be a mapping.', $modeId));
         }
         $this->assertExactKeys($value, ['maximum_duration', 'daily_boundary_time', 'daily_boundary_timezone', 'close_before_boundary'], 'horizon.value');
-        $duration = $modeId === 'day_trading' ? 'PT8H' : 'PT2H';
+        $duration = match ($modeId) {
+            'day_trading' => 'PT8H',
+            'scalping' => 'PT2H',
+            'micro_scalping' => 'PT30M',
+            default => throw new ModeContractException(sprintf('Unsupported shadow mode "%s".', $modeId)),
+        };
         if (!$this->frozenValuesEqual($value, ['maximum_duration' => $duration, 'daily_boundary_time' => '00:00:00', 'daily_boundary_timezone' => 'UTC', 'close_before_boundary' => true])) {
             throw new ModeContractException(sprintf('%s 1.1.0 horizon differs from the frozen shadow decision.', $modeId));
         }
@@ -404,28 +409,39 @@ final class ModeContractValidator
     /** @param array<string, mixed> $document */
     private function assertShadowFrozenValues(array $document): void
     {
-        $frozen = $document['mode_id'] === 'day_trading'
-            ? [
+        $frozen = match ($document['mode_id']) {
+            'day_trading' => [
                 'timeframes' => ['regime' => ['4h'], 'context' => ['1h'], 'trigger' => ['15m'], 'execution' => ['15m'], 'confirmations' => ['5m', '1m']],
                 'cadence' => 'PT15M',
                 'trade_budget' => 5.0,
                 'daily_loss_cap' => ['percent_equity' => 6.0, 'absolute_quote' => 30.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
                 'mode_exposure_cap' => 100.0,
                 'leverage' => 2.0,
-            ]
-            : [
+            ],
+            'scalping' => [
                 'timeframes' => ['regime' => ['1h'], 'context' => ['15m'], 'trigger' => ['5m'], 'execution' => ['5m'], 'confirmations' => ['1m']],
                 'cadence' => 'PT5M',
                 'trade_budget' => 2.0,
                 'daily_loss_cap' => ['percent_equity' => 6.0, 'absolute_quote' => 40.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
                 'mode_exposure_cap' => 75.0,
                 'leverage' => 3.0,
-            ];
+            ],
+            'micro_scalping' => [
+                'timeframes' => ['regime' => ['5m'], 'context' => ['5m'], 'trigger' => ['1m'], 'execution' => ['1m'], 'confirmations' => ['1m']],
+                'cadence' => 'PT1M',
+                'validity' => 'PT5S',
+                'trade_budget' => 0.4,
+                'daily_loss_cap' => ['percent_equity' => 2.5, 'absolute_quote' => 50.0, 'quote_currency' => 'USDT', 'day_timezone' => 'UTC', 'day_boundary_local' => '00:00:00', 'include_unrealized_loss' => true],
+                'mode_exposure_cap' => 20.0,
+                'leverage' => 2.0,
+            ],
+            default => throw new ModeContractException('Unsupported shadow mode.'),
+        };
 
         if ($document['lifecycle']['status'] !== 'shadow' || $document['lifecycle']['executable'] !== true
             || $document['timeframes'] !== $frozen['timeframes']
             || $document['cadence']['evaluation']['value'] !== $frozen['cadence']
-            || $document['cadence']['validity_window']['value'] !== $frozen['cadence']
+            || $document['cadence']['validity_window']['value'] !== ($frozen['validity'] ?? $frozen['cadence'])
             || !$this->frozenValuesEqual($document['risk']['trade_budget']['value'], $frozen['trade_budget'])
             || !$this->frozenValuesEqual($document['risk']['daily_loss_cap']['value'], $frozen['daily_loss_cap'])
             || !$this->frozenValuesEqual($document['risk']['mode_exposure_cap']['value'], $frozen['mode_exposure_cap'])
@@ -436,6 +452,65 @@ final class ModeContractValidator
 
         if ($document['mode_id'] === 'scalping') {
             $this->assertScalpingShadowDataAndMetadata($document);
+        }
+        if ($document['mode_id'] === 'micro_scalping') {
+            $this->assertMicroScalpingShadowDataAndMetadata($document);
+        }
+    }
+
+    /** @param array<string, mixed> $document */
+    private function assertMicroScalpingShadowDataAndMetadata(array $document): void
+    {
+        if ($document['data_contract'] !== [
+            'required_inputs' => [
+                ['kind' => 'candles', 'timeframes' => ['5m', '1m'], 'fields' => ['open', 'high', 'low', 'close', 'volume']],
+                ['kind' => 'order_book', 'timeframes' => ['1m'], 'fields' => ['best_bid', 'best_ask', 'spread_bps']],
+                ['kind' => 'public_trades', 'timeframes' => ['1m'], 'fields' => ['price', 'quantity', 'aggressor_side', 'trade_id', 'timestamp']],
+            ],
+            'missing_data_policy' => 'reject',
+        ]) {
+            throw new ModeContractException('micro_scalping 1.1.0 data contract differs from the frozen shadow contract.');
+        }
+
+        $source = 'GitHub issue #308 approved decision 2026-08-20';
+        foreach ([
+            'horizon' => 'Positions are limited to thirty minutes and closed before the UTC daily boundary.',
+            'session_policy' => 'Crypto evaluation is continuous and all daily accounting is in UTC.',
+            'cadence.evaluation' => 'The immutable contract evaluates on the one-minute execution cadence.',
+            'cadence.validity_window' => 'Authenticated microstructure evidence and its decision expire after five seconds.',
+            'risk.trade_budget' => 'The value is 0.4 percentage points of equity per trade, never a 40-percent fraction.',
+            'risk.daily_loss_cap' => 'The lower of 2.5 percent equity and 50 USDT applies in UTC to realized and unrealized loss.',
+            'risk.max_concurrent_positions' => 'Three positions is the cap and pending entries reserve a slot.',
+            'risk.mode_exposure_cap' => 'Aggregate micro-scalping notional is capped at 20 percent of equity.',
+            'leverage' => 'The explicit 2x cap removes every legacy timeframe multiplier.',
+            'order_policy' => 'Only isolated limit orders are admissible; market fallback is prohibited.',
+        ] as $path => $justification) {
+            $decision = match ($path) {
+                'cadence.evaluation' => $document['cadence']['evaluation'],
+                'cadence.validity_window' => $document['cadence']['validity_window'],
+                'risk.trade_budget' => $document['risk']['trade_budget'],
+                'risk.daily_loss_cap' => $document['risk']['daily_loss_cap'],
+                'risk.max_concurrent_positions' => $document['risk']['max_concurrent_positions'],
+                'risk.mode_exposure_cap' => $document['risk']['mode_exposure_cap'],
+                default => $document[$path],
+            };
+            if ($decision['source'] !== $source || $decision['justification'] !== $justification) {
+                throw new ModeContractException(sprintf('micro_scalping 1.1.0 %s metadata differs from the frozen shadow contract.', $path));
+            }
+        }
+
+        if ($document['provenance'] !== [
+            ['path' => 'horizon', 'source' => $source, 'unit' => 'holding_horizon_policy', 'justification' => 'PT30M and the UTC close boundary are explicit decisions.'],
+            ['path' => 'session_policy', 'source' => $source, 'unit' => 'session_policy', 'justification' => 'Continuous crypto session with UTC accounting is explicit.'],
+            ['path' => 'timeframes', 'source' => $source, 'unit' => 'timeframe_roles', 'justification' => '5m/5m/1m/1m/1m are the approved regime, context, trigger, execution and confirmation roles.'],
+            ['path' => 'cadence', 'source' => $source, 'unit' => 'duration', 'justification' => 'Evaluation is PT1M while proof and decision validity are PT5S.'],
+            ['path' => 'risk', 'source' => $source, 'unit' => 'canonical_risk_policy', 'justification' => 'Risk, daily cap, concurrency and exposure are explicit fail-closed limits.'],
+            ['path' => 'leverage', 'source' => $source, 'unit' => 'leverage_multiple', 'justification' => 'The 2x cap supersedes the legacy x20 multiplier.'],
+            ['path' => 'order_policy', 'source' => $source, 'unit' => 'policy', 'justification' => 'Isolated limit intent has no market fallback.'],
+            ['path' => 'compatible_setup_ids', 'source' => 'GitHub issue #300 catalog for #301', 'unit' => 'setup_id', 'justification' => 'The immutable contract uses the existing two-setup micro-scalping catalog.'],
+            ['path' => 'data_contract.required_inputs', 'source' => $source, 'unit' => 'required_market_data', 'justification' => 'Candles, authenticated order book and authenticated public trades are fail-closed inputs.'],
+        ]) {
+            throw new ModeContractException('micro_scalping 1.1.0 decision metadata differs from the frozen shadow contract.');
         }
     }
 

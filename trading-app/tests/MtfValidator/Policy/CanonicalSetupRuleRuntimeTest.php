@@ -6,6 +6,9 @@ namespace App\Tests\MtfValidator\Policy;
 
 use App\Indicator\Condition\ConditionInterface;
 use App\Indicator\Condition\ConditionResult;
+use App\Indicator\Condition\OrderFlowImbalanceGteCondition;
+use App\Indicator\Condition\OrderFlowImbalanceLteCondition;
+use App\Indicator\Condition\SpreadBpsLteCondition;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntimeResult;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
@@ -266,6 +269,49 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         self::assertContains('blocked_condition:spread_bps_lte', $result->trace['blockers']);
     }
 
+    public function testExecutableMicroShadowPassesOnlyWithFreshAuthenticatedMicrostructure(): void
+    {
+        $snapshot = $this->microstructureSnapshot();
+        $provider = new class($snapshot) implements CanonicalMicrostructureSnapshotProviderInterface {
+            public function __construct(private readonly CanonicalMicrostructureSnapshot $snapshot) {}
+            public function snapshotFor(LineageContext $identity, \DateTimeImmutable $evaluatedAt): ?CanonicalMicrostructureSnapshot
+            {
+                return $this->snapshot;
+            }
+        };
+        $inputs = [
+            '5m' => self::indicatorInput('5m', '2026-08-14T11:55:00Z'),
+            '1m' => self::indicatorInput('1m', '2026-08-14T11:59:00Z'),
+        ];
+        foreach ($inputs as $timeframe => &$input) {
+            $input['snapshot_identity'] = [
+                'timeframe' => $timeframe,
+                'symbol' => 'BTCUSDT',
+                'exchange' => 'okx',
+                'environment' => 'mainnet',
+                'market_type' => 'perpetual',
+            ];
+        }
+        unset($input);
+
+        $result = (new CanonicalSetupRuleRuntime(
+            $this->passingConditions('1.2.0'),
+            microstructureInputs: new CanonicalMicrostructureRuntimeInputResolver($provider),
+        ))->evaluate(
+            $this->executableMicroLineage(),
+            $inputs,
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000Z'),
+        );
+
+        self::assertTrue($result->passed, $result->reasonCode);
+        self::assertSame('setup_rules_passed', $result->reasonCode);
+        self::assertSame('1.2.0', $result->trace['catalog_version']);
+        self::assertSame('1m', $result->trace['execution_timeframe']);
+        self::assertSame(['1m'], $result->trace['mandatory_confirmations']);
+        self::assertSame('ready', $result->trace['microstructure_input']['status']);
+        self::assertSame($snapshot->inputHash, $result->trace['microstructure_input']['input_hash']);
+    }
+
     public function testLegacyAndCatalogMismatchRejectBeforeEvaluation(): void
     {
         $runtime = new CanonicalSetupRuleRuntime([]);
@@ -402,6 +448,35 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         ]);
     }
 
+    private function executableMicroLineage(): LineageContext
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
+            'okx', 'mainnet', 'long', ShadowExecutionCapability::Paper,
+        ));
+
+        return LineageContext::fromOrchestratorPayload([
+            'origin' => 'orchestrator',
+            'orchestration_run_id' => 'run-micro-shadow',
+            'orchestration_set_id' => 'set-micro-shadow',
+            'mode_id' => 'micro_scalping',
+            'mode_version' => '1.1.0',
+            'setup_id' => 'micro_scalping.momentum_ofi.long',
+            'setup_version' => '1.1.0',
+            'config_hash' => $snapshot->configHash,
+            'condition_catalog_hash' => $snapshot->conditionCatalogHash,
+            'side' => 'LONG',
+            'exchange' => 'okx',
+            'environment' => 'mainnet',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'decision_key' => 'decision-micro-shadow',
+            'dry_run' => true,
+            'effective_config_reference' => 'effective-config:micro-shadow',
+            'effective_config_snapshot' => $snapshot->toArray(),
+        ]);
+    }
+
     private function microstructureSnapshot(): CanonicalMicrostructureSnapshot
     {
         $checksum = 'sha256:' . str_repeat('f', 64);
@@ -412,7 +487,7 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             [new NormalizedBacktestPublicBook(
                 str_repeat('a', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT',
                 '2026-08-14T12:00:59.000000Z', '2026-08-14T12:00:59.000000Z',
-                '99', '10', '101', '12', 'contracts', '2', '3', 'ws_books',
+                '99.96', '10', '100.04', '12', 'contracts', '2', '3', 'ws_books',
             )],
             [
                 new NormalizedBacktestPublicTrade(str_repeat('1', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT', '1', '2026-08-14T12:00:10.000000Z', '2026-08-14T12:00:10.000000Z', 'buy', '100', '3', 'contracts'),
@@ -470,13 +545,17 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
     }
 
     /** @return list<ConditionInterface> */
-    private function passingConditions(): array
+    private function passingConditions(string $catalogVersion = '1.0.0'): array
     {
         $ids = (new \App\TradingCore\Rules\Catalog\ConditionCatalogLoader())->loadFile(
-            dirname(__DIR__, 3) . '/config/trading/condition_catalog/1.0.0.yaml',
+            dirname(__DIR__, 3) . '/config/trading/condition_catalog/' . $catalogVersion . '.yaml',
         )->conditionIds();
 
-        return array_map(static fn (string $id): ConditionInterface => new class($id) implements ConditionInterface {
+        return array_map(static fn (string $id): ConditionInterface => match ($id) {
+            SpreadBpsLteCondition::NAME => new SpreadBpsLteCondition(),
+            OrderFlowImbalanceGteCondition::NAME => new OrderFlowImbalanceGteCondition(),
+            OrderFlowImbalanceLteCondition::NAME => new OrderFlowImbalanceLteCondition(),
+            default => new class($id) implements ConditionInterface {
             public function __construct(private readonly string $id)
             {
             }
@@ -491,6 +570,6 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             {
                 return new ConditionResult($this->id, true);
             }
-        }, $ids);
+        }}, $ids);
     }
 }

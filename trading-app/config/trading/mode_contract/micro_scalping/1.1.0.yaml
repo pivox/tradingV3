@@ -1,0 +1,51 @@
+schema_version: '1.0.0'
+mode_id: micro_scalping
+mode_version: '1.1.0'
+lifecycle: { status: shadow, executable: true, rationale: 'Executable only in Shadow/Paper/backtest with authenticated public microstructure; certification remains pending.' }
+horizon:
+  state: defined
+  value: { maximum_duration: PT30M, daily_boundary_time: '00:00:00', daily_boundary_timezone: UTC, close_before_boundary: true }
+  unit: holding_horizon_policy
+  source: 'GitHub issue #308 approved decision 2026-08-20'
+  justification: 'Positions are limited to thirty minutes and closed before the UTC daily boundary.'
+session_policy: { state: defined, value: { calendar: continuous_crypto, timezone: UTC }, unit: session_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Crypto evaluation is continuous and all daily accounting is in UTC.' }
+timeframes:
+  regime: ['5m']
+  context: ['5m']
+  trigger: ['1m']
+  execution: ['1m']
+  confirmations: ['1m']
+cadence:
+  evaluation: { state: defined, value: PT1M, unit: duration, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The immutable contract evaluates on the one-minute execution cadence.' }
+  validity_window: { state: defined, value: PT5S, unit: duration, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Authenticated microstructure evidence and its decision expire after five seconds.' }
+risk:
+  trade_budget: { state: defined, value: 0.4, unit: percent_equity_per_trade, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The value is 0.4 percentage points of equity per trade, never a 40-percent fraction.' }
+  daily_loss_cap: { state: defined, value: { percent_equity: 2.5, absolute_quote: 50.0, quote_currency: USDT, day_timezone: UTC, day_boundary_local: '00:00:00', include_unrealized_loss: true }, unit: compound_percent_equity_and_quote_per_day, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The lower of 2.5 percent equity and 50 USDT applies in UTC to realized and unrealized loss.' }
+  max_concurrent_positions: { state: defined, value: { limit: 3, include_pending_entries: true }, unit: positions, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Three positions is the cap and pending entries reserve a slot.' }
+  mode_exposure_cap: { state: defined, value: 20.0, unit: percent_equity_notional, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Aggregate micro-scalping notional is capped at 20 percent of equity.' }
+leverage: { state: defined, value: 2.0, unit: leverage_multiple, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The explicit 2x cap removes every legacy timeframe multiplier.' }
+order_policy: { state: defined, value: { margin_mode: isolated, preferred_type: limit, market_fallback: false }, unit: policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Only isolated limit orders are admissible; market fallback is prohibited.' }
+compatible_setup_ids:
+  - micro_scalping.momentum_ofi.long
+  - micro_scalping.momentum_ofi.short
+data_contract:
+  required_inputs:
+    - { kind: candles, timeframes: ['5m', '1m'], fields: [open, high, low, close, volume] }
+    - { kind: order_book, timeframes: ['1m'], fields: [best_bid, best_ask, spread_bps] }
+    - { kind: public_trades, timeframes: ['1m'], fields: [price, quantity, aggressor_side, trade_id, timestamp] }
+  missing_data_policy: reject
+governance:
+  promotion: { target_status: shadow, conditions: ['#132 and #191 evidence attached', 'independent risk review approved', 'at least 50 certified trades per executable cell'], action: 'publish a new semantic version; never mutate this shadow version' }
+  suspension: { target_status: draft, conditions: ['kill switch asserted', 'authenticated data or cost contract breach', 'daily loss or portfolio invariant breached'], action: 'reject new entries and preserve complete lineage' }
+  rollback: { target_status: retired, conditions: ['certified baseline regression', 'schema or provenance defect', 'risk invariant breach'], action: 'retire this exact version; no implicit fallback' }
+ownership_model: mode-contract-ownership-v1
+provenance:
+  - { path: horizon, source: 'GitHub issue #308 approved decision 2026-08-20', unit: holding_horizon_policy, justification: 'PT30M and the UTC close boundary are explicit decisions.' }
+  - { path: session_policy, source: 'GitHub issue #308 approved decision 2026-08-20', unit: session_policy, justification: 'Continuous crypto session with UTC accounting is explicit.' }
+  - { path: timeframes, source: 'GitHub issue #308 approved decision 2026-08-20', unit: timeframe_roles, justification: '5m/5m/1m/1m/1m are the approved regime, context, trigger, execution and confirmation roles.' }
+  - { path: cadence, source: 'GitHub issue #308 approved decision 2026-08-20', unit: duration, justification: 'Evaluation is PT1M while proof and decision validity are PT5S.' }
+  - { path: risk, source: 'GitHub issue #308 approved decision 2026-08-20', unit: canonical_risk_policy, justification: 'Risk, daily cap, concurrency and exposure are explicit fail-closed limits.' }
+  - { path: leverage, source: 'GitHub issue #308 approved decision 2026-08-20', unit: leverage_multiple, justification: 'The 2x cap supersedes the legacy x20 multiplier.' }
+  - { path: order_policy, source: 'GitHub issue #308 approved decision 2026-08-20', unit: policy, justification: 'Isolated limit intent has no market fallback.' }
+  - { path: compatible_setup_ids, source: 'GitHub issue #300 catalog for #301', unit: setup_id, justification: 'The immutable contract uses the existing two-setup micro-scalping catalog.' }
+  - { path: data_contract.required_inputs, source: 'GitHub issue #308 approved decision 2026-08-20', unit: required_market_data, justification: 'Candles, authenticated order book and authenticated public trades are fail-closed inputs.' }

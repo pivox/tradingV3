@@ -60,11 +60,29 @@ final class SetupContractValidator
             'commit' => '6c42d14d20798f6fee9d55b306ccaa0539af5e79',
         ],
     ];
+    private const MICRO_SCALPING_SHADOW_SOURCE_ORIGINS = [
+        'micro_scalping.momentum_ofi.long' => [
+            'file' => 'src/MtfValidator/config/validations.scalper_micro.yaml',
+            'line_range' => '5-19,87-115',
+            'content_sha256' => '47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2',
+            'commit' => '75a4cef8852f99d6e8202422fdd0531cdfce60bb',
+        ],
+        'micro_scalping.momentum_ofi.short' => [
+            'file' => 'src/MtfValidator/config/validations.scalper_micro.yaml',
+            'line_range' => '5-19,95-125',
+            'content_sha256' => '47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2',
+            'commit' => '75a4cef8852f99d6e8202422fdd0531cdfce60bb',
+        ],
+    ];
     /** Canonical documents are explicit in setup-contract.schema.json scalping* $defs. */
     private const SCALPING_SHADOW_DOCUMENT_HASHES = [
         'scalping.trend_continuation.long' => '7ebaae24166be3a248a39b66bb545c52b7eb4498f9c0419bb2dcf919de23136e',
         'scalping.pullback.long' => 'a02681c73c81609d4cef23b88c7e3acce22b06837f3573c90c113c8d979794ed',
         'scalping.trend_momentum.short' => '66d12bb65c67b44126a865abc67d8f716320c6c557d33a6a14c75695ca99f769',
+    ];
+    private const MICRO_SCALPING_SHADOW_DOCUMENT_HASHES = [
+        'micro_scalping.momentum_ofi.long' => '3d9361dd5fb6357786ee2c193a2f19ccb88ee875c7e6e14c0d12672e3ebd003d',
+        'micro_scalping.momentum_ofi.short' => '392e735295e8d2529479556cee036f27f052fca8f18b73fb87848398edd5a672',
     ];
     private const TOP_KEYS = [
         'schema_version', 'setup_id', 'setup_version', 'status', 'executable', 'family', 'side', 'thesis',
@@ -100,7 +118,11 @@ final class SetupContractValidator
             'scalping.pullback.long',
             'scalping.trend_momentum.short',
         ], true) && ($document['setup_version'] ?? null) === '1.1.0';
-        $isExecutableShadow = $isDayTradingLongShadow || $isScalpingShadow;
+        $isMicroScalpingShadow = in_array($document['setup_id'] ?? null, [
+            'micro_scalping.momentum_ofi.long',
+            'micro_scalping.momentum_ofi.short',
+        ], true) && ($document['setup_version'] ?? null) === '1.1.0';
+        $isExecutableShadow = $isDayTradingLongShadow || $isScalpingShadow || $isMicroScalpingShadow;
         $topKeys = self::TOP_KEYS;
         if ($isCrashDecision) {
             $topKeys = array_values(array_diff($topKeys, ['source_origin']));
@@ -116,6 +138,8 @@ final class SetupContractValidator
             'scalping.trend_continuation.long',
             'scalping.pullback.long',
             'scalping.trend_momentum.short',
+            'micro_scalping.momentum_ofi.long',
+            'micro_scalping.momentum_ofi.short',
         ];
         if ($document['schema_version'] !== '1.0.0'
             || ($document['setup_version'] !== '1.0.0'
@@ -171,6 +195,9 @@ final class SetupContractValidator
         }
         if ($isScalpingShadow && $origins !== [self::SCALPING_SHADOW_SOURCE_ORIGINS[$document['setup_id']]]) {
             throw new SetupContractException('scalping shadow source origin must match the exact #307 source pin.');
+        }
+        if ($isMicroScalpingShadow && $origins !== [self::MICRO_SCALPING_SHADOW_SOURCE_ORIGINS[$document['setup_id']]]) {
+            throw new SetupContractException('micro-scalping shadow source origin must match the exact #308 source pin.');
         }
 
         $modes = $this->list($document, 'compatible_modes', true, 'contract');
@@ -233,7 +260,7 @@ final class SetupContractValidator
             foreach (['execution_timeframe', 'mandatory_confirmations', 'order_policy'] as $key) {
                 $this->decision($this->map($execution, $key, 'execution'), 'execution.' . $key);
             }
-            $this->assertFrozenShadowExecution($execution, $isScalpingShadow ? 'scalping' : 'day_trading');
+            $this->assertFrozenShadowExecution($execution, $isMicroScalpingShadow ? 'micro_scalping' : ($isScalpingShadow ? 'scalping' : 'day_trading'));
         }
         if ($isCrashDecision) {
             foreach (['order_policy', 'risk_boundary'] as $key) {
@@ -247,10 +274,13 @@ final class SetupContractValidator
         if ($isScalpingShadow && $document['validity_window']['value'] !== 'PT5M') {
             throw new SetupContractException('scalping shadow validity window must be PT5M.');
         }
+        if ($isMicroScalpingShadow && $document['validity_window']['value'] !== 'PT5S') {
+            throw new SetupContractException('micro-scalping shadow validity window must be PT5S.');
+        }
 
         $data = $this->map($document, 'data_condition_contract', 'contract');
         $dataKeys = ['required_data', 'missing_conditions', 'external_dependencies', 'condition_catalog_hash', 'unknown_condition_policy'];
-        if ($isScalpingShadow) {
+        if ($isScalpingShadow || $isMicroScalpingShadow) {
             array_unshift($dataKeys, 'condition_catalog_version');
         }
         $this->exact($data, $dataKeys, 'data_condition_contract');
@@ -309,6 +339,21 @@ final class SetupContractValidator
                 throw new SetupContractException('scalping shadow must pin condition catalog version 1.1.0.');
             }
         }
+        if ($isMicroScalpingShadow) {
+            $expectedRequiredData = [
+                'ohlcv_5m', 'ohlcv_1m', 'macd', 'rsi', 'atr', 'vwap', 'authenticated_order_book',
+                'authenticated_public_trades', 'fee_schedule', 'funding_schedule',
+            ];
+            if ($requiredData !== $expectedRequiredData || $missing !== [] || $data['external_dependencies'] !== []) {
+                throw new SetupContractException('micro-scalping shadow data requirements differ from the frozen executable contract.');
+            }
+            if ($conditionCatalogHash['state'] !== 'defined' || $conditionCatalogHash['value'] !== $this->conditionCatalog->stableHash()) {
+                throw new SetupContractException('micro-scalping shadow must pin the exact canonical condition catalog hash.');
+            }
+            if ($data['condition_catalog_version'] !== '1.2.0' || $data['condition_catalog_version'] !== $this->conditionCatalog->catalogVersion) {
+                throw new SetupContractException('micro-scalping shadow must pin condition catalog version 1.2.0.');
+            }
+        }
         if ($missing !== [] && $document['status'] !== 'blocked') {
             throw new SetupContractException('Missing conditions require blocked status.');
         }
@@ -323,8 +368,8 @@ final class SetupContractValidator
         }
         $knownDefects = $this->strings($this->list($document, 'known_defects', true, 'contract'), 'known_defects');
         $this->assertUniqueStrings($knownDefects, 'known_defects');
-        if ($isScalpingShadow && $knownDefects !== []) {
-            throw new SetupContractException('scalping shadow known_defects must be empty.');
+        if (($isScalpingShadow || $isMicroScalpingShadow) && $knownDefects !== []) {
+            throw new SetupContractException('Executable shadow known_defects must be empty.');
         }
         $rows = $this->list($document, 'provenance', false, 'contract');
         $provenancePaths = [];
@@ -355,18 +400,30 @@ final class SetupContractValidator
                 ));
             }
         }
+        if ($isMicroScalpingShadow) {
+            $actualHash = $this->semanticDocumentHash($document);
+            $expectedHash = self::MICRO_SCALPING_SHADOW_DOCUMENT_HASHES[$document['setup_id']];
+            if (!hash_equals($expectedHash, $actualHash)) {
+                throw new SetupContractException(sprintf(
+                    '%s@1.1.0 differs from its exact frozen proof document.',
+                    $document['setup_id'],
+                ));
+            }
+        }
     }
 
     /** @param array<string, mixed> $execution */
     private function assertFrozenShadowExecution(array $execution, string $modeId): void
     {
+        $stopTimeframe = $modeId === 'micro_scalping' ? '1m' : '5m';
         $common = [
-            'stop' => ['kind' => 'atr', 'timeframe' => '5m', 'atr_multiplier' => 1.5, 'pivot_id' => null, 'buffer_rate' => 0.0],
+            'stop' => ['kind' => 'atr', 'timeframe' => $stopTimeframe, 'atr_multiplier' => 1.5, 'pivot_id' => null, 'buffer_rate' => 0.0],
             'minimum_net_r' => 1.3,
             'invalidation' => ['kind' => 'close_beyond_stop'],
             'cost_contract' => ['entry_liquidity_role' => 'maker', 'stop_liquidity_role' => 'taker', 'entry_spread_source' => 'order_book', 'entry_slippage_source' => 'execution_model', 'stop_spread_source' => 'order_book', 'stop_slippage_source' => 'execution_model', 'target_spread_source' => 'order_book', 'target_slippage_source' => 'execution_model', 'funding_source' => 'venue_schedule', 'funding_interval_seconds' => 28800],
         ];
-        $expected = $modeId === 'scalping' ? [
+        $expected = match ($modeId) {
+            'scalping' => [
             'execution_timeframe' => '5m',
             'mandatory_confirmations' => ['1m'],
             'entry_zone' => ['anchor_source' => 'vwap', 'anchor_timeframe' => '5m', 'atr_timeframe' => '5m', 'atr_multiplier' => 0.22, 'minimum_half_width_rate' => 0.0004, 'maximum_half_width_rate' => 0.0065, 'asymmetry_rate' => 0.0, 'ttl_seconds' => 150, 'maximum_input_age_seconds' => 30, 'quantize_outward' => true],
@@ -374,7 +431,17 @@ final class SetupContractValidator
             'targets' => [['id' => 'tp1', 'risk_multiple' => 1.8, 'liquidity_role' => 'taker']],
             'time_stop' => 'PT2H',
             'order_policy' => ['type' => 'limit', 'liquidity_role' => 'maker', 'ttl_seconds' => 45, 'cancel_after_seconds' => 75, 'market_fallback' => false, 'maximum_spread_bps' => 6.0, 'maximum_slippage_bps' => 8.0],
-        ] : [
+            ],
+            'micro_scalping' => [
+                'execution_timeframe' => '1m',
+                'mandatory_confirmations' => ['1m'],
+                'entry_zone' => ['anchor_source' => 'vwap', 'anchor_timeframe' => '1m', 'atr_timeframe' => '1m', 'atr_multiplier' => 0.35, 'minimum_half_width_rate' => 0.0005, 'maximum_half_width_rate' => 0.003, 'asymmetry_rate' => 0.0, 'ttl_seconds' => 30, 'maximum_input_age_seconds' => 5, 'quantize_outward' => true],
+                ...$common,
+                'targets' => [['id' => 'tp1', 'risk_multiple' => 1.8, 'liquidity_role' => 'taker']],
+                'time_stop' => 'PT30M',
+                'order_policy' => ['type' => 'limit', 'liquidity_role' => 'maker', 'ttl_seconds' => 30, 'cancel_after_seconds' => 60, 'market_fallback' => false, 'maximum_spread_bps' => 8.0, 'maximum_slippage_bps' => 8.0],
+            ],
+            'day_trading' => [
             'execution_timeframe' => '15m',
             'mandatory_confirmations' => ['5m', '1m'],
             'entry_zone' => ['anchor_source' => 'vwap', 'anchor_timeframe' => '5m', 'atr_timeframe' => '5m', 'atr_multiplier' => 0.30, 'minimum_half_width_rate' => 0.0005, 'maximum_half_width_rate' => 0.0100, 'asymmetry_rate' => 0.0, 'ttl_seconds' => 240, 'maximum_input_age_seconds' => 60, 'quantize_outward' => true],
@@ -382,7 +449,9 @@ final class SetupContractValidator
             'targets' => [['id' => 'tp1', 'risk_multiple' => 2.0, 'liquidity_role' => 'taker']],
             'time_stop' => 'PT8H',
             'order_policy' => ['type' => 'limit', 'liquidity_role' => 'maker', 'ttl_seconds' => 90, 'cancel_after_seconds' => 120, 'market_fallback' => false, 'maximum_spread_bps' => 6.0, 'maximum_slippage_bps' => 8.0],
-        ];
+            ],
+            default => throw new SetupContractException(sprintf('Unsupported executable mode "%s".', $modeId)),
+        };
         foreach ($expected as $key => $value) {
             if (($execution[$key]['state'] ?? null) !== 'defined' || !$this->valuesEquivalent($execution[$key]['value'] ?? null, $value)) {
                 throw new SetupContractException(sprintf('%s shadow execution.%s differs from the frozen decision.', $modeId, $key));

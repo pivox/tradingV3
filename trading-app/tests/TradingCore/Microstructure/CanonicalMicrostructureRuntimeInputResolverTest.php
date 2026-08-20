@@ -35,6 +35,10 @@ final class CanonicalMicrostructureRuntimeInputResolverTest extends TestCase
         self::assertNotNull($resolved->ruleInput);
         self::assertSame('timestamped_order_book', $resolved->ruleInput->source);
         self::assertSame($snapshot->inputHash, $resolved->trace['input_hash']);
+        self::assertSame((float) $snapshot->bestBid, $resolved->trace['best_bid']);
+        self::assertSame((float) $snapshot->bestAsk, $resolved->trace['best_ask']);
+        self::assertSame((float) $snapshot->spreadBps, $resolved->trace['spread_bps']);
+        self::assertSame($snapshot->bookHappenedAt, $resolved->trace['book_observed_at']);
         self::assertSame([
             'source_network' => 'mainnet',
             'market_data_venue' => 'okx',

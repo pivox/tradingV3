@@ -50,16 +50,17 @@ final class CanonicalOrderPlanPipelineFixture
         float $availableBalanceQuote = 1000.0,
         string $exchange = 'fake',
         string $environment = 'test',
+        string $marketObservedAt = '2026-08-10T11:59:30+00:00',
     ): array
     {
         $policy = $executionPolicy ?? CanonicalExecutionPolicyFixture::policy($side);
-        $observed = new \DateTimeImmutable('2026-08-10T11:59:30+00:00');
+        $observed = new \DateTimeImmutable($marketObservedAt);
         $candidate = $side === 'long' ? 100.1 : 100.39;
         $zoneRequest = new CanonicalEntryZoneRequest(
             $policy,
             'BTCUSDT',
-            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'vwap', '5m', 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
-            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'vwap', $policy->entryZone->anchorTimeframe, 100.0, $observed, 'sha256:' . str_repeat('1', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', $policy->entryZone->atrTimeframe, 1.0, $observed, 'sha256:' . str_repeat('2', 64)),
             new CanonicalMarketSnapshot($exchange, $environment, 'BTCUSDT', 'perpetual', 'order_book', $candidate, $observed, 'sha256:' . str_repeat('3', 64)),
             new CanonicalTickSnapshot($exchange, $environment, 'BTCUSDT', 'perpetual', 0.1, $observed, 'sha256:' . str_repeat('4', 64)),
         );
@@ -67,7 +68,7 @@ final class CanonicalOrderPlanPipelineFixture
         $protectionRequest = new CanonicalProtectionRequest(
             $policy,
             $zone,
-            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', '5m', 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
+            new CanonicalPriceObservation($exchange, $environment, 'BTCUSDT', 'perpetual', 'atr', $policy->stop->timeframe, 1.0, $observed, 'sha256:' . str_repeat('5', 64)),
             null,
         );
         $protection = (new CanonicalProtectionEngine())->calculate($protectionRequest);

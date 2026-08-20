@@ -38,6 +38,7 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
         $isModernShadow = in_array($modernShadowIdentity, [
             'day_trading@1.1.0',
             'scalping@1.1.0',
+            'micro_scalping@1.1.0',
         ], true);
         if ($isModernShadow && $request->capability === null) {
             throw new TradingConfigException($request->modeId . '_shadow_capability_required');

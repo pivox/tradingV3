@@ -10,6 +10,7 @@ use App\TradingCore\Config\EffectiveTradingConfigResolverInterface;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicy;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilderInterface;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanException;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanTime;
@@ -72,6 +73,12 @@ final readonly class CanonicalShadowRuntime
             );
             if (!$rules->passed) {
                 return $this->reject($request, $policy->reason($rules->reasonCode), ['rules' => $rules->trace]);
+            }
+            if ($policy->requiresCanonicalMicrostructure) {
+                $microstructureGuard = $this->microstructureGuard($request, $rules->trace);
+                if ($microstructureGuard !== null) {
+                    return $this->reject($request, $policy->reason($microstructureGuard), ['rules' => $rules->trace]);
+                }
             }
 
             $executionPolicy = $this->policyCompiler->compile($snapshot);
@@ -267,6 +274,59 @@ final readonly class CanonicalShadowRuntime
         }
 
         return true;
+    }
+
+    /** @param array<string, mixed> $trace */
+    private function microstructureGuard(ShadowRuntimeRequest $request, array $trace): ?string
+    {
+        $microstructure = $trace['microstructure_input'] ?? null;
+        if (!\is_array($microstructure)
+            || ($microstructure['status'] ?? null) !== 'ready'
+            || !\is_string($microstructure['input_hash'] ?? null)
+            || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $microstructure['input_hash']) !== 1
+        ) {
+            return 'microstructure_proof_unavailable';
+        }
+        $spread = $this->conditionObservedValue($trace, 'spread_bps_lte');
+        $book = $request->orderBook;
+        if ($spread === null
+            || !$book instanceof CanonicalOrderBookSnapshot
+            || $request->liveSpreadBps === null
+            || !\is_finite($request->liveSpreadBps)
+            || abs($spread - $request->liveSpreadBps) > 1.0e-9
+            || !\is_float($microstructure['best_bid'] ?? null)
+            || !\is_float($microstructure['best_ask'] ?? null)
+            || !\is_float($microstructure['spread_bps'] ?? null)
+            || abs($microstructure['best_bid'] - $book->bestBid) > 1.0e-9
+            || abs($microstructure['best_ask'] - $book->bestAsk) > 1.0e-9
+            || abs($microstructure['spread_bps'] - $book->spreadBps) > 1.0e-9
+            || ($microstructure['book_observed_at'] ?? null) !== $book->observedAt->format('Y-m-d\TH:i:s.u\Z')
+        ) {
+            return 'microstructure_spread_mismatch';
+        }
+
+        return null;
+    }
+
+    /** @param array<array-key, mixed> $node */
+    private function conditionObservedValue(array $node, string $conditionId): ?float
+    {
+        if (($node['condition_id'] ?? null) === $conditionId) {
+            $value = $node['observed_value'] ?? null;
+
+            return (\is_int($value) || \is_float($value)) && \is_finite((float) $value) ? (float) $value : null;
+        }
+        foreach ($node as $child) {
+            if (!\is_array($child)) {
+                continue;
+            }
+            $value = $this->conditionObservedValue($child, $conditionId);
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     private function spreadMatchesRate(float $spreadBps, ?float $spreadRate): bool

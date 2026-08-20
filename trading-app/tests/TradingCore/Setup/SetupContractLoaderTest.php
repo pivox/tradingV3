@@ -40,7 +40,9 @@ final class SetupContractLoaderTest extends TestCase
             'day_trading.trend_continuation.long/1.1.0.yaml' => '4814381e1373a57c9e60190014e929af0928e5bb5a56b816afaa99e0efa70010',
             'day_trading.trend_continuation.short/1.0.0.yaml' => 'ff9b0c340cff81eda57ffed39192081716007f345419039341b836c1519ba47f',
             'micro_scalping.momentum_ofi.long/1.0.0.yaml' => '7a4e2290233aea9811e0cdae6e1f9878e0017ca0c360be1d68cfb246e2b7e381',
+            'micro_scalping.momentum_ofi.long/1.1.0.yaml' => '993d4b50a938bd642b736c133a2efcd8e70fcf65010f60e362aba450878c743d',
             'micro_scalping.momentum_ofi.short/1.0.0.yaml' => '804c5e301e3fd5b861a9038cc2c78540c4b6b2550ef76f1293f89dba0308e5d7',
+            'micro_scalping.momentum_ofi.short/1.1.0.yaml' => '3c85135642f0731a035f2d42d0c2c1bb7673a02b55733cec406caa7914a996ad',
             'scalping.pullback.long/1.0.0.yaml' => '12c0d593a3271d8ab61c2efc4039a2d6ac286f6781ad3f6d3163c7a1ed6f9bae',
             'scalping.trend_continuation.long/1.0.0.yaml' => 'df4936f8f4fbb72f58720c9430c165164e1cd3df8e9173cee34e57f4df95b470',
             'scalping.trend_momentum.short/1.0.0.yaml' => '921623fd143bc39b2b75e2cbd86941c37194b4ea00ef43bc34f221c331490f25',
@@ -109,6 +111,64 @@ final class SetupContractLoaderTest extends TestCase
         self::assertSame('limit', $execution['order_policy']['value']['type']);
         self::assertFalse($execution['order_policy']['value']['market_fallback']);
         self::assertSame('blocked', $loader->load('day_trading.trend_continuation.short', '1.0.0')->status);
+    }
+
+    public function testPublishesExecutableMicroScalpingShadowSetups(): void
+    {
+        $loader = new SetupContractLoader($this->root);
+        foreach ([
+            'micro_scalping.momentum_ofi.long' => ['long', 'order_flow_imbalance_gte', 'min_ofi', 0.15],
+            'micro_scalping.momentum_ofi.short' => ['short', 'order_flow_imbalance_lte', 'max_ofi', -0.15],
+        ] as $setupId => [$side, $ofiCondition, $parameter, $threshold]) {
+            $contract = $loader->load($setupId, '1.1.0');
+            $document = $contract->toArray();
+            $compiled = (new SetupCompiler())->compile($contract);
+
+            self::assertSame('shadow', $contract->status);
+            self::assertTrue($contract->isExecutable());
+            self::assertTrue($compiled->publishable);
+            self::assertSame([], $contract->unresolvedPaths());
+            self::assertSame(['micro_scalping' => '1.1.0'], $compiled->modeVersions);
+            self::assertSame('1.2.0', $document['data_condition_contract']['condition_catalog_version']);
+            self::assertSame(
+                (new ConditionCatalogLoader())->loadVersion('1.2.0')->stableHash(),
+                $document['data_condition_contract']['condition_catalog_hash']['value'],
+            );
+            self::assertSame([], $document['data_condition_contract']['missing_conditions']);
+            self::assertSame('1m', $document['execution']['execution_timeframe']['value']);
+            self::assertSame('PT5S', $document['validity_window']['value']);
+            self::assertSame(1.5, $document['execution']['stop']['value']['atr_multiplier']);
+            self::assertSame(1.8, $document['execution']['targets']['value'][0]['risk_multiple']);
+            self::assertFalse($document['execution']['order_policy']['value']['market_fallback']);
+            $trigger = $document['context']['trigger']['nodes'];
+            self::assertSame($ofiCondition, $trigger[2]['condition']);
+            self::assertSame($threshold, $trigger[2]['parameters'][$parameter]);
+            self::assertSame($side, $document['side']);
+        }
+    }
+
+    public function testMicroScalpingShadowHasPhpAndSchemaParityForFrozenDecisions(): void
+    {
+        $schema = $this->jsonObject(dirname(__DIR__, 3) . '/config/trading/schema/setup-contract.schema.json');
+        foreach (['long', 'short'] as $side) {
+            $document = $this->yaml($this->root . '/micro_scalping.momentum_ofi.' . $side . '/1.1.0.yaml');
+            $object = json_decode(json_encode($document, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+            self::assertTrue((new JsonSchemaValidator())->validate($object, $schema)->isValid(), $side);
+
+            $mutations = [];
+            $mutations['catalog'] = $document;
+            $mutations['catalog']['data_condition_contract']['condition_catalog_version'] = '1.1.0';
+            $mutations['entry zone'] = $document;
+            $mutations['entry zone']['execution']['entry_zone']['value']['maximum_input_age_seconds'] = 6;
+            $mutations['market fallback'] = $document;
+            $mutations['market fallback']['execution']['order_policy']['value']['market_fallback'] = true;
+            $mutations['validity'] = $document;
+            $mutations['validity']['validity_window']['value'] = 'PT6S';
+
+            foreach ($mutations as $label => $mutation) {
+                $this->assertPhpAndSchemaReject($mutation, $side . ' ' . $label);
+            }
+        }
     }
 
     public function testDayTradingLongShadowHasPhpAndSchemaParity(): void
@@ -728,6 +788,8 @@ final class SetupContractLoaderTest extends TestCase
             'scalping.trend_continuation.long' => '6-14,216-356',
             'scalping.pullback.long' => '6-14,157-161,216-356',
             'scalping.trend_momentum.short' => '6-14,216-356',
+            'micro_scalping.momentum_ofi.long' => '5-19,87-115',
+            'micro_scalping.momentum_ofi.short' => '5-19,95-125',
         ];
 
         foreach (glob($this->root . '/*/*.yaml') ?: [] as $path) {
