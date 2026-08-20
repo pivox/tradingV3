@@ -760,7 +760,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
         foreach ([
             [2980, 2981, 'BTCUSDT', 'itd-fill-window-exact', 'position-fill-window-exact', '2026-08-20 10:00:01+00:00', '2026-08-20 10:04:31+00:00', true],
             [2982, 2983, 'ETHUSDT', 'itd-fill-window-invalid', 'position-fill-window-invalid', '2026-08-20 11:05:00+00:00', '2026-08-20 11:04:00+00:00', false],
-        ] as [$entryId, $closeId, $symbol, $internalTradeId, $positionId, $entryFillAt, $exitFillAt, $exact]) {
+            [2984, 2985, 'SOLUSDT', 'itd-fill-window-incomplete', 'position-fill-window-incomplete', '2026-08-20 12:00:01+00:00', '2026-08-20 12:04:31+00:00', null],
+        ] as [$entryId, $closeId, $symbol, $internalTradeId, $positionId, $entryFillAt, $exitFillAt, $chronology]) {
             $this->entry($symbol, 'run-fill-window', 'fill-window', 'scalper', 'fake', 'paper', [
                 'internal_trade_id' => $internalTradeId,
                 'risk_usdt' => 1.0,
@@ -785,7 +786,11 @@ final class PositionTradeAnalysisViewTest extends TestCase
                 'holding_time_source' => 'provider_position_history',
             ], $positionId, '2026-08-20 10:05:00+00', $closeId, 'fake', 'paper', 'hyperliquid');
             $this->canonicalLifecycle($entryId, $closeId, $internalTradeId, $positionId, 'trade-' . $internalTradeId);
-            foreach ([['entry', 100.0, $entryFillAt], ['exit', 101.0, $exitFillAt]] as [$role, $price, $occurredAt]) {
+            $fills = [['entry', 100.0, $entryFillAt]];
+            if ($chronology !== null) {
+                $fills[] = ['exit', 101.0, $exitFillAt];
+            }
+            foreach ($fills as [$role, $price, $occurredAt]) {
                 $this->ledgerFill($symbol, $internalTradeId, $positionId, $internalTradeId . '-' . $role, $role, $price, 1.0, $occurredAt, [
                     'fee_usdt' => 0.01,
                     'funding_usdt' => 0.0,
@@ -819,6 +824,14 @@ final class PositionTradeAnalysisViewTest extends TestCase
             self::assertNull($invalid['canonical_net_pnl_usdt']);
             self::assertContains('ledger_fill_chronology_invalid', $invalid['canonical_pnl_quality_flags']);
             self::assertSame('partial', $invalid['canonical_cost_completeness']);
+
+            $incomplete = $this->analysisRow(2984);
+            self::assertSame(999, $incomplete['holding_time_sec']);
+            self::assertSame('complete', $incomplete['mfe_mae_data_quality']);
+            self::assertNull($incomplete['canonical_holding_time_sec']);
+            self::assertSame('incomplete_fill_ledger', $incomplete['holding_time_source']);
+            self::assertSame('partial', $incomplete['canonical_mfe_mae_data_quality']);
+            self::assertSame('incomplete_fill_ledger', $incomplete['mfe_mae_window_source']);
         } finally {
             $down = new Version20260820000000($this->conn, new NullLogger());
             $down->down(new Schema());

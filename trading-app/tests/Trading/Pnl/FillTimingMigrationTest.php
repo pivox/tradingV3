@@ -32,6 +32,8 @@ final class FillTimingMigrationTest extends TestCase
         self::assertStringContainsString("timing.chronology_valid IS DISTINCT FROM FALSE", $sql);
         self::assertStringContainsString('AS canonical_holding_time_sec', $sql);
         self::assertStringContainsString('AS mfe_mae_window_source', $sql);
+        self::assertStringContainsString("ELSE 'incomplete_fill_ledger'", $sql);
+        self::assertStringNotContainsString('ELSE legacy.holding_time_sec', $sql);
         self::assertStringNotContainsString('jsonb_populate_record', $sql);
         self::assertDoesNotMatchRegularExpression('/\\?(?:[|&])?/', $sql);
     }

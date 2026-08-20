@@ -278,6 +278,10 @@ Les consommateurs certifiants utilisent également `canonical_cost_completeness`
 `canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality`. Les colonnes sans
 préfixe restent exposées uniquement pour la compatibilité et l'analyse de divergence ;
 elles ne constituent pas une autorité de certification temporelle.
+Un ledger de quantité incomplet laisse `canonical_holding_time_sec` à `NULL`, force
+la qualité d'excursion canonique à `partial` (sauf erreur/missing plus restrictive)
+et expose la provenance `incomplete_fill_ledger`. Les valeurs provider restent
+uniquement dans les colonnes legacy sans préfixe.
 
 Aucun backfill heuristique n'est autorise. Les anciennes lignes restent
 visibles pour l'audit, mais leurs montants enregistres ou estimes ne deviennent

@@ -60,8 +60,7 @@ CROSS JOIN LATERAL (
         AND legacy.entry_first_fill_at IS NOT NULL
         AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
       THEN extract(epoch FROM legacy.exit_last_fill_at - legacy.entry_first_fill_at)
-      WHEN legacy.quantity_status = 'complete' THEN NULL
-      ELSE legacy.holding_time_sec
+      ELSE NULL
     END AS holding_time_sec,
     CASE
       WHEN legacy.quantity_status = 'complete'
@@ -69,7 +68,7 @@ CROSS JOIN LATERAL (
         AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
       THEN 'fill_cost_ledger_v1'
       WHEN legacy.quantity_status = 'complete' THEN 'invalid_fill_chronology'
-      ELSE COALESCE(NULLIF(c.extra->> 'holding_time_source', ''), 'legacy_position_history')
+      ELSE 'incomplete_fill_ledger'
     END AS holding_time_source
 ) timing
 CROSS JOIN LATERAL (
@@ -84,7 +83,10 @@ CROSS JOIN LATERAL (
 CROSS JOIN LATERAL (
   SELECT
     CASE
-      WHEN legacy.quantity_status IS DISTINCT FROM 'complete' THEN legacy.mfe_mae_data_quality
+      WHEN legacy.quantity_status IS DISTINCT FROM 'complete'
+        AND legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error')
+      THEN legacy.mfe_mae_data_quality
+      WHEN legacy.quantity_status IS DISTINCT FROM 'complete' THEN 'partial'
       WHEN evidence.exact_window THEN legacy.mfe_mae_data_quality
       WHEN legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error') THEN legacy.mfe_mae_data_quality
       ELSE 'partial'
@@ -92,12 +94,12 @@ CROSS JOIN LATERAL (
     CASE
       WHEN evidence.exact_window THEN 'fill_cost_ledger_v1'
       WHEN legacy.quantity_status = 'complete' THEN 'unverified_fill_window'
-      ELSE COALESCE(NULLIF(c.extra->> 'mfe_mae_window_source', ''), 'legacy_position_history')
+      ELSE 'incomplete_fill_ledger'
     END AS window_source,
     CASE
       WHEN evidence.exact_window THEN 'fill_cost_ledger_v1'
       WHEN legacy.quantity_status = 'complete' THEN 'unverified_entry_price'
-      ELSE COALESCE(NULLIF(c.extra->> 'mfe_mae_entry_price_source', ''), 'legacy_position_history')
+      ELSE 'incomplete_fill_ledger'
     END AS entry_price_source
 ) excursion
 SQL : '';
