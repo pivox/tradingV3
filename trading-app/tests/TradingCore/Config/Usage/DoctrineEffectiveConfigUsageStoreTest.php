@@ -25,14 +25,29 @@ final class DoctrineEffectiveConfigUsageStoreTest extends TestCase
         $database = is_string($dsn) ? ltrim((string) parse_url($dsn, PHP_URL_PATH), '/') : '';
         $safePostgres = ($database === 'test' || str_ends_with($database, '_test'))
             && preg_match('/^(?:postgres|postgresql|pdo-pgsql):/', (string) $dsn) === 1;
+        $requirePostgres = getenv('EFFECTIVE_CONFIG_USAGE_REQUIRE_POSTGRES') === '1';
+        if ($requirePostgres && !$safePostgres) {
+            throw new \LogicException('A safe PostgreSQL test DSN is required for the effective-config usage gate.');
+        }
         if ($safePostgres) {
             PostgresIntegrationDatabaseGuard::assertIsolatedTestDatabase($dsn);
-            $this->connection = DriverManager::getConnection(['url' => $dsn]);
-            $this->schemaName = sprintf('effective_config_usage_%d_%s', getmypid(), bin2hex(random_bytes(4)));
-            $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
-            $this->connection->executeStatement('CREATE SCHEMA ' . $quoted);
-            $this->connection->executeStatement('SET search_path TO ' . $quoted . ', public');
-        } else {
+            try {
+                $this->connection = DriverManager::getConnection(['url' => $dsn]);
+                $this->schemaName = sprintf('effective_config_usage_%d_%s', getmypid(), bin2hex(random_bytes(4)));
+                $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
+                $this->connection->executeStatement('CREATE SCHEMA ' . $quoted);
+                $this->connection->executeStatement('SET search_path TO ' . $quoted . ', public');
+            } catch (\Throwable $exception) {
+                if ($requirePostgres) {
+                    throw $exception;
+                }
+                if (isset($this->connection)) {
+                    $this->connection->close();
+                }
+                $this->schemaName = null;
+            }
+        }
+        if (!isset($this->connection) || !$this->connection->isConnected()) {
             $this->connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
         }
         $this->createTables();
