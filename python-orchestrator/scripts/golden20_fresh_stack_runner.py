@@ -168,7 +168,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
         symfony_environment.update(
             {
                 "APP_ENV": "test",
-                "APP_DEBUG": "0",
+                "APP_DEBUG": "1",
                 "APP_SECRET": "golden20-local-fake-only",
                 "DEFAULT_URI": symfony_url,
                 "LOCK_DSN": "flock",
