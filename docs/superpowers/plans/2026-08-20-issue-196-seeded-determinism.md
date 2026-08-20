@@ -7,7 +7,8 @@
 3. Wire the configured seed into the global Fake store and cell-scoped Paper
    runtimes; expose fail-closed readiness for non-certified legacy state.
 4. Add failing Python tests for explicit seed validation, deterministic recipe
-   invocation IDs and different-seed divergence; implement CLI/config support.
+   evidence IDs, unique dispatch nonces and different-seed divergence; implement
+   CLI/config support.
 5. Extend Golden 20 to pass and attest one fixed seed, then compare normalized
    reports and full relevant state evidence from fresh stacks.
 6. Update #196 audit and operator docs, explicitly excluding ephemeral atomic
