@@ -148,6 +148,12 @@ services:
     App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface:
         alias: App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge
 
+    App\Trading\Pnl\CanonicalTradeFillWindowResolverInterface:
+        alias: App\Trading\Pnl\LedgerCanonicalTradeFillWindowResolver
+
+    App\Trading\Pnl\FillQuantityAggregationProviderInterface:
+        alias: App\Trading\Pnl\FillQuantityAggregationService
+
     App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge:
         arguments:
             $validator: '@paper.execution.mtf_validator'

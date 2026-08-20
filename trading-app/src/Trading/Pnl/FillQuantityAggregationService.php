@@ -7,7 +7,7 @@ namespace App\Trading\Pnl;
 use App\Entity\FillCostLedgerEntry;
 use App\Repository\FillCostLedgerEntryRepository;
 
-final readonly class FillQuantityAggregationService
+final readonly class FillQuantityAggregationService implements FillQuantityAggregationProviderInterface
 {
     public const DEFAULT_QUANTITY_TOLERANCE = 0.00000001;
 

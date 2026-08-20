@@ -265,6 +265,15 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'holding_time_sec')]
     private ?float $holdingTimeSec = null;
 
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'holding_time_source')]
+    private ?string $holdingTimeSource = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'mfe_mae_window_source')]
+    private ?string $mfeMaeWindowSource = null;
+
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'mfe_mae_entry_price_source')]
+    private ?string $mfeMaeEntryPriceSource = null;
+
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'fees_usdt')]
     private ?float $feesUsdt = null;
 
@@ -650,6 +659,21 @@ class PositionTradeAnalysisV2
     public function getHoldingTimeSec(): ?float
     {
         return $this->holdingTimeSec;
+    }
+
+    public function getHoldingTimeSource(): ?string
+    {
+        return $this->holdingTimeSource;
+    }
+
+    public function getMfeMaeWindowSource(): ?string
+    {
+        return $this->mfeMaeWindowSource;
+    }
+
+    public function getMfeMaeEntryPriceSource(): ?string
+    {
+        return $this->mfeMaeEntryPriceSource;
     }
 
     public function getFeesUsdt(): ?float

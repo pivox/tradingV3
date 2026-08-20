@@ -10,6 +10,7 @@ use App\Logging\TradeLifecycleLogger;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Pnl\CanonicalTradeFillWindowResolverInterface;
 use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
 use App\Trading\Event\PositionOpenedEvent;
@@ -72,6 +73,7 @@ final class TradeLifecycleLoggerListener
         private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
         private readonly ?MainProviderInterface $mainProvider = null,
         private readonly ?TradeLineageManager $tradeLineageManager = null,
+        private readonly ?CanonicalTradeFillWindowResolverInterface $fillWindowResolver = null,
     ) {}
 
     // --- POSITION OUVERTE ----------------------------------------------------
@@ -140,7 +142,31 @@ final class TradeLifecycleLoggerListener
             : null;
         $pnlFloat = (float)$history->realizedPnl->__toString();
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
-        $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
+        $analysisWindowStart = $history->openedAt;
+        $analysisWindowEnd = $history->closedAt;
+        $holdingTimeSource = 'provider_position_history';
+        $analysisWindowSource = 'provider_position_history';
+        $entryPriceSource = 'provider_position_history';
+        if ($lineage !== null && $event->exchange !== null && $marketType !== null && $this->fillWindowResolver !== null) {
+            try {
+                $fillWindow = $this->fillWindowResolver->resolve(
+                    $lineage->getInternalTradeId(),
+                    $event->exchange,
+                    $marketType,
+                );
+                if ($fillWindow !== null) {
+                    $analysisWindowStart = $fillWindow->entryFirstFillAt;
+                    $analysisWindowEnd = $fillWindow->exitLastFillAt;
+                    $entryPriceFloat = $fillWindow->entryVwap;
+                    $holdingTimeSource = 'fill_cost_ledger_v1';
+                    $analysisWindowSource = 'fill_cost_ledger_v1';
+                    $entryPriceSource = 'fill_cost_ledger_v1';
+                }
+            } catch (\Throwable) {
+                // Ledger evidence is optional here; an unavailable or incomplete window remains explicit best-effort provider history.
+            }
+        }
+        $holdingTimeSec = $analysisWindowEnd->getTimestamp() - $analysisWindowStart->getTimestamp();
         $effectiveRunId = $event->runId ?? $lineage?->getRunId();
         $certifiedPnlExtra = $this->certifiedPnlExtraFromRaw($history->raw);
 
@@ -198,7 +224,7 @@ final class TradeLifecycleLoggerListener
             $mfeMaeSource = 'kline_1m_high_low';
             $mfeMaeTimeframe = Timeframe::TF_1M->value;
             $mfeMaeSampleCount = 0;
-            $mfeMaeExpectedSampleCount = $this->expectedOneMinuteSampleCount($history->openedAt, $history->closedAt);
+            $mfeMaeExpectedSampleCount = $this->expectedOneMinuteSampleCount($analysisWindowStart, $analysisWindowEnd);
             $klineOpenTimes = [];
             try {
                 $klineProvider = $this->mainProvider
@@ -207,8 +233,8 @@ final class TradeLifecycleLoggerListener
                 $klines = $klineProvider->getKlinesInWindow(
                     $history->symbol,
                     Timeframe::TF_1M,
-                    $history->openedAt,
-                    $history->closedAt,
+                    $analysisWindowStart,
+                    $analysisWindowEnd,
                     $mfeMaeLimit
                 );
 
@@ -219,13 +245,11 @@ final class TradeLifecycleLoggerListener
                         continue;
                     }
                     $openedAt = $this->klineOpenedAt($kline);
-                    if ($openedAt !== null && $openedAt >= $history->closedAt) {
+                    if ($openedAt === null || $openedAt < $analysisWindowStart || $openedAt >= $analysisWindowEnd) {
                         continue;
                     }
                     ++$mfeMaeSampleCount;
-                    if ($openedAt !== null) {
-                        $klineOpenTimes[$openedAt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM)] = true;
-                    }
+                    $klineOpenTimes[$openedAt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM)] = true;
 
                     if (strtoupper($history->side->value) === 'LONG') {
                         // Favorable = plus haut, défavorable = plus bas
@@ -265,8 +289,8 @@ final class TradeLifecycleLoggerListener
                 if ($mfeMaeSampleCount === 0 || $mfePrice === null || $maePrice === null) {
                     $mfeMaeDataQuality = 'missing_price_data';
                 } elseif (
-                    $this->isOneMinuteBoundary($history->openedAt)
-                    && $this->isOneMinuteBoundary($history->closedAt)
+                    $this->isOneMinuteBoundary($analysisWindowStart)
+                    && $this->isOneMinuteBoundary($analysisWindowEnd)
                     && $mfeMaeExpectedSampleCount !== null
                     && $mfeMaeExpectedSampleCount <= $mfeMaeLimit
                     && \count($klineOpenTimes) >= $mfeMaeExpectedSampleCount
@@ -300,7 +324,15 @@ final class TradeLifecycleLoggerListener
                     'exit_price' => $history->exitPrice->__toString(),
                     'entry_time' => $history->openedAt->format('Y-m-d H:i:s'),
                     'close_time' => $history->closedAt->format('Y-m-d H:i:s'),
+                    'fees' => $history->fees?->__toString(),
+                    'raw'  => $history->raw,
+                ],
+                $certifiedPnlExtra,
+                $event->extra,
+                [
+                    // Computed analysis evidence is authoritative over untrusted provider/event extras.
                     'holding_time_sec' => $holdingTimeSec,
+                    'holding_time_source' => $holdingTimeSource,
                     'max_favorable_price' => $mfePrice,
                     'max_adverse_price' => $maePrice,
                     'mfe_pct' => $mfePct,
@@ -309,17 +341,15 @@ final class TradeLifecycleLoggerListener
                     'mae_at' => $maeAt?->format(\DateTimeInterface::ATOM),
                     'mfe_mae_source' => $mfeMaeSource,
                     'mfe_mae_timeframe' => $mfeMaeTimeframe,
-                    'mfe_mae_window_start' => $history->openedAt->format(\DateTimeInterface::ATOM),
-                    'mfe_mae_window_end' => $history->closedAt->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_start' => $analysisWindowStart->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_end' => $analysisWindowEnd->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_source' => $analysisWindowSource,
+                    'mfe_mae_entry_price_source' => $entryPriceSource,
                     'mfe_mae_sample_count' => $mfeMaeSampleCount,
                     'mfe_mae_expected_sample_count' => $mfeMaeExpectedSampleCount,
                     'mfe_mae_limit' => $mfeMaeLimit,
                     'mfe_mae_data_quality' => $mfeMaeDataQuality,
-                    'fees' => $history->fees?->__toString(),
-                    'raw'  => $history->raw,
                 ],
-                $certifiedPnlExtra,
-                $event->extra,
             ),
             marketType: $marketType,
         );

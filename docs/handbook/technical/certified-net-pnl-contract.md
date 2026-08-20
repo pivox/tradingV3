@@ -252,6 +252,22 @@ Les champs MFE/MAE conservent leur contrat separe. Seule une qualite
 une interpretation forte ; ils ne participent pas a la certification du PnL
 net.
 
+Pour les nouveaux trades disposant d'un ledger complet, la fenêtre est désormais
+fixée par `entry_first_fill_at` et `exit_last_fill_at`, et le prix de référence est
+le VWAP des fills d'entrée. Le lifecycle persiste explicitement
+`mfe_mae_window_source=fill_cost_ledger_v1` et
+`mfe_mae_entry_price_source=fill_cost_ledger_v1`. La vue ne conserve une qualité
+`complete` que si ces deux provenances et les deux bornes correspondent exactement
+à l'agrégat ledger. Une ancienne fenêtre provider ou une fenêtre incohérente reste
+visible mais devient `partial`; ses valeurs d'excursion ne sont pas projetées comme
+preuves fortes.
+
+`holding_time_sec` suit la même règle et vaut exactement
+`exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
+fermée. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
+premier fill d'entrée ajoute `ledger_fill_chronology_invalid`, masque le PnL net
+canonique et interdit donc la certification.
+
 Aucun backfill heuristique n'est autorise. Les anciennes lignes restent
 visibles pour l'audit, mais leurs montants enregistres ou estimes ne deviennent
 pas canoniques sans evidence ledger complete et lineage #302 canonique.
