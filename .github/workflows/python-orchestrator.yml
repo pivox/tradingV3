@@ -82,24 +82,6 @@ jobs:
           --cov-report=xml
           --cov-fail-under=95
 
-      # Install PHP only after the ordinary Python suite. Several historical
-      # cross-runtime tests intentionally use vendor/autoload.php presence as
-      # their local opt-in and must not be activated accidentally in this job.
-      - name: Setup PHP for the golden fresh-stack boundary
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.4'
-          extensions: redis, pdo_sqlite, sqlite3, intl, opcache
-          coverage: none
-          tools: composer:v2
-
-      - name: Install Symfony dependencies for golden scenario 20
-        working-directory: trading-app
-        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
-
-      - name: Run golden scenario 20 through fresh HTTP stacks
-        run: python -m pytest -q tests/test_golden20_fresh_stack_runner.py
-
       - name: Archive coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -107,3 +89,40 @@ jobs:
           name: coverage-xml
           path: python-orchestrator/coverage.xml
           if-no-files-found: ignore
+
+  golden20:
+    name: Golden 20 fresh HTTP stacks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: python-orchestrator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: redis, pdo_sqlite, sqlite3, intl, opcache
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Symfony dependencies
+        working-directory: trading-app
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Run golden scenario 20 through fresh HTTP stacks
+        run: python -m pytest -q tests/test_golden20_fresh_stack_runner.py
