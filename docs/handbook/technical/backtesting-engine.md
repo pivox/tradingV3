@@ -772,6 +772,23 @@ Le schema `canonical-microstructure-snapshot.v1` et son hash sont identiques au
 resultat PHP. Ce lot ne reconstruit aucune profondeur, priorite de file ou
 fillabilite et ne rend pas encore `micro_scalping` executable.
 
+`CanonicalMicrostructureRuleInputAdapter` est l'unique pont vers les regles
+strictes. Il verifie le hash du snapshot, publie la source
+`timestamped_order_book` sur `1m` et borne `valid_until` au minimum de l'age du
+carnet, de l'age du dernier trade et du trou maximal autorise apres ce trade.
+Les valeurs non finies ou une validite deja expiree sont rejetees sans fallback.
+
+Le catalogue immuable `1.2.0` rend executables `spread_bps_lte`,
+`order_flow_imbalance_gte` et `order_flow_imbalance_lte`. Chaque service exige
+la definition OFI `aggressor_volume_ratio.v1`, les hashes, l'identite publique
+reseau/venue/marche/symbole et l'unite native coherente (`contracts` pour OKX,
+`base_asset` pour Hyperliquid). Une preuve absente ou incoherente devient
+`missing_critical_data` dans l'evaluateur strict.
+
+Ce pont ne repointe encore aucun setup. Le contrat micro des ordres, du risque,
+de l'EntryZone, des couts et de l'horizon reste a publier avant de rendre
+`micro_scalping` executable. Aucun port prive mainnet n'est introduit.
+
 ## Validation locale
 
 ```bash

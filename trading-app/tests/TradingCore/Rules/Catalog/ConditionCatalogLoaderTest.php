@@ -17,6 +17,7 @@ final class ConditionCatalogLoaderTest extends TestCase
 {
     private string $catalogPath;
     private string $catalogOneOnePath;
+    private string $catalogOneTwoPath;
     private string $setupRoot;
 
     protected function setUp(): void
@@ -24,6 +25,7 @@ final class ConditionCatalogLoaderTest extends TestCase
         $root = dirname(__DIR__, 4);
         $this->catalogPath = $root . '/config/trading/condition_catalog/1.0.0.yaml';
         $this->catalogOneOnePath = $root . '/config/trading/condition_catalog/1.1.0.yaml';
+        $this->catalogOneTwoPath = $root . '/config/trading/condition_catalog/1.2.0.yaml';
         $this->setupRoot = $root . '/config/trading/setup_contract';
     }
 
@@ -35,12 +37,21 @@ final class ConditionCatalogLoaderTest extends TestCase
         );
     }
 
+    public function testPublishedOneOneCatalogRemainsByteForByteImmutable(): void
+    {
+        self::assertSame(
+            'bba33c786f25b99d2e6987df0ce7a2df871109be103ff4222134dc0e18c0f910',
+            hash_file('sha256', $this->catalogOneOnePath),
+        );
+    }
+
     public function testLoadsOnlyExactPublishedCatalogVersionsWithoutAliasOrFallback(): void
     {
         $loader = new ConditionCatalogLoader();
 
         self::assertSame('1.0.0', $loader->loadVersion('1.0.0')->catalogVersion);
         self::assertSame('1.1.0', $loader->loadVersion('1.1.0')->catalogVersion);
+        self::assertSame('1.2.0', $loader->loadVersion('1.2.0')->catalogVersion);
         self::assertSame(
             'executable',
             $loader->loadFile($this->catalogOneOnePath)->definition('pullback_confirmed')->status,
@@ -53,6 +64,29 @@ final class ConditionCatalogLoaderTest extends TestCase
         $this->expectException(ConditionCatalogException::class);
         $this->expectExceptionMessage('Unsupported exact condition catalog version "1.0.1"');
         $loader->loadVersion('1.0.1');
+    }
+
+    public function testOneTwoPublishesOnlyTheAuthenticatedMicrostructureConditions(): void
+    {
+        $catalog = (new ConditionCatalogLoader())->loadFile($this->catalogOneTwoPath);
+
+        self::assertSame(
+            '6171ac90869a5cc1eef1f4d4a4ad9ded62366b4ea86578140846b0afb374abaf',
+            hash_file('sha256', $this->catalogOneTwoPath),
+        );
+
+        foreach ([
+            'spread_bps_lte' => 'condition_service:spread_bps_lte',
+            'order_flow_imbalance_gte' => 'condition_service:order_flow_imbalance_gte',
+            'order_flow_imbalance_lte' => 'condition_service:order_flow_imbalance_lte',
+        ] as $conditionId => $implementation) {
+            $definition = $catalog->definition($conditionId);
+            self::assertSame('executable', $definition->status);
+            self::assertSame($implementation, $definition->implementation);
+            self::assertSame('timestamped_order_book', $definition->contextSource);
+        }
+
+        self::assertSame('8461d5597febb7bb35e7707b17640505698ab1a7855569a8e6a77f4cd50f111f', $catalog->stableHash());
     }
 
     public function testResolverBindsVersionSourceAndHashWithoutCrossVersionFallback(): void

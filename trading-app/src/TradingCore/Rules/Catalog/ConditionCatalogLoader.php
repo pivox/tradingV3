@@ -8,7 +8,7 @@ use Symfony\Component\Yaml\Yaml;
 
 final class ConditionCatalogLoader
 {
-    private const SUPPORTED_VERSIONS = ['1.0.0', '1.1.0'];
+    private const SUPPORTED_VERSIONS = ['1.0.0', '1.1.0', '1.2.0'];
     private const TOP_KEYS = ['schema_version', 'catalog_version', 'input_freshness_seconds', 'conditions'];
     private const CONDITION_KEYS = [
         'id', 'implementation', 'metric', 'unit', 'value_type', 'timeframes', 'sides',

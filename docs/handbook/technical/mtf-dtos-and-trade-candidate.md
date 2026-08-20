@@ -227,3 +227,23 @@ Cette PR ajoute uniquement des classes preparatoires et leurs tests.
 Aucun entrypoint, controller, commande, schedule, worker, handler Messenger,
 service TradeEntry ou YAML strategie n'est modifie. La structure de reponse
 `/api/mtf/run` reste inchangee.
+
+## Pont microstructure strict #308
+
+Le catalogue de conditions `1.2.0` ajoute une frontiere distincte des snapshots
+d'indicateurs. Un `CanonicalMicrostructureSnapshot` authentifie est adapte en
+`RuleInputSnapshot` de source `timestamped_order_book`, exclusivement pour le
+timeframe `1m`. Sa validite est la plus courte des trois limites portees par la
+politique canonique : fraicheur du carnet, fraicheur du dernier trade et trou
+maximal depuis le dernier trade.
+
+Les conditions typées `spread_bps_lte`, `order_flow_imbalance_gte` et
+`order_flow_imbalance_lte` n'acceptent pas les scalaires legacy. Elles exigent
+les hashes du snapshot et de la source, la definition OFI exacte, l'identite du
+marche public et l'unite venue. L'evaluateur strict rejette une entree absente,
+expiree ou falsifiee ; aucune valeur par defaut ne remplace la preuve.
+
+Ce lot ne branche pas encore `micro_scalping` au runtime MTF et ne modifie pas
+les DTOs de decision ou TradeEntry. L'activation attend encore les contrats
+canoniques de risque, EntryZone, couts, ordre et horizon, sans execution privee
+mainnet.
