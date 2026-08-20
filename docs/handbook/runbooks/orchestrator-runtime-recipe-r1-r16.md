@@ -311,14 +311,22 @@ python scripts/runtime_recipe_runner.py \
   --keep-fixtures
 ```
 
-> **Statut de certification supersede (audit final #196).** Cette documentation
-> Prompt 6 conserve la recette R12 et son resultat propre, mais ne constitue plus
-> une certification golden du scenario 20. Le statut de reference est publie
-> dans
+> **Certification golden #196 (20 août 2026).** Le statut de référence est
+> publié dans
 > [`reports/fake-paper-final-audit-196.md`](../reports/fake-paper-final-audit-196.md).
-> Le scenario 20 est `partial` : les tests Python utilisent des doubles HTTP en
-> memoire et le runner golden PHP ne lance pas la recette complete deux fois
-> depuis deux piles applicatives fraiches.
+> Le scénario 20 est `executable` : le runner golden lance la recette complète
+> dans deux piles fraîches, avec bases/états/processus distincts et frontières
+> Symfony/FastAPI sur HTTP loopback réel.
+
+La preuve autonome fraîche est :
+
+```bash
+cd python-orchestrator
+python scripts/golden20_fresh_stack_runner.py
+```
+
+Elle crée et détruit ses états temporaires, exige deux rapports normalisés
+byte-identiques et n'exporte ni ports, ni PID, ni chemins temporaires.
 
 La recette autonome du golden scenario 20 est :
 

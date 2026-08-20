@@ -5,12 +5,26 @@ on:
     paths:
       - '.github/workflows/python-orchestrator.yml'
       - 'python-orchestrator/**'
+      - 'trading-app/bin/console'
+      - 'trading-app/composer.*'
+      - 'trading-app/config/**'
+      - 'trading-app/public/**'
+      - 'trading-app/src/**'
+      - 'trading-app/tests/Exchange/Fake/**'
+      - 'trading-app/tests/fixtures/fake-paper/**'
   push:
     branches:
       - main
     paths:
       - '.github/workflows/python-orchestrator.yml'
       - 'python-orchestrator/**'
+      - 'trading-app/bin/console'
+      - 'trading-app/composer.*'
+      - 'trading-app/config/**'
+      - 'trading-app/public/**'
+      - 'trading-app/src/**'
+      - 'trading-app/tests/Exchange/Fake/**'
+      - 'trading-app/tests/fixtures/fake-paper/**'
 
 jobs:
   tests:
@@ -75,3 +89,40 @@ jobs:
           name: coverage-xml
           path: python-orchestrator/coverage.xml
           if-no-files-found: ignore
+
+  golden20:
+    name: Golden 20 fresh HTTP stacks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: python-orchestrator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: redis, pdo_pgsql, pdo_sqlite, sqlite3, intl, opcache
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Symfony dependencies
+        working-directory: trading-app
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Run golden scenario 20 through fresh HTTP stacks
+        run: python -m pytest -q tests/test_golden20_fresh_stack_runner.py

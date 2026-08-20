@@ -50,6 +50,7 @@ use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use App\Exchange\Ws\ExchangeWsIngestionService;
 use Psr\Clock\ClockInterface;
 use Psr\Log\NullLogger;
+use Symfony\Component\Process\Process;
 
 final class FakePaperGoldenScenarioRunner
 {
@@ -73,6 +74,7 @@ final class FakePaperGoldenScenarioRunner
         'restart_with_open_position',
         'funding',
         'one_way_conflict',
+        'dry_run_multi_profiles_same_symbol',
     ];
 
     /** @return list<string> */
@@ -110,6 +112,7 @@ final class FakePaperGoldenScenarioRunner
             'restart_with_open_position' => $this->restartWithOpenPosition(),
             'funding' => $this->funding(),
             'one_way_conflict' => $this->oneWayConflict(),
+            'dry_run_multi_profiles_same_symbol' => $this->dryRunMultiProfilesSameSymbol(),
         };
 
         return [
@@ -118,6 +121,57 @@ final class FakePaperGoldenScenarioRunner
             'clock' => $this->clock()->now()->format(\DateTimeInterface::ATOM),
             'facts' => $facts,
         ];
+    }
+
+    /** @return array<string,mixed> */
+    private function dryRunMultiProfilesSameSymbol(): array
+    {
+        $repositoryRoot = dirname(__DIR__, 4);
+        $orchestratorRoot = $repositoryRoot . '/python-orchestrator';
+        $script = $orchestratorRoot . '/scripts/golden20_fresh_stack_runner.py';
+        if (!is_file($script)) {
+            throw new \RuntimeException('Golden scenario 20 fresh-stack runner is missing.');
+        }
+
+        $python = $this->goldenPythonBinary();
+        $process = new Process([$python, $script], $orchestratorRoot);
+        $process->setTimeout(45.0);
+        $process->run();
+        if (!$process->isSuccessful()) {
+            throw new \RuntimeException(sprintf(
+                'Golden scenario 20 fresh-stack proof failed: %s',
+                trim($process->getErrorOutput()),
+            ));
+        }
+
+        $facts = json_decode($process->getOutput(), true, 32, JSON_THROW_ON_ERROR);
+        if (!\is_array($facts) || ($facts['status'] ?? null) !== 'pass') {
+            throw new \RuntimeException('Golden scenario 20 fresh-stack proof returned invalid facts.');
+        }
+
+        return $facts;
+    }
+
+    private function goldenPythonBinary(): string
+    {
+        $configuredPython = getenv('PYTHON_BINARY');
+        $candidates = \is_string($configuredPython) && trim($configuredPython) !== ''
+            ? [trim($configuredPython)]
+            : ['/usr/local/bin/python3', '/opt/homebrew/bin/python3', '/usr/bin/python3', 'python3'];
+        foreach ($candidates as $candidate) {
+            $probe = new Process([
+                $candidate,
+                '-c',
+                'import fastapi, httpx, sqlalchemy, uvicorn',
+            ]);
+            $probe->setTimeout(5.0);
+            $probe->run();
+            if ($probe->isSuccessful()) {
+                return $candidate;
+            }
+        }
+
+        throw new \RuntimeException('Golden scenario 20 requires Python with FastAPI, HTTPX and SQLAlchemy.');
     }
 
     /** @return array<string,mixed> */

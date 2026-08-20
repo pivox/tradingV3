@@ -702,7 +702,7 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-neuf scenarios executes dans cette version sont : maker limit rempli, limit
+Les vingt scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill immédiatement protégé puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
@@ -711,15 +711,11 @@ market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL a
 prochain prix disponible, déconnexion private WS avec snapshot resync,
 duplicate/out-of-order private WS avec snapshot resync,
 restart avec position protegee ouverte,
-funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
-actif avec replay et restart.
+funding perpetuel deterministe/persistant, conflit One-Way position/ordre actif
+avec replay et restart, et trois profils Fake dry-run sur le même symbole depuis
+deux piles Symfony/FastAPI fraîches reliées par HTTP loopback.
 
-Une ligne reste `partial` : le scenario 20 dispose de tests Python avec doubles HTTP en memoire, mais le
-  runner golden PHP ne lance pas la recette complete deux fois depuis des piles
-  fraiches. Les preuves structurelles OKX/Hyperliquid/Bitmart et les tests de lock
-  restent utiles, sans constituer la preuve golden finale.
-
-Le bilan est donc 19 `executable` et 1 `partial`. L'audit critere par critere et
+Le bilan golden est donc 20 `executable` et 0 `partial`. L'audit critere par critere et
 les conditions de cloture sont publies dans
 `reports/fake-paper-final-audit-196.md`. Ce bilan ne clot pas l'issue #196 et
 n'autorise aucune mutation demo/testnet/mainnet.

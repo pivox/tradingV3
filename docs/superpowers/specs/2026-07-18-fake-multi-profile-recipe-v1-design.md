@@ -1,12 +1,11 @@
 # Fake multi-profile recipe v1 design
 
-> **Superseded certification status (2026-07-19).** This document preserves
-> Prompt 6's historical design intent and acceptance criteria; it is not the
-> current golden-suite certification. The source of truth is
+> **Superseded certification status (updated 2026-08-20).** This document
+> preserves Prompt 6's historical design intent. The current fresh-stack design
+> is [`2026-08-20-issue-196-golden-20-fresh-stack-design.md`](2026-08-20-issue-196-golden-20-fresh-stack-design.md)
+> and the source of truth is
 > [`docs/handbook/reports/fake-paper-final-audit-196.md`](../../handbook/reports/fake-paper-final-audit-196.md).
-> Scenario 20 is `partial`: its Python tests use in-memory HTTP test doubles,
-> and the PHP golden runner does not launch the full recipe twice from two fresh
-> application stacks.
+> Scenario 20 is now `executable` through two fresh Symfony/FastAPI HTTP stacks.
 
 ## Scope
 
