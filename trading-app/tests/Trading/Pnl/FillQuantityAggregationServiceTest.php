@@ -162,6 +162,22 @@ final class FillQuantityAggregationServiceTest extends TestCase
         self::assertEqualsWithDelta(0.10, $result->fundingUsdt, 1e-12);
     }
 
+    public function testDuplicateWithDifferentSubsecondTimestampIsAConflict(): void
+    {
+        $service = new FillQuantityAggregationService();
+
+        $result = $service->aggregateEntries([
+            self::fill('entry', 'entry', '2026-06-25T10:00:00.123456+00:00', 100.0, 1.0, exchangeFillId: 'venue-fill-1'),
+            self::fill('entry-shifted', 'entry', '2026-06-25T10:00:00.654321+00:00', 100.0, 1.0, exchangeFillId: 'venue-fill-1'),
+            self::fill('exit', 'exit', '2026-06-25T10:05:00.000000+00:00', 101.0, 1.0, exchangeFillId: 'venue-fill-2'),
+        ], internalTradeId: 'shared-trade-id', exchange: 'fake', marketType: 'paper');
+
+        self::assertSame('fill_conflict', $result->quantityStatus);
+        self::assertContains('fill_conflict', $result->quantityQualityFlags);
+        self::assertNotContains('duplicate_fill_ignored', $result->quantityQualityFlags);
+        self::assertFalse($result->netPnlCertificationAllowed());
+    }
+
     public function testCancelledOrCorrectedFillIsIgnoredAuditably(): void
     {
         $service = new FillQuantityAggregationService();

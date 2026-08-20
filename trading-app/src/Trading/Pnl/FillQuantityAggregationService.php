@@ -10,6 +10,7 @@ use App\Repository\FillCostLedgerEntryRepository;
 final readonly class FillQuantityAggregationService implements FillQuantityAggregationProviderInterface
 {
     public const DEFAULT_QUANTITY_TOLERANCE = 0.00000001;
+    private const FILL_TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
 
     public function __construct(
         private ?FillCostLedgerEntryRepository $ledger = null,
@@ -183,7 +184,7 @@ final readonly class FillQuantityAggregationService implements FillQuantityAggre
             'slippage_cost_usdt' => $entry->getSlippageCostUsdt(),
             'borrow_cost_usdt' => $entry->getBorrowCostUsdt(),
             'liquidation_fee_usdt' => $entry->getLiquidationFeeUsdt(),
-            'occurred_at' => $entry->getOccurredAt()->format(\DateTimeInterface::ATOM),
+            'occurred_at' => $entry->getOccurredAt()->format(self::FILL_TIMESTAMP_FORMAT),
         ], \JSON_THROW_ON_ERROR);
         if (!isset($seenFillFingerprints[$identity])) {
             $seenFillFingerprints[$identity] = $fingerprint;
