@@ -57,7 +57,8 @@ php bin/console app:position-trade-analysis:backfill-divergence \
 
 Le champ `rows[].classification` peut valoir :
 
-- `certified` : v2 est complete et expose un `net_pnl_usdt` certifie ;
+- `certified` : v2 porte une lineage `canonical`, des couts canoniques complets et expose un
+  `canonical_net_pnl_usdt` non nul ;
 - `partial` : ligne exploitable partiellement mais non certifiable ;
 - `unknown` : etat ou couts inconnus ;
 - `unmatched` : v2 ne rapproche pas la cloture par identifiant exact ;
@@ -67,11 +68,18 @@ Le champ `rows[].classification` peut valoir :
 - `v1_only` : presente seulement dans v1 ;
 - `v2_only` : presente seulement dans v2 ;
 - `pnl_divergence` : ecart PnL entre v1 et v2 au-dela de l'epsilon technique.
+- `non_canonical_lineage` : la ligne v2 est legacy ou incomplete et ne peut pas etre certifiee.
 
 Une ligne incomplete n'est jamais presentee comme complete. Les valeurs absentes restent `null`.
-Le delta `pnl_delta_usdt` compare v1 au `net_pnl_usdt` lorsque v2 est certifiee
-(`cost_completeness=complete` et net present). Pour les lignes non certifiees, il compare v1 a
+Le delta `pnl_delta_usdt` compare v1 au `canonical_net_pnl_usdt` lorsque v2 est certifiee
+(`canonical_cost_completeness=complete` et net canonique present). Pour les lignes non certifiees, il compare v1 a
 `recorded_pnl_usdt`, puis a `gross_realized_pnl_usdt` seulement si le recorded est absent.
+
+Le rapport lit exclusivement `canonical_holding_time_sec`, `canonical_cost_completeness`,
+`canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality` pour les preuves certifiantes.
+Les deltas MFE/MAE sont masques lorsque la qualite canonique n'est pas `complete`. Chaque ligne
+exporte aussi `mode_id`, `mode_version`, `setup_id`, `setup_version`, `side`, `config_hash` et les
+provenances de holding time et MFE/MAE afin de conserver la cellule moderne exacte.
 
 ## Rapport
 
@@ -82,7 +90,8 @@ Le JSON contient :
   preuve lineage/cout/quantite ;
 - `pagination` : limite, curseur et statut de troncature ;
 - `proposal` : `ready_for_backfill=false` si une divergence, une exclusion ou une pagination
-  tronquee subsiste ;
+  tronquee subsiste, mais aussi si aucune ligne comparable n'a ete trouvee
+  (`blocking_reason=no_comparable_rows`) ;
 - `rows` : details par `entry_event_id`, avec deltas PnL, duration, MFE et MAE.
 
 Exemple minimal :
@@ -118,5 +127,6 @@ Exemple minimal :
 - Aucun fallback par symbole seul.
 - Aucun rapprochement par fenetre temporelle pour le backfill.
 - Aucun cout absent transforme en zero.
+- Aucune colonne legacy sans prefixe utilisee comme autorite de certification.
 - Aucun changement live, strategie, MTF, EntryZone, Risk/Leverage ou SL/TP.
 - Aucun payload brut sensible exporte.

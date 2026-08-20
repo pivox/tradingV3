@@ -64,22 +64,39 @@ SELECT
     v1.pnl_usdt AS v1_pnl_usdt,
     v2.recorded_pnl_usdt AS v2_recorded_pnl_usdt,
     v2.gross_realized_pnl_usdt AS v2_gross_realized_pnl_usdt,
-    v2.net_pnl_usdt AS v2_net_pnl_usdt,
+    to_jsonb(v2)->> 'canonical_net_pnl_usdt' AS v2_net_pnl_usdt,
     v1.holding_time_sec AS v1_holding_time_sec,
-    v2.holding_time_sec AS v2_holding_time_sec,
+    to_jsonb(v2)->> 'canonical_holding_time_sec' AS v2_holding_time_sec,
     v1.mfe_pct AS v1_mfe_pct,
-    v2.mfe_pct AS v2_mfe_pct,
+    CASE
+        WHEN to_jsonb(v2)->> 'canonical_mfe_mae_data_quality' = 'complete' THEN v2.mfe_pct
+        ELSE NULL
+    END AS v2_mfe_pct,
     v1.mae_pct AS v1_mae_pct,
-    v2.mae_pct AS v2_mae_pct,
+    CASE
+        WHEN to_jsonb(v2)->> 'canonical_mfe_mae_data_quality' = 'complete' THEN v2.mae_pct
+        ELSE NULL
+    END AS v2_mae_pct,
+    to_jsonb(v2)->> 'mode_id' AS v2_mode_id,
+    to_jsonb(v2)->> 'mode_version' AS v2_mode_version,
+    to_jsonb(v2)->> 'setup_id' AS v2_setup_id,
+    to_jsonb(v2)->> 'setup_version' AS v2_setup_version,
+    to_jsonb(v2)->> 'canonical_side' AS v2_canonical_side,
+    to_jsonb(v2)->> 'canonical_config_hash' AS v2_canonical_config_hash,
     v2.internal_trade_id AS v2_internal_trade_id,
     v2.trade_id AS v2_trade_id,
     v2.position_id AS v2_position_id,
     v2.close_match_status AS v2_close_match_status,
     v2.close_matched_by AS v2_close_matched_by,
     v2.analysis_status AS v2_analysis_status,
-    v2.cost_completeness AS v2_cost_completeness,
+    to_jsonb(v2)->> 'lineage_classification' AS v2_lineage_classification,
+    to_jsonb(v2)->> 'canonical_cost_completeness' AS v2_cost_completeness,
     v2.position_fully_closed AS v2_position_fully_closed,
-    v2.pnl_quality_flags AS v2_pnl_quality_flags
+    to_jsonb(v2)-> 'canonical_pnl_quality_flags' AS v2_pnl_quality_flags,
+    to_jsonb(v2)->> 'holding_time_source' AS v2_holding_time_source,
+    to_jsonb(v2)->> 'mfe_mae_window_source' AS v2_mfe_mae_window_source,
+    to_jsonb(v2)->> 'mfe_mae_entry_price_source' AS v2_mfe_mae_entry_price_source,
+    to_jsonb(v2)->> 'canonical_mfe_mae_data_quality' AS v2_mfe_mae_data_quality
 FROM position_trade_analysis v1
 FULL OUTER JOIN position_trade_analysis_v2 v2
     ON v2.entry_event_id = v1.entry_event_id

@@ -61,7 +61,7 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
 
         $nextCursor = $rows === [] ? null : (int) $rows[array_key_last($rows)]['entry_event_id'];
         $excludedRows = count($rows) - $certifiedRows;
-        $ready = $excludedRows === 0 && !$truncated;
+        $ready = $rows !== [] && $excludedRows === 0 && !$truncated;
 
         return [
             'metadata' => [
@@ -106,7 +106,9 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
             ],
             'proposal' => [
                 'ready_for_backfill' => $ready,
-                'blocking_reason' => $ready ? null : ($truncated ? 'pagination_truncated' : 'divergence_or_incomplete_data'),
+                'blocking_reason' => $ready
+                    ? null
+                    : ($truncated ? 'pagination_truncated' : ($rows === [] ? 'no_comparable_rows' : 'divergence_or_incomplete_data')),
                 'apply_mode_available' => false,
             ],
             'rows' => $rows,
@@ -186,6 +188,12 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
             'market_data_venue' => ($venue = trim((string) ($row['market_data_venue'] ?? ''))) !== '' ? $venue : null,
             'market_type' => $row['market_type'] ?? null,
             'profile' => $row['profile'] ?? null,
+            'mode_id' => $this->stringOrNull($row['v2_mode_id'] ?? null),
+            'mode_version' => $this->stringOrNull($row['v2_mode_version'] ?? null),
+            'setup_id' => $this->stringOrNull($row['v2_setup_id'] ?? null),
+            'setup_version' => $this->stringOrNull($row['v2_setup_version'] ?? null),
+            'side' => $this->stringOrNull($row['v2_canonical_side'] ?? null),
+            'config_hash' => $this->stringOrNull($row['v2_canonical_config_hash'] ?? null),
             'entry_time' => $this->stringOrNull($row['entry_time'] ?? null),
             'v1_present' => $v1Present,
             'v2_present' => $v2Present,
@@ -197,7 +205,12 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
             'close_match_status' => $row['v2_close_match_status'] ?? null,
             'close_matched_by' => $row['v2_close_matched_by'] ?? null,
             'analysis_status' => $row['v2_analysis_status'] ?? null,
+            'lineage_classification' => $this->stringOrNull($row['v2_lineage_classification'] ?? null),
             'cost_completeness' => $row['v2_cost_completeness'] ?? null,
+            'holding_time_source' => $this->stringOrNull($row['v2_holding_time_source'] ?? null),
+            'mfe_mae_window_source' => $this->stringOrNull($row['v2_mfe_mae_window_source'] ?? null),
+            'mfe_mae_entry_price_source' => $this->stringOrNull($row['v2_mfe_mae_entry_price_source'] ?? null),
+            'mfe_mae_data_quality' => $this->stringOrNull($row['v2_mfe_mae_data_quality'] ?? null),
             'position_fully_closed' => $this->nullableBool($row['v2_position_fully_closed'] ?? null),
             'quality_flags' => $flags,
             'v1_pnl_usdt' => $v1Pnl,
@@ -235,6 +248,9 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
         }
         if (in_array('quantity_mismatch', $flags, true)) {
             return 'quantity_mismatch';
+        }
+        if (($row['v2_lineage_classification'] ?? null) !== 'canonical') {
+            return 'non_canonical_lineage';
         }
         if ($pnlDelta !== null && abs($pnlDelta) > self::PNL_DIVERGENCE_EPSILON) {
             return 'pnl_divergence';
