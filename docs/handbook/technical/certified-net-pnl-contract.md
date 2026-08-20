@@ -256,11 +256,16 @@ Pour les nouveaux trades disposant d'un ledger complet, la fenêtre est désorma
 fixée par `entry_first_fill_at` et `exit_last_fill_at`, et le prix de référence est
 le VWAP des fills d'entrée. Le lifecycle persiste explicitement
 `mfe_mae_window_source=fill_cost_ledger_v1` et
-`mfe_mae_entry_price_source=fill_cost_ledger_v1`. La vue ne conserve une qualité
-`complete` que si ces deux provenances et les deux bornes correspondent exactement
-à l'agrégat ledger. Une ancienne fenêtre provider ou une fenêtre incohérente reste
-visible mais devient `partial`; ses valeurs d'excursion ne sont pas projetées comme
-preuves fortes.
+`mfe_mae_entry_price_source=fill_cost_ledger_v1`, ainsi que le VWAP utilisé dans
+`mfe_mae_entry_price`. La vue ne conserve une qualité `complete` que si ces deux
+provenances, les deux bornes et le VWAP correspondent à l'agrégat ledger. La
+comparaison du VWAP tolère uniquement un écart numérique relatif de `1e-12` (avec
+un plancher absolu de `1e-12`) lié à la sérialisation JSON. Une ancienne fenêtre,
+un ancien VWAP ou une preuve provider reste visible mais devient `partial`; ses
+valeurs d'excursion ne sont pas projetées comme preuves fortes. Lors d'un replay,
+une preuve `complete` n'est préservée que si ses bornes et son VWAP correspondent
+encore au ledger ; si le recalcul est indisponible après un changement, elle est
+explicitement rétrogradée.
 
 Avec des klines 1m, seules les bougies entièrement contenues entre le premier fill
 d'entrée et le dernier fill de sortie contribuent aux extrema. La bougie partielle

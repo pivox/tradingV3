@@ -156,7 +156,18 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                 'holding_time_source' => 'fill_cost_ledger_v1',
             ];
             $replacementIsUsable = $excursion['mfe_price'] !== null && $excursion['mae_price'] !== null;
-            $existingEvidenceIsComplete = ($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete';
+            $windowStart = $window->entryFirstFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT);
+            $windowEnd = $window->exitLastFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT);
+            $existingEntryPrice = $existingExtra['mfe_mae_entry_price'] ?? null;
+            $entryPriceTolerance = max(1e-12, abs($window->entryVwap) * 1e-12);
+            $existingEvidenceMatchesLedger = ($existingExtra['mfe_mae_window_source'] ?? null) === 'fill_cost_ledger_v1'
+                && ($existingExtra['mfe_mae_entry_price_source'] ?? null) === 'fill_cost_ledger_v1'
+                && ($existingExtra['mfe_mae_window_start'] ?? null) === $windowStart
+                && ($existingExtra['mfe_mae_window_end'] ?? null) === $windowEnd
+                && is_numeric($existingEntryPrice)
+                && abs((float) $existingEntryPrice - $window->entryVwap) <= $entryPriceTolerance;
+            $existingEvidenceIsComplete = ($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete'
+                && $existingEvidenceMatchesLedger;
             if ($replacementIsUsable && (!$existingEvidenceIsComplete || $excursion['data_quality'] === 'complete')) {
                 $updates += [
                     'max_favorable_price' => $excursion['mfe_price'],
@@ -167,15 +178,18 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                     'mae_at' => $excursion['mae_at']?->format(\DateTimeInterface::ATOM),
                     'mfe_mae_source' => $excursion['source'],
                     'mfe_mae_timeframe' => $excursion['timeframe'],
-                    'mfe_mae_window_start' => $window->entryFirstFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
-                    'mfe_mae_window_end' => $window->exitLastFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_start' => $windowStart,
+                    'mfe_mae_window_end' => $windowEnd,
                     'mfe_mae_window_source' => 'fill_cost_ledger_v1',
+                    'mfe_mae_entry_price' => $window->entryVwap,
                     'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
                     'mfe_mae_sample_count' => $excursion['sample_count'],
                     'mfe_mae_expected_sample_count' => $excursion['expected_sample_count'],
                     'mfe_mae_limit' => $excursion['limit'],
                     'mfe_mae_data_quality' => $excursion['data_quality'],
                 ];
+            } elseif (($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete' && !$existingEvidenceMatchesLedger) {
+                $updates['mfe_mae_data_quality'] = 'partial';
             }
             $closed->setExtra(array_replace($existingExtra, $updates));
             $this->tradeLifecycleRepository->save($closed);
@@ -342,6 +356,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                     'mfe_mae_window_start' => $analysisWindowStart->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
                     'mfe_mae_window_end' => $analysisWindowEnd->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
                     'mfe_mae_window_source' => $analysisWindowSource,
+                    'mfe_mae_entry_price' => $entryPriceFloat,
                     'mfe_mae_entry_price_source' => $entryPriceSource,
                     'mfe_mae_sample_count' => $mfeMaeSampleCount,
                     'mfe_mae_expected_sample_count' => $mfeMaeExpectedSampleCount,

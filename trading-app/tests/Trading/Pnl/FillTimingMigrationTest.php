@@ -74,6 +74,8 @@ final class FillTimingMigrationTest extends TestCase
         self::assertStringContainsString("identity.lineage_classification = 'canonical' AND legacy.quantity_status = 'complete'", $sql);
         self::assertStringContainsString('AS canonical_holding_time_sec', $sql);
         self::assertStringContainsString('AS mfe_mae_window_source', $sql);
+        self::assertStringContainsString("c.extra->> 'mfe_mae_entry_price'", $sql);
+        self::assertStringContainsString('legacy.entry_vwap', $sql);
         self::assertStringContainsString("ELSE 'incomplete_fill_ledger'", $sql);
         self::assertStringNotContainsString('ELSE legacy.holding_time_sec', $sql);
         self::assertStringNotContainsString('jsonb_populate_record', $sql);

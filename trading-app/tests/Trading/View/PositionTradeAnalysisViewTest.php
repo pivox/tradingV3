@@ -782,6 +782,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
                 'mfe_mae_window_end' => $exitFillAt,
                 'mfe_mae_window_source' => 'fill_cost_ledger_v1',
                 'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+                'mfe_mae_entry_price' => 100.0,
                 'holding_time_sec' => 999,
                 'holding_time_source' => 'provider_position_history',
             ], $positionId, '2026-08-20 10:05:00+00', $closeId, 'fake', 'paper', 'hyperliquid');
@@ -817,6 +818,15 @@ final class PositionTradeAnalysisViewTest extends TestCase
             self::assertSame('fill_cost_ledger_v1', $exact['mfe_mae_entry_price_source']);
             self::assertSame('complete', $exact['canonical_mfe_mae_data_quality']);
             self::assertEqualsWithDelta(0.1, (float) $exact['mfe_pct'], 1e-9);
+
+            $this->conn->executeStatement(<<<'SQL'
+UPDATE trade_lifecycle_event
+SET extra = jsonb_set(extra, '{mfe_mae_entry_price}', '99'::jsonb)
+WHERE id = 2981
+SQL);
+            $staleEntryPrice = $this->analysisRow(2980);
+            self::assertSame('partial', $staleEntryPrice['canonical_mfe_mae_data_quality']);
+            self::assertSame('unverified_entry_price', $staleEntryPrice['mfe_mae_entry_price_source']);
 
             $invalid = $this->analysisRow(2982);
             self::assertNull($invalid['canonical_holding_time_sec']);

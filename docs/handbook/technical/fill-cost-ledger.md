@@ -155,7 +155,10 @@ last-exit fills. This deterministic repair covers the case where the final fill
 arrives after the provider close event; an unavailable ledger or market-data
 provider leaves the previous excursion evidence untouched. A partial refresh
 also cannot replace existing `complete` evidence; this preserves valid canonical
-evidence during an idempotent replay.
+evidence during an idempotent replay. That preservation requires the persisted
+fill bounds and `mfe_mae_entry_price` to still match the canonical ledger window
+and entry VWAP. If either changes while market data is unavailable, the stale
+evidence remains auditable but is downgraded to `partial`.
 
 Current statuses:
 

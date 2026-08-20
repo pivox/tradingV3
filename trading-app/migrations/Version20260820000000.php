@@ -71,6 +71,10 @@ SQL;
     AND NULLIF(c.extra->> 'mfe_mae_entry_price_source', '') = 'fill_cost_ledger_v1'
     AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_start') = legacy.entry_first_fill_at
     AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_end') = legacy.exit_last_fill_at
+    AND legacy.entry_vwap IS NOT NULL
+    AND trading_v3_safe_numeric(c.extra->> 'mfe_mae_entry_price') IS NOT NULL
+    AND abs(trading_v3_safe_numeric(c.extra->> 'mfe_mae_entry_price') - legacy.entry_vwap)
+        <= greatest(0.000000000001::numeric, abs(legacy.entry_vwap) * 0.000000000001::numeric)
 SQL;
 
         $fillTimingColumns = $withFillTiming ? <<<SQL
