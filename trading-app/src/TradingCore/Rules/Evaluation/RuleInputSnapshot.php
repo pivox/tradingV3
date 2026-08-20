@@ -13,6 +13,7 @@ final readonly class RuleInputSnapshot
         public \DateTimeImmutable $observedAt,
         public \DateTimeImmutable $validUntil,
         public array $values,
+        public ?RuleInputProof $proof = null,
     ) {
         if ($timeframe === '' || $source === '') {
             throw new \InvalidArgumentException('Rule input timeframe and source must be non-empty.');

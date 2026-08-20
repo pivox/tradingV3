@@ -96,25 +96,13 @@ final class CanonicalMicrostructureEngineTest extends TestCase
         );
     }
 
-    public function testRejectsForgedSnapshotMetricEvenWithRecomputedHash(): void
+    public function testSnapshotConstructionIsRestrictedToCanonicalRecordAuthority(): void
     {
-        $snapshot = (new CanonicalMicrostructureEngine())->build(
-            $this->policy(),
-            $this->evaluatedAt(),
-            [$this->book('2026-08-14T12:00:59.000000Z')],
-            $this->trades(),
-        );
-        $arguments = [];
-        foreach ((new \ReflectionMethod(CanonicalMicrostructureSnapshot::class, '__construct'))->getParameters() as $parameter) {
-            $name = $parameter->getName();
-            $arguments[$name] = $name === 'inputHash' ? null : $snapshot->{$name};
-        }
-        $arguments['orderFlowImbalance'] = '2';
+        $constructor = (new \ReflectionClass(CanonicalMicrostructureSnapshot::class))->getConstructor();
 
-        $this->expectException(CanonicalMicrostructureException::class);
-        $this->expectExceptionMessage('canonical_microstructure_snapshot_invalid');
-
-        new CanonicalMicrostructureSnapshot(...$arguments);
+        self::assertNotNull($constructor);
+        self::assertTrue($constructor->isPrivate());
+        self::assertTrue((new \ReflectionMethod(CanonicalMicrostructureSnapshot::class, 'fromRecords'))->isPublic());
     }
 
     public function testSnapshotSerializationIsForbidden(): void
