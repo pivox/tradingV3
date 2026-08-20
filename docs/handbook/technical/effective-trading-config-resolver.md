@@ -156,8 +156,9 @@ their cells can use distinct effective configurations. One decision or trade mus
 resolve to a single snapshot.
 
 Every matching lineage row must carry
-`effective-config-snapshot:sha256:<64 lowercase hex>` and, when present, its
-`config_hash` must match the immutable registry document. Responses include only
+`effective-config-snapshot:sha256:<64 lowercase hex>` and a canonical `config_hash`
+matching the immutable registry document. Rows are streamed and aggregated without
+materializing the lifecycle-event history. Responses include only
 the stored redacted historical document plus explicit lineage/order-intent/event
 and distinct identity counts. Failures are closed and stable:
 
@@ -167,7 +168,8 @@ and distinct identity counts. Failures are closed and stable:
   reference;
 - `409 effective_config_usage_conflict` for an ambiguous decision or trade;
 - `409 effective_config_snapshot_unregistered` for a dangling reference;
-- `409 effective_config_hash_conflict` when lineage and registry hashes disagree.
+- `409 effective_config_hash_conflict` when a lineage hash is missing, malformed,
+  inconsistent, or disagrees with the registry.
 
 The Front Ops links and presentation of these responses remain owned by #318.
 

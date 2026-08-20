@@ -92,7 +92,9 @@ final class DoctrineEffectiveConfigUsageStoreTest extends TestCase
             [EffectiveConfigUsageScope::DECISION, 'decision-exact', [2, 3, 1]],
             [EffectiveConfigUsageScope::TRADE, 'trade-exact', [2, 5, 3, 6, 1]],
         ] as [$scope, $identifier, $expectedIds]) {
-            $facts = $this->store->find($scope, $identifier);
+            $stream = $this->store->find($scope, $identifier);
+            self::assertInstanceOf(\Traversable::class, $stream, $scope->value);
+            $facts = iterator_to_array($stream, false);
             self::assertSame(array_map('strval', $expectedIds), array_column($facts, 'rowIdentity'), $scope->value);
         }
     }
@@ -112,7 +114,9 @@ final class DoctrineEffectiveConfigUsageStoreTest extends TestCase
             'effective_config_reference' => null,
         ]);
 
-        $facts = $this->store->find(EffectiveConfigUsageScope::RUN, 'run-null');
+        $stream = $this->store->find(EffectiveConfigUsageScope::RUN, 'run-null');
+        self::assertInstanceOf(\Traversable::class, $stream);
+        $facts = iterator_to_array($stream, false);
 
         self::assertSame(['10', '20'], array_column($facts, 'rowIdentity'));
         self::assertNull($facts[0]->configHash);

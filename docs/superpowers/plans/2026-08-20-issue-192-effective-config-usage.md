@@ -55,11 +55,11 @@ public function __construct(
 ) {}
 ```
 
-The store contract is:
+The streaming store contract is:
 
 ```php
-/** @return list<EffectiveConfigUsageFact> */
-public function find(EffectiveConfigUsageScope $scope, string $identifier): array;
+/** @return iterable<EffectiveConfigUsageFact> */
+public function find(EffectiveConfigUsageScope $scope, string $identifier): iterable;
 ```
 
 The read service method is:
@@ -128,7 +128,8 @@ order_intent.trade_id = ? OR order_intent.internal_trade_id = ?
 trade_lifecycle_event.trade_id = ? OR trade_lifecycle_event.internal_trade_id = ?
 ```
 
-Order by normalized `source`, then numeric `row_identity`.
+Order by normalized `source`, then numeric `row_identity`, and expose rows through
+`iterateAssociative()` so lifecycle cardinality is not materialized in request memory.
 
 - [ ] **Step 4: Verify GREEN**
 

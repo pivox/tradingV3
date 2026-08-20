@@ -12,7 +12,7 @@ final readonly class DoctrineEffectiveConfigUsageStore implements EffectiveConfi
     {
     }
 
-    public function find(EffectiveConfigUsageScope $scope, string $identifier): array
+    public function find(EffectiveConfigUsageScope $scope, string $identifier): iterable
     {
         [$lineagePredicate, $intentPredicate, $eventPredicate, $parameters] = match ($scope) {
             EffectiveConfigUsageScope::RUN => [
@@ -66,8 +66,8 @@ FROM (
 ORDER BY source, row_order
 SQL, $lineagePredicate, $intentPredicate, $eventPredicate);
 
-        return array_map(
-            static fn (array $row): EffectiveConfigUsageFact => new EffectiveConfigUsageFact(
+        foreach ($this->connection->iterateAssociative($sql, $parameters) as $row) {
+            yield new EffectiveConfigUsageFact(
                 self::requiredString($row, 'source'),
                 self::requiredString($row, 'row_identity'),
                 self::nullableString($row, 'config_hash'),
@@ -75,9 +75,8 @@ SQL, $lineagePredicate, $intentPredicate, $eventPredicate);
                 self::nullableString($row, 'decision_id'),
                 self::nullableString($row, 'trade_id'),
                 self::nullableString($row, 'internal_trade_id'),
-            ),
-            $this->connection->fetchAllAssociative($sql, $parameters),
-        );
+            );
+        }
     }
 
     /** @param array<string,mixed> $row */

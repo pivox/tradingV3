@@ -74,8 +74,9 @@ timestamp fallback is allowed.
 6. Group rows by snapshot hash and aggregate explicitly named source/entity counts.
 7. Resolve every hash through the immutable snapshot registry. A missing registry record is
    a `409 effective_config_snapshot_unregistered` integrity conflict.
-8. Require each non-null row `config_hash` to equal the stored document `config_hash`.
-   Mismatches return `409 effective_config_hash_conflict`.
+8. Require every row to carry a canonical `config_hash` equal to the stored document
+   `config_hash`. Missing, malformed, or mismatched hashes return
+   `409 effective_config_hash_conflict`.
 9. For decision/trade scopes, reject more than one distinct snapshot with
    `409 effective_config_usage_conflict`.
 10. Return only the registry's redacted historical document. Embedded lineage JSON is never
@@ -90,14 +91,17 @@ distinct non-empty values within one snapshot group.
 - `EffectiveConfigUsageCriteria`: validated scope and identifier, plus the exact store
   predicate for that scope.
 - `EffectiveConfigUsageFact`: one normalized, immutable persistence observation.
-- `EffectiveConfigUsageStoreInterface`: returns every matching fact without pagination.
-- `DoctrineEffectiveConfigUsageStore`: executes fixed, parameterized `UNION ALL` queries.
+- `EffectiveConfigUsageStoreInterface`: streams every matching fact without pagination.
+- `DoctrineEffectiveConfigUsageStore`: executes fixed, parameterized `UNION ALL` queries
+  through a forward-only DBAL iterator.
 - `EffectiveConfigUsageReadService`: fail-closed validation, grouping, registry lookup, and
   response assembly.
 - `EffectiveConfigUsageApiController`: the four routes and stable HTTP error mapping.
 
-The store owns SQL only. The service owns all integrity decisions. The controller owns only
-HTTP translation.
+The store owns SQL only. The service validates and aggregates each streamed fact immediately;
+it retains counters and distinct canonical identities, never the event history. Memory is
+therefore bounded by the response's distinct snapshots/identities rather than lifecycle-event
+cardinality. The controller owns only HTTP translation.
 
 ## Indexes and migration safety
 

@@ -93,6 +93,16 @@ final class EffectiveConfigUsageReadServiceTest extends TestCase
         $this->assertFailure($mismatch, EffectiveConfigUsageScope::RUN, 'run-1', 'effective_config_hash_conflict', 409);
     }
 
+    public function testMissingConfigHashIsAnIntegrityConflict(): void
+    {
+        $snapshot = $this->hash('a');
+        $service = $this->service([
+            $this->fact('order_intent', '1', $snapshot, configHash: null, useDefaultConfigHash: false),
+        ], [$this->record($snapshot, 'c')]);
+
+        $this->assertFailure($service, EffectiveConfigUsageScope::RUN, 'run-1', 'effective_config_hash_conflict', 409);
+    }
+
     public function testDecisionAndTradeRejectMoreThanOneSnapshot(): void
     {
         $a = $this->hash('a');
@@ -115,6 +125,7 @@ final class EffectiveConfigUsageReadServiceTest extends TestCase
         $store = new class($facts) implements EffectiveConfigUsageStoreInterface {
             /** @param list<EffectiveConfigUsageFact> $facts */
             public function __construct(private readonly array $facts) {}
+            /** @return list<EffectiveConfigUsageFact> */
             public function find(EffectiveConfigUsageScope $scope, string $identifier): array { return $this->facts; }
         };
         $registry = new class($records) implements EffectiveConfigSnapshotRegistryInterface {
@@ -145,11 +156,14 @@ final class EffectiveConfigUsageReadServiceTest extends TestCase
         ?string $tradeId = null,
         ?string $internalTradeId = null,
         ?string $configHash = null,
+        bool $useDefaultConfigHash = true,
     ): EffectiveConfigUsageFact {
         return new EffectiveConfigUsageFact(
             $source,
             $rowIdentity,
-            $configHash ?? $this->hash($snapshotHash === $this->hash('a') ? 'c' : 'd'),
+            $useDefaultConfigHash && $configHash === null
+                ? $this->hash($snapshotHash === $this->hash('a') ? 'c' : 'd')
+                : $configHash,
             'effective-config-snapshot:' . $snapshotHash,
             $decisionId,
             $tradeId,

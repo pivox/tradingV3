@@ -71,6 +71,7 @@ final class EffectiveConfigUsageApiControllerTest extends TestCase
         $store = new class($facts) implements EffectiveConfigUsageStoreInterface {
             /** @param list<EffectiveConfigUsageFact> $facts */
             public function __construct(private readonly array $facts) {}
+            /** @return list<EffectiveConfigUsageFact> */
             public function find(EffectiveConfigUsageScope $scope, string $identifier): array { return $this->facts; }
         };
         $registry = new class($records) implements EffectiveConfigSnapshotRegistryInterface {

@@ -9,6 +9,7 @@ use App\TradingCore\Config\Audit\EffectiveConfigSnapshotRegistryInterface;
 final readonly class EffectiveConfigUsageReadService
 {
     private const REFERENCE_PATTERN = '/\Aeffective-config-snapshot:(sha256:[0-9a-f]{64})\z/D';
+    private const HASH_PATTERN = '/\Asha256:[0-9a-f]{64}\z/D';
 
     public function __construct(
         private EffectiveConfigUsageStoreInterface $store,
@@ -29,18 +30,19 @@ final readonly class EffectiveConfigUsageReadService
             );
         }
 
-        $facts = $this->store->find($scope, $identifier);
-        if ($facts === []) {
-            throw $this->failure(
-                'effective_config_usage_not_found',
-                404,
-                'No canonical effective-config usage was found for the requested identifier.',
-            );
-        }
-
-        /** @var array<string,list<EffectiveConfigUsageFact>> $groups */
+        /**
+         * @var array<string,array{
+         *     source_counts:array{trade_lineage:int,order_intent:int,trade_lifecycle_event:int},
+         *     config_hashes:array<string,true>,
+         *     decision_ids:array<string,true>,
+         *     trade_ids:array<string,true>,
+         *     internal_trade_ids:array<string,true>
+         * }> $groups
+         */
         $groups = [];
-        foreach ($facts as $fact) {
+        $found = false;
+        foreach ($this->store->find($scope, $identifier) as $fact) {
+            $found = true;
             if (preg_match(self::REFERENCE_PATTERN, $fact->effectiveConfigReference ?? '', $matches) !== 1) {
                 throw $this->failure(
                     'effective_config_reference_missing',
@@ -48,7 +50,43 @@ final readonly class EffectiveConfigUsageReadService
                     'Canonical lineage exists but does not contain a valid effective-config reference.',
                 );
             }
-            $groups[$matches[1]][] = $fact;
+            if (preg_match(self::HASH_PATTERN, $fact->configHash ?? '') !== 1) {
+                throw $this->failure(
+                    'effective_config_hash_conflict',
+                    409,
+                    'Canonical lineage does not contain a valid config hash.',
+                );
+            }
+
+            $snapshotHash = $matches[1];
+            if (!isset($groups[$snapshotHash])) {
+                $groups[$snapshotHash] = [
+                    'source_counts' => [
+                        'trade_lineage' => 0,
+                        'order_intent' => 0,
+                        'trade_lifecycle_event' => 0,
+                    ],
+                    'config_hashes' => [],
+                    'decision_ids' => [],
+                    'trade_ids' => [],
+                    'internal_trade_ids' => [],
+                ];
+            }
+            if (!array_key_exists($fact->source, $groups[$snapshotHash]['source_counts'])) {
+                throw new \LogicException('effective_config_usage_source_invalid');
+            }
+            ++$groups[$snapshotHash]['source_counts'][$fact->source];
+            $groups[$snapshotHash]['config_hashes'][$fact->configHash] = true;
+            $this->collect($groups[$snapshotHash]['decision_ids'], $fact->decisionId);
+            $this->collect($groups[$snapshotHash]['trade_ids'], $fact->tradeId);
+            $this->collect($groups[$snapshotHash]['internal_trade_ids'], $fact->internalTradeId);
+        }
+        if (!$found) {
+            throw $this->failure(
+                'effective_config_usage_not_found',
+                404,
+                'No canonical effective-config usage was found for the requested identifier.',
+            );
         }
 
         if ($scope->requiresUniqueSnapshot() && count($groups) !== 1) {
@@ -61,7 +99,7 @@ final readonly class EffectiveConfigUsageReadService
 
         ksort($groups, SORT_STRING);
         $snapshots = [];
-        foreach ($groups as $snapshotHash => $groupFacts) {
+        foreach ($groups as $snapshotHash => $group) {
             $record = $this->registry->find($snapshotHash);
             if ($record === null) {
                 throw $this->failure(
@@ -75,20 +113,18 @@ final readonly class EffectiveConfigUsageReadService
             if (!is_string($documentConfigHash) || $documentConfigHash === '') {
                 throw new \LogicException('effective_config_snapshot_invalid');
             }
-            foreach ($groupFacts as $fact) {
-                if ($fact->configHash !== null && !hash_equals($documentConfigHash, $fact->configHash)) {
-                    throw $this->failure(
-                        'effective_config_hash_conflict',
-                        409,
-                        'Canonical lineage config hash disagrees with the referenced snapshot.',
-                    );
-                }
+            if (count($group['config_hashes']) !== 1 || !isset($group['config_hashes'][$documentConfigHash])) {
+                throw $this->failure(
+                    'effective_config_hash_conflict',
+                    409,
+                    'Canonical lineage config hash disagrees with the referenced snapshot.',
+                );
             }
 
             $snapshots[] = [
                 'snapshot' => ['document_kind' => 'historical_snapshot']
                     + array_diff_key($record->document, ['document_kind' => true]),
-                'usage' => $this->usage($groupFacts),
+                'usage' => $this->usage($group),
             ];
         }
 
@@ -101,37 +137,25 @@ final readonly class EffectiveConfigUsageReadService
     }
 
     /**
-     * @param list<EffectiveConfigUsageFact> $facts
+     * @param array{
+     *     source_counts:array{trade_lineage:int,order_intent:int,trade_lifecycle_event:int},
+     *     config_hashes:array<string,true>,
+     *     decision_ids:array<string,true>,
+     *     trade_ids:array<string,true>,
+     *     internal_trade_ids:array<string,true>
+     * } $group
      *
      * @return array<string,int>
      */
-    private function usage(array $facts): array
+    private function usage(array $group): array
     {
-        $sourceCounts = [
-            'trade_lineage' => 0,
-            'order_intent' => 0,
-            'trade_lifecycle_event' => 0,
-        ];
-        $decisionIds = [];
-        $tradeIds = [];
-        $internalTradeIds = [];
-        foreach ($facts as $fact) {
-            if (!array_key_exists($fact->source, $sourceCounts)) {
-                throw new \LogicException('effective_config_usage_source_invalid');
-            }
-            ++$sourceCounts[$fact->source];
-            $this->collect($decisionIds, $fact->decisionId);
-            $this->collect($tradeIds, $fact->tradeId);
-            $this->collect($internalTradeIds, $fact->internalTradeId);
-        }
-
         return [
-            'lineages' => $sourceCounts['trade_lineage'],
-            'order_intents' => $sourceCounts['order_intent'],
-            'lifecycle_events' => $sourceCounts['trade_lifecycle_event'],
-            'decision_ids' => count($decisionIds),
-            'trade_ids' => count($tradeIds),
-            'internal_trade_ids' => count($internalTradeIds),
+            'lineages' => $group['source_counts']['trade_lineage'],
+            'order_intents' => $group['source_counts']['order_intent'],
+            'lifecycle_events' => $group['source_counts']['trade_lifecycle_event'],
+            'decision_ids' => count($group['decision_ids']),
+            'trade_ids' => count($group['trade_ids']),
+            'internal_trade_ids' => count($group['internal_trade_ids']),
         ];
     }
 
