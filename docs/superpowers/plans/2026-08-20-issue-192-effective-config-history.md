@@ -21,7 +21,7 @@
 - Test: `trading-app/tests/TradingCore/Config/Audit/EffectiveConfigRedactorTest.php`
 - Test: `trading-app/tests/TradingCore/Config/Audit/EffectiveConfigViewerDocumentFactoryTest.php`
 
-- [ ] **Step 1: Write redaction tests that define the security boundary**
+- [x] **Step 1: Write redaction tests that define the security boundary**
 
 Create tests proving recursive traversal, case/punctuation/camel-case normalization, DSN user-info detection, stable lexical redacted paths, list preservation, and the literal replacement value:
 
@@ -41,13 +41,13 @@ self::assertSame('https://example.test', $result->document['items'][1]['public_e
 self::assertSame(['Api-Key', 'dsn', 'items.0.walletSigner', 'nested.privateKey'], $result->redactedPaths);
 ```
 
-- [ ] **Step 2: Run the redaction test and confirm it fails because the classes do not exist**
+- [x] **Step 2: Run the redaction test and confirm it fails because the classes do not exist**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigRedactorTest.php`
 
 Expected: non-zero exit with `Class "App\\TradingCore\\Config\\Audit\\EffectiveConfigRedactor" not found`.
 
-- [ ] **Step 3: Implement the recursive redactor and immutable result**
+- [x] **Step 3: Implement the recursive redactor and immutable result**
 
 Use the exact public contract:
 
@@ -69,7 +69,7 @@ final class EffectiveConfigRedactor
 
 Normalize keys by splitting camel case, replacing non-alphanumerics with `_`, and lowercasing. Treat these normalized concepts as sensitive: `api_key`, `secret`, `password`, `passphrase`, `token`, `credential`, `private_key`, `signature`, `wallet`, and `signer`. Match complete normalized segments, singular/plural and prefixed/suffixed forms, but explicitly keep benign keys such as `token_budget`. Redact `dsn`, `url`, or `uri` only when the string parses with non-empty user-info. Traverse lists by numeric path and maps by original key; sort and deduplicate paths before returning.
 
-- [ ] **Step 4: Write deterministic canonical JSON and viewer-document tests**
+- [x] **Step 4: Write deterministic canonical JSON and viewer-document tests**
 
 The tests must prove map keys are sorted recursively, list order is preserved, non-finite floats are rejected, and a real `EffectiveTradingConfigSnapshot` yields this envelope:
 
@@ -85,13 +85,13 @@ The tests must prove map keys are sorted recursively, list order is preserved, n
 
 Also assert `snapshot_hash` remains the resolver-computed hash, `canonicalJson()` is byte-stable across input map order, and `redactedContentChecksum()` equals `hash('sha256', $document->canonicalJson())`.
 
-- [ ] **Step 5: Run the viewer-document tests and confirm the missing implementation failure**
+- [x] **Step 5: Run the viewer-document tests and confirm the missing implementation failure**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigViewerDocumentFactoryTest.php`
 
 Expected: non-zero exit naming `EffectiveConfigViewerDocumentFactory`.
 
-- [ ] **Step 6: Implement canonical JSON, document, and factory**
+- [x] **Step 6: Implement canonical JSON, document, and factory**
 
 Use these contracts:
 
@@ -124,7 +124,7 @@ final readonly class EffectiveConfigViewerDocumentFactory
 
 The factory redacts `snapshot->toArray()`, then prepends `document_kind=current_preview`, `resolver_version=1.0.0`, `validation_status=valid`, and `redacted_paths`. Canonical JSON must reject resources, objects, unsupported values, and `INF`, `-INF`, or `NAN` with `LogicException('effective_config_document_not_canonical')`.
 
-- [ ] **Step 7: Run both unit suites and commit**
+- [x] **Step 7: Run both unit suites and commit**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigRedactorTest.php tests/TradingCore/Config/Audit/EffectiveConfigViewerDocumentFactoryTest.php`
 
@@ -145,17 +145,17 @@ git commit -m "feat(#192): define safe effective config documents"
 - Test: `trading-app/tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationTest.php`
 - Test: `trading-app/tests/TradingCore/Config/Audit/DoctrineEffectiveConfigSnapshotRegistryTest.php`
 
-- [ ] **Step 1: Write the PostgreSQL migration test**
+- [x] **Step 1: Write the PostgreSQL migration test**
 
 Follow `PaperExecutionMigrationTest`: require a `DATABASE_URL` whose database ends in `_paper_test`, create an isolated schema, instantiate `DoctrineMigrations\\Version20260820150000`, run `up()`, then assert the table, both indexes, and constraints exist. Insert one valid row, then prove UPDATE and DELETE each fail with SQLSTATE `P0001` and message `effective_trading_config_snapshot_append_only`. Prove malformed hashes and an invalid validation status fail with SQLSTATE `23514`, run `down()`, and drop the schema in `finally`.
 
-- [ ] **Step 2: Run the migration test and verify the missing migration failure**
+- [x] **Step 2: Run the migration test and verify the missing migration failure**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationTest.php`
 
 Expected: FAIL because `Version20260820150000.php` is absent, or SKIP only when the isolated PostgreSQL test database is unavailable.
 
-- [ ] **Step 3: Implement the migration**
+- [x] **Step 3: Implement the migration**
 
 Create `effective_trading_config_snapshot` with:
 
@@ -181,7 +181,7 @@ created_at TIMESTAMP(6) WITH TIME ZONE NOT NULL
 
 Add exact SHA-256 check constraints, `validation_status IN ('valid')`, `side IN ('long','short')`, `jsonb_typeof(redacted_snapshot)='object'`, a `config_hash, created_at, snapshot_hash` index, a complete identity index, and a `BEFORE UPDATE OR DELETE` trigger that raises the append-only exception. `down()` removes trigger/function/table.
 
-- [ ] **Step 4: Write registry tests before its implementation**
+- [x] **Step 4: Write registry tests before its implementation**
 
 Create a real-PostgreSQL fixture using the same isolated-schema guard. Assert:
 
@@ -194,13 +194,13 @@ self::assertCount(2, $registry->findByConfigHash($document->configHash()));
 
 The second history record must have a distinct `snapshot_hash` but the same `config_hash`. Directly corrupting a stored checksum or registering a same-hash/different-document object must throw `LogicException('effective_config_snapshot_conflict')`. Assert history ordering by `created_at, snapshot_hash`, canonical re-decoding of JSONB, and no raw secret in `redacted_snapshot::text`.
 
-- [ ] **Step 5: Run registry tests and confirm the missing-class failure**
+- [x] **Step 5: Run registry tests and confirm the missing-class failure**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/DoctrineEffectiveConfigSnapshotRegistryTest.php`
 
 Expected: FAIL naming the absent registry class, or SKIP only without the isolated PostgreSQL database.
 
-- [ ] **Step 6: Implement record, interface, and DBAL registry**
+- [x] **Step 6: Implement record, interface, and DBAL registry**
 
 Use these exact signatures:
 
@@ -222,7 +222,7 @@ interface EffectiveConfigSnapshotRegistryInterface
 
 `DoctrineEffectiveConfigSnapshotRegistry` receives `Doctrine\\DBAL\\Connection`. On register, start a transaction, select the complete row by primary key, compare every identity column plus canonicalized stored JSON and checksum, and return only for an exact replay. Otherwise insert the factory document. Convert uniqueness races and all mismatches to `LogicException('effective_config_snapshot_conflict')`. On reads, decode JSON with `JSON_THROW_ON_ERROR`, require an object/map, recompute its canonical checksum, and fail with `LogicException('effective_config_snapshot_checksum_mismatch')` on disagreement.
 
-- [ ] **Step 7: Run migration and registry tests and commit**
+- [x] **Step 7: Run migration and registry tests and commit**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationTest.php tests/TradingCore/Config/Audit/DoctrineEffectiveConfigSnapshotRegistryTest.php`
 
@@ -243,17 +243,17 @@ git commit -m "feat(#192): persist immutable effective configs"
 - Modify: `trading-app/tests/Trading/Controller/Api/EffectiveTradingConfigApiControllerTest.php`
 - Test: `trading-app/tests/TradingCore/Config/EffectiveTradingConfigContainerTest.php`
 
-- [ ] **Step 1: Write decorator tests**
+- [x] **Step 1: Write decorator tests**
 
 Use a recording in-memory registry implementing `EffectiveConfigSnapshotRegistryInterface`. Prove `resolve()` calls the concrete resolver once, registers once, and returns the exact same `EffectiveTradingConfigSnapshot` instance. Make registry `register()` throw and assert the same exception escapes before a snapshot is returned. Resolve twice and prove exact idempotent registrations are accepted.
 
-- [ ] **Step 2: Run the decorator test and verify it fails for the absent decorator**
+- [x] **Step 2: Run the decorator test and verify it fails for the absent decorator**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/PersistentEffectiveTradingConfigResolverTest.php`
 
 Expected: FAIL naming `PersistentEffectiveTradingConfigResolver`.
 
-- [ ] **Step 3: Implement the fail-closed resolver decorator**
+- [x] **Step 3: Implement the fail-closed resolver decorator**
 
 ```php
 final readonly class PersistentEffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
@@ -281,17 +281,17 @@ registration, emit one `info` record containing only `snapshot_hash`,
 `validation_status`, and `duration_ms`. Do not catch persistence exceptions and
 never pass the raw or redacted document to the logger.
 
-- [ ] **Step 4: Write preview and container tests**
+- [x] **Step 4: Write preview and container tests**
 
 Update controller construction to give the read service an interface resolver plus `EffectiveConfigViewerDocumentFactory`. Assert successful preview contains `document_kind=current_preview`, `resolver_version=1.0.0`, `validation_status=valid`, and `redacted_paths`, while preserving existing resolver hashes and fail-closed 400/422 behavior. In a kernel container test, assert `EffectiveTradingConfigResolverInterface` resolves to `PersistentEffectiveTradingConfigResolver` and `EffectiveConfigSnapshotRegistryInterface` resolves to `DoctrineEffectiveConfigSnapshotRegistry`.
 
-- [ ] **Step 5: Run preview/container tests and confirm the expected signature/alias failures**
+- [x] **Step 5: Run preview/container tests and confirm the expected signature/alias failures**
 
 Run: `cd trading-app && php bin/phpunit tests/Trading/Controller/Api/EffectiveTradingConfigApiControllerTest.php tests/TradingCore/Config/EffectiveTradingConfigContainerTest.php`
 
 Expected: FAIL until the read service and aliases are updated.
 
-- [ ] **Step 6: Present previews through the safe document factory and wire production aliases**
+- [x] **Step 6: Present previews through the safe document factory and wire production aliases**
 
 Change the read service constructor and method to:
 
@@ -309,7 +309,7 @@ public function describe(EffectiveTradingConfigRequest $request): array
 
 In `services.yaml`, alias `EffectiveTradingConfigResolverInterface` to the persistent decorator and `EffectiveConfigSnapshotRegistryInterface` to the Doctrine implementation. Leave concrete `EffectiveTradingConfigResolver` autowirable so the decorator receives it as its inner resolver.
 
-- [ ] **Step 7: Run focused tests, container validation, and commit**
+- [x] **Step 7: Run focused tests, container validation, and commit**
 
 Run:
 
@@ -338,7 +338,7 @@ git commit -m "feat(#192): register effective configs before use"
 - Create: `trading-app/tests/TradingCore/Config/Audit/EffectiveConfigDiffServiceTest.php`
 - Create: `trading-app/tests/Trading/Controller/Api/EffectiveTradingConfigHistoryApiControllerTest.php`
 
-- [ ] **Step 1: Write hash-validator and diff tests**
+- [x] **Step 1: Write hash-validator and diff tests**
 
 Assert `EffectiveConfigHash::require('sha256:'.str_repeat('a', 64))` returns its input, while uppercase, missing prefix, short, whitespace-padded, and non-hex values throw `InvalidArgumentException('effective_config_hash_invalid')`. Build two records whose `config` and `provenance` produce all four classifications and assert exact lexical detail order:
 
@@ -353,13 +353,13 @@ Assert `EffectiveConfigHash::require('sha256:'.str_repeat('a', 64))` returns its
 
 Also assert unchanged paths are absent from `changes` but included in `summary.unchanged`, redacted values stay redacted, nested maps flatten with dot-separated paths, and list values compare canonically as leaf values.
 
-- [ ] **Step 2: Run diff tests and confirm missing classes**
+- [x] **Step 2: Run diff tests and confirm missing classes**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigDiffServiceTest.php`
 
 Expected: FAIL naming `EffectiveConfigDiffService`.
 
-- [ ] **Step 3: Implement exact hash validation and diffing**
+- [x] **Step 3: Implement exact hash validation and diffing**
 
 Use:
 
@@ -378,7 +378,7 @@ final readonly class EffectiveConfigDiffService
 
 Flatten only `config` and its matching `provenance`. For each union path in `SORT_STRING` order, classify absent/present, canonical value inequality, then equal value with canonical provenance inequality. Use explicit presence booleans so JSON `null` is not confused with absence. Summaries contain integer counts for `added`, `removed`, `changed`, `same_but_different_source`, and `unchanged`.
 
-- [ ] **Step 4: Write controller tests for every route and failure mode**
+- [x] **Step 4: Write controller tests for every route and failure mode**
 
 Use an in-memory registry and construct the history controller directly. Cover:
 
@@ -390,13 +390,13 @@ Use an in-memory registry and construct the history controller directly. Cover:
 - diff returns the exact service payload and uses only snapshot hashes;
 - serialized bodies never contain seeded secret literals.
 
-- [ ] **Step 5: Run controller tests and confirm missing methods/controller**
+- [x] **Step 5: Run controller tests and confirm missing methods/controller**
 
 Run: `cd trading-app && php bin/phpunit tests/Trading/Controller/Api/EffectiveTradingConfigHistoryApiControllerTest.php`
 
 Expected: FAIL until history methods and controller exist.
 
-- [ ] **Step 6: Extend the read service and add read-only routes**
+- [x] **Step 6: Extend the read service and add read-only routes**
 
 Add read-service methods:
 
@@ -421,7 +421,7 @@ Add these routes in `EffectiveTradingConfigHistoryApiController`:
 
 Do application-level validation too so malformed identifiers consistently produce JSON 400 instead of router 404. Map only `InvalidArgumentException` to 400 and `EffectiveConfigSnapshotNotFound` to 404; let registry corruption surface as a server failure.
 
-- [ ] **Step 7: Run API/diff tests and commit**
+- [x] **Step 7: Run API/diff tests and commit**
 
 Run: `cd trading-app && php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigDiffServiceTest.php tests/Trading/Controller/Api/EffectiveTradingConfigHistoryApiControllerTest.php`
 
@@ -438,11 +438,11 @@ git commit -m "feat(#192): expose effective config history and diff"
 - Modify: `docs/handbook/technical/effective-trading-config-resolver.md`
 - Modify: `docs/superpowers/specs/2026-08-20-issue-192-effective-config-history-design.md`
 
-- [ ] **Step 1: Document the operational contract**
+- [x] **Step 1: Document the operational contract**
 
 Add an “Immutable history” section documenting all three routes, canonical hash syntax, `snapshot_hash` versus `config_hash`, append-only/fail-closed semantics, centralized redaction, the four current diff classes, and that `invalidated`, usage navigation, and UI remain deferred. Add curl examples using fake/test only. Add a final “Implemented” note to the design spec naming migration `Version20260820150000` and resolver version `1.0.0`; do not weaken the mainnet-private prohibition.
 
-- [ ] **Step 2: Run the complete targeted test set**
+- [x] **Step 2: Run the complete targeted test set**
 
 Run:
 
@@ -457,7 +457,7 @@ php bin/phpunit \
 
 Expected: PASS, with PostgreSQL suites passing when `DATABASE_URL` targets `_paper_test` and otherwise only their explicit skips.
 
-- [ ] **Step 3: Run static, container, YAML, and documentation checks**
+- [x] **Step 3: Run static, container, YAML, and documentation checks**
 
 Run:
 
@@ -467,12 +467,12 @@ vendor/bin/phpstan analyse src/TradingCore/Config src/Trading/Controller/Api/Eff
 php bin/console lint:container
 php bin/console lint:yaml config
 cd ..
-python -m mkdocs build --strict
+python3 -m mkdocs build --strict
 ```
 
 Expected: every command exits 0.
 
-- [ ] **Step 4: Run the real PostgreSQL integration suites**
+- [x] **Step 4: Run the real PostgreSQL integration suites**
 
 Use the project’s existing isolated `_paper_test` database command/environment and run:
 
@@ -483,7 +483,7 @@ php bin/phpunit tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationT
 
 Expected: PASS with no skips. Never point these destructive isolated-schema tests at a non-`_paper_test` database.
 
-- [ ] **Step 5: Review the final diff for security and scope**
+- [x] **Step 5: Review the final diff for security and scope**
 
 Run:
 

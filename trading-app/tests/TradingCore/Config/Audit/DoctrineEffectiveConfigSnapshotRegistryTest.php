@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Tests\TradingCore\Config\Audit;
 
 use App\TradingCore\Config\Audit\DoctrineEffectiveConfigSnapshotRegistry;
+use App\TradingCore\Config\Audit\EffectiveConfigCanonicalJson;
 use App\TradingCore\Config\Audit\EffectiveConfigViewerDocument;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Exception\DriverException;
 use Doctrine\DBAL\Schema\Schema;
 use DoctrineMigrations\Version20260820150000;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -56,7 +58,9 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
         $this->registry->register($document);
 
         self::assertSame(1, (int) $this->connection->fetchOne('SELECT COUNT(*) FROM effective_trading_config_snapshot'));
-        self::assertSame($document->payload, $this->registry->find($document->snapshotHash())?->document);
+        $reloaded = $this->registry->find($document->snapshotHash());
+        self::assertNotNull($reloaded);
+        self::assertSame($document->canonicalJson(), EffectiveConfigCanonicalJson::encode($reloaded->document));
         self::assertStringNotContainsString('raw-secret', (string) $this->connection->fetchOne('SELECT redacted_snapshot::text FROM effective_trading_config_snapshot'));
     }
 
@@ -80,6 +84,49 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
             ['sha256:' . str_repeat('b', 64), 'sha256:' . str_repeat('a', 64)],
             array_map(static fn ($record): string => (string) $record->document['snapshot_hash'], $history),
         );
+    }
+
+    public function testDatabaseRejectsSnapshotMutationAndDeletion(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->registry->register($document);
+
+        foreach ([
+            'UPDATE effective_trading_config_snapshot SET validation_status = validation_status WHERE snapshot_hash = ?',
+            'DELETE FROM effective_trading_config_snapshot WHERE snapshot_hash = ?',
+        ] as $sql) {
+            try {
+                $this->connection->executeStatement($sql, [$document->snapshotHash()]);
+                self::fail('Append-only snapshot mutation was accepted.');
+            } catch (DriverException $exception) {
+                self::assertSame('P0001', $exception->getSQLState());
+                self::assertStringContainsString('effective_trading_config_snapshot_append_only', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testReadRejectsAStoredChecksumMismatch(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $payload = $document->payload;
+        $this->connection->executeStatement(<<<'SQL'
+INSERT INTO effective_trading_config_snapshot (
+    snapshot_hash, config_hash, condition_catalog_hash, schema_version, resolver_version,
+    mode_id, mode_version, setup_id, setup_version, exchange, environment, side,
+    execution_capability, validation_status, redacted_snapshot, redacted_content_checksum, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'valid', ?::jsonb, ?, NOW())
+SQL, [
+            $document->snapshotHash(), $document->configHash(), $payload['condition_catalog_hash'],
+            $payload['config']['schema_version'], $payload['resolver_version'],
+            $payload['request']['mode_id'], $payload['request']['mode_version'],
+            $payload['request']['setup_id'], $payload['request']['setup_version'],
+            $payload['request']['exchange'], $payload['request']['environment'], $payload['request']['side'],
+            $document->canonicalJson(), str_repeat('0', 64),
+        ]);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('effective_config_snapshot_checksum_mismatch');
+        $this->registry->find($document->snapshotHash());
     }
 
     private function document(string $snapshot, string $config, string $path): EffectiveConfigViewerDocument

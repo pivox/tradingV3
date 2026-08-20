@@ -160,3 +160,9 @@ serialized output.
 - Front Ops list/detail/diff screens in #318;
 - retention policy, which is unnecessary while snapshots are content-addressed
   and immutable at the current scale.
+
+## Implemented
+
+Implemented on 20 August 2026 with resolver contract version `1.0.0` and
+PostgreSQL migration `Version20260820150000`. The implementation preserves the
+mainnet-private execution prohibition and does not activate any write path.

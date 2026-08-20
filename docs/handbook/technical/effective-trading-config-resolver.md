@@ -93,6 +93,49 @@ config/hash. Unknown or mismatched identity returns a structured HTTP 400. A
 successful future response includes the hash, ordered layers/files, and
 provenance.
 
+## Immutable history
+
+Every successful production resolution is registered before the resolver returns
+its unchanged runtime snapshot. Registration is fail-closed and idempotent: an
+exact replay is accepted, while a reused snapshot hash with different identity,
+content, or checksum is rejected. The dedicated
+`effective_trading_config_snapshot` table is append-only; PostgreSQL rejects both
+updates and deletes.
+
+`snapshot_hash` identifies one exact historical document, including provenance.
+`config_hash` identifies its effective configuration values, so several
+provenance-distinct snapshots may legitimately share one config hash. Both use
+the exact canonical form `sha256:` followed by 64 lowercase hexadecimal
+characters.
+
+The read-only API exposes:
+
+```text
+GET /api/trading/config/effective/snapshots/{snapshot_hash}
+GET /api/trading/config/effective/snapshots?config_hash={config_hash}
+GET /api/trading/config/effective/diff?left={snapshot_hash}&right={snapshot_hash}
+```
+
+For example, a fake/test preview and an exact historical read can be requested
+without enabling any private exchange operation:
+
+```bash
+curl 'http://localhost:8082/api/trading/config/effective?mode_id=day_trading&mode_version=1.1.0&setup_id=day_trading.trend_continuation.long&setup_version=1.1.0&exchange=fake&environment=test&side=long&execution_capability=fake'
+curl 'http://localhost:8082/api/trading/config/effective/snapshots/sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+```
+
+One recursive redactor protects database writes and every successful JSON
+response. Sensitive key variants and credential-bearing DSNs are replaced with
+`***REDACTED***`; their paths are retained without their values. Historical
+reads return only the stored redacted document and never reload or merge current
+YAML.
+
+Diffs compare exact snapshot hashes, flatten configuration paths, sort them
+lexically, and classify details as `added`, `removed`, `changed`, or
+`same_but_different_source`. Unchanged paths are counted but omitted. The future
+`invalidated` state, persisted warning/invalid snapshots, usage navigation, and
+the Front Ops UI remain deferred. Mainnet private execution remains forbidden.
+
 ## Legacy quarantine and migration
 
 `TradeEntryConfigProvider` and `MtfValidationConfigProvider` remain available
