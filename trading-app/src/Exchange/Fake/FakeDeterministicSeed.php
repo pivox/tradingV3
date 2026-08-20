@@ -43,7 +43,11 @@ final readonly class FakeDeterministicSeed
 
         $payload = json_encode(
             $this->canonicalize($components),
-            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION,
+            JSON_THROW_ON_ERROR
+                | JSON_UNESCAPED_SLASHES
+                | JSON_UNESCAPED_UNICODE
+                | JSON_UNESCAPED_LINE_TERMINATORS
+                | JSON_PRESERVE_ZERO_FRACTION,
         );
 
         return hash_hmac(

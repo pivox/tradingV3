@@ -81,4 +81,15 @@ final class FakeDeterministicSeedTest extends TestCase
             ['value' => 1.0e-7],
         );
     }
+
+    public function testUnicodeLineTerminatorsMatchPythonContractVector(): void
+    {
+        self::assertSame(
+            '1924c08a295e7f1c12dcb2ab269b196192d22533b22a5795d68ea8130ac888d7',
+            (new FakeDeterministicSeed('golden-seed-2026-v1'))->deriveHex(
+                'runtime-recipe.evidence.v1',
+                ['separator' => "before\u{2028}after\u{2029}end"],
+            ),
+        );
+    }
 }

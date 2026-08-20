@@ -491,6 +491,11 @@ def test_seed_derivation_matches_php_contract_vector():
         },
     ) == "5e33d1f9500da204fd41cdb99ab73845b466d2b43c7b097cd623cc6b3f465a9e"
 
+    assert DeterministicSeed("golden-seed-2026-v1").derive_hex(
+        "runtime-recipe.evidence.v1",
+        {"separator": "before\u2028after\u2029end"},
+    ) == "1924c08a295e7f1c12dcb2ab269b196192d22533b22a5795d68ea8130ac888d7"
+
 
 @pytest.mark.parametrize(
     "component",
