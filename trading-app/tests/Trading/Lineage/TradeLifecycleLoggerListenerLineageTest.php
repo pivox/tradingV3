@@ -496,6 +496,70 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
     }
 
+    public function testRefreshPreservesExistingExcursionEvidenceWhenKlineProviderFails(): void
+    {
+        $internalTradeId = 'itd-refresh-provider-error';
+        $window = new CanonicalTradeFillWindow(
+            entryFirstFillAt: new \DateTimeImmutable('2026-06-23 10:01:00 UTC'),
+            exitLastFillAt: new \DateTimeImmutable('2026-06-23 10:04:00 UTC'),
+            entryVwap: 101.0,
+        );
+        $resolver = new class($internalTradeId, $window) implements CanonicalTradeFillWindowResolverInterface {
+            public function __construct(
+                private readonly string $internalTradeId,
+                private readonly CanonicalTradeFillWindow $window,
+            ) {
+            }
+
+            public function resolve(string $internalTradeId, string $exchange, string $marketType): ?CanonicalTradeFillWindow
+            {
+                return $internalTradeId === $this->internalTradeId && $exchange === 'fake' && $marketType === 'perpetual'
+                    ? $this->window
+                    : null;
+            }
+        };
+        $originalEvidence = [
+            'holding_time_sec' => 180,
+            'holding_time_source' => 'fill_cost_ledger_v1',
+            'max_favorable_price' => 111.0,
+            'max_adverse_price' => 98.0,
+            'mfe_pct' => (111.0 - 101.0) / 101.0,
+            'mae_pct' => (101.0 - 98.0) / 101.0,
+            'mfe_at' => '2026-06-23T10:02:00+00:00',
+            'mae_at' => '2026-06-23T10:03:00+00:00',
+            'mfe_mae_source' => 'kline_1m_high_low',
+            'mfe_mae_timeframe' => '1m',
+            'mfe_mae_window_start' => '2026-06-23T10:01:00.000000+00:00',
+            'mfe_mae_window_end' => '2026-06-23T10:04:00.000000+00:00',
+            'mfe_mae_window_source' => 'fill_cost_ledger_v1',
+            'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+            'mfe_mae_sample_count' => 3,
+            'mfe_mae_expected_sample_count' => 3,
+            'mfe_mae_limit' => 500,
+            'mfe_mae_data_quality' => 'complete',
+        ];
+        $closed = (new TradeLifecycleEvent('BTCUSDT', 'position_closed'))
+            ->setInternalTradeId($internalTradeId)
+            ->setSide('LONG')
+            ->setExchange(Exchange::FAKE)
+            ->setMarketType(MarketType::PERPETUAL)
+            ->setExtra($originalEvidence);
+        $this->em->persist($closed);
+        $this->em->flush();
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([], fail: true),
+            null,
+            $resolver,
+        );
+
+        $listener->refreshAfterFill($internalTradeId, 'fake', 'perpetual');
+
+        self::assertSame($originalEvidence, $closed->getExtra());
+    }
+
     public function testClosedPositionMarksMfeMaePartialWhenWindowHasMissingKlines(): void
     {
         $listener = new TradeLifecycleLoggerListener(
@@ -803,14 +867,16 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
     /**
      * @param list<KlineDto> $klines
      */
-    private function mainProviderWithKlines(array $klines): MainProviderInterface
+    private function mainProviderWithKlines(array $klines, bool $fail = false): MainProviderInterface
     {
-        $klineProvider = new class($klines) implements KlineProviderInterface {
+        $klineProvider = new class($klines, $fail) implements KlineProviderInterface {
             /**
              * @param list<KlineDto> $klines
              */
-            public function __construct(private readonly array $klines)
-            {
+            public function __construct(
+                private readonly array $klines,
+                private readonly bool $fail,
+            ) {
             }
 
             /**
@@ -826,6 +892,10 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
              */
             public function getKlinesInWindow(string $symbol, Timeframe $timeframe, \DateTimeImmutable $start, \DateTimeImmutable $end, int $limit = 500, ?ExchangeContext $context = null): array
             {
+                if ($this->fail) {
+                    throw new \RuntimeException('Synthetic kline provider outage.');
+                }
+
                 return array_slice($this->klines, 0, $limit);
             }
 

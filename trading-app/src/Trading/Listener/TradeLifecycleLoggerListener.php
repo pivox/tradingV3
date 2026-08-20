@@ -150,26 +150,31 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
             if (abs($holdingTimeSec - round($holdingTimeSec)) < 1e-9) {
                 $holdingTimeSec = (int) round($holdingTimeSec);
             }
-            $closed->setExtra(array_replace($closed->getExtra() ?? [], [
+            $updates = [
                 'holding_time_sec' => $holdingTimeSec,
                 'holding_time_source' => 'fill_cost_ledger_v1',
-                'max_favorable_price' => $excursion['mfe_price'],
-                'max_adverse_price' => $excursion['mae_price'],
-                'mfe_pct' => $excursion['mfe_pct'],
-                'mae_pct' => $excursion['mae_pct'],
-                'mfe_at' => $excursion['mfe_at']?->format(\DateTimeInterface::ATOM),
-                'mae_at' => $excursion['mae_at']?->format(\DateTimeInterface::ATOM),
-                'mfe_mae_source' => $excursion['source'],
-                'mfe_mae_timeframe' => $excursion['timeframe'],
-                'mfe_mae_window_start' => $window->entryFirstFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
-                'mfe_mae_window_end' => $window->exitLastFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
-                'mfe_mae_window_source' => 'fill_cost_ledger_v1',
-                'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
-                'mfe_mae_sample_count' => $excursion['sample_count'],
-                'mfe_mae_expected_sample_count' => $excursion['expected_sample_count'],
-                'mfe_mae_limit' => $excursion['limit'],
-                'mfe_mae_data_quality' => $excursion['data_quality'],
-            ]));
+            ];
+            if ($excursion['mfe_price'] !== null && $excursion['mae_price'] !== null) {
+                $updates += [
+                    'max_favorable_price' => $excursion['mfe_price'],
+                    'max_adverse_price' => $excursion['mae_price'],
+                    'mfe_pct' => $excursion['mfe_pct'],
+                    'mae_pct' => $excursion['mae_pct'],
+                    'mfe_at' => $excursion['mfe_at']?->format(\DateTimeInterface::ATOM),
+                    'mae_at' => $excursion['mae_at']?->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_source' => $excursion['source'],
+                    'mfe_mae_timeframe' => $excursion['timeframe'],
+                    'mfe_mae_window_start' => $window->entryFirstFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_end' => $window->exitLastFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_source' => 'fill_cost_ledger_v1',
+                    'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+                    'mfe_mae_sample_count' => $excursion['sample_count'],
+                    'mfe_mae_expected_sample_count' => $excursion['expected_sample_count'],
+                    'mfe_mae_limit' => $excursion['limit'],
+                    'mfe_mae_data_quality' => $excursion['data_quality'],
+                ];
+            }
+            $closed->setExtra(array_replace($closed->getExtra() ?? [], $updates));
             $this->tradeLifecycleRepository->save($closed);
         } catch (\Throwable) {
             // Fill ingestion remains authoritative; unavailable analytics evidence stays explicitly non-canonical.
