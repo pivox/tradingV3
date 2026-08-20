@@ -177,6 +177,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                 "DEFAULT_URI": symfony_url,
                 "LOCK_DSN": "flock",
                 "PAPER_FAKE_STATE_ROOT": str(fake_state_root),
+                "REDIS_ORDER_WATCH_CHANNEL": "golden20-local-order-watch",
             }
         )
         orchestrator_environment = _proxy_free_environment()
