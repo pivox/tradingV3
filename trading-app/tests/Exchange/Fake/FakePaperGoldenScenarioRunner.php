@@ -162,7 +162,7 @@ final class FakePaperGoldenScenarioRunner
             $probe = new Process([
                 $candidate,
                 '-c',
-                'import fastapi, httpx, sqlalchemy',
+                'import fastapi, httpx, sqlalchemy, uvicorn',
             ]);
             $probe->setTimeout(5.0);
             $probe->run();
