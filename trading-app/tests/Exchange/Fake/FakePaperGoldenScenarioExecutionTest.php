@@ -322,7 +322,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'orders_total' => 0,
             'profiles' => ['regular', 'scalper', 'scalper_micro'],
             'replay_same_run_id' => true,
-            'report_digest' => 'sha256:ea8de7061ee5c55e9d6eaffdf70906705399d35af38405592c7d22b40fad5dfc',
+            'report_digest' => 'sha256:e50c6f15e6fb1d5b7433dc4aa960ae9452e4d9ccb74a9b845e6d968f3078fdeb',
             'reports_identical' => true,
             'schema_version' => 'fake-paper-golden20-fresh-stacks-v1',
             'seed_certified' => true,

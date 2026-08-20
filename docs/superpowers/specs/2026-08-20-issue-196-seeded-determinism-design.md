@@ -12,8 +12,10 @@ excluded because they are neither persisted nor exported.
 `fake-deterministic-seed-v1` accepts one explicit 8–128 character seed. Raw seed
 material is never persisted or logged; evidence exposes only its SHA-256
 fingerprint. Identity derivation uses HMAC-SHA256 with versioned domain names
-and canonical null/boolean/integer/string/list/map components. Floats are
-rejected because PHP and Python JSON exponent rendering is not byte-identical.
+and canonical null/boolean/integer/string/non-empty-list/non-empty-map
+components. Floats are rejected because PHP and Python JSON exponent rendering
+is not byte-identical; empty collections are rejected because PHP arrays cannot
+preserve the empty list/map distinction.
 
 The PHP Fake state store derives private-WS resync cycle, snapshot proof and
 attestation identities from the seed plus their exact scenario/state context.
@@ -29,6 +31,12 @@ independent recipe executions; it is not certified evidence and is excluded
 from the normalized R12 report. The runtime report and R12 standalone report
 expose the schema and fingerprint, never the raw seed. Child demo runners
 receive domain-separated derived seeds.
+
+Certification additionally requires `fake-backend-determinism-proof-v1`: the
+fresh Symfony open-state evidence must report the same seed schema and
+fingerprint with `certified=true`. Missing, legacy or mismatched backend evidence
+blocks R12 and leaves the Python report non-certified. The proof schema is part
+of the replay key so an older persisted R12 run cannot be reused.
 
 ## Acceptance proof
 

@@ -68,6 +68,9 @@ final readonly class FakeDeterministicSeed
         if (!\is_array($value)) {
             throw new \InvalidArgumentException('fake_deterministic_seed_component_invalid');
         }
+        if ($value === []) {
+            throw new \InvalidArgumentException('fake_deterministic_seed_component_invalid');
+        }
 
         if (array_is_list($value)) {
             return array_map(fn (mixed $item): mixed => $this->canonicalize($item), $value);

@@ -92,4 +92,15 @@ final class FakeDeterministicSeedTest extends TestCase
             ),
         );
     }
+
+    public function testAmbiguousEmptyCollectionFailsClosed(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fake_deterministic_seed_component_invalid');
+
+        (new FakeDeterministicSeed('golden-seed-2026-v1'))->deriveHex(
+            'runtime-recipe.evidence.v1',
+            ['ambiguous' => []],
+        );
+    }
 }

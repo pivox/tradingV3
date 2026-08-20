@@ -15,6 +15,14 @@ import scripts.runtime_recipe_runner as runner_module
 from scripts.runtime_recipe_runner import DeterministicSeed, RecipeRunner, RunnerConfig
 
 
+DEFAULT_BACKEND_DETERMINISM = {
+    "certified": True,
+    "schema_version": "fake-deterministic-seed-v1",
+    "seed_fingerprint": "sha256:"
+    + hashlib.sha256(runner_module.DEFAULT_DETERMINISTIC_SEED.encode()).hexdigest(),
+}
+
+
 class FakeRecipeApi:
     """HTTP API en memoire pour tester le runner sans socket."""
 
@@ -50,6 +58,7 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "determinism": DEFAULT_BACKEND_DETERMINISM,
                 "exchange_call_proof": {
                     "bitmart": "fake_provider_boundary",
                     "hyperliquid": "http_client_guard",
@@ -67,6 +76,7 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "determinism": DEFAULT_BACKEND_DETERMINISM,
                 "exchange_call_proof": {
                     "bitmart": "fake_provider_boundary",
                     "hyperliquid": "http_client_guard",
@@ -387,6 +397,10 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
 
     recipe = json.loads(first_json)
     assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v2"
+    assert recipe["determinism"]["backend_verified"] is True
+    assert recipe["determinism"]["backend_proof_schema_version"] == (
+        "fake-backend-determinism-proof-v1"
+    )
     assert recipe["determinism"]["certified"] is True
     assert recipe["determinism"]["schema_version"] == "fake-deterministic-seed-v1"
     assert recipe["determinism"]["seed_fingerprint"].startswith("sha256:")
@@ -473,7 +487,9 @@ def test_explicit_seed_derives_stable_redacted_invocation_identity(tmp_path: Pat
         "deterministic_evidence_id"
     ]
     assert first["metadata"]["determinism"] == {
-        "certified": True,
+        "backend_proof_schema_version": "fake-backend-determinism-proof-v1",
+        "backend_verified": False,
+        "certified": False,
         "evidence_id": first["metadata"]["deterministic_evidence_id"],
         "schema_version": "fake-deterministic-seed-v1",
         "seed_fingerprint": "sha256:" + hashlib.sha256(seed.encode()).hexdigest(),
@@ -499,7 +515,7 @@ def test_seed_derivation_matches_php_contract_vector():
 
 @pytest.mark.parametrize(
     "component",
-    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}],
+    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}, [], {}],
 )
 def test_seed_derivation_rejects_noncanonical_components(component: object):
     with pytest.raises(ValueError, match="fake_deterministic_seed_component_invalid"):
@@ -543,6 +559,7 @@ def test_r12_v2_distinguishes_bitmart_boundary_proof_from_http_guards(tmp_path: 
         "ambiguous_calls": 0,
         "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
+        "determinism": DEFAULT_BACKEND_DETERMINISM,
         "exchange_call_proof": {
             "bitmart": "fake_provider_boundary",
             "hyperliquid": "http_client_guard",
@@ -864,6 +881,40 @@ def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
     assert report["results"][0]["status"] == expected_status
     assert recipe["status"] == expected_status
     assert recipe["exchange_calls"] == expected_exchange_calls
+
+
+def test_r12_blocks_when_backend_seed_fingerprint_does_not_match(tmp_path: Path):
+    runner = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            deterministic_seed="different-runner-seed-v1",
+        ),
+        http_client=FakeRecipeApi(),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "BLOCKED"
+    assert report["metadata"]["determinism"]["certified"] is False
+    assert recipe["determinism"]["backend_verified"] is False
+
+
+def test_r12_blocks_when_backend_state_is_not_seed_certified(tmp_path: Path):
+    legacy_evidence = {
+        **FakeRecipeApi().open_state_safety_evidence,
+        "determinism": {**DEFAULT_BACKEND_DETERMINISM, "certified": False},
+    }
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(open_state_safety_evidence=legacy_evidence),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert report["results"][0]["status"] == "BLOCKED"
+    assert report["metadata"]["determinism"]["certified"] is False
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ namespace App\Controller;
 use App\Application\Runner\OpenStateSnapshotSerializer;
 use App\Common\Enum\Exchange;
 use App\Contract\Provider\MainProviderInterface;
+use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Provider\Context\ExchangeContextResolver;
 use App\Runtime\Safety\FakeOnlyExchangeCallAudit;
 use Psr\Log\LoggerInterface;
@@ -30,6 +31,7 @@ final class ExchangeStateController extends AbstractController
         private readonly OpenStateSnapshotSerializer $serializer,
         private readonly LoggerInterface $logger,
         private readonly FakeOnlyExchangeCallAudit $fakeOnlyExchangeCallAudit = new FakeOnlyExchangeCallAudit(),
+        private readonly ?FakeExchangeStateStore $fakeExchangeStateStore = null,
     ) {
     }
 
@@ -75,7 +77,7 @@ final class ExchangeStateController extends AbstractController
 
             $snapshot = $this->serializer->serialize($openPositions, $openOrders);
             if ($safetyEvidenceRequested) {
-                $snapshot['fake_only_safety_evidence'] = $this->fakeOnlyExchangeCallAudit->finish();
+                $snapshot['fake_only_safety_evidence'] = $this->fakeOnlySafetyEvidence();
             }
 
             $this->logger->info('[Exchange State] Open-state snapshot produced', [
@@ -99,7 +101,7 @@ final class ExchangeStateController extends AbstractController
                 return $this->json([
                     'status' => 'error',
                     'message' => $e->getMessage(),
-                    'fake_only_safety_evidence' => $this->fakeOnlyExchangeCallAudit->finish(),
+                    'fake_only_safety_evidence' => $this->fakeOnlySafetyEvidence(),
                 ], Response::HTTP_SERVICE_UNAVAILABLE);
             }
 
@@ -110,5 +112,23 @@ final class ExchangeStateController extends AbstractController
                 'message' => $e->getMessage(),
             ], Response::HTTP_SERVICE_UNAVAILABLE);
         }
+    }
+
+    /** @return array<string,mixed> */
+    private function fakeOnlySafetyEvidence(): array
+    {
+        $evidence = $this->fakeOnlyExchangeCallAudit->finish();
+        if ($this->fakeExchangeStateStore === null) {
+            return $evidence;
+        }
+
+        $recovery = $this->fakeExchangeStateStore->recoveryMetadata();
+        $evidence['determinism'] = [
+            'certified' => $recovery['seed_certified'],
+            'schema_version' => $recovery['determinism_schema_version'],
+            'seed_fingerprint' => $recovery['deterministic_seed_fingerprint'],
+        ];
+
+        return $evidence;
     }
 }

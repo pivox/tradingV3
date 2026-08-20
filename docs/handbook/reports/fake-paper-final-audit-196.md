@@ -45,6 +45,9 @@ sont byte-identiques ; un restart sous une autre seed échoue avec
 `fake_exchange_state_seed_mismatch`. Un état antérieur sans preuve de seed reste
 `seed_certified=false` et bloque le runtime-check. Golden 20 injecte une seed
 fixe dans ses deux piles et atteste le schéma et l'empreinte dans son rapport.
+La certification R12 exige en plus que l'open-state Symfony fournisse la même
+empreinte avec `seed_certified=true`; une preuve backend absente, legacy ou
+divergente produit `BLOCKED` et ne peut pas réutiliser la clé de replay précédente.
 
 L'audit du 19 juillet 2026 porte sur le dépôt `pivox/tradingV3`, la branche
 `issue/196-fake-paper-final-audit` et la base exacte

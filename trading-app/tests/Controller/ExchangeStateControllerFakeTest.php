@@ -36,7 +36,7 @@ use Symfony\Component\HttpFoundation\Response;
 #[CoversClass(ExchangeStateController::class)]
 final class ExchangeStateControllerFakeTest extends TestCase
 {
-    private function buildController(): ExchangeStateController
+    private function buildController(bool $includeDeterminism = false): ExchangeStateController
     {
         $fake = FakeProviderFixture::create();
         $registry = new ExchangeProviderRegistry(
@@ -59,6 +59,7 @@ final class ExchangeStateControllerFakeTest extends TestCase
             new ExchangeContextResolver(),
             new OpenStateSnapshotSerializer(),
             new NullLogger(),
+            fakeExchangeStateStore: $includeDeterminism ? $fake->state : null,
         );
 
         // AbstractController::json() needs a container with the serializer flag.
@@ -109,6 +110,31 @@ final class ExchangeStateControllerFakeTest extends TestCase
                 'source' => 'symfony_fake_provider_boundary_and_http_guards',
             ],
             $payload['fake_only_safety_evidence'] ?? null,
+        );
+    }
+
+    public function testFakeOnlyProofCanBindConfiguredBackendSeed(): void
+    {
+        $controller = $this->buildController(includeDeterminism: true);
+        $request = new Request(
+            ['exchange' => 'fake', 'market_type' => 'perpetual', 'dry_run' => 'true'],
+            server: ['HTTP_X_FAKE_ONLY_SAFETY_EVIDENCE' => 'v2'],
+        );
+
+        $payload = json_decode(
+            (string) $controller->openState($request)->getContent(),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        );
+        $determinism = $payload['fake_only_safety_evidence']['determinism'] ?? null;
+
+        self::assertIsArray($determinism);
+        self::assertSame('fake-deterministic-seed-v1', $determinism['schema_version'] ?? null);
+        self::assertTrue($determinism['certified'] ?? false);
+        self::assertMatchesRegularExpression(
+            '/\Asha256:[a-f0-9]{64}\z/D',
+            $determinism['seed_fingerprint'] ?? '',
         );
     }
 

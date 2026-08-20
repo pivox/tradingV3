@@ -32,6 +32,7 @@ DEFAULT_EXPORT_DIR = ROOT / "var" / "runtime-recipe"
 CONFIRMATION_TOKEN = "DRY_RUN_ONLY"
 FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION = "fake-only-exchange-safety-v2"
 DETERMINISTIC_SEED_SCHEMA_VERSION = "fake-deterministic-seed-v1"
+BACKEND_DETERMINISM_PROOF_SCHEMA_VERSION = "fake-backend-determinism-proof-v1"
 DEFAULT_DETERMINISTIC_SEED = "fake-paper-default-seed-v1"
 FAKE_ONLY_EXCHANGE_CALL_PROOF = {
     "bitmart": "fake_provider_boundary",
@@ -149,8 +150,12 @@ class DeterministicSeed:
         if type(value) is float:
             raise ValueError("fake_deterministic_seed_component_invalid")
         if type(value) is list:
+            if not value:
+                raise ValueError("fake_deterministic_seed_component_invalid")
             return [self._canonicalize(item) for item in value]
         if type(value) is dict and all(type(key) is str for key in value):
+            if not value:
+                raise ValueError("fake_deterministic_seed_component_invalid")
             return {key: self._canonicalize(item) for key, item in value.items()}
         raise ValueError("fake_deterministic_seed_component_invalid")
 
@@ -182,6 +187,7 @@ class RecipeRunner:
         self.fixtures = self._load_fixtures()
         self.invocation_id = ""
         self.deterministic_evidence_id = ""
+        self.backend_seed_verified = False
 
     def run(
         self,
@@ -199,6 +205,7 @@ class RecipeRunner:
             return self._run_demo_exchanges(selected, keep_fixtures=keep_fixtures)
 
         started_at = datetime.now(timezone.utc).isoformat()
+        self.backend_seed_verified = False
         self.invocation_id = self._new_invocation_id()
         self.deterministic_evidence_id = self._deterministic_evidence_id(
             target_exchange,
@@ -261,6 +268,7 @@ class RecipeRunner:
         keep_fixtures: bool,
     ) -> dict[str, Any]:
         started_at = datetime.now(timezone.utc).isoformat()
+        self.backend_seed_verified = False
         self.invocation_id = self._new_invocation_id()
         self.deterministic_evidence_id = self._deterministic_evidence_id(
             DEMO_EXCHANGES_TARGET,
@@ -394,7 +402,9 @@ class RecipeRunner:
 
     def _determinism_evidence(self) -> dict[str, Any]:
         return {
-            "certified": True,
+            "backend_proof_schema_version": BACKEND_DETERMINISM_PROOF_SCHEMA_VERSION,
+            "backend_verified": self.backend_seed_verified,
+            "certified": self.backend_seed_verified,
             "evidence_id": self.deterministic_evidence_id,
             "schema_version": DETERMINISTIC_SEED_SCHEMA_VERSION,
             "seed_fingerprint": self.deterministic_seed.fingerprint,
@@ -780,6 +790,7 @@ class RecipeRunner:
         fixture_hash = f"sha256:{hashlib.sha256(fixture_canonical.encode('utf-8')).hexdigest()}"
         recipe_key = (
             f"fake-golden20-{FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION}-"
+            f"{BACKEND_DETERMINISM_PROOF_SCHEMA_VERSION}-"
             f"{fixture_hash[7:23]}"
         )
         first = self._run_dashboard(dashboard_id, recipe_key)
@@ -797,6 +808,7 @@ class RecipeRunner:
         exchange_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
         snapshot_reference_calls: dict[str, int] | None = None
         snapshot_exchange_calls = {"bitmart": 0, "hyperliquid": 0, "okx": 0}
+        backend_determinism_ok = True
         for fixture_set in enabled_sets:
             set_id = fixture_set["set_id"]
             result = observed.get(set_id, {})
@@ -817,6 +829,10 @@ class RecipeRunner:
             )
             snapshot_ok, observed_snapshot_calls = self._normalize_fake_only_safety_evidence(
                 snapshot_evidence
+            )
+            backend_determinism_ok = (
+                backend_determinism_ok
+                and self._backend_determinism_matches(snapshot_evidence)
             )
             safety_evidence_ok = safety_evidence_ok and snapshot_ok
             if snapshot_reference_calls is None:
@@ -862,6 +878,8 @@ class RecipeRunner:
 
         for exchange in exchange_calls:
             exchange_calls[exchange] += snapshot_exchange_calls[exchange]
+        self.backend_seed_verified = backend_determinism_ok
+        safety_evidence_ok = safety_evidence_ok and backend_determinism_ok
 
         config_hashes = [item["config_hash"] for item in report_sets]
         lineage_ids = [item["lineage"]["orchestration_set_id"] for item in report_sets]
@@ -992,6 +1010,21 @@ class RecipeRunner:
             and ambiguous_calls == 0
         )
         return valid, normalized_calls
+
+    def _backend_determinism_matches(self, safety_evidence: Any) -> bool:
+        determinism = (
+            safety_evidence.get("determinism")
+            if isinstance(safety_evidence, dict)
+            else None
+        )
+
+        return (
+            isinstance(determinism, dict)
+            and set(determinism) == {"certified", "schema_version", "seed_fingerprint"}
+            and determinism.get("certified") is True
+            and determinism.get("schema_version") == DETERMINISTIC_SEED_SCHEMA_VERSION
+            and determinism.get("seed_fingerprint") == self.deterministic_seed.fingerprint
+        )
 
     def _scenario_r14(self, dashboards: dict[str, dict[str, Any]]) -> dict[str, Any]:
         target = self._target_recipe()
