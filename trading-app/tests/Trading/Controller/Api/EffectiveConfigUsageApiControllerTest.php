@@ -62,7 +62,10 @@ final class EffectiveConfigUsageApiControllerTest extends TestCase
         }
     }
 
-    /** @param list<EffectiveConfigUsageFact> $facts @param list<EffectiveConfigSnapshotRecord> $records */
+    /**
+     * @param list<EffectiveConfigUsageFact>      $facts
+     * @param list<EffectiveConfigSnapshotRecord> $records
+     */
     private function controller(array $facts, array $records): EffectiveConfigUsageApiController
     {
         $store = new class($facts) implements EffectiveConfigUsageStoreInterface {

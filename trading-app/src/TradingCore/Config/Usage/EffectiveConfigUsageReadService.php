@@ -99,7 +99,11 @@ final readonly class EffectiveConfigUsageReadService
         ];
     }
 
-    /** @param list<EffectiveConfigUsageFact> $facts @return array<string,int> */
+    /**
+     * @param list<EffectiveConfigUsageFact> $facts
+     *
+     * @return array<string,int>
+     */
     private function usage(array $facts): array
     {
         $sourceCounts = [

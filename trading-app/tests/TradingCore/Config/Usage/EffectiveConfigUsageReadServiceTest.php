@@ -105,7 +105,10 @@ final class EffectiveConfigUsageReadServiceTest extends TestCase
         $this->assertFailure($service, EffectiveConfigUsageScope::TRADE, 'trade-1', 'effective_config_usage_conflict', 409);
     }
 
-    /** @param list<EffectiveConfigUsageFact> $facts @param list<EffectiveConfigSnapshotRecord> $records */
+    /**
+     * @param list<EffectiveConfigUsageFact>     $facts
+     * @param list<EffectiveConfigSnapshotRecord> $records
+     */
     private function service(array $facts, array $records): EffectiveConfigUsageReadService
     {
         $store = new class($facts) implements EffectiveConfigUsageStoreInterface {

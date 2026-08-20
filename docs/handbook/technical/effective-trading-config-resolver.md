@@ -133,8 +133,43 @@ YAML.
 Diffs compare exact snapshot hashes, flatten configuration paths, sort them
 lexically, and classify details as `added`, `removed`, `changed`, or
 `same_but_different_source`. Unchanged paths are counted but omitted. The future
-`invalidated` state, persisted warning/invalid snapshots, usage navigation, and
-the Front Ops UI remain deferred. Mainnet private execution remains forbidden.
+`invalidated` state, persisted warning/invalid snapshots, and the Front Ops UI
+remain deferred. Mainnet private execution remains forbidden.
+
+## Usage navigation
+
+The immutable snapshot actually used by a canonical runtime identity is available
+without resolving current YAML:
+
+```text
+GET /api/orchestration/runs/{run_id}/effective-config
+GET /api/orchestration/sets/{set_id}/effective-config
+GET /api/trading/decisions/{decision_id}/effective-config
+GET /api/trades/{trade_id}/effective-config
+```
+
+The reader performs exact equality lookups over `trade_lineage`, `order_intent`,
+and `trade_lifecycle_event`. For a trade, canonical `trade_id` and persistent
+`internal_trade_id` are exact sources; venue trade IDs, symbols, and time windows
+are never inferred. Run and set responses may contain several snapshots because
+their cells can use distinct effective configurations. One decision or trade must
+resolve to a single snapshot.
+
+Every matching lineage row must carry
+`effective-config-snapshot:sha256:<64 lowercase hex>` and, when present, its
+`config_hash` must match the immutable registry document. Responses include only
+the stored redacted historical document plus explicit lineage/order-intent/event
+and distinct identity counts. Failures are closed and stable:
+
+- `400 invalid_effective_config_usage_identifier` for an invalid route identity;
+- `404 effective_config_usage_not_found` when no canonical fact exists;
+- `422 effective_config_reference_missing` when any matching fact lacks a valid
+  reference;
+- `409 effective_config_usage_conflict` for an ambiguous decision or trade;
+- `409 effective_config_snapshot_unregistered` for a dangling reference;
+- `409 effective_config_hash_conflict` when lineage and registry hashes disagree.
+
+The Front Ops links and presentation of these responses remain owned by #318.
 
 ## Legacy quarantine and migration
 
