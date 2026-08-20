@@ -19,8 +19,9 @@ final readonly class EffectiveConfigUsageReadService
     /** @return array<string,mixed> */
     public function read(EffectiveConfigUsageScope $scope, string $identifier): array
     {
-        $identifier = trim($identifier);
-        if ($identifier === '' || strlen($identifier) > $scope->maxIdentifierLength()) {
+        if ($identifier === ''
+            || $identifier !== trim($identifier)
+            || strlen($identifier) > $scope->maxIdentifierLength()) {
             throw $this->failure(
                 'invalid_effective_config_usage_identifier',
                 400,

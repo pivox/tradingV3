@@ -64,6 +64,7 @@ final class EffectiveConfigUsageReadServiceTest extends TestCase
         $service = $this->service([], []);
 
         $this->assertFailure($service, EffectiveConfigUsageScope::RUN, ' ', 'invalid_effective_config_usage_identifier', 400);
+        $this->assertFailure($service, EffectiveConfigUsageScope::RUN, ' run-1', 'invalid_effective_config_usage_identifier', 400);
         $this->assertFailure($service, EffectiveConfigUsageScope::RUN, str_repeat('x', 256), 'invalid_effective_config_usage_identifier', 400);
         $this->assertFailure($service, EffectiveConfigUsageScope::RUN, 'missing', 'effective_config_usage_not_found', 404);
     }
