@@ -16,6 +16,15 @@ use App\Trading\Paper\Replay\PaperReplayReader;
 
 final readonly class PaperReplayReadinessService
 {
+    /** @var list<string> */
+    private const CELL_INSPECTION_FAILURES = [
+        'paper_execution_cell_identity_conflict',
+        'paper_execution_checkpoint_missing',
+        'paper_execution_checkpoint_corrupt',
+        'paper_execution_dataset_identity_corrupt',
+        'paper_execution_cell_state_invalid',
+    ];
+
     public function __construct(
         private PaperDatasetVerifier $verifier,
         private PaperPrivateConfigurationReader $configurationReader,
@@ -53,7 +62,16 @@ final readonly class PaperReplayReadinessService
 
         $eligibility = $this->profiles->require($profile);
         $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
-        $state = $this->store->inspectCell($cell, $eligibility);
+        $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
+        try {
+            $state = $this->store->inspectCell($cell, $eligibility);
+        } catch (\Throwable $failure) {
+            if (in_array($failure->getMessage(), self::CELL_INSPECTION_FAILURES, true)) {
+                throw new \LogicException($failure->getMessage());
+            }
+
+            throw new \RuntimeException('paper_execution_state_inspection_failed');
+        }
         if ($state->killed) {
             throw new \LogicException('paper_execution_cell_killed');
         }
@@ -64,8 +82,6 @@ final readonly class PaperReplayReadinessService
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }
-        $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
-
         return new PaperReplayPreparation($manifest, $snapshot, $eligibility, $cell);
     }
 

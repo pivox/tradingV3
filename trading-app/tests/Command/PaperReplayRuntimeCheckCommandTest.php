@@ -15,6 +15,7 @@ use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
@@ -165,6 +166,37 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
 
         self::assertSame('paper_execution_dataset_identity_conflict', $payload['blocker']);
         self::assertSame($writes, $store->registrationWrites);
+    }
+
+    public function testStoreFailureIsNormalizedWithoutLeakingDatabaseDetails(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $store->inspectionFailure = new \RuntimeException('postgres://user:password@private-host/database');
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_execution_state_inspection_failed', $payload['blocker']);
+        self::assertStringNotContainsString('private-host', $tester->getDisplay());
+        self::assertStringNotContainsString('password', $tester->getDisplay());
+    }
+
+    public function testFreeFormRecorderVersionIsNeverEmitted(): void
+    {
+        $manifestPath = $this->dataset . '/manifest.json';
+        $manifest = json_decode((string) file_get_contents($manifestPath), true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($manifest);
+        $manifest['recorder_version'] = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        file_put_contents($manifestPath, CanonicalJson::encode($manifest));
+        chmod($manifestPath, 0600);
+        $tester = new CommandTester($this->command($this->acceptingCoordinator()));
+
+        self::assertSame(Command::SUCCESS, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 32, JSON_THROW_ON_ERROR);
+
+        self::assertArrayNotHasKey('recorder_version', $payload['source']);
+        self::assertStringNotContainsString('ghp_', $tester->getDisplay());
     }
 
     /** @return array<string, string> */

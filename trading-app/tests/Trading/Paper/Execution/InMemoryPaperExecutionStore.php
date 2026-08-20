@@ -17,6 +17,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 {
     public int $registrationWrites = 0;
+    public ?\Throwable $inspectionFailure = null;
 
     /** @var array<int, PaperMarketEvent> */
     private array $sources = [];
@@ -53,6 +54,9 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     }
     public function inspectCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): PaperExecutionCellState
     {
+        if ($this->inspectionFailure !== null) {
+            throw $this->inspectionFailure;
+        }
         if (!isset($this->registeredCells[$cell->id])) {
             return PaperExecutionCellState::absent();
         }

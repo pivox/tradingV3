@@ -43,7 +43,6 @@ final readonly class PaperReplayPreparation
                 'dataset_id' => $this->manifest->datasetId,
                 'events_file_sha256' => $this->manifest->eventsFileSha256,
                 'schema_version' => $this->manifest->schemaVersion,
-                'recorder_version' => $this->manifest->recorderVersion,
                 'network' => $this->manifest->network->value,
                 'venue' => $this->manifest->venue->value,
                 'quality' => $this->manifest->quality->value,

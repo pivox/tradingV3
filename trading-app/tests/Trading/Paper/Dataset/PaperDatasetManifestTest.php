@@ -103,21 +103,6 @@ final class PaperDatasetManifestTest extends TestCase
         ], array_keys($manifest->toArray()));
     }
 
-    public function testRejectsRecorderVersionThatCannotBeEmittedSafely(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('paper_dataset_recorder_version_invalid');
-
-        self::completeManifest(
-            venue: PaperMarketDataVenue::OKX,
-            network: PaperMarketDataNetwork::MAINNET,
-            quality: PaperMarketDataQuality::PUBLIC_HISTORICAL_CANDLES_AND_TRADES,
-            modelName: 'okx_historical_model',
-            modelVersion: '1.0.0',
-            recorderVersion: 'token=must-not-be-logged',
-        );
-    }
-
     /** @param array<string, mixed> $coverage */
     #[DataProvider('invalidHistoricalCoverageProvider')]
     public function testRejectsInvalidHistoricalCoverage(array $coverage): void
@@ -240,11 +225,10 @@ final class PaperDatasetManifestTest extends TestCase
         ?string $modelName,
         ?string $modelVersion,
         ?HyperliquidHistoricalCoverage $historicalCoverage = null,
-        string $recorderVersion = '1.0.0',
     ): PaperDatasetManifest {
         return new PaperDatasetManifest(
             schemaVersion: PaperDatasetManifest::SCHEMA_VERSION,
-            recorderVersion: $recorderVersion,
+            recorderVersion: '1.0.0',
             datasetId: 'hyperliquid-history-001',
             venue: $venue,
             network: $network,

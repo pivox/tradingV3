@@ -54,7 +54,7 @@ Successful JSON uses `paper-replay-readiness-v1` and contains only redacted
 identities and facts:
 
 - `ready`, `runtime_ready`;
-- dataset ID, checksum, schema/recorder versions, network, venue, quality,
+- dataset ID, checksum, schema version, network, venue, quality,
   symbols and channels;
 - controlled-clock status;
 - `execution_mode=paper`, `execution_exchange=fake`, and explicit false values
