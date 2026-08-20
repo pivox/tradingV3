@@ -5,6 +5,18 @@
 **Le résultat métier de l'issue #196 reste incomplet. Le présent rapport est une
 baseline historique mise à jour par les lots correctifs listés ci-dessous.**
 
+### Mise à jour du 20 août 2026 — identité Paper moderne
+
+Le stockage Paper accepte désormais une identité moderne versionnée contenant
+exactement réseau, venue publique, mode et version, setup et version, side, hash
+de configuration canonique et hash du catalogue de conditions. Les cellules
+legacy conservent leur identité v1 byte-identique et restent `reference_only` ;
+aucun alias ni backfill ne transforme leur provenance. Une cellule moderne peut
+être enregistrée pour audit, mais son exécution échoue explicitement avec
+`paper_modern_strategy_bridge_unavailable` tant que le pont vers la stratégie et
+les effets canoniques n'est pas livré. Elle ne peut donc pas encore devenir
+`baseline_eligible`.
+
 ### Mise à jour du 20 août 2026 — readiness Paper replay
 
 Le P0 « source Paper » est levé. Le runtime possède des datasets publics OKX et
@@ -155,7 +167,7 @@ le livrable golden, sans lever les autres écarts de #196.
 | Fill engine configurable | Crossing top-of-book, IOC, partial explicite, fallback taker, slippage et gaps sont déterministes. | PARTIAL | Pas de modes configurables `fill_immediate`, probabiliste seedé, volume-constrained, replay historique, latence/jitter ou queue maker réaliste. |
 | Modèle de coûts | Frais, rôle maker/taker, slippage, spread explicite, funding et liquidation sont séparés ; inconnu funding reste `null`. Les datasets Paper portent leur qualité et leur modèle versionné. | PASS pour les modèles implémentés | Toute nouvelle hypothèse doit conserver cette provenance explicite. |
 | Positions, SL/TP, trailing, compensation | Attachments terminaux, fill partiel immédiatement protégé, resize stable, compensation exacte, TP1/trailing, liquidation et races terminales sont testés. | PASS pour le contrat attaché | Une entrée sans SL attaché reste hors de cette garantie. |
-| Persistance/recovery Paper | Dataset public vérifié, journal PostgreSQL en trois phases, checkpoints et reprise des effets pending. | PASS pour le replay Paper | Les profils legacy restent exclus de la baseline moderne. |
+| Persistance/recovery Paper | Dataset public vérifié, journal PostgreSQL en trois phases, checkpoints, reprise des effets pending et identité moderne exacte sans backfill legacy. | PASS pour le replay Paper | Les profils legacy restent exclus ; les cellules modernes restent bloquées avant effets jusqu'au pont canonique. |
 | Simulation WS public/privé | Private WS persistant, disconnect, ack, duplicate/out-of-order/gap et snapshot resync aux scénarios 15 et 16. | PARTIAL | Public WS absent. |
 | DSL/fixtures d'erreurs | Fautes typées `network_timeout`, `transport_error`, `http_429`, `http_500`, avant/après mutation, FIFO et restart. | PARTIAL | Pas de quota glissant, latence/jitter seedés, précision/marge dans une DSL commune, ni catalogue de divergences. |
 | Runtime-check Fake/Paper | Le check Fake certifie son état seedé ; le check Paper dédié vérifie source publique exacte, checksum, horloge, base, cellule et frontière Fake-only sans mutation. | PASS fail-closed | `PAPER_EXECUTION_ENABLED=0`, source invalide, clock en régression ou DB non allowlistée restent bloquants. |

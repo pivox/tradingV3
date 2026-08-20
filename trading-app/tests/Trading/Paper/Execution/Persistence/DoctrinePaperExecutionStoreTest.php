@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Execution\Persistence;
 
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Persistence\DoctrinePaperExecutionStore;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
@@ -16,11 +18,15 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
 use DoctrineMigrations\Version20260801120000;
+use DoctrineMigrations\Version20260820170000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -108,6 +114,37 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_cell_identity_conflict');
         $this->store->registerCell($other, PaperProfileEligibility::REFERENCE_ONLY);
+    }
+
+    public function testModernCellRegistrationPersistsAndComparesEveryExactIdentityField(): void
+    {
+        $modern = $this->modernCell();
+        $this->store->registerCell($modern, PaperProfileEligibility::REFERENCE_ONLY);
+        $stored = $this->connection->fetchAssociative('SELECT * FROM paper_execution_cell WHERE id = ?', [$modern->id]);
+
+        self::assertIsArray($stored);
+        self::assertSame('micro_scalping', $stored['mode_id']);
+        self::assertSame('1.1.0', $stored['mode_version']);
+        self::assertSame('micro_scalping.momentum_ofi.long', $stored['setup_id']);
+        self::assertSame('1.1.0', $stored['setup_version']);
+        self::assertSame('long', $stored['canonical_side']);
+        self::assertSame($modern->modernIdentity?->configHash, $stored['canonical_config_hash']);
+        self::assertSame($modern->modernIdentity?->conditionCatalogHash, $stored['condition_catalog_hash']);
+
+        $this->connection->executeStatement(
+            "UPDATE paper_execution_cell SET setup_version = '1.0.0' WHERE id = ?",
+            [$modern->id],
+        );
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_cell_identity_conflict');
+        $this->store->inspectCell($modern, PaperProfileEligibility::REFERENCE_ONLY);
+    }
+
+    public function testModernCellCannotBeMarkedBaselineEligibleBeforeBridge(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_cell_eligibility_conflict');
+        $this->store->registerCell($this->modernCell(), PaperProfileEligibility::BASELINE_ELIGIBLE);
     }
 
     public function testDatasetIdentityIsBoundOnceAndCannotBeSubstitutedOnRestart(): void
@@ -277,11 +314,47 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
     private function executeMigration(): void
     {
         require_once __DIR__ . '/../../../../../migrations/Version20260801120000.php';
-        /** @var AbstractMigration $migration */
-        $migration = new Version20260801120000($this->connection, new NullLogger());
-        $migration->up(new Schema());
-        foreach ($migration->getSql() as $query) {
-            $this->connection->executeStatement($query->getStatement());
+        require_once __DIR__ . '/../../../../../migrations/Version20260820170000.php';
+        foreach ([Version20260801120000::class, Version20260820170000::class] as $class) {
+            /** @var AbstractMigration $migration */
+            $migration = new $class($this->connection, new NullLogger());
+            $migration->up(new Schema());
+            foreach ($migration->getSql() as $query) {
+                $this->connection->executeStatement($query->getStatement());
+            }
         }
+    }
+
+    private function modernCell(): PaperExecutionCell
+    {
+        $conditionHash = 'sha256:' . str_repeat('c', 64);
+        $payload = ['decision' => ['enabled' => true]];
+        $layers = [];
+        foreach (['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'] as $type) {
+            $layers[] = ['type' => $type, 'name' => $type, 'path' => $type . '.yaml', 'required' => true];
+        }
+        $snapshot = new EffectiveTradingConfigSnapshot(
+            new EffectiveTradingConfigRequest(
+                'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
+                'hyperliquid', 'testnet', 'long', ShadowExecutionCapability::Paper,
+            ),
+            $payload,
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, $conditionHash),
+            $conditionHash,
+            $layers,
+            ['decision.enabled' => $layers[0]],
+        );
+
+        return PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            $this->snapshot->id,
+            PaperModernStrategyIdentity::fromResolvedSnapshot(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                $snapshot,
+            ),
+            'modern-run-002',
+        );
     }
 }

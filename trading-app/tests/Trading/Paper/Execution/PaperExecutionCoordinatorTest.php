@@ -23,9 +23,11 @@ use App\TradeEntry\Policy\IdempotencyPolicy;
 use App\TradeEntry\Policy\OrderModePolicyInterface;
 use App\TradeEntry\Service\TradeEntryMetricsService;
 use App\TradeEntry\Types\Side;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\PaperExecutionCoordinator;
@@ -41,6 +43,9 @@ use App\Trading\Paper\Runtime\PaperDatabaseGuard;
 use App\Trading\Paper\Runtime\PaperDatabaseInspection;
 use App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface;
 use App\Trading\Paper\Runtime\PaperRuntimeGuard;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -82,6 +87,26 @@ final class PaperExecutionCoordinatorTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_network_mismatch');
         $coordinator->consumeAt($this->cell(), PaperProfileEligibility::REFERENCE_ONLY, 'dataset-1', 0, $event);
+    }
+
+    public function testModernCellFailsBeforeAnyCoordinatorMutationUntilCanonicalBridgeExists(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $coordinator = $this->coordinator(
+            $store,
+            new RecordingProjectionStore(),
+            sys_get_temp_dir() . '/paper_coord_' . bin2hex(random_bytes(5)),
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_modern_strategy_bridge_unavailable');
+        $coordinator->consumeAt(
+            $this->modernCell(),
+            PaperProfileEligibility::REFERENCE_ONLY,
+            'dataset-1',
+            0,
+            $this->event(),
+        );
     }
 
     public function testNoDecisionStillAdvancesTheDurableFakeMarketEffect(): void
@@ -174,6 +199,39 @@ final class PaperExecutionCoordinatorTest extends TestCase
     private function cell(): PaperExecutionCell
     {
         return PaperExecutionCell::create(PaperMarketDataNetwork::TESTNET, PaperMarketDataVenue::HYPERLIQUID, 'sha256:' . str_repeat('d', 64), 'scalper_micro', 'run-1');
+    }
+
+    private function modernCell(): PaperExecutionCell
+    {
+        $conditionHash = 'sha256:' . str_repeat('c', 64);
+        $payload = ['decision' => ['enabled' => true]];
+        $layers = [];
+        foreach (['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'] as $type) {
+            $layers[] = ['type' => $type, 'name' => $type, 'path' => $type . '.yaml', 'required' => true];
+        }
+        $snapshot = new EffectiveTradingConfigSnapshot(
+            new EffectiveTradingConfigRequest(
+                'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
+                'hyperliquid', 'testnet', 'long', ShadowExecutionCapability::Paper,
+            ),
+            $payload,
+            CanonicalEffectiveConfigSnapshot::calculateConfigHash($payload, $conditionHash),
+            $conditionHash,
+            $layers,
+            ['decision.enabled' => $layers[0]],
+        );
+
+        return PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'sha256:' . str_repeat('d', 64),
+            PaperModernStrategyIdentity::fromResolvedSnapshot(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                $snapshot,
+            ),
+            'modern-run-1',
+        );
     }
 
     private function event(): PaperMarketEvent

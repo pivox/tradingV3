@@ -74,6 +74,15 @@ Success returns schema `paper-replay-readiness-v1` with `ready=true`. Read
 their trades eligible for a modern baseline. Failure returns `ready=false` and
 one stable `blocker`; paths and configuration contents are never output.
 
+Modern cells use identity schema v2. Their exact identity contains network,
+public-data venue, Paper configuration snapshot, canonical mode/setup IDs and
+versions, side, canonical configuration hash, condition-catalog hash and run ID.
+All modern fields are mandatory together; legacy v1 cells are never backfilled.
+The current runtime deliberately rejects a modern cell before mutation with
+`paper_modern_strategy_bridge_unavailable`. Operators must not interpret a
+persisted v2 cell as executable or baseline-eligible until the canonical
+strategy/effect bridge is available.
+
 After a successful check, execute the same tuple:
 
 ```bash
