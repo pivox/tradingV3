@@ -76,6 +76,7 @@ final class FillTimingMigrationTest extends TestCase
         self::assertStringContainsString('AS mfe_mae_window_source', $sql);
         self::assertStringContainsString("c.extra->> 'mfe_mae_entry_price'", $sql);
         self::assertStringContainsString('legacy.entry_vwap', $sql);
+        self::assertStringContainsString('legacy.entry_last_fill_at <= legacy.exit_last_fill_at', $sql);
         self::assertStringContainsString("ELSE 'incomplete_fill_ledger'", $sql);
         self::assertStringNotContainsString('ELSE legacy.holding_time_sec', $sql);
         self::assertStringNotContainsString('jsonb_populate_record', $sql);

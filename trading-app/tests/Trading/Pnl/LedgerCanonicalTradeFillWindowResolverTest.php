@@ -51,6 +51,15 @@ final class LedgerCanonicalTradeFillWindowResolverTest extends TestCase
             complete: true,
         )));
         self::assertNull($invalid->resolve('trade-1', 'fake', 'perpetual'));
+
+        $lateEntry = new LedgerCanonicalTradeFillWindowResolver($this->provider($this->aggregationResult(
+            entry: new \DateTimeImmutable('2026-08-20 10:00:00 UTC'),
+            exit: new \DateTimeImmutable('2026-08-20 11:00:00 UTC'),
+            entryVwap: 100.0,
+            complete: true,
+            entryLast: new \DateTimeImmutable('2026-08-20 12:00:00 UTC'),
+        )));
+        self::assertNull($lateEntry->resolve('trade-1', 'fake', 'perpetual'));
     }
 
     public function testHoldingTimePreservesSubsecondPrecision(): void
@@ -83,13 +92,14 @@ final class LedgerCanonicalTradeFillWindowResolverTest extends TestCase
         \DateTimeImmutable $exit,
         float $entryVwap,
         bool $complete,
+        ?\DateTimeImmutable $entryLast = null,
     ): FillQuantityAggregationResult {
         return new FillQuantityAggregationResult(
             internalTradeId: 'trade-1',
             exchange: 'fake',
             marketType: 'perpetual',
             entryFirstFillAt: $entry,
-            entryLastFillAt: $entry,
+            entryLastFillAt: $entryLast ?? $entry,
             entryQty: 1.0,
             entryVwap: $entryVwap,
             exitFirstFillAt: $exit,

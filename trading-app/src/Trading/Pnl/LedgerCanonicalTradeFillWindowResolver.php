@@ -15,8 +15,14 @@ final readonly class LedgerCanonicalTradeFillWindowResolver implements Canonical
         $aggregate = $this->aggregator->aggregateByTradeVenue($internalTradeId, $exchange, $marketType);
         if (!$aggregate->netPnlCertificationAllowed()
             || !$aggregate->entryFirstFillAt instanceof \DateTimeImmutable
+            || !$aggregate->entryLastFillAt instanceof \DateTimeImmutable
+            || !$aggregate->exitFirstFillAt instanceof \DateTimeImmutable
             || !$aggregate->exitLastFillAt instanceof \DateTimeImmutable
             || $aggregate->entryVwap === null
+            || $aggregate->entryFirstFillAt > $aggregate->entryLastFillAt
+            || $aggregate->exitFirstFillAt > $aggregate->exitLastFillAt
+            || $aggregate->entryFirstFillAt > $aggregate->exitFirstFillAt
+            || $aggregate->entryLastFillAt > $aggregate->exitLastFillAt
         ) {
             return null;
         }

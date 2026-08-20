@@ -276,8 +276,10 @@ dans MFE/MAE.
 `exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
 fermée, y compris la précision microseconde. Les bornes persistées utilisent le
 format `Y-m-d\TH:i:s.uP`. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
-premier fill d'entrée ajoute `ledger_fill_chronology_invalid`, masque le PnL net
-canonique et interdit donc la certification.
+premier fill d'entrée, ou un dernier fill d'entrée postérieur au dernier fill de
+sortie, ajoute `ledger_fill_chronology_invalid`, masque le PnL net canonique et
+interdit donc la certification. La vue vérifie aussi l'ordre interne des premiers
+et derniers fills de chaque rôle avant de publier une fenêtre canonique.
 
 Les consommateurs certifiants utilisent également `canonical_cost_completeness`,
 `canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality`. Les colonnes sans

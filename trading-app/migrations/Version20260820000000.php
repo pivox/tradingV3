@@ -53,17 +53,23 @@ SQL, $precision));
 
     private function addCanonicalWrapperSql(bool $withFillTiming): void
     {
-        $validChronology = <<<'SQL'
-legacy.quantity_status = 'complete'
-    AND legacy.entry_first_fill_at IS NOT NULL
+        $validFillOrder = <<<'SQL'
+legacy.entry_first_fill_at IS NOT NULL
+    AND legacy.entry_last_fill_at IS NOT NULL
+    AND legacy.exit_first_fill_at IS NOT NULL
     AND legacy.exit_last_fill_at IS NOT NULL
-    AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
+    AND legacy.entry_first_fill_at <= legacy.entry_last_fill_at
+    AND legacy.exit_first_fill_at <= legacy.exit_last_fill_at
+    AND legacy.entry_first_fill_at <= legacy.exit_first_fill_at
+    AND legacy.entry_last_fill_at <= legacy.exit_last_fill_at
 SQL;
-        $invalidChronology = <<<'SQL'
+        $validChronology = <<<SQL
 legacy.quantity_status = 'complete'
-    AND legacy.entry_first_fill_at IS NOT NULL
-    AND legacy.exit_last_fill_at IS NOT NULL
-    AND legacy.exit_last_fill_at < legacy.entry_first_fill_at
+    AND {$validFillOrder}
+SQL;
+        $invalidChronology = <<<SQL
+legacy.quantity_status = 'complete'
+    AND NOT ({$validFillOrder})
 SQL;
         $exactWindow = <<<SQL
 {$validChronology}

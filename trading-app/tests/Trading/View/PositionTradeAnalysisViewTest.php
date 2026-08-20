@@ -761,6 +761,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             [2980, 2981, 'BTCUSDT', 'itd-fill-window-exact', 'position-fill-window-exact', '2026-08-20 10:00:01+00:00', '2026-08-20 10:04:31+00:00', true],
             [2982, 2983, 'ETHUSDT', 'itd-fill-window-invalid', 'position-fill-window-invalid', '2026-08-20 11:05:00+00:00', '2026-08-20 11:04:00+00:00', false],
             [2984, 2985, 'SOLUSDT', 'itd-fill-window-incomplete', 'position-fill-window-incomplete', '2026-08-20 12:00:01+00:00', '2026-08-20 12:04:31+00:00', null],
+            [2986, 2987, 'XRPUSDT', 'itd-fill-window-late-entry', 'position-fill-window-late-entry', '2026-08-20 13:00:00+00:00', '2026-08-20 14:00:00+00:00', 'late_entry'],
         ] as [$entryId, $closeId, $symbol, $internalTradeId, $positionId, $entryFillAt, $exitFillAt, $chronology]) {
             $this->entry($symbol, 'run-fill-window', 'fill-window', 'scalper', 'fake', 'paper', [
                 'internal_trade_id' => $internalTradeId,
@@ -787,12 +788,15 @@ final class PositionTradeAnalysisViewTest extends TestCase
                 'holding_time_source' => 'provider_position_history',
             ], $positionId, '2026-08-20 10:05:00+00', $closeId, 'fake', 'paper', 'hyperliquid');
             $this->canonicalLifecycle($entryId, $closeId, $internalTradeId, $positionId, 'trade-' . $internalTradeId);
-            $fills = [['entry', 100.0, $entryFillAt]];
+            $fills = [['entry', 100.0, $entryFillAt, $chronology === 'late_entry' ? 0.5 : 1.0]];
             if ($chronology !== null) {
-                $fills[] = ['exit', 101.0, $exitFillAt];
+                $fills[] = ['exit', 101.0, $exitFillAt, 1.0];
             }
-            foreach ($fills as [$role, $price, $occurredAt]) {
-                $this->ledgerFill($symbol, $internalTradeId, $positionId, $internalTradeId . '-' . $role, $role, $price, 1.0, $occurredAt, [
+            if ($chronology === 'late_entry') {
+                $fills[] = ['entry', 100.0, '2026-08-20 15:00:00+00:00', 0.5];
+            }
+            foreach ($fills as $fillIndex => [$role, $price, $occurredAt, $quantity]) {
+                $this->ledgerFill($symbol, $internalTradeId, $positionId, $internalTradeId . '-' . $role . '-' . $fillIndex, $role, $price, $quantity, $occurredAt, [
                     'fee_usdt' => 0.01,
                     'funding_usdt' => 0.0,
                     'spread_cost_usdt' => 0.0,
@@ -834,6 +838,13 @@ SQL);
             self::assertNull($invalid['canonical_net_pnl_usdt']);
             self::assertContains('ledger_fill_chronology_invalid', $invalid['canonical_pnl_quality_flags']);
             self::assertSame('partial', $invalid['canonical_cost_completeness']);
+
+            $lateEntry = $this->analysisRow(2986);
+            self::assertNull($lateEntry['canonical_holding_time_sec']);
+            self::assertSame('invalid_fill_chronology', $lateEntry['holding_time_source']);
+            self::assertNull($lateEntry['canonical_net_pnl_usdt']);
+            self::assertContains('ledger_fill_chronology_invalid', $lateEntry['canonical_pnl_quality_flags']);
+            self::assertSame('partial', $lateEntry['canonical_cost_completeness']);
 
             $incomplete = $this->analysisRow(2984);
             self::assertSame(999, $incomplete['holding_time_sec']);
