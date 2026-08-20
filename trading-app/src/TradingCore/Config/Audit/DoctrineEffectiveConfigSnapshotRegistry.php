@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\TradingCore\Config\Audit;
 
 use Doctrine\DBAL\Connection;
-use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
 final readonly class DoctrineEffectiveConfigSnapshotRegistry implements EffectiveConfigSnapshotRegistryInterface
 {
@@ -16,47 +15,46 @@ final readonly class DoctrineEffectiveConfigSnapshotRegistry implements Effectiv
     public function register(EffectiveConfigViewerDocument $document): void
     {
         $this->connection->transactional(function () use ($document): void {
-            $existing = $this->connection->fetchAssociative(
-                'SELECT *, redacted_snapshot::text AS redacted_snapshot_json FROM effective_trading_config_snapshot WHERE snapshot_hash = ?',
-                [$document->snapshotHash()],
-            );
-            if ($existing !== false) {
-                $this->assertExactReplay($existing, $document);
-
-                return;
-            }
-
             $payload = $document->payload;
             $request = $this->requiredMap($payload, 'request');
             $config = $this->requiredMap($payload, 'config');
-            try {
-                $this->connection->executeStatement(<<<'SQL'
+            $inserted = $this->connection->executeStatement(<<<'SQL'
 INSERT INTO effective_trading_config_snapshot (
     snapshot_hash, config_hash, condition_catalog_hash, schema_version, resolver_version,
     mode_id, mode_version, setup_id, setup_version, exchange, environment, side,
     execution_capability, validation_status, redacted_snapshot, redacted_content_checksum, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, NOW())
+ON CONFLICT (snapshot_hash) DO NOTHING
 SQL, [
-                    $document->snapshotHash(),
-                    $document->configHash(),
-                    $this->nullableString($payload, 'condition_catalog_hash'),
-                    $this->requiredString($config, 'schema_version'),
-                    $this->requiredString($payload, 'resolver_version'),
-                    $this->requiredString($request, 'mode_id'),
-                    $this->requiredString($request, 'mode_version'),
-                    $this->requiredString($request, 'setup_id'),
-                    $this->requiredString($request, 'setup_version'),
-                    $this->requiredString($request, 'exchange'),
-                    $this->requiredString($request, 'environment'),
-                    $this->requiredString($request, 'side'),
-                    $this->nullableString($request, 'execution_capability'),
-                    $this->requiredString($payload, 'validation_status'),
-                    $document->canonicalJson(),
-                    $document->redactedContentChecksum(),
-                ]);
-            } catch (UniqueConstraintViolationException) {
+                $document->snapshotHash(),
+                $document->configHash(),
+                $this->nullableString($payload, 'condition_catalog_hash'),
+                $this->requiredString($config, 'schema_version'),
+                $this->requiredString($payload, 'resolver_version'),
+                $this->requiredString($request, 'mode_id'),
+                $this->requiredString($request, 'mode_version'),
+                $this->requiredString($request, 'setup_id'),
+                $this->requiredString($request, 'setup_version'),
+                $this->requiredString($request, 'exchange'),
+                $this->requiredString($request, 'environment'),
+                $this->requiredString($request, 'side'),
+                $this->nullableString($request, 'execution_capability'),
+                $this->requiredString($payload, 'validation_status'),
+                $document->canonicalJson(),
+                $document->redactedContentChecksum(),
+            ]);
+            if ($inserted === 1) {
+                return;
+            }
+
+            $existing = $this->connection->fetchAssociative(
+                'SELECT *, redacted_snapshot::text AS redacted_snapshot_json FROM effective_trading_config_snapshot WHERE snapshot_hash = ?',
+                [$document->snapshotHash()],
+            );
+            if ($existing === false) {
                 throw new \LogicException('effective_config_snapshot_conflict');
             }
+            $this->assertExactReplay($existing, $document);
         });
     }
 

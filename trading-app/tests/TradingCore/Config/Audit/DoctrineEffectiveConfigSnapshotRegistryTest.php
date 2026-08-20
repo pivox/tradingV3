@@ -21,6 +21,7 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
 {
     private Connection $connection;
     private string $schemaName;
+    private string $dsn;
     private DoctrineEffectiveConfigSnapshotRegistry $registry;
 
     protected function setUp(): void
@@ -31,7 +32,8 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
             self::markTestSkipped('Effective config registry integration tests require a database ending in _paper_test.');
         }
 
-        $this->connection = DriverManager::getConnection(['url' => $dsn]);
+        $this->dsn = $dsn;
+        $this->connection = DriverManager::getConnection(['url' => $this->dsn]);
         $this->schemaName = sprintf('effective_config_%d_%s', getmypid(), bin2hex(random_bytes(4)));
         $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
         $this->connection->executeStatement('CREATE SCHEMA ' . $quoted);
@@ -73,6 +75,73 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
         $this->registry->register($this->document('a', 'c', '/different.yaml'));
     }
 
+    public function testConcurrentExactRegistrationIsAnIdempotentReplay(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->connection->beginTransaction();
+        $this->insertRaw($document, $document->redactedContentChecksum());
+        $readyFile = tempnam(sys_get_temp_dir(), 'effective-config-race-');
+        self::assertIsString($readyFile);
+        unlink($readyFile);
+        $script = <<<'PHP'
+require $argv[1];
+$connection = \Doctrine\DBAL\DriverManager::getConnection(['url' => $argv[2]]);
+$quoted = $connection->getDatabasePlatform()->quoteSingleIdentifier($argv[3]);
+$connection->executeStatement('SET search_path TO ' . $quoted . ', public');
+$payload = json_decode(base64_decode($argv[4], true), true, 512, JSON_THROW_ON_ERROR);
+$document = new \App\TradingCore\Config\Audit\EffectiveConfigViewerDocument($payload);
+file_put_contents($argv[5], (string) $connection->fetchOne('SELECT pg_backend_pid()'));
+try {
+    (new \App\TradingCore\Config\Audit\DoctrineEffectiveConfigSnapshotRegistry($connection))->register($document);
+    exit(0);
+} catch (\Throwable $exception) {
+    fwrite(STDERR, $exception->getMessage());
+    exit(1);
+}
+PHP;
+        $process = proc_open([
+            PHP_BINARY,
+            '-r',
+            $script,
+            dirname(__DIR__, 4) . '/vendor/autoload.php',
+            $this->dsn,
+            $this->schemaName,
+            base64_encode($document->canonicalJson()),
+            $readyFile,
+        ], [
+            0 => ['file', '/dev/null', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
+        self::assertIsResource($process);
+
+        for ($attempt = 0; $attempt < 50 && !is_file($readyFile); ++$attempt) {
+            usleep(20_000);
+        }
+        self::assertFileExists($readyFile);
+        $backendPid = (int) file_get_contents($readyFile);
+        $blocked = false;
+        for ($attempt = 0; $attempt < 50; ++$attempt) {
+            if ($this->connection->fetchOne('SELECT wait_event_type FROM pg_stat_activity WHERE pid = ?', [$backendPid]) === 'Lock') {
+                $blocked = true;
+                break;
+            }
+            usleep(20_000);
+        }
+        $this->connection->commit();
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+        unlink($readyFile);
+
+        self::assertTrue($blocked, 'Concurrent registration never reached the unique-key lock.');
+        self::assertSame('', $stdout);
+        self::assertSame(0, $exit, 'An exact concurrent replay was reported as a conflict: ' . $stderr);
+        self::assertSame(1, (int) $this->connection->fetchOne('SELECT COUNT(*) FROM effective_trading_config_snapshot'));
+    }
+
     public function testHistoryPreservesProvenanceDistinctSnapshotsSharingAConfigHash(): void
     {
         $this->registry->register($this->document('b', 'c', '/base-b.yaml'));
@@ -108,6 +177,15 @@ final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
     public function testReadRejectsAStoredChecksumMismatch(): void
     {
         $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->insertRaw($document, str_repeat('0', 64));
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('effective_config_snapshot_checksum_mismatch');
+        $this->registry->find($document->snapshotHash());
+    }
+
+    private function insertRaw(EffectiveConfigViewerDocument $document, string $checksum): void
+    {
         $payload = $document->payload;
         $this->connection->executeStatement(<<<'SQL'
 INSERT INTO effective_trading_config_snapshot (
@@ -121,12 +199,8 @@ SQL, [
             $payload['request']['mode_id'], $payload['request']['mode_version'],
             $payload['request']['setup_id'], $payload['request']['setup_version'],
             $payload['request']['exchange'], $payload['request']['environment'], $payload['request']['side'],
-            $document->canonicalJson(), str_repeat('0', 64),
+            $document->canonicalJson(), $checksum,
         ]);
-
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('effective_config_snapshot_checksum_mismatch');
-        $this->registry->find($document->snapshotHash());
     }
 
     private function document(string $snapshot, string $config, string $path): EffectiveConfigViewerDocument
