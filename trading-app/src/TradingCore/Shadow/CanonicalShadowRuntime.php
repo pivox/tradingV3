@@ -289,8 +289,15 @@ final readonly class CanonicalShadowRuntime
         }
         $spread = $this->conditionObservedValue($trace, 'spread_bps_lte');
         $book = $request->orderBook;
+        $bookSourceRecordId = $microstructure['book_source_record_id'] ?? null;
+        if (!$book instanceof CanonicalOrderBookSnapshot
+            || !\is_string($bookSourceRecordId)
+            || preg_match('/\A[a-f0-9]{64}\z/D', $bookSourceRecordId) !== 1
+            || !hash_equals('sha256:' . $bookSourceRecordId, $book->inputHash)
+        ) {
+            return 'microstructure_book_record_mismatch';
+        }
         if ($spread === null
-            || !$book instanceof CanonicalOrderBookSnapshot
             || $request->liveSpreadBps === null
             || !\is_finite($request->liveSpreadBps)
             || abs($spread - $request->liveSpreadBps) > 1.0e-9

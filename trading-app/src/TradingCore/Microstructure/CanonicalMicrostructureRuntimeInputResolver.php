@@ -66,6 +66,7 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
                 'best_bid' => (float) $snapshot->bestBid,
                 'best_ask' => (float) $snapshot->bestAsk,
                 'spread_bps' => (float) $snapshot->spreadBps,
+                'book_source_record_id' => $snapshot->bookSourceRecordId,
                 'book_observed_at' => $snapshot->bookHappenedAt,
                 'expected_market_identity' => $marketIdentity->toArray(),
             ]);

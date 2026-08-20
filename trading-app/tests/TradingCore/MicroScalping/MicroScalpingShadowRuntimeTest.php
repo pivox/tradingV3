@@ -93,6 +93,45 @@ final class MicroScalpingShadowRuntimeTest extends TestCase
         self::assertNull($outcome->reservation);
     }
 
+    public function testExecutionBookMustReferenceTheAuthenticatedSourceRecord(): void
+    {
+        $request = self::request('micro_scalping.momentum_ofi.long', 'long');
+        $snapshot = self::microstructure($request->orderBook, 'long');
+        $book = $request->orderBook;
+        self::assertNotNull($book);
+        $foreignRecord = new CanonicalOrderBookSnapshot(
+            $book->exchange,
+            $book->environment,
+            $book->symbol,
+            $book->marketType,
+            $book->source,
+            $book->bestBid,
+            $book->bestAsk,
+            $book->spreadBps,
+            $book->observedAt,
+            'sha256:' . str_repeat('b', 64),
+        );
+        $mismatch = new MicroScalpingShadowRequest(
+            $request->configRequest,
+            $request->lineage,
+            $request->indicatorsByTimeframe,
+            $request->orderPlanRequest,
+            $request->portfolioScope,
+            $request->portfolioSnapshot,
+            $request->decisionKey,
+            $request->liveSpreadBps,
+            $request->estimatedSlippageBps,
+            $foreignRecord,
+        );
+
+        $outcome = self::runtime($snapshot)->run($mismatch);
+
+        self::assertSame('no_trade', $outcome->status);
+        self::assertSame('micro_scalping_shadow_microstructure_book_record_mismatch', $outcome->reasonCode);
+        self::assertNull($outcome->orderPlan);
+        self::assertNull($outcome->reservation);
+    }
+
     public function testOutcomeRejectsEveryIncompleteOrContradictoryShape(): void
     {
         $request = self::request('micro_scalping.momentum_ofi.long', 'long');
