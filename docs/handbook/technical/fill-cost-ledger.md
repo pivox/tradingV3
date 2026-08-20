@@ -65,6 +65,12 @@ The deterministic fill ID is derived from venue, market type, symbol, order ID, 
 
 Replays with the same canonical fill/cost payload hash are ignored. Mutable projection source and late lineage enrichment do not change that canonical hash. If both the existing row and the replay provide non-null lineage identifiers and they differ, ingestion raises a conflict instead of silently moving the fill to another trade. A different payload for the same idempotency key raises a conflict and does not update the existing row.
 
+Exchange fill timestamps are persisted with six fractional digits
+(`Y-m-d\TH:i:s.uP`) so ordering and holding-time evidence do not lose provider
+microseconds. Replay comparison also recognizes hashes written by the previous
+ATOM-only serializer; this compatibility path only affects idempotency checks
+and never rewrites the stored row.
+
 ### Funding identity and monetary convention
 
 Normalized funding is a cost-only row with `fill_role=funding`. It is never an
@@ -138,6 +144,14 @@ The aggregation exposes:
 `entry_vwap` and `exit_vwap` are quantity-weighted from fill price and quantity. Funding and cost-only adjustment rows contribute to cost aggregates but not to entry or exit quantity.
 
 The default close tolerance is `0.00000001`. A position is fully closed only when `remaining_qty` is within that tolerance and no blocking quantity flag is present.
+
+After every entry/exit fill ingestion (including an idempotent replay), the
+canonical timing projection is retried. If a `position_closed` lifecycle event
+already exists and the aggregated quantity has just become complete, its
+holding time and MFE/MAE evidence are recomputed from the exact first-entry and
+last-exit fills. This deterministic repair covers the case where the final fill
+arrives after the provider close event; an unavailable ledger or market-data
+provider leaves the previous non-canonical evidence untouched.
 
 Current statuses:
 

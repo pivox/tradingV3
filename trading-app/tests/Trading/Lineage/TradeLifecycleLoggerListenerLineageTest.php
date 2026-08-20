@@ -417,6 +417,85 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame('fill_cost_ledger_v1', $extra['holding_time_source'] ?? null);
     }
 
+    public function testLateCompleteFillWindowRefreshesExistingClosedPositionEvidence(): void
+    {
+        $lineage = $this->persistLineageWithPosition();
+        $fillWindowResolver = new class($lineage->getInternalTradeId()) implements CanonicalTradeFillWindowResolverInterface {
+            public ?CanonicalTradeFillWindow $window = null;
+
+            public function __construct(private readonly string $internalTradeId)
+            {
+            }
+
+            public function resolve(string $internalTradeId, string $exchange, string $marketType): ?CanonicalTradeFillWindow
+            {
+                if ($internalTradeId !== $this->internalTradeId || $exchange !== 'fake' || $marketType !== 'perpetual') {
+                    return null;
+                }
+
+                return $this->window;
+            }
+        };
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:00:00 UTC'), BigDecimal::of('100'), BigDecimal::of('999'), BigDecimal::of('1'), BigDecimal::of('101'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('106'), BigDecimal::of('99'), BigDecimal::of('105'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:02:00 UTC'), BigDecimal::of('105'), BigDecimal::of('111'), BigDecimal::of('103'), BigDecimal::of('109'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:03:00 UTC'), BigDecimal::of('109'), BigDecimal::of('110'), BigDecimal::of('98'), BigDecimal::of('100'), BigDecimal::of('1')),
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:04:00 UTC'), BigDecimal::of('100'), BigDecimal::of('999'), BigDecimal::of('1'), BigDecimal::of('101'), BigDecimal::of('1')),
+            ]),
+            $this->tradeLineageManager(),
+            $fillWindowResolver,
+        );
+
+        $listener->onPositionClosed(new PositionClosedEvent(
+            positionHistory: new PositionHistoryEntryDto(
+                symbol: 'BTCUSDT',
+                side: PositionSide::LONG,
+                size: BigDecimal::of('1'),
+                entryPrice: BigDecimal::of('100'),
+                exitPrice: BigDecimal::of('104'),
+                realizedPnl: BigDecimal::of('4'),
+                fees: null,
+                openedAt: new \DateTimeImmutable('2026-06-23 10:00:00 UTC'),
+                closedAt: new \DateTimeImmutable('2026-06-23 10:05:00 UTC'),
+                raw: ['position_id' => 'pos-real'],
+            ),
+            runId: null,
+            exchange: Exchange::FAKE->value,
+            extra: ['market_type' => MarketType::PERPETUAL->value],
+        ));
+
+        /** @var TradeLifecycleEvent|null $closed */
+        $closed = $this->em->getRepository(TradeLifecycleEvent::class)->findOneBy([
+            'eventType' => 'position_closed',
+            'positionId' => 'pos-real',
+        ]);
+        self::assertNotNull($closed);
+        self::assertSame('provider_position_history', $closed->getExtra()['holding_time_source'] ?? null);
+
+        $fillWindowResolver->window = new CanonicalTradeFillWindow(
+            entryFirstFillAt: new \DateTimeImmutable('2026-06-23 10:01:00 UTC'),
+            exitLastFillAt: new \DateTimeImmutable('2026-06-23 10:04:00 UTC'),
+            entryVwap: 101.0,
+        );
+
+        $listener->refreshAfterFill($lineage->getInternalTradeId(), 'fake', 'perpetual');
+
+        $extra = $closed->getExtra();
+        self::assertSame(180, $extra['holding_time_sec'] ?? null);
+        self::assertSame('fill_cost_ledger_v1', $extra['holding_time_source'] ?? null);
+        self::assertSame('2026-06-23T10:01:00.000000+00:00', $extra['mfe_mae_window_start'] ?? null);
+        self::assertSame('2026-06-23T10:04:00.000000+00:00', $extra['mfe_mae_window_end'] ?? null);
+        self::assertSame('fill_cost_ledger_v1', $extra['mfe_mae_window_source'] ?? null);
+        self::assertSame('fill_cost_ledger_v1', $extra['mfe_mae_entry_price_source'] ?? null);
+        self::assertSame(111.0, $extra['max_favorable_price'] ?? null);
+        self::assertSame(98.0, $extra['max_adverse_price'] ?? null);
+        self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
+    }
+
     public function testClosedPositionMarksMfeMaePartialWhenWindowHasMissingKlines(): void
     {
         $listener = new TradeLifecycleLoggerListener(

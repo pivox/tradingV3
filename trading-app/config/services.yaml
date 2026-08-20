@@ -764,6 +764,7 @@ services:
     App\Config\TradeEntryConfigProvider: ~
 
     App\TradingCore\Config\EffectiveTradingConfigResolverInterface: '@App\TradingCore\Config\EffectiveTradingConfigResolver'
+    App\Trading\Pnl\CanonicalFillEvidenceRefresherInterface: '@App\Trading\Listener\TradeLifecycleLoggerListener'
 
     # Config par défaut (compatibilité)
     App\Config\TradeEntryConfig:

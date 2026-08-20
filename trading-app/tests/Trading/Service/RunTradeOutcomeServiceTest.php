@@ -44,7 +44,8 @@ final class RunTradeOutcomeServiceTest extends TestCase
                 'symbol' => 'ETHUSDT', 'setId' => 's1', 'mtfProfile' => 'scalper', 'exchange' => 'bitmart',
                 'closeEventId' => null, 'closeMatchStatus' => 'unmatched', 'closeMatchedBy' => 'unmatched',
                 'analysisStatus' => 'unmatched', 'recordedPnlUsdt' => null, 'pnlR' => null,
-                'mfePct' => 1.0, 'maePct' => -0.2, 'costCompleteness' => 'not_applicable',
+                'mfePct' => 1.0, 'maePct' => -0.2, 'mfeMaeDataQuality' => 'partial',
+                'costCompleteness' => 'not_applicable',
             ]),
         ];
 
@@ -72,8 +73,8 @@ final class RunTradeOutcomeServiceTest extends TestCase
         self::assertEqualsWithDelta(10.7, $s['estimated_net_pnl_usdt'], 1e-9);
         self::assertSame('mixed', $s['cost_completeness']); // partial + unknown
         self::assertFalse($s['data_complete']);
-        self::assertEqualsWithDelta((2.0 + 0.5 + 1.0) / 3, $s['mfe_pct_avg'], 1e-6);
-        self::assertSame(1.0, $s['mfe_pct_median']);
+        self::assertEqualsWithDelta((2.0 + 0.5) / 2, $s['mfe_pct_avg'], 1e-6);
+        self::assertEqualsWithDelta(1.25, $s['mfe_pct_median'], 1e-6);
 
         $bySymbol = $this->byKey($out['by_symbol']);
         self::assertSame(2, $bySymbol['BTCUSDT']['trade_count']);
@@ -373,6 +374,7 @@ final class RunTradeOutcomeServiceTest extends TestCase
             'analysisStatus' => 'unmatched',
             'costCompleteness' => 'not_applicable',
             'lineageClassification' => 'canonical',
+            'mfeMaeDataQuality' => 'complete',
         ];
         $data = array_merge($defaults, $overrides);
 

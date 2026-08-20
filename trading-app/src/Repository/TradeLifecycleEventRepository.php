@@ -33,6 +33,12 @@ final class TradeLifecycleEventRepository extends ServiceEntityRepository
         parent::__construct($registry, TradeLifecycleEvent::class);
     }
 
+    public function save(TradeLifecycleEvent $event): void
+    {
+        $this->getEntityManager()->persist($event);
+        $this->getEntityManager()->flush();
+    }
+
     /**
      * @param array<string, mixed> $criteria
      * @return TradeLifecycleEvent[]
