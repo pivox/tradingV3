@@ -228,6 +228,23 @@ final class FillQuantityAggregationServiceTest extends TestCase
         self::assertFalse($result->netPnlCertificationAllowed());
     }
 
+    public function testFillEndpointsUseFullSubsecondChronologyBeforeFillId(): void
+    {
+        $service = new FillQuantityAggregationService();
+
+        $result = $service->aggregateEntries([
+            self::fill('a-entry-late', 'entry', '2026-06-25T10:00:00.900000+00:00', 101.0, 0.5),
+            self::fill('z-entry-early', 'entry', '2026-06-25T10:00:00.100000+00:00', 100.0, 0.5),
+            self::fill('a-exit-late', 'exit', '2026-06-25T10:05:00.900000+00:00', 103.0, 0.5),
+            self::fill('z-exit-early', 'exit', '2026-06-25T10:05:00.100000+00:00', 102.0, 0.5),
+        ], internalTradeId: 'shared-trade-id', exchange: 'fake', marketType: 'paper');
+
+        self::assertEquals(new \DateTimeImmutable('2026-06-25T10:00:00.100000+00:00'), $result->entryFirstFillAt);
+        self::assertEquals(new \DateTimeImmutable('2026-06-25T10:00:00.900000+00:00'), $result->entryLastFillAt);
+        self::assertEquals(new \DateTimeImmutable('2026-06-25T10:05:00.100000+00:00'), $result->exitFirstFillAt);
+        self::assertEquals(new \DateTimeImmutable('2026-06-25T10:05:00.900000+00:00'), $result->exitLastFillAt);
+    }
+
     /**
      * @param list<string> $qualityFlags
      */

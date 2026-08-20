@@ -295,7 +295,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
 
                 return new CanonicalTradeFillWindow(
                     entryFirstFillAt: new \DateTimeImmutable('2026-06-23 10:01:00 UTC'),
-                    exitLastFillAt: new \DateTimeImmutable('2026-06-23 10:04:00 UTC'),
+                    exitLastFillAt: new \DateTimeImmutable('2026-06-23 10:04:31 UTC'),
                     entryVwap: 101.0,
                 );
             }
@@ -345,15 +345,15 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
 
         self::assertNotNull($closed);
         $extra = $closed->getExtra();
-        self::assertSame(180, $extra['holding_time_sec'] ?? null);
+        self::assertSame(211, $extra['holding_time_sec'] ?? null);
         self::assertSame('fill_cost_ledger_v1', $extra['holding_time_source'] ?? null);
         self::assertSame('2026-06-23T10:01:00.000000+00:00', $extra['mfe_mae_window_start'] ?? null);
-        self::assertSame('2026-06-23T10:04:00.000000+00:00', $extra['mfe_mae_window_end'] ?? null);
+        self::assertSame('2026-06-23T10:04:31.000000+00:00', $extra['mfe_mae_window_end'] ?? null);
         self::assertSame('fill_cost_ledger_v1', $extra['mfe_mae_window_source'] ?? null);
         self::assertSame('fill_cost_ledger_v1', $extra['mfe_mae_entry_price_source'] ?? null);
         self::assertEqualsWithDelta((111.0 - 101.0) / 101.0, $extra['mfe_pct'] ?? 0.0, 1e-12);
         self::assertEqualsWithDelta((101.0 - 98.0) / 101.0, $extra['mae_pct'] ?? 0.0, 1e-12);
-        self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame('partial', $extra['mfe_mae_data_quality'] ?? null);
     }
 
     public function testClosedPositionPreservesSubsecondLedgerFillWindowEvidence(): void
@@ -511,7 +511,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame('2026-06-23T10:00:00+00:00', $extra['mae_at'] ?? null);
     }
 
-    public function testClosedPositionKeepsMfeMaePartialWhenWindowIsNotMinuteAligned(): void
+    public function testClosedPositionRejectsCandlesThatExtendBeyondNonAlignedWindow(): void
     {
         $listener = new TradeLifecycleLoggerListener(
             new TradeLifecycleLogger($this->em, $this->fixedClock()),
@@ -548,8 +548,8 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
 
         self::assertNotNull($closed);
         $extra = $closed->getExtra();
-        self::assertSame('partial', $extra['mfe_mae_data_quality'] ?? null);
-        self::assertSame(1, $extra['mfe_mae_sample_count'] ?? null);
+        self::assertSame('missing_price_data', $extra['mfe_mae_data_quality'] ?? null);
+        self::assertSame(0, $extra['mfe_mae_sample_count'] ?? null);
         self::assertSame(1, $extra['mfe_mae_expected_sample_count'] ?? null);
         self::assertSame('2026-06-23T10:00:30.000000+00:00', $extra['mfe_mae_window_start'] ?? null);
         self::assertSame('2026-06-23T10:01:29.000000+00:00', $extra['mfe_mae_window_end'] ?? null);

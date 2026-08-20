@@ -286,7 +286,14 @@ final readonly class FillQuantityAggregationService implements FillQuantityAggre
 
     private static function sortByOccurrence(FillCostLedgerEntry $left, FillCostLedgerEntry $right): int
     {
-        return [$left->getOccurredAt()->getTimestamp(), $left->getFillId()]
-            <=> [$right->getOccurredAt()->getTimestamp(), $right->getFillId()];
+        return [
+            $left->getOccurredAt()->getTimestamp(),
+            (int) $left->getOccurredAt()->format('u'),
+            $left->getFillId(),
+        ] <=> [
+            $right->getOccurredAt()->getTimestamp(),
+            (int) $right->getOccurredAt()->format('u'),
+            $right->getFillId(),
+        ];
     }
 }

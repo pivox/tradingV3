@@ -250,7 +250,11 @@ final class TradeLifecycleLoggerListener
                         continue;
                     }
                     $openedAt = $this->klineOpenedAt($kline);
-                    if ($openedAt === null || $openedAt < $analysisWindowStart || $openedAt >= $analysisWindowEnd) {
+                    if (
+                        $openedAt === null
+                        || $openedAt < $analysisWindowStart
+                        || $openedAt->modify('+1 minute') > $analysisWindowEnd
+                    ) {
                         continue;
                     }
                     ++$mfeMaeSampleCount;

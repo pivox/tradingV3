@@ -262,6 +262,11 @@ le VWAP des fills d'entrée. Le lifecycle persiste explicitement
 visible mais devient `partial`; ses valeurs d'excursion ne sont pas projetées comme
 preuves fortes.
 
+Avec des klines 1m, seules les bougies entièrement contenues entre le premier fill
+d'entrée et le dernier fill de sortie contribuent aux extrema. La bougie partielle
+qui contient le fill de sortie est exclue afin qu'aucun prix post-clôture n'entre
+dans MFE/MAE.
+
 `canonical_holding_time_sec` suit la même règle et vaut exactement
 `exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
 fermée, y compris la précision microseconde. Les bornes persistées utilisent le
