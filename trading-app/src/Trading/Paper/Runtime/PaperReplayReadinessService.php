@@ -8,11 +8,17 @@ use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Configuration\PaperPrivateConfigurationReader;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
+use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
 final readonly class PaperReplayReadinessService
 {
@@ -37,15 +43,19 @@ final readonly class PaperReplayReadinessService
         private PaperReplayReader $reader,
         private PaperExecutionStoreInterface $store,
         private PaperReplayCheckpointResolver $checkpoints,
+        private EffectiveTradingConfigResolver $effectiveConfigResolver,
     ) {
     }
 
     public function prepare(
         #[\SensitiveParameter] string $datasetPath,
         #[\SensitiveParameter] string $configurationPath,
-        string $profile,
+        PaperReplayStrategySelection|string $strategy,
         string $runId,
     ): PaperReplayPreparation {
+        if (is_string($strategy)) {
+            $strategy = PaperReplayStrategySelection::legacy($strategy);
+        }
         $this->assertAbsolute($datasetPath);
         $configuration = $this->configurationReader->read($configurationPath);
         $snapshot = $this->snapshots->create($configuration);
@@ -63,6 +73,52 @@ final readonly class PaperReplayReadinessService
         }
         $this->clock->assertCanAdvanceTo($manifest->startExchangeTimestamp);
 
+        if ($strategy->isModern()) {
+            $identity = $strategy->modernIdentity();
+            try {
+                $request = new EffectiveTradingConfigRequest(
+                    $identity['mode_id'],
+                    $identity['mode_version'],
+                    $identity['setup_id'],
+                    $identity['setup_version'],
+                    $manifest->venue->value,
+                    $manifest->network->value,
+                    $identity['side'],
+                    ShadowExecutionCapability::Paper,
+                );
+            } catch (TradingConfigException $failure) {
+                throw new \InvalidArgumentException($this->identityFailureCode($failure), 0, $failure);
+            }
+            try {
+                $effective = $this->effectiveConfigResolver->resolve($request);
+            } catch (TradingConfigException $failure) {
+                throw new \RuntimeException('paper_modern_effective_config_unavailable', 0, $failure);
+            }
+            $modernIdentity = PaperModernStrategyIdentity::fromResolvedSnapshot(
+                $manifest->network,
+                $manifest->venue,
+                $effective,
+            );
+            $cell = PaperExecutionCell::createModern(
+                $manifest->network,
+                $manifest->venue,
+                $snapshot->id,
+                $modernIdentity,
+                $runId,
+            );
+
+            return new PaperReplayPreparation(
+                $manifest,
+                $snapshot,
+                PaperProfileEligibility::REFERENCE_ONLY,
+                $cell,
+                $this->checkpoints->consumerId($cell),
+                null,
+                'paper_modern_strategy_bridge_unavailable',
+            );
+        }
+
+        $profile = $strategy->legacyProfile();
         $eligibility = $this->profiles->require($profile);
         $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
         $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
@@ -108,6 +164,20 @@ final readonly class PaperReplayReadinessService
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
             throw new \InvalidArgumentException('paper_execution_path_must_be_absolute');
         }
+    }
+
+    private function identityFailureCode(TradingConfigException $failure): string
+    {
+        $message = $failure->getMessage();
+
+        return match (true) {
+            str_starts_with($message, 'Unknown modern mode id ') => 'paper_modern_mode_id_invalid',
+            str_starts_with($message, 'Unknown canonical setup id ') => 'paper_modern_setup_id_invalid',
+            str_starts_with($message, 'mode_version must ') => 'paper_modern_mode_version_invalid',
+            str_starts_with($message, 'setup_version must ') => 'paper_modern_setup_version_invalid',
+            str_starts_with($message, 'side must ') => 'paper_modern_side_invalid',
+            default => 'paper_modern_strategy_identity_invalid',
+        };
     }
 
     private function throwNormalizedStateFailure(\Throwable $failure): never

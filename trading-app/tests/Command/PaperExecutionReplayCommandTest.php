@@ -23,6 +23,7 @@ use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Runtime\PaperReplayCheckpointResolver;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -154,6 +155,44 @@ final class PaperExecutionReplayCommandTest extends TestCase
         }
     }
 
+    public function testModernReplayStopsBeforeAnyPaperStateRegistration(): void
+    {
+        $root = (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()) . '/paper_command_modern_' . bin2hex(random_bytes(5));
+        $dataset = $root . '/dataset';
+        try {
+            mkdir($dataset, 0700, true);
+            foreach (['manifest.json', 'events.ndjson'] as $file) {
+                copy(__DIR__ . '/../Fixtures/PaperExecution/okx-mainnet-cell/' . $file, $dataset . '/' . $file);
+                chmod($dataset . '/' . $file, 0600);
+            }
+            $configuration = $root . '/configuration.json';
+            file_put_contents($configuration, '{"strategy":{"mode":"day_trading"}}');
+            chmod($configuration, 0600);
+            $store = new InMemoryPaperExecutionStore();
+            $verifier = new PaperDatasetVerifier();
+            $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), new PaperReplayClock());
+            $tester = new CommandTester($this->command($verifier, $reader, $store));
+
+            self::assertSame(Command::INVALID, $tester->execute([
+                '--dataset' => $dataset,
+                '--configuration' => $configuration,
+                '--mode-id' => 'day_trading',
+                '--mode-version' => '1.1.0',
+                '--setup-id' => 'day_trading.trend_continuation.long',
+                '--setup-version' => '1.1.0',
+                '--side' => 'long',
+                '--run-id' => 'paper-modern-run-001',
+            ]));
+            self::assertStringContainsString('paper_modern_strategy_bridge_unavailable', $tester->getDisplay());
+            self::assertSame(0, $store->registrationWrites);
+        } finally {
+            foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
+            @rmdir($dataset);
+            @unlink($root . '/configuration.json');
+            @rmdir($root);
+        }
+    }
+
     private function event(int $second): PaperMarketEvent
     {
         $timestamp = new \DateTimeImmutable(sprintf('2026-08-01T10:00:%02dZ', $second));
@@ -193,6 +232,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 $reader,
                 $store,
                 new PaperReplayCheckpointResolver($store),
+                new EffectiveTradingConfigResolver(),
             ),
             $reader,
             $store,

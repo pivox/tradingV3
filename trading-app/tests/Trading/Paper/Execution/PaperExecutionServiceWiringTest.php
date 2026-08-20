@@ -20,6 +20,7 @@ use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -53,6 +54,8 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         self::assertSame($readerClock, $readinessClock, 'Readiness and replay must validate the same controlled clock.');
         $readinessReader = (new \ReflectionProperty(PaperReplayReadinessService::class, 'reader'))->getValue($readiness);
         self::assertSame($reader, $readinessReader, 'Readiness must enforce the exact replay reader event limit.');
+        $effectiveConfigResolver = (new \ReflectionProperty(PaperReplayReadinessService::class, 'effectiveConfigResolver'))->getValue($readiness);
+        self::assertInstanceOf(EffectiveTradingConfigResolver::class, $effectiveConfigResolver, 'Read-only readiness must not use the persistent Effective Config resolver.');
         $resolver = $container->get(PaperMtfPreparationResolver::class);
         self::assertSame(0, (new \ReflectionClass($resolver))->getConstructor()?->getNumberOfParameters() ?? 0, 'Paper preparation must have no ambient account, HTTP, lock, or exchange dependency.');
         $strategy = $container->get(\App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge::class);
