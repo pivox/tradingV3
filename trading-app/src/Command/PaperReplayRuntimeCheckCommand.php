@@ -6,6 +6,7 @@ namespace App\Command;
 
 use App\Trading\Paper\Runtime\PaperReplayPreparation;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
+use App\Trading\Paper\Runtime\PaperReplayStrategySelection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -25,7 +26,12 @@ final class PaperReplayRuntimeCheckCommand extends Command
         $this
             ->addOption('dataset', null, InputOption::VALUE_REQUIRED, 'Absolute private dataset directory')
             ->addOption('configuration', null, InputOption::VALUE_REQUIRED, 'Absolute private JSON configuration snapshot')
-            ->addOption('profile', null, InputOption::VALUE_REQUIRED, 'Exact strategy profile')
+            ->addOption('profile', null, InputOption::VALUE_REQUIRED, 'Exact legacy strategy profile')
+            ->addOption('mode-id', null, InputOption::VALUE_REQUIRED, 'Exact modern mode ID')
+            ->addOption('mode-version', null, InputOption::VALUE_REQUIRED, 'Exact modern mode version')
+            ->addOption('setup-id', null, InputOption::VALUE_REQUIRED, 'Exact modern setup ID')
+            ->addOption('setup-version', null, InputOption::VALUE_REQUIRED, 'Exact modern setup version')
+            ->addOption('side', null, InputOption::VALUE_REQUIRED, 'Exact modern side')
             ->addOption('run-id', null, InputOption::VALUE_REQUIRED, 'Explicit Paper run ID');
     }
 
@@ -35,11 +41,11 @@ final class PaperReplayRuntimeCheckCommand extends Command
             $preparation = $this->readiness->prepare(
                 $this->requiredOption($input, 'dataset'),
                 $this->requiredOption($input, 'configuration'),
-                $this->requiredOption($input, 'profile'),
+                $this->strategySelection($input),
                 $this->requiredOption($input, 'run-id'),
             );
             $payload = $preparation->readinessPayload();
-            $status = Command::SUCCESS;
+            $status = $payload['ready'] === true ? Command::SUCCESS : Command::INVALID;
         } catch (\InvalidArgumentException|\LogicException|\RuntimeException $exception) {
             $payload = [
                 'schema_version' => PaperReplayPreparation::READINESS_SCHEMA,
@@ -63,5 +69,24 @@ final class PaperReplayRuntimeCheckCommand extends Command
         }
 
         return trim($value);
+    }
+
+    private function strategySelection(InputInterface $input): PaperReplayStrategySelection
+    {
+        return PaperReplayStrategySelection::fromOptions(
+            $this->optionalOption($input, 'profile'),
+            $this->optionalOption($input, 'mode-id'),
+            $this->optionalOption($input, 'mode-version'),
+            $this->optionalOption($input, 'setup-id'),
+            $this->optionalOption($input, 'setup-version'),
+            $this->optionalOption($input, 'side'),
+        );
+    }
+
+    private function optionalOption(InputInterface $input, string $name): ?string
+    {
+        $value = $input->getOption($name);
+
+        return is_string($value) ? $value : null;
     }
 }

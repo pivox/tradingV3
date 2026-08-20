@@ -24,6 +24,7 @@ use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Runtime\PaperReplayCheckpointResolver;
+use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -88,6 +89,80 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertTrue($payload['clock']['controlled']);
         self::assertStringNotContainsString($this->root, $tester->getDisplay());
         self::assertSame(0, $store->registrationWrites);
+    }
+
+    public function testModernIdentityIsResolvedExactlyButRemainsBlockedWithoutCanonicalBridge(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+        $options = $this->options();
+        unset($options['--profile']);
+        $options += [
+            '--mode-id' => 'day_trading',
+            '--mode-version' => '1.1.0',
+            '--setup-id' => 'day_trading.trend_continuation.long',
+            '--setup-version' => '1.1.0',
+            '--side' => 'long',
+        ];
+
+        self::assertSame(Command::INVALID, $tester->execute($options));
+        $payload = json_decode(trim($tester->getDisplay()), true, 32, JSON_THROW_ON_ERROR);
+
+        self::assertFalse($payload['ready']);
+        self::assertFalse($payload['runtime_ready']);
+        self::assertFalse($payload['baseline_eligible']);
+        self::assertSame('paper_modern_strategy_bridge_unavailable', $payload['blocker']);
+        self::assertSame([
+            'schema_version' => 2,
+            'mode_id' => 'day_trading',
+            'mode_version' => '1.1.0',
+            'setup_id' => 'day_trading.trend_continuation.long',
+            'setup_version' => '1.1.0',
+            'side' => 'long',
+            'config_hash' => $payload['strategy']['config_hash'],
+            'condition_catalog_hash' => $payload['strategy']['condition_catalog_hash'],
+        ], $payload['strategy']);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $payload['strategy']['config_hash']);
+        self::assertMatchesRegularExpression('/\Asha256:[a-f0-9]{64}\z/D', $payload['strategy']['condition_catalog_hash']);
+        self::assertSame('mainnet', $payload['source']['network']);
+        self::assertSame('okx', $payload['source']['venue']);
+        self::assertSame(0, $store->registrationWrites);
+        self::assertStringNotContainsString($this->root, $tester->getDisplay());
+    }
+
+    public function testProfileCannotBeMixedWithModernOptions(): void
+    {
+        $tester = new CommandTester($this->command($this->acceptingCoordinator()));
+        $options = $this->options() + [
+            '--mode-id' => 'day_trading',
+            '--mode-version' => '1.1.0',
+            '--setup-id' => 'day_trading.trend_continuation.long',
+            '--setup-version' => '1.1.0',
+            '--side' => 'long',
+        ];
+
+        self::assertSame(Command::INVALID, $tester->execute($options));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+        self::assertSame('paper_strategy_selection_ambiguous', $payload['blocker']);
+    }
+
+    public function testLegacyAliasIsNeverAcceptedAsAModernMode(): void
+    {
+        $tester = new CommandTester($this->command($this->acceptingCoordinator()));
+        $options = $this->options();
+        unset($options['--profile']);
+        $options += [
+            '--mode-id' => 'regular',
+            '--mode-version' => '1.1.0',
+            '--setup-id' => 'day_trading.trend_continuation.long',
+            '--setup-version' => '1.1.0',
+            '--side' => 'long',
+        ];
+
+        self::assertSame(Command::INVALID, $tester->execute($options));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('Unknown modern mode id "regular"', $payload['blocker']);
+        self::assertArrayNotHasKey('strategy', $payload);
     }
 
     public function testFailureIsStableJsonAndDoesNotLeakPaths(): void
@@ -279,6 +354,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
             $reader,
             $store,
             new PaperReplayCheckpointResolver($store),
+            new EffectiveTradingConfigResolver(),
         ));
     }
 

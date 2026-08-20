@@ -21,7 +21,18 @@ final readonly class PaperReplayPreparation
         public PaperExecutionCell $cell,
         public string $consumerId,
         public ?PaperReplayCheckpoint $checkpoint,
+        public ?string $blocker = null,
     ) {
+    }
+
+    public function assertRunnable(): void
+    {
+        if ($this->blocker !== null) {
+            throw new \LogicException($this->blocker);
+        }
+        if ($this->cell->isModern()) {
+            throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+        }
     }
 
     /** @return array<string, mixed> */
@@ -31,10 +42,11 @@ final readonly class PaperReplayPreparation
             throw new \LogicException('paper_execution_dataset_checksum_missing');
         }
 
-        return [
+        $ready = $this->blocker === null;
+        $payload = [
             'schema_version' => self::READINESS_SCHEMA,
-            'ready' => true,
-            'runtime_ready' => true,
+            'ready' => $ready,
+            'runtime_ready' => $ready,
             'baseline_eligible' => $this->eligibility === PaperProfileEligibility::BASELINE_ELIGIBLE,
             'profile_eligibility' => $this->eligibility->value,
             'profile' => $this->cell->strategyProfile,
@@ -64,5 +76,23 @@ final readonly class PaperReplayPreparation
                 'demo_testnet_write_enabled' => false,
             ],
         ];
+        if ($this->cell->modernIdentity !== null) {
+            $identity = $this->cell->modernIdentity;
+            $payload['strategy'] = [
+                'schema_version' => 2,
+                'mode_id' => $identity->modeId,
+                'mode_version' => $identity->modeVersion,
+                'setup_id' => $identity->setupId,
+                'setup_version' => $identity->setupVersion,
+                'side' => $identity->side,
+                'config_hash' => $identity->configHash,
+                'condition_catalog_hash' => $identity->conditionCatalogHash,
+            ];
+        }
+        if ($this->blocker !== null) {
+            $payload['blocker'] = $this->blocker;
+        }
+
+        return $payload;
     }
 }

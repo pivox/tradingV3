@@ -17,6 +17,12 @@ aucun alias ni backfill ne transforme leur provenance. Une cellule moderne peut
 les effets canoniques n'est pas livré. Elle ne peut donc pas encore devenir
 `baseline_eligible`.
 
+Les deux commandes Paper acceptent maintenant cette identité moderne uniquement
+sous forme complète et exclusive. Le runtime-check résout les six couches de
+configuration effective avec la venue et le réseau du dataset, publie les hashes
+canoniques redacted, puis reste `ready=false` sur le blocker ci-dessus. La
+commande de replay réutilise le même contrat et s'arrête avant toute écriture.
+
 ### Mise à jour du 20 août 2026 — readiness Paper replay
 
 Le P0 « source Paper » est levé. Le runtime possède des datasets publics OKX et

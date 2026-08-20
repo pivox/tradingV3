@@ -95,6 +95,31 @@ PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:replay \
 
 The replay command uses the same preparation contract before any state write.
 
+### Modern operator identity
+
+To inspect a modern cell, omit `--profile` and provide the complete canonical
+identity:
+
+```bash
+PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
+  --dataset=/absolute/private/dataset \
+  --configuration=/absolute/private/configuration.json \
+  --mode-id=day_trading \
+  --mode-version=1.1.0 \
+  --setup-id=day_trading.trend_continuation.long \
+  --setup-version=1.1.0 \
+  --side=long \
+  --run-id=run-20260820-modern-001
+```
+
+The dataset fixes the public venue and network environment; the command fixes
+the capability to `paper`. Mixing `--profile` with modern options, omitting one
+modern field or using a legacy alias fails closed. The check resolves the exact
+Effective Config and emits only its canonical hashes and identity. It currently
+returns `ready=false` with `paper_modern_strategy_bridge_unavailable`. Supplying
+the same options to `app:paper-market:replay` stops before any Paper snapshot,
+cell or dataset binding is written.
+
 ## Database and rollback rules
 
 The only allowed Paper database is `trading_paper`. Tests may use names matching
