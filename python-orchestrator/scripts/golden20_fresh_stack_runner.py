@@ -82,7 +82,11 @@ def _wait_for_http(
                         return
                     last_error = f"HTTP 200 without {expected_json_key}"
                 elif response.status_code >= 500:
-                    raise RuntimeError(f"fresh stack returned HTTP {response.status_code} at {url}")
+                    body_excerpt = response.text[:4000].replace(str(REPOSITORY_ROOT), "<repository>")
+                    raise RuntimeError(
+                        f"fresh stack returned HTTP {response.status_code} at {url}; "
+                        f"body_excerpt={body_excerpt}"
+                    )
                 else:
                     last_error = f"HTTP {response.status_code}"
             except (httpx.HTTPError, ValueError) as exc:
