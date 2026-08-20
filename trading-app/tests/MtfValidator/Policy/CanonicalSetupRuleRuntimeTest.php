@@ -9,10 +9,19 @@ use App\Indicator\Condition\ConditionResult;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntimeResult;
 use App\Tests\Trading\Lineage\CanonicalSnapshotFixture;
+use App\Tests\Trading\Lineage\CanonicalSnapshotMetadataFixture;
+use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicBook;
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicTrade;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\Microstructure\CanonicalMicrostructureEngine;
+use App\TradingCore\Microstructure\CanonicalMicrostructurePolicy;
+use App\TradingCore\Microstructure\CanonicalMicrostructureRuntimeInputResolver;
+use App\TradingCore\Microstructure\CanonicalMicrostructureSnapshot;
+use App\TradingCore\Microstructure\CanonicalMicrostructureSnapshotProviderInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -226,6 +235,37 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
         self::assertStringNotContainsString('fallback', json_encode($result->trace, JSON_THROW_ON_ERROR));
     }
 
+    public function testBlockedMicroContractCarriesAuthenticatedRuntimeInputWithoutChangingPublishedBlockers(): void
+    {
+        $snapshot = $this->microstructureSnapshot();
+        $provider = new class($snapshot) implements CanonicalMicrostructureSnapshotProviderInterface {
+            public function __construct(private readonly CanonicalMicrostructureSnapshot $snapshot) {}
+            public function snapshotFor(LineageContext $identity, \DateTimeImmutable $evaluatedAt): ?CanonicalMicrostructureSnapshot
+            {
+                return $this->snapshot;
+            }
+        };
+        $runtime = new CanonicalSetupRuleRuntime(
+            $this->passingConditions(),
+            microstructureInputs: new CanonicalMicrostructureRuntimeInputResolver($provider),
+        );
+
+        $result = $runtime->evaluate(
+            $this->microLineage(),
+            [
+                '5m' => self::indicatorInput('5m', '2026-08-14T11:55:00Z'),
+                '1m' => self::indicatorInput('1m', '2026-08-14T11:59:00Z'),
+            ],
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000Z'),
+        );
+
+        self::assertSame('compiled_plan_blocked', $result->reasonCode);
+        self::assertSame('ready', $result->trace['microstructure_input']['status']);
+        self::assertSame($snapshot->inputHash, $result->trace['microstructure_input']['input_hash']);
+        self::assertSame('okx', $result->trace['microstructure_input']['expected_market_identity']['market_data_venue']);
+        self::assertContains('blocked_condition:spread_bps_lte', $result->trace['blockers']);
+    }
+
     public function testLegacyAndCatalogMismatchRejectBeforeEvaluation(): void
     {
         $runtime = new CanonicalSetupRuleRuntime([]);
@@ -315,6 +355,71 @@ final class CanonicalSetupRuleRuntimeTest extends TestCase
             'effective_config_reference' => 'effective-config:scalping-shadow',
             'effective_config_snapshot' => $snapshot->toArray(),
         ]);
+    }
+
+    private function microLineage(): LineageContext
+    {
+        $catalogHash = 'sha256:' . (new \App\TradingCore\Rules\Catalog\ConditionCatalogLoader())->loadVersion('1.0.0')->stableHash();
+        $config = [
+            'schema_version' => 'effective-trading-config.v2',
+            'mode' => ['mode_id' => 'micro_scalping', 'mode_version' => '1.0.0'],
+            'setup' => ['setup_id' => 'micro_scalping.momentum_ofi.long', 'setup_version' => '1.0.0'],
+            'exchange' => ['id' => 'okx'],
+            'environment' => ['id' => 'mainnet'],
+        ];
+        $configHash = CanonicalEffectiveConfigSnapshot::calculateConfigHash($config, $catalogHash);
+        $effective = CanonicalSnapshotMetadataFixture::enrich([
+            'request' => [
+                'mode_id' => 'micro_scalping', 'mode_version' => '1.0.0',
+                'setup_id' => 'micro_scalping.momentum_ofi.long', 'setup_version' => '1.0.0',
+                'exchange' => 'okx', 'environment' => 'mainnet', 'side' => 'long',
+            ],
+            'config' => $config,
+            'config_hash' => $configHash,
+            'condition_catalog_hash' => $catalogHash,
+            'executable' => false,
+            'blockers' => ['micro_scalping_contract_blocked'],
+        ]);
+
+        return LineageContext::fromOrchestratorPayload([
+            'origin' => 'orchestrator',
+            'orchestration_run_id' => 'run-micro-runtime',
+            'orchestration_set_id' => 'set-micro-runtime',
+            'mode_id' => 'micro_scalping',
+            'mode_version' => '1.0.0',
+            'setup_id' => 'micro_scalping.momentum_ofi.long',
+            'setup_version' => '1.0.0',
+            'config_hash' => $configHash,
+            'condition_catalog_hash' => $catalogHash,
+            'side' => 'LONG',
+            'exchange' => 'okx',
+            'environment' => 'mainnet',
+            'market_type' => 'perpetual',
+            'symbol' => 'BTCUSDT',
+            'dry_run' => true,
+            'effective_config_reference' => 'effective-config:micro-runtime',
+            'effective_config_snapshot' => $effective,
+        ]);
+    }
+
+    private function microstructureSnapshot(): CanonicalMicrostructureSnapshot
+    {
+        $checksum = 'sha256:' . str_repeat('f', 64);
+
+        return (new CanonicalMicrostructureEngine())->build(
+            new CanonicalMicrostructurePolicy(60, 2, 5, 30, 3),
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000Z'),
+            [new NormalizedBacktestPublicBook(
+                str_repeat('a', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT',
+                '2026-08-14T12:00:59.000000Z', '2026-08-14T12:00:59.000000Z',
+                '99', '10', '101', '12', 'contracts', '2', '3', 'ws_books',
+            )],
+            [
+                new NormalizedBacktestPublicTrade(str_repeat('1', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT', '1', '2026-08-14T12:00:10.000000Z', '2026-08-14T12:00:10.000000Z', 'buy', '100', '3', 'contracts'),
+                new NormalizedBacktestPublicTrade(str_repeat('2', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT', '2', '2026-08-14T12:00:30.000000Z', '2026-08-14T12:00:30.000000Z', 'sell', '100', '1', 'contracts'),
+                new NormalizedBacktestPublicTrade(str_repeat('3', 64), $checksum, 'mainnet', 'okx', 'BTCUSDT', '3', '2026-08-14T12:00:55.000000Z', '2026-08-14T12:00:55.000000Z', 'buy', '100', '2', 'contracts'),
+            ],
+        );
     }
 
     /** @return array<string, array<string, mixed>> */
