@@ -168,6 +168,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                 "APP_ENV": "test",
                 "APP_DEBUG": "0",
                 "APP_SECRET": "golden20-local-fake-only",
+                "DEFAULT_URI": symfony_url,
                 "LOCK_DSN": "flock",
                 "PAPER_FAKE_STATE_ROOT": str(fake_state_root),
             }
@@ -191,6 +192,8 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
             symfony_process = subprocess.Popen(
                 [
                     php_binary,
+                    "-d",
+                    "variables_order=EGPCS",
                     "-S",
                     f"127.0.0.1:{symfony_port}",
                     "-t",
