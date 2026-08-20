@@ -26,11 +26,13 @@ final class FillTimingMigrationTest extends TestCase
             $migration->getSql(),
         ));
 
-        self::assertStringContainsString('old.exit_last_fill_at - old.entry_first_fill_at', $sql);
+        self::assertStringContainsString('legacy.exit_last_fill_at - legacy.entry_first_fill_at', $sql);
         self::assertStringContainsString("'fill_cost_ledger_v1'", $sql);
         self::assertStringContainsString('ledger_fill_chronology_invalid', $sql);
-        self::assertStringContainsString("'net_pnl_usdt', CASE WHEN timing.chronology_valid IS FALSE THEN NULL", $sql);
-        self::assertStringContainsString("'mfe_mae_window_source'", $sql);
+        self::assertStringContainsString("timing.chronology_valid IS DISTINCT FROM FALSE", $sql);
+        self::assertStringContainsString('AS canonical_holding_time_sec', $sql);
+        self::assertStringContainsString('AS mfe_mae_window_source', $sql);
+        self::assertStringNotContainsString('jsonb_populate_record', $sql);
         self::assertDoesNotMatchRegularExpression('/\\?(?:[|&])?/', $sql);
     }
 }

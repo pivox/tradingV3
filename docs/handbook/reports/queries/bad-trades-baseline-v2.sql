@@ -99,8 +99,8 @@ WITH scoped AS (
       lineage_classification = 'canonical'
       AND analysis_status = 'matched_closed'
       AND close_match_status = 'matched'
-      AND cost_completeness = 'complete'
-      AND pnl_quality_flags = '[]'::jsonb
+      AND canonical_cost_completeness = 'complete'
+      AND canonical_pnl_quality_flags = '[]'::jsonb
       AND position_fully_closed IS TRUE
       AND canonical_net_pnl_usdt IS NOT NULL
       AND canonical_realized_net_pnl_r IS NOT NULL
@@ -162,8 +162,8 @@ SELECT
   analysis_status,
   close_match_status,
   close_matched_by,
-  cost_completeness,
-  pnl_quality_flags,
+  canonical_cost_completeness AS cost_completeness,
+  canonical_pnl_quality_flags AS pnl_quality_flags,
   position_fully_closed,
   canonical_net_pnl_usdt AS net_pnl_usdt,
   gross_realized_pnl_usdt,
@@ -204,8 +204,8 @@ SELECT
   mae_price,
   mfe_at,
   mae_at,
-  mfe_mae_data_quality,
-  holding_time_sec,
+  canonical_mfe_mae_data_quality AS mfe_mae_data_quality,
+  canonical_holding_time_sec AS holding_time_sec,
   entry_rsi,
   entry_atr,
   atr_pct_entry,

@@ -262,11 +262,16 @@ le VWAP des fills d'entrée. Le lifecycle persiste explicitement
 visible mais devient `partial`; ses valeurs d'excursion ne sont pas projetées comme
 preuves fortes.
 
-`holding_time_sec` suit la même règle et vaut exactement
+`canonical_holding_time_sec` suit la même règle et vaut exactement
 `exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
 fermée. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
 premier fill d'entrée ajoute `ledger_fill_chronology_invalid`, masque le PnL net
 canonique et interdit donc la certification.
+
+Les consommateurs certifiants utilisent également `canonical_cost_completeness`,
+`canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality`. Les colonnes sans
+préfixe restent exposées uniquement pour la compatibilité et l'analyse de divergence ;
+elles ne constituent pas une autorité de certification temporelle.
 
 Aucun backfill heuristique n'est autorise. Les anciennes lignes restent
 visibles pour l'audit, mais leurs montants enregistres ou estimes ne deviennent

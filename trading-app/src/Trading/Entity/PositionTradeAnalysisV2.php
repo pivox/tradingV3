@@ -259,10 +259,10 @@ class PositionTradeAnalysisV2
     #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'mae_r')]
     private ?float $maeR = null;
 
-    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'mfe_mae_data_quality')]
+    #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'canonical_mfe_mae_data_quality')]
     private ?string $mfeMaeDataQuality = null;
 
-    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'holding_time_sec')]
+    #[ORM\Column(type: Types::FLOAT, nullable: true, name: 'canonical_holding_time_sec')]
     private ?float $holdingTimeSec = null;
 
     #[ORM\Column(type: Types::STRING, length: 32, nullable: true, name: 'holding_time_source')]
@@ -326,7 +326,7 @@ class PositionTradeAnalysisV2
     private ?string $pnlSource = null;
 
     /** @var list<string>|null */
-    #[ORM\Column(type: Types::JSON, nullable: true, name: 'pnl_quality_flags')]
+    #[ORM\Column(type: Types::JSON, nullable: true, name: 'canonical_pnl_quality_flags')]
     private ?array $pnlQualityFlags = null;
 
     /** ESTIMATION best-effort, jamais certifiée (cf. {@see getCostCompleteness()}). */
@@ -334,7 +334,7 @@ class PositionTradeAnalysisV2
     private ?float $estimatedNetPnlUsdt = null;
 
     /** `not_applicable` | `unknown` | `partial` | `complete`. */
-    #[ORM\Column(type: Types::STRING, length: 16, name: 'cost_completeness')]
+    #[ORM\Column(type: Types::STRING, length: 16, name: 'canonical_cost_completeness')]
     private string $costCompleteness = 'unknown';
 
     public function getEntryEventId(): int

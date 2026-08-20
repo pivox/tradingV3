@@ -758,8 +758,8 @@ final class PositionTradeAnalysisViewTest extends TestCase
     public function testFillTimingMigrationUsesExactLedgerWindowAndRejectsInvalidChronology(): void
     {
         foreach ([
-            [2980, 2981, 'BTCUSDT', 'itd-fill-window-exact', 'position-fill-window-exact', '2026-08-20 10:00:01+00', '2026-08-20 10:04:31+00', true],
-            [2982, 2983, 'ETHUSDT', 'itd-fill-window-invalid', 'position-fill-window-invalid', '2026-08-20 11:05:00+00', '2026-08-20 11:04:00+00', false],
+            [2980, 2981, 'BTCUSDT', 'itd-fill-window-exact', 'position-fill-window-exact', '2026-08-20 10:00:01+00:00', '2026-08-20 10:04:31+00:00', true],
+            [2982, 2983, 'ETHUSDT', 'itd-fill-window-invalid', 'position-fill-window-invalid', '2026-08-20 11:05:00+00:00', '2026-08-20 11:04:00+00:00', false],
         ] as [$entryId, $closeId, $symbol, $internalTradeId, $positionId, $entryFillAt, $exitFillAt, $exact]) {
             $this->entry($symbol, 'run-fill-window', 'fill-window', 'scalper', 'fake', 'paper', [
                 'internal_trade_id' => $internalTradeId,
@@ -806,19 +806,19 @@ final class PositionTradeAnalysisViewTest extends TestCase
 
         try {
             $exact = $this->analysisRow(2980);
-            self::assertEqualsWithDelta(270.0, (float) $exact['holding_time_sec'], 1e-9);
+            self::assertEqualsWithDelta(270.0, (float) $exact['canonical_holding_time_sec'], 1e-9);
             self::assertSame('fill_cost_ledger_v1', $exact['holding_time_source']);
             self::assertSame('fill_cost_ledger_v1', $exact['mfe_mae_window_source']);
             self::assertSame('fill_cost_ledger_v1', $exact['mfe_mae_entry_price_source']);
-            self::assertSame('complete', $exact['mfe_mae_data_quality']);
+            self::assertSame('complete', $exact['canonical_mfe_mae_data_quality']);
             self::assertEqualsWithDelta(0.1, (float) $exact['mfe_pct'], 1e-9);
 
             $invalid = $this->analysisRow(2982);
-            self::assertNull($invalid['holding_time_sec']);
+            self::assertNull($invalid['canonical_holding_time_sec']);
             self::assertSame('invalid_fill_chronology', $invalid['holding_time_source']);
             self::assertNull($invalid['canonical_net_pnl_usdt']);
-            self::assertContains('ledger_fill_chronology_invalid', $invalid['pnl_quality_flags']);
-            self::assertSame('partial', $invalid['cost_completeness']);
+            self::assertContains('ledger_fill_chronology_invalid', $invalid['canonical_pnl_quality_flags']);
+            self::assertSame('partial', $invalid['canonical_cost_completeness']);
         } finally {
             $down = new Version20260820000000($this->conn, new NullLogger());
             $down->down(new Schema());
