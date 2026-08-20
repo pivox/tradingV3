@@ -17,16 +17,7 @@ final class CanonicalMicrostructureRuleInputAdapterTest extends TestCase
 {
     public function testAdaptsVerifiedSnapshotWithTheStrictestValidityBoundary(): void
     {
-        $snapshot = (new CanonicalMicrostructureEngine())->build(
-            new CanonicalMicrostructurePolicy(60, 2, 5, 30, 3),
-            new \DateTimeImmutable('2026-08-14T12:01:00.000000+00:00'),
-            [$this->book()],
-            [
-                $this->trade('1', '2026-08-14T12:00:10.000000Z', 'buy', '3'),
-                $this->trade('2', '2026-08-14T12:00:30.000000Z', 'sell', '1'),
-                $this->trade('3', '2026-08-14T12:00:55.000000Z', 'buy', '2'),
-            ],
-        );
+        $snapshot = $this->snapshot(new CanonicalMicrostructurePolicy(60, 2, 5, 30, 3));
 
         $input = (new CanonicalMicrostructureRuleInputAdapter())->adapt($snapshot);
 
@@ -47,6 +38,29 @@ final class CanonicalMicrostructureRuleInputAdapterTest extends TestCase
         self::assertSame(3, $input->values['microstructure_trade_count']);
         self::assertTrue($input->isValidAt($input->validUntil));
         self::assertFalse($input->isValidAt($input->validUntil->modify('+1 microsecond')));
+    }
+
+    public function testValidityNeverExceedsTheFiveSecondCatalogFreshness(): void
+    {
+        $input = (new CanonicalMicrostructureRuleInputAdapter())->adapt(
+            $this->snapshot(new CanonicalMicrostructurePolicy(60, 30, 30, 60, 3)),
+        );
+
+        self::assertSame('2026-08-14T12:01:05.000000+00:00', $input->validUntil->format('Y-m-d\TH:i:s.uP'));
+    }
+
+    private function snapshot(CanonicalMicrostructurePolicy $policy): \App\TradingCore\Microstructure\CanonicalMicrostructureSnapshot
+    {
+        return (new CanonicalMicrostructureEngine())->build(
+            $policy,
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000+00:00'),
+            [$this->book()],
+            [
+                $this->trade('1', '2026-08-14T12:00:10.000000Z', 'buy', '3'),
+                $this->trade('2', '2026-08-14T12:00:30.000000Z', 'sell', '1'),
+                $this->trade('3', '2026-08-14T12:00:55.000000Z', 'buy', '2'),
+            ],
+        );
     }
 
     private function book(): NormalizedBacktestPublicBook

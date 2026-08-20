@@ -775,15 +775,20 @@ fillabilite et ne rend pas encore `micro_scalping` executable.
 `CanonicalMicrostructureRuleInputAdapter` est l'unique pont vers les regles
 strictes. Il verifie le hash du snapshot, publie la source
 `timestamped_order_book` sur `1m` et borne `valid_until` au minimum de l'age du
-carnet, de l'age du dernier trade et du trou maximal autorise apres ce trade.
-Les valeurs non finies ou une validite deja expiree sont rejetees sans fallback.
+carnet, de l'age du dernier trade, du trou maximal autorise apres ce trade et
+des cinq secondes publiees par le catalogue. Cette meme borne est reverifiee
+par la condition et ne peut pas etre etendue par un snapshot generique. Les
+valeurs non finies ou une validite deja expiree sont rejetees sans fallback.
 
 Le catalogue immuable `1.2.0` rend executables `spread_bps_lte`,
 `order_flow_imbalance_gte` et `order_flow_imbalance_lte`. Chaque service exige
 la definition OFI `aggressor_volume_ratio.v1`, les hashes, l'identite publique
 reseau/venue/marche/symbole et l'unite native coherente (`contracts` pour OKX,
 `base_asset` pour Hyperliquid). Une preuve absente ou incoherente devient
-`missing_critical_data` dans l'evaluateur strict.
+`missing_critical_data` dans l'evaluateur strict. Le contexte conserve aussi le
+snapshot canonique readonly : son hash est reverifie et ses metriques sont
+comparees aux scalaires evalues. `RuleMarketIdentity` lie enfin cette preuve au
+reseau, a la venue, au marche, au symbole et a l'unite attendus par le run.
 
 Ce pont ne repointe encore aucun setup. Le contrat micro des ordres, du risque,
 de l'EntryZone, des couts et de l'horizon reste a publier avant de rendre

@@ -139,6 +139,7 @@ final readonly class StrictRuleEvaluator
         $base['input_freshness_seconds'] = $this->catalog->freshnessSeconds($snapshot->source, $snapshot->timeframe);
         $base['input_observed_at'] = $snapshot->observedAt->format(DATE_ATOM);
         $base['input_valid_until'] = $snapshot->validUntil->format(DATE_ATOM);
+        $base['expected_market_identity'] = $context->marketIdentity?->toArray();
         $base['parameter_source'] = $node->parameterSources;
         $base['series_order'] = $definition->seriesOrder;
         $base['reported_series_order'] = $snapshot->values['series_order'] ?? null;
@@ -168,6 +169,9 @@ final readonly class StrictRuleEvaluator
             'series_order' => $snapshot->values['series_order'] ?? $definition->seriesOrder,
             '_input_source' => $snapshot->source,
             '_input_observed_at' => $snapshot->observedAt->format(DATE_ATOM),
+            '_input_valid_until' => $snapshot->validUntil->format(DATE_ATOM),
+            '_input_proof' => $snapshot->proof,
+            '_expected_market_identity' => $context->marketIdentity,
         ]);
         try {
             $result = $isCompiledExpression

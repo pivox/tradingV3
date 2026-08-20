@@ -235,13 +235,16 @@ d'indicateurs. Un `CanonicalMicrostructureSnapshot` authentifie est adapte en
 `RuleInputSnapshot` de source `timestamped_order_book`, exclusivement pour le
 timeframe `1m`. Sa validite est la plus courte des trois limites portees par la
 politique canonique : fraicheur du carnet, fraicheur du dernier trade et trou
-maximal depuis le dernier trade.
+maximal depuis le dernier trade. Elle est en plus plafonnee aux cinq secondes
+du catalogue et reverifiee lors de l'evaluation.
 
 Les conditions typées `spread_bps_lte`, `order_flow_imbalance_gte` et
 `order_flow_imbalance_lte` n'acceptent pas les scalaires legacy. Elles exigent
 les hashes du snapshot et de la source, la definition OFI exacte, l'identite du
 marche public et l'unite venue. L'evaluateur strict rejette une entree absente,
-expiree ou falsifiee ; aucune valeur par defaut ne remplace la preuve.
+expiree ou falsifiee ; aucune valeur par defaut ne remplace la preuve. Le hash
+est lie au snapshot canonique readonly et les champs observes doivent aussi
+correspondre a un `RuleMarketIdentity` attendu distinct de l'identite recue.
 
 Ce lot ne branche pas encore `micro_scalping` au runtime MTF et ne modifie pas
 les DTOs de decision ou TradeEntry. L'activation attend encore les contrats

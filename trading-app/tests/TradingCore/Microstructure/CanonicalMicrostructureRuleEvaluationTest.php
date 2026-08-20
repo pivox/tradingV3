@@ -15,6 +15,8 @@ use App\TradingCore\Microstructure\CanonicalMicrostructureRuleInputAdapter;
 use App\TradingCore\Rules\Ast\ConditionNode;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Rules\Evaluation\RuleEvaluationContext;
+use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
+use App\TradingCore\Rules\Evaluation\RuleMarketIdentity;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use PHPUnit\Framework\Attributes\CoversNothing;
@@ -26,7 +28,12 @@ final class CanonicalMicrostructureRuleEvaluationTest extends TestCase
     public function testCanonicalSnapshotPassesAllThreeTypedConditions(): void
     {
         [$evaluator, $input] = $this->fixture();
-        $context = new RuleEvaluationContext('sha256:' . str_repeat('c', 64), $input->observedAt, [$input]);
+        $context = new RuleEvaluationContext(
+            'sha256:' . str_repeat('c', 64),
+            $input->observedAt,
+            [$input],
+            new RuleMarketIdentity('mainnet', 'okx', 'perpetual', 'BTCUSDT', 'contracts'),
+        );
 
         foreach ([
             new ConditionNode('spread_bps_lte', '1m', 'long', ['max_spread_bps' => 200.0], 'fixture:spread'),
@@ -38,6 +45,50 @@ final class CanonicalMicrostructureRuleEvaluationTest extends TestCase
             self::assertSame('condition_passed', $result->reasonCode);
             self::assertSame('timestamped_order_book', $result->trace['input_source']);
         }
+    }
+
+    public function testAuthenticSnapshotForAnotherExpectedMarketFailsClosed(): void
+    {
+        [$evaluator, $input] = $this->fixture();
+        $node = new ConditionNode('spread_bps_lte', '1m', 'long', ['max_spread_bps' => 200.0], 'fixture:spread');
+        $context = new RuleEvaluationContext(
+            'config',
+            $input->observedAt,
+            [$input],
+            new RuleMarketIdentity('mainnet', 'okx', 'perpetual', 'ETHUSDT', 'contracts'),
+        );
+
+        $result = $evaluator->evaluate($node, $context);
+
+        self::assertFalse($result->passed);
+        self::assertSame('missing_critical_data', $result->reasonCode);
+        self::assertSame('microstructure_proof_expected_identity_mismatch', $result->trace['meta']['proof_reason'] ?? null);
+    }
+
+    public function testCallerCannotExtendTheCanonicalInputValidity(): void
+    {
+        [$evaluator, $input] = $this->fixture();
+        $extended = new RuleInputSnapshot(
+            $input->timeframe,
+            $input->source,
+            $input->observedAt,
+            $input->observedAt->modify('+30 seconds'),
+            $input->values,
+            $input->proof,
+        );
+        $context = new RuleEvaluationContext(
+            'config',
+            $input->observedAt->modify('+10 seconds'),
+            [$extended],
+            new RuleMarketIdentity('mainnet', 'okx', 'perpetual', 'BTCUSDT', 'contracts'),
+        );
+        $node = new ConditionNode('spread_bps_lte', '1m', 'long', ['max_spread_bps' => 200.0], 'fixture:spread');
+
+        $result = $evaluator->evaluate($node, $context);
+
+        self::assertFalse($result->passed);
+        self::assertSame('missing_critical_data', $result->reasonCode);
+        self::assertSame('microstructure_proof_validity_invalid', $result->trace['meta']['proof_reason'] ?? null);
     }
 
     public function testMissingAndExpiredCanonicalInputsFailClosedBeforeConditionExecution(): void

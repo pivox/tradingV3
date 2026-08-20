@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Indicator\Condition;
 
+use App\TradingCore\Microstructure\CanonicalMicrostructureSnapshot;
+use App\TradingCore\Microstructure\CanonicalMicrostructureRuleInputAdapter;
+use App\TradingCore\Rules\Evaluation\RuleMarketIdentity;
+
 final class MicrostructureProof
 {
     /**
@@ -12,6 +16,16 @@ final class MicrostructureProof
      */
     public static function validate(array $context, string $metricKey, string $thresholdKey): array
     {
+        $snapshot = $context['_input_proof'] ?? null;
+        if (!$snapshot instanceof CanonicalMicrostructureSnapshot) {
+            return self::failure('microstructure_proof_snapshot_missing');
+        }
+        try {
+            $snapshot->verify();
+        } catch (\Throwable) {
+            return self::failure('microstructure_proof_snapshot_invalid');
+        }
+
         $checks = [
             ['_input_source', static fn (mixed $value): bool => $value === 'timestamped_order_book', 'microstructure_proof_source_invalid'],
             ['timeframe', static fn (mixed $value): bool => $value === '1m', 'microstructure_proof_timeframe_invalid'],
@@ -34,12 +48,50 @@ final class MicrostructureProof
             return self::failure('microstructure_proof_quantity_unit_invalid');
         }
 
+        foreach ([
+            'order_flow_imbalance_definition' => $snapshot->orderFlowImbalanceDefinition,
+            'microstructure_input_hash' => $snapshot->inputHash,
+            'source_checksum' => $snapshot->sourceChecksum,
+            'source_network' => $snapshot->sourceNetwork,
+            'market_data_venue' => $snapshot->marketDataVenue,
+            'market_type' => $snapshot->marketType,
+            'symbol' => $snapshot->symbol,
+            'quantity_unit' => $snapshot->quantityUnit,
+        ] as $key => $expected) {
+            if (($context[$key] ?? null) !== $expected) {
+                return self::failure('microstructure_proof_snapshot_binding_invalid');
+            }
+        }
+        if (!self::sameInstant($context['_input_observed_at'] ?? null, $snapshot->evaluatedAt)) {
+            return self::failure('microstructure_proof_snapshot_time_invalid');
+        }
+        if (!self::validityIsBounded($context['_input_valid_until'] ?? null, $snapshot)) {
+            return self::failure('microstructure_proof_validity_invalid');
+        }
+        $expectedIdentity = $context['_expected_market_identity'] ?? null;
+        if (!$expectedIdentity instanceof RuleMarketIdentity) {
+            return self::failure('microstructure_proof_expected_identity_missing');
+        }
+        if (!$expectedIdentity->matches(
+            $snapshot->sourceNetwork,
+            $snapshot->marketDataVenue,
+            $snapshot->marketType,
+            $snapshot->symbol,
+            $snapshot->quantityUnit,
+        )) {
+            return self::failure('microstructure_proof_expected_identity_mismatch');
+        }
+
         $value = self::number($context[$metricKey] ?? null);
         if ($value === null
             || ($metricKey === 'spread_bps' && $value < 0.0)
             || ($metricKey === 'order_flow_imbalance' && ($value < -1.0 || $value > 1.0))
         ) {
             return self::failure('microstructure_proof_metric_invalid');
+        }
+        $snapshotValue = self::number($metricKey === 'spread_bps' ? (float) $snapshot->spreadBps : (float) $snapshot->orderFlowImbalance);
+        if ($snapshotValue === null || $value !== $snapshotValue) {
+            return self::failure('microstructure_proof_snapshot_metric_invalid');
         }
         $threshold = self::number($context[$thresholdKey] ?? null);
         if ($threshold === null
@@ -65,6 +117,45 @@ final class MicrostructureProof
         $number = (float) $value;
 
         return \is_finite($number) ? $number : null;
+    }
+
+    private static function sameInstant(mixed $observedAt, string $snapshotEvaluatedAt): bool
+    {
+        $observed = self::instant($observedAt);
+        $expected = self::instant($snapshotEvaluatedAt);
+
+        return $observed !== null && $expected !== null && $observed == $expected;
+    }
+
+    private static function validityIsBounded(mixed $validUntil, CanonicalMicrostructureSnapshot $snapshot): bool
+    {
+        $actual = self::instant($validUntil);
+        $observed = self::instant($snapshot->evaluatedAt);
+        $book = self::instant($snapshot->bookHappenedAt);
+        $trade = self::instant($snapshot->lastTradeHappenedAt);
+        if ($actual === null || $observed === null || $book === null || $trade === null) {
+            return false;
+        }
+        $maximum = min(
+            $observed->modify('+' . CanonicalMicrostructureRuleInputAdapter::CATALOG_FRESHNESS_SECONDS . ' seconds'),
+            $book->modify('+' . $snapshot->policy['maximum_book_age_seconds'] . ' seconds'),
+            $trade->modify('+' . $snapshot->policy['maximum_trade_age_seconds'] . ' seconds'),
+            $trade->modify('+' . $snapshot->policy['maximum_trade_gap_seconds'] . ' seconds'),
+        );
+
+        return $actual >= $observed && $actual <= $maximum;
+    }
+
+    private static function instant(mixed $value): ?\DateTimeImmutable
+    {
+        if (!\is_string($value)) {
+            return null;
+        }
+        try {
+            return new \DateTimeImmutable($value);
+        } catch (\Exception) {
+            return null;
+        }
     }
 
     /** @return array{value: null, threshold: null, meta: array{missing_data: true, proof_reason: string}} */

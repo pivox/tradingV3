@@ -7,6 +7,7 @@ namespace App\Tests\TradingCore\Rules\Catalog;
 use App\TradingCore\Rules\Catalog\ConditionCatalogException;
 use App\TradingCore\Rules\Catalog\ConditionCatalogLoader;
 use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
+use App\TradingCore\Microstructure\CanonicalMicrostructureRuleInputAdapter;
 use App\TradingCore\Rules\Evaluation\StrictCompiledExpressionEvaluator;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -87,6 +88,10 @@ final class ConditionCatalogLoaderTest extends TestCase
         }
 
         self::assertSame('8461d5597febb7bb35e7707b17640505698ab1a7855569a8e6a77f4cd50f111f', $catalog->stableHash());
+        self::assertSame(
+            CanonicalMicrostructureRuleInputAdapter::CATALOG_FRESHNESS_SECONDS,
+            $catalog->freshnessSeconds('timestamped_order_book', '1m'),
+        );
     }
 
     public function testResolverBindsVersionSourceAndHashWithoutCrossVersionFallback(): void

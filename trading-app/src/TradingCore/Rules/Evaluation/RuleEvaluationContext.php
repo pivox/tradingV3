@@ -14,6 +14,7 @@ final readonly class RuleEvaluationContext
         public string $configHash,
         public \DateTimeImmutable $evaluatedAt,
         array $snapshots,
+        public ?RuleMarketIdentity $marketIdentity = null,
     ) {
         if ($configHash === '') {
             throw new \InvalidArgumentException('Effective config hash must be non-empty.');

@@ -6,8 +6,9 @@ namespace App\TradingCore\Microstructure;
 
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
+use App\TradingCore\Rules\Evaluation\RuleInputProof;
 
-final readonly class CanonicalMicrostructureSnapshot
+final readonly class CanonicalMicrostructureSnapshot implements RuleInputProof
 {
     public const SCHEMA_VERSION = 'canonical-microstructure-snapshot.v1';
     public const OFI_DEFINITION = 'aggressor_volume_ratio.v1';

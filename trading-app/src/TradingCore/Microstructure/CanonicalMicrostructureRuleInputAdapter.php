@@ -9,6 +9,7 @@ use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 final readonly class CanonicalMicrostructureRuleInputAdapter
 {
     private const TIMESTAMP_FORMAT = '!Y-m-d\TH:i:s.u\Z';
+    public const CATALOG_FRESHNESS_SECONDS = 5;
 
     public function adapt(CanonicalMicrostructureSnapshot $snapshot): RuleInputSnapshot
     {
@@ -18,6 +19,7 @@ final readonly class CanonicalMicrostructureRuleInputAdapter
         $bookHappenedAt = $this->timestamp($snapshot->bookHappenedAt);
         $lastTradeHappenedAt = $this->timestamp($snapshot->lastTradeHappenedAt);
         $validUntil = min(
+            $this->addSeconds($observedAt, self::CATALOG_FRESHNESS_SECONDS),
             $this->addSeconds($bookHappenedAt, $snapshot->policy['maximum_book_age_seconds']),
             $this->addSeconds($lastTradeHappenedAt, $snapshot->policy['maximum_trade_age_seconds']),
             $this->addSeconds($lastTradeHappenedAt, $snapshot->policy['maximum_trade_gap_seconds']),
@@ -46,6 +48,7 @@ final readonly class CanonicalMicrostructureRuleInputAdapter
                 'microstructure_window_start' => $snapshot->windowStart,
                 'microstructure_trade_count' => $snapshot->tradeCount,
             ],
+            proof: $snapshot,
         );
     }
 
