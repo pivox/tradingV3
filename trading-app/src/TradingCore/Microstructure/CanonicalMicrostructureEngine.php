@@ -133,10 +133,15 @@ final readonly class CanonicalMicrostructureEngine
      */
     private function validateRecords(array $books, array $trades): void
     {
-        if (array_any($books, static fn (mixed $book): bool => !$book instanceof NormalizedBacktestPublicBook)
-            || array_any($trades, static fn (mixed $trade): bool => !$trade instanceof NormalizedBacktestPublicTrade)
-        ) {
-            throw new CanonicalMicrostructureException('canonical_microstructure_input_invalid');
+        foreach ($books as $book) {
+            if (!$book instanceof NormalizedBacktestPublicBook) {
+                throw new CanonicalMicrostructureException('canonical_microstructure_input_invalid');
+            }
+        }
+        foreach ($trades as $trade) {
+            if (!$trade instanceof NormalizedBacktestPublicTrade) {
+                throw new CanonicalMicrostructureException('canonical_microstructure_input_invalid');
+            }
         }
         $records = [...$books, ...$trades];
         if ($records === []) {

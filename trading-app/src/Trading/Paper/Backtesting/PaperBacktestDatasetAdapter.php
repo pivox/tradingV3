@@ -209,15 +209,16 @@ final class PaperBacktestDatasetAdapter
      */
     public function adaptMicrostructureEvents(array $events, string $sourceChecksum): array
     {
-        if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $sourceChecksum) !== 1
-            || array_any($events, static fn (mixed $event): bool => !$event instanceof PaperMarketEvent)
-        ) {
+        if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $sourceChecksum) !== 1) {
             throw new PaperBacktestAdapterException('paper_backtest_microstructure_events_invalid');
         }
 
         $books = [];
         $trades = [];
         foreach ($events as $event) {
+            if (!$event instanceof PaperMarketEvent) {
+                throw new PaperBacktestAdapterException('paper_backtest_microstructure_events_invalid');
+            }
             if ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
                 $books[] = $event->sourceVenue === PaperMarketDataVenue::OKX
                     ? $this->normalizeOkxBook($event, $sourceChecksum)
