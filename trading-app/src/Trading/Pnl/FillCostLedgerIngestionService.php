@@ -25,6 +25,7 @@ use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 final readonly class FillCostLedgerIngestionService
 {
     private const SOURCE_VERSION = 'fill_cost_ledger_v1';
+    private const FILL_TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
     private const SENSITIVE_KEY_MARKERS = ['apikey', 'secret', 'token', 'password', 'memo', 'credential'];
     private const FUNDING_DETAIL_CONFLICT_KEYS = [
         'funding_native_amount',
@@ -37,6 +38,7 @@ final readonly class FillCostLedgerIngestionService
     public function __construct(
         private FillCostLedgerEntryRepository $ledger,
         private TradeLineageManager $lineageManager,
+        private ?CanonicalFillEvidenceRefresherInterface $evidenceRefresher = null,
     ) {
     }
 
@@ -115,7 +117,7 @@ final readonly class FillCostLedgerIngestionService
             'slippage_cost_usdt' => $slippageCostUsdt,
             'borrow_cost_usdt' => null,
             'liquidation_fee_usdt' => $liquidationFeeUsdt,
-            'occurred_at' => $fill->filledAt->format(\DateTimeInterface::ATOM),
+            'occurred_at' => $fill->filledAt->format(self::FILL_TIMESTAMP_FORMAT),
             'source' => $source,
             'source_version' => $sourceVersion,
             'quality_flags' => array_values(array_unique($qualityFlags)),
@@ -123,7 +125,16 @@ final readonly class FillCostLedgerIngestionService
             'paper_provenance' => $paperProvenance,
         ];
 
-        return $this->persistSnapshot($idempotencyKey, $snapshot);
+        $result = $this->persistSnapshot($idempotencyKey, $snapshot);
+        if ($internalTradeId !== null && \in_array($snapshot['fill_role'], ['entry', 'exit'], true)) {
+            $this->evidenceRefresher?->refreshAfterFill(
+                $internalTradeId,
+                $fill->exchange->value,
+                $fill->marketType->value,
+            );
+        }
+
+        return $result;
     }
 
     public function ingestFunding(ExchangeFundingReceived $event): FillCostLedgerIngestionResult
@@ -714,8 +725,20 @@ final readonly class FillCostLedgerIngestionService
      */
     private function payloadHashMatches(string $storedHash, string $currentHash, array $snapshot): bool
     {
-        return $storedHash === $currentHash
-            || $storedHash === $this->conflictHash($snapshot, includeFundingDetails: false);
+        if ($storedHash === $currentHash
+            || $storedHash === $this->conflictHash($snapshot, includeFundingDetails: false)
+        ) {
+            return true;
+        }
+
+        $legacySnapshot = $snapshot;
+        $occurredAt = $this->string($snapshot['occurred_at'] ?? null);
+        if ($occurredAt !== null) {
+            $legacySnapshot['occurred_at'] = (new \DateTimeImmutable($occurredAt))->format(\DateTimeInterface::ATOM);
+        }
+
+        return $storedHash === $this->conflictHash($legacySnapshot)
+            || $storedHash === $this->conflictHash($legacySnapshot, includeFundingDetails: false);
     }
 
     private function deterministicFillId(ExchangeFillDto $fill): string

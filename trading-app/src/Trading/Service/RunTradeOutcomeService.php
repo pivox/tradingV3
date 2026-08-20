@@ -212,8 +212,12 @@ final class RunTradeOutcomeService
         $netDecided = $netWinCount + $netLossCount;
         $netCertifiedCount = count($certifiedNetRows);
 
-        $mfeValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
-        $maeValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
+        $canonicalExcursionRows = array_values(array_filter(
+            $canonicalRows,
+            static fn (PositionTradeAnalysisV2 $r): bool => $r->getMfeMaeDataQuality() === 'complete',
+        ));
+        $mfeValues = $this->values($canonicalExcursionRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMfePct());
+        $maeValues = $this->values($canonicalExcursionRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getMaePct());
         $holdValues = $this->values($canonicalRows, static fn (PositionTradeAnalysisV2 $r): ?float => $r->getHoldingTimeSec());
 
         $canonicalCount = count($canonicalRows);

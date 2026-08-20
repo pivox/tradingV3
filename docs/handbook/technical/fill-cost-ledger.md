@@ -63,7 +63,19 @@ If no exchange fill ID exists, the fallback is:
 
 The deterministic fill ID is derived from venue, market type, symbol, order ID, client order ID, fill timestamp, quantity, price, order side, and position side. It never uses symbol and timestamp alone.
 
+Duplicate detection also fingerprints the fill timestamp with all six fractional
+digits. Two rows sharing an exchange fill ID but differing only by microseconds
+are therefore a conflict, not an identical replay.
+
 Replays with the same canonical fill/cost payload hash are ignored. Mutable projection source and late lineage enrichment do not change that canonical hash. If both the existing row and the replay provide non-null lineage identifiers and they differ, ingestion raises a conflict instead of silently moving the fill to another trade. A different payload for the same idempotency key raises a conflict and does not update the existing row.
+
+Exchange fill timestamps are persisted with six fractional digits
+(`Y-m-d\TH:i:s.uP`) so ordering and holding-time evidence do not lose provider
+microseconds. The PostgreSQL `occurred_at` column is widened to
+`TIMESTAMP(6) WITH TIME ZONE` by the fill-timing migration so those digits also
+survive a database reload. Replay comparison recognizes hashes written by the previous
+ATOM-only serializer; this compatibility path only affects idempotency checks
+and never rewrites the stored row.
 
 ### Funding identity and monetary convention
 
@@ -138,6 +150,21 @@ The aggregation exposes:
 `entry_vwap` and `exit_vwap` are quantity-weighted from fill price and quantity. Funding and cost-only adjustment rows contribute to cost aggregates but not to entry or exit quantity.
 
 The default close tolerance is `0.00000001`. A position is fully closed only when `remaining_qty` is within that tolerance and no blocking quantity flag is present.
+
+After every entry/exit fill ingestion (including an idempotent replay), the
+canonical timing projection is retried. If a `position_closed` lifecycle event
+already exists and the aggregated quantity has just become complete, its
+holding time and MFE/MAE evidence are recomputed from the exact first-entry and
+last-exit fills. This deterministic repair covers the case where the final fill
+arrives after the provider close event; an unavailable ledger or market-data
+provider leaves the previous excursion evidence untouched. The exact holding
+time is still repaired when market data is unavailable because it depends only
+on the ledger bounds, including their microseconds. A partial refresh also cannot
+replace existing `complete` evidence; this preserves valid canonical evidence
+during an idempotent replay. That preservation requires the persisted
+fill bounds and `mfe_mae_entry_price` to still match the canonical ledger window
+and entry VWAP. If either changes while market data is unavailable, the stale
+evidence remains auditable but is downgraded to `partial`.
 
 Current statuses:
 

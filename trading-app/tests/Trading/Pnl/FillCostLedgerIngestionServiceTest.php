@@ -16,6 +16,7 @@ use App\Exchange\Event\ExchangeFillReceived;
 use App\Repository\FillCostLedgerEntryRepository;
 use App\Repository\TradeLineageRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Pnl\CanonicalFillEvidenceRefresherInterface;
 use App\Trading\Pnl\FillCostLedgerIngestionConflict;
 use App\Trading\Pnl\FillCostLedgerIngestionResult;
 use App\Trading\Pnl\FillCostLedgerIngestionService;
@@ -93,6 +94,7 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
             price: 100.0,
             fee: 0.125,
             feeCurrency: 'USDT',
+            filledAt: new \DateTimeImmutable('2026-01-01T00:00:00.123456+00:00'),
             metadata: [
                 'liquidity_role' => 'maker',
                 'source' => 'fake_exchange_ws',
@@ -124,6 +126,7 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertSame('0.125000000000', $entry->getFeeUsdt());
         self::assertSame('0.000000000000', $entry->getSpreadCostUsdt());
         self::assertSame('0.012500000000', $entry->getSlippageCostUsdt());
+        self::assertSame('2026-01-01T00:00:00.123456+00:00', $entry->getOccurredAt()->format('Y-m-d\\TH:i:s.uP'));
         self::assertSame([], $entry->getQualityFlags());
         self::assertSame([
             'source' => 'fake_exchange_ws',
@@ -150,6 +153,40 @@ final class FillCostLedgerIngestionServiceTest extends KernelTestCase
         self::assertTrue($second->replayed);
         self::assertFalse($second->inserted);
         self::assertSame(1, $this->ledger->count([]));
+    }
+
+    public function testInsertedFillAndReplayTriggerCanonicalEvidenceRefresh(): void
+    {
+        $this->persistLineage('itd-ledger-refresh', 'cid-refresh', 'EX-REFRESH', null);
+        $refresher = new class implements CanonicalFillEvidenceRefresherInterface {
+            /** @var list<array{string,string,string}> */
+            public array $calls = [];
+
+            public function refreshAfterFill(string $internalTradeId, string $exchange, string $marketType): void
+            {
+                $this->calls[] = [$internalTradeId, $exchange, $marketType];
+            }
+        };
+        /** @var TradeLineageRepository $lineages */
+        $lineages = $this->em->getRepository(TradeLineage::class);
+        $service = new FillCostLedgerIngestionService(
+            $this->ledger,
+            new TradeLineageManager($lineages, $this->em, new NullLogger()),
+            $refresher,
+        );
+
+        $event = new ExchangeFillReceived($this->fill(
+            exchangeOrderId: 'EX-REFRESH',
+            clientOrderId: 'cid-refresh',
+            fillId: 'fill-refresh',
+        ));
+        $service->ingestExchangeFill($event);
+        $service->ingestExchangeFill($event);
+
+        self::assertSame([
+            ['itd-ledger-refresh', 'fake', 'perpetual'],
+            ['itd-ledger-refresh', 'fake', 'perpetual'],
+        ], $refresher->calls);
     }
 
     public function testReplayAcceptsPayloadHashWrittenBeforeFundingFieldsWereCanonicalized(): void

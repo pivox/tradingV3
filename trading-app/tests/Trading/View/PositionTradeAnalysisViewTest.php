@@ -16,6 +16,7 @@ use DoctrineMigrations\Version20260626000000;
 use DoctrineMigrations\Version20260719130000;
 use DoctrineMigrations\Version20260808114000;
 use DoctrineMigrations\Version20260811120000;
+use DoctrineMigrations\Version20260820000000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -40,6 +41,7 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260719130000::class)]
 #[CoversClass(Version20260808114000::class)]
 #[CoversClass(Version20260811120000::class)]
+#[CoversClass(Version20260820000000::class)]
 final class PositionTradeAnalysisViewTest extends TestCase
 {
     private Connection $conn;
@@ -71,6 +73,7 @@ final class PositionTradeAnalysisViewTest extends TestCase
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_legacy_source');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_pre_ledger');
+            $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis_v2_pre_fill_timing');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_ledger_aggregate_v1');
             $this->conn->executeStatement('DROP VIEW IF EXISTS position_trade_analysis');
             $this->conn->executeStatement('DROP TABLE IF EXISTS fill_cost_ledger');
@@ -750,6 +753,113 @@ final class PositionTradeAnalysisViewTest extends TestCase
         self::assertEqualsWithDelta(8.11, (float) $row['canonical_net_pnl_usdt'], 1e-9);
         self::assertIsArray($row['pnl_quality_flags']);
         self::assertNotContains('ledger_quantity_aggregate_missing', $row['pnl_quality_flags']);
+    }
+
+    public function testFillTimingMigrationUsesExactLedgerWindowAndRejectsInvalidChronology(): void
+    {
+        foreach ([
+            [2980, 2981, 'BTCUSDT', 'itd-fill-window-exact', 'position-fill-window-exact', '2026-08-20 10:00:01+00:00', '2026-08-20 10:04:31+00:00', true],
+            [2982, 2983, 'ETHUSDT', 'itd-fill-window-invalid', 'position-fill-window-invalid', '2026-08-20 11:05:00+00:00', '2026-08-20 11:04:00+00:00', false],
+            [2984, 2985, 'SOLUSDT', 'itd-fill-window-incomplete', 'position-fill-window-incomplete', '2026-08-20 12:00:01+00:00', '2026-08-20 12:04:31+00:00', null],
+            [2986, 2987, 'XRPUSDT', 'itd-fill-window-late-entry', 'position-fill-window-late-entry', '2026-08-20 13:00:00+00:00', '2026-08-20 14:00:00+00:00', 'late_entry'],
+        ] as [$entryId, $closeId, $symbol, $internalTradeId, $positionId, $entryFillAt, $exitFillAt, $chronology]) {
+            $this->entry($symbol, 'run-fill-window', 'fill-window', 'scalper', 'fake', 'paper', [
+                'internal_trade_id' => $internalTradeId,
+                'risk_usdt' => 1.0,
+            ], '2026-08-20 10:00:00+00', $entryId, 'hyperliquid');
+            $this->close($symbol, 'run-fill-window', [
+                'internal_trade_id' => $internalTradeId,
+                'recorded_pnl_usdt' => 0.8,
+                'other_trading_fees_usdt' => 0.0,
+                'mfe_pct' => 0.1,
+                'mae_pct' => 0.02,
+                'max_favorable_price' => 111.0,
+                'max_adverse_price' => 98.0,
+                'mfe_at' => '2026-08-20T10:02:00+00:00',
+                'mae_at' => '2026-08-20T10:03:00+00:00',
+                'mfe_mae_source' => 'kline_1m_high_low',
+                'mfe_mae_data_quality' => 'complete',
+                'mfe_mae_window_start' => $entryFillAt,
+                'mfe_mae_window_end' => $exitFillAt,
+                'mfe_mae_window_source' => 'fill_cost_ledger_v1',
+                'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+                'mfe_mae_entry_price' => 100.0,
+                'holding_time_sec' => 999,
+                'holding_time_source' => 'provider_position_history',
+            ], $positionId, '2026-08-20 10:05:00+00', $closeId, 'fake', 'paper', 'hyperliquid');
+            $this->canonicalLifecycle($entryId, $closeId, $internalTradeId, $positionId, 'trade-' . $internalTradeId);
+            $fills = [['entry', 100.0, $entryFillAt, $chronology === 'late_entry' ? 0.5 : 1.0]];
+            if ($chronology !== null) {
+                $fills[] = ['exit', 101.0, $exitFillAt, 1.0];
+            }
+            if ($chronology === 'late_entry') {
+                $fills[] = ['entry', 100.0, '2026-08-20 15:00:00+00:00', 0.5];
+            }
+            foreach ($fills as $fillIndex => [$role, $price, $occurredAt, $quantity]) {
+                $this->ledgerFill($symbol, $internalTradeId, $positionId, $internalTradeId . '-' . $role . '-' . $fillIndex, $role, $price, $quantity, $occurredAt, [
+                    'fee_usdt' => 0.01,
+                    'funding_usdt' => 0.0,
+                    'spread_cost_usdt' => 0.0,
+                    'slippage_cost_usdt' => 0.0,
+                    'borrow_cost_usdt' => 0.0,
+                    'liquidation_fee_usdt' => 0.0,
+                ]);
+            }
+        }
+
+        require_once \dirname(__DIR__, 3) . '/migrations/Version20260820000000.php';
+        $migration = new Version20260820000000($this->conn, new NullLogger());
+        $migration->up(new Schema());
+        foreach ($migration->getSql() as $query) {
+            $this->conn->executeStatement($query->getStatement(), $query->getParameters(), $query->getTypes());
+        }
+
+        try {
+            $exact = $this->analysisRow(2980);
+            self::assertEqualsWithDelta(270.0, (float) $exact['canonical_holding_time_sec'], 1e-9);
+            self::assertSame('fill_cost_ledger_v1', $exact['holding_time_source']);
+            self::assertSame('fill_cost_ledger_v1', $exact['mfe_mae_window_source']);
+            self::assertSame('fill_cost_ledger_v1', $exact['mfe_mae_entry_price_source']);
+            self::assertSame('complete', $exact['canonical_mfe_mae_data_quality']);
+            self::assertEqualsWithDelta(0.1, (float) $exact['mfe_pct'], 1e-9);
+
+            $this->conn->executeStatement(<<<'SQL'
+UPDATE trade_lifecycle_event
+SET extra = jsonb_set(extra, '{mfe_mae_entry_price}', '99'::jsonb)
+WHERE id = 2981
+SQL);
+            $staleEntryPrice = $this->analysisRow(2980);
+            self::assertSame('partial', $staleEntryPrice['canonical_mfe_mae_data_quality']);
+            self::assertSame('unverified_entry_price', $staleEntryPrice['mfe_mae_entry_price_source']);
+
+            $invalid = $this->analysisRow(2982);
+            self::assertNull($invalid['canonical_holding_time_sec']);
+            self::assertSame('invalid_fill_chronology', $invalid['holding_time_source']);
+            self::assertNull($invalid['canonical_net_pnl_usdt']);
+            self::assertContains('ledger_fill_chronology_invalid', $invalid['canonical_pnl_quality_flags']);
+            self::assertSame('partial', $invalid['canonical_cost_completeness']);
+
+            $lateEntry = $this->analysisRow(2986);
+            self::assertNull($lateEntry['canonical_holding_time_sec']);
+            self::assertSame('invalid_fill_chronology', $lateEntry['holding_time_source']);
+            self::assertNull($lateEntry['canonical_net_pnl_usdt']);
+            self::assertContains('ledger_fill_chronology_invalid', $lateEntry['canonical_pnl_quality_flags']);
+            self::assertSame('partial', $lateEntry['canonical_cost_completeness']);
+
+            $incomplete = $this->analysisRow(2984);
+            self::assertSame(999, $incomplete['holding_time_sec']);
+            self::assertSame('complete', $incomplete['mfe_mae_data_quality']);
+            self::assertNull($incomplete['canonical_holding_time_sec']);
+            self::assertSame('incomplete_fill_ledger', $incomplete['holding_time_source']);
+            self::assertSame('partial', $incomplete['canonical_mfe_mae_data_quality']);
+            self::assertSame('incomplete_fill_ledger', $incomplete['mfe_mae_window_source']);
+        } finally {
+            $down = new Version20260820000000($this->conn, new NullLogger());
+            $down->down(new Schema());
+            foreach ($down->getSql() as $query) {
+                $this->conn->executeStatement($query->getStatement(), $query->getParameters(), $query->getTypes());
+            }
+        }
     }
 
     public function testLedgerAggregateHelperProjectsCompleteExactFillEvidence(): void

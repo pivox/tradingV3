@@ -10,14 +10,18 @@ use App\Logging\TradeLifecycleLogger;
 use App\Provider\Context\ExchangeContext;
 use App\Repository\TradeLifecycleEventRepository;
 use App\Trading\Lineage\TradeLineageManager;
+use App\Trading\Pnl\CanonicalFillEvidenceRefresherInterface;
+use App\Trading\Pnl\CanonicalTradeFillWindowResolverInterface;
 use App\Trading\Event\OrderStateChangedEvent;
 use App\Trading\Event\PositionClosedEvent;
 use App\Trading\Event\PositionOpenedEvent;
 use App\Trading\Event\SymbolSkippedEvent;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 
-final class TradeLifecycleLoggerListener
+final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresherInterface
 {
+    private const FILL_EVIDENCE_TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
+
     /**
      * @var string[]
      */
@@ -72,6 +76,7 @@ final class TradeLifecycleLoggerListener
         private readonly TradeLifecycleEventRepository $tradeLifecycleRepository,
         private readonly ?MainProviderInterface $mainProvider = null,
         private readonly ?TradeLineageManager $tradeLineageManager = null,
+        private readonly ?CanonicalTradeFillWindowResolverInterface $fillWindowResolver = null,
     ) {}
 
     // --- POSITION OUVERTE ----------------------------------------------------
@@ -110,6 +115,86 @@ final class TradeLifecycleLoggerListener
         );
     }
 
+    public function refreshAfterFill(string $internalTradeId, string $exchange, string $marketType): void
+    {
+        if ($this->fillWindowResolver === null) {
+            return;
+        }
+
+        try {
+            $window = $this->fillWindowResolver->resolve($internalTradeId, $exchange, $marketType);
+            if ($window === null) {
+                return;
+            }
+            $closedEvents = $this->tradeLifecycleRepository->findRecentBy([
+                'internalTradeId' => $internalTradeId,
+                'eventType' => 'position_closed',
+                'exchange' => $exchange,
+                'marketType' => $marketType,
+            ], 1);
+            $closed = $closedEvents[0] ?? null;
+            if ($closed === null || !\in_array(strtoupper((string) $closed->getSide()), ['LONG', 'SHORT'], true)) {
+                return;
+            }
+
+            $excursion = $this->calculateExcursionEvidence(
+                $closed->getSymbol(),
+                strtoupper((string) $closed->getSide()),
+                $exchange,
+                $marketType,
+                $window->entryFirstFillAt,
+                $window->exitLastFillAt,
+                $window->entryVwap,
+            );
+            $holdingTimeSec = $window->holdingTimeSeconds();
+            $existingExtra = $closed->getExtra() ?? [];
+            $updates = [
+                'holding_time_sec' => $holdingTimeSec,
+                'holding_time_source' => 'fill_cost_ledger_v1',
+            ];
+            $replacementIsUsable = $excursion['mfe_price'] !== null && $excursion['mae_price'] !== null;
+            $windowStart = $window->entryFirstFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT);
+            $windowEnd = $window->exitLastFillAt->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT);
+            $existingEntryPrice = $existingExtra['mfe_mae_entry_price'] ?? null;
+            $entryPriceTolerance = max(1e-12, abs($window->entryVwap) * 1e-12);
+            $existingEvidenceMatchesLedger = ($existingExtra['mfe_mae_window_source'] ?? null) === 'fill_cost_ledger_v1'
+                && ($existingExtra['mfe_mae_entry_price_source'] ?? null) === 'fill_cost_ledger_v1'
+                && ($existingExtra['mfe_mae_window_start'] ?? null) === $windowStart
+                && ($existingExtra['mfe_mae_window_end'] ?? null) === $windowEnd
+                && is_numeric($existingEntryPrice)
+                && abs((float) $existingEntryPrice - $window->entryVwap) <= $entryPriceTolerance;
+            $existingEvidenceIsComplete = ($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete'
+                && $existingEvidenceMatchesLedger;
+            if ($replacementIsUsable && (!$existingEvidenceIsComplete || $excursion['data_quality'] === 'complete')) {
+                $updates += [
+                    'max_favorable_price' => $excursion['mfe_price'],
+                    'max_adverse_price' => $excursion['mae_price'],
+                    'mfe_pct' => $excursion['mfe_pct'],
+                    'mae_pct' => $excursion['mae_pct'],
+                    'mfe_at' => $excursion['mfe_at']?->format(\DateTimeInterface::ATOM),
+                    'mae_at' => $excursion['mae_at']?->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_source' => $excursion['source'],
+                    'mfe_mae_timeframe' => $excursion['timeframe'],
+                    'mfe_mae_window_start' => $windowStart,
+                    'mfe_mae_window_end' => $windowEnd,
+                    'mfe_mae_window_source' => 'fill_cost_ledger_v1',
+                    'mfe_mae_entry_price' => $window->entryVwap,
+                    'mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+                    'mfe_mae_sample_count' => $excursion['sample_count'],
+                    'mfe_mae_expected_sample_count' => $excursion['expected_sample_count'],
+                    'mfe_mae_limit' => $excursion['limit'],
+                    'mfe_mae_data_quality' => $excursion['data_quality'],
+                ];
+            } elseif (($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete' && !$existingEvidenceMatchesLedger) {
+                $updates['mfe_mae_data_quality'] = 'partial';
+            }
+            $closed->setExtra(array_replace($existingExtra, $updates));
+            $this->tradeLifecycleRepository->save($closed);
+        } catch (\Throwable) {
+            // Fill ingestion remains authoritative; unavailable analytics evidence stays explicitly non-canonical.
+        }
+    }
+
     // --- POSITION FERMÉE -----------------------------------------------------
 
     #[AsEventListener(event: PositionClosedEvent::class)]
@@ -140,7 +225,34 @@ final class TradeLifecycleLoggerListener
             : null;
         $pnlFloat = (float)$history->realizedPnl->__toString();
         $pnlPct = $notional !== null && $notional > 0.0 ? $pnlFloat / $notional : null;
-        $holdingTimeSec = $history->closedAt->getTimestamp() - $history->openedAt->getTimestamp();
+        $analysisWindowStart = $history->openedAt;
+        $analysisWindowEnd = $history->closedAt;
+        $holdingTimeSource = 'provider_position_history';
+        $analysisWindowSource = 'provider_position_history';
+        $entryPriceSource = 'provider_position_history';
+        if ($lineage !== null && $event->exchange !== null && $marketType !== null && $this->fillWindowResolver !== null) {
+            try {
+                $fillWindow = $this->fillWindowResolver->resolve(
+                    $lineage->getInternalTradeId(),
+                    $event->exchange,
+                    $marketType,
+                );
+                if ($fillWindow !== null) {
+                    $analysisWindowStart = $fillWindow->entryFirstFillAt;
+                    $analysisWindowEnd = $fillWindow->exitLastFillAt;
+                    $entryPriceFloat = $fillWindow->entryVwap;
+                    $holdingTimeSource = 'fill_cost_ledger_v1';
+                    $analysisWindowSource = 'fill_cost_ledger_v1';
+                    $entryPriceSource = 'fill_cost_ledger_v1';
+                }
+            } catch (\Throwable) {
+                // Ledger evidence is optional here; an unavailable or incomplete window remains explicit best-effort provider history.
+            }
+        }
+        $holdingTimeSec = (float) $analysisWindowEnd->format('U.u') - (float) $analysisWindowStart->format('U.u');
+        if (abs($holdingTimeSec - round($holdingTimeSec)) < 1e-9) {
+            $holdingTimeSec = (int) round($holdingTimeSec);
+        }
         $effectiveRunId = $event->runId ?? $lineage?->getRunId();
         $certifiedPnlExtra = $this->certifiedPnlExtraFromRaw($history->raw);
 
@@ -180,106 +292,27 @@ final class TradeLifecycleLoggerListener
             // best-effort: pnl_R reste null si la recherche échoue
         }
 
-        // MFE / MAE (best-effort à partir des klines 1m)
-        $mfePrice = null;
-        $maePrice = null;
-        $mfeAt = null;
-        $maeAt = null;
-        $mfePct = null;
-        $maePct = null;
-        $mfeMaeSource = null;
-        $mfeMaeTimeframe = null;
-        $mfeMaeSampleCount = null;
-        $mfeMaeExpectedSampleCount = null;
-        $mfeMaeDataQuality = null;
-        $mfeMaeLimit = 500;
-
-        if ($this->mainProvider !== null) {
-            $mfeMaeSource = 'kline_1m_high_low';
-            $mfeMaeTimeframe = Timeframe::TF_1M->value;
-            $mfeMaeSampleCount = 0;
-            $mfeMaeExpectedSampleCount = $this->expectedOneMinuteSampleCount($history->openedAt, $history->closedAt);
-            $klineOpenTimes = [];
-            try {
-                $klineProvider = $this->mainProvider
-                    ->forContext(ExchangeContext::fromValues($event->exchange, $marketType))
-                    ->getKlineProvider();
-                $klines = $klineProvider->getKlinesInWindow(
-                    $history->symbol,
-                    Timeframe::TF_1M,
-                    $history->openedAt,
-                    $history->closedAt,
-                    $mfeMaeLimit
-                );
-
-                foreach ($klines as $kline) {
-                    $high = $this->klineNumericValue($kline, 'high');
-                    $low = $this->klineNumericValue($kline, 'low');
-                    if ($high === null || $low === null) {
-                        continue;
-                    }
-                    $openedAt = $this->klineOpenedAt($kline);
-                    if ($openedAt !== null && $openedAt >= $history->closedAt) {
-                        continue;
-                    }
-                    ++$mfeMaeSampleCount;
-                    if ($openedAt !== null) {
-                        $klineOpenTimes[$openedAt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM)] = true;
-                    }
-
-                    if (strtoupper($history->side->value) === 'LONG') {
-                        // Favorable = plus haut, défavorable = plus bas
-                        if ($mfePrice === null || $high > $mfePrice) {
-                            $mfePrice = $high;
-                            $mfeAt = $openedAt;
-                        }
-                        if ($maePrice === null || $low < $maePrice) {
-                            $maePrice = $low;
-                            $maeAt = $openedAt;
-                        }
-                    } else {
-                        // SHORT: favorable = plus bas, défavorable = plus haut
-                        if ($mfePrice === null || $low < $mfePrice) {
-                            $mfePrice = $low;
-                            $mfeAt = $openedAt;
-                        }
-                        if ($maePrice === null || $high > $maePrice) {
-                            $maePrice = $high;
-                            $maeAt = $openedAt;
-                        }
-                    }
-                }
-
-                if ($entryPriceFloat > 0.0) {
-                    if ($mfePrice !== null) {
-                        $mfePct = strtoupper($history->side->value) === 'LONG'
-                            ? ($mfePrice - $entryPriceFloat) / $entryPriceFloat
-                            : ($entryPriceFloat - $mfePrice) / $entryPriceFloat;
-                    }
-                    if ($maePrice !== null) {
-                        $maePct = strtoupper($history->side->value) === 'LONG'
-                            ? ($entryPriceFloat - $maePrice) / $entryPriceFloat
-                            : ($maePrice - $entryPriceFloat) / $entryPriceFloat;
-                    }
-                }
-                if ($mfeMaeSampleCount === 0 || $mfePrice === null || $maePrice === null) {
-                    $mfeMaeDataQuality = 'missing_price_data';
-                } elseif (
-                    $this->isOneMinuteBoundary($history->openedAt)
-                    && $this->isOneMinuteBoundary($history->closedAt)
-                    && $mfeMaeExpectedSampleCount !== null
-                    && $mfeMaeExpectedSampleCount <= $mfeMaeLimit
-                    && \count($klineOpenTimes) >= $mfeMaeExpectedSampleCount
-                ) {
-                    $mfeMaeDataQuality = 'complete';
-                } else {
-                    $mfeMaeDataQuality = 'partial';
-                }
-            } catch (\Throwable) {
-                // best-effort: metrics restent null en cas d'échec
-                $mfeMaeDataQuality = 'provider_error';
-            }
-        }
+        $excursion = $this->calculateExcursionEvidence(
+            $history->symbol,
+            strtoupper($history->side->value),
+            $event->exchange,
+            $marketType,
+            $analysisWindowStart,
+            $analysisWindowEnd,
+            $entryPriceFloat,
+        );
+        $mfePrice = $excursion['mfe_price'];
+        $maePrice = $excursion['mae_price'];
+        $mfeAt = $excursion['mfe_at'];
+        $maeAt = $excursion['mae_at'];
+        $mfePct = $excursion['mfe_pct'];
+        $maePct = $excursion['mae_pct'];
+        $mfeMaeSource = $excursion['source'];
+        $mfeMaeTimeframe = $excursion['timeframe'];
+        $mfeMaeSampleCount = $excursion['sample_count'];
+        $mfeMaeExpectedSampleCount = $excursion['expected_sample_count'];
+        $mfeMaeLimit = $excursion['limit'];
+        $mfeMaeDataQuality = $excursion['data_quality'];
 
         $this->tradeLifecycleLogger->logPositionClosed(
             symbol: $history->symbol,
@@ -300,7 +333,15 @@ final class TradeLifecycleLoggerListener
                     'exit_price' => $history->exitPrice->__toString(),
                     'entry_time' => $history->openedAt->format('Y-m-d H:i:s'),
                     'close_time' => $history->closedAt->format('Y-m-d H:i:s'),
+                    'fees' => $history->fees?->__toString(),
+                    'raw'  => $history->raw,
+                ],
+                $certifiedPnlExtra,
+                $event->extra,
+                [
+                    // Computed analysis evidence is authoritative over untrusted provider/event extras.
                     'holding_time_sec' => $holdingTimeSec,
+                    'holding_time_source' => $holdingTimeSource,
                     'max_favorable_price' => $mfePrice,
                     'max_adverse_price' => $maePrice,
                     'mfe_pct' => $mfePct,
@@ -309,17 +350,16 @@ final class TradeLifecycleLoggerListener
                     'mae_at' => $maeAt?->format(\DateTimeInterface::ATOM),
                     'mfe_mae_source' => $mfeMaeSource,
                     'mfe_mae_timeframe' => $mfeMaeTimeframe,
-                    'mfe_mae_window_start' => $history->openedAt->format(\DateTimeInterface::ATOM),
-                    'mfe_mae_window_end' => $history->closedAt->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_start' => $analysisWindowStart->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_end' => $analysisWindowEnd->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_source' => $analysisWindowSource,
+                    'mfe_mae_entry_price' => $entryPriceFloat,
+                    'mfe_mae_entry_price_source' => $entryPriceSource,
                     'mfe_mae_sample_count' => $mfeMaeSampleCount,
                     'mfe_mae_expected_sample_count' => $mfeMaeExpectedSampleCount,
                     'mfe_mae_limit' => $mfeMaeLimit,
                     'mfe_mae_data_quality' => $mfeMaeDataQuality,
-                    'fees' => $history->fees?->__toString(),
-                    'raw'  => $history->raw,
                 ],
-                $certifiedPnlExtra,
-                $event->extra,
             ),
             marketType: $marketType,
         );
@@ -458,6 +498,118 @@ final class TradeLifecycleLoggerListener
         } catch (\Throwable) {
             // Le lifecycle reste prioritaire; le lineage sera récupéré par un identifiant exact ultérieur.
         }
+    }
+
+    /**
+     * @return array{
+     *   mfe_price:?float,mae_price:?float,mfe_at:?\DateTimeImmutable,mae_at:?\DateTimeImmutable,
+     *   mfe_pct:?float,mae_pct:?float,source:?string,timeframe:?string,sample_count:?int,
+     *   expected_sample_count:?int,limit:int,data_quality:?string
+     * }
+     */
+    private function calculateExcursionEvidence(
+        string $symbol,
+        string $side,
+        ?string $exchange,
+        ?string $marketType,
+        \DateTimeImmutable $windowStart,
+        \DateTimeImmutable $windowEnd,
+        float $entryPrice,
+    ): array {
+        $evidence = [
+            'mfe_price' => null,
+            'mae_price' => null,
+            'mfe_at' => null,
+            'mae_at' => null,
+            'mfe_pct' => null,
+            'mae_pct' => null,
+            'source' => null,
+            'timeframe' => null,
+            'sample_count' => null,
+            'expected_sample_count' => null,
+            'limit' => 500,
+            'data_quality' => null,
+        ];
+        if ($this->mainProvider === null) {
+            return $evidence;
+        }
+
+        $evidence['source'] = 'kline_1m_high_low';
+        $evidence['timeframe'] = Timeframe::TF_1M->value;
+        $evidence['sample_count'] = 0;
+        $evidence['expected_sample_count'] = $this->expectedOneMinuteSampleCount($windowStart, $windowEnd);
+        $klineOpenTimes = [];
+        try {
+            $klines = $this->mainProvider
+                ->forContext(ExchangeContext::fromValues($exchange, $marketType))
+                ->getKlineProvider()
+                ->getKlinesInWindow($symbol, Timeframe::TF_1M, $windowStart, $windowEnd, $evidence['limit']);
+
+            foreach ($klines as $kline) {
+                $high = $this->klineNumericValue($kline, 'high');
+                $low = $this->klineNumericValue($kline, 'low');
+                $openedAt = $this->klineOpenedAt($kline);
+                if (
+                    $high === null
+                    || $low === null
+                    || $openedAt === null
+                    || $openedAt < $windowStart
+                    || $openedAt->modify('+1 minute') > $windowEnd
+                ) {
+                    continue;
+                }
+                ++$evidence['sample_count'];
+                $klineOpenTimes[$openedAt->setTimezone(new \DateTimeZone('UTC'))->format(\DateTimeInterface::ATOM)] = true;
+
+                if ($side === 'LONG') {
+                    if ($evidence['mfe_price'] === null || $high > $evidence['mfe_price']) {
+                        $evidence['mfe_price'] = $high;
+                        $evidence['mfe_at'] = $openedAt;
+                    }
+                    if ($evidence['mae_price'] === null || $low < $evidence['mae_price']) {
+                        $evidence['mae_price'] = $low;
+                        $evidence['mae_at'] = $openedAt;
+                    }
+                } else {
+                    if ($evidence['mfe_price'] === null || $low < $evidence['mfe_price']) {
+                        $evidence['mfe_price'] = $low;
+                        $evidence['mfe_at'] = $openedAt;
+                    }
+                    if ($evidence['mae_price'] === null || $high > $evidence['mae_price']) {
+                        $evidence['mae_price'] = $high;
+                        $evidence['mae_at'] = $openedAt;
+                    }
+                }
+            }
+
+            if ($entryPrice > 0.0 && $evidence['mfe_price'] !== null) {
+                $evidence['mfe_pct'] = $side === 'LONG'
+                    ? ($evidence['mfe_price'] - $entryPrice) / $entryPrice
+                    : ($entryPrice - $evidence['mfe_price']) / $entryPrice;
+            }
+            if ($entryPrice > 0.0 && $evidence['mae_price'] !== null) {
+                $evidence['mae_pct'] = $side === 'LONG'
+                    ? ($entryPrice - $evidence['mae_price']) / $entryPrice
+                    : ($evidence['mae_price'] - $entryPrice) / $entryPrice;
+            }
+            if ($evidence['sample_count'] === 0 || $evidence['mfe_price'] === null || $evidence['mae_price'] === null) {
+                $evidence['data_quality'] = 'missing_price_data';
+            } elseif (
+                $this->isOneMinuteBoundary($windowStart)
+                && $this->isOneMinuteBoundary($windowEnd)
+                && $evidence['expected_sample_count'] !== null
+                && $evidence['expected_sample_count'] <= $evidence['limit']
+                && \count($klineOpenTimes) >= $evidence['expected_sample_count']
+            ) {
+                $evidence['data_quality'] = 'complete';
+            } else {
+                $evidence['data_quality'] = 'partial';
+            }
+        } catch (\Throwable) {
+            $evidence['data_quality'] = 'provider_error';
+        }
+
+        return $evidence;
     }
 
     private function expectedOneMinuteSampleCount(\DateTimeImmutable $start, \DateTimeImmutable $end): ?int

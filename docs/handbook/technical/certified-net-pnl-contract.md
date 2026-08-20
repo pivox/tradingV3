@@ -252,6 +252,47 @@ Les champs MFE/MAE conservent leur contrat separe. Seule une qualite
 une interpretation forte ; ils ne participent pas a la certification du PnL
 net.
 
+Pour les nouveaux trades disposant d'un ledger complet, la fenêtre est désormais
+fixée par `entry_first_fill_at` et `exit_last_fill_at`, et le prix de référence est
+le VWAP des fills d'entrée. Le lifecycle persiste explicitement
+`mfe_mae_window_source=fill_cost_ledger_v1` et
+`mfe_mae_entry_price_source=fill_cost_ledger_v1`, ainsi que le VWAP utilisé dans
+`mfe_mae_entry_price`. La vue ne conserve une qualité `complete` que si ces deux
+provenances, les deux bornes et le VWAP correspondent à l'agrégat ledger. La
+comparaison du VWAP tolère uniquement un écart numérique relatif de `1e-12` (avec
+un plancher absolu de `1e-12`) lié à la sérialisation JSON. Une ancienne fenêtre,
+un ancien VWAP ou une preuve provider reste visible mais devient `partial`; ses
+valeurs d'excursion ne sont pas projetées comme preuves fortes. Lors d'un replay,
+une preuve `complete` n'est préservée que si ses bornes et son VWAP correspondent
+encore au ledger ; si le recalcul est indisponible après un changement, elle est
+explicitement rétrogradée.
+
+Avec des klines 1m, seules les bougies entièrement contenues entre le premier fill
+d'entrée et le dernier fill de sortie contribuent aux extrema. La bougie partielle
+qui contient le fill de sortie est exclue afin qu'aucun prix post-clôture n'entre
+dans MFE/MAE.
+
+`canonical_holding_time_sec` suit la même règle et vaut exactement
+`exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
+fermée, y compris la précision microseconde. Les bornes persistées utilisent le
+format `Y-m-d\TH:i:s.uP`. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
+premier fill d'entrée, ou un dernier fill d'entrée postérieur au dernier fill de
+sortie, ajoute `ledger_fill_chronology_invalid`, masque le PnL net canonique et
+interdit donc la certification. La vue vérifie aussi l'ordre interne des premiers
+et derniers fills de chaque rôle avant de publier une fenêtre canonique.
+
+Les consommateurs certifiants utilisent également `canonical_cost_completeness`,
+`canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality`. Les colonnes sans
+préfixe restent exposées uniquement pour la compatibilité et l'analyse de divergence ;
+elles ne constituent pas une autorité de certification temporelle.
+Les agrégats MFE/MAE de `RunTradeOutcomeService` excluent toute ligne dont
+`canonical_mfe_mae_data_quality` n'est pas exactement `complete`; une excursion
+`partial`, même calculable, ne dilue donc ni moyenne ni médiane canonique.
+Un ledger de quantité incomplet laisse `canonical_holding_time_sec` à `NULL`, force
+la qualité d'excursion canonique à `partial` (sauf erreur/missing plus restrictive)
+et expose la provenance `incomplete_fill_ledger`. Les valeurs provider restent
+uniquement dans les colonnes legacy sans préfixe.
+
 Aucun backfill heuristique n'est autorise. Les anciennes lignes restent
 visibles pour l'audit, mais leurs montants enregistres ou estimes ne deviennent
 pas canoniques sans evidence ledger complete et lineage #302 canonique.

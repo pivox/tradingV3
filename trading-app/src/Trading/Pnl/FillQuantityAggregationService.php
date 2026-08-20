@@ -7,9 +7,10 @@ namespace App\Trading\Pnl;
 use App\Entity\FillCostLedgerEntry;
 use App\Repository\FillCostLedgerEntryRepository;
 
-final readonly class FillQuantityAggregationService
+final readonly class FillQuantityAggregationService implements FillQuantityAggregationProviderInterface
 {
     public const DEFAULT_QUANTITY_TOLERANCE = 0.00000001;
+    private const FILL_TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
 
     public function __construct(
         private ?FillCostLedgerEntryRepository $ledger = null,
@@ -183,7 +184,7 @@ final readonly class FillQuantityAggregationService
             'slippage_cost_usdt' => $entry->getSlippageCostUsdt(),
             'borrow_cost_usdt' => $entry->getBorrowCostUsdt(),
             'liquidation_fee_usdt' => $entry->getLiquidationFeeUsdt(),
-            'occurred_at' => $entry->getOccurredAt()->format(\DateTimeInterface::ATOM),
+            'occurred_at' => $entry->getOccurredAt()->format(self::FILL_TIMESTAMP_FORMAT),
         ], \JSON_THROW_ON_ERROR);
         if (!isset($seenFillFingerprints[$identity])) {
             $seenFillFingerprints[$identity] = $fingerprint;
@@ -286,7 +287,14 @@ final readonly class FillQuantityAggregationService
 
     private static function sortByOccurrence(FillCostLedgerEntry $left, FillCostLedgerEntry $right): int
     {
-        return [$left->getOccurredAt()->getTimestamp(), $left->getFillId()]
-            <=> [$right->getOccurredAt()->getTimestamp(), $right->getFillId()];
+        return [
+            $left->getOccurredAt()->getTimestamp(),
+            (int) $left->getOccurredAt()->format('u'),
+            $left->getFillId(),
+        ] <=> [
+            $right->getOccurredAt()->getTimestamp(),
+            (int) $right->getOccurredAt()->format('u'),
+            $right->getFillId(),
+        ];
     }
 }
