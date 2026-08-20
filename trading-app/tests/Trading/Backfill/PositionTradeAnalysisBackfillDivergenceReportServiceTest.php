@@ -27,6 +27,13 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
                 'v2_close_match_status' => 'matched',
                 'v2_analysis_status' => 'matched_closed',
                 'v2_position_fully_closed' => true,
+                'v2_paper_network' => 'mainnet',
+                'v2_mode_id' => 'scalping',
+                'v2_mode_version' => '1.1.0',
+                'v2_setup_id' => 'scalping.pullback.long',
+                'v2_setup_version' => '1.1.0',
+                'v2_canonical_side' => 'LONG',
+                'v2_canonical_config_hash' => 'sha256:canonical',
             ]),
             $this->row(102, [
                 'v1_present' => true,
@@ -101,6 +108,13 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
         self::assertTrue($report['metadata']['dry_run']);
         self::assertTrue($report['metadata']['read_only']);
         self::assertSame('entry_event_id', $report['metadata']['comparison_key']);
+        self::assertSame('mainnet', $report['rows'][0]['paper_network']);
+        self::assertSame('scalping', $report['rows'][0]['mode_id']);
+        self::assertSame('1.1.0', $report['rows'][0]['mode_version']);
+        self::assertSame('scalping.pullback.long', $report['rows'][0]['setup_id']);
+        self::assertSame('1.1.0', $report['rows'][0]['setup_version']);
+        self::assertSame('LONG', $report['rows'][0]['side']);
+        self::assertSame('sha256:canonical', $report['rows'][0]['config_hash']);
     }
 
     public function testPaginationTruncatesToLimitAndKeepsDeterministicCursor(): void
@@ -161,7 +175,7 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
         self::assertSame(0, $report['summary']['certified_rows']);
     }
 
-    public function testEmptyDatasetIsReadOnlyAndBackfillReady(): void
+    public function testEmptyDatasetIsReadOnlyButCannotClaimBackfillReadiness(): void
     {
         $service = new PositionTradeAnalysisBackfillDivergenceReportService(new RecordingDivergenceReader([]));
 
@@ -170,8 +184,36 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
         self::assertSame(0, $report['summary']['v1_rows']);
         self::assertSame(0, $report['summary']['v2_rows']);
         self::assertSame([], $report['rows']);
-        self::assertTrue($report['proposal']['ready_for_backfill']);
+        self::assertFalse($report['proposal']['ready_for_backfill']);
+        self::assertSame('no_comparable_rows', $report['proposal']['blocking_reason']);
         self::assertTrue($report['metadata']['dry_run']);
+    }
+
+    public function testNonCanonicalLineageCannotBeCertifiedFromLegacyCompatibleColumns(): void
+    {
+        $service = new PositionTradeAnalysisBackfillDivergenceReportService(new RecordingDivergenceReader([
+            $this->row(280, [
+                'v1_pnl_usdt' => '5.00000000',
+                'v2_recorded_pnl_usdt' => '5.00000000',
+                'v2_net_pnl_usdt' => null,
+                'v2_cost_completeness' => null,
+                'v2_lineage_classification' => 'legacy',
+                'v2_holding_time_sec' => null,
+                'v2_holding_time_source' => 'incomplete_fill_ledger',
+                'v2_mfe_mae_data_quality' => 'partial',
+                'v2_mfe_pct' => null,
+                'v2_mae_pct' => null,
+            ]),
+        ]));
+
+        $report = $service->buildReport(new BackfillDivergenceCriteria());
+
+        self::assertSame('non_canonical_lineage', $report['rows'][0]['classification']);
+        self::assertNull($report['rows'][0]['cost_completeness']);
+        self::assertNull($report['rows'][0]['holding_time_delta_sec']);
+        self::assertNull($report['rows'][0]['mfe_delta_pct']);
+        self::assertNull($report['rows'][0]['mae_delta_pct']);
+        self::assertSame(0, $report['summary']['certified_rows']);
     }
 
     public function testUnknownRawPayloadColumnsAreNotExported(): void
@@ -236,9 +278,14 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
             'v2_mae_pct' => '-0.005',
             'v2_close_match_status' => 'matched',
             'v2_analysis_status' => 'matched_closed',
+            'v2_lineage_classification' => 'canonical',
             'v2_cost_completeness' => 'partial',
             'v2_position_fully_closed' => true,
             'v2_pnl_quality_flags' => [],
+            'v2_holding_time_source' => 'fill_cost_ledger_v1',
+            'v2_mfe_mae_window_source' => 'fill_cost_ledger_v1',
+            'v2_mfe_mae_entry_price_source' => 'fill_cost_ledger_v1',
+            'v2_mfe_mae_data_quality' => 'complete',
         ];
     }
 }
