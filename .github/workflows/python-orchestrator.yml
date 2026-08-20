@@ -51,6 +51,18 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup PHP for the golden fresh-stack boundary
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: redis, intl, opcache
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Symfony dependencies for golden scenario 20
+        working-directory: trading-app
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

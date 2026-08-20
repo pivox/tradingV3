@@ -202,17 +202,17 @@
         "tests/Provider/Fake/FakeExchangeBundleRegistryTest.php::testRegistryResolvesFakePerpetualContext",
         "tests/Indicator/Provider/IndicatorProviderServiceClosedKlineTest.php::testFakeContextUsesFakeKlinesWithoutCallingLegacyFallback",
         "python-orchestrator/tests/test_runtime_recipe_runner.py::test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart",
-        "python-orchestrator/tests/test_integration_orchestrator_e2e.py::test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism"
+        "python-orchestrator/tests/test_integration_orchestrator_e2e.py::test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism",
+        "python-orchestrator/scripts/golden20_fresh_stack_runner.py::run_fresh_stacks",
+        "python-orchestrator/tests/test_golden20_fresh_stack_runner.py::test_golden20_runs_twice_through_fresh_real_http_stacks",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioRunner.php::dryRunMultiProfilesSameSymbol"
       ],
-      "gap_codes": [
-        "multi_profile_recipe_uses_in_memory_http_harness",
-        "golden_runner_does_not_execute_recipe_twice_from_fresh_state"
-      ],
+      "gap_codes": [],
       "id": 20,
       "name": "dry_run_multi_profiles_same_symbol",
       "requirement": "Regular, scalper and scalper_micro dry-run sets targeting the same symbol preserve profile isolation while reporting the global exposure-lock contract as not exercised.",
-      "runner": null,
-      "status": "partial"
+      "runner": "dry_run_multi_profiles_same_symbol",
+      "status": "executable"
     }
   ]
 }

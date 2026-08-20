@@ -23,6 +23,16 @@ que `requiresResync` est actif, projette le snapshot local avec
 événements sans perte ni doublon. Le catalogue passe à 19 exécutables et un
 seul scénario partiel.
 
+### Mise à jour du 20 août 2026 — golden scenario 20
+
+Le golden 20 lance désormais R12 dans deux piles applicatives indépendantes.
+Chaque pile crée une base SQLite d'orchestration, un répertoire d'état Fake, un
+processus Symfony Kernel et un processus FastAPI/uvicorn neufs. Les appels
+passent par HTTP loopback réel, sans `MockTransport` ni API Symfony simulée. Les
+deux rapports normalisés sont byte-identiques ; trois profils distincts ciblent
+`BTCUSDT`, le replay conserve le même run, et ordres comme appels
+Bitmart/OKX/Hyperliquid restent à zéro. Le catalogue passe à 20 exécutables.
+
 L'audit du 19 juillet 2026 porte sur le dépôt `pivox/tradingV3`, la branche
 `issue/196-fake-paper-final-audit` et la base exacte
 `e2c1e30d6610ed262daf834003cadafaf1b76bab`, identique à `origin/main` au
@@ -31,11 +41,10 @@ MTF, EntryZone, sizing, fréquence, garde live ou Bitmart n'a été modifié.
 
 Le résultat vérifié est le suivant :
 
-- 19 scénarios golden sur 20 exécutent réellement leur comportement nommé dans
+- 20 scénarios golden sur 20 exécutent réellement leur comportement nommé dans
   le runner consolidé, deux fois avec une horloge contrôlée et un état neuf ;
-- le scénario 20 dispose de tests Python utiles, mais ceux-ci utilisent des
-  doubles HTTP en mémoire ; l'ancien runner PHP ne lançait pas la recette et
-  certifiait plusieurs faits par constantes ;
+- le scénario 20 complète les tests unitaires Python par deux piles locales
+  fraîches et de vraies frontières HTTP FastAPI/Symfony ;
 - aucun contrat de seed fixe n'existe pour l'ensemble Fake/Paper ; des identités
   internes utilisent encore une source aléatoire, même si les résultats golden
   normalisés observés sont stables ;
@@ -45,9 +54,10 @@ Le résultat vérifié est le suivant :
   modes de fill, le public WS et la matrice de remplacement Bitmart restent à
   livrer.
 
-La présence d'une ligne dans le catalogue n'est donc pas une certification. Le
-catalogue conserve les vingt exigences, mais classe honnêtement 15 et 20
-`partial`. Ce rapport ne ferme ni #196 ni #195 et n'autorise aucune écriture
+La présence d'une ligne dans le catalogue n'est pas à elle seule une
+certification. Les vingt lignes sont désormais `executable`, mais les autres
+écarts de représentativité listés ci-dessous restent ouverts. Ce rapport ne
+ferme ni #196 ni #195 et n'autorise aucune écriture
 exchange.
 
 ## Méthode et périmètre de preuve
@@ -101,11 +111,10 @@ identités non incluses dans les faits normalisés ne sont pas déterministes.
 | 17 | `restart_with_open_position` | Un fichier neuf est repris dans une nouvelle instance avec position, protection et séquence conservées. | `restartWithOpenPosition()` et `testStateStoreRestoresProtectedPositionAndContinuesEventSequence` | PASS — exécutable deux fois |
 | 18 | `funding` | Funding positif/négatif/absent, long/short/partiel, deadline, replay exact-once, restart et montant inconnu `null`. | `funding()` et `FakeFundingModelTest` | PASS — exécutable deux fois |
 | 19 | `one_way_conflict` | Conflits position/ordre, reduce-only, symboles indépendants, replay et restart en One-Way. | `oneWayConflict()` et `FakeOneWayConflictGuardTest` | PASS — exécutable deux fois |
-| 20 | `dry_run_multi_profiles_same_symbol` | Les tests Python exercent la logique d'orchestration avec une API Symfony simulée ; l'ancien runner PHP ne lançait pas la recette et construisait les faits à partir de constantes/du JSON. Il ne s'agit pas de deux piles fraîches complètes. | `test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart` et `test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism` | **PARTIAL** — `multi_profile_recipe_uses_in_memory_http_harness`, `golden_runner_does_not_execute_recipe_twice_from_fresh_state` |
+| 20 | `dry_run_multi_profiles_same_symbol` | Deux bases, deux états Fake et deux couples Symfony/FastAPI frais exécutent R12 par HTTP loopback ; rapports identiques, trois lineage/config hashes distincts, replay stable et zéro ordre/appel exchange. | `run_fresh_stacks()`, `test_golden20_runs_twice_through_fresh_real_http_stacks()` et `dryRunMultiProfilesSameSymbol()` | PASS — exécutable deux fois depuis piles fraîches |
 
-Résultat : **19 PASS / 1 PARTIAL / 0 UNSUPPORTED** dans le catalogue. Ce
-résultat n'est pas « 20 scénarios automatisés PASS » au sens de l'acceptance
-criterion de #196.
+Résultat : **20 PASS / 0 PARTIAL / 0 UNSUPPORTED** dans le catalogue. Cela lève
+le livrable golden, sans lever les autres écarts de #196.
 
 ## Matrice des livrables de #196
 
@@ -122,7 +131,7 @@ criterion de #196.
 | Simulation WS public/privé | Private WS persistant, disconnect, ack, duplicate/out-of-order/gap et snapshot resync aux scénarios 15 et 16. | PARTIAL | Public WS absent. |
 | DSL/fixtures d'erreurs | Fautes typées `network_timeout`, `transport_error`, `http_429`, `http_500`, avant/après mutation, FIFO et restart. | PARTIAL | Pas de quota glissant, latence/jitter seedés, précision/marge dans une DSL commune, ni catalogue de divergences. |
 | Runtime-check Fake/Paper | Contrôle local de book, balance, horloge, coûts, SL et reprise de sonde ; dry-run, permissions off, kill switch et writes off imposés. | PASS fail-closed | La configuration courante reste non-ready sans horloge contrôlée et source marché Paper. Aucun résultat ready Paper ne doit être revendiqué. |
-| 20 scénarios golden | Catalogue strict de vingt lignes et runner consolidé. | **FAIL** | 19 exécutables ; scénario 20 `partial`. |
+| 20 scénarios golden | Catalogue strict de vingt lignes, runner consolidé et R12 exécuté depuis deux piles fraîches. | PASS | Aucun écart sur le livrable golden. |
 | Matrice de parité/remplacement Bitmart | Les adapters exposent quelques flags et la recette Fake garde une frontière structurelle avec Bitmart. | **FAIL** | Aucune matrice complète critère→preuve→divergence→condition de remplacement n'était livrée. L'entrée proposée pour #195 figure plus bas. |
 | Documentation opérateur et rollback | Handbook, README Fake, modèle risque et rollback local existent. | PARTIAL | Les anciens documents sur-certifiaient 20/20 ; Paper réel/replay et rollback de sa source restent à documenter après implémentation. |
 
@@ -135,7 +144,7 @@ criterion de #196.
 | Un maker peut rester non rempli ou partiel | Scénarios 2 et 3, IOC non croisé et fill partiel explicite. | PASS | — |
 | Précision, marge, balance et levier réalistes | Scénarios 6–8 et catalogue instrument. | PASS pour le modèle synthétique versionné | La réalisme Paper dépendra des données source. |
 | Aucun ordre accepté avec `order_id=null` | Les résultats acceptés utilisent une identité locale persistée ; tests adapter/contrat. | PASS | — |
-| Idempotence sans multi-submit | Scénarios 9, 10, 12, 13, 18 et 19 couvrent replay et effets exact-once. | PASS dans les chemins couverts | La future pile réelle du scénario 20 doit aussi être instrumentée. |
+| Idempotence sans multi-submit | Scénarios 9, 10, 12, 13, 18–20 couvrent replay et effets exact-once ; R12 relit le même run sur chaque pile fraîche. | PASS dans les chemins couverts | Les autres chemins Paper restent conditionnés par leur future source marché. |
 | Toute position ouverte a un SL accepté ou une compensation | Fill complet/partiel avec SL attaché, resize et compensation exacte sont testés. | PASS pour le contrat attaché | Les ordres sans SL attaché ne sont pas certifiés par cette garantie. |
 | Restart Paper sans perte | Scénarios 13, 16–19 et tests du file store restaurent l'état et les séquences. | PASS pour fichier local | Pas de ledger PostgreSQL utilisé par Fake. |
 | Network/rate-limit/WS disconnect injectables | Timeout, transport, HTTP 429/500, private WS disconnect/gap et snapshot resync sont injectables. | PARTIAL | Pas de rate limiter temporel/quota glissant, latence/jitter seedés ou public WS. |
@@ -181,16 +190,11 @@ capability existe sur un exchange réel.
 
 ### P0 — empêche la clôture de #196
 
-1. **Scénario 20 sur pile réelle locale.** Démarrer deux états applicatifs
-   indépendants ou remettre à zéro toutes les persistences, lancer réellement la
-   recette R12 vers Symfony local Fake, instrumenter les frontières HTTP de tous
-   les exchanges et comparer les rapports. Les doubles HTTP en mémoire restent
-   des tests unitaires, pas la preuve golden finale.
-2. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
+1. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
    scénario/runtime, dériver les identités non métier de ce seed ou les exclure
    contractuellement avec justification, puis comparer l'état persistant complet
    et les coûts/événements de deux exécutions fraîches.
-3. **Mode Paper.** Implémenter une source marché réelle publique ou replay
+2. **Mode Paper.** Implémenter une source marché réelle publique ou replay
    enregistrée, versionnée et redacted, sans client privé et sans write, puis
    rendre le runtime-check ready uniquement si source et horloge sont prêtes.
 
@@ -278,7 +282,8 @@ Les validations exigées pour ce rapport sont :
 - suites Exchange/Fake/Provider/TradeEntry/TradingCore proportionnelles ;
 - tests ciblés restart/fichier, idempotence, coûts, protections, runtime-check et
   absence d'appel exchange ;
-- tests Python ciblés du scénario 20, comptés comme preuves partielles ;
+- test Python du scénario 20 sur deux piles HTTP fraîches et suite orchestrateur
+  complète dans les conditions CI ;
 - PHPStan sur chaque PHP touché ;
 - lint container Symfony et YAML avec `DEFAULT_URI` sûr explicite si nécessaire ;
 - MkDocs strict ;
@@ -291,20 +296,20 @@ Résultats obtenus :
 |---|---|---|
 | Baseline consolidée avant edit | Deux processus : 28 tests, 469 assertions chacun. Cette valeur diffère de la baseline orchestrateur annoncée à 26/433 et confirmait que les vingt lignes étaient alors fournies au runner. | PASS technique, certification auditée ensuite |
 | TDD de reclassification | Test rouge initial : 26 tests, 394 assertions, 2 failures attendues (catalogue encore `executable`, runner encore à 20 clés). Après correction ciblée : 24 tests, 421 assertions, PASS. | PASS |
-| Golden consolidé, processus frais 1 | 26 tests, 452 assertions. | PASS |
-| Golden consolidé, processus frais 2 | 26 tests, 452 assertions. | PASS |
-| Suite proportionnelle Exchange/Fake/Provider/TradeEntry/TradingCore | Premier audit : 949 tests, 5280 assertions, 1 erreur d'environnement et 3 failures révélant des tests Provider `cross` périmés. Après environnement local sûr et réalignement TDD : 950 tests, 5297 assertions. | PASS final |
+| Golden consolidé avec scénario 20 frais | 26 tests, 453 assertions ; le test PHPUnit relance le runner complet, lequel crée deux piles par invocation. | PASS |
+| Suite proportionnelle Exchange/Fake/Provider/TradeEntry | 1392 tests, 7298 assertions, 30 skips et un risque de métadonnée coverage préexistant. | PASS fonctionnel |
 | Provider Fake ciblé | Reproduction rouge : 24 tests, 196 assertions, 3 failures ; après correction et preuve `cross=false` : 25 tests, 216 assertions. Registry avec `LOCK_DSN=flock` et valeurs locales : 4 tests, 14 assertions. | PASS final |
 | Restart fichier ciblé | Position/protection/séquence, private WS, funding, One-Way, liquidation et trailing : 6 tests, 62 assertions. | PASS |
 | Runtime-check CLI Fake | Exit 0 de la commande de diagnostic ; `readiness=not_ready`, blockers `fake_paper_clock_not_controlled` et `public_connectivity_unavailable`, warning `fake_paper_market_source_not_configured`; state writable/recovery et modèles locaux ready. | PASS fail-closed, **pas ready** |
 | Sécurité structurale exchange | `FakeOnlyExchangeCallAuditTest` : 6 tests, 28 assertions. | PASS |
-| Python scénario 20 | Deux tests ciblés PASS ; un warning de dépréciation Starlette/httpx. Ces tests restent classés comme preuve partielle car ils utilisent des doubles HTTP. | PASS de la preuve partielle |
+| Python scénario 20 | Test frais PASS : deux SQLite, deux états Fake et quatre processus Symfony/FastAPI sur HTTP loopback ; digest identique et zéro ordre/appel exchange. | PASS |
+| Suite Python orchestrateur | 1188 tests collectés : 1184 PASS et 4 skips attendus dans les conditions CI ; un warning Starlette/httpx et des warnings Backtrader connus. | PASS |
 | Python redaction/fixtures | Deux tests ciblés PASS. | PASS |
-| PHPStan | Quatre fichiers PHP golden/Provider touchés, aucun défaut. | PASS |
+| PHPStan | Trois fichiers PHP golden touchés, aucun défaut avec limite mémoire explicite de 1 Gio. | PASS |
 | Symfony container lint | Tous les services ont des types d'injection compatibles. | PASS |
-| YAML lint | 55 fichiers valides, tags parsés. | PASS |
+| YAML lint | 96 fichiers valides, tags parsés. | PASS |
 | MkDocs strict | L'exécutable `mkdocs` n'est pas dans le `PATH` (exit 127) ; `python3 -m mkdocs build --strict` réussit. Les pages historiques hors navigation sont signalées au niveau INFO. | PASS via module Python ; blocker PATH documenté |
-| Scan des ajouts | Affectations de secrets : PASS ; ajout d'appel réseau/exchange : PASS ; aucune valeur n'est imprimée par les scans. | PASS |
+| Scan des ajouts | Aucun credential exchange ni header d'autorisation ; seul `APP_SECRET` reçoit une constante locale de boot Symfony non sensible. Les nouvelles URL sont exclusivement `127.0.0.1` et aucun appel exchange n'est ajouté. | PASS |
 | `git diff --check` | Aucun défaut. | PASS |
 
 > **Note — commande exacte de sélection de la suite proportionnelle :**

@@ -312,6 +312,24 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'same_rejected_order_id' => true,
             'short_blocks_long' => true,
         ],
+        'dry_run_multi_profiles_same_symbol' => [
+            'config_hashes_unique' => true,
+            'disabled_sets' => ['recipe_fake_multi_disabled'],
+            'exchange_calls' => ['bitmart' => 0, 'hyperliquid' => 0, 'okx' => 0],
+            'fresh_database_count' => 2,
+            'fresh_process_count' => 4,
+            'loopback_http_stacks' => 2,
+            'orders_total' => 0,
+            'profiles' => ['regular', 'scalper', 'scalper_micro'],
+            'replay_same_run_id' => true,
+            'report_digest' => 'sha256:578aaf847bee9833d8946d056638506ebac938dabbb8dd3459df626e64c46b8d',
+            'reports_identical' => true,
+            'schema_version' => 'fake-paper-golden20-fresh-stacks-v1',
+            'stack_count' => 2,
+            'status' => 'pass',
+            'symbols' => [['BTCUSDT'], ['BTCUSDT'], ['BTCUSDT']],
+            'transport' => 'loopback_tcp_http',
+        ],
     ];
 
     public function testGoldenRunnerContractExists(): void
@@ -377,7 +395,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(19, $catalogKeys);
+        self::assertCount(20, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

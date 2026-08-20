@@ -350,14 +350,20 @@ Par defaut, il cible les scenarios critiques `R1`, `R2`, `R5`, `R6`, `R8`,
 schedule reel : les scenarios qui exigent une panne/crash/Temporal reel sont
 marques `BLOCKED` si la condition n'est pas observable depuis le runner.
 
-> **Statut de certification supersede (audit final #196).** Cette documentation
-> Prompt 6 conserve la recette R12 et son resultat propre, mais ne constitue plus
-> une certification golden du scenario 20. Le statut de reference est publie
-> dans
+> **Certification golden #196 (20 août 2026).** Le statut de référence est
+> publié dans
 > [`docs/handbook/reports/fake-paper-final-audit-196.md`](../docs/handbook/reports/fake-paper-final-audit-196.md).
-> Le scenario 20 est `partial` : les tests Python utilisent des doubles HTTP en
-> memoire et le runner golden PHP ne lance pas la recette complete deux fois
-> depuis deux piles applicatives fraiches.
+> Le scénario 20 est `executable` : deux piles fraîches FastAPI/Symfony sont
+> lancées sur HTTP loopback avec bases et états Fake distincts.
+
+La preuve autonome complète est :
+
+```bash
+python scripts/golden20_fresh_stack_runner.py
+```
+
+Elle exécute R12 deux fois depuis des piles neuves, compare les rapports
+normalisés byte pour byte et supprime tous les états/processus temporaires.
 
 Le golden scenario 20 / `R12` dispose d'une commande dediee et reproductible :
 

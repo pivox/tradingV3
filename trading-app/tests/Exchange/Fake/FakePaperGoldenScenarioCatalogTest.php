@@ -30,13 +30,7 @@ final class FakePaperGoldenScenarioCatalogTest extends TestCase
         'restart_with_open_position' => ['executable', []],
         'funding' => ['executable', []],
         'one_way_conflict' => ['executable', []],
-        'dry_run_multi_profiles_same_symbol' => [
-            'partial',
-            [
-                'multi_profile_recipe_uses_in_memory_http_harness',
-                'golden_runner_does_not_execute_recipe_twice_from_fresh_state',
-            ],
-        ],
+        'dry_run_multi_profiles_same_symbol' => ['executable', []],
     ];
 
     private const EXPECTED_NAMES = [
