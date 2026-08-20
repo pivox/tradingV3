@@ -21,6 +21,20 @@ final readonly class CanonicalMicrostructureEngine
         array $books,
         array $trades,
     ): CanonicalMicrostructureSnapshot {
+        return CanonicalMicrostructureSnapshot::fromRecords($policy, $evaluatedAt, $books, $trades);
+    }
+
+    /**
+     * @param list<NormalizedBacktestPublicBook>  $books
+     * @param list<NormalizedBacktestPublicTrade> $trades
+     * @return array<string, mixed>
+     */
+    public function compute(
+        CanonicalMicrostructurePolicy $policy,
+        \DateTimeImmutable $evaluatedAt,
+        array $books,
+        array $trades,
+    ): array {
         self::utc($evaluatedAt);
         $this->validateRecords($books, $trades);
         $availableBooks = array_values(array_filter($books, static fn (NormalizedBacktestPublicBook $book): bool => self::time($book->availableAt) <= $evaluatedAt));
@@ -110,7 +124,7 @@ final readonly class CanonicalMicrostructureEngine
             'lastTradeAvailableAt' => $last->availableAt,
             'tradeSourceRecordIds' => array_map(static fn (NormalizedBacktestPublicTrade $trade): string => $trade->sourceRecordId, $windowTrades),
         ];
-        return new CanonicalMicrostructureSnapshot(...$arguments);
+        return $arguments;
     }
 
     /**

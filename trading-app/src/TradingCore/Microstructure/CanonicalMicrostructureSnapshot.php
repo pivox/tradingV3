@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\TradingCore\Microstructure;
 
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicBook;
+use App\Trading\Paper\Backtesting\NormalizedBacktestPublicTrade;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use App\TradingCore\Rules\Evaluation\RuleInputProof;
@@ -21,7 +23,7 @@ final readonly class CanonicalMicrostructureSnapshot implements RuleInputProof
      * @param array<string, int|string> $policy
      * @param non-empty-list<string>    $tradeSourceRecordIds
      */
-    public function __construct(
+    private function __construct(
         public string $sourceNetwork,
         public string $marketDataVenue,
         public string $marketType,
@@ -67,6 +69,24 @@ final readonly class CanonicalMicrostructureSnapshot implements RuleInputProof
         ) {
             throw new CanonicalMicrostructureException('canonical_microstructure_snapshot_invalid');
         }
+    }
+
+    /**
+     * @param list<NormalizedBacktestPublicBook>  $books
+     * @param list<NormalizedBacktestPublicTrade> $trades
+     */
+    public static function fromRecords(
+        CanonicalMicrostructurePolicy $policy,
+        \DateTimeImmutable $evaluatedAt,
+        array $books,
+        array $trades,
+    ): self {
+        return new self(...(new CanonicalMicrostructureEngine())->compute(
+            $policy,
+            $evaluatedAt,
+            $books,
+            $trades,
+        ));
     }
 
     public function verify(): self

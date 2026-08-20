@@ -789,6 +789,9 @@ reseau/venue/marche/symbole et l'unite native coherente (`contracts` pour OKX,
 snapshot canonique readonly : son hash est reverifie et ses metriques sont
 comparees aux scalaires evalues. `RuleMarketIdentity` lie enfin cette preuve au
 reseau, a la venue, au marche, au symbole et a l'unite attendus par le run.
+Le constructeur du snapshot est prive : une preuve ne peut etre creee depuis
+des metriques fournies par l'appelant. `fromRecords()` repasse obligatoirement
+par le calcul canonique sur les records publics normalises et controles.
 
 Ce pont ne repointe encore aucun setup. Le contrat micro des ordres, du risque,
 de l'EntryZone, des couts et de l'horizon reste a publier avant de rendre

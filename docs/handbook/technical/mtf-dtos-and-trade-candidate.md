@@ -245,6 +245,8 @@ marche public et l'unite venue. L'evaluateur strict rejette une entree absente,
 expiree ou falsifiee ; aucune valeur par defaut ne remplace la preuve. Le hash
 est lie au snapshot canonique readonly et les champs observes doivent aussi
 correspondre a un `RuleMarketIdentity` attendu distinct de l'identite recue.
+Le constructeur du snapshot est prive ; seule la factory sur records publics
+normalises peut demander le recalcul canonique et produire ce `RuleInputProof`.
 
 Ce lot ne branche pas encore `micro_scalping` au runtime MTF et ne modifie pas
 les DTOs de decision ou TradeEntry. L'activation attend encore les contrats
