@@ -17,11 +17,13 @@ use App\Trading\Paper\Replay\PaperReplayReader;
 final readonly class PaperReplayReadinessService
 {
     /** @var list<string> */
-    private const CELL_INSPECTION_FAILURES = [
+    private const CELL_STATE_FAILURES = [
         'paper_execution_cell_identity_conflict',
         'paper_execution_checkpoint_missing',
         'paper_execution_checkpoint_corrupt',
+        'paper_execution_dataset_identity_missing',
         'paper_execution_dataset_identity_corrupt',
+        'paper_execution_dataset_identity_conflict',
         'paper_execution_cell_state_invalid',
     ];
 
@@ -67,11 +69,7 @@ final readonly class PaperReplayReadinessService
         try {
             $state = $this->store->inspectCell($cell, $eligibility);
         } catch (\Throwable $failure) {
-            if (in_array($failure->getMessage(), self::CELL_INSPECTION_FAILURES, true)) {
-                throw new \LogicException($failure->getMessage());
-            }
-
-            throw new \RuntimeException('paper_execution_state_inspection_failed');
+            $this->throwNormalizedStateFailure($failure);
         }
         if ($state->killed) {
             throw new \LogicException('paper_execution_cell_killed');
@@ -84,9 +82,13 @@ final readonly class PaperReplayReadinessService
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }
         $consumerId = $this->checkpoints->consumerId($cell);
-        $checkpoint = $state->registered
-            ? $this->checkpoints->resolve($cell, $manifest, $consumerId)
-            : null;
+        try {
+            $checkpoint = $state->registered
+                ? $this->checkpoints->resolve($cell, $manifest, $consumerId)
+                : null;
+        } catch (\Throwable $failure) {
+            $this->throwNormalizedStateFailure($failure);
+        }
         if ($checkpoint !== null) {
             $this->reader->assertCanResume($datasetPath, $consumerId, $checkpoint, $manifest);
         }
@@ -106,5 +108,14 @@ final readonly class PaperReplayReadinessService
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
             throw new \InvalidArgumentException('paper_execution_path_must_be_absolute');
         }
+    }
+
+    private function throwNormalizedStateFailure(\Throwable $failure): never
+    {
+        if (in_array($failure->getMessage(), self::CELL_STATE_FAILURES, true)) {
+            throw new \LogicException($failure->getMessage());
+        }
+
+        throw new \RuntimeException('paper_execution_state_inspection_failed');
     }
 }

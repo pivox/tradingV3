@@ -185,6 +185,21 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertStringNotContainsString('password', $tester->getDisplay());
     }
 
+    public function testCheckpointResolutionFailureIsNormalizedWithoutLeakingDatabaseDetails(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $store->registerCell($this->cell(), PaperProfileEligibility::REFERENCE_ONLY);
+        $store->checkpointFailure = new \RuntimeException('postgres://user:password@private-host/checkpoint');
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_execution_state_inspection_failed', $payload['blocker']);
+        self::assertStringNotContainsString('private-host', $tester->getDisplay());
+        self::assertStringNotContainsString('password', $tester->getDisplay());
+    }
+
     public function testFreeFormRecorderVersionIsNeverEmitted(): void
     {
         $manifestPath = $this->dataset . '/manifest.json';

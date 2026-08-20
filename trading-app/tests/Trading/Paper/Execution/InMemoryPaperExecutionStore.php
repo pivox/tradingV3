@@ -18,6 +18,7 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 {
     public int $registrationWrites = 0;
     public ?\Throwable $inspectionFailure = null;
+    public ?\Throwable $checkpointFailure = null;
 
     /** @var array<int, PaperMarketEvent> */
     private array $sources = [];
@@ -123,6 +124,10 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint
     {
+        if ($this->checkpointFailure !== null) {
+            throw $this->checkpointFailure;
+        }
+
         return new PaperExecutionCheckpoint($cell->id, count($this->sources), $this->ordinal, str_repeat('0', 64), $this->cursor, $this->killed, $this->ordinal);
     }
 
