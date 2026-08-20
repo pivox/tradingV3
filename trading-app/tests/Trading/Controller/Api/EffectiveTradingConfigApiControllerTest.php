@@ -7,6 +7,8 @@ namespace App\Tests\Trading\Controller\Api;
 use App\Trading\Controller\Api\EffectiveTradingConfigApiController;
 use App\TradingCore\Config\EffectiveTradingConfigReadService;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Config\Audit\EffectiveConfigRedactor;
+use App\TradingCore\Config\Audit\EffectiveConfigViewerDocumentFactory;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
@@ -71,6 +73,10 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
         self::assertSame(Response::HTTP_OK, $response->getStatusCode());
         self::assertSame('fake', $body['request']['execution_capability']);
         self::assertTrue($body['executable']);
+        self::assertSame('current_preview', $body['document_kind']);
+        self::assertSame('1.0.0', $body['resolver_version']);
+        self::assertSame('valid', $body['validation_status']);
+        self::assertSame([], $body['redacted_paths']);
     }
 
     public function testViewerRejectsUnknownCapabilityWithoutFallback(): void
@@ -88,7 +94,10 @@ final class EffectiveTradingConfigApiControllerTest extends TestCase
 
     private function controller(): EffectiveTradingConfigApiController
     {
-        $controller = new EffectiveTradingConfigApiController(new EffectiveTradingConfigReadService(new EffectiveTradingConfigResolver()));
+        $controller = new EffectiveTradingConfigApiController(new EffectiveTradingConfigReadService(
+            new EffectiveTradingConfigResolver(),
+            new EffectiveConfigViewerDocumentFactory(new EffectiveConfigRedactor()),
+        ));
         $controller->setContainer(new class implements ContainerInterface {
             public function get(string $id): mixed { throw new \RuntimeException($id); }
             public function has(string $id): bool { return false; }

@@ -121,6 +121,14 @@ jobs:
           vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
           tests/Trading/Paper/Execution
 
+      - name: PHPUnit — Effective config registry PostgreSQL
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+        run: >-
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
+          tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationTest.php
+          tests/TradingCore/Config/Audit/DoctrineEffectiveConfigSnapshotRegistryTest.php
+
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
 

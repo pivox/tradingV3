@@ -1,0 +1,239 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\TradingCore\Config\Audit;
+
+use App\TradingCore\Config\Audit\DoctrineEffectiveConfigSnapshotRegistry;
+use App\TradingCore\Config\Audit\EffectiveConfigCanonicalJson;
+use App\TradingCore\Config\Audit\EffectiveConfigViewerDocument;
+use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Exception\DriverException;
+use Doctrine\DBAL\Schema\Schema;
+use DoctrineMigrations\Version20260820150000;
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
+
+#[CoversClass(DoctrineEffectiveConfigSnapshotRegistry::class)]
+final class DoctrineEffectiveConfigSnapshotRegistryTest extends TestCase
+{
+    private Connection $connection;
+    private string $schemaName;
+    private string $dsn;
+    private DoctrineEffectiveConfigSnapshotRegistry $registry;
+
+    protected function setUp(): void
+    {
+        $dsn = $_ENV['DATABASE_URL'] ?? $_SERVER['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '';
+        $database = is_string($dsn) ? ltrim((string) parse_url($dsn, PHP_URL_PATH), '/') : '';
+        if (!str_ends_with($database, '_paper_test')) {
+            self::markTestSkipped('Effective config registry integration tests require a database ending in _paper_test.');
+        }
+
+        $this->dsn = $dsn;
+        $this->connection = DriverManager::getConnection(['url' => $this->dsn]);
+        $this->schemaName = sprintf('effective_config_%d_%s', getmypid(), bin2hex(random_bytes(4)));
+        $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
+        $this->connection->executeStatement('CREATE SCHEMA ' . $quoted);
+        $this->connection->executeStatement('SET search_path TO ' . $quoted . ', public');
+        $this->executeMigration();
+        $this->registry = new DoctrineEffectiveConfigSnapshotRegistry($this->connection);
+    }
+
+    protected function tearDown(): void
+    {
+        if (!isset($this->connection)) {
+            return;
+        }
+        $quoted = $this->connection->getDatabasePlatform()->quoteSingleIdentifier($this->schemaName);
+        $this->connection->executeStatement('SET search_path TO public');
+        $this->connection->executeStatement('DROP SCHEMA IF EXISTS ' . $quoted . ' CASCADE');
+        $this->connection->close();
+    }
+
+    public function testRegistrationIsIdempotentAndReloadsCanonicalDocument(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->registry->register($document);
+        $this->registry->register($document);
+
+        self::assertSame(1, (int) $this->connection->fetchOne('SELECT COUNT(*) FROM effective_trading_config_snapshot'));
+        $reloaded = $this->registry->find($document->snapshotHash());
+        self::assertNotNull($reloaded);
+        self::assertSame($document->canonicalJson(), EffectiveConfigCanonicalJson::encode($reloaded->document));
+        self::assertStringNotContainsString('raw-secret', (string) $this->connection->fetchOne('SELECT redacted_snapshot::text FROM effective_trading_config_snapshot'));
+    }
+
+    public function testSameHashWithDifferentContentFailsClosed(): void
+    {
+        $this->registry->register($this->document('a', 'c', '/base-a.yaml'));
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('effective_config_snapshot_conflict');
+        $this->registry->register($this->document('a', 'c', '/different.yaml'));
+    }
+
+    public function testConcurrentExactRegistrationIsAnIdempotentReplay(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->connection->beginTransaction();
+        $this->insertRaw($document, $document->redactedContentChecksum());
+        $readyFile = tempnam(sys_get_temp_dir(), 'effective-config-race-');
+        self::assertIsString($readyFile);
+        unlink($readyFile);
+        $script = <<<'PHP'
+require $argv[1];
+$connection = \Doctrine\DBAL\DriverManager::getConnection(['url' => $argv[2]]);
+$quoted = $connection->getDatabasePlatform()->quoteSingleIdentifier($argv[3]);
+$connection->executeStatement('SET search_path TO ' . $quoted . ', public');
+$payload = json_decode(base64_decode($argv[4], true), true, 512, JSON_THROW_ON_ERROR);
+$document = new \App\TradingCore\Config\Audit\EffectiveConfigViewerDocument($payload);
+file_put_contents($argv[5], (string) $connection->fetchOne('SELECT pg_backend_pid()'));
+try {
+    (new \App\TradingCore\Config\Audit\DoctrineEffectiveConfigSnapshotRegistry($connection))->register($document);
+    exit(0);
+} catch (\Throwable $exception) {
+    fwrite(STDERR, $exception->getMessage());
+    exit(1);
+}
+PHP;
+        $process = proc_open([
+            PHP_BINARY,
+            '-r',
+            $script,
+            dirname(__DIR__, 4) . '/vendor/autoload.php',
+            $this->dsn,
+            $this->schemaName,
+            base64_encode($document->canonicalJson()),
+            $readyFile,
+        ], [
+            0 => ['file', '/dev/null', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
+        self::assertIsResource($process);
+
+        for ($attempt = 0; $attempt < 50 && !is_file($readyFile); ++$attempt) {
+            usleep(20_000);
+        }
+        self::assertFileExists($readyFile);
+        $backendPid = (int) file_get_contents($readyFile);
+        $blocked = false;
+        for ($attempt = 0; $attempt < 50; ++$attempt) {
+            if ($this->connection->fetchOne('SELECT wait_event_type FROM pg_stat_activity WHERE pid = ?', [$backendPid]) === 'Lock') {
+                $blocked = true;
+                break;
+            }
+            usleep(20_000);
+        }
+        $this->connection->commit();
+        $stdout = stream_get_contents($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+        unlink($readyFile);
+
+        self::assertTrue($blocked, 'Concurrent registration never reached the unique-key lock.');
+        self::assertSame('', $stdout);
+        self::assertSame(0, $exit, 'An exact concurrent replay was reported as a conflict: ' . $stderr);
+        self::assertSame(1, (int) $this->connection->fetchOne('SELECT COUNT(*) FROM effective_trading_config_snapshot'));
+    }
+
+    public function testHistoryPreservesProvenanceDistinctSnapshotsSharingAConfigHash(): void
+    {
+        $this->registry->register($this->document('b', 'c', '/base-b.yaml'));
+        $this->registry->register($this->document('a', 'c', '/base-a.yaml'));
+
+        $history = $this->registry->findByConfigHash('sha256:' . str_repeat('c', 64));
+        self::assertCount(2, $history);
+        self::assertSame(
+            ['sha256:' . str_repeat('b', 64), 'sha256:' . str_repeat('a', 64)],
+            array_map(static fn ($record): string => (string) $record->document['snapshot_hash'], $history),
+        );
+    }
+
+    public function testDatabaseRejectsSnapshotMutationAndDeletion(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->registry->register($document);
+
+        foreach ([
+            'UPDATE effective_trading_config_snapshot SET validation_status = validation_status WHERE snapshot_hash = ?',
+            'DELETE FROM effective_trading_config_snapshot WHERE snapshot_hash = ?',
+        ] as $sql) {
+            try {
+                $this->connection->executeStatement($sql, [$document->snapshotHash()]);
+                self::fail('Append-only snapshot mutation was accepted.');
+            } catch (DriverException $exception) {
+                self::assertSame('P0001', $exception->getSQLState());
+                self::assertStringContainsString('effective_trading_config_snapshot_append_only', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testReadRejectsAStoredChecksumMismatch(): void
+    {
+        $document = $this->document('a', 'c', '/base-a.yaml');
+        $this->insertRaw($document, str_repeat('0', 64));
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('effective_config_snapshot_checksum_mismatch');
+        $this->registry->find($document->snapshotHash());
+    }
+
+    private function insertRaw(EffectiveConfigViewerDocument $document, string $checksum): void
+    {
+        $payload = $document->payload;
+        $this->connection->executeStatement(<<<'SQL'
+INSERT INTO effective_trading_config_snapshot (
+    snapshot_hash, config_hash, condition_catalog_hash, schema_version, resolver_version,
+    mode_id, mode_version, setup_id, setup_version, exchange, environment, side,
+    execution_capability, validation_status, redacted_snapshot, redacted_content_checksum, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'valid', ?::jsonb, ?, NOW())
+SQL, [
+            $document->snapshotHash(), $document->configHash(), $payload['condition_catalog_hash'],
+            $payload['config']['schema_version'], $payload['resolver_version'],
+            $payload['request']['mode_id'], $payload['request']['mode_version'],
+            $payload['request']['setup_id'], $payload['request']['setup_version'],
+            $payload['request']['exchange'], $payload['request']['environment'], $payload['request']['side'],
+            $document->canonicalJson(), $checksum,
+        ]);
+    }
+
+    private function document(string $snapshot, string $config, string $path): EffectiveConfigViewerDocument
+    {
+        return new EffectiveConfigViewerDocument([
+            'document_kind' => 'current_preview',
+            'resolver_version' => '1.0.0',
+            'validation_status' => 'valid',
+            'redacted_paths' => ['config.api_secret'],
+            'request' => [
+                'mode_id' => 'day_trading', 'mode_version' => '1.1.0',
+                'setup_id' => 'day_trading.trend_continuation.long', 'setup_version' => '1.1.0',
+                'exchange' => 'fake', 'environment' => 'test', 'side' => 'long',
+            ],
+            'config' => ['schema_version' => 'effective-trading-config.v2', 'api_secret' => '***REDACTED***'],
+            'config_hash' => 'sha256:' . str_repeat($config, 64),
+            'condition_catalog_hash' => 'sha256:' . str_repeat('d', 64),
+            'ordered_layers' => [['type' => 'base', 'name' => 'base', 'path' => $path, 'required' => true]],
+            'ordered_files' => [$path],
+            'provenance' => ['schema_version' => ['type' => 'base', 'name' => 'base', 'path' => $path, 'required' => true]],
+            'executable' => true,
+            'blockers' => [],
+            'snapshot_hash' => 'sha256:' . str_repeat($snapshot, 64),
+        ]);
+    }
+
+    private function executeMigration(): void
+    {
+        require_once __DIR__ . '/../../../../migrations/Version20260820150000.php';
+        $migration = new Version20260820150000($this->connection, new NullLogger());
+        $migration->up(new Schema());
+        foreach ($migration->getSql() as $query) {
+            $this->connection->executeStatement($query->getStatement());
+        }
+    }
+}

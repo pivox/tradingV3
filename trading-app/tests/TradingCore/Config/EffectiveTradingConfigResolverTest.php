@@ -7,8 +7,10 @@ namespace App\Tests\TradingCore\Config;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Config\Exception\TradingConfigException;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\AbstractLogger;
 
 #[CoversClass(EffectiveTradingConfigResolver::class)]
 final class EffectiveTradingConfigResolverTest extends TestCase
@@ -59,5 +61,27 @@ final class EffectiveTradingConfigResolverTest extends TestCase
         $this->expectExceptionMessage('EffectiveTradingConfigRequest');
 
         (new EffectiveTradingConfigResolver())->resolve('scalper');
+    }
+
+    public function testResolutionLogContainsOnlyLayerCountInsteadOfLayerDocuments(): void
+    {
+        $logger = new class extends AbstractLogger {
+            /** @var list<array<string,mixed>> */
+            public array $contexts = [];
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->contexts[] = $context;
+            }
+        };
+
+        (new EffectiveTradingConfigResolver(logger: $logger))->resolve(new EffectiveTradingConfigRequest(
+            'day_trading', '1.1.0', 'day_trading.trend_continuation.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
+
+        self::assertCount(1, $logger->contexts);
+        self::assertSame(6, $logger->contexts[0]['layer_count']);
+        self::assertArrayNotHasKey('layers', $logger->contexts[0]);
+        self::assertArrayNotHasKey('config', $logger->contexts[0]);
     }
 }

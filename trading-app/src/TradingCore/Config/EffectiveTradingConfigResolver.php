@@ -122,7 +122,7 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
         $this->logger?->info('trading_config.canonical_effective_resolved', [
             ...$request->toArray(),
             'config_hash' => $snapshot->configHash,
-            'layers' => $snapshot->orderedLayers(),
+            'layer_count' => count($snapshot->orderedLayers()),
         ]);
 
         return $snapshot;
