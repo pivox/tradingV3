@@ -17,12 +17,14 @@ final class Version20260820000000 extends AbstractMigration
     public function up(Schema $schema): void
     {
         $this->addSql('DROP VIEW position_trade_analysis_v2');
+        $this->addSql('ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(6) WITH TIME ZONE');
         $this->addCanonicalWrapperSql(true);
     }
 
     public function down(Schema $schema): void
     {
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2');
+        $this->addSql('ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(0) WITH TIME ZONE');
         $this->addCanonicalWrapperSql(false);
     }
 

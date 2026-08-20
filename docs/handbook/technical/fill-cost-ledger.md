@@ -67,7 +67,9 @@ Replays with the same canonical fill/cost payload hash are ignored. Mutable proj
 
 Exchange fill timestamps are persisted with six fractional digits
 (`Y-m-d\TH:i:s.uP`) so ordering and holding-time evidence do not lose provider
-microseconds. Replay comparison also recognizes hashes written by the previous
+microseconds. The PostgreSQL `occurred_at` column is widened to
+`TIMESTAMP(6) WITH TIME ZONE` by the fill-timing migration so those digits also
+survive a database reload. Replay comparison recognizes hashes written by the previous
 ATOM-only serializer; this compatibility path only affects idempotency checks
 and never rewrites the stored row.
 

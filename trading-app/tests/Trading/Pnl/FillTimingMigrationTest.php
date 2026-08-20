@@ -14,6 +14,38 @@ use Psr\Log\NullLogger;
 #[CoversClass(Version20260820000000::class)]
 final class FillTimingMigrationTest extends TestCase
 {
+    public function testMigrationWidensLedgerFillTimestampBeforeRecreatingTheView(): void
+    {
+        require_once \dirname(__DIR__, 3) . '/migrations/Version20260820000000.php';
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $migration = new Version20260820000000($connection, new NullLogger());
+
+        $migration->up(new Schema());
+        $up = array_map(
+            static fn ($query): string => $query->getStatement(),
+            $migration->getSql(),
+        );
+
+        self::assertSame('DROP VIEW position_trade_analysis_v2', $up[0] ?? null);
+        self::assertSame(
+            'ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(6) WITH TIME ZONE',
+            $up[1] ?? null,
+        );
+
+        $migration = new Version20260820000000($connection, new NullLogger());
+        $migration->down(new Schema());
+        $down = array_map(
+            static fn ($query): string => $query->getStatement(),
+            $migration->getSql(),
+        );
+
+        self::assertSame('DROP VIEW IF EXISTS position_trade_analysis_v2', $down[0] ?? null);
+        self::assertSame(
+            'ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(0) WITH TIME ZONE',
+            $down[1] ?? null,
+        );
+    }
+
     public function testMigrationUsesExactFillChronologyAndFailsClosed(): void
     {
         require_once \dirname(__DIR__, 3) . '/migrations/Version20260820000000.php';
