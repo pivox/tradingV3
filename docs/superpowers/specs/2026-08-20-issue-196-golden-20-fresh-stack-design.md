@@ -57,4 +57,6 @@ on every invocation.
 Servers bind only to `127.0.0.1` on ephemeral ports. Symfony runs in `test`, its
 Paper Fake state root is temporary, and the R12 safety evidence must report zero
 calls for Bitmart, OKX and Hyperliquid. No mainnet or demo/testnet write is
-permitted.
+permitted. Harness clients ignore inherited proxy settings and both child
+processes receive an explicit loopback-only `NO_PROXY`, so local proof traffic
+cannot be redirected to an external proxy.

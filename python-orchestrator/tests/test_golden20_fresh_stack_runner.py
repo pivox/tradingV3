@@ -12,7 +12,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
     not (REPOSITORY_ROOT / "trading-app/vendor/autoload.php").exists(),
     reason="Symfony dependencies unavailable; exercised by the dedicated golden CI step",
 )
-def test_golden20_runs_twice_through_fresh_real_http_stacks():
+def test_golden20_runs_twice_through_fresh_real_http_stacks(monkeypatch):
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+
     assert run_fresh_stacks() == {
         "config_hashes_unique": True,
         "disabled_sets": ["recipe_fake_multi_disabled"],

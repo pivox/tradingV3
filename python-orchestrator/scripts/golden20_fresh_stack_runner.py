@@ -26,9 +26,9 @@ from typing import Any, Iterator
 import httpx
 
 try:
-    from scripts.runtime_recipe_runner import RecipeRunner, RunnerConfig
+    from scripts.runtime_recipe_runner import HttpxRecipeHttpClient, RecipeRunner, RunnerConfig
 except ModuleNotFoundError:  # Direct `python scripts/...` execution.
-    from runtime_recipe_runner import RecipeRunner, RunnerConfig
+    from runtime_recipe_runner import HttpxRecipeHttpClient, RecipeRunner, RunnerConfig
 
 
 ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +36,14 @@ REPOSITORY_ROOT = ORCHESTRATOR_ROOT.parent
 TRADING_APP_ROOT = REPOSITORY_ROOT / "trading-app"
 REPORT_NAME = "fake-multi-profile-recipe-report.json"
 STARTUP_TIMEOUT_SECONDS = 15.0
+PROXY_ENVIRONMENT_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 @dataclass(frozen=True)
@@ -62,21 +70,22 @@ def _wait_for_http(
 ) -> None:
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     last_error = "no response"
-    while time.monotonic() < deadline:
-        try:
-            response = httpx.get(url, headers=headers, timeout=1.0)
-            if response.status_code == 200:
-                if expected_json_key is None:
-                    return
-                body = response.json()
-                if isinstance(body, dict) and expected_json_key in body:
-                    return
-                last_error = f"HTTP 200 without {expected_json_key}"
-            else:
-                last_error = f"HTTP {response.status_code}"
-        except (httpx.HTTPError, ValueError) as exc:
-            last_error = f"{exc.__class__.__name__}: {exc}"
-        time.sleep(0.05)
+    with httpx.Client(timeout=1.0, trust_env=False) as client:
+        while time.monotonic() < deadline:
+            try:
+                response = client.get(url, headers=headers)
+                if response.status_code == 200:
+                    if expected_json_key is None:
+                        return
+                    body = response.json()
+                    if isinstance(body, dict) and expected_json_key in body:
+                        return
+                    last_error = f"HTTP 200 without {expected_json_key}"
+                else:
+                    last_error = f"HTTP {response.status_code}"
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = f"{exc.__class__.__name__}: {exc}"
+            time.sleep(0.05)
     raise RuntimeError(f"fresh stack did not become ready at {url}: {last_error}")
 
 
@@ -97,6 +106,15 @@ def _redacted_log_tail(path: Path, temporary_root: Path) -> str:
     except OSError as exc:
         return f"log_unavailable:{exc.__class__.__name__}"
     return content[-4000:].replace(str(temporary_root), "<temporary>")
+
+
+def _proxy_free_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in PROXY_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    environment["NO_PROXY"] = "127.0.0.1,localhost"
+    environment["no_proxy"] = "127.0.0.1,localhost"
+    return environment
 
 
 def _initialize_orchestrator_database(environment: dict[str, str]) -> None:
@@ -144,7 +162,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
         symfony_url = f"http://127.0.0.1:{symfony_port}"
         orchestrator_url = f"http://127.0.0.1:{orchestrator_port}"
 
-        symfony_environment = os.environ.copy()
+        symfony_environment = _proxy_free_environment()
         symfony_environment.update(
             {
                 "APP_ENV": "test",
@@ -154,7 +172,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                 "PAPER_FAKE_STATE_ROOT": str(fake_state_root),
             }
         )
-        orchestrator_environment = os.environ.copy()
+        orchestrator_environment = _proxy_free_environment()
         orchestrator_environment.update(
             {
                 "DATABASE_URL": f"sqlite:///{database_path}",
@@ -257,7 +275,8 @@ def _run_one_fresh_stack() -> FreshStackResult:
                 orchestrator_url=orchestrator_url,
                 confirmation_token="DRY_RUN_ONLY",
                 timeout_seconds=15.0,
-            )
+            ),
+            http_client=HttpxRecipeHttpClient(orchestrator_url, trust_env=False),
         )
         runtime_report = runner.run(scenarios=("R12",), keep_fixtures=True)
         results = runtime_report.get("results")

@@ -95,14 +95,15 @@ class RecipeHttpClient(Protocol):
 class HttpxRecipeHttpClient:
     """Client HTTP simple vers l'API Python orchestrator."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, *, trust_env: bool = True) -> None:
         self.base_url = base_url.rstrip("/")
+        self.trust_env = trust_env
 
     def request(
         self, method: str, path: str, *, json_body: Any = None, timeout: float = 30.0
     ) -> tuple[int, Any]:
         try:
-            with httpx.Client(timeout=timeout) as client:
+            with httpx.Client(timeout=timeout, trust_env=self.trust_env) as client:
                 response = client.request(method, f"{self.base_url}{path}", json=json_body)
         except httpx.HTTPError as exc:
             return 0, {"detail": str(exc)}
