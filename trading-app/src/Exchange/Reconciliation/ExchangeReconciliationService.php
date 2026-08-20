@@ -54,7 +54,6 @@ final readonly class ExchangeReconciliationService
 
     public function reconcileBase(ExchangeAdapterInterface $adapter, ?string $symbol = null): ExchangeReconciliationResult
     {
-        $startedAt = $this->clock->now();
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $orders = $adapter instanceof ExchangeRestSnapshotProviderInterface
             ? $adapter->getOrdersSnapshot($normalizedSymbol)
@@ -63,6 +62,35 @@ final readonly class ExchangeReconciliationService
         $fills = $adapter instanceof ExchangeRestSnapshotProviderInterface
             ? $adapter->getFillsSnapshot($normalizedSymbol)
             : [];
+        $positionSnapshotAuthoritative = $adapter instanceof ExchangeRestSnapshotProviderInterface
+            && $adapter->hasAuthoritativePositionSnapshot($normalizedSymbol);
+
+        return $this->reconcileSnapshot(
+            $adapter,
+            $orders,
+            $positions,
+            $fills,
+            $positionSnapshotAuthoritative,
+            $normalizedSymbol,
+        );
+    }
+
+    /**
+     * @param ExchangeOrderDto[] $orders
+     * @param ExchangePositionDto[] $positions
+     * @param ExchangeFillDto[] $fills
+     */
+    public function reconcileSnapshot(
+        ExchangeAdapterInterface $adapter,
+        array $orders,
+        array $positions,
+        array $fills,
+        bool $positionSnapshotAuthoritative,
+        ?string $symbol = null,
+    ): ExchangeReconciliationResult
+    {
+        $startedAt = $this->clock->now();
+        $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
 
         $unknownOrders = [];
         $eventsProjected = 0;
@@ -88,8 +116,6 @@ final readonly class ExchangeReconciliationService
             ++$eventsProjected;
         }
 
-        $positionSnapshotAuthoritative = $adapter instanceof ExchangeRestSnapshotProviderInterface
-            && $adapter->hasAuthoritativePositionSnapshot($normalizedSymbol);
         if ($positionSnapshotAuthoritative) {
             foreach ($this->missingLocalPositions($adapter, $positions, $normalizedSymbol) as $missingPosition) {
                 $this->bus->publish(new \App\Exchange\Event\ExchangePositionClosed(
@@ -115,7 +141,7 @@ final readonly class ExchangeReconciliationService
             ++$eventsProjected;
         }
 
-        $unprotectedPositions = $this->detectUnprotectedPositions($adapter, $positions);
+        $unprotectedPositions = $this->detectUnprotectedPositions($positions, $orders);
         $completedAt = $this->clock->now();
         $metadata = [
             'unknown_order_ids' => $unknownOrders,
@@ -203,14 +229,18 @@ final readonly class ExchangeReconciliationService
 
     /**
      * @param ExchangePositionDto[] $positions
+     * @param ExchangeOrderDto[] $orders
      * @return array<int,array<string,mixed>>
      */
-    private function detectUnprotectedPositions(ExchangeAdapterInterface $adapter, array $positions): array
+    private function detectUnprotectedPositions(array $positions, array $orders): array
     {
         $unprotected = [];
         foreach ($positions as $position) {
             $coveredQuantity = 0.0;
-            foreach ($adapter->getOpenOrders($position->symbol) as $order) {
+            foreach ($orders as $order) {
+                if ($order->symbol !== $position->symbol) {
+                    continue;
+                }
                 if (!$this->isConfirmedStopLossProtection($order, $position)) {
                     continue;
                 }

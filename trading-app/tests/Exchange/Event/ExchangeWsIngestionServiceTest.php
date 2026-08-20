@@ -208,6 +208,8 @@ final class ExchangeWsIngestionServiceTest extends TestCase
             new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
             ['event_sequence' => 1],
         ));
+        $store = new RecordingProjectionStore();
+        $staleSnapshot = $this->reconciliationService($store)->reconcile($this->adapter($state));
         $state->appendEvent(new FakeExchangeEvent(
             'order.created',
             'BTCUSDT',
@@ -237,7 +239,14 @@ final class ExchangeWsIngestionServiceTest extends TestCase
             self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
         }
 
-        $store = new RecordingProjectionStore();
+        try {
+            $client->completeSnapshotResync($staleSnapshot);
+            self::fail('A snapshot below the sequence that triggered the gap must be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_watermark_stale', $exception->getMessage());
+        }
+        self::assertTrue($client->requiresResync());
+
         $snapshot = $this->reconciliationService($store)->reconcile($this->adapter($state));
         $client->completeSnapshotResync($snapshot);
         self::assertFalse($client->requiresResync());

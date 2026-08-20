@@ -24,6 +24,7 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
     private int $acknowledgedEvents = 0;
     private ?string $lastAcknowledgedSequence = null;
     private int $lastObservedNumericSequence = 0;
+    private int $resyncRequiredSequenceFloor = 0;
 
     public function __construct(
         private readonly FakeExchangeStateStore $stateStore,
@@ -75,6 +76,10 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
                 if ($numericSequence !== $expectedSequence) {
                     $this->resyncRequired = true;
                     $this->resyncReason = 'fake_private_ws_sequence_gap';
+                    $this->resyncRequiredSequenceFloor = max(
+                        $this->resyncRequiredSequenceFloor,
+                        $numericSequence,
+                    );
 
                     throw FakePrivateWsException::sequenceGap(
                         lastAcknowledgedSequence: $this->lastAcknowledgedSequence,
@@ -101,6 +106,10 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
                 $this->disconnectInjected = true;
                 $this->resyncRequired = true;
                 $this->resyncReason = 'fake_private_ws_disconnected';
+                $this->resyncRequiredSequenceFloor = max(
+                    $this->resyncRequiredSequenceFloor,
+                    $this->lastObservedNumericSequence,
+                );
 
                 throw FakePrivateWsException::disconnected($this->lastAcknowledgedSequence);
             }
@@ -175,7 +184,7 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
         if (!\is_int($watermark) || $watermark < 0) {
             throw new \LogicException('fake_private_ws_snapshot_watermark_invalid');
         }
-        if ($watermark < $this->lastObservedNumericSequence) {
+        if ($watermark < $this->resyncRequiredSequenceFloor) {
             throw new \LogicException('fake_private_ws_snapshot_watermark_stale');
         }
 
@@ -195,6 +204,7 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
 
         $this->resyncRequired = false;
         $this->resyncReason = null;
+        $this->resyncRequiredSequenceFloor = 0;
     }
 
     /**

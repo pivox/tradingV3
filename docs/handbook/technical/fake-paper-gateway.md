@@ -609,8 +609,9 @@ Le contrat runtime est le suivant :
   `stateFile` ;
 - le filtre symbole ne consomme jamais une livraison d un autre symbole.
 
-La reprise impose d abord un `ExchangeReconciliationService` global sur les
-snapshots REST Fake locaux. Hors mode scénario comme en mode scénario,
+La reprise impose d abord un `ExchangeReconciliationService` global sur un
+snapshot REST Fake local atomique : ordres, positions, fills et watermark sont
+capturés sous la même transaction d'état. Hors mode scénario comme en mode scénario,
 `completeSnapshotResync()` exige
 le `ExchangeReconciliationResult` Fake/Perpetual correspondant, avec
 `symbol === null` et aucune erreur. Une preuve absente, echouee ou limitee a un
@@ -621,8 +622,8 @@ puis `2`, et incremente `resync_total` une fois. Un evenement canonique ajoute
 apres ce watermark n'est jamais acquitté par la complétion du snapshot et reste
 livrable après reconnexion. Un simple `reconnect()` pendant
 `resync_required` échoue fermé. Hors mode scénario, un résultat dont le
-watermark est inférieur à la dernière séquence observée lors du passage en
-resync est également rejeté comme snapshot obsolète.
+watermark est inférieur à la séquence ayant déclenché la déconnexion ou le gap
+est également rejeté comme snapshot obsolète.
 
 `privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
 watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :

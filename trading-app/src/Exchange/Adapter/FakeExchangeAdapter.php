@@ -25,6 +25,7 @@ use App\Exchange\Fake\FakeFillCostModel;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOperation;
 use App\Exchange\Fake\FakeExchangeOrderBook;
+use App\Exchange\Fake\FakeExchangeReconciliationSnapshot;
 use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeInstrumentCatalog;
 use App\Exchange\Fake\FakeInstrumentProviderInterface;
@@ -187,9 +188,35 @@ final readonly class FakeExchangeAdapter implements
     {
         $this->throwInjectedFault(FakeExchangeOperation::GetFillsSnapshot, FakeExchangeFaultOutcome::NotApplied);
 
+        return $this->fillsFromEvents($this->stateStore->events(), $symbol);
+    }
+
+    public function captureReconciliationSnapshot(): FakeExchangeReconciliationSnapshot
+    {
+        $this->throwInjectedFault(FakeExchangeOperation::GetOrdersSnapshot, FakeExchangeFaultOutcome::NotApplied);
+        $this->throwInjectedFault(FakeExchangeOperation::GetOpenPositions, FakeExchangeFaultOutcome::NotApplied);
+        $this->throwInjectedFault(FakeExchangeOperation::GetFillsSnapshot, FakeExchangeFaultOutcome::NotApplied);
+
+        $snapshot = $this->stateStore->captureReconciliationState();
+
+        return new FakeExchangeReconciliationSnapshot(
+            orders: $snapshot['orders'],
+            positions: $snapshot['positions'],
+            fills: $this->fillsFromEvents($snapshot['events']),
+            eventSequenceWatermark: $snapshot['event_sequence_watermark'],
+            pendingPrivateWsProof: $snapshot['pending_private_ws_proof'],
+        );
+    }
+
+    /**
+     * @param FakeExchangeEvent[] $events
+     * @return ExchangeFillDto[]
+     */
+    private function fillsFromEvents(array $events, ?string $symbol = null): array
+    {
         $normalizedSymbol = $symbol !== null ? strtoupper($symbol) : null;
         $fills = [];
-        foreach ($this->stateStore->events() as $index => $event) {
+        foreach ($events as $index => $event) {
             if (!\in_array($event->type, ['order.filled', 'order.partially_filled', 'liquidation.filled'], true)) {
                 continue;
             }

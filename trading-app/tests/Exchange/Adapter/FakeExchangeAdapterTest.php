@@ -19,6 +19,7 @@ use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
+use App\Exchange\Fake\FakeExchangeReconciliationSnapshot;
 use App\Exchange\Fake\FakeExchangeScenarioService;
 use App\Exchange\Fake\FakeExchangeStateCorruptedException;
 use App\Exchange\Fake\FakeExchangeStateStore;
@@ -34,6 +35,7 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(FakeExchangeAdapter::class)]
 #[CoversClass(FakeExchangeMatchingEngine::class)]
 #[CoversClass(FakeExchangeOrderBook::class)]
+#[CoversClass(FakeExchangeReconciliationSnapshot::class)]
 #[CoversClass(FakeExchangeScenarioService::class)]
 #[CoversClass(FakeExchangeStateStore::class)]
 final class FakeExchangeAdapterTest extends TestCase
@@ -50,6 +52,31 @@ final class FakeExchangeAdapterTest extends TestCase
 
         $this->adapter = new FakeExchangeAdapter($this->state, $book, $engine, $this->fixedClock());
         $this->scenario = new FakeExchangeScenarioService($this->state, $book, $engine);
+    }
+
+    public function testCapturedReconciliationSnapshotKeepsOneEventWatermarkBoundary(): void
+    {
+        $this->adapter->placeOrder($this->request(
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'snapshot-btc',
+        ));
+
+        $snapshot = $this->adapter->captureReconciliationSnapshot();
+
+        $this->adapter->placeOrder($this->request(
+            symbol: 'ETHUSDT',
+            orderType: ExchangeOrderType::MARKET,
+            price: null,
+            clientOrderId: 'after-snapshot-eth',
+        ));
+
+        self::assertSame(3, $snapshot->eventSequenceWatermark);
+        self::assertCount(1, $snapshot->orders);
+        self::assertCount(1, $snapshot->positions);
+        self::assertCount(1, $snapshot->fills);
+        self::assertSame('snapshot-btc', $snapshot->orders[0]->clientOrderId);
+        self::assertCount(6, $this->state->events());
     }
 
     /**

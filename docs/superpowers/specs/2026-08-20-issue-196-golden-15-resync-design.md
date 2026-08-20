@@ -17,14 +17,15 @@ events are acknowledged, the client must disconnect and expose
 The runner then calls the canonical `ExchangeReconciliationService::reconcile()` against
 the Fake adapter, verifies the authoritative local snapshot and passes the
 result to `FakeExchangeWsClient::completeSnapshotResync()`. The reconciliation
-result carries the maximum canonical event sequence captured before the
-snapshot. An event is then appended before completion to exercise the race:
+result carries orders, positions, fills and their maximum canonical event
+sequence from one atomic Fake state capture. An event is then appended before
+completion to exercise the race:
 completion acknowledges only sequences at or below that watermark. Only after
 that handshake may the client reconnect and drain the newer event. A final
 drain must be empty. The canonical golden test invokes the runner twice, so
 each execution gets an independent state file and the exact result must match.
 For an ordinary client, completion also rejects any reconciliation watermark
-below the last sequence observed when resync became required; a snapshot taken
+below the sequence that triggered disconnect or gap resync; a snapshot taken
 too early therefore cannot clear the fail-closed state.
 
 ## Alternatives
