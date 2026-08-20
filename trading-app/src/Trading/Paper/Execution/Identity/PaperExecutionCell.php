@@ -12,7 +12,8 @@ use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 
 final readonly class PaperExecutionCell
 {
-    private const SCHEMA_VERSION = 1;
+    private const LEGACY_SCHEMA_VERSION = 1;
+    private const MODERN_SCHEMA_VERSION = 2;
 
     private function __construct(
         public string $id,
@@ -22,6 +23,7 @@ final readonly class PaperExecutionCell
         public string $configurationSnapshotId,
         public string $strategyProfile,
         public string $runId,
+        public ?PaperModernStrategyIdentity $modernIdentity,
     ) {
     }
 
@@ -32,26 +34,12 @@ final readonly class PaperExecutionCell
         string $strategyProfile,
         string $runId,
     ): self {
-        if ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN) {
-            throw new \InvalidArgumentException('paper_execution_network_unsupported');
-        }
-
-        if ($venue === PaperMarketDataVenue::OKX && $network !== PaperMarketDataNetwork::MAINNET) {
-            throw new \InvalidArgumentException('paper_execution_network_venue_unsupported');
-        }
-
-        if (!preg_match('/\Asha256:[a-f0-9]{64}\z/D', $configurationSnapshotId)) {
-            throw new \InvalidArgumentException('paper_configuration_snapshot_id_invalid');
-        }
+        self::assertScope($network, $venue, $configurationSnapshotId, $runId);
 
         (new PaperProfileRegistry())->require($strategyProfile);
 
-        if (!preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\z/D', $runId)) {
-            throw new \InvalidArgumentException('paper_execution_run_id_invalid');
-        }
-
         $digest = hash('sha256', CanonicalJson::encode([
-            'schema_version' => self::SCHEMA_VERSION,
+            'schema_version' => self::LEGACY_SCHEMA_VERSION,
             'network' => $network->value,
             'market_data_venue' => $venue->value,
             'configuration_snapshot_id' => $configurationSnapshotId,
@@ -67,12 +55,60 @@ final readonly class PaperExecutionCell
             configurationSnapshotId: $configurationSnapshotId,
             strategyProfile: $strategyProfile,
             runId: $runId,
+            modernIdentity: null,
         );
+    }
+
+    public static function createModern(
+        PaperMarketDataNetwork $network,
+        PaperMarketDataVenue $venue,
+        string $configurationSnapshotId,
+        PaperModernStrategyIdentity $identity,
+        string $runId,
+    ): self {
+        self::assertScope($network, $venue, $configurationSnapshotId, $runId);
+        if ($identity->network !== $network || $identity->marketDataVenue !== $venue) {
+            throw new \InvalidArgumentException('paper_modern_identity_market_scope_mismatch');
+        }
+
+        $digest = hash('sha256', CanonicalJson::encode([
+            'schema_version' => self::MODERN_SCHEMA_VERSION,
+            'network' => $network->value,
+            'market_data_venue' => $venue->value,
+            'configuration_snapshot_id' => $configurationSnapshotId,
+            'mode_id' => $identity->modeId,
+            'mode_version' => $identity->modeVersion,
+            'setup_id' => $identity->setupId,
+            'setup_version' => $identity->setupVersion,
+            'side' => $identity->side,
+            'config_hash' => $identity->configHash,
+            'condition_catalog_hash' => $identity->conditionCatalogHash,
+            'run_id' => $runId,
+        ]));
+
+        return new self(
+            id: 'sha256:' . $digest,
+            accountNamespace: 'paper:cell:v2:' . $digest,
+            network: $network,
+            marketDataVenue: $venue,
+            configurationSnapshotId: $configurationSnapshotId,
+            strategyProfile: $identity->modeId,
+            runId: $runId,
+            modernIdentity: $identity,
+        );
+    }
+
+    public function isModern(): bool
+    {
+        return $this->modernIdentity !== null;
     }
 
     /** @return array<string, string> */
     public function provenance(PaperProfileEligibility $eligibility): array
     {
+        if ($this->isModern()) {
+            throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+        }
         if ((new PaperProfileRegistry())->require($this->strategyProfile) !== $eligibility) {
             throw new \InvalidArgumentException('paper_execution_cell_eligibility_conflict');
         }
@@ -87,5 +123,25 @@ final readonly class PaperExecutionCell
             'run_id' => $this->runId,
             'exchange' => 'fake',
         ];
+    }
+
+    private static function assertScope(
+        PaperMarketDataNetwork $network,
+        PaperMarketDataVenue $venue,
+        string $configurationSnapshotId,
+        string $runId,
+    ): void {
+        if ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN) {
+            throw new \InvalidArgumentException('paper_execution_network_unsupported');
+        }
+        if ($venue === PaperMarketDataVenue::OKX && $network !== PaperMarketDataNetwork::MAINNET) {
+            throw new \InvalidArgumentException('paper_execution_network_venue_unsupported');
+        }
+        if (!preg_match('/\Asha256:[a-f0-9]{64}\z/D', $configurationSnapshotId)) {
+            throw new \InvalidArgumentException('paper_configuration_snapshot_id_invalid');
+        }
+        if (!preg_match('/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\z/D', $runId)) {
+            throw new \InvalidArgumentException('paper_execution_run_id_invalid');
+        }
     }
 }

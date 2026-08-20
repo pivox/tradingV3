@@ -54,7 +54,11 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
 
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
     {
-        if ((new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility) {
+        if ($cell->isModern()) {
+            if ($eligibility !== PaperProfileEligibility::REFERENCE_ONLY) {
+                throw new \LogicException('paper_execution_cell_eligibility_conflict');
+            }
+        } elseif ((new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility) {
             throw new \LogicException('paper_execution_cell_eligibility_conflict');
         }
 
@@ -69,8 +73,10 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
             try {
                 $this->connection->executeStatement(<<<'SQL'
 INSERT INTO paper_execution_cell
-    (id, network, market_data_venue, configuration_snapshot_id, strategy_profile, run_id, account_namespace, eligibility, terminal_state, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())
+    (id, network, market_data_venue, configuration_snapshot_id, strategy_profile, run_id, account_namespace, eligibility,
+     mode_id, mode_version, setup_id, setup_version, canonical_side, canonical_config_hash, condition_catalog_hash,
+     terminal_state, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())
 SQL, [
                     $cell->id,
                     $cell->network->value,
@@ -80,6 +86,13 @@ SQL, [
                     $cell->runId,
                     $cell->accountNamespace,
                     $eligibility->value,
+                    $cell->modernIdentity?->modeId,
+                    $cell->modernIdentity?->modeVersion,
+                    $cell->modernIdentity?->setupId,
+                    $cell->modernIdentity?->setupVersion,
+                    $cell->modernIdentity?->side,
+                    $cell->modernIdentity?->configHash,
+                    $cell->modernIdentity?->conditionCatalogHash,
                 ]);
                 $this->connection->executeStatement(<<<'SQL'
 INSERT INTO paper_execution_checkpoint
@@ -567,6 +580,13 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
             'run_id' => $cell->runId,
             'account_namespace' => $cell->accountNamespace,
             'eligibility' => $eligibility->value,
+            'mode_id' => $cell->modernIdentity?->modeId,
+            'mode_version' => $cell->modernIdentity?->modeVersion,
+            'setup_id' => $cell->modernIdentity?->setupId,
+            'setup_version' => $cell->modernIdentity?->setupVersion,
+            'canonical_side' => $cell->modernIdentity?->side,
+            'canonical_config_hash' => $cell->modernIdentity?->configHash,
+            'condition_catalog_hash' => $cell->modernIdentity?->conditionCatalogHash,
         ];
         foreach ($expected as $key => $value) {
             if (($stored[$key] ?? null) !== $value) {
