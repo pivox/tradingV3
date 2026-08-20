@@ -63,6 +63,11 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
                 'input_hash' => $snapshot->inputHash,
                 'observed_at' => $ruleInput->observedAt->format(DATE_ATOM),
                 'valid_until' => $ruleInput->validUntil->format(DATE_ATOM),
+                'best_bid' => (float) $snapshot->bestBid,
+                'best_ask' => (float) $snapshot->bestAsk,
+                'spread_bps' => (float) $snapshot->spreadBps,
+                'book_source_record_id' => $snapshot->bookSourceRecordId,
+                'book_observed_at' => $snapshot->bookHappenedAt,
                 'expected_market_identity' => $marketIdentity->toArray(),
             ]);
         } catch (\Throwable $exception) {
@@ -89,8 +94,8 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
 
     private function marketIdentity(LineageContext $identity): ?RuleMarketIdentity
     {
-        if (!\in_array($identity->environment, ['mainnet', 'testnet'], true)
-            || !\in_array($identity->exchange, ['okx', 'hyperliquid'], true)
+        $sourceNetwork = CanonicalPublicMarketDataNetwork::forTarget($identity->exchange, $identity->environment);
+        if ($sourceNetwork === null
             || $identity->marketType !== 'perpetual'
             || $identity->symbol === null
         ) {
@@ -98,7 +103,7 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
         }
 
         return new RuleMarketIdentity(
-            $identity->environment,
+            $sourceNetwork,
             $identity->exchange,
             $identity->marketType,
             $identity->symbol,

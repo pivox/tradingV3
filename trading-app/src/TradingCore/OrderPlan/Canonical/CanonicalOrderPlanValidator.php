@@ -16,6 +16,11 @@ final readonly class CanonicalOrderPlanValidator
         ['scalping', '1.1.0', 'scalping.pullback.long', '1.1.0', 'long'],
         ['scalping', '1.1.0', 'scalping.trend_momentum.short', '1.1.0', 'short'],
     ];
+    /** @var list<array{string, string, string, string, string}> */
+    private const MICRO_SCALPING_SHADOW_IDENTITIES = [
+        ['micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0', 'long'],
+        ['micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.short', '1.1.0', 'short'],
+    ];
 
     public function __construct(private ClockInterface $clock)
     {
@@ -89,6 +94,40 @@ final readonly class CanonicalOrderPlanValidator
                 || !$plan->holdingExpiresAt instanceof \DateTimeImmutable
                 || $plan->expiresAt > $plan->createdAt->modify('+45 seconds')
                 || $plan->cancelAfterAt > $plan->createdAt->modify('+75 seconds')
+                || $plan->cancelAfterAt < $plan->expiresAt
+                || $plan->holdingExpiresAt != $expectedHoldingExpiry
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_order_deadline_invalid');
+            }
+        } elseif ($plan->modeId === 'micro_scalping' && $plan->modeVersion === '1.1.0') {
+            if (!\in_array([
+                $plan->modeId,
+                $plan->modeVersion,
+                $plan->setupId,
+                $plan->setupVersion,
+                $plan->side,
+            ], self::MICRO_SCALPING_SHADOW_IDENTITIES, true)) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_identity_unsupported');
+            }
+            $expectedHoldingExpiry = CanonicalHoldingBoundary::expiresAt($plan->createdAt, 1800, [
+                'maximum_duration' => 'PT30M',
+                'daily_boundary_time' => '00:00:00',
+                'daily_boundary_timezone' => 'UTC',
+                'close_before_boundary' => true,
+            ]);
+            if (
+                !isset($plan->orderBookInputHash)
+                || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $plan->orderBookInputHash) !== 1
+                || !\in_array($plan->orderBookInputHash, $plan->inputHashes, true)
+                || ($plan->inputHashes[array_key_last($plan->inputHashes)] ?? null) !== $plan->orderBookInputHash
+            ) {
+                throw new CanonicalOrderPlanException('canonical_order_plan_order_book_lineage_invalid');
+            }
+            if (
+                !$plan->cancelAfterAt instanceof \DateTimeImmutable
+                || !$plan->holdingExpiresAt instanceof \DateTimeImmutable
+                || $plan->expiresAt > $plan->createdAt->modify('+30 seconds')
+                || $plan->cancelAfterAt > $plan->createdAt->modify('+60 seconds')
                 || $plan->cancelAfterAt < $plan->expiresAt
                 || $plan->holdingExpiresAt != $expectedHoldingExpiry
             ) {

@@ -44,4 +44,17 @@ final class CanonicalHoldingBoundaryTest extends TestCase
         $this->expectExceptionMessage('canonical_holding_boundary_invalid');
         CanonicalHoldingBoundary::expiresAt(new \DateTimeImmutable('2026-08-10T12:00:00Z'), 28_800, $horizon);
     }
+
+    public function testSupportsFrozenThirtyMinuteMicroScalpingBoundary(): void
+    {
+        self::assertSame(
+            '2026-08-10T12:30:00+00:00',
+            CanonicalHoldingBoundary::expiresAt(new \DateTimeImmutable('2026-08-10T12:00:00Z'), 1800, [
+                'maximum_duration' => 'PT30M',
+                'daily_boundary_time' => '00:00:00',
+                'daily_boundary_timezone' => 'UTC',
+                'close_before_boundary' => true,
+            ])->format('c'),
+        );
+    }
 }

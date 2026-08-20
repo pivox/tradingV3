@@ -17,6 +17,7 @@ final readonly class ShadowRuntimeIdentityPolicy
         public string $reasonPrefix,
         public array $identities,
         public bool $requiresCanonicalOrderBook = false,
+        public bool $requiresCanonicalMicrostructure = false,
     ) {
         if (preg_match('/^[a-z][a-z0-9_]*$/', $reasonPrefix) !== 1) {
             throw new \InvalidArgumentException('shadow_runtime_reason_prefix_invalid');

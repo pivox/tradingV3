@@ -61,7 +61,13 @@ final readonly class CanonicalExecutionPolicy
                 'scalping.pullback.long',
                 'scalping.trend_momentum.short',
             ], true);
-        $shadow = $shadowIdentity === 'day_trading@1.1.0' || $scalpingShadow;
+        $microScalpingShadow = $shadowIdentity === 'micro_scalping@1.1.0'
+            && $snapshot->request->setupVersion === '1.1.0'
+            && \in_array($snapshot->request->setupId, [
+                'micro_scalping.momentum_ofi.long',
+                'micro_scalping.momentum_ofi.short',
+            ], true);
+        $shadow = $shadowIdentity === 'day_trading@1.1.0' || $scalpingShadow || $microScalpingShadow;
         $executionKeys = [
             'side',
             'entry_zone',
@@ -99,6 +105,7 @@ final readonly class CanonicalExecutionPolicy
             $expectedTimeframes = match ($shadowIdentity) {
                 'day_trading@1.1.0' => ['15m', ['5m', '1m']],
                 'scalping@1.1.0' => ['5m', ['1m']],
+                'micro_scalping@1.1.0' => ['1m', ['1m']],
                 default => null,
             };
             if ($expectedTimeframes === null
@@ -363,17 +370,23 @@ final readonly class CanonicalExecutionPolicy
             'scalping@1.1.0@scalping.pullback.long@1.1.0',
             'scalping@1.1.0@scalping.trend_momentum.short@1.1.0',
         ], true);
+        $microScalpingIdentity = \in_array($identity, [
+            'micro_scalping@1.1.0@micro_scalping.momentum_ofi.long@1.1.0',
+            'micro_scalping@1.1.0@micro_scalping.momentum_ofi.short@1.1.0',
+        ], true);
         $expected = match (true) {
-            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H'],
-            $scalpingIdentity => [45, 75, 7200, 'PT2H'],
+            $identity === 'day_trading@1.1.0@day_trading.trend_continuation.long@1.1.0' => [90, 120, 28_800, 'PT8H', 6.0],
+            $scalpingIdentity => [45, 75, 7200, 'PT2H', 6.0],
+            $microScalpingIdentity => [30, 60, 1800, 'PT30M', 8.0],
             default => null,
         };
         if ($orderPolicy === null || $expected === null) {
             throw new CanonicalOrderPlanException('canonical_shadow_identity_policy_mismatch');
         }
-        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration] = $expected;
+        [$ttlSeconds, $cancelAfterSeconds, $windowSeconds, $maximumDuration, $maximumSpreadBps] = $expected;
         if ($orderPolicy->ttlSeconds !== $ttlSeconds
             || $orderPolicy->cancelAfterSeconds !== $cancelAfterSeconds
+            || $orderPolicy->maximumSpreadBps !== $maximumSpreadBps
             || $holdingWindowSeconds !== $windowSeconds
             || ($holdingHorizon['maximum_duration'] ?? null) !== $maximumDuration
             || ($holdingHorizon['daily_boundary_time'] ?? null) !== '00:00:00'
@@ -485,11 +498,19 @@ final readonly class CanonicalExecutionPolicy
                 'scalping.pullback.long',
                 'scalping.trend_momentum.short',
             ], true);
-        if ($scalpingShadow) {
+        $microScalpingShadow = $snapshot->request->modeId === 'micro_scalping'
+            && $snapshot->request->modeVersion === '1.1.0'
+            && $snapshot->request->setupVersion === '1.1.0'
+            && \in_array($snapshot->request->setupId, [
+                'micro_scalping.momentum_ofi.long',
+                'micro_scalping.momentum_ofi.short',
+            ], true);
+        if ($scalpingShadow || $microScalpingShadow) {
             array_unshift($dataContractKeys, 'condition_catalog_version');
         }
         self::requireExactKeys($dataContract, $dataContractKeys, 'canonical_execution_policy_catalog_invalid');
-        if ($scalpingShadow && ($dataContract['condition_catalog_version'] ?? null) !== '1.1.0') {
+        $expectedCatalogVersion = $microScalpingShadow ? '1.2.0' : ($scalpingShadow ? '1.1.0' : null);
+        if ($expectedCatalogVersion !== null && ($dataContract['condition_catalog_version'] ?? null) !== $expectedCatalogVersion) {
             throw new CanonicalOrderPlanException('canonical_execution_policy_catalog_invalid');
         }
         $catalogDecision = self::mapping($dataContract, 'condition_catalog_hash', 'canonical_execution_policy_catalog_invalid');

@@ -27,8 +27,8 @@ final readonly class LineageContext
         'scalping.trend_continuation.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
         'scalping.pullback.long' => ['mode' => 'scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
         'scalping.trend_momentum.short' => ['mode' => 'scalping', 'side' => 'SHORT', 'versions' => ['1.0.0', '1.1.0']],
-        'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'versions' => ['1.0.0']],
-        'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'versions' => ['1.0.0']],
+        'micro_scalping.momentum_ofi.long' => ['mode' => 'micro_scalping', 'side' => 'LONG', 'versions' => ['1.0.0', '1.1.0']],
+        'micro_scalping.momentum_ofi.short' => ['mode' => 'micro_scalping', 'side' => 'SHORT', 'versions' => ['1.0.0', '1.1.0']],
     ];
 
     /** @var string[] */

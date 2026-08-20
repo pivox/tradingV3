@@ -21,12 +21,19 @@ final class CanonicalHoldingBoundary
             'daily_boundary_timezone' => 'UTC',
             'close_before_boundary' => true,
         ];
+        $expectedMicroScalping = [
+            'maximum_duration' => 'PT30M',
+            'daily_boundary_time' => '00:00:00',
+            'daily_boundary_timezone' => 'UTC',
+            'close_before_boundary' => true,
+        ];
         ksort($horizon, SORT_STRING);
         ksort($expectedDayTrading, SORT_STRING);
         ksort($expectedScalping, SORT_STRING);
+        ksort($expectedMicroScalping, SORT_STRING);
         if (!\in_array(
             [$holdingWindowSeconds, $horizon],
-            [[28_800, $expectedDayTrading], [7200, $expectedScalping]],
+            [[28_800, $expectedDayTrading], [7200, $expectedScalping], [1800, $expectedMicroScalping]],
             true,
         )) {
             throw new CanonicalOrderPlanException('canonical_holding_boundary_invalid');

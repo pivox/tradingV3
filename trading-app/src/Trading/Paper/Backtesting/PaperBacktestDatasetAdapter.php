@@ -203,6 +203,42 @@ final class PaperBacktestDatasetAdapter
             $tradeQuantityConversions, $bookQuantityConversions);
     }
 
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return array{books:list<NormalizedBacktestPublicBook>,trades:list<NormalizedBacktestPublicTrade>}
+     */
+    public function adaptMicrostructureEvents(array $events, string $sourceChecksum): array
+    {
+        if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $sourceChecksum) !== 1) {
+            throw new PaperBacktestAdapterException('paper_backtest_microstructure_events_invalid');
+        }
+
+        $books = [];
+        $trades = [];
+        foreach ($events as $event) {
+            if (!$event instanceof PaperMarketEvent) {
+                throw new PaperBacktestAdapterException('paper_backtest_microstructure_events_invalid');
+            }
+            if ($event->channel === PaperMarketDataChannel::TOP_OF_BOOK) {
+                $books[] = $event->sourceVenue === PaperMarketDataVenue::OKX
+                    ? $this->normalizeOkxBook($event, $sourceChecksum)
+                    : $this->normalizeHyperliquidBook($event, $sourceChecksum);
+            } elseif ($event->channel === PaperMarketDataChannel::PUBLIC_TRADE) {
+                $trades[] = $event->sourceVenue === PaperMarketDataVenue::OKX
+                    ? $this->normalizeOkxTrade($event, $sourceChecksum)
+                    : $this->normalizeHyperliquidTrade($event, $sourceChecksum);
+            }
+        }
+        usort($books, static fn (NormalizedBacktestPublicBook $left, NormalizedBacktestPublicBook $right): int =>
+            [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
+            <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
+        usort($trades, static fn (NormalizedBacktestPublicTrade $left, NormalizedBacktestPublicTrade $right): int =>
+            [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
+            <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
+
+        return ['books' => $books, 'trades' => $trades];
+    }
+
     private function normalizeInstrumentMetadata(
         PaperMarketEvent $event,
         string $sourceChecksum,

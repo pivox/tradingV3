@@ -117,6 +117,27 @@ final class ModeContractLoaderTest extends TestCase
         ], $document['order_policy']['value']);
     }
 
+    public function testLoadsExecutableMicroScalpingShadowVersionWithExactDecisions(): void
+    {
+        $contract = (new ModeContractLoader($this->contractRoot))->load('micro_scalping', '1.1.0');
+        $document = $contract->toArray();
+
+        self::assertSame('shadow', $contract->lifecycleStatus);
+        self::assertTrue($contract->isExecutable());
+        self::assertSame('PT30M', $document['horizon']['value']['maximum_duration']);
+        self::assertSame(['5m'], $contract->timeframeRoles()['regime']);
+        self::assertSame(['5m'], $contract->timeframeRoles()['context']);
+        self::assertSame(['1m'], $contract->timeframeRoles()['trigger']);
+        self::assertSame(['1m'], $contract->timeframeRoles()['execution']);
+        self::assertSame(['1m'], $contract->timeframeRoles()['confirmations']);
+        self::assertSame('PT1M', $document['cadence']['evaluation']['value']);
+        self::assertSame('PT5S', $document['cadence']['validity_window']['value']);
+        self::assertSame(0.4, $document['risk']['trade_budget']['value']);
+        self::assertSame(20.0, $document['risk']['mode_exposure_cap']['value']);
+        self::assertSame(2.0, $document['leverage']['value']);
+        self::assertFalse($document['order_policy']['value']['market_fallback']);
+    }
+
     public function testScalpingShadowMutationsFailInPhpAndJsonSchema(): void
     {
         $document = (new ModeContractLoader($this->contractRoot))->load('scalping', '1.1.0')->toArray();

@@ -10,6 +10,7 @@ use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(EffectiveTradingConfigResolver::class)]
@@ -193,5 +194,85 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
         self::assertSame('fake', $snapshot->payload()['exchange']['id']);
         self::assertSame('backtest', $snapshot->request->toArray()['execution_capability']);
         self::assertFalse($snapshot->payload()['environment']['write_enabled']);
+    }
+
+    /** @dataProvider microScalpingShadowTargetProvider */
+    public function testMicroScalpingShadowResolvesOnlyPublicVenueLayers(
+        string $setupId,
+        string $side,
+        string $exchange,
+        string $environment,
+    ): void {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', $setupId, '1.1.0',
+            $exchange, $environment, $side, ShadowExecutionCapability::Paper,
+        ));
+        $payload = $snapshot->payload();
+
+        self::assertSame(['base', 'mode', 'setup', 'exchange', 'mode_exchange', 'environment'], array_column($snapshot->orderedLayers(), 'type'));
+        self::assertSame(10.0, $payload['exchange']['limits']['max_notional']);
+        self::assertSame(2.0, $payload['mode']['leverage']['value']);
+        self::assertSame(0.4, $payload['mode']['risk']['trade_budget']['value']);
+        self::assertFalse($payload['environment']['write_enabled']);
+        self::assertTrue($payload['environment']['dry_run']);
+    }
+
+    /** @return iterable<string,array{string,string,string,string}> */
+    public static function microScalpingShadowTargetProvider(): iterable
+    {
+        foreach ([
+            ['micro_scalping.momentum_ofi.long', 'long'],
+            ['micro_scalping.momentum_ofi.short', 'short'],
+        ] as [$setupId, $side]) {
+            yield $setupId . ' / OKX demo' => [$setupId, $side, 'okx', 'demo'];
+            yield $setupId . ' / OKX mainnet read-only' => [$setupId, $side, 'okx', 'mainnet'];
+            yield $setupId . ' / Hyperliquid testnet' => [$setupId, $side, 'hyperliquid', 'testnet'];
+            yield $setupId . ' / Hyperliquid mainnet read-only' => [$setupId, $side, 'hyperliquid', 'mainnet'];
+        }
+    }
+
+    #[DataProvider('microScalpingBacktestTargetProvider')]
+    public function testMicroScalpingBacktestUsesAuthenticatedPublicVenueLayers(
+        string $setupId,
+        string $side,
+        string $exchange,
+        string $environment,
+    ): void {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', $setupId, '1.1.0',
+            $exchange, $environment, $side, ShadowExecutionCapability::Backtest,
+        ));
+
+        self::assertSame(ShadowExecutionCapability::Backtest, $snapshot->request->capability);
+        self::assertSame($exchange, $snapshot->payload()['exchange']['id']);
+        self::assertFalse($snapshot->payload()['environment']['write_enabled']);
+        self::assertTrue($snapshot->payload()['environment']['dry_run']);
+    }
+
+    /** @return iterable<string,array{string,string,string,string}> */
+    public static function microScalpingBacktestTargetProvider(): iterable
+    {
+        yield 'long / OKX mainnet public replay' => ['micro_scalping.momentum_ofi.long', 'long', 'okx', 'mainnet'];
+        yield 'short / Hyperliquid mainnet public replay' => ['micro_scalping.momentum_ofi.short', 'short', 'hyperliquid', 'mainnet'];
+    }
+
+    public function testMicroScalpingShadowRejectsPrivateMainnetAndHasNoFakeOverlay(): void
+    {
+        try {
+            (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+                'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
+                'okx', 'mainnet', 'long', ShadowExecutionCapability::PrivateMainnet,
+            ));
+            self::fail('Private mainnet execution was accepted.');
+        } catch (TradingConfigException $exception) {
+            self::assertSame('private_mainnet_execution_forbidden', $exception->getMessage());
+        }
+
+        $this->expectException(TradingConfigException::class);
+        $this->expectExceptionMessage('Required trading config layer "mode_exchange" is missing');
+        (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', 'micro_scalping.momentum_ofi.long', '1.1.0',
+            'fake', 'test', 'long', ShadowExecutionCapability::Fake,
+        ));
     }
 }

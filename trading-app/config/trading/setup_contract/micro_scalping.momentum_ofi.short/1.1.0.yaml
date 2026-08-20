@@ -1,0 +1,95 @@
+schema_version: '1.0.0'
+setup_id: micro_scalping.momentum_ofi.short
+setup_version: '1.1.0'
+status: shadow
+executable: true
+family: momentum_ofi
+side: short
+thesis: 'Negative 5m momentum plus a tight authenticated 1m spread and negative canonical OFI may precede a micro short move.'
+source_origin: { file: 'src/MtfValidator/config/validations.scalper_micro.yaml', line_range: '5-19,95-125', content_sha256: 47969bd5055b28ba5871b0b22e503482730a368c56fad3d0963aaad3808808e2, commit: 75a4cef8852f99d6e8202422fdd0531cdfce60bb }
+compatible_modes: [{ mode_id: micro_scalping, mode_version: '1.1.0' }]
+mode_compatibility: { state: defined, issue: null, justification: 'Exact compatibility with micro_scalping@1.1.0; no legacy alias or version range.' }
+hypothesis: 'Strictly negative local momentum plus authenticated executable spread and OFI predicts a downward micro move under the fixed #308 Shadow policy.'
+context:
+  side: short
+  regime:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101 plus GitHub issue #308'
+    nodes:
+      - { condition: close_below_vwap_or_ma9, timeframe: 5m, provenance: 'validations.scalper_micro.yaml:97' }
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.0 }, provenance: 'validations.scalper_micro.yaml:98; epsilon fixed to zero by #308' }
+      - { condition: rsi_bearish, timeframe: 5m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:99; frozen condition threshold' }
+      - { condition: rsi_gt_30, timeframe: 5m, parameters: { rsi_threshold: 30 }, provenance: 'validations.scalper_micro.yaml:100; frozen condition threshold' }
+      - { condition: atr_volatility_ok, timeframe: 5m, parameters: { min_atr_pct: 0.0005, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:101' }
+  context:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:95-101 plus GitHub issue #308'
+    nodes:
+      - { condition: macd_hist_lt_eps, timeframe: 5m, parameters: { eps: 0.0 }, provenance: 'validations.scalper_micro.yaml:98; epsilon fixed to zero by #308' }
+      - { condition: rsi_bearish, timeframe: 5m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:99; frozen condition threshold' }
+  trigger:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:117-125 plus #364/#365'
+    nodes:
+      - { condition: near_vwap, timeframe: 1m, parameters: { near_vwap_tolerance: 0.0012 }, provenance: 'validations.scalper_micro.yaml:119' }
+      - { condition: spread_bps_lte, timeframe: 1m, parameters: { max_spread_bps: 8 }, provenance: 'validations.scalper_micro.yaml:120; authenticated implementation #365' }
+      - { condition: order_flow_imbalance_lte, timeframe: 1m, parameters: { max_ofi: -0.15 }, provenance: 'validations.scalper_micro.yaml:121; canonical OFI v1 #364/#365' }
+      - { condition: close_below_vwap_or_ma9, timeframe: 1m, provenance: 'validations.scalper_micro.yaml:122' }
+  confirmations:
+    op: all_of
+    provenance: 'validations.scalper_micro.yaml:123-125'
+    nodes:
+      - { condition: macd_hist_decreasing_n, timeframe: 1m, parameters: { n: 1, eps: 0.001 }, provenance: 'validations.scalper_micro.yaml:123' }
+      - { condition: rsi_bearish, timeframe: 1m, parameters: { rsi_threshold: 48 }, provenance: 'validations.scalper_micro.yaml:124; frozen condition threshold' }
+      - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
+filters:
+  - { condition: atr_volatility_ok, timeframe: 1m, parameters: { min_atr_pct: 0.00035, max_atr_pct: 0.03 }, provenance: 'validations.scalper_micro.yaml:125' }
+no_trade_rules: []
+missing_data_policy: { absent: reject, stale: reject, critical: reject }
+execution:
+  side: short
+  execution_timeframe: { state: defined, value: 1m, unit: timeframe, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Fixed one-minute execution with no selector descent.' }
+  mandatory_confirmations: { state: defined, value: ['1m'], unit: timeframes, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The sourced one-minute confirmation is mandatory and cannot be substituted.' }
+  entry_zone: { state: defined, value: { anchor_source: vwap, anchor_timeframe: 1m, atr_timeframe: 1m, atr_multiplier: 0.35, minimum_half_width_rate: 0.0005, maximum_half_width_rate: 0.003, asymmetry_rate: 0.0, ttl_seconds: 30, maximum_input_age_seconds: 5, quantize_outward: true }, unit: price_zone_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Single symmetric VWAP/ATR zone whose inputs cannot outlive the microstructure proof.' }
+  stop: { state: defined, value: { kind: atr, timeframe: 1m, atr_multiplier: 1.5, pivot_id: null, buffer_rate: 0.0 }, unit: stop_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Single ATR stop source without pivot or legacy fallback.' }
+  targets: { state: defined, value: [{ id: tp1, risk_multiple: 1.8, liquidity_role: taker }], unit: target_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'One target at exactly 1.8 gross R.' }
+  minimum_net_r: { state: defined, value: 1.3, unit: net_r_multiple, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The target must retain 1.3 R after fees, spread, slippage and funding.' }
+  invalidation: { state: defined, value: { kind: close_beyond_stop }, unit: invalidation_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'The stop is the sole price invalidation boundary.' }
+  time_stop: { state: defined, value: PT30M, unit: duration, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Thirty-minute maximum duration, additionally bounded by the UTC day boundary.' }
+  cost_contract: { state: defined, value: { entry_liquidity_role: maker, stop_liquidity_role: taker, entry_spread_source: order_book, entry_slippage_source: execution_model, stop_spread_source: order_book, stop_slippage_source: execution_model, target_spread_source: order_book, target_slippage_source: execution_model, funding_source: venue_schedule, funding_interval_seconds: 28800 }, unit: cost_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Fees are exchange-owned; spread, slippage and funding require exact canonical sources.' }
+  order_policy: { state: defined, value: { type: limit, liquidity_role: maker, ttl_seconds: 30, cancel_after_seconds: 60, market_fallback: false, maximum_spread_bps: 8.0, maximum_slippage_bps: 8.0 }, unit: order_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Limit-only Shadow policy with fixed expiry and live-cost guards.' }
+data_condition_contract:
+  condition_catalog_version: '1.2.0'
+  required_data: [ohlcv_5m, ohlcv_1m, macd, rsi, atr, vwap, authenticated_order_book, authenticated_public_trades, fee_schedule, funding_schedule]
+  missing_conditions: []
+  external_dependencies: []
+  condition_catalog_hash: { state: defined, value: 8461d5597febb7bb35e7707b17640505698ab1a7855569a8e6a77f4cd50f111f, unit: sha256, source: 'config/trading/condition_catalog/1.2.0.yaml', justification: 'Pinned to the additive canonical #308 microstructure catalogue.' }
+  unknown_condition_policy: reject
+validity_window: { state: defined, value: PT5S, unit: duration, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'No decision carry-forward beyond the authenticated microstructure proof.' }
+governance:
+  shadow: ['capture complete identity and typed decision trace', 'reject every missing, stale or cross-market critical input', 'use canonical #304 plan and reservation']
+  paper: ['pass deterministic Shadow fixtures', 'run Paper with exact venue costs and no tuning']
+  promotion: ['#132 certified net baseline attached', 'at least 50 certified trades per executable cell', 'independent risk review', 'publish a new semantic version']
+  suspension: ['authenticated microstructure or cost absent or stale', 'condition contract breach', 'trace or risk invariant gap']
+  rollback: ['certified net baseline regression', 'schema or provenance defect', 'risk invariant breach']
+  activation_requires_trace: true
+  activation_requires_certified_net_baseline: true
+known_defects: []
+provenance:
+  - { path: mode_compatibility, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Pinned exclusively to micro_scalping@1.1.0.' }
+  - { path: context.regime, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:95-101 plus GitHub issue #308', justification: 'Copied 5m bearish AST and removed the MACD overlap at zero.' }
+  - { path: context.context, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:95-101 plus GitHub issue #308', justification: 'Copied local momentum context with strict negative MACD.' }
+  - { path: context.trigger, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:117-125 plus #364/#365', justification: 'Copied 1m trigger with authenticated spread and canonical OFI.' }
+  - { path: context.confirmations, source: 'src/MtfValidator/config/validations.scalper_micro.yaml:123-125', justification: 'Copied the sourced one-minute confirmation AST.' }
+  - { path: execution.execution_timeframe, source: 'GitHub issue #308 approved decision 2026-08-20', justification: '1m only; no selector.' }
+  - { path: execution.mandatory_confirmations, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Exact 1m confirmation contract.' }
+  - { path: execution.entry_zone, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Canonical VWAP/ATR micro Shadow zone.' }
+  - { path: execution.stop, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Canonical ATR-only stop.' }
+  - { path: execution.targets, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Single 1.8R gross target.' }
+  - { path: execution.minimum_net_r, source: 'GitHub issue #308 approved decision 2026-08-20', justification: '1.3R net acceptance floor.' }
+  - { path: execution.invalidation, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Close beyond stop.' }
+  - { path: execution.time_stop, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'PT30M plus UTC boundary.' }
+  - { path: execution.cost_contract, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Exact venue/live/model cost sources.' }
+  - { path: execution.order_policy, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'Limit-only timing and cost guards.' }
+  - { path: validity_window, source: 'GitHub issue #308 approved decision 2026-08-20', justification: 'PT5S validity.' }
+ownership_model: setup-contract-ownership-v1

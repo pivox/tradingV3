@@ -136,6 +136,9 @@ services:
     App\Trading\Paper\Runtime\PaperDatabaseInspectorInterface:
         alias: App\Trading\Paper\Runtime\DoctrinePaperDatabaseInspector
 
+    App\TradingCore\Microstructure\CanonicalMicrostructureSnapshotProviderInterface:
+        alias: App\TradingCore\Microstructure\PaperMarketStateMicrostructureSnapshotProvider
+
     Doctrine\Migrations\DependencyFactory:
         alias: doctrine.migrations.dependency_factory
 

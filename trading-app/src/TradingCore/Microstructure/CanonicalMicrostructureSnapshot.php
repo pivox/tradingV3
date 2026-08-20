@@ -53,6 +53,15 @@ final readonly class CanonicalMicrostructureSnapshot implements RuleInputProof
         $this->schemaVersion = self::SCHEMA_VERSION;
         $this->orderFlowImbalanceDefinition = self::OFI_DEFINITION;
         $this->inputHash = $inputHash ?? self::hashPayload($this->payload());
+        $tradeSourceRecordIdsValid = true;
+        foreach ($tradeSourceRecordIds as $tradeSourceRecordId) {
+            if (!\is_string($tradeSourceRecordId)
+                || preg_match('/\A[0-9a-f]{64}\z/D', $tradeSourceRecordId) !== 1
+            ) {
+                $tradeSourceRecordIdsValid = false;
+                break;
+            }
+        }
         if (!\in_array($sourceNetwork, ['mainnet', 'testnet'], true)
             || !\in_array($marketDataVenue, ['okx', 'hyperliquid'], true)
             || $marketType !== 'perpetual'
@@ -63,7 +72,7 @@ final readonly class CanonicalMicrostructureSnapshot implements RuleInputProof
             || $tradeCount !== count($tradeSourceRecordIds)
             || $tradeCount < 1
             || count(array_unique($tradeSourceRecordIds)) !== $tradeCount
-            || array_any($tradeSourceRecordIds, static fn (string $id): bool => preg_match('/\A[0-9a-f]{64}\z/D', $id) !== 1)
+            || !$tradeSourceRecordIdsValid
             || !$this->semanticsAreValid()
             || !hash_equals(self::hashPayload($this->payload()), $this->inputHash)
         ) {

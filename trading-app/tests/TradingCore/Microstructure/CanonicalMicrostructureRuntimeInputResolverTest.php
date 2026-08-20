@@ -35,6 +35,11 @@ final class CanonicalMicrostructureRuntimeInputResolverTest extends TestCase
         self::assertNotNull($resolved->ruleInput);
         self::assertSame('timestamped_order_book', $resolved->ruleInput->source);
         self::assertSame($snapshot->inputHash, $resolved->trace['input_hash']);
+        self::assertSame((float) $snapshot->bestBid, $resolved->trace['best_bid']);
+        self::assertSame((float) $snapshot->bestAsk, $resolved->trace['best_ask']);
+        self::assertSame((float) $snapshot->spreadBps, $resolved->trace['spread_bps']);
+        self::assertSame($snapshot->bookSourceRecordId, $resolved->trace['book_source_record_id']);
+        self::assertSame($snapshot->bookHappenedAt, $resolved->trace['book_observed_at']);
         self::assertSame([
             'source_network' => 'mainnet',
             'market_data_venue' => 'okx',
@@ -43,6 +48,21 @@ final class CanonicalMicrostructureRuntimeInputResolverTest extends TestCase
             'quantity_unit' => 'contracts',
         ], $resolved->marketIdentity?->toArray());
         self::assertSame($resolved->marketIdentity->toArray(), $resolved->trace['expected_market_identity']);
+    }
+
+    public function testOkxDemoUsesItsMainnetPublicDataNetwork(): void
+    {
+        $snapshot = $this->snapshot('BTCUSDT');
+
+        $resolved = (new CanonicalMicrostructureRuntimeInputResolver($this->provider($snapshot)))->resolve(
+            $this->lineage('okx', 'demo'),
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000Z'),
+        );
+
+        self::assertSame('ready', $resolved->status);
+        self::assertNotNull($resolved->marketIdentity);
+        self::assertSame('mainnet', $resolved->marketIdentity->sourceNetwork);
+        self::assertSame('okx', $resolved->marketIdentity->marketDataVenue);
     }
 
     public function testProviderAbsenceAndUnsupportedFakeIdentityAreExplicit(): void

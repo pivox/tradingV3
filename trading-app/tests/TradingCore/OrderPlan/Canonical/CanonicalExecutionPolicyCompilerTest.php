@@ -79,6 +79,36 @@ final class CanonicalExecutionPolicyCompilerTest extends TestCase
         yield 'trend momentum short' => ['scalping.trend_momentum.short', 'short'];
     }
 
+    #[DataProvider('microScalpingIdentities')]
+    public function testCompilesExactMicroScalpingShadowEnvelope(string $setupId, string $side): void
+    {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', $setupId, '1.1.0',
+            'okx', 'demo', $side, ShadowExecutionCapability::Paper,
+        ));
+
+        $policy = (new CanonicalExecutionPolicyCompiler())->compile($snapshot);
+
+        self::assertSame('1m', $policy->executionTimeframe);
+        self::assertSame(['1m'], $policy->mandatoryConfirmations);
+        self::assertSame(30, $policy->orderPolicy->ttlSeconds);
+        self::assertSame(60, $policy->orderPolicy->cancelAfterSeconds);
+        self::assertFalse($policy->orderPolicy->marketFallback);
+        self::assertSame(1800, $policy->holdingWindowSeconds);
+        self::assertSame(0.004, $policy->riskPolicy->riskRate);
+        self::assertSame(2.0, $policy->riskPolicy->modeLeverageCap);
+        self::assertSame(10.0, $policy->riskPolicy->exchangeMaxNotional);
+        self::assertSame(1.3, $policy->minimumNetR);
+        self::assertSame(1.8, $policy->targets[0]->riskMultiple);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function microScalpingIdentities(): iterable
+    {
+        yield 'momentum OFI long' => ['micro_scalping.momentum_ofi.long', 'long'];
+        yield 'momentum OFI short' => ['micro_scalping.momentum_ofi.short', 'short'];
+    }
+
     public function testLegacyIdentityCannotOptIntoModernShadowExecutionDecisions(): void
     {
         $payload = $this->payload();
