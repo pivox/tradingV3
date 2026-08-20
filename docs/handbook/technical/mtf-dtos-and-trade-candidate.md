@@ -248,7 +248,15 @@ correspondre a un `RuleMarketIdentity` attendu distinct de l'identite recue.
 Le constructeur du snapshot est prive ; seule la factory sur records publics
 normalises peut demander le recalcul canonique et produire ce `RuleInputProof`.
 
-Ce lot ne branche pas encore `micro_scalping` au runtime MTF et ne modifie pas
-les DTOs de decision ou TradeEntry. L'activation attend encore les contrats
-canoniques de risque, EntryZone, couts, ordre et horizon, sans execution privee
-mainnet.
+`CanonicalSetupRuleRuntime` dispose maintenant d'un ingress dedie. Un provider
+retourne uniquement le snapshot scelle, puis le runtime calcule lui-meme
+l'identite attendue depuis le lineage : reseau `mainnet|testnet`, venue
+`okx|hyperliquid`, perpetual, symbole et unite native. Une source absente,
+expiree, croisee ou en erreur reste visible dans `microstructure_input` et ne
+produit aucun snapshot de regle. Les environnements Fake/demo/test/local ne
+sont pas mappes implicitement ; leur routage vers une venue publique reste a
+#196.
+
+Les contrats micro 1.0 restent bloques et inchanges. L'activation attend encore
+les contrats canoniques de risque, EntryZone, couts, ordre et horizon, sans
+execution privee mainnet.

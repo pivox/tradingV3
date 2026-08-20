@@ -17,6 +17,7 @@ use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
 use App\TradingCore\Mode\ModeContractLoader;
 use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
+use App\TradingCore\Microstructure\CanonicalMicrostructureRuntimeInputResolver;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
@@ -37,6 +38,7 @@ final class CanonicalSetupRuleRuntime
         ?ConditionCatalog $catalog = null,
         ?SetupContractLoader $contracts = null,
         ?ModeContractLoader $modes = null,
+        private readonly ?CanonicalMicrostructureRuntimeInputResolver $microstructureInputs = null,
     ) {
         $this->suppliedCatalog = $catalog;
         $this->contracts = $contracts ?? new SetupContractLoader();
@@ -144,10 +146,17 @@ final class CanonicalSetupRuleRuntime
         $planCacheHit = isset($this->planCache[$planCacheKey]);
         $plan = $this->planCache[$planCacheKey] ??= (new StrictSetupRuleCompiler($catalog))->compile($contract);
         $evaluator = new StrictRuleEvaluator($catalog, $this->registry);
+        $microstructureInput = ($this->microstructureInputs ?? new CanonicalMicrostructureRuntimeInputResolver())
+            ->resolve($identity, $evaluatedAt);
+        $snapshots = $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt, $catalog);
+        if ($microstructureInput->ruleInput !== null) {
+            $snapshots[] = $microstructureInput->ruleInput;
+        }
         $context = new RuleEvaluationContext(
             (string) $identity->configHash,
             $evaluatedAt,
-            $this->snapshots($identity, $indicatorsByTimeframe, $evaluatedAt, $catalog),
+            $snapshots,
+            $microstructureInput->marketIdentity,
         );
         $sectionResults = [];
         foreach ($plan->sections as $name => $node) {
@@ -173,6 +182,10 @@ final class CanonicalSetupRuleRuntime
             default => 'setup_rules_passed',
         };
 
+        $microstructureTrace = $identity->modeId === 'micro_scalping'
+            ? ['microstructure_input' => $microstructureInput->trace]
+            : [];
+
         return new CanonicalSetupRuleRuntimeResult($passed, $reason, [
             'schema_version' => 'canonical-setup-rule-runtime.v1',
             'mode_id' => $identity->modeId,
@@ -190,6 +203,7 @@ final class CanonicalSetupRuleRuntime
             'plan_cache_key' => $planCacheKey,
             'plan_cache_hit' => $planCacheHit,
             'blockers' => $plan->blockers,
+            ...$microstructureTrace,
             'sections' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $sectionResults),
             'filters' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $filterResults),
             'no_trade_rules' => array_map(static fn (RuleEvaluationResult $result): array => $result->trace, $noTradeResults),

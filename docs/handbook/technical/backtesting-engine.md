@@ -793,6 +793,13 @@ Le constructeur du snapshot est prive : une preuve ne peut etre creee depuis
 des metriques fournies par l'appelant. `fromRecords()` repasse obligatoirement
 par le calcul canonique sur les records publics normalises et controles.
 
+`PaperBacktestMicrostructureAdapter` filtre un `PaperBacktestDataset` deja
+verifie sur le symbole exact avant de deleguer au meme moteur canonique. Le
+runtime MTF consomme ensuite la preuve par
+`CanonicalMicrostructureSnapshotProviderInterface`; il ne connait ni payload
+exchange brut ni scalaire legacy. Le hash et l'identite attendue sont exposes
+dans la trace, jamais l'objet de preuve serialise.
+
 Ce pont ne repointe encore aucun setup. Le contrat micro des ordres, du risque,
 de l'EntryZone, des couts et de l'horizon reste a publier avant de rendre
 `micro_scalping` executable. Aucun port prive mainnet n'est introduit.
