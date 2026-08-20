@@ -117,7 +117,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
 
     public function refreshAfterFill(string $internalTradeId, string $exchange, string $marketType): void
     {
-        if ($this->fillWindowResolver === null || $this->mainProvider === null) {
+        if ($this->fillWindowResolver === null) {
             return;
         }
 
@@ -146,10 +146,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                 $window->exitLastFillAt,
                 $window->entryVwap,
             );
-            $holdingTimeSec = (float) $window->exitLastFillAt->format('U.u') - (float) $window->entryFirstFillAt->format('U.u');
-            if (abs($holdingTimeSec - round($holdingTimeSec)) < 1e-9) {
-                $holdingTimeSec = (int) round($holdingTimeSec);
-            }
+            $holdingTimeSec = $window->holdingTimeSeconds();
             $existingExtra = $closed->getExtra() ?? [];
             $updates = [
                 'holding_time_sec' => $holdingTimeSec,

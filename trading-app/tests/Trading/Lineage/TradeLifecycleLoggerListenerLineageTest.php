@@ -587,6 +587,50 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame(101.0, $closed->getExtra()['mfe_mae_entry_price']);
     }
 
+    public function testRefreshRepairsHoldingTimeWithoutMarketDataProvider(): void
+    {
+        $internalTradeId = 'itd-refresh-holding-without-provider';
+        $window = new CanonicalTradeFillWindow(
+            entryFirstFillAt: new \DateTimeImmutable('2026-06-23T10:01:00.123456+00:00'),
+            exitLastFillAt: new \DateTimeImmutable('2026-06-23T10:04:00.654321+00:00'),
+            entryVwap: 101.0,
+        );
+        $resolver = new class($window) implements CanonicalTradeFillWindowResolverInterface {
+            public function __construct(private readonly CanonicalTradeFillWindow $window)
+            {
+            }
+
+            public function resolve(string $internalTradeId, string $exchange, string $marketType): ?CanonicalTradeFillWindow
+            {
+                return $this->window;
+            }
+        };
+        $closed = (new TradeLifecycleEvent('BTCUSDT', 'position_closed'))
+            ->setInternalTradeId($internalTradeId)
+            ->setSide('LONG')
+            ->setExchange(Exchange::FAKE)
+            ->setMarketType(MarketType::PERPETUAL)
+            ->setExtra([
+                'holding_time_sec' => 999,
+                'holding_time_source' => 'provider_position_history',
+            ]);
+        $this->em->persist($closed);
+        $this->em->flush();
+
+        $listener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            null,
+            null,
+            $resolver,
+        );
+
+        $listener->refreshAfterFill($internalTradeId, 'fake', 'perpetual');
+
+        self::assertEqualsWithDelta(180.530865, $closed->getExtra()['holding_time_sec'] ?? 0.0, 1e-12);
+        self::assertSame('fill_cost_ledger_v1', $closed->getExtra()['holding_time_source'] ?? null);
+    }
+
     public function testClosedPositionMarksMfeMaePartialWhenWindowHasMissingKlines(): void
     {
         $listener = new TradeLifecycleLoggerListener(

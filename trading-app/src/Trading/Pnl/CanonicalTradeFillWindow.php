@@ -19,8 +19,11 @@ final readonly class CanonicalTradeFillWindow
         }
     }
 
-    public function holdingTimeSeconds(): int
+    public function holdingTimeSeconds(): int|float
     {
-        return $this->exitLastFillAt->getTimestamp() - $this->entryFirstFillAt->getTimestamp();
+        $wholeSeconds = $this->exitLastFillAt->getTimestamp() - $this->entryFirstFillAt->getTimestamp();
+        $microseconds = (int) $this->exitLastFillAt->format('u') - (int) $this->entryFirstFillAt->format('u');
+
+        return $microseconds === 0 ? $wholeSeconds : $wholeSeconds + ($microseconds / 1_000_000);
     }
 }

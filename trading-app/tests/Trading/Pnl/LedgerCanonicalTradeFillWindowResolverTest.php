@@ -53,6 +53,17 @@ final class LedgerCanonicalTradeFillWindowResolverTest extends TestCase
         self::assertNull($invalid->resolve('trade-1', 'fake', 'perpetual'));
     }
 
+    public function testHoldingTimePreservesSubsecondPrecision(): void
+    {
+        $window = new CanonicalTradeFillWindow(
+            new \DateTimeImmutable('2026-08-20T10:00:00.123456+00:00'),
+            new \DateTimeImmutable('2026-08-20T10:03:00.654321+00:00'),
+            101.5,
+        );
+
+        self::assertEqualsWithDelta(180.530865, $window->holdingTimeSeconds(), 1e-12);
+    }
+
     private function provider(FillQuantityAggregationResult $result): FillQuantityAggregationProviderInterface
     {
         return new class($result) implements FillQuantityAggregationProviderInterface {
