@@ -14,6 +14,15 @@ est annulé après rejet ou déclenchement du stop. Restart, replay et fallback
 maker/taker conservent cette garantie. Le scénario golden 3 ne crée plus de stop
 manuellement et prouve désormais le comportement runtime.
 
+### Mise à jour du 20 août 2026 — golden scenario 15
+
+Le golden 15 est désormais exécutable deux fois depuis des fichiers frais. Il
+force la déconnexion après deux acquittements, interdit toute projection tant
+que `requiresResync` est actif, projette le snapshot local avec
+`ExchangeReconciliationService`, acquitte ce résultat puis reprend de nouveaux
+événements sans perte ni doublon. Le catalogue passe à 19 exécutables et un
+seul scénario partiel.
+
 L'audit du 19 juillet 2026 porte sur le dépôt `pivox/tradingV3`, la branche
 `issue/196-fake-paper-final-audit` et la base exacte
 `e2c1e30d6610ed262daf834003cadafaf1b76bab`, identique à `origin/main` au
@@ -22,10 +31,8 @@ MTF, EntryZone, sizing, fréquence, garde live ou Bitmart n'a été modifié.
 
 Le résultat vérifié est le suivant :
 
-- 18 scénarios golden sur 20 exécutent réellement leur comportement nommé dans
+- 19 scénarios golden sur 20 exécutent réellement leur comportement nommé dans
   le runner consolidé, deux fois avec une horloge contrôlée et un état neuf ;
-- le scénario 15 reconnecte le private WS, mais ne réalise pas le resync par
-  snapshot annoncé par son nom ;
 - le scénario 20 dispose de tests Python utiles, mais ceux-ci utilisent des
   doubles HTTP en mémoire ; l'ancien runner PHP ne lançait pas la recette et
   certifiait plusieurs faits par constantes ;
@@ -89,14 +96,14 @@ identités non incluses dans les faits normalisés ne sont pas déterministes.
 | 12 | `stop_loss_attach_failure` | L'échec terminal d'attachement déclenche une compensation MARKET reduce-only sur la quantité effectivement exposée. | `stopLossAttachFailure()` et tests de compensation | PASS — exécutable deux fois |
 | 13 | `tp1_then_trailing` | TP1 réduit exactement la position, puis un trailing monotone protège le reliquat à travers replay/restart. | `tp1ThenTrailing()` et tests `FakeTp1TrailingPolicy` | PASS — exécutable deux fois |
 | 14 | `gap_at_stop_loss` | Un gap au-delà du SL ferme au prochain top-of-book disponible. | `gapAtStopLoss()` et `testMovePriceTriggersAttachedStopLossAndClosesPosition` | PASS — exécutable deux fois |
-| 15 | `websocket_disconnect_resync` | La fixture déconnecte après deux événements et `reconnect()` reprend sans doublon/perte. Aucun snapshot REST local ni `ExchangeReconciliationService` n'est appelé dans ce scénario. | `testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate` | **PARTIAL** — `websocket_disconnect_snapshot_resync_not_exercised` |
+| 15 | `websocket_disconnect_resync` | Déconnexion après deux événements, blocage avant snapshot, réconciliation locale exacte, événement ajouté après snapshot, acquittement borné au watermark puis reprise sans perte. | `websocketDisconnectResync()` et `testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate` | PASS — exécutable deux fois depuis fichiers frais |
 | 16 | `duplicate_out_of_order_event` | Duplicat, gap, conflit de séquence, blocage de projection, snapshot local, reprise contiguë et restart sont exécutés. | `duplicateOutOfOrderEvent()` et `testOutOfOrderOneThreeTwoRequiresSnapshotBeforeFurtherProjection` | PASS — exécutable deux fois |
 | 17 | `restart_with_open_position` | Un fichier neuf est repris dans une nouvelle instance avec position, protection et séquence conservées. | `restartWithOpenPosition()` et `testStateStoreRestoresProtectedPositionAndContinuesEventSequence` | PASS — exécutable deux fois |
 | 18 | `funding` | Funding positif/négatif/absent, long/short/partiel, deadline, replay exact-once, restart et montant inconnu `null`. | `funding()` et `FakeFundingModelTest` | PASS — exécutable deux fois |
 | 19 | `one_way_conflict` | Conflits position/ordre, reduce-only, symboles indépendants, replay et restart en One-Way. | `oneWayConflict()` et `FakeOneWayConflictGuardTest` | PASS — exécutable deux fois |
 | 20 | `dry_run_multi_profiles_same_symbol` | Les tests Python exercent la logique d'orchestration avec une API Symfony simulée ; l'ancien runner PHP ne lançait pas la recette et construisait les faits à partir de constantes/du JSON. Il ne s'agit pas de deux piles fraîches complètes. | `test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_after_restart` et `test_same_symbol_fake_profiles_coexist_with_distinct_lineage_hashes_and_bounded_parallelism` | **PARTIAL** — `multi_profile_recipe_uses_in_memory_http_harness`, `golden_runner_does_not_execute_recipe_twice_from_fresh_state` |
 
-Résultat : **18 PASS / 2 PARTIAL / 0 UNSUPPORTED** dans le catalogue. Ce
+Résultat : **19 PASS / 1 PARTIAL / 0 UNSUPPORTED** dans le catalogue. Ce
 résultat n'est pas « 20 scénarios automatisés PASS » au sens de l'acceptance
 criterion de #196.
 
@@ -110,12 +117,12 @@ criterion de #196.
 | Machine d'état des ordres | Les chemins `pending/open/partially_filled/filled/cancelled/rejected/expired/unknown` sont persistés/testés. | PARTIAL | Les états minimum demandés `created`, `cancel_pending`, `replace_pending`, `replaced` et `failed` ne sont pas représentés dans `ExchangeOrderStatus`. |
 | Fill engine configurable | Crossing top-of-book, IOC, partial explicite, fallback taker, slippage et gaps sont déterministes. | PARTIAL | Pas de modes configurables `fill_immediate`, probabiliste seedé, volume-constrained, replay historique, latence/jitter ou queue maker réaliste. |
 | Modèle de coûts | Frais, rôle maker/taker, slippage, spread explicite, funding et liquidation sont séparés ; inconnu funding reste `null`. | PASS pour les modèles synthétiques implémentés | Les hypothèses Paper devront être sourcées/versionnées avec la future source de marché. |
-| Positions, SL/TP, trailing, compensation | Attachments terminaux, compensation, TP1/trailing, liquidation et races terminales sont testés. | **FAIL** | Un fill partiel ordinaire crée une exposition avant protection ; le cancel ordinaire ne l'attache pas automatiquement. Protéger/redimensionner ou compenser à chaque accroissement d'exposition. |
+| Positions, SL/TP, trailing, compensation | Attachments terminaux, fill partiel immédiatement protégé, resize stable, compensation exacte, TP1/trailing, liquidation et races terminales sont testés. | PASS pour le contrat attaché | Une entrée sans SL attaché reste hors de cette garantie. |
 | Persistance/recovery Paper | Enveloppe versionnée, checksum, écriture atomique, reprise ordres/positions/fills/événements/fautes/funding. | PASS pour l'état local | Cela ne transforme pas le Fake local en Paper sans source marché réelle/replay. |
-| Simulation WS public/privé | Private WS persistant, ack, duplicate/out-of-order/gap et snapshot resync au scénario 16. | PARTIAL | Public WS absent ; scénario golden 15 ne réalise pas son snapshot resync nommé. |
+| Simulation WS public/privé | Private WS persistant, disconnect, ack, duplicate/out-of-order/gap et snapshot resync aux scénarios 15 et 16. | PARTIAL | Public WS absent. |
 | DSL/fixtures d'erreurs | Fautes typées `network_timeout`, `transport_error`, `http_429`, `http_500`, avant/après mutation, FIFO et restart. | PARTIAL | Pas de quota glissant, latence/jitter seedés, précision/marge dans une DSL commune, ni catalogue de divergences. |
 | Runtime-check Fake/Paper | Contrôle local de book, balance, horloge, coûts, SL et reprise de sonde ; dry-run, permissions off, kill switch et writes off imposés. | PASS fail-closed | La configuration courante reste non-ready sans horloge contrôlée et source marché Paper. Aucun résultat ready Paper ne doit être revendiqué. |
-| 20 scénarios golden | Catalogue strict de vingt lignes et runner consolidé. | **FAIL** | 18 exécutables ; scénarios 15 et 20 `partial`. |
+| 20 scénarios golden | Catalogue strict de vingt lignes et runner consolidé. | **FAIL** | 19 exécutables ; scénario 20 `partial`. |
 | Matrice de parité/remplacement Bitmart | Les adapters exposent quelques flags et la recette Fake garde une frontière structurelle avec Bitmart. | **FAIL** | Aucune matrice complète critère→preuve→divergence→condition de remplacement n'était livrée. L'entrée proposée pour #195 figure plus bas. |
 | Documentation opérateur et rollback | Handbook, README Fake, modèle risque et rollback local existent. | PARTIAL | Les anciens documents sur-certifiaient 20/20 ; Paper réel/replay et rollback de sa source restent à documenter après implémentation. |
 
@@ -129,11 +136,11 @@ criterion de #196.
 | Précision, marge, balance et levier réalistes | Scénarios 6–8 et catalogue instrument. | PASS pour le modèle synthétique versionné | La réalisme Paper dépendra des données source. |
 | Aucun ordre accepté avec `order_id=null` | Les résultats acceptés utilisent une identité locale persistée ; tests adapter/contrat. | PASS | — |
 | Idempotence sans multi-submit | Scénarios 9, 10, 12, 13, 18 et 19 couvrent replay et effets exact-once. | PASS dans les chemins couverts | La future pile réelle du scénario 20 doit aussi être instrumentée. |
-| Toute position ouverte a un SL accepté ou une compensation | Compensation terminale et protections de fill complet sont testées. | **FAIL** | Fill partiel ordinaire non protégé jusqu'au fill terminal ; le scénario 3 attache manuellement après cancel. |
+| Toute position ouverte a un SL accepté ou une compensation | Fill complet/partiel avec SL attaché, resize et compensation exacte sont testés. | PASS pour le contrat attaché | Les ordres sans SL attaché ne sont pas certifiés par cette garantie. |
 | Restart Paper sans perte | Scénarios 13, 16–19 et tests du file store restaurent l'état et les séquences. | PASS pour fichier local | Pas de ledger PostgreSQL utilisé par Fake. |
-| Network/rate-limit/WS disconnect injectables | Timeout, transport, HTTP 429/500, private WS disconnect/gap sont injectables. | PARTIAL | Pas de rate limiter temporel/quota glissant, latence/jitter seedés, public WS ; scénario 15 sans snapshot resync. |
+| Network/rate-limit/WS disconnect injectables | Timeout, transport, HTTP 429/500, private WS disconnect/gap et snapshot resync sont injectables. | PARTIAL | Pas de rate limiter temporel/quota glissant, latence/jitter seedés ou public WS. |
 | Frais/slippage/funding séparés | Ledger/événements et champs distincts, funding exact-once, liquidation exacte. | PASS | — |
-| Les 20 scénarios golden sont automatisés | Dix-huit exécutions consolidées ; deux preuves partielles. | **FAIL** | Compléter réellement 15 et 20, puis les exécuter deux fois depuis état/pile neufs. |
+| Les 20 scénarios golden sont automatisés | Dix-neuf exécutions consolidées ; une preuve partielle. | **FAIL** | Compléter réellement le scénario 20 sur deux piles fraîches. |
 | Divergences critiques Bitmart listées | La section #195 ci-dessous propose une entrée statique. | PARTIAL | Il manque les fixtures empiriques Bitmart redacted et la matrice de remplacement validée par #195. |
 
 ## Capabilities Fake/Paper observées
@@ -151,7 +158,7 @@ capability existe sur un exchange réel.
 | Hedge | Non implémenté | Mode non One-Way rejeté | Unsupported explicite |
 | MARKET | Top-of-book, slippage/cost séparé | Pas de profondeur/impact volume | Supporté partiel |
 | LIMIT / IOC / post-only | Repos, crossing, IOC, partial et expiry | Queue maker/volume historique absents | Supporté partiel |
-| Stop / SL / TP / trigger | Ordres reduce-only, attachments, gap, races terminales | Protection d'un fill partiel ordinaire non garantie | **Gap critique** |
+| Stop / SL / TP / trigger | Ordres reduce-only, attachments, fill partiel immédiat, resize, gap et races terminales | Les ordres sans SL attaché restent hors garantie | Supporté pour le contrat attaché |
 | Trailing | Politique TP1→trailing opt-in, persistante | Pas de trailing générique | Supporté ciblé |
 | Cancel | Par ordre et par client ID, replay idempotent | État `cancel_pending` absent | Supporté partiel |
 | Replace / modify | `supportsModifyOrder=false` | Aucun lifecycle replace | Unsupported déclaré |
@@ -167,27 +174,23 @@ capability existe sur un exchange réel.
 | Fees / slippage / spread | Modèles/version/source séparés | Hypothèses synthétiques | Supporté |
 | REST exchange | Aucun transport réseau Fake | API locale de scénario uniquement | Sans réseau par conception |
 | Public WS | Absent | Aucun flux public simulé | Unsupported |
-| Private WS | Replay, ack, disconnect, duplicate, gap, resync/restart | Le golden 15 ne chaîne pas snapshot resync | Supporté partiel |
+| Private WS | Replay, ack, disconnect, duplicate, gap, snapshot resync/restart | Public WS séparé absent | Supporté |
 | Source Paper réelle/replay | Absente ; runtime-check fail-closed | `marketDataSourceReady=false` | **Unsupported** |
 
 ## Divergences et follow-ups requis
 
 ### P0 — empêche la clôture de #196
 
-1. **Scénario 15 complet.** Après disconnect, imposer `requiresResync`, obtenir
-   un snapshot Fake local, appeler le service de réconciliation, terminer le
-   resync puis seulement reprendre la projection. Exécuter deux fois depuis
-   fichiers frais.
-2. **Scénario 20 sur pile réelle locale.** Démarrer deux états applicatifs
+1. **Scénario 20 sur pile réelle locale.** Démarrer deux états applicatifs
    indépendants ou remettre à zéro toutes les persistences, lancer réellement la
    recette R12 vers Symfony local Fake, instrumenter les frontières HTTP de tous
    les exchanges et comparer les rapports. Les doubles HTTP en mémoire restent
    des tests unitaires, pas la preuve golden finale.
-3. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
+2. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
    scénario/runtime, dériver les identités non métier de ce seed ou les exclure
    contractuellement avec justification, puis comparer l'état persistant complet
    et les coûts/événements de deux exécutions fraîches.
-4. **Mode Paper.** Implémenter une source marché réelle publique ou replay
+3. **Mode Paper.** Implémenter une source marché réelle publique ou replay
    enregistrée, versionnée et redacted, sans client privé et sans write, puis
    rendre le runtime-check ready uniquement si source et horloge sont prêtes.
 

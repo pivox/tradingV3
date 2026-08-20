@@ -217,7 +217,9 @@ Ce contrat couvre les erreurs adapter REST simulees. Il ne modelise pas encore u
 quota glissant, la latence/jitter avec seed, les erreurs de precision/marge, ni les
 divergences Bitmart. `FakeExchangeWsClient` couvre la deconnexion/reconnexion et
 une fixture distincte couvre le gap avec snapshot resync. Le scenario golden 15
-ne chaine toutefois pas encore ces deux comportements ; il reste donc `partial`.
+chaîne désormais déconnexion, blocage `requiresResync`, snapshot Fake local,
+`ExchangeReconciliationService`, événement concurrent après snapshot,
+acquittement borné au watermark et reprise sans perte.
 
 ## Runtime-check Fake/Paper
 
@@ -607,16 +609,21 @@ Le contrat runtime est le suivant :
   `stateFile` ;
 - le filtre symbole ne consomme jamais une livraison d un autre symbole.
 
-La reprise impose d abord un `ExchangeReconciliationService` global sur les
-snapshots REST Fake locaux. En mode scenario, `completeSnapshotResync()` exige
+La reprise impose d abord un `ExchangeReconciliationService` global sur un
+snapshot REST Fake local atomique : ordres, positions, fills et watermark sont
+capturés sous la même transaction d'état. Hors mode scénario comme en mode scénario,
+`completeSnapshotResync()` exige
 le `ExchangeReconciliationResult` Fake/Perpetual correspondant, avec
 `symbol === null` et aucune erreur. Une preuve absente, echouee ou limitee a un
 symbole ne modifie ni curseur ni `resync_required`. Ensuite seulement, la
 sequence numerique maximale de l etat canonique sert de watermark : le curseur
 avance dans l ordre declare sur toutes les livraisons couvertes, y compris `3`
 puis `2`, et incremente `resync_total` une fois. Un evenement canonique ajoute
-apres ce watermark prolonge la fixture active et reprend sur la sequence
-contigue.
+apres ce watermark n'est jamais acquitté par la complétion du snapshot et reste
+livrable après reconnexion. Un simple `reconnect()` pendant
+`resync_required` échoue fermé. Hors mode scénario, un résultat dont le
+watermark est inférieur à la séquence ayant déclenché la déconnexion ou le gap
+est également rejeté comme snapshot obsolète.
 
 `privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
 watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :
@@ -695,27 +702,24 @@ Une ligne presente dans le catalogue n est pas un PASS. Seul le statut `executab
 avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
-Les dix-huit scenarios executes dans cette version sont : maker limit rempli, limit
+Les dix-neuf scenarios executes dans cette version sont : maker limit rempli, limit
 IOC expire sans fill, partial fill immédiatement protégé puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
 market reduce-only, TP1 partiel puis trailing persistant long/short, gap au SL au
-prochain prix disponible, duplicate/out-of-order private WS avec snapshot resync,
+prochain prix disponible, déconnexion private WS avec snapshot resync,
+duplicate/out-of-order private WS avec snapshot resync,
 restart avec position protegee ouverte,
 funding perpetuel deterministe/persistant, et conflit One-Way position/ordre
 actif avec replay et restart.
 
-Deux lignes restent `partial` :
-
-- le scenario 15 exerce une deconnexion/reconnexion sans perte ni doublon, mais
-  pas le resync par snapshot annonce par son nom ;
-- le scenario 20 dispose de tests Python avec doubles HTTP en memoire, mais le
+Une ligne reste `partial` : le scenario 20 dispose de tests Python avec doubles HTTP en memoire, mais le
   runner golden PHP ne lance pas la recette complete deux fois depuis des piles
   fraiches. Les preuves structurelles OKX/Hyperliquid/Bitmart et les tests de lock
   restent utiles, sans constituer la preuve golden finale.
 
-Le bilan est donc 18 `executable` et 2 `partial`. L'audit critere par critere et
+Le bilan est donc 19 `executable` et 1 `partial`. L'audit critere par critere et
 les conditions de cloture sont publies dans
 `reports/fake-paper-final-audit-196.md`. Ce bilan ne clot pas l'issue #196 et
 n'autorise aucune mutation demo/testnet/mainnet.

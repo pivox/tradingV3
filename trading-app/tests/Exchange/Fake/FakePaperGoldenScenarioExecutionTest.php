@@ -222,6 +222,24 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             'order_status' => 'filled',
             'stop_price' => 24800.0,
         ],
+        'websocket_disconnect_resync' => [
+            'blocked_before_snapshot_code' => 'fake_private_ws_disconnected',
+            'disconnect_code' => 'fake_private_ws_disconnected',
+            'empty_raw_event_count' => 0,
+            'last_acknowledged_sequence' => '2',
+            'normalized_projection_count' => 11,
+            'normalized_projections_unique' => true,
+            'projection_blocked_before_snapshot' => true,
+            'projection_digest' => '77b2c47522451cc931cfdf44b28e371295f9a6accd28ecb03f23208c2e14b272',
+            'requires_resync_after_snapshot' => false,
+            'resumed_projected_event_count' => 5,
+            'resumed_raw_event_count' => 4,
+            'snapshot_corrections' => 4,
+            'snapshot_fill_count' => 1,
+            'snapshot_order_count' => 2,
+            'snapshot_position_count' => 1,
+            'snapshot_unprotected_position_count' => 0,
+        ],
         'duplicate_out_of_order_event' => [
             'conflict_code' => 'fake_private_ws_sequence_conflict',
             'conflict_total' => 1,
@@ -359,7 +377,7 @@ final class FakePaperGoldenScenarioExecutionTest extends TestCase
             ),
         ));
 
-        self::assertCount(18, $catalogKeys);
+        self::assertCount(19, $catalogKeys);
         self::assertSame($catalogKeys, FakePaperGoldenScenarioRunner::keys());
     }
 

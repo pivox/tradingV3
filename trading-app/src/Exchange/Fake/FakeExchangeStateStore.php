@@ -26,6 +26,8 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 #[Autoconfigure(lazy: true)]
 class FakeExchangeStateStore
 {
+    public const RECONCILIATION_EVENT_SEQUENCE_WATERMARK = 'fake_private_ws_event_sequence_watermark';
+
     private const STATE_FORMAT_VERSION = 1;
     private const ENGINE_VERSION = 'fake-paper-state-v1';
     private const SCENARIO_CONFIG_ID = 'fake-paper-default-v1';
@@ -815,33 +817,31 @@ class FakeExchangeStateStore
      */
     public function capturePrivateWsSnapshotProof(): ?array
     {
-        return $this->transactional(function (): ?array {
-            $scenario = $this->privateWsScenario();
-            if (
-                !$scenario instanceof FakePrivateWsScenario
-                || $this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED
-            ) {
-                return null;
-            }
+        return $this->transactional(fn (): ?array => $this->capturePrivateWsSnapshotProofFromCurrentState());
+    }
 
-            $cycleId = $this->privateWs['resync_cycle_id'];
-            if (!\is_string($cycleId)) {
-                throw new \LogicException('fake_private_ws_resync_cycle_invalid');
-            }
+    /**
+     * @return array{
+     *     orders:list<ExchangeOrderDto>,
+     *     positions:list<ExchangePositionDto>,
+     *     events:list<FakeExchangeEvent>,
+     *     event_sequence_watermark:int,
+     *     pending_private_ws_proof:array<string,mixed>|null
+     * }
+     */
+    public function captureReconciliationState(): array
+    {
+        return $this->transactional(function (): array {
+            $pendingProof = $this->capturePrivateWsSnapshotProofFromCurrentState();
 
-            $proof = [
-                'schema_version' => self::PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA,
-                'scenario_id' => $scenario->scenarioId,
-                'resync_cycle_id' => $cycleId,
-                'event_sequence_watermark' => $this->maximumCanonicalNumericEventSequence(),
-                'scenario_delivery_count' => \count($scenario->deliveries),
-                'proof_id' => bin2hex(random_bytes(32)),
-                'status' => 'pending',
-                'attestation_id' => null,
+            return [
+                'orders' => $this->getOrders(),
+                'positions' => $this->getOpenPositions(),
+                'events' => $this->events(),
+                'event_sequence_watermark' => $pendingProof['event_sequence_watermark']
+                    ?? $this->maximumCanonicalNumericEventSequence(),
+                'pending_private_ws_proof' => $pendingProof,
             ];
-            $this->privateWs['snapshot_proof'] = $proof;
-
-            return $proof;
         });
     }
 
@@ -859,13 +859,22 @@ class FakeExchangeStateStore
             return $reconciliation->reconcileBase($adapter, $symbol);
         }
 
-        $pendingProof = $this->capturePrivateWsSnapshotProof();
-        $result = $reconciliation->reconcileBase($adapter);
-        if ($pendingProof === null || $result->errors !== []) {
-            return $result;
+        $snapshot = $adapter->captureReconciliationSnapshot();
+        $result = $reconciliation->reconcileSnapshot(
+            $adapter,
+            $snapshot->orders,
+            $snapshot->positions,
+            $snapshot->fills,
+            positionSnapshotAuthoritative: true,
+        );
+        $metadata = array_replace($result->metadata, [
+            self::RECONCILIATION_EVENT_SEQUENCE_WATERMARK => $snapshot->eventSequenceWatermark,
+        ]);
+        if ($snapshot->pendingPrivateWsProof !== null && $result->errors === []) {
+            $metadata['fake_private_ws_snapshot_proof'] = $this->attestPrivateWsSnapshotProof(
+                $snapshot->pendingPrivateWsProof,
+            );
         }
-
-        $proof = $this->attestPrivateWsSnapshotProof($pendingProof);
 
         return new ExchangeReconciliationResult(
             exchange: $result->exchange,
@@ -880,8 +889,39 @@ class FakeExchangeStateStore
             staleOrdersClosed: $result->staleOrdersClosed,
             unknownOrdersDetected: $result->unknownOrdersDetected,
             errors: $result->errors,
-            metadata: array_replace($result->metadata, ['fake_private_ws_snapshot_proof' => $proof]),
+            metadata: $metadata,
         );
+    }
+
+    /** @return array<string,mixed>|null */
+    private function capturePrivateWsSnapshotProofFromCurrentState(): ?array
+    {
+        $scenario = $this->privateWsScenario();
+        if (
+            !$scenario instanceof FakePrivateWsScenario
+            || $this->privateWs['connection_state'] !== self::PRIVATE_WS_RESYNC_REQUIRED
+        ) {
+            return null;
+        }
+
+        $cycleId = $this->privateWs['resync_cycle_id'];
+        if (!\is_string($cycleId)) {
+            throw new \LogicException('fake_private_ws_resync_cycle_invalid');
+        }
+
+        $proof = [
+            'schema_version' => self::PRIVATE_WS_SNAPSHOT_PROOF_SCHEMA,
+            'scenario_id' => $scenario->scenarioId,
+            'resync_cycle_id' => $cycleId,
+            'event_sequence_watermark' => $this->maximumCanonicalNumericEventSequence(),
+            'scenario_delivery_count' => \count($scenario->deliveries),
+            'proof_id' => bin2hex(random_bytes(32)),
+            'status' => 'pending',
+            'attestation_id' => null,
+        ];
+        $this->privateWs['snapshot_proof'] = $proof;
+
+        return $proof;
     }
 
     /**

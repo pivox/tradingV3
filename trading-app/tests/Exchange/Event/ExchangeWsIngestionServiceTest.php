@@ -28,6 +28,7 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Exchange\Fake\FakeExchangeWsClient;
 use App\Exchange\Fake\FakePrivateWsException;
 use App\Exchange\Fake\FakePrivateWsScenario;
+use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use App\Exchange\Ws\ExchangeWsIngestionResult;
 use App\Exchange\Ws\ExchangeWsIngestionService;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -108,13 +109,11 @@ final class ExchangeWsIngestionServiceTest extends TestCase
     {
         $state = new FakeExchangeStateStore();
         $adapter = $this->adapter($state);
+        $store = new RecordingProjectionStore();
+        $staleSnapshot = $this->reconciliationService($store)->reconcile($adapter);
         $adapter->placeOrder($this->marketRequest(symbol: 'BTCUSDT', clientOrderId: 'btc-cid'));
         $adapter->placeOrder($this->marketRequest(symbol: 'ETHUSDT', clientOrderId: 'eth-cid'));
 
-        $expectedStore = new RecordingProjectionStore();
-        $this->service($expectedStore)->drain(new FakeExchangeWsClient($state));
-
-        $store = new RecordingProjectionStore();
         $service = $this->service($store);
         $client = new FakeExchangeWsClient($state, disconnectAfterAcknowledgedEvents: 2);
 
@@ -130,14 +129,44 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         self::assertTrue($client->requiresResync());
         self::assertSame('resync_required', $client->connectionState());
 
+        try {
+            $client->reconnect();
+            self::fail('A deterministic disconnect requires snapshot reconciliation before reconnect.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
+        }
+
+        try {
+            $client->completeSnapshotResync($staleSnapshot);
+            self::fail('A snapshot older than the disconnect watermark must be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_watermark_stale', $exception->getMessage());
+        }
+        self::assertTrue($client->requiresResync());
+
+        $snapshot = $this->reconciliationService($store)->reconcile($adapter);
+        $adapter->placeOrder($this->marketRequest(
+            symbol: 'BTCUSDT',
+            clientOrderId: 'post-snapshot-cid',
+            quantity: 1.0,
+        ));
+        self::assertSame(
+            6,
+            $snapshot->metadata[FakeExchangeStateStore::RECONCILIATION_EVENT_SEQUENCE_WATERMARK] ?? null,
+        );
+        $client->completeSnapshotResync($snapshot);
         $client->reconnect();
         $resumed = $service->drain($client);
         $empty = $service->drain($client);
 
         self::assertFalse($client->requiresResync());
-        self::assertGreaterThan(0, $resumed->rawEventsRead);
+        self::assertSame(3, $resumed->rawEventsRead);
+        self::assertSame(4, $resumed->eventsProjected);
         self::assertSame(0, $empty->rawEventsRead);
-        self::assertSame($expectedStore->eventSignatures(), $store->eventSignatures());
+        self::assertCount(1, array_filter(
+            $store->eventsOf(ExchangeOrderFilled::class),
+            static fn (ExchangeOrderFilled $event): bool => 'post-snapshot-cid' === $event->order()->clientOrderId,
+        ));
     }
 
     public function testProjectionFailureDoesNotAcknowledgeRawEvent(): void
@@ -179,6 +208,8 @@ final class ExchangeWsIngestionServiceTest extends TestCase
             new \DateTimeImmutable('2026-01-01 00:00:00 UTC'),
             ['event_sequence' => 1],
         ));
+        $store = new RecordingProjectionStore();
+        $staleSnapshot = $this->reconciliationService($store)->reconcile($this->adapter($state));
         $state->appendEvent(new FakeExchangeEvent(
             'order.created',
             'BTCUSDT',
@@ -208,7 +239,16 @@ final class ExchangeWsIngestionServiceTest extends TestCase
             self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
         }
 
-        $client->completeSnapshotResync();
+        try {
+            $client->completeSnapshotResync($staleSnapshot);
+            self::fail('A snapshot below the sequence that triggered the gap must be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_watermark_stale', $exception->getMessage());
+        }
+        self::assertTrue($client->requiresResync());
+
+        $snapshot = $this->reconciliationService($store)->reconcile($this->adapter($state));
+        $client->completeSnapshotResync($snapshot);
         self::assertFalse($client->requiresResync());
         self::assertSame([], iterator_to_array($client->drainPrivateEvents()));
 
@@ -574,6 +614,16 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         return new ExchangeWsIngestionService(
             new ExchangeEventNormalizerRegistry([new FakeExchangeEventNormalizer()]),
             new ExchangeEventBus($store, new NullLogger()),
+            new NullLogger(),
+        );
+    }
+
+    private function reconciliationService(RecordingProjectionStore $store): ExchangeReconciliationService
+    {
+        return new ExchangeReconciliationService(
+            new ExchangeEventBus($store, new NullLogger()),
+            $store,
+            $this->fixedClock(),
             new NullLogger(),
         );
     }

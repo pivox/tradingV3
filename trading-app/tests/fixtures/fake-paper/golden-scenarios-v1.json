@@ -139,13 +139,16 @@
       "status": "executable"
     },
     {
-      "evidence": ["tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate"],
-      "gap_codes": ["websocket_disconnect_snapshot_resync_not_exercised"],
+      "evidence": [
+        "tests/Exchange/Event/ExchangeWsIngestionServiceTest.php::testReconnectResumesAfterDeterministicDisconnectWithoutLossOrDuplicate",
+        "tests/Exchange/Fake/FakePaperGoldenScenarioExecutionTest.php::testExecutableScenarioIsDeterministicAndMatchesGoldenFacts"
+      ],
+      "gap_codes": [],
       "id": 15,
       "name": "websocket_disconnect_resync",
       "requirement": "A deterministic private WebSocket disconnect resumes without event loss or duplication.",
-      "runner": null,
-      "status": "partial"
+      "runner": "websocket_disconnect_resync",
+      "status": "executable"
     },
     {
       "evidence": [
