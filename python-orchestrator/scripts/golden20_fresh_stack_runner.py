@@ -81,6 +81,8 @@ def _wait_for_http(
                     if isinstance(body, dict) and expected_json_key in body:
                         return
                     last_error = f"HTTP 200 without {expected_json_key}"
+                elif response.status_code >= 500:
+                    raise RuntimeError(f"fresh stack returned HTTP {response.status_code} at {url}")
                 else:
                     last_error = f"HTTP {response.status_code}"
             except (httpx.HTTPError, ValueError) as exc:
