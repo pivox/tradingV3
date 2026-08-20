@@ -264,7 +264,8 @@ preuves fortes.
 
 `canonical_holding_time_sec` suit la même règle et vaut exactement
 `exit_last_fill_at - entry_first_fill_at` lorsque la quantité est complètement
-fermée. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
+fermée, y compris la précision microseconde. Les bornes persistées utilisent le
+format `Y-m-d\TH:i:s.uP`. `holding_time_source` expose `fill_cost_ledger_v1`. Une sortie antérieure au
 premier fill d'entrée ajoute `ledger_fill_chronology_invalid`, masque le PnL net
 canonique et interdit donc la certification.
 

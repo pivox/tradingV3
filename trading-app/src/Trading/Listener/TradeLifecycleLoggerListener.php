@@ -19,6 +19,8 @@ use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 
 final class TradeLifecycleLoggerListener
 {
+    private const FILL_EVIDENCE_TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
+
     /**
      * @var string[]
      */
@@ -166,7 +168,10 @@ final class TradeLifecycleLoggerListener
                 // Ledger evidence is optional here; an unavailable or incomplete window remains explicit best-effort provider history.
             }
         }
-        $holdingTimeSec = $analysisWindowEnd->getTimestamp() - $analysisWindowStart->getTimestamp();
+        $holdingTimeSec = (float) $analysisWindowEnd->format('U.u') - (float) $analysisWindowStart->format('U.u');
+        if (abs($holdingTimeSec - round($holdingTimeSec)) < 1e-9) {
+            $holdingTimeSec = (int) round($holdingTimeSec);
+        }
         $effectiveRunId = $event->runId ?? $lineage?->getRunId();
         $certifiedPnlExtra = $this->certifiedPnlExtraFromRaw($history->raw);
 
@@ -341,8 +346,8 @@ final class TradeLifecycleLoggerListener
                     'mae_at' => $maeAt?->format(\DateTimeInterface::ATOM),
                     'mfe_mae_source' => $mfeMaeSource,
                     'mfe_mae_timeframe' => $mfeMaeTimeframe,
-                    'mfe_mae_window_start' => $analysisWindowStart->format(\DateTimeInterface::ATOM),
-                    'mfe_mae_window_end' => $analysisWindowEnd->format(\DateTimeInterface::ATOM),
+                    'mfe_mae_window_start' => $analysisWindowStart->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
+                    'mfe_mae_window_end' => $analysisWindowEnd->format(self::FILL_EVIDENCE_TIMESTAMP_FORMAT),
                     'mfe_mae_window_source' => $analysisWindowSource,
                     'mfe_mae_entry_price_source' => $entryPriceSource,
                     'mfe_mae_sample_count' => $mfeMaeSampleCount,
