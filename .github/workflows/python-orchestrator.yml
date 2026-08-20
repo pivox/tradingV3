@@ -116,7 +116,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: redis, pdo_sqlite, sqlite3, intl, opcache
+          extensions: redis, pdo_pgsql, pdo_sqlite, sqlite3, intl, opcache
           coverage: none
           tools: composer:v2
 
