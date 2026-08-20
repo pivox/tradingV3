@@ -150,11 +150,14 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
             if (abs($holdingTimeSec - round($holdingTimeSec)) < 1e-9) {
                 $holdingTimeSec = (int) round($holdingTimeSec);
             }
+            $existingExtra = $closed->getExtra() ?? [];
             $updates = [
                 'holding_time_sec' => $holdingTimeSec,
                 'holding_time_source' => 'fill_cost_ledger_v1',
             ];
-            if ($excursion['mfe_price'] !== null && $excursion['mae_price'] !== null) {
+            $replacementIsUsable = $excursion['mfe_price'] !== null && $excursion['mae_price'] !== null;
+            $existingEvidenceIsComplete = ($existingExtra['mfe_mae_data_quality'] ?? null) === 'complete';
+            if ($replacementIsUsable && (!$existingEvidenceIsComplete || $excursion['data_quality'] === 'complete')) {
                 $updates += [
                     'max_favorable_price' => $excursion['mfe_price'],
                     'max_adverse_price' => $excursion['mae_price'],
@@ -174,7 +177,7 @@ final class TradeLifecycleLoggerListener implements CanonicalFillEvidenceRefresh
                     'mfe_mae_data_quality' => $excursion['data_quality'],
                 ];
             }
-            $closed->setExtra(array_replace($closed->getExtra() ?? [], $updates));
+            $closed->setExtra(array_replace($existingExtra, $updates));
             $this->tradeLifecycleRepository->save($closed);
         } catch (\Throwable) {
             // Fill ingestion remains authoritative; unavailable analytics evidence stays explicitly non-canonical.

@@ -496,7 +496,7 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         self::assertSame('complete', $extra['mfe_mae_data_quality'] ?? null);
     }
 
-    public function testRefreshPreservesExistingExcursionEvidenceWhenKlineProviderFails(): void
+    public function testRefreshPreservesExistingCompleteExcursionEvidenceWhenReplacementIsNotComplete(): void
     {
         $internalTradeId = 'itd-refresh-provider-error';
         $window = new CanonicalTradeFillWindow(
@@ -556,6 +556,20 @@ final class TradeLifecycleLoggerListenerLineageTest extends KernelTestCase
         );
 
         $listener->refreshAfterFill($internalTradeId, 'fake', 'perpetual');
+
+        self::assertSame($originalEvidence, $closed->getExtra());
+
+        $partialListener = new TradeLifecycleLoggerListener(
+            new TradeLifecycleLogger($this->em, $this->fixedClock()),
+            $this->tradeLifecycleRepository(),
+            $this->mainProviderWithKlines([
+                new KlineDto('BTCUSDT', Timeframe::TF_1M, new \DateTimeImmutable('2026-06-23 10:01:00 UTC'), BigDecimal::of('101'), BigDecimal::of('106'), BigDecimal::of('99'), BigDecimal::of('105'), BigDecimal::of('1')),
+            ]),
+            null,
+            $resolver,
+        );
+
+        $partialListener->refreshAfterFill($internalTradeId, 'fake', 'perpetual');
 
         self::assertSame($originalEvidence, $closed->getExtra());
     }

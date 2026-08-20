@@ -153,8 +153,9 @@ already exists and the aggregated quantity has just become complete, its
 holding time and MFE/MAE evidence are recomputed from the exact first-entry and
 last-exit fills. This deterministic repair covers the case where the final fill
 arrives after the provider close event; an unavailable ledger or market-data
-provider leaves the previous excursion evidence untouched, including valid
-canonical evidence during an idempotent replay.
+provider leaves the previous excursion evidence untouched. A partial refresh
+also cannot replace existing `complete` evidence; this preserves valid canonical
+evidence during an idempotent replay.
 
 Current statuses:
 
