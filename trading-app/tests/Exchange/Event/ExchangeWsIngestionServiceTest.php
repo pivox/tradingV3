@@ -109,10 +109,11 @@ final class ExchangeWsIngestionServiceTest extends TestCase
     {
         $state = new FakeExchangeStateStore();
         $adapter = $this->adapter($state);
+        $store = new RecordingProjectionStore();
+        $staleSnapshot = $this->reconciliationService($store)->reconcile($adapter);
         $adapter->placeOrder($this->marketRequest(symbol: 'BTCUSDT', clientOrderId: 'btc-cid'));
         $adapter->placeOrder($this->marketRequest(symbol: 'ETHUSDT', clientOrderId: 'eth-cid'));
 
-        $store = new RecordingProjectionStore();
         $service = $this->service($store);
         $client = new FakeExchangeWsClient($state, disconnectAfterAcknowledgedEvents: 2);
 
@@ -134,6 +135,14 @@ final class ExchangeWsIngestionServiceTest extends TestCase
         } catch (\LogicException $exception) {
             self::assertSame('fake_private_ws_snapshot_resync_required', $exception->getMessage());
         }
+
+        try {
+            $client->completeSnapshotResync($staleSnapshot);
+            self::fail('A snapshot older than the disconnect watermark must be rejected.');
+        } catch (\LogicException $exception) {
+            self::assertSame('fake_private_ws_snapshot_watermark_stale', $exception->getMessage());
+        }
+        self::assertTrue($client->requiresResync());
 
         $snapshot = $this->reconciliationService($store)->reconcile($adapter);
         $adapter->placeOrder($this->marketRequest(

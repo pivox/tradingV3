@@ -23,6 +23,9 @@ completion acknowledges only sequences at or below that watermark. Only after
 that handshake may the client reconnect and drain the newer event. A final
 drain must be empty. The canonical golden test invokes the runner twice, so
 each execution gets an independent state file and the exact result must match.
+For an ordinary client, completion also rejects any reconciliation watermark
+below the last sequence observed when resync became required; a snapshot taken
+too early therefore cannot clear the fail-closed state.
 
 ## Alternatives
 

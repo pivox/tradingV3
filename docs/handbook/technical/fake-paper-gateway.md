@@ -620,7 +620,9 @@ avance dans l ordre declare sur toutes les livraisons couvertes, y compris `3`
 puis `2`, et incremente `resync_total` une fois. Un evenement canonique ajoute
 apres ce watermark n'est jamais acquitté par la complétion du snapshot et reste
 livrable après reconnexion. Un simple `reconnect()` pendant
-`resync_required` échoue fermé.
+`resync_required` échoue fermé. Hors mode scénario, un résultat dont le
+watermark est inférieur à la dernière séquence observée lors du passage en
+resync est également rejeté comme snapshot obsolète.
 
 `privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
 watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :

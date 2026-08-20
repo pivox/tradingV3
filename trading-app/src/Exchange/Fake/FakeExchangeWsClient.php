@@ -175,6 +175,9 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
         if (!\is_int($watermark) || $watermark < 0) {
             throw new \LogicException('fake_private_ws_snapshot_watermark_invalid');
         }
+        if ($watermark < $this->lastObservedNumericSequence) {
+            throw new \LogicException('fake_private_ws_snapshot_watermark_stale');
+        }
 
         foreach ($this->stateStore->events() as $index => $event) {
             $sequence = $this->sequence($event, $index);
