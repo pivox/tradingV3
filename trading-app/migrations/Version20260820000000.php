@@ -17,15 +17,38 @@ final class Version20260820000000 extends AbstractMigration
     public function up(Schema $schema): void
     {
         $this->addSql('DROP VIEW position_trade_analysis_v2');
-        $this->addSql('ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(6) WITH TIME ZONE');
+        $this->addLedgerTimestampPrecisionSql(6);
         $this->addCanonicalWrapperSql(true);
     }
 
     public function down(Schema $schema): void
     {
         $this->addSql('DROP VIEW IF EXISTS position_trade_analysis_v2');
-        $this->addSql('ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(0) WITH TIME ZONE');
+        $this->addLedgerTimestampPrecisionSql(0);
         $this->addCanonicalWrapperSql(false);
+    }
+
+    private function addLedgerTimestampPrecisionSql(int $precision): void
+    {
+        $this->addSql(sprintf(<<<'SQL'
+DO $fill_timestamp_precision$
+DECLARE
+    aggregate_definition text;
+    legacy_definition text;
+BEGIN
+    SELECT pg_get_viewdef('position_trade_ledger_aggregate_v1'::regclass, true)
+      INTO aggregate_definition;
+    SELECT pg_get_viewdef('position_trade_analysis_v2_legacy_source'::regclass, true)
+      INTO legacy_definition;
+
+    EXECUTE 'DROP VIEW position_trade_analysis_v2_legacy_source';
+    EXECUTE 'DROP VIEW position_trade_ledger_aggregate_v1';
+    EXECUTE 'ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(%d) WITH TIME ZONE';
+    EXECUTE 'CREATE VIEW position_trade_ledger_aggregate_v1 AS ' || aggregate_definition;
+    EXECUTE 'CREATE VIEW position_trade_analysis_v2_legacy_source AS ' || legacy_definition;
+END
+$fill_timestamp_precision$
+SQL, $precision));
     }
 
     private function addCanonicalWrapperSql(bool $withFillTiming): void

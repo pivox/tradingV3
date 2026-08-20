@@ -27,10 +27,15 @@ final class FillTimingMigrationTest extends TestCase
         );
 
         self::assertSame('DROP VIEW position_trade_analysis_v2', $up[0] ?? null);
-        self::assertSame(
+        $upPrecision = $up[1] ?? '';
+        self::assertStringContainsString('DROP VIEW position_trade_analysis_v2_legacy_source', $upPrecision);
+        self::assertStringContainsString('DROP VIEW position_trade_ledger_aggregate_v1', $upPrecision);
+        self::assertStringContainsString(
             'ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(6) WITH TIME ZONE',
-            $up[1] ?? null,
+            $upPrecision,
         );
+        self::assertStringContainsString('CREATE VIEW position_trade_ledger_aggregate_v1 AS ', $upPrecision);
+        self::assertStringContainsString('CREATE VIEW position_trade_analysis_v2_legacy_source AS ', $upPrecision);
 
         $migration = new Version20260820000000($connection, new NullLogger());
         $migration->down(new Schema());
@@ -40,10 +45,15 @@ final class FillTimingMigrationTest extends TestCase
         );
 
         self::assertSame('DROP VIEW IF EXISTS position_trade_analysis_v2', $down[0] ?? null);
-        self::assertSame(
+        $downPrecision = $down[1] ?? '';
+        self::assertStringContainsString('DROP VIEW position_trade_analysis_v2_legacy_source', $downPrecision);
+        self::assertStringContainsString('DROP VIEW position_trade_ledger_aggregate_v1', $downPrecision);
+        self::assertStringContainsString(
             'ALTER TABLE fill_cost_ledger ALTER COLUMN occurred_at TYPE TIMESTAMP(0) WITH TIME ZONE',
-            $down[1] ?? null,
+            $downPrecision,
         );
+        self::assertStringContainsString('CREATE VIEW position_trade_ledger_aggregate_v1 AS ', $downPrecision);
+        self::assertStringContainsString('CREATE VIEW position_trade_analysis_v2_legacy_source AS ', $downPrecision);
     }
 
     public function testMigrationUsesExactFillChronologyAndFailsClosed(): void
