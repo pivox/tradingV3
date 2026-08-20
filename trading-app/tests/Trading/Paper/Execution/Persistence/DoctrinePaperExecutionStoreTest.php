@@ -8,6 +8,7 @@ use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Persistence\DoctrinePaperExecutionStore;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
@@ -26,6 +27,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
 #[CoversClass(DoctrinePaperExecutionStore::class)]
+#[CoversClass(PaperExecutionCellState::class)]
 final class DoctrinePaperExecutionStoreTest extends TestCase
 {
     private Connection $connection;
@@ -121,6 +123,22 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_dataset_identity_conflict');
         $this->store->bindDataset($this->cell, 'dataset-substitute', str_repeat('b', 64));
+    }
+
+    public function testReadOnlyCellInspectionExposesBindingAndKillState(): void
+    {
+        $initial = $this->store->inspectCell($this->cell, PaperProfileEligibility::REFERENCE_ONLY);
+        self::assertTrue($initial->registered);
+        self::assertFalse($initial->killed);
+        self::assertNull($initial->datasetId);
+
+        $this->store->bindDataset($this->cell, 'dataset-original', str_repeat('a', 64));
+        $bound = $this->store->inspectCell($this->cell, PaperProfileEligibility::REFERENCE_ONLY);
+        self::assertSame('dataset-original', $bound->datasetId);
+        self::assertSame(str_repeat('a', 64), $bound->eventsFileSha256);
+
+        $this->store->kill($this->cell);
+        self::assertTrue($this->store->inspectCell($this->cell, PaperProfileEligibility::REFERENCE_ONLY)->killed);
     }
 
     public function testExactSourceOrderingReplayAndConflictingDuplicate(): void

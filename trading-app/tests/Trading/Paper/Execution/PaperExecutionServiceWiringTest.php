@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Execution;
 
 use App\Command\PaperExecutionReplayCommand;
+use App\Command\PaperReplayRuntimeCheckCommand;
 use App\Kernel;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\PaperExecutionCoordinator;
@@ -17,6 +18,7 @@ use App\MtfValidator\Service\MtfValidatorService;
 use App\MtfValidator\Service\TimeframeValidationService;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
+use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -36,6 +38,7 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
 
         self::assertInstanceOf(PaperExecutionCoordinator::class, $container->get(PaperEventCoordinatorInterface::class));
         self::assertInstanceOf(PaperExecutionReplayCommand::class, $container->get(PaperExecutionReplayCommand::class));
+        self::assertInstanceOf(PaperReplayRuntimeCheckCommand::class, $container->get(PaperReplayRuntimeCheckCommand::class));
         $factory = $container->get(PaperFakeRuntimeFactory::class);
         self::assertInstanceOf(PaperFakeRuntimeFactory::class, $factory);
         $root = (new \ReflectionProperty(PaperFakeRuntimeFactory::class, 'root'))->getValue($factory);
@@ -45,6 +48,11 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         $readerClock = (new \ReflectionProperty(PaperReplayReader::class, 'clock'))->getValue($reader);
         self::assertInstanceOf(PaperReplayClock::class, $runtimeClock);
         self::assertSame($readerClock, $runtimeClock, 'Replay reader and Fake matching must share dataset time.');
+        $readiness = $container->get(PaperReplayReadinessService::class);
+        $readinessClock = (new \ReflectionProperty(PaperReplayReadinessService::class, 'clock'))->getValue($readiness);
+        self::assertSame($readerClock, $readinessClock, 'Readiness and replay must validate the same controlled clock.');
+        $readinessReader = (new \ReflectionProperty(PaperReplayReadinessService::class, 'reader'))->getValue($readiness);
+        self::assertSame($reader, $readinessReader, 'Readiness must enforce the exact replay reader event limit.');
         $resolver = $container->get(PaperMtfPreparationResolver::class);
         self::assertSame(0, (new \ReflectionClass($resolver))->getConstructor()?->getNumberOfParameters() ?? 0, 'Paper preparation must have no ambient account, HTTP, lock, or exchange dependency.');
         $strategy = $container->get(\App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge::class);

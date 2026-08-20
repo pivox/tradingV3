@@ -7,6 +7,7 @@ namespace App\Tests\Trading\Paper\Execution;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionCheckpoint;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Persistence\PaperPendingEffect;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
@@ -16,6 +17,8 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 {
     public int $registrationWrites = 0;
+    public ?\Throwable $inspectionFailure = null;
+    public ?\Throwable $checkpointFailure = null;
 
     /** @var array<int, PaperMarketEvent> */
     private array $sources = [];
@@ -32,9 +35,15 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     private int $failures = 0;
     /** @var array{dataset_id: string, events_file_sha256: string}|null */
     private ?array $datasetIdentity = null;
+    /** @var array<string, PaperProfileEligibility> */
+    private array $registeredCells = [];
 
     public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void { ++$this->registrationWrites; }
-    public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void { ++$this->registrationWrites; }
+    public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
+    {
+        ++$this->registrationWrites;
+        $this->registeredCells[$cell->id] = $eligibility;
+    }
     public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void
     {
         ++$this->registrationWrites;
@@ -43,6 +52,24 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }
         $this->datasetIdentity = $identity;
+    }
+    public function inspectCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): PaperExecutionCellState
+    {
+        if ($this->inspectionFailure !== null) {
+            throw $this->inspectionFailure;
+        }
+        if (!isset($this->registeredCells[$cell->id])) {
+            return PaperExecutionCellState::absent();
+        }
+        if ($this->registeredCells[$cell->id] !== $eligibility) {
+            throw new \LogicException('paper_execution_cell_identity_conflict');
+        }
+
+        return PaperExecutionCellState::registered(
+            $this->killed,
+            $this->datasetIdentity['dataset_id'] ?? null,
+            $this->datasetIdentity['events_file_sha256'] ?? null,
+        );
     }
     public function datasetIdentity(PaperExecutionCell $cell): array
     {
@@ -97,6 +124,10 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
 
     public function checkpoint(PaperExecutionCell $cell): PaperExecutionCheckpoint
     {
+        if ($this->checkpointFailure !== null) {
+            throw $this->checkpointFailure;
+        }
+
         return new PaperExecutionCheckpoint($cell->id, count($this->sources), $this->ordinal, str_repeat('0', 64), $this->cursor, $this->killed, $this->ordinal);
     }
 

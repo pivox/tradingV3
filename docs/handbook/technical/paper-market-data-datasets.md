@@ -147,7 +147,28 @@ d'identité.
 
 ### Rejeu opérateur
 
-Le rejeu exige tous les paramètres, sans valeur implicite :
+Le runtime-check read-only et le rejeu exigent le même tuple, sans valeur
+implicite :
+
+```bash
+php bin/console app:paper-market:runtime-check \
+  --dataset=/chemin/absolu/dataset \
+  --configuration=/chemin/absolu/configuration.json \
+  --profile=scalper_micro \
+  --run-id=run-20260801-001
+```
+
+Le résultat JSON `paper-replay-readiness-v1` ne contient aucune configuration
+ni aucun chemin. `ready=true` prouve la disponibilité technique de la source,
+de l'horloge, de la base et de la frontière Fake-only. Le champ indépendant
+`baseline_eligible` reste faux pour tous les profils legacy `reference_only`.
+Le check refuse aussi une cellule tuée, un binding dataset divergent et un
+dataset au-delà de la limite effective du reader. Une reprise existante doit
+pointer vers le même événement, index et timestamp dans le dataset vérifié,
+sans avancer l'horloge. Le check ne crée ni snapshot persistant, ni cellule, ni
+checkpoint, ni effet.
+
+Le rejeu réutilise exactement cette préparation avant toute écriture :
 
 ```bash
 php bin/console app:paper-market:replay \
@@ -170,6 +191,6 @@ Les codes de refus stables incluent notamment
 `paper_execution_source_gap`, `paper_execution_source_out_of_order` et
 `paper_execution_provenance_invalid`.
 
-Ce lot suit la PR #330 de capture live publique. Les prochaines étapes restent
-#300, #301, #310, #133 et #302 avant génération des populations modernes. Le
+La promotion vers une baseline moderne reste conditionnée par les modes
+exécutables #306, #307 et #308, puis par la génération des populations. Le
 retrait BitMart #305 reste hors de ce chantier.

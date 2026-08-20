@@ -5,6 +5,17 @@
 **Le résultat métier de l'issue #196 reste incomplet. Le présent rapport est une
 baseline historique mise à jour par les lots correctifs listés ci-dessous.**
 
+### Mise à jour du 20 août 2026 — readiness Paper replay
+
+Le P0 « source Paper » est levé. Le runtime possède des datasets publics OKX et
+Hyperliquid versionnés, redacted et vérifiés, une horloge de replay contrôlée,
+un coordinateur persistant et une frontière d'exécution Fake-only sans client
+privé ni adapter réel. `app:paper-market:runtime-check` vérifie désormais un
+tuple exact dataset/configuration/profil/run sans mutation ; le replay réutilise
+la même préparation avant toute écriture. Le résultat distingue la readiness
+technique de l'éligibilité baseline : les profils legacy restent
+`reference_only`, donc aucune baseline moderne n'est certifiée par ce lot.
+
 ### Mise à jour du 20 août 2026 — protection partielle
 
 Le premier P0 de l'audit est levé : le matching engine attache un SL exact dès
@@ -66,8 +77,8 @@ Le résultat vérifié est le suivant :
   sont explicitement hors preuve car ils ne sont pas des résultats métier ;
 - la faille historique de protection des fills partiels est corrigée par la mise
   à jour du 20 août 2026 ci-dessus ;
-- le mode Paper réel/replay, la matrice complète de capabilities, plusieurs
-  modes de fill, le public WS et la matrice de remplacement Bitmart restent à
+- la promotion des modes modernes, la matrice complète de capabilities,
+  plusieurs modes de fill et la matrice de remplacement Bitmart restent à
   livrer.
 
 La présence d'une ligne dans le catalogue n'est pas à elle seule une
@@ -137,31 +148,31 @@ le livrable golden, sans lever les autres écarts de #196.
 
 | Livrable #196 | Évidence vérifiée | Statut | Écart exact / condition de clôture |
 |---|---|---|---|
-| ADR Fake vs Paper | Le handbook distingue Fake local et Paper persistant avec source marché réelle/replay. | PARTIAL | Pas d'ADR formel/versionné couvrant hypothèses, invariants et décision de source Paper. |
+| ADR Fake vs Paper | Le design versionné du 19 juillet et le delta readiness du 20 août fixent hypothèses, invariants, source publique/replay et frontière Fake-only. | PASS | La promotion des profils reste traitée séparément. |
 | Matrice de capabilities | `ExchangeCapabilities` publie 13 booléens et le présent audit inventorie le reste. | PARTIAL | Le contrat ne couvre pas toute la liste #196 ; `supportsTestnet=true` est ambigu pour Fake local ; plusieurs absences ne disposent pas d'une opération explicite à faire échouer. |
 | Fixtures de métadonnées instruments | Catalogue versionné avec tick, step, min notional, levier et maintenance margin ; tests de validation. | PASS | Aucun écart sur le sous-périmètre Fake perpétuel. |
 | Machine d'état des ordres | Les chemins `pending/open/partially_filled/filled/cancelled/rejected/expired/unknown` sont persistés/testés. | PARTIAL | Les états minimum demandés `created`, `cancel_pending`, `replace_pending`, `replaced` et `failed` ne sont pas représentés dans `ExchangeOrderStatus`. |
 | Fill engine configurable | Crossing top-of-book, IOC, partial explicite, fallback taker, slippage et gaps sont déterministes. | PARTIAL | Pas de modes configurables `fill_immediate`, probabiliste seedé, volume-constrained, replay historique, latence/jitter ou queue maker réaliste. |
-| Modèle de coûts | Frais, rôle maker/taker, slippage, spread explicite, funding et liquidation sont séparés ; inconnu funding reste `null`. | PASS pour les modèles synthétiques implémentés | Les hypothèses Paper devront être sourcées/versionnées avec la future source de marché. |
+| Modèle de coûts | Frais, rôle maker/taker, slippage, spread explicite, funding et liquidation sont séparés ; inconnu funding reste `null`. Les datasets Paper portent leur qualité et leur modèle versionné. | PASS pour les modèles implémentés | Toute nouvelle hypothèse doit conserver cette provenance explicite. |
 | Positions, SL/TP, trailing, compensation | Attachments terminaux, fill partiel immédiatement protégé, resize stable, compensation exacte, TP1/trailing, liquidation et races terminales sont testés. | PASS pour le contrat attaché | Une entrée sans SL attaché reste hors de cette garantie. |
-| Persistance/recovery Paper | Enveloppe versionnée, checksum, écriture atomique, reprise ordres/positions/fills/événements/fautes/funding. | PASS pour l'état local | Cela ne transforme pas le Fake local en Paper sans source marché réelle/replay. |
+| Persistance/recovery Paper | Dataset public vérifié, journal PostgreSQL en trois phases, checkpoints et reprise des effets pending. | PASS pour le replay Paper | Les profils legacy restent exclus de la baseline moderne. |
 | Simulation WS public/privé | Private WS persistant, disconnect, ack, duplicate/out-of-order/gap et snapshot resync aux scénarios 15 et 16. | PARTIAL | Public WS absent. |
 | DSL/fixtures d'erreurs | Fautes typées `network_timeout`, `transport_error`, `http_429`, `http_500`, avant/après mutation, FIFO et restart. | PARTIAL | Pas de quota glissant, latence/jitter seedés, précision/marge dans une DSL commune, ni catalogue de divergences. |
-| Runtime-check Fake/Paper | Contrôle local de book, balance, horloge, coûts, SL, reprise de sonde et certification de seed ; dry-run, permissions off, kill switch et writes off imposés. | PASS fail-closed | La configuration courante reste non-ready sans horloge contrôlée et source marché Paper. Un état legacy non seedé bloque aussi la readiness. |
+| Runtime-check Fake/Paper | Le check Fake certifie son état seedé ; le check Paper dédié vérifie source publique exacte, checksum, horloge, base, cellule et frontière Fake-only sans mutation. | PASS fail-closed | `PAPER_EXECUTION_ENABLED=0`, source invalide, clock en régression ou DB non allowlistée restent bloquants. |
 | 20 scénarios golden | Catalogue strict de vingt lignes, runner consolidé et R12 exécuté depuis deux piles fraîches. | PASS | Aucun écart sur le livrable golden. |
 | Matrice de parité/remplacement Bitmart | Les adapters exposent quelques flags et la recette Fake garde une frontière structurelle avec Bitmart. | **FAIL** | Aucune matrice complète critère→preuve→divergence→condition de remplacement n'était livrée. L'entrée proposée pour #195 figure plus bas. |
-| Documentation opérateur et rollback | Handbook, README Fake, modèle risque et rollback local existent. | PARTIAL | Les anciens documents sur-certifiaient 20/20 ; Paper réel/replay et rollback de sa source restent à documenter après implémentation. |
+| Documentation opérateur et rollback | Le runbook décrit le check read-only, l'interprétation de l'éligibilité, le rejeu exact et la conservation des datasets au rollback. | PASS pour le replay | Les follow-ups P1 restent documentés dans cet audit. |
 
 ## Matrice des critères d'acceptation de #196
 
 | Critère | Preuve | Statut | Écart exact |
 |---|---|---|---|
 | Même seed ⇒ mêmes résultats | `fake-deterministic-seed-v1`, état persistant byte-identique, restart lié à l'empreinte et Golden 20 sur deux piles fraîches sous seed fixe. | PASS pour le périmètre Fake/R12 certifié | Les futurs modèles probabilistes devront réutiliser ce contrat et ajouter leur propre domaine versionné. |
-| Paper ne touche aucun endpoint privé réel | Le bundle Fake n'injecte aucun client HTTP exchange ; les tests structuraux et guards bloquent les clients réels. | PARTIAL | Le mode Paper réel/replay n'existe pas encore. La propriété est prouvée pour Fake local, pas pour une source Paper future. |
+| Paper ne touche aucun endpoint privé réel | Le sous-graphe Paper utilise les sources publiques vérifiées et un registry d'exécution vide ; les tests de wiring excluent client privé, credential, signer et adapter réel. | PASS pour le replay | Aucune activation d'écriture exchange n'est autorisée. |
 | Un maker peut rester non rempli ou partiel | Scénarios 2 et 3, IOC non croisé et fill partiel explicite. | PASS | — |
 | Précision, marge, balance et levier réalistes | Scénarios 6–8 et catalogue instrument. | PASS pour le modèle synthétique versionné | La réalisme Paper dépendra des données source. |
 | Aucun ordre accepté avec `order_id=null` | Les résultats acceptés utilisent une identité locale persistée ; tests adapter/contrat. | PASS | — |
-| Idempotence sans multi-submit | Scénarios 9, 10, 12, 13, 18–20 couvrent replay et effets exact-once ; R12 relit le même run sur chaque pile fraîche. | PASS dans les chemins couverts | Les autres chemins Paper restent conditionnés par leur future source marché. |
+| Idempotence sans multi-submit | Scénarios 9, 10, 12, 13, 18–20 couvrent replay et effets exact-once ; R12 relit le même run sur chaque pile fraîche. Le coordinateur Paper reprend les effets pending avant consommation. | PASS dans les chemins couverts | Les futurs profils modernes devront conserver cette preuve. |
 | Toute position ouverte a un SL accepté ou une compensation | Fill complet/partiel avec SL attaché, resize et compensation exacte sont testés. | PASS pour le contrat attaché | Les ordres sans SL attaché ne sont pas certifiés par cette garantie. |
 | Restart Paper sans perte | Scénarios 13, 16–19 et tests du file store restaurent l'état et les séquences. | PASS pour fichier local | Pas de ledger PostgreSQL utilisé par Fake. |
 | Network/rate-limit/WS disconnect injectables | Timeout, transport, HTTP 429/500, private WS disconnect/gap et snapshot resync sont injectables. | PARTIAL | Pas de rate limiter temporel/quota glissant, latence/jitter seedés ou public WS. |
@@ -201,15 +212,14 @@ capability existe sur un exchange réel.
 | REST exchange | Aucun transport réseau Fake | API locale de scénario uniquement | Sans réseau par conception |
 | Public WS | Absent | Aucun flux public simulé | Unsupported |
 | Private WS | Replay, ack, disconnect, duplicate, gap, snapshot resync/restart | Public WS séparé absent | Supporté |
-| Source Paper réelle/replay | Absente ; runtime-check fail-closed | `marketDataSourceReady=false` | **Unsupported** |
+| Source Paper réelle/replay | Datasets publics OKX/Hyperliquid vérifiés, replay déterministe et readiness dédiée | Dataset/clock/DB/cellule invalides échouent avant mutation | Supporté, profils legacy `reference_only` |
 
 ## Divergences et follow-ups requis
 
-### P0 — empêche la clôture de #196
+### P0
 
-1. **Mode Paper.** Implémenter une source marché réelle publique ou replay
-   enregistrée, versionnée et redacted, sans client privé et sans write, puis
-   rendre le runtime-check ready uniquement si source et horloge sont prêtes.
+Aucun P0 restant dans le périmètre source/readiness Paper. Cela ne clôt pas les
+écarts P1 ci-dessous et ne rend aucun profil legacy certifiable.
 
 ### P1 — livrables incomplets
 

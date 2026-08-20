@@ -23,11 +23,16 @@ final class PaperReplayClock implements ClockInterface
     public function advanceTo(#[\SensitiveParameter] \DateTimeImmutable $next): void
     {
         $next = self::toUtc($next);
-        if ($next < $this->current) {
-            throw new \LogicException('paper_replay_clock_regression');
-        }
+        $this->assertCanAdvanceTo($next);
 
         $this->current = $next;
+    }
+
+    public function assertCanAdvanceTo(#[\SensitiveParameter] \DateTimeImmutable $next): void
+    {
+        if (self::toUtc($next) < $this->current) {
+            throw new \LogicException('paper_replay_clock_regression');
+        }
     }
 
     private static function toUtc(\DateTimeImmutable $timestamp): \DateTimeImmutable
