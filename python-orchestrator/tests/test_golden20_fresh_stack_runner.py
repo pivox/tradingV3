@@ -1,6 +1,17 @@
+from pathlib import Path
+
+import pytest
+
 from scripts.golden20_fresh_stack_runner import run_fresh_stacks
 
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.skipif(
+    not (REPOSITORY_ROOT / "trading-app/vendor/autoload.php").exists(),
+    reason="Symfony dependencies unavailable; exercised by the dedicated golden CI step",
+)
 def test_golden20_runs_twice_through_fresh_real_http_stacks():
     assert run_fresh_stacks() == {
         "config_hashes_unique": True,
