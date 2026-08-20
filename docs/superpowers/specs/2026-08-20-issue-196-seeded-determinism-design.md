@@ -12,7 +12,8 @@ excluded because they are neither persisted nor exported.
 `fake-deterministic-seed-v1` accepts one explicit 8–128 character seed. Raw seed
 material is never persisted or logged; evidence exposes only its SHA-256
 fingerprint. Identity derivation uses HMAC-SHA256 with versioned domain names
-and canonical components.
+and canonical null/boolean/integer/string/list/map components. Floats are
+rejected because PHP and Python JSON exponent rendering is not byte-identical.
 
 The PHP Fake state store derives private-WS resync cycle, snapshot proof and
 attestation identities from the seed plus their exact scenario/state context.
@@ -21,10 +22,13 @@ envelope under a different seed fails closed. Legacy state remains identifiable
 as non-certified and must not silently become seeded proof while a resync is
 active.
 
-The Python recipe runner accepts the same explicit seed contract and derives
-its invocation identity from the seed, selected scenarios and target. The
-runtime report and R12 standalone report expose the schema and fingerprint,
-never the raw seed. Child demo runners receive domain-separated derived seeds.
+The Python recipe runner accepts the same explicit seed contract and derives a
+stable evidence identity from the seed, selected scenarios and target. A
+separate random operational invocation nonce prevents idempotency replay across
+independent recipe executions; it is not certified evidence and is excluded
+from the normalized R12 report. The runtime report and R12 standalone report
+expose the schema and fingerprint, never the raw seed. Child demo runners
+receive domain-separated derived seeds.
 
 ## Acceptance proof
 
@@ -33,8 +37,8 @@ never the raw seed. Child demo runners receive domain-separated derived seeds.
 - a different seed changes the derived identities and fingerprint;
 - restart with the same seed preserves state exactly; restart with another seed
   fails with a stable typed reason;
-- no `random_bytes`, UUID or ambient PRNG remains in the certified Fake identity
-  paths;
+- no `random_bytes`, UUID or ambient PRNG remains in certified Fake identities;
+  the non-certified recipe dispatch nonce exists only to prevent stale replay;
 - runtime readiness reports whether the persisted state is seed-certified;
 - all Golden scenarios remain Fake-only and no exchange write is enabled.
 

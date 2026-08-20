@@ -70,4 +70,15 @@ final class FakeDeterministicSeedTest extends TestCase
 
         new FakeDeterministicSeed($seed);
     }
+
+    public function testFloatComponentsFailClosedAcrossRuntimes(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fake_deterministic_seed_component_invalid');
+
+        (new FakeDeterministicSeed('golden-seed-2026-v1'))->deriveHex(
+            'runtime-recipe.evidence.v1',
+            ['value' => 1.0e-7],
+        );
+    }
 }

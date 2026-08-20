@@ -389,6 +389,9 @@ La seed doit contenir 8 à 128 caractères parmi `A-Za-z0-9._:-`. Elle n'est
 jamais écrite dans les rapports. Changer la seed d'un état Fake déjà certifié
 fait échouer la restauration avec `fake_exchange_state_seed_mismatch`; un état
 legacy sans empreinte reste non certifié et ne peut pas rendre le runtime ready.
+L'identité de preuve reste stable sous la même seed, tandis qu'un nonce de
+dispatch distinct empêche deux invocations indépendantes de relire un ancien
+run par collision de clé d'idempotence.
 
 La recette ne cree aucun `OrderIntent` et n'exerce donc pas le lock metier. Le
 rapport conserve son scope avec `evidence_status=not_exercised` et

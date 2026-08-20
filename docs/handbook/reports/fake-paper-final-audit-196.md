@@ -38,8 +38,9 @@ Bitmart/OKX/Hyperliquid restent à zéro. Le catalogue passe à 20 exécutables.
 Le contrat `fake-deterministic-seed-v1` lie désormais les identités persistées
 Fake et les rapports de recette à une seed explicite. Seule son empreinte
 SHA-256 est exposée. Les cycles de resynchronisation private WS, preuves,
-attestations et invocations Python sont dérivés par HMAC avec domaines
-versionnés. Deux états frais exécutant les mêmes opérations sous la même seed
+attestations et identités de preuve Python sont dérivés par HMAC avec domaines
+versionnés. Un nonce d'invocation opérationnel, non certifié, reste unique pour
+empêcher la réutilisation d'un run persistant. Deux états frais exécutant les mêmes opérations sous la même seed
 sont byte-identiques ; un restart sous une autre seed échoue avec
 `fake_exchange_state_seed_mismatch`. Un état antérieur sans preuve de seed reste
 `seed_certified=false` et bloque le runtime-check. Golden 20 injecte une seed
@@ -58,8 +59,8 @@ Le résultat vérifié est le suivant :
 - le scénario 20 complète les tests unitaires Python par deux piles locales
   fraîches et de vraies frontières HTTP FastAPI/Symfony ;
 - le contrat seedé couvre les identités Fake persistées et la recette R12 ; les
-  noms de fichiers temporaires atomiques sont explicitement hors preuve car ils
-  ne sont ni persistés ni exportés ;
+  noms de fichiers temporaires atomiques et le nonce anti-replay de dispatch
+  sont explicitement hors preuve car ils ne sont pas des résultats métier ;
 - la faille historique de protection des fills partiels est corrigée par la mise
   à jour du 20 août 2026 ci-dessus ;
 - le mode Paper réel/replay, la matrice complète de capabilities, plusieurs

@@ -59,11 +59,7 @@ final readonly class FakeDeterministicSeed
             return $value;
         }
         if (\is_float($value)) {
-            if (!\is_finite($value)) {
-                throw new \InvalidArgumentException('fake_deterministic_seed_component_invalid');
-            }
-
-            return $value;
+            throw new \InvalidArgumentException('fake_deterministic_seed_component_invalid');
         }
         if (!\is_array($value)) {
             throw new \InvalidArgumentException('fake_deterministic_seed_component_invalid');

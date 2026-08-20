@@ -13,8 +13,8 @@ import argparse
 import hashlib
 import hmac
 import json
-import math
 import re
+import secrets
 import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -147,9 +147,7 @@ class DeterministicSeed:
                 raise ValueError("fake_deterministic_seed_component_invalid")
             return value
         if type(value) is float:
-            if not math.isfinite(value):
-                raise ValueError("fake_deterministic_seed_component_invalid")
-            return value
+            raise ValueError("fake_deterministic_seed_component_invalid")
         if type(value) is list:
             return [self._canonicalize(item) for item in value]
         if type(value) is dict and all(type(key) is str for key in value):
@@ -183,7 +181,7 @@ class RecipeRunner:
         self.deterministic_seed = DeterministicSeed(config.deterministic_seed)
         self.fixtures = self._load_fixtures()
         self.invocation_id = ""
-        self._invocation_sequence = 0
+        self.deterministic_evidence_id = ""
 
     def run(
         self,
@@ -201,7 +199,11 @@ class RecipeRunner:
             return self._run_demo_exchanges(selected, keep_fixtures=keep_fixtures)
 
         started_at = datetime.now(timezone.utc).isoformat()
-        self.invocation_id = self._invocation_id(target_exchange, selected)
+        self.invocation_id = self._new_invocation_id()
+        self.deterministic_evidence_id = self._deterministic_evidence_id(
+            target_exchange,
+            selected,
+        )
 
         service_ok, service_note = self._check_orchestrator()
         preflight = self._run_target_preflight() if service_ok else {"status": "BLOCKED", "notes": service_note}
@@ -233,6 +235,7 @@ class RecipeRunner:
                 "dry_run_forced": True,
                 "confirmation_token": "REDACTED",
                 "invocation_id": self.invocation_id,
+                "deterministic_evidence_id": self.deterministic_evidence_id,
                 "determinism": self._determinism_evidence(),
                 "orchestrator_url": self.config.orchestrator_url,
                 "fixtures_dir": str(self.config.fixtures_dir),
@@ -258,7 +261,11 @@ class RecipeRunner:
         keep_fixtures: bool,
     ) -> dict[str, Any]:
         started_at = datetime.now(timezone.utc).isoformat()
-        self.invocation_id = self._invocation_id(DEMO_EXCHANGES_TARGET, selected)
+        self.invocation_id = self._new_invocation_id()
+        self.deterministic_evidence_id = self._deterministic_evidence_id(
+            DEMO_EXCHANGES_TARGET,
+            selected,
+        )
 
         exchange_results: dict[str, list[dict[str, Any]]] = {}
         exchange_summaries: dict[str, dict[str, Any]] = {}
@@ -330,6 +337,7 @@ class RecipeRunner:
                 "dry_run_forced": True,
                 "confirmation_token": "REDACTED",
                 "invocation_id": self.invocation_id,
+                "deterministic_evidence_id": self.deterministic_evidence_id,
                 "determinism": self._determinism_evidence(),
                 "orchestrator_url": self.config.orchestrator_url,
                 "fixtures_dir": str(self.config.fixtures_dir),
@@ -367,21 +375,27 @@ class RecipeRunner:
                 "this runner is dry-run only."
             )
 
-    def _invocation_id(self, target_exchange: str, selected: tuple[str, ...]) -> str:
-        invocation_id = self.deterministic_seed.derive_hex(
-            "runtime-recipe.invocation.v1",
+    @staticmethod
+    def _new_invocation_id() -> str:
+        return secrets.token_hex(6)
+
+    def _deterministic_evidence_id(
+        self,
+        target_exchange: str,
+        selected: tuple[str, ...],
+    ) -> str:
+        return self.deterministic_seed.derive_hex(
+            "runtime-recipe.evidence.v1",
             {
-                "invocation_sequence": self._invocation_sequence,
                 "scenarios": list(selected),
                 "target_exchange": target_exchange,
             },
         )[:12]
-        self._invocation_sequence += 1
-        return invocation_id
 
     def _determinism_evidence(self) -> dict[str, Any]:
         return {
             "certified": True,
+            "evidence_id": self.deterministic_evidence_id,
             "schema_version": DETERMINISTIC_SEED_SCHEMA_VERSION,
             "seed_fingerprint": self.deterministic_seed.fingerprint,
         }

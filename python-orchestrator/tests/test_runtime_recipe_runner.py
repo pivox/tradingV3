@@ -465,10 +465,16 @@ def test_explicit_seed_derives_stable_redacted_invocation_identity(tmp_path: Pat
         http_client=FakeRecipeApi(),
     ).run(scenarios=("R5",))
 
-    assert first["metadata"]["invocation_id"] == second["metadata"]["invocation_id"]
-    assert first["metadata"]["invocation_id"] != different["metadata"]["invocation_id"]
+    assert first["metadata"]["invocation_id"] != second["metadata"]["invocation_id"]
+    assert first["metadata"]["deterministic_evidence_id"] == second["metadata"][
+        "deterministic_evidence_id"
+    ]
+    assert first["metadata"]["deterministic_evidence_id"] != different["metadata"][
+        "deterministic_evidence_id"
+    ]
     assert first["metadata"]["determinism"] == {
         "certified": True,
+        "evidence_id": first["metadata"]["deterministic_evidence_id"],
         "schema_version": "fake-deterministic-seed-v1",
         "seed_fingerprint": "sha256:" + hashlib.sha256(seed.encode()).hexdigest(),
     }
@@ -486,13 +492,32 @@ def test_seed_derivation_matches_php_contract_vector():
     ) == "5e33d1f9500da204fd41cdb99ab73845b466d2b43c7b097cd623cc6b3f465a9e"
 
 
-@pytest.mark.parametrize("component", [float("nan"), 2**63, object(), {1: "bad-key"}])
+@pytest.mark.parametrize(
+    "component",
+    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}],
+)
 def test_seed_derivation_rejects_noncanonical_components(component: object):
     with pytest.raises(ValueError, match="fake_deterministic_seed_component_invalid"):
         DeterministicSeed("golden-seed-2026-v1").derive_hex(
             "runtime-recipe.invocation.v1",
             {"component": component},
         )
+
+
+def test_separate_recipe_invocations_do_not_reuse_idempotency_anchor(tmp_path: Path):
+    api = FakeRecipeApi()
+    config = RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY")
+
+    RecipeRunner(config, http_client=api).run(scenarios=("R1",), keep_fixtures=True)
+    RecipeRunner(config, http_client=api).run(scenarios=("R1",), keep_fixtures=True)
+
+    run_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+    assert len(run_keys) == 2
+    assert run_keys[0] != run_keys[1]
 
 
 @pytest.mark.parametrize("seed", ["short", " leading-seed", "seed/with/slash", "a" * 129])
