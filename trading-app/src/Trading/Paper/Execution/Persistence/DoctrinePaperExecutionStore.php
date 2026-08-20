@@ -61,20 +61,7 @@ final class DoctrinePaperExecutionStore implements PaperExecutionStoreInterface
         $this->atomic(function () use ($cell, $eligibility): void {
             $existing = $this->connection->fetchAssociative('SELECT * FROM paper_execution_cell WHERE id = ?', [$cell->id]);
             if ($existing !== false) {
-                $expected = [
-                    'network' => $cell->network->value,
-                    'market_data_venue' => $cell->marketDataVenue->value,
-                    'configuration_snapshot_id' => $cell->configurationSnapshotId,
-                    'strategy_profile' => $cell->strategyProfile,
-                    'run_id' => $cell->runId,
-                    'account_namespace' => $cell->accountNamespace,
-                    'eligibility' => $eligibility->value,
-                ];
-                foreach ($expected as $key => $value) {
-                    if (($existing[$key] ?? null) !== $value) {
-                        throw new \LogicException('paper_execution_cell_identity_conflict');
-                    }
-                }
+                $this->assertCellIdentity($existing, $cell, $eligibility);
 
                 return;
             }
@@ -127,6 +114,36 @@ SQL, [$cell->id, self::EMPTY_JOURNAL_CHECKSUM]);
                 throw new \LogicException('paper_execution_dataset_identity_conflict');
             }
         });
+    }
+
+    public function inspectCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): PaperExecutionCellState
+    {
+        $storedCell = $this->connection->fetchAssociative('SELECT * FROM paper_execution_cell WHERE id = ?', [$cell->id]);
+        if ($storedCell === false) {
+            return PaperExecutionCellState::absent();
+        }
+        $this->assertCellIdentity($storedCell, $cell, $eligibility);
+
+        $checkpoint = $this->connection->fetchAssociative('SELECT * FROM paper_execution_checkpoint WHERE cell_id = ?', [$cell->id]);
+        if ($checkpoint === false) {
+            throw new \LogicException('paper_execution_checkpoint_missing');
+        }
+        $this->verifyCheckpoint($checkpoint);
+
+        $datasetId = $storedCell['dataset_id'] ?? null;
+        $eventsFileSha256 = $storedCell['dataset_events_sha256'] ?? null;
+        if (($datasetId !== null && !is_string($datasetId))
+            || ($eventsFileSha256 !== null && !is_string($eventsFileSha256))
+            || (($datasetId === null) !== ($eventsFileSha256 === null))
+        ) {
+            throw new \LogicException('paper_execution_dataset_identity_corrupt');
+        }
+
+        return PaperExecutionCellState::registered(
+            $this->databaseBoolean($checkpoint['killed'] ?? false),
+            $datasetId,
+            $eventsFileSha256,
+        );
     }
 
     public function datasetIdentity(PaperExecutionCell $cell): array
@@ -537,6 +554,25 @@ SQL, [$checkpoint['cell_id'], $ordinal, $eventType, $sourcePosition, $sourceEven
             'killed' => $this->databaseBoolean($checkpoint['killed'] ?? false),
             'lock_version' => (int) ($checkpoint['lock_version'] ?? -1),
         ]));
+    }
+
+    /** @param array<string, mixed> $stored */
+    private function assertCellIdentity(array $stored, PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
+    {
+        $expected = [
+            'network' => $cell->network->value,
+            'market_data_venue' => $cell->marketDataVenue->value,
+            'configuration_snapshot_id' => $cell->configurationSnapshotId,
+            'strategy_profile' => $cell->strategyProfile,
+            'run_id' => $cell->runId,
+            'account_namespace' => $cell->accountNamespace,
+            'eligibility' => $eligibility->value,
+        ];
+        foreach ($expected as $key => $value) {
+            if (($stored[$key] ?? null) !== $value) {
+                throw new \LogicException('paper_execution_cell_identity_conflict');
+            }
+        }
     }
 
     /** @param array<string, mixed> $payload */

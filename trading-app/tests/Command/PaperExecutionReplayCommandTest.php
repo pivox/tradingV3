@@ -177,6 +177,8 @@ final class PaperExecutionReplayCommandTest extends TestCase
 
         $verifier ??= (new \ReflectionClass(PaperDatasetVerifier::class))->newInstanceWithoutConstructor();
 
+        $reader ??= (new \ReflectionClass(PaperReplayReader::class))->newInstanceWithoutConstructor();
+
         return new PaperExecutionReplayCommand(
             new PaperReplayReadinessService(
                 $verifier,
@@ -185,8 +187,10 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 new PaperProfileRegistry(),
                 new PaperReplayClock(),
                 $coordinator,
+                $reader,
+                $store,
             ),
-            $reader ?? (new \ReflectionClass(PaperReplayReader::class))->newInstanceWithoutConstructor(),
+            $reader,
             $store,
             $coordinator,
         );

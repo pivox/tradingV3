@@ -162,7 +162,9 @@ Le résultat JSON `paper-replay-readiness-v1` ne contient aucune configuration
 ni aucun chemin. `ready=true` prouve la disponibilité technique de la source,
 de l'horloge, de la base et de la frontière Fake-only. Le champ indépendant
 `baseline_eligible` reste faux pour tous les profils legacy `reference_only`.
-Le check ne crée ni snapshot persistant, ni cellule, ni checkpoint, ni effet.
+Le check refuse aussi une cellule tuée, un binding dataset divergent et un
+dataset au-delà de la limite effective du reader. Il ne crée ni snapshot
+persistant, ni cellule, ni checkpoint, ni effet.
 
 Le rejeu réutilise exactement cette préparation avant toute écriture :
 

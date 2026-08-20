@@ -9,8 +9,10 @@ use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Configuration\PaperPrivateConfigurationReader;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Replay\PaperReplayReader;
 
 final readonly class PaperReplayReadinessService
 {
@@ -21,6 +23,8 @@ final readonly class PaperReplayReadinessService
         private PaperProfileRegistry $profiles,
         private PaperReplayClock $clock,
         private PaperEventCoordinatorInterface $coordinator,
+        private PaperReplayReader $reader,
+        private PaperExecutionStoreInterface $store,
     ) {
     }
 
@@ -33,7 +37,15 @@ final readonly class PaperReplayReadinessService
         $this->assertAbsolute($datasetPath);
         $configuration = $this->configurationReader->read($configurationPath);
         $snapshot = $this->snapshots->create($configuration);
-        $manifest = $this->verifier->verifyForBaseline($datasetPath);
+        try {
+            $manifest = $this->verifier->verifyForBaseline($datasetPath, $this->reader->eventLimit());
+        } catch (\RuntimeException $failure) {
+            if ($failure->getMessage() === 'paper_dataset_event_limit_exceeded') {
+                throw new \RuntimeException('paper_replay_event_limit_exceeded');
+            }
+
+            throw $failure;
+        }
         if ($manifest->startExchangeTimestamp === null) {
             throw new \LogicException('paper_replay_clock_start_missing');
         }
@@ -41,6 +53,17 @@ final readonly class PaperReplayReadinessService
 
         $eligibility = $this->profiles->require($profile);
         $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
+        $state = $this->store->inspectCell($cell, $eligibility);
+        if ($state->killed) {
+            throw new \LogicException('paper_execution_cell_killed');
+        }
+        if ($state->datasetId !== null
+            && ($manifest->eventsFileSha256 === null
+                || $state->datasetId !== $manifest->datasetId
+                || !hash_equals((string) $state->eventsFileSha256, $manifest->eventsFileSha256))
+        ) {
+            throw new \LogicException('paper_execution_dataset_identity_conflict');
+        }
         $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
 
         return new PaperReplayPreparation($manifest, $snapshot, $eligibility, $cell);

@@ -10,11 +10,18 @@ use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
 use App\Trading\Paper\Execution\Configuration\PaperPrivateConfigurationReader;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionCellState;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
+use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Command\Command;
@@ -22,6 +29,7 @@ use Symfony\Component\Console\Tester\CommandTester;
 
 #[CoversClass(PaperReplayRuntimeCheckCommand::class)]
 #[CoversClass(PaperReplayReadinessService::class)]
+#[CoversClass(PaperExecutionCellState::class)]
 final class PaperReplayRuntimeCheckCommandTest extends TestCase
 {
     private string $root;
@@ -54,7 +62,8 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
 
     public function testReportsRedactedTechnicalReadinessWithoutPromotingReferenceProfileOrWritingState(): void
     {
-        $tester = new CommandTester($this->command($this->acceptingCoordinator()));
+        $store = new InMemoryPaperExecutionStore();
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
 
         self::assertSame(Command::SUCCESS, $tester->execute($this->options()));
         $payload = json_decode(trim($tester->getDisplay()), true, 32, JSON_THROW_ON_ERROR);
@@ -74,6 +83,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertSame('okx', $payload['source']['venue']);
         self::assertTrue($payload['clock']['controlled']);
         self::assertStringNotContainsString($this->root, $tester->getDisplay());
+        self::assertSame(0, $store->registrationWrites);
     }
 
     public function testFailureIsStableJsonAndDoesNotLeakPaths(): void
@@ -115,6 +125,48 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertSame('2026-08-01T10:00:01.000000Z', $clock->now()->format('Y-m-d\TH:i:s.u\Z'));
     }
 
+    public function testDatasetOverTheEffectiveReplayLimitIsNotReady(): void
+    {
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), eventLimit: 3));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_replay_event_limit_exceeded', $payload['blocker']);
+    }
+
+    public function testKilledExistingCellIsNotReadyAndTheCheckDoesNotMutateIt(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $cell = $this->cell();
+        $store->registerCell($cell, PaperProfileEligibility::REFERENCE_ONLY);
+        $store->kill($cell);
+        $writes = $store->registrationWrites;
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_execution_cell_killed', $payload['blocker']);
+        self::assertSame($writes, $store->registrationWrites);
+    }
+
+    public function testExistingCellBoundToAnotherDatasetIsNotReady(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $cell = $this->cell();
+        $store->registerCell($cell, PaperProfileEligibility::REFERENCE_ONLY);
+        $store->bindDataset($cell, 'another-dataset', str_repeat('a', 64));
+        $writes = $store->registrationWrites;
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_execution_dataset_identity_conflict', $payload['blocker']);
+        self::assertSame($writes, $store->registrationWrites);
+    }
+
     /** @return array<string, string> */
     private function options(): array
     {
@@ -126,16 +178,41 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         ];
     }
 
-    private function command(PaperEventCoordinatorInterface $coordinator, ?PaperReplayClock $clock = null): PaperReplayRuntimeCheckCommand
-    {
+    private function command(
+        PaperEventCoordinatorInterface $coordinator,
+        ?PaperReplayClock $clock = null,
+        ?PaperExecutionStoreInterface $store = null,
+        int $eventLimit = PaperReplayReader::DEFAULT_EVENT_LIMIT,
+    ): PaperReplayRuntimeCheckCommand {
+        $verifier = new PaperDatasetVerifier();
+        $clock ??= new PaperReplayClock();
+        $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), $clock, $eventLimit);
+
         return new PaperReplayRuntimeCheckCommand(new PaperReplayReadinessService(
-            new PaperDatasetVerifier(),
+            $verifier,
             new PaperPrivateConfigurationReader(),
             new PaperConfigurationSnapshotFactory(),
             new PaperProfileRegistry(),
-            $clock ?? new PaperReplayClock(),
+            $clock,
             $coordinator,
+            $reader,
+            $store ?? new InMemoryPaperExecutionStore(),
         ));
+    }
+
+    private function cell(): PaperExecutionCell
+    {
+        $snapshot = (new PaperConfigurationSnapshotFactory())->create([
+            'strategy' => ['mode' => 'day_trading'],
+        ]);
+
+        return PaperExecutionCell::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            $snapshot->id,
+            'regular',
+            'paper-readiness-001',
+        );
     }
 
     private function acceptingCoordinator(): PaperEventCoordinatorInterface

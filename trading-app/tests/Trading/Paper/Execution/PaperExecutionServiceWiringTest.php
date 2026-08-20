@@ -51,6 +51,8 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         $readiness = $container->get(PaperReplayReadinessService::class);
         $readinessClock = (new \ReflectionProperty(PaperReplayReadinessService::class, 'clock'))->getValue($readiness);
         self::assertSame($readerClock, $readinessClock, 'Readiness and replay must validate the same controlled clock.');
+        $readinessReader = (new \ReflectionProperty(PaperReplayReadinessService::class, 'reader'))->getValue($readiness);
+        self::assertSame($reader, $readinessReader, 'Readiness must enforce the exact replay reader event limit.');
         $resolver = $container->get(PaperMtfPreparationResolver::class);
         self::assertSame(0, (new \ReflectionClass($resolver))->getConstructor()?->getNumberOfParameters() ?? 0, 'Paper preparation must have no ambient account, HTTP, lock, or exchange dependency.');
         $strategy = $container->get(\App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge::class);

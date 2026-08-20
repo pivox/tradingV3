@@ -50,6 +50,11 @@ final class PaperReplayReader
         return $this->currentEventIndex;
     }
 
+    public function eventLimit(): int
+    {
+        return $this->eventLimit;
+    }
+
     /** @return \Generator<int, PaperMarketEvent> */
     public function read(
         #[\SensitiveParameter] string $datasetDirectory,

@@ -60,7 +60,8 @@ PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
 
 The command verifies the completed public dataset and checksum, certifiable
 network provenance, the private/redacted configuration snapshot, controlled
-clock, exact execution cell, Paper database and Fake-only/write-disabled runtime.
+clock, the replay reader event bound, exact execution cell, existing dataset
+binding and kill state, Paper database and Fake-only/write-disabled runtime.
 It does not register state, bind a dataset, write a checkpoint or consume an
 event.
 

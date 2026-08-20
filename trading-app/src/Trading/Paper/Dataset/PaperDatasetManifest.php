@@ -78,7 +78,7 @@ final readonly class PaperDatasetManifest
         if (($schemaVersion === self::LEGACY_SCHEMA_VERSION) !== ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN)) {
             throw new \InvalidArgumentException('paper_dataset_network_provenance_invalid');
         }
-        if ($recorderVersion === '' || trim($recorderVersion) !== $recorderVersion) {
+        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/D', $recorderVersion) !== 1) {
             throw new \InvalidArgumentException('paper_dataset_recorder_version_invalid');
         }
         self::assertDatasetId($datasetId);
