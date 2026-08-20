@@ -188,6 +188,7 @@ final readonly class PositionTradeAnalysisBackfillDivergenceReportService implem
             'market_data_venue' => ($venue = trim((string) ($row['market_data_venue'] ?? ''))) !== '' ? $venue : null,
             'market_type' => $row['market_type'] ?? null,
             'profile' => $row['profile'] ?? null,
+            'paper_network' => $this->stringOrNull($row['v2_paper_network'] ?? null),
             'mode_id' => $this->stringOrNull($row['v2_mode_id'] ?? null),
             'mode_version' => $this->stringOrNull($row['v2_mode_version'] ?? null),
             'setup_id' => $this->stringOrNull($row['v2_setup_id'] ?? null),

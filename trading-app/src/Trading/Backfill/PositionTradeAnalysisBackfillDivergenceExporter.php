@@ -35,6 +35,7 @@ final class PositionTradeAnalysisBackfillDivergenceExporter
             'market_data_venue',
             'market_type',
             'profile',
+            'paper_network',
             'mode_id',
             'mode_version',
             'setup_id',

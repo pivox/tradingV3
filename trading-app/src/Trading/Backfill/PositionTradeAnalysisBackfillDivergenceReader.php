@@ -77,6 +77,7 @@ SELECT
         WHEN to_jsonb(v2)->> 'canonical_mfe_mae_data_quality' = 'complete' THEN v2.mae_pct
         ELSE NULL
     END AS v2_mae_pct,
+    to_jsonb(v2)->> 'paper_network' AS v2_paper_network,
     to_jsonb(v2)->> 'mode_id' AS v2_mode_id,
     to_jsonb(v2)->> 'mode_version' AS v2_mode_version,
     to_jsonb(v2)->> 'setup_id' AS v2_setup_id,

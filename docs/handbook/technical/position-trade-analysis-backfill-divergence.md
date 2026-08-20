@@ -78,8 +78,9 @@ Le delta `pnl_delta_usdt` compare v1 au `canonical_net_pnl_usdt` lorsque v2 est 
 Le rapport lit exclusivement `canonical_holding_time_sec`, `canonical_cost_completeness`,
 `canonical_pnl_quality_flags` et `canonical_mfe_mae_data_quality` pour les preuves certifiantes.
 Les deltas MFE/MAE sont masques lorsque la qualite canonique n'est pas `complete`. Chaque ligne
-exporte aussi `mode_id`, `mode_version`, `setup_id`, `setup_version`, `side`, `config_hash` et les
-provenances de holding time et MFE/MAE afin de conserver la cellule moderne exacte.
+exporte aussi `paper_network`, `mode_id`, `mode_version`, `setup_id`, `setup_version`, `side`,
+`config_hash` et les provenances de holding time et MFE/MAE afin de conserver la cellule moderne
+exacte.
 
 ## Rapport
 

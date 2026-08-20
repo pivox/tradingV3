@@ -24,6 +24,7 @@ final class PositionTradeAnalysisBackfillDivergenceReaderSqlTest extends TestCas
                 self::assertStringContainsString("to_jsonb(v2)-> 'canonical_pnl_quality_flags'", $sql);
                 self::assertStringContainsString("to_jsonb(v2)->> 'canonical_holding_time_sec'", $sql);
                 self::assertStringContainsString("to_jsonb(v2)->> 'canonical_mfe_mae_data_quality'", $sql);
+                self::assertStringContainsString("to_jsonb(v2)->> 'paper_network'", $sql);
                 self::assertStringContainsString("to_jsonb(v2)->> 'mode_id'", $sql);
                 self::assertStringContainsString("to_jsonb(v2)->> 'setup_id'", $sql);
                 self::assertStringContainsString("to_jsonb(v2)->> 'canonical_side'", $sql);

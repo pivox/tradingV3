@@ -27,6 +27,7 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
                 'v2_close_match_status' => 'matched',
                 'v2_analysis_status' => 'matched_closed',
                 'v2_position_fully_closed' => true,
+                'v2_paper_network' => 'mainnet',
                 'v2_mode_id' => 'scalping',
                 'v2_mode_version' => '1.1.0',
                 'v2_setup_id' => 'scalping.pullback.long',
@@ -107,6 +108,7 @@ final class PositionTradeAnalysisBackfillDivergenceReportServiceTest extends Tes
         self::assertTrue($report['metadata']['dry_run']);
         self::assertTrue($report['metadata']['read_only']);
         self::assertSame('entry_event_id', $report['metadata']['comparison_key']);
+        self::assertSame('mainnet', $report['rows'][0]['paper_network']);
         self::assertSame('scalping', $report['rows'][0]['mode_id']);
         self::assertSame('1.1.0', $report['rows'][0]['mode_version']);
         self::assertSame('scalping.pullback.long', $report['rows'][0]['setup_id']);
