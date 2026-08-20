@@ -5,12 +5,26 @@ on:
     paths:
       - '.github/workflows/python-orchestrator.yml'
       - 'python-orchestrator/**'
+      - 'trading-app/bin/console'
+      - 'trading-app/composer.*'
+      - 'trading-app/config/**'
+      - 'trading-app/public/**'
+      - 'trading-app/src/**'
+      - 'trading-app/tests/Exchange/Fake/**'
+      - 'trading-app/tests/fixtures/fake-paper/**'
   push:
     branches:
       - main
     paths:
       - '.github/workflows/python-orchestrator.yml'
       - 'python-orchestrator/**'
+      - 'trading-app/bin/console'
+      - 'trading-app/composer.*'
+      - 'trading-app/config/**'
+      - 'trading-app/public/**'
+      - 'trading-app/src/**'
+      - 'trading-app/tests/Exchange/Fake/**'
+      - 'trading-app/tests/fixtures/fake-paper/**'
 
 jobs:
   tests:
