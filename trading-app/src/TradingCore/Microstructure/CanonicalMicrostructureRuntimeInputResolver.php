@@ -94,8 +94,8 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
 
     private function marketIdentity(LineageContext $identity): ?RuleMarketIdentity
     {
-        if (!\in_array($identity->environment, ['mainnet', 'testnet'], true)
-            || !\in_array($identity->exchange, ['okx', 'hyperliquid'], true)
+        $sourceNetwork = CanonicalPublicMarketDataNetwork::forTarget($identity->exchange, $identity->environment);
+        if ($sourceNetwork === null
             || $identity->marketType !== 'perpetual'
             || $identity->symbol === null
         ) {
@@ -103,7 +103,7 @@ final readonly class CanonicalMicrostructureRuntimeInputResolver
         }
 
         return new RuleMarketIdentity(
-            $identity->environment,
+            $sourceNetwork,
             $identity->exchange,
             $identity->marketType,
             $identity->symbol,

@@ -13,6 +13,7 @@ use App\TradingCore\Setup\Exception\SetupContractException;
 use App\TradingCore\Setup\SetupCompiler;
 use App\TradingCore\Setup\SetupContractLoader;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\Microstructure\CanonicalPublicMarketDataNetwork;
 use Psr\Log\LoggerInterface;
 
 final readonly class EffectiveTradingConfigResolver implements EffectiveTradingConfigResolverInterface
@@ -46,7 +47,14 @@ final readonly class EffectiveTradingConfigResolver implements EffectiveTradingC
         if ($isModernShadow && $request->capability === ShadowExecutionCapability::PrivateMainnet) {
             throw new TradingConfigException('private_mainnet_execution_forbidden');
         }
-        if ($isModernShadow && $request->capability === ShadowExecutionCapability::Backtest && $request->exchange !== 'fake') {
+        $isMicroPublicBacktest = $modernShadowIdentity === 'micro_scalping@1.1.0'
+            && $request->capability === ShadowExecutionCapability::Backtest
+            && CanonicalPublicMarketDataNetwork::forTarget($request->exchange, $request->environment) !== null;
+        if ($isModernShadow
+            && $request->capability === ShadowExecutionCapability::Backtest
+            && $request->exchange !== 'fake'
+            && !$isMicroPublicBacktest
+        ) {
             throw new TradingConfigException($request->modeId . '_backtest_requires_fake_exchange');
         }
 

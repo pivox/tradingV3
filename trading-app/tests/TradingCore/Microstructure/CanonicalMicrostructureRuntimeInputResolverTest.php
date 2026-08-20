@@ -50,6 +50,21 @@ final class CanonicalMicrostructureRuntimeInputResolverTest extends TestCase
         self::assertSame($resolved->marketIdentity->toArray(), $resolved->trace['expected_market_identity']);
     }
 
+    public function testOkxDemoUsesItsMainnetPublicDataNetwork(): void
+    {
+        $snapshot = $this->snapshot('BTCUSDT');
+
+        $resolved = (new CanonicalMicrostructureRuntimeInputResolver($this->provider($snapshot)))->resolve(
+            $this->lineage('okx', 'demo'),
+            new \DateTimeImmutable('2026-08-14T12:01:00.000000Z'),
+        );
+
+        self::assertSame('ready', $resolved->status);
+        self::assertNotNull($resolved->marketIdentity);
+        self::assertSame('mainnet', $resolved->marketIdentity->sourceNetwork);
+        self::assertSame('okx', $resolved->marketIdentity->marketDataVenue);
+    }
+
     public function testProviderAbsenceAndUnsupportedFakeIdentityAreExplicit(): void
     {
         $absent = (new CanonicalMicrostructureRuntimeInputResolver())->resolve(

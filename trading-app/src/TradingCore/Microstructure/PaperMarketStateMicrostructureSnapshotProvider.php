@@ -27,8 +27,8 @@ final readonly class PaperMarketStateMicrostructureSnapshotProvider implements C
         LineageContext $identity,
         \DateTimeImmutable $evaluatedAt,
     ): ?CanonicalMicrostructureSnapshot {
-        if (!\in_array($identity->environment, ['mainnet', 'testnet'], true)
-            || !\in_array($identity->exchange, ['okx', 'hyperliquid'], true)
+        $sourceNetwork = CanonicalPublicMarketDataNetwork::forTarget($identity->exchange, $identity->environment);
+        if ($sourceNetwork === null
             || $identity->marketType !== 'perpetual'
             || !\in_array($identity->symbol, ['BTCUSDT', 'ETHUSDT'], true)
         ) {
@@ -39,7 +39,7 @@ final readonly class PaperMarketStateMicrostructureSnapshotProvider implements C
         $events = array_values(array_filter(
             $this->market->events(),
             static fn (PaperMarketEvent $event): bool =>
-                $event->sourceNetwork->value === $identity->environment
+                $event->sourceNetwork->value === $sourceNetwork
                 && $event->sourceVenue->value === $identity->exchange
                 && $event->symbol === $identity->symbol
                 && \in_array($event->channel, [PaperMarketDataChannel::TOP_OF_BOOK, PaperMarketDataChannel::PUBLIC_TRADE], true)

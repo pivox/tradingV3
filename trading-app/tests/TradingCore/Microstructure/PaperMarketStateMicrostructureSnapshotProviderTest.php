@@ -67,6 +67,33 @@ final class PaperMarketStateMicrostructureSnapshotProviderTest extends TestCase
         ));
     }
 
+    public function testOkxDemoReadsTheMainnetPublicJournal(): void
+    {
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        foreach ([
+            $this->trade('1', '2026-08-10T11:59:10.000000Z', 'buy', '3'),
+            $this->trade('2', '2026-08-10T11:59:30.000000Z', 'sell', '1'),
+            $this->trade('3', '2026-08-10T11:59:55.000000Z', 'buy', '2'),
+            $this->book('2026-08-10T11:59:59.000000Z'),
+        ] as $event) {
+            $market->apply($event);
+        }
+
+        $snapshot = (new PaperMarketStateMicrostructureSnapshotProvider($market))->snapshotFor(
+            new LineageContext(
+                origin: LineageContext::ORIGIN_MANUAL,
+                exchange: 'okx',
+                environment: 'demo',
+                marketType: 'perpetual',
+                symbol: 'BTCUSDT',
+            ),
+            new \DateTimeImmutable('2026-08-10T12:00:00.000000Z'),
+        );
+
+        self::assertNotNull($snapshot);
+        self::assertSame('mainnet', $snapshot->sourceNetwork);
+    }
+
     private function trade(string $id, string $time, string $side, string $quantity): PaperMarketEvent
     {
         $timestamp = new \DateTimeImmutable($time);

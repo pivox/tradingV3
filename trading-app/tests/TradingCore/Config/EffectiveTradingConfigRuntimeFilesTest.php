@@ -10,6 +10,7 @@ use App\TradingCore\Config\Exception\NonExecutableTradingConfigException;
 use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(EffectiveTradingConfigResolver::class)]
@@ -228,6 +229,31 @@ final class EffectiveTradingConfigRuntimeFilesTest extends TestCase
             yield $setupId . ' / Hyperliquid testnet' => [$setupId, $side, 'hyperliquid', 'testnet'];
             yield $setupId . ' / Hyperliquid mainnet read-only' => [$setupId, $side, 'hyperliquid', 'mainnet'];
         }
+    }
+
+    #[DataProvider('microScalpingBacktestTargetProvider')]
+    public function testMicroScalpingBacktestUsesAuthenticatedPublicVenueLayers(
+        string $setupId,
+        string $side,
+        string $exchange,
+        string $environment,
+    ): void {
+        $snapshot = (new EffectiveTradingConfigResolver())->resolve(new EffectiveTradingConfigRequest(
+            'micro_scalping', '1.1.0', $setupId, '1.1.0',
+            $exchange, $environment, $side, ShadowExecutionCapability::Backtest,
+        ));
+
+        self::assertSame(ShadowExecutionCapability::Backtest, $snapshot->request->capability);
+        self::assertSame($exchange, $snapshot->payload()['exchange']['id']);
+        self::assertFalse($snapshot->payload()['environment']['write_enabled']);
+        self::assertTrue($snapshot->payload()['environment']['dry_run']);
+    }
+
+    /** @return iterable<string,array{string,string,string,string}> */
+    public static function microScalpingBacktestTargetProvider(): iterable
+    {
+        yield 'long / OKX mainnet public replay' => ['micro_scalping.momentum_ofi.long', 'long', 'okx', 'mainnet'];
+        yield 'short / Hyperliquid mainnet public replay' => ['micro_scalping.momentum_ofi.short', 'short', 'hyperliquid', 'mainnet'];
     }
 
     public function testMicroScalpingShadowRejectsPrivateMainnetAndHasNoFakeOverlay(): void
