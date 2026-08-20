@@ -26,7 +26,7 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         private ClockInterface $clock,
         private bool $controlledClock = false,
         private bool $marketDataSourceReady = false,
-        #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
+        #[Autowire('%env(resolve:FAKE_EXCHANGE_STATE_FILE)%')]
         private ?string $stateFile = null,
         private ExchangeReadinessEvaluator $evaluator = new ExchangeReadinessEvaluator(),
     ) {
@@ -110,6 +110,9 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         }
 
         $recovery = $this->stateStore->recoveryMetadata();
+        if (!$recovery['seed_certified']) {
+            $blockingErrors[] = 'fake_paper_state_seed_not_certified';
+        }
 
         return $this->check(new ExchangeReadinessInput(
             exchange: Exchange::FAKE,

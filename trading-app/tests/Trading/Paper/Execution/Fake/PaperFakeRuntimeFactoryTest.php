@@ -55,6 +55,46 @@ final class PaperFakeRuntimeFactoryTest extends TestCase
         self::assertTrue($first->adapter->isBackedByStateStore($first->stateStore));
     }
 
+    public function testCellSeedsAreStableAndDomainSeparated(): void
+    {
+        $firstFactory = new PaperFakeRuntimeFactory(
+            $this->root,
+            new MockClock('2026-08-01T10:00:00Z'),
+            'paper-parent-seed-v1',
+        );
+        $first = $firstFactory->forCell($this->cell('run-1'));
+        $second = $firstFactory->forCell($this->cell('run-2'));
+        $firstMetadata = $first->stateStore->recoveryMetadata();
+        $secondMetadata = $second->stateStore->recoveryMetadata();
+
+        self::assertNotSame(
+            $firstMetadata['deterministic_seed_fingerprint'],
+            $secondMetadata['deterministic_seed_fingerprint'],
+        );
+        self::assertTrue($firstMetadata['seed_certified']);
+
+        $otherRoot = $this->root . '-other';
+        try {
+            $recreated = (new PaperFakeRuntimeFactory(
+                $otherRoot,
+                new MockClock('2026-08-01T10:00:00Z'),
+                'paper-parent-seed-v1',
+            ))->forCell($this->cell('run-1'));
+
+            self::assertSame(
+                $firstMetadata['deterministic_seed_fingerprint'],
+                $recreated->stateStore->recoveryMetadata()['deterministic_seed_fingerprint'],
+            );
+        } finally {
+            if (is_dir($otherRoot)) {
+                foreach (glob($otherRoot . '/*') ?: [] as $file) {
+                    @unlink($file);
+                }
+                @rmdir($otherRoot);
+            }
+        }
+    }
+
     public function testPermissiveOrSymlinkedRootIsRejected(): void
     {
         mkdir($this->root, 0755, true);

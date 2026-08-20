@@ -12,7 +12,15 @@ from typing import Any
 import pytest
 
 import scripts.runtime_recipe_runner as runner_module
-from scripts.runtime_recipe_runner import RecipeRunner, RunnerConfig
+from scripts.runtime_recipe_runner import DeterministicSeed, RecipeRunner, RunnerConfig
+
+
+DEFAULT_BACKEND_DETERMINISM = {
+    "certified": True,
+    "schema_version": "fake-deterministic-seed-v1",
+    "seed_fingerprint": "sha256:"
+    + hashlib.sha256(runner_module.DEFAULT_DETERMINISTIC_SEED.encode()).hexdigest(),
+}
 
 
 class FakeRecipeApi:
@@ -50,6 +58,7 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "determinism": DEFAULT_BACKEND_DETERMINISM,
                 "exchange_call_proof": {
                     "bitmart": "fake_provider_boundary",
                     "hyperliquid": "http_client_guard",
@@ -67,6 +76,7 @@ class FakeRecipeApi:
                 "ambiguous_calls": 0,
                 "async_exchange_capable_dispatches_suppressed": True,
                 "complete": True,
+                "determinism": DEFAULT_BACKEND_DETERMINISM,
                 "exchange_call_proof": {
                     "bitmart": "fake_provider_boundary",
                     "hyperliquid": "http_client_guard",
@@ -381,12 +391,27 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
 
     assert first["results"][0]["status"] == "PASS"
     assert restarted["results"][0]["status"] == "PASS"
-    assert api.new_run_dispatch_count == 1
+    assert api.new_run_dispatch_count == 2
+    r12_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+    assert r12_keys[0] == r12_keys[1]
+    assert r12_keys[2] == r12_keys[3]
+    assert r12_keys[0] != r12_keys[2]
     assert first_json == (tmp_path / "fake-multi-profile-recipe-report.json").read_bytes()
     assert first_markdown == (tmp_path / "fake-multi-profile-recipe-report.md").read_bytes()
 
     recipe = json.loads(first_json)
     assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v2"
+    assert recipe["determinism"]["backend_verified"] is True
+    assert recipe["determinism"]["backend_proof_schema_version"] == (
+        "fake-backend-determinism-proof-v1"
+    )
+    assert recipe["determinism"]["certified"] is True
+    assert recipe["determinism"]["schema_version"] == "fake-deterministic-seed-v1"
+    assert recipe["determinism"]["seed_fingerprint"].startswith("sha256:")
     assert recipe["scenario"] == "dry_run_multi_profiles_same_symbol"
     assert recipe["status"] == "PASS"
     assert [item["profile"] for item in recipe["sets"]] == [
@@ -397,6 +422,9 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert {tuple(item["symbols"]) for item in recipe["sets"]} == {("BTCUSDT",)}
     assert len({item["config_hash"] for item in recipe["sets"]}) == 3
     assert len({item["lineage"]["orchestration_set_id"] for item in recipe["sets"]}) == 3
+    assert {
+        item["lineage"]["orchestration_run_id"] for item in recipe["sets"]
+    } == {"OPERATIONAL_RUN_ID_REDACTED"}
     assert recipe["disabled_sets"] == ["recipe_fake_multi_disabled"]
     assert recipe["locks"]["orchestration"]["scope"] == (
         "mtf_profile+exchange+market_type+symbol"
@@ -443,11 +471,106 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
 
 
+def test_explicit_seed_derives_stable_redacted_invocation_identity(tmp_path: Path):
+    seed = "golden-python-seed-v1"
+    config = RunnerConfig(
+        export_dir=tmp_path,
+        confirmation_token="DRY_RUN_ONLY",
+        deterministic_seed=seed,
+    )
+
+    first = RecipeRunner(config, http_client=FakeRecipeApi()).run(scenarios=("R5",))
+    second = RecipeRunner(config, http_client=FakeRecipeApi()).run(scenarios=("R5",))
+    different = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            deterministic_seed="golden-python-seed-v2",
+        ),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R5",))
+
+    assert first["metadata"]["invocation_id"] != second["metadata"]["invocation_id"]
+    assert first["metadata"]["deterministic_evidence_id"] == second["metadata"][
+        "deterministic_evidence_id"
+    ]
+    assert first["metadata"]["deterministic_evidence_id"] != different["metadata"][
+        "deterministic_evidence_id"
+    ]
+    assert first["metadata"]["determinism"] == {
+        "backend_proof_schema_version": "fake-backend-determinism-proof-v1",
+        "backend_verified": False,
+        "certified": False,
+        "evidence_id": first["metadata"]["deterministic_evidence_id"],
+        "schema_version": "fake-deterministic-seed-v1",
+        "seed_fingerprint": "sha256:" + hashlib.sha256(seed.encode()).hexdigest(),
+    }
+    assert seed not in json.dumps(first, sort_keys=True)
+
+
+def test_seed_derivation_matches_php_contract_vector():
+    assert DeterministicSeed("golden-seed-2026-v1").derive_hex(
+        "private-ws.resync-cycle.v1",
+        {
+            "scenario_id": "private-ws-gap-v1",
+            "reason": "fake_private_ws_sequence_gap",
+            "sequence": "3",
+        },
+    ) == "5e33d1f9500da204fd41cdb99ab73845b466d2b43c7b097cd623cc6b3f465a9e"
+
+    assert DeterministicSeed("golden-seed-2026-v1").derive_hex(
+        "runtime-recipe.evidence.v1",
+        {"separator": "before\u2028after\u2029end"},
+    ) == "1924c08a295e7f1c12dcb2ab269b196192d22533b22a5795d68ea8130ac888d7"
+
+
+@pytest.mark.parametrize(
+    "component",
+    [1.0, 1e-7, float("nan"), 2**63, object(), {1: "bad-key"}, {"1": "bad-key"}, [], {}],
+)
+def test_seed_derivation_rejects_noncanonical_components(component: object):
+    with pytest.raises(ValueError, match="fake_deterministic_seed_component_invalid"):
+        DeterministicSeed("golden-seed-2026-v1").derive_hex(
+            "runtime-recipe.invocation.v1",
+            {"component": component},
+        )
+
+
+def test_separate_recipe_invocations_do_not_reuse_idempotency_anchor(tmp_path: Path):
+    api = FakeRecipeApi()
+    config = RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY")
+
+    RecipeRunner(config, http_client=api).run(scenarios=("R1",), keep_fixtures=True)
+    RecipeRunner(config, http_client=api).run(scenarios=("R1",), keep_fixtures=True)
+
+    run_keys = [
+        request["json"]["idempotency_key"]
+        for request in api.requests
+        if request["path"] == "/orchestrator/run"
+    ]
+    assert len(run_keys) == 2
+    assert run_keys[0] != run_keys[1]
+
+
+@pytest.mark.parametrize("seed", ["short", " leading-seed", "seed/with/slash", "a" * 129])
+def test_invalid_deterministic_seed_fails_closed(tmp_path: Path, seed: str):
+    with pytest.raises(ValueError, match="fake_deterministic_seed_invalid"):
+        RecipeRunner(
+            RunnerConfig(
+                export_dir=tmp_path,
+                confirmation_token="DRY_RUN_ONLY",
+                deterministic_seed=seed,
+            ),
+            http_client=FakeRecipeApi(),
+        )
+
+
 def test_r12_v2_distinguishes_bitmart_boundary_proof_from_http_guards(tmp_path: Path):
     evidence_v2 = {
         "ambiguous_calls": 0,
         "async_exchange_capable_dispatches_suppressed": True,
         "complete": True,
+        "determinism": DEFAULT_BACKEND_DETERMINISM,
         "exchange_call_proof": {
             "bitmart": "fake_provider_boundary",
             "hyperliquid": "http_client_guard",
@@ -769,6 +892,40 @@ def test_r12_fails_closed_when_observed_fake_only_safety_evidence_is_invalid(
     assert report["results"][0]["status"] == expected_status
     assert recipe["status"] == expected_status
     assert recipe["exchange_calls"] == expected_exchange_calls
+
+
+def test_r12_blocks_when_backend_seed_fingerprint_does_not_match(tmp_path: Path):
+    runner = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            deterministic_seed="different-runner-seed-v1",
+        ),
+        http_client=FakeRecipeApi(),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+    recipe = report["results"][0]["evidence"]["recipe_report"]
+
+    assert report["results"][0]["status"] == "BLOCKED"
+    assert report["metadata"]["determinism"]["certified"] is False
+    assert recipe["determinism"]["backend_verified"] is False
+
+
+def test_r12_blocks_when_backend_state_is_not_seed_certified(tmp_path: Path):
+    legacy_evidence = {
+        **FakeRecipeApi().open_state_safety_evidence,
+        "determinism": {**DEFAULT_BACKEND_DETERMINISM, "certified": False},
+    }
+    runner = RecipeRunner(
+        RunnerConfig(export_dir=tmp_path, confirmation_token="DRY_RUN_ONLY"),
+        http_client=FakeRecipeApi(open_state_safety_evidence=legacy_evidence),
+    )
+
+    report = runner.run(scenarios=("R12",), keep_fixtures=True)
+
+    assert report["results"][0]["status"] == "BLOCKED"
+    assert report["metadata"]["determinism"]["certified"] is False
 
 
 @pytest.mark.parametrize(
@@ -1124,6 +1281,23 @@ def test_runner_exports_demo_exchange_report_by_exchange(tmp_path: Path, monkeyp
         for request in api.requests
         if isinstance(request["json"], dict)
     )
+
+
+def test_demo_exchange_runner_keeps_backend_seed_for_global_r12(tmp_path: Path):
+    report = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            target_exchange="demo-exchanges",
+        ),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R12",), keep_fixtures=True)
+
+    global_r12 = report["exchange_results"]["global"][0]
+
+    assert global_r12["scenario"] == "R12"
+    assert global_r12["status"] == "PASS"
+    assert global_r12["evidence"]["recipe_report"]["determinism"]["backend_verified"] is True
 
 
 def test_demo_exchange_runner_materializes_scenario_iterable_once(

@@ -33,6 +33,22 @@ deux rapports normalisés sont byte-identiques ; trois profils distincts ciblent
 `BTCUSDT`, le replay conserve le même run, et ordres comme appels
 Bitmart/OKX/Hyperliquid restent à zéro. Le catalogue passe à 20 exécutables.
 
+### Mise à jour du 20 août 2026 — déterminisme seedé
+
+Le contrat `fake-deterministic-seed-v1` lie désormais les identités persistées
+Fake et les rapports de recette à une seed explicite. Seule son empreinte
+SHA-256 est exposée. Les cycles de resynchronisation private WS, preuves,
+attestations et identités de preuve Python sont dérivés par HMAC avec domaines
+versionnés. Un nonce d'invocation opérationnel, non certifié, reste unique pour
+empêcher la réutilisation d'un run persistant. Deux états frais exécutant les mêmes opérations sous la même seed
+sont byte-identiques ; un restart sous une autre seed échoue avec
+`fake_exchange_state_seed_mismatch`. Un état antérieur sans preuve de seed reste
+`seed_certified=false` et bloque le runtime-check. Golden 20 injecte une seed
+fixe dans ses deux piles et atteste le schéma et l'empreinte dans son rapport.
+La certification R12 exige en plus que l'open-state Symfony fournisse la même
+empreinte avec `seed_certified=true`; une preuve backend absente, legacy ou
+divergente produit `BLOCKED` et ne peut pas réutiliser la clé de replay précédente.
+
 L'audit du 19 juillet 2026 porte sur le dépôt `pivox/tradingV3`, la branche
 `issue/196-fake-paper-final-audit` et la base exacte
 `e2c1e30d6610ed262daf834003cadafaf1b76bab`, identique à `origin/main` au
@@ -45,9 +61,9 @@ Le résultat vérifié est le suivant :
   le runner consolidé, deux fois avec une horloge contrôlée et un état neuf ;
 - le scénario 20 complète les tests unitaires Python par deux piles locales
   fraîches et de vraies frontières HTTP FastAPI/Symfony ;
-- aucun contrat de seed fixe n'existe pour l'ensemble Fake/Paper ; des identités
-  internes utilisent encore une source aléatoire, même si les résultats golden
-  normalisés observés sont stables ;
+- le contrat seedé couvre les identités Fake persistées et la recette R12 ; les
+  noms de fichiers temporaires atomiques et le nonce anti-replay de dispatch
+  sont explicitement hors preuve car ils ne sont pas des résultats métier ;
 - la faille historique de protection des fills partiels est corrigée par la mise
   à jour du 20 août 2026 ci-dessus ;
 - le mode Paper réel/replay, la matrice complète de capabilities, plusieurs
@@ -84,9 +100,10 @@ La preuve golden comprend deux niveaux distincts :
 2. la commande consolidée est relancée dans deux processus PHPUnit distincts,
    sans configuration PHPUnit et avec des états Fake locaux/temporaires.
 
-Cela prouve la répétabilité des sorties couvertes. Cela ne prouve pas le critère
-plus fort « seed fixe » : aucun seed n'est injecté ni vérifié, et certaines
-identités non incluses dans les faits normalisés ne sont pas déterministes.
+Cela prouve la répétabilité des sorties couvertes. Golden 20 complète désormais
+cette preuve avec une seed fixe injectée dans Symfony et Python, une empreinte
+attestée, des identités HMAC déterministes et la comparaison byte pour byte du
+rapport normalisé.
 
 ## Catalogue golden : exigence, preuve et statut
 
@@ -111,7 +128,7 @@ identités non incluses dans les faits normalisés ne sont pas déterministes.
 | 17 | `restart_with_open_position` | Un fichier neuf est repris dans une nouvelle instance avec position, protection et séquence conservées. | `restartWithOpenPosition()` et `testStateStoreRestoresProtectedPositionAndContinuesEventSequence` | PASS — exécutable deux fois |
 | 18 | `funding` | Funding positif/négatif/absent, long/short/partiel, deadline, replay exact-once, restart et montant inconnu `null`. | `funding()` et `FakeFundingModelTest` | PASS — exécutable deux fois |
 | 19 | `one_way_conflict` | Conflits position/ordre, reduce-only, symboles indépendants, replay et restart en One-Way. | `oneWayConflict()` et `FakeOneWayConflictGuardTest` | PASS — exécutable deux fois |
-| 20 | `dry_run_multi_profiles_same_symbol` | Deux bases, deux états Fake et deux couples Symfony/FastAPI frais exécutent R12 par HTTP loopback ; rapports identiques, trois lineage/config hashes distincts, replay stable et zéro ordre/appel exchange. | `run_fresh_stacks()`, `test_golden20_runs_twice_through_fresh_real_http_stacks()` et `dryRunMultiProfilesSameSymbol()` | PASS — exécutable deux fois depuis piles fraîches |
+| 20 | `dry_run_multi_profiles_same_symbol` | Deux bases, deux états Fake et deux couples Symfony/FastAPI frais exécutent R12 par HTTP loopback sous la même seed explicite ; rapports identiques, empreinte attestée, trois lineage/config hashes distincts, replay stable et zéro ordre/appel exchange. | `run_fresh_stacks()`, `test_golden20_runs_twice_through_fresh_real_http_stacks()` et `dryRunMultiProfilesSameSymbol()` | PASS — exécutable deux fois depuis piles fraîches seedées |
 
 Résultat : **20 PASS / 0 PARTIAL / 0 UNSUPPORTED** dans le catalogue. Cela lève
 le livrable golden, sans lever les autres écarts de #196.
@@ -130,7 +147,7 @@ le livrable golden, sans lever les autres écarts de #196.
 | Persistance/recovery Paper | Enveloppe versionnée, checksum, écriture atomique, reprise ordres/positions/fills/événements/fautes/funding. | PASS pour l'état local | Cela ne transforme pas le Fake local en Paper sans source marché réelle/replay. |
 | Simulation WS public/privé | Private WS persistant, disconnect, ack, duplicate/out-of-order/gap et snapshot resync aux scénarios 15 et 16. | PARTIAL | Public WS absent. |
 | DSL/fixtures d'erreurs | Fautes typées `network_timeout`, `transport_error`, `http_429`, `http_500`, avant/après mutation, FIFO et restart. | PARTIAL | Pas de quota glissant, latence/jitter seedés, précision/marge dans une DSL commune, ni catalogue de divergences. |
-| Runtime-check Fake/Paper | Contrôle local de book, balance, horloge, coûts, SL et reprise de sonde ; dry-run, permissions off, kill switch et writes off imposés. | PASS fail-closed | La configuration courante reste non-ready sans horloge contrôlée et source marché Paper. Aucun résultat ready Paper ne doit être revendiqué. |
+| Runtime-check Fake/Paper | Contrôle local de book, balance, horloge, coûts, SL, reprise de sonde et certification de seed ; dry-run, permissions off, kill switch et writes off imposés. | PASS fail-closed | La configuration courante reste non-ready sans horloge contrôlée et source marché Paper. Un état legacy non seedé bloque aussi la readiness. |
 | 20 scénarios golden | Catalogue strict de vingt lignes, runner consolidé et R12 exécuté depuis deux piles fraîches. | PASS | Aucun écart sur le livrable golden. |
 | Matrice de parité/remplacement Bitmart | Les adapters exposent quelques flags et la recette Fake garde une frontière structurelle avec Bitmart. | **FAIL** | Aucune matrice complète critère→preuve→divergence→condition de remplacement n'était livrée. L'entrée proposée pour #195 figure plus bas. |
 | Documentation opérateur et rollback | Handbook, README Fake, modèle risque et rollback local existent. | PARTIAL | Les anciens documents sur-certifiaient 20/20 ; Paper réel/replay et rollback de sa source restent à documenter après implémentation. |
@@ -139,7 +156,7 @@ le livrable golden, sans lever les autres écarts de #196.
 
 | Critère | Preuve | Statut | Écart exact |
 |---|---|---|---|
-| Même seed ⇒ mêmes résultats | Deux runners frais et deux processus donnent les mêmes sorties normalisées sous horloge fixe. | **FAIL** | Aucun seed fixe n'est injecté/testé ; des identités internes reposent encore sur une source aléatoire. Répétabilité observée ≠ contrat seedé. |
+| Même seed ⇒ mêmes résultats | `fake-deterministic-seed-v1`, état persistant byte-identique, restart lié à l'empreinte et Golden 20 sur deux piles fraîches sous seed fixe. | PASS pour le périmètre Fake/R12 certifié | Les futurs modèles probabilistes devront réutiliser ce contrat et ajouter leur propre domaine versionné. |
 | Paper ne touche aucun endpoint privé réel | Le bundle Fake n'injecte aucun client HTTP exchange ; les tests structuraux et guards bloquent les clients réels. | PARTIAL | Le mode Paper réel/replay n'existe pas encore. La propriété est prouvée pour Fake local, pas pour une source Paper future. |
 | Un maker peut rester non rempli ou partiel | Scénarios 2 et 3, IOC non croisé et fill partiel explicite. | PASS | — |
 | Précision, marge, balance et levier réalistes | Scénarios 6–8 et catalogue instrument. | PASS pour le modèle synthétique versionné | La réalisme Paper dépendra des données source. |
@@ -149,7 +166,7 @@ le livrable golden, sans lever les autres écarts de #196.
 | Restart Paper sans perte | Scénarios 13, 16–19 et tests du file store restaurent l'état et les séquences. | PASS pour fichier local | Pas de ledger PostgreSQL utilisé par Fake. |
 | Network/rate-limit/WS disconnect injectables | Timeout, transport, HTTP 429/500, private WS disconnect/gap et snapshot resync sont injectables. | PARTIAL | Pas de rate limiter temporel/quota glissant, latence/jitter seedés ou public WS. |
 | Frais/slippage/funding séparés | Ledger/événements et champs distincts, funding exact-once, liquidation exacte. | PASS | — |
-| Les 20 scénarios golden sont automatisés | Dix-neuf exécutions consolidées ; une preuve partielle. | **FAIL** | Compléter réellement le scénario 20 sur deux piles fraîches. |
+| Les 20 scénarios golden sont automatisés | Vingt exécutions consolidées ; R12 lance deux piles HTTP fraîches sous seed fixe. | PASS | — |
 | Divergences critiques Bitmart listées | La section #195 ci-dessous propose une entrée statique. | PARTIAL | Il manque les fixtures empiriques Bitmart redacted et la matrice de remplacement validée par #195. |
 
 ## Capabilities Fake/Paper observées
@@ -190,11 +207,7 @@ capability existe sur un exchange réel.
 
 ### P0 — empêche la clôture de #196
 
-1. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
-   scénario/runtime, dériver les identités non métier de ce seed ou les exclure
-   contractuellement avec justification, puis comparer l'état persistant complet
-   et les coûts/événements de deux exécutions fraîches.
-2. **Mode Paper.** Implémenter une source marché réelle publique ou replay
+1. **Mode Paper.** Implémenter une source marché réelle publique ou replay
    enregistrée, versionnée et redacted, sans client privé et sans write, puis
    rendre le runtime-check ready uniquement si source et horloge sont prêtes.
 
@@ -303,6 +316,7 @@ Résultats obtenus :
 | Runtime-check CLI Fake | Exit 0 de la commande de diagnostic ; `readiness=not_ready`, blockers `fake_paper_clock_not_controlled` et `public_connectivity_unavailable`, warning `fake_paper_market_source_not_configured`; state writable/recovery et modèles locaux ready. | PASS fail-closed, **pas ready** |
 | Sécurité structurale exchange | `FakeOnlyExchangeCallAuditTest` : 6 tests, 28 assertions. | PASS |
 | Python scénario 20 | Test frais PASS : deux SQLite, deux états Fake et quatre processus Symfony/FastAPI sur HTTP loopback ; digest identique et zéro ordre/appel exchange. | PASS |
+| Contrat seedé PHP/Python | 50 tests PHP ciblés, 263 assertions ; vecteur HMAC commun PHP/Python, état byte-identique, mismatch/legacy fail-closed et seed par cellule. Suite Python complète dans les conditions CI, dont deux piles Golden 20 seedées. | PASS |
 | Suite Python orchestrateur | 1188 tests collectés : 1184 PASS et 4 skips attendus dans les conditions CI ; un warning Starlette/httpx et des warnings Backtrader connus. | PASS |
 | Python redaction/fixtures | Deux tests ciblés PASS. | PASS |
 | PHPStan | Trois fichiers PHP golden touchés, aucun défaut avec limite mémoire explicite de 1 Gio. | PASS |

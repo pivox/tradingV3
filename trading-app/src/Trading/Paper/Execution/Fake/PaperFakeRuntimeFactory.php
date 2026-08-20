@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Execution\Fake;
 
 use App\Exchange\Adapter\FakeExchangeAdapter;
+use App\Exchange\Fake\FakeDeterministicSeed;
 use App\Exchange\Fake\FakeExchangeMatchingEngine;
 use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Exchange\Fake\FakeExchangeStateStore;
@@ -17,11 +18,16 @@ final class PaperFakeRuntimeFactory
     /** @var array<string, PaperFakeRuntime> */
     private array $runtimes = [];
 
+    private readonly FakeDeterministicSeed $deterministicSeed;
+
     public function __construct(
         #[Autowire('%kernel.project_dir%/var/paper-fake-state')]
         private readonly string $root,
         private readonly ClockInterface $clock,
+        #[Autowire('%env(string:FAKE_EXCHANGE_DETERMINISTIC_SEED)%')]
+        string $deterministicSeed = FakeExchangeStateStore::DEFAULT_DETERMINISTIC_SEED,
     ) {
+        $this->deterministicSeed = new FakeDeterministicSeed($deterministicSeed);
     }
 
     public function forCell(PaperExecutionCell $cell): PaperFakeRuntime
@@ -44,7 +50,11 @@ final class PaperFakeRuntimeFactory
             throw new \RuntimeException('paper_fake_state_symlink_forbidden');
         }
 
-        $state = new FakeExchangeStateStore($statePath);
+        $cellSeed = $this->deterministicSeed->deriveHex(
+            'paper-runtime.cell-seed.v1',
+            ['cell_id' => $cell->id],
+        );
+        $state = new FakeExchangeStateStore($statePath, $cellSeed);
         $book = new FakeExchangeOrderBook($state);
         $clock = $this->serializableClock();
         $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
