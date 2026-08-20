@@ -129,6 +129,14 @@ jobs:
           tests/TradingCore/Config/Audit/EffectiveConfigSnapshotMigrationTest.php
           tests/TradingCore/Config/Audit/DoctrineEffectiveConfigSnapshotRegistryTest.php
 
+      - name: PHPUnit — Effective config usage PostgreSQL
+        env:
+          DATABASE_URL: 'postgresql://trading:trading@127.0.0.1:5432/trading_app_paper_test?serverVersion=16&charset=utf8'
+          EFFECTIVE_CONFIG_USAGE_REQUIRE_POSTGRES: '1'
+        run: >-
+          vendor/bin/phpunit --bootstrap vendor/autoload.php --fail-on-skipped
+          tests/TradingCore/Config/Usage/DoctrineEffectiveConfigUsageStoreTest.php
+
       - name: PHPUnit — Contract MtfValidator DTOs (OBS-003)
         run: vendor/bin/phpunit --bootstrap vendor/autoload.php tests/Contract/MtfValidator/Dto
 
