@@ -341,6 +341,7 @@ cd python-orchestrator
 python scripts/runtime_recipe_runner.py \
   --orchestrator-url http://localhost:8099 \
   --confirm DRY_RUN_ONLY \
+  --seed fake-paper-golden20-seed-v1 \
   --export-dir var/runtime-recipe/latest \
   --keep-fixtures
 ```
@@ -363,7 +364,9 @@ python scripts/golden20_fresh_stack_runner.py
 ```
 
 Elle exécute R12 deux fois depuis des piles neuves, compare les rapports
-normalisés byte pour byte et supprime tous les états/processus temporaires.
+normalisés byte pour byte et supprime tous les états/processus temporaires. La
+preuve injecte la même seed explicite dans Symfony et Python ; le rapport expose
+uniquement son empreinte SHA-256 et le schéma `fake-deterministic-seed-v1`.
 
 Le golden scenario 20 / `R12` dispose d'une commande dediee et reproductible :
 
@@ -371,6 +374,7 @@ Le golden scenario 20 / `R12` dispose d'une commande dediee et reproductible :
 python scripts/runtime_recipe_runner.py \
   --orchestrator-url http://localhost:8099 \
   --confirm DRY_RUN_ONLY \
+  --seed fake-paper-golden20-seed-v1 \
   --scenario R12 \
   --export-dir var/runtime-recipe/fake-multi-profile \
   --keep-fixtures
@@ -380,6 +384,11 @@ Elle applique `fake_multi_profile_same_symbol.json`, force trois sets Fake
 `regular`, `scalper` et `scalper_micro` sur `BTCUSDT` en dry-run, puis produit
 `fake-multi-profile-recipe-report.json` et `.md`. La cle de replay derive du hash
 de fixture : un restart du runner relit le meme run sans redispatch.
+
+La seed doit contenir 8 à 128 caractères parmi `A-Za-z0-9._:-`. Elle n'est
+jamais écrite dans les rapports. Changer la seed d'un état Fake déjà certifié
+fait échouer la restauration avec `fake_exchange_state_seed_mismatch`; un état
+legacy sans empreinte reste non certifié et ne peut pas rendre le runtime ready.
 
 La recette ne cree aucun `OrderIntent` et n'exerce donc pas le lock metier. Le
 rapport conserve son scope avec `evidence_status=not_exercised` et

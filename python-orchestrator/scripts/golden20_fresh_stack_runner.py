@@ -36,6 +36,7 @@ REPOSITORY_ROOT = ORCHESTRATOR_ROOT.parent
 TRADING_APP_ROOT = REPOSITORY_ROOT / "trading-app"
 REPORT_NAME = "fake-multi-profile-recipe-report.json"
 STARTUP_TIMEOUT_SECONDS = 15.0
+GOLDEN_DETERMINISTIC_SEED = "fake-paper-golden20-seed-v1"
 PROXY_ENVIRONMENT_KEYS = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -178,6 +179,7 @@ def _fresh_stack() -> Iterator[tuple[str, Path, bool, str, int, int]]:
                 "LOCK_DSN": "flock",
                 "PAPER_FAKE_STATE_ROOT": str(fake_state_root),
                 "REDIS_ORDER_WATCH_CHANNEL": "golden20-local-order-watch",
+                "FAKE_EXCHANGE_DETERMINISTIC_SEED": GOLDEN_DETERMINISTIC_SEED,
             }
         )
         orchestrator_environment = _proxy_free_environment()
@@ -285,6 +287,7 @@ def _run_one_fresh_stack() -> FreshStackResult:
                 orchestrator_url=orchestrator_url,
                 confirmation_token="DRY_RUN_ONLY",
                 timeout_seconds=15.0,
+                deterministic_seed=GOLDEN_DETERMINISTIC_SEED,
             ),
             http_client=HttpxRecipeHttpClient(orchestrator_url, trust_env=False),
         )
@@ -331,6 +334,8 @@ def run_fresh_stacks() -> dict[str, Any]:
     order_totals = [item.get("orders_total") for item in sets if isinstance(item, dict)]
     replay = first.report.get("replay")
     replay = replay if isinstance(replay, dict) else {}
+    determinism = first.report.get("determinism")
+    determinism = determinism if isinstance(determinism, dict) else {}
     proof: dict[str, Any] = {
         "config_hashes_unique": len(config_hashes) == 3 and len(set(config_hashes)) == 3,
         "disabled_sets": first.report.get("disabled_sets"),
@@ -343,6 +348,9 @@ def run_fresh_stacks() -> dict[str, Any]:
         "orders_total": sum(value for value in order_totals if isinstance(value, int)),
         "profiles": profiles,
         "replay_same_run_id": replay.get("same_run_id") is True,
+        "seed_certified": determinism.get("certified") is True,
+        "seed_fingerprint": determinism.get("seed_fingerprint"),
+        "seed_schema_version": determinism.get("schema_version"),
         "report_digest": "sha256:" + hashlib.sha256(first.report_bytes).hexdigest(),
         "reports_identical": reports_identical,
         "schema_version": "fake-paper-golden20-fresh-stacks-v1",
@@ -359,6 +367,10 @@ def run_fresh_stacks() -> dict[str, Any]:
         "orders_total": 0,
         "profiles": ["regular", "scalper", "scalper_micro"],
         "replay_same_run_id": True,
+        "seed_certified": True,
+        "seed_fingerprint": "sha256:"
+        + hashlib.sha256(GOLDEN_DETERMINISTIC_SEED.encode("utf-8")).hexdigest(),
+        "seed_schema_version": "fake-deterministic-seed-v1",
         "reports_identical": True,
         "symbols": [["BTCUSDT"], ["BTCUSDT"], ["BTCUSDT"]],
     }

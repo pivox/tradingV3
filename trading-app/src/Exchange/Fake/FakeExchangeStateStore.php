@@ -27,6 +27,7 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 class FakeExchangeStateStore
 {
     public const RECONCILIATION_EVENT_SEQUENCE_WATERMARK = 'fake_private_ws_event_sequence_watermark';
+    public const DEFAULT_DETERMINISTIC_SEED = 'fake-paper-default-seed-v1';
 
     private const STATE_FORMAT_VERSION = 1;
     private const ENGINE_VERSION = 'fake-paper-state-v1';
@@ -38,6 +39,10 @@ class FakeExchangeStateStore
     private const LIQUIDATION_BALANCE_CLAMP_MODEL_VERSION = 'fake-liquidation-balance-floor-v1';
 
     private ?string $stateFile;
+
+    private readonly FakeDeterministicSeed $deterministicSeed;
+
+    private bool $seedCertified = true;
 
     private int $nextOrderSequence = 1;
 
@@ -86,8 +91,11 @@ class FakeExchangeStateStore
     public function __construct(
         #[Autowire('%kernel.project_dir%/var/fake_exchange_state.dat')]
         ?string $stateFile = null,
+        #[Autowire('%env(string:FAKE_EXCHANGE_DETERMINISTIC_SEED)%')]
+        string $deterministicSeed = self::DEFAULT_DETERMINISTIC_SEED,
     ) {
         $this->stateFile = $stateFile;
+        $this->deterministicSeed = new FakeDeterministicSeed($deterministicSeed);
         if (!$this->restore()) {
             $this->initializeDefaults();
         }
@@ -105,6 +113,7 @@ class FakeExchangeStateStore
         $this->nextEventSequence = 1;
         $this->restored = false;
         $this->restoredLegacyState = false;
+        $this->seedCertified = true;
         $this->orders = [];
         $this->clientOrderIndex = [];
         $this->positions = [];
@@ -761,7 +770,17 @@ class FakeExchangeStateStore
 
             $this->privateWs['connection_state'] = self::PRIVATE_WS_RESYNC_REQUIRED;
             $this->privateWs['resync_reason'] = 'fake_private_ws_sequence_gap';
-            $this->privateWs['resync_cycle_id'] = bin2hex(random_bytes(32));
+            $this->privateWs['resync_cycle_id'] = $this->deterministicSeed->deriveHex(
+                'private-ws.resync-cycle.v1',
+                [
+                    'actual_sequence' => $actualSequence,
+                    'attempt' => $this->privateWs['counters']['gap_total'] + 1,
+                    'expected_sequence' => $expectedSequence,
+                    'fixture_entry_id' => $current->fixtureEntryId,
+                    'reason' => 'fake_private_ws_sequence_gap',
+                    'scenario_id' => $this->privateWsScenario()?->scenarioId,
+                ],
+            );
             $this->privateWs['snapshot_proof'] = null;
             ++$this->privateWs['counters']['gap_total'];
             $this->appendPrivateWsRecord([
@@ -791,7 +810,17 @@ class FakeExchangeStateStore
 
             $this->privateWs['connection_state'] = self::PRIVATE_WS_RESYNC_REQUIRED;
             $this->privateWs['resync_reason'] = 'fake_private_ws_sequence_conflict';
-            $this->privateWs['resync_cycle_id'] = bin2hex(random_bytes(32));
+            $this->privateWs['resync_cycle_id'] = $this->deterministicSeed->deriveHex(
+                'private-ws.resync-cycle.v1',
+                [
+                    'attempt' => $this->privateWs['counters']['conflict_total'] + 1,
+                    'fixture_entry_id' => $current->fixtureEntryId,
+                    'fingerprint' => $current->fingerprint,
+                    'reason' => 'fake_private_ws_sequence_conflict',
+                    'scenario_id' => $this->privateWsScenario()?->scenarioId,
+                    'sequence' => $current->sequence,
+                ],
+            );
             $this->privateWs['snapshot_proof'] = null;
             ++$this->privateWs['counters']['conflict_total'];
             $this->appendPrivateWsRecord([
@@ -915,7 +944,15 @@ class FakeExchangeStateStore
             'resync_cycle_id' => $cycleId,
             'event_sequence_watermark' => $this->maximumCanonicalNumericEventSequence(),
             'scenario_delivery_count' => \count($scenario->deliveries),
-            'proof_id' => bin2hex(random_bytes(32)),
+            'proof_id' => $this->deterministicSeed->deriveHex(
+                'private-ws.snapshot-proof.v1',
+                [
+                    'event_sequence_watermark' => $this->maximumCanonicalNumericEventSequence(),
+                    'resync_cycle_id' => $cycleId,
+                    'scenario_delivery_count' => \count($scenario->deliveries),
+                    'scenario_id' => $scenario->scenarioId,
+                ],
+            ),
             'status' => 'pending',
             'attestation_id' => null,
         ];
@@ -967,7 +1004,15 @@ class FakeExchangeStateStore
 
             $attestation = $storedProof;
             $attestation['status'] = 'completed';
-            $attestation['attestation_id'] = bin2hex(random_bytes(32));
+            $attestation['attestation_id'] = $this->deterministicSeed->deriveHex(
+                'private-ws.snapshot-attestation.v1',
+                [
+                    'event_sequence_watermark' => $storedProof['event_sequence_watermark'],
+                    'proof_id' => $storedProof['proof_id'],
+                    'resync_cycle_id' => $cycleId,
+                    'scenario_id' => $scenario->scenarioId,
+                ],
+            );
             $this->privateWs['snapshot_proof'] = $attestation;
 
             return $attestation;
@@ -1248,6 +1293,9 @@ class FakeExchangeStateStore
      *     format_version:int,
      *     engine_version:string,
      *     scenario_config_hash:string,
+     *     determinism_schema_version:string,
+     *     deterministic_seed_fingerprint:string,
+     *     seed_certified:bool,
      *     restored:bool,
      *     legacy:bool,
      *     next_event_sequence:int,
@@ -1262,6 +1310,9 @@ class FakeExchangeStateStore
             'format_version' => self::STATE_FORMAT_VERSION,
             'engine_version' => self::ENGINE_VERSION,
             'scenario_config_hash' => self::scenarioConfigHash(),
+            'determinism_schema_version' => $this->deterministicSeed->schemaVersion(),
+            'deterministic_seed_fingerprint' => $this->deterministicSeed->fingerprint(),
+            'seed_certified' => $this->seedCertified,
             'restored' => $this->restored,
             'legacy' => $this->restoredLegacyState,
             'next_event_sequence' => $this->nextEventSequence,
@@ -1405,6 +1456,9 @@ class FakeExchangeStateStore
         $this->hydrate($state);
         $this->restored = true;
         $this->restoredLegacyState = $legacy;
+        if ($legacy) {
+            $this->seedCertified = false;
+        }
 
         return true;
     }
@@ -1443,6 +1497,11 @@ class FakeExchangeStateStore
             'format_version' => self::STATE_FORMAT_VERSION,
             'engine_version' => self::ENGINE_VERSION,
             'scenario_config_hash' => self::scenarioConfigHash(),
+            'determinism' => [
+                'schema_version' => $this->deterministicSeed->schemaVersion(),
+                'seed_fingerprint' => $this->deterministicSeed->fingerprint(),
+                'certified' => $this->seedCertified,
+            ],
             'payload_checksum' => hash('sha256', serialize($payload)),
             'payload' => $payload,
         ]);
@@ -1480,6 +1539,24 @@ class FakeExchangeStateStore
         }
         if (($envelope['scenario_config_hash'] ?? null) !== self::scenarioConfigHash()) {
             throw new FakeExchangeStateCorruptedException('fake_exchange_state_config_mismatch');
+        }
+
+        $determinism = $envelope['determinism'] ?? null;
+        if ($determinism === null) {
+            $this->seedCertified = false;
+        } elseif (
+            !\is_array($determinism)
+            || !$this->hasExactKeys($determinism, ['schema_version', 'seed_fingerprint', 'certified'])
+            || ($determinism['schema_version'] ?? null) !== $this->deterministicSeed->schemaVersion()
+            || !\is_string($determinism['seed_fingerprint'] ?? null)
+            || !\is_bool($determinism['certified'] ?? null)
+        ) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_determinism_invalid');
+        } else {
+            if (!hash_equals($this->deterministicSeed->fingerprint(), $determinism['seed_fingerprint'])) {
+                throw new FakeExchangeStateCorruptedException('fake_exchange_state_seed_mismatch');
+            }
+            $this->seedCertified = $determinism['certified'];
         }
 
         $payload = $envelope['payload'] ?? null;

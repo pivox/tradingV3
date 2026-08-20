@@ -93,6 +93,48 @@ final class FakePrivateWsStatePersistenceTest extends TestCase
         self::assertSame(2, $restored->privateWsExpectedNumericSequence());
     }
 
+    public function testSameSeedProducesByteIdenticalPersistedPendingResyncState(): void
+    {
+        $otherStateFile = $this->stateFile . '.same-seed';
+        try {
+            foreach ([$this->stateFile, $otherStateFile] as $stateFile) {
+                $state = new FakeExchangeStateStore($stateFile, 'golden-seed-2026-v1');
+                foreach ([1, 2, 3] as $sequence) {
+                    $state->appendEvent($this->event($sequence));
+                }
+                $state->configurePrivateWsScenario($this->scenario([1, 3]));
+                $first = $state->privateWsCurrentDelivery();
+                self::assertInstanceOf(FakePrivateWsDelivery::class, $first);
+                $state->acknowledgePrivateWsDelivery($first);
+                $gap = $state->privateWsCurrentDelivery();
+                self::assertInstanceOf(FakePrivateWsDelivery::class, $gap);
+                $state->markPrivateWsGap('2', '3', $gap);
+                self::assertIsArray($state->capturePrivateWsSnapshotProof());
+            }
+
+            self::assertSame(file_get_contents($this->stateFile), file_get_contents($otherStateFile));
+            self::assertStringNotContainsString(
+                'golden-seed-2026-v1',
+                (string) file_get_contents($this->stateFile),
+            );
+        } finally {
+            @unlink($otherStateFile);
+            @unlink($otherStateFile . '.lock');
+            @unlink($otherStateFile . '.private-ws-consumer.lock');
+        }
+    }
+
+    public function testPersistedStateRejectsAnotherDeterministicSeed(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile, 'golden-seed-2026-v1');
+        $state->reset();
+
+        $this->expectException(FakeExchangeStateCorruptedException::class);
+        $this->expectExceptionMessage('fake_exchange_state_seed_mismatch');
+
+        new FakeExchangeStateStore($this->stateFile, 'golden-seed-2026-v2');
+    }
+
     public function testScenarioReconfigurationCannotClearGapResyncState(): void
     {
         $state = new FakeExchangeStateStore($this->stateFile);

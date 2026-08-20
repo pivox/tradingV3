@@ -330,6 +330,30 @@ final class FakeRuntimeCheckTest extends TestCase
         }
     }
 
+    public function testLegacyPersistedStateCannotClaimSeededReadiness(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake_runtime_check_legacy_seed_');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $state->reset();
+            $envelope = unserialize((string) file_get_contents($stateFile), ['allowed_classes' => true]);
+            self::assertIsArray($envelope);
+            unset($envelope['determinism']);
+            file_put_contents($stateFile, serialize($envelope));
+
+            $legacy = new FakeExchangeStateStore($stateFile);
+            self::assertFalse($legacy->recoveryMetadata()['seed_certified']);
+
+            $report = $this->runtimeCheck($legacy)->current();
+            self::assertContains('fake_paper_state_seed_not_certified', $report->blockingErrors);
+        } finally {
+            @unlink($stateFile);
+        }
+    }
+
     public function testResidualLocalBookDoesNotProveMarketSourceReadiness(): void
     {
         $state = new FakeExchangeStateStore();

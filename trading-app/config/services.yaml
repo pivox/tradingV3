@@ -78,6 +78,7 @@ parameters:
     env(MTF_VALIDATION_FALLBACK_ALERT_THRESHOLD): '1'
     env(POSITION_TRADE_ANALYSIS_REPORTING_SOURCE): 'v2'
     env(FAKE_EXCHANGE_DAILY_LOSS_CAP_USDT): '100.000000000000'
+    env(FAKE_EXCHANGE_DETERMINISTIC_SEED): 'fake-paper-default-seed-v1'
     app.trade_entry_default_mode: 'scalper_micro'
 
     # Configuration TradeEntry - Valeurs par défaut (déplacées dans services_trade_entry.yaml)
@@ -180,6 +181,7 @@ services:
         arguments:
             $root: '%env(string:PAPER_FAKE_STATE_ROOT)%'
             $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+            $deterministicSeed: '%env(string:FAKE_EXCHANGE_DETERMINISTIC_SEED)%'
 
     paper.execution.empty_adapter_registry:
         class: App\Exchange\Registry\ExchangeAdapterRegistry

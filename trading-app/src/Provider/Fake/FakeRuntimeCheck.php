@@ -110,6 +110,9 @@ final readonly class FakeRuntimeCheck implements ExchangeRuntimeCheckInterface
         }
 
         $recovery = $this->stateStore->recoveryMetadata();
+        if (!$recovery['seed_certified']) {
+            $blockingErrors[] = 'fake_paper_state_seed_not_certified';
+        }
 
         return $this->check(new ExchangeReadinessInput(
             exchange: Exchange::FAKE,

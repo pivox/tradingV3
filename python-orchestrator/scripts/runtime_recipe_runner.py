@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
+import math
 import re
 import subprocess
 from collections import Counter
@@ -20,7 +22,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Protocol, Sequence
-from uuid import uuid4
 
 import httpx
 
@@ -30,6 +31,8 @@ DEFAULT_FIXTURES_DIR = ROOT / "fixtures" / "runtime-recipe"
 DEFAULT_EXPORT_DIR = ROOT / "var" / "runtime-recipe"
 CONFIRMATION_TOKEN = "DRY_RUN_ONLY"
 FAKE_ONLY_EXCHANGE_SAFETY_SCHEMA_VERSION = "fake-only-exchange-safety-v2"
+DETERMINISTIC_SEED_SCHEMA_VERSION = "fake-deterministic-seed-v1"
+DEFAULT_DETERMINISTIC_SEED = "fake-paper-default-seed-v1"
 FAKE_ONLY_EXCHANGE_CALL_PROOF = {
     "bitmart": "fake_provider_boundary",
     "hyperliquid": "http_client_guard",
@@ -114,6 +117,46 @@ class HttpxRecipeHttpClient:
         return response.status_code, body
 
 
+class DeterministicSeed:
+    def __init__(self, seed: object) -> None:
+        if not isinstance(seed, str) or re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", seed) is None:
+            raise ValueError("fake_deterministic_seed_invalid")
+        self.__seed = seed.encode("utf-8")
+
+    @property
+    def fingerprint(self) -> str:
+        return "sha256:" + hashlib.sha256(self.__seed).hexdigest()
+
+    def derive_hex(self, domain: str, components: dict[str, Any]) -> str:
+        if re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,95}", domain) is None:
+            raise ValueError("fake_deterministic_seed_domain_invalid")
+        canonical = json.dumps(
+            self._canonicalize(components),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        message = f"{DETERMINISTIC_SEED_SCHEMA_VERSION}\0{domain}\0{canonical}"
+        return hmac.new(self.__seed, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _canonicalize(self, value: Any) -> Any:
+        if value is None or type(value) in (bool, str):
+            return value
+        if type(value) is int:
+            if not -(2**63) <= value < 2**63:
+                raise ValueError("fake_deterministic_seed_component_invalid")
+            return value
+        if type(value) is float:
+            if not math.isfinite(value):
+                raise ValueError("fake_deterministic_seed_component_invalid")
+            return value
+        if type(value) is list:
+            return [self._canonicalize(item) for item in value]
+        if type(value) is dict and all(type(key) is str for key in value):
+            return {key: self._canonicalize(item) for key, item in value.items()}
+        raise ValueError("fake_deterministic_seed_component_invalid")
+
+
 @dataclass(frozen=True)
 class RunnerConfig:
     export_dir: Path
@@ -125,6 +168,7 @@ class RunnerConfig:
     temporal_available: bool = False
     temporal_dry_run_command: Sequence[str] | None = None
     cleanup: bool = False
+    deterministic_seed: str = DEFAULT_DETERMINISTIC_SEED
 
 
 class RecipeRunner:
@@ -136,8 +180,10 @@ class RecipeRunner:
     ) -> None:
         self.config = config
         self.http = http_client or HttpxRecipeHttpClient(config.orchestrator_url)
+        self.deterministic_seed = DeterministicSeed(config.deterministic_seed)
         self.fixtures = self._load_fixtures()
         self.invocation_id = ""
+        self._invocation_sequence = 0
 
     def run(
         self,
@@ -155,7 +201,7 @@ class RecipeRunner:
             return self._run_demo_exchanges(selected, keep_fixtures=keep_fixtures)
 
         started_at = datetime.now(timezone.utc).isoformat()
-        self.invocation_id = uuid4().hex[:12]
+        self.invocation_id = self._invocation_id(target_exchange, selected)
 
         service_ok, service_note = self._check_orchestrator()
         preflight = self._run_target_preflight() if service_ok else {"status": "BLOCKED", "notes": service_note}
@@ -187,6 +233,7 @@ class RecipeRunner:
                 "dry_run_forced": True,
                 "confirmation_token": "REDACTED",
                 "invocation_id": self.invocation_id,
+                "determinism": self._determinism_evidence(),
                 "orchestrator_url": self.config.orchestrator_url,
                 "fixtures_dir": str(self.config.fixtures_dir),
                 "target_exchange": self.config.target_exchange,
@@ -211,7 +258,7 @@ class RecipeRunner:
         keep_fixtures: bool,
     ) -> dict[str, Any]:
         started_at = datetime.now(timezone.utc).isoformat()
-        self.invocation_id = uuid4().hex[:12]
+        self.invocation_id = self._invocation_id(DEMO_EXCHANGES_TARGET, selected)
 
         exchange_results: dict[str, list[dict[str, Any]]] = {}
         exchange_summaries: dict[str, dict[str, Any]] = {}
@@ -235,6 +282,10 @@ class RecipeRunner:
                         temporal_available=self.config.temporal_available,
                         temporal_dry_run_command=self.config.temporal_dry_run_command,
                         cleanup=self.config.cleanup,
+                        deterministic_seed=self.deterministic_seed.derive_hex(
+                            "runtime-recipe.demo-child-seed.v1",
+                            {"exchange_scope": exchange_scope, "target_exchange": target_exchange},
+                        ),
                     ),
                     http_client=self.http,
                 )
@@ -279,6 +330,7 @@ class RecipeRunner:
                 "dry_run_forced": True,
                 "confirmation_token": "REDACTED",
                 "invocation_id": self.invocation_id,
+                "determinism": self._determinism_evidence(),
                 "orchestrator_url": self.config.orchestrator_url,
                 "fixtures_dir": str(self.config.fixtures_dir),
                 "target_exchange": DEMO_EXCHANGES_TARGET,
@@ -314,6 +366,25 @@ class RecipeRunner:
                 f"refusing to run recipe without --confirm {CONFIRMATION_TOKEN}; "
                 "this runner is dry-run only."
             )
+
+    def _invocation_id(self, target_exchange: str, selected: tuple[str, ...]) -> str:
+        invocation_id = self.deterministic_seed.derive_hex(
+            "runtime-recipe.invocation.v1",
+            {
+                "invocation_sequence": self._invocation_sequence,
+                "scenarios": list(selected),
+                "target_exchange": target_exchange,
+            },
+        )[:12]
+        self._invocation_sequence += 1
+        return invocation_id
+
+    def _determinism_evidence(self) -> dict[str, Any]:
+        return {
+            "certified": True,
+            "schema_version": DETERMINISTIC_SEED_SCHEMA_VERSION,
+            "seed_fingerprint": self.deterministic_seed.fingerprint,
+        }
 
     def _check_orchestrator(self) -> tuple[bool, str]:
         status, body = self.http.request("GET", "/healthcheck", timeout=self.config.timeout_seconds)
@@ -800,6 +871,7 @@ class RecipeRunner:
         else:
             status = "PASS"
         recipe_report = {
+            "determinism": self._determinism_evidence(),
             "disabled_sets": disabled_sets,
             "exchange_call_proof": FAKE_ONLY_EXCHANGE_CALL_PROOF,
             "exchange_calls": exchange_calls,
@@ -1258,6 +1330,9 @@ class RecipeRunner:
             "# Fake multi-profile recipe",
             "",
             f"- Status: `{report['status']}`",
+            "- Determinism: "
+            f"`{report['determinism']['schema_version']}` / "
+            f"`{report['determinism']['seed_fingerprint']}`",
             f"- Fixture: `{report['fixture_id']}`",
             f"- Fixture hash: `{report['fixture_hash']}`",
             f"- Scenario: `{report['scenario']}`",
@@ -1348,6 +1423,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    parser.add_argument("--seed", default=DEFAULT_DETERMINISTIC_SEED)
     parser.add_argument("--confirm", required=True, help=f"Must be {CONFIRMATION_TOKEN}")
     parser.add_argument("--keep-fixtures", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
@@ -1368,6 +1444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         temporal_available=args.temporal_available,
         temporal_dry_run_command=args.temporal_dry_run_command,
         cleanup=args.cleanup,
+        deterministic_seed=args.seed,
     )
     report = RecipeRunner(config).run(
         scenarios=tuple(args.scenario) if args.scenario else None,

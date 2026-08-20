@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 import scripts.runtime_recipe_runner as runner_module
-from scripts.runtime_recipe_runner import RecipeRunner, RunnerConfig
+from scripts.runtime_recipe_runner import DeterministicSeed, RecipeRunner, RunnerConfig
 
 
 class FakeRecipeApi:
@@ -387,6 +387,9 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
 
     recipe = json.loads(first_json)
     assert recipe["schema_version"] == "fake-multi-profile-recipe-report-v2"
+    assert recipe["determinism"]["certified"] is True
+    assert recipe["determinism"]["schema_version"] == "fake-deterministic-seed-v1"
+    assert recipe["determinism"]["seed_fingerprint"].startswith("sha256:")
     assert recipe["scenario"] == "dry_run_multi_profiles_same_symbol"
     assert recipe["status"] == "PASS"
     assert [item["profile"] for item in recipe["sets"]] == [
@@ -441,6 +444,68 @@ def test_r12_exports_deterministic_redacted_multi_profile_reports_and_replays_af
     ]
     assert exchange_sets
     assert {item["exchange"] for item in exchange_sets} == {"fake"}
+
+
+def test_explicit_seed_derives_stable_redacted_invocation_identity(tmp_path: Path):
+    seed = "golden-python-seed-v1"
+    config = RunnerConfig(
+        export_dir=tmp_path,
+        confirmation_token="DRY_RUN_ONLY",
+        deterministic_seed=seed,
+    )
+
+    first = RecipeRunner(config, http_client=FakeRecipeApi()).run(scenarios=("R5",))
+    second = RecipeRunner(config, http_client=FakeRecipeApi()).run(scenarios=("R5",))
+    different = RecipeRunner(
+        RunnerConfig(
+            export_dir=tmp_path,
+            confirmation_token="DRY_RUN_ONLY",
+            deterministic_seed="golden-python-seed-v2",
+        ),
+        http_client=FakeRecipeApi(),
+    ).run(scenarios=("R5",))
+
+    assert first["metadata"]["invocation_id"] == second["metadata"]["invocation_id"]
+    assert first["metadata"]["invocation_id"] != different["metadata"]["invocation_id"]
+    assert first["metadata"]["determinism"] == {
+        "certified": True,
+        "schema_version": "fake-deterministic-seed-v1",
+        "seed_fingerprint": "sha256:" + hashlib.sha256(seed.encode()).hexdigest(),
+    }
+    assert seed not in json.dumps(first, sort_keys=True)
+
+
+def test_seed_derivation_matches_php_contract_vector():
+    assert DeterministicSeed("golden-seed-2026-v1").derive_hex(
+        "private-ws.resync-cycle.v1",
+        {
+            "scenario_id": "private-ws-gap-v1",
+            "reason": "fake_private_ws_sequence_gap",
+            "sequence": "3",
+        },
+    ) == "5e33d1f9500da204fd41cdb99ab73845b466d2b43c7b097cd623cc6b3f465a9e"
+
+
+@pytest.mark.parametrize("component", [float("nan"), 2**63, object(), {1: "bad-key"}])
+def test_seed_derivation_rejects_noncanonical_components(component: object):
+    with pytest.raises(ValueError, match="fake_deterministic_seed_component_invalid"):
+        DeterministicSeed("golden-seed-2026-v1").derive_hex(
+            "runtime-recipe.invocation.v1",
+            {"component": component},
+        )
+
+
+@pytest.mark.parametrize("seed", ["short", " leading-seed", "seed/with/slash", "a" * 129])
+def test_invalid_deterministic_seed_fails_closed(tmp_path: Path, seed: str):
+    with pytest.raises(ValueError, match="fake_deterministic_seed_invalid"):
+        RecipeRunner(
+            RunnerConfig(
+                export_dir=tmp_path,
+                confirmation_token="DRY_RUN_ONLY",
+                deterministic_seed=seed,
+            ),
+            http_client=FakeRecipeApi(),
+        )
 
 
 def test_r12_v2_distinguishes_bitmart_boundary_proof_from_http_guards(tmp_path: Path):
