@@ -28,81 +28,66 @@ final class Version20260820000000 extends AbstractMigration
 
     private function addCanonicalWrapperSql(bool $withFillTiming): void
     {
-        $fillTimingColumns = $withFillTiming ? <<<'SQL'
-  ,timing.holding_time_sec AS canonical_holding_time_sec
-  ,timing.holding_time_source
-  ,excursion.window_source AS mfe_mae_window_source
-  ,excursion.entry_price_source AS mfe_mae_entry_price_source
-  ,excursion.data_quality AS canonical_mfe_mae_data_quality
-  ,CASE WHEN timing.chronology_valid IS FALSE THEN 'partial' ELSE legacy.cost_completeness END AS canonical_cost_completeness
+        $validChronology = <<<'SQL'
+legacy.quantity_status = 'complete'
+    AND legacy.entry_first_fill_at IS NOT NULL
+    AND legacy.exit_last_fill_at IS NOT NULL
+    AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
+SQL;
+        $invalidChronology = <<<'SQL'
+legacy.quantity_status = 'complete'
+    AND legacy.entry_first_fill_at IS NOT NULL
+    AND legacy.exit_last_fill_at IS NOT NULL
+    AND legacy.exit_last_fill_at < legacy.entry_first_fill_at
+SQL;
+        $exactWindow = <<<SQL
+{$validChronology}
+    AND NULLIF(c.extra->> 'mfe_mae_window_source', '') = 'fill_cost_ledger_v1'
+    AND NULLIF(c.extra->> 'mfe_mae_entry_price_source', '') = 'fill_cost_ledger_v1'
+    AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_start') = legacy.entry_first_fill_at
+    AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_end') = legacy.exit_last_fill_at
+SQL;
+
+        $fillTimingColumns = $withFillTiming ? <<<SQL
+  ,CASE WHEN {$validChronology}
+    THEN extract(epoch FROM legacy.exit_last_fill_at - legacy.entry_first_fill_at)
+    ELSE NULL
+  END AS canonical_holding_time_sec
   ,CASE
-    WHEN timing.chronology_valid IS FALSE THEN
+    WHEN {$validChronology} THEN 'fill_cost_ledger_v1'
+    WHEN legacy.quantity_status = 'complete' THEN 'invalid_fill_chronology'
+    ELSE 'incomplete_fill_ledger'
+  END AS holding_time_source
+  ,CASE
+    WHEN {$exactWindow} THEN 'fill_cost_ledger_v1'
+    WHEN legacy.quantity_status = 'complete' THEN 'unverified_fill_window'
+    ELSE 'incomplete_fill_ledger'
+  END AS mfe_mae_window_source
+  ,CASE
+    WHEN {$exactWindow} THEN 'fill_cost_ledger_v1'
+    WHEN legacy.quantity_status = 'complete' THEN 'unverified_entry_price'
+    ELSE 'incomplete_fill_ledger'
+  END AS mfe_mae_entry_price_source
+  ,CASE
+    WHEN legacy.quantity_status IS DISTINCT FROM 'complete'
+      AND legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error')
+    THEN legacy.mfe_mae_data_quality
+    WHEN legacy.quantity_status IS DISTINCT FROM 'complete' THEN 'partial'
+    WHEN {$exactWindow} THEN legacy.mfe_mae_data_quality
+    WHEN legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error') THEN legacy.mfe_mae_data_quality
+    ELSE 'partial'
+  END AS canonical_mfe_mae_data_quality
+  ,CASE WHEN {$invalidChronology} THEN 'partial' ELSE legacy.cost_completeness END AS canonical_cost_completeness
+  ,CASE
+    WHEN {$invalidChronology} THEN
       COALESCE(legacy.pnl_quality_flags, '[]'::jsonb) || '["ledger_fill_chronology_invalid"]'::jsonb
     ELSE legacy.pnl_quality_flags
   END AS canonical_pnl_quality_flags
 SQL : '';
 
         $canonicalNetCondition = $withFillTiming
-            ? "identity.lineage_classification = 'canonical' AND timing.chronology_valid IS DISTINCT FROM FALSE"
+            ? "identity.lineage_classification = 'canonical' AND {$validChronology}"
             : "identity.lineage_classification = 'canonical'";
-        $fillTimingJoins = $withFillTiming ? <<<'SQL'
-CROSS JOIN LATERAL (
-  SELECT
-    CASE
-      WHEN legacy.quantity_status = 'complete'
-        AND legacy.entry_first_fill_at IS NOT NULL
-        AND legacy.exit_last_fill_at IS NOT NULL
-      THEN legacy.exit_last_fill_at >= legacy.entry_first_fill_at
-      ELSE NULL
-    END AS chronology_valid,
-    CASE
-      WHEN legacy.quantity_status = 'complete'
-        AND legacy.entry_first_fill_at IS NOT NULL
-        AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
-      THEN extract(epoch FROM legacy.exit_last_fill_at - legacy.entry_first_fill_at)
-      ELSE NULL
-    END AS holding_time_sec,
-    CASE
-      WHEN legacy.quantity_status = 'complete'
-        AND legacy.entry_first_fill_at IS NOT NULL
-        AND legacy.exit_last_fill_at >= legacy.entry_first_fill_at
-      THEN 'fill_cost_ledger_v1'
-      WHEN legacy.quantity_status = 'complete' THEN 'invalid_fill_chronology'
-      ELSE 'incomplete_fill_ledger'
-    END AS holding_time_source
-) timing
-CROSS JOIN LATERAL (
-  SELECT
-    legacy.quantity_status = 'complete'
-      AND timing.chronology_valid
-      AND NULLIF(c.extra->> 'mfe_mae_window_source', '') = 'fill_cost_ledger_v1'
-      AND NULLIF(c.extra->> 'mfe_mae_entry_price_source', '') = 'fill_cost_ledger_v1'
-      AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_start') = legacy.entry_first_fill_at
-      AND trading_v3_safe_timestamptz(c.extra->> 'mfe_mae_window_end') = legacy.exit_last_fill_at AS exact_window
-) evidence
-CROSS JOIN LATERAL (
-  SELECT
-    CASE
-      WHEN legacy.quantity_status IS DISTINCT FROM 'complete'
-        AND legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error')
-      THEN legacy.mfe_mae_data_quality
-      WHEN legacy.quantity_status IS DISTINCT FROM 'complete' THEN 'partial'
-      WHEN evidence.exact_window THEN legacy.mfe_mae_data_quality
-      WHEN legacy.mfe_mae_data_quality IN ('missing_price_data', 'provider_error') THEN legacy.mfe_mae_data_quality
-      ELSE 'partial'
-    END AS data_quality,
-    CASE
-      WHEN evidence.exact_window THEN 'fill_cost_ledger_v1'
-      WHEN legacy.quantity_status = 'complete' THEN 'unverified_fill_window'
-      ELSE 'incomplete_fill_ledger'
-    END AS window_source,
-    CASE
-      WHEN evidence.exact_window THEN 'fill_cost_ledger_v1'
-      WHEN legacy.quantity_status = 'complete' THEN 'unverified_entry_price'
-      ELSE 'incomplete_fill_ledger'
-    END AS entry_price_source
-) excursion
-SQL : '';
 
         $this->addSql(<<<SQL
 CREATE VIEW position_trade_analysis_v2 AS
@@ -174,7 +159,6 @@ CROSS JOIN LATERAL (
     ELSE 'canonical'
   END AS lineage_classification
 ) identity
-{$fillTimingJoins}
 SQL);
     }
 }
