@@ -473,7 +473,7 @@ final class FakeDailyLossCapGuardTest extends TestCase
             self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial->status);
             self::assertSame(0.4, $partial->filledQuantity);
             self::assertSame(0.6, $partial->remainingQuantity);
-            self::assertCount(1, $adapter->getOpenOrders('BTCUSDT'));
+            self::assertCount(2, $adapter->getOpenOrders('BTCUSDT'));
 
             $this->appendFill($state, $clock->now(), '-10');
             $fillEventCount = \count($state->events('order.filled'))
@@ -541,7 +541,7 @@ final class FakeDailyLossCapGuardTest extends TestCase
         }
     }
 
-    public function testMovePriceCapBlockCompensatesPartialExposureWhenProtectionIsRejected(): void
+    public function testMovePriceCapBlockKeepsAlreadyProtectedPartialExposure(): void
     {
         $state = new FakeExchangeStateStore();
         $clock = new MutableDailyLossClock('2026-07-18T15:43:00+00:00');
@@ -571,24 +571,16 @@ final class FakeDailyLossCapGuardTest extends TestCase
         self::assertSame('daily_loss_cap_not_computable', $blocked->metadata['reason'] ?? null);
         self::assertSame('not_computable', $blocked->metadata['daily_loss_cap_status'] ?? null);
         self::assertSame('fill_fee_unknown', $blocked->metadata['daily_loss_cap_detail_reason'] ?? null);
-        self::assertSame('rejected', $blocked->metadata['protection_status'] ?? null);
-        self::assertSame('reduce_only_market_close', $blocked->metadata['fail_safe_action'] ?? null);
-        self::assertSame('completed', $blocked->metadata['compensation_status'] ?? null);
-        self::assertSame('position_closed', $blocked->metadata['compensation_outcome'] ?? null);
-        self::assertTrue($blocked->metadata['position_flat_after_compensation'] ?? false);
-        self::assertCount(0, $adapter->getOpenPositions('BTCUSDT'));
-        self::assertCount(0, $adapter->getOpenOrders('BTCUSDT'));
+        self::assertSame('accepted', $blocked->metadata['protection_status'] ?? null);
+        self::assertArrayNotHasKey('compensation_status', $blocked->metadata);
+        self::assertSame(0.4, $adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
         self::assertCount(1, $state->events('order.cancelled'));
-        self::assertCount(1, $state->events('protection_order.rejected'));
+        self::assertCount(0, $state->events('protection_order.rejected'));
         self::assertCount(0, $state->events('order.rejected'));
-
-        $compensationId = $blocked->metadata['compensation_order_id'] ?? null;
-        self::assertIsString($compensationId);
-        $compensation = $state->getOrder($compensationId);
-        self::assertNotNull($compensation);
-        self::assertSame(ExchangeOrderStatus::FILLED, $compensation->status);
-        self::assertTrue($compensation->reduceOnly);
-        self::assertSame(0.4, $compensation->filledQuantity);
 
         $eventCount = \count($state->events());
         self::assertSame([], $scenario->movePrice('BTCUSDT', 24930.0, 0.0)['matched_orders']);

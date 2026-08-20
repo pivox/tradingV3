@@ -24,6 +24,7 @@ use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
 use App\Exchange\Event\ExchangeOrderRejected;
+use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
 use App\Exchange\Event\ExchangePositionUpdated;
@@ -77,6 +78,9 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
                 : [],
             'protection_order.created' => $order instanceof ExchangeOrderDto
                 ? [new ExchangeProtectionOrderCreated($order, $event->occurredAt, $event->payload)]
+                : [],
+            'protection_order.resized' => $order instanceof ExchangeOrderDto
+                ? [new ExchangeOrderUpdated($order, $event->occurredAt, $event->payload)]
                 : [],
             'protection_order.rejected' => $order instanceof ExchangeOrderDto
                 ? [new ExchangeProtectionOrderRejected($order, $event->occurredAt, $event->payload)]

@@ -1612,7 +1612,7 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(0.4, $protection->remainingQuantity);
     }
 
-    public function testFallbackRejectionProtectionFailureCompensatesExistingMakerPartialFill(): void
+    public function testFallbackRejectionReusesAlreadyAcceptedMakerPartialProtection(): void
     {
         $policy = new FakeFallbackTakerPolicy(
             enabled: true,
@@ -1635,12 +1635,13 @@ final class FakeExchangeAdapterTest extends TestCase
 
         self::assertFalse($result->executed);
         self::assertSame('fallback_slippage_exceeded', $result->reason);
-        self::assertSame('rejected', $result->parentOrder?->metadata['protection_status'] ?? null);
-        self::assertSame('completed', $result->parentOrder?->metadata['compensation_status'] ?? null);
-        self::assertSame(0.4, $result->parentOrder?->metadata['compensation_quantity'] ?? null);
-        self::assertSame(0.0, $result->parentOrder?->metadata['position_size_after_compensation'] ?? null);
-        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
-        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertSame('accepted', $result->parentOrder->metadata['protection_status'] ?? null);
+        self::assertArrayNotHasKey('compensation_status', $result->parentOrder->metadata);
+        self::assertSame(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
     }
 
     public function testFallbackTakerReplayReturnsSameChildWithoutSecondOrderOrFill(): void
@@ -1917,7 +1918,7 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(0.4, $protection->quantity);
     }
 
-    public function testFallbackTakerProtectionFailureCompensatesFullMakerAndTakerExposure(): void
+    public function testFallbackTakerProtectionResizeFailureCompensatesOnlyTakerIncrement(): void
     {
         $policy = new FakeFallbackTakerPolicy(
             enabled: true,
@@ -1939,20 +1940,23 @@ final class FakeExchangeAdapterTest extends TestCase
         try {
             $result = $this->scenario->fallbackTaker($placed->exchangeOrderId);
         } catch (\LogicException $exception) {
-            self::fail(sprintf('Protection fail-safe must cover the full fallback exposure, got "%s".', $exception->getMessage()));
+            self::fail(sprintf('Protection fail-safe must preserve the protected maker exposure, got "%s".', $exception->getMessage()));
         }
 
         self::assertTrue($result->executed);
         self::assertSame('rejected', $result->fallbackOrder?->metadata['protection_status'] ?? null);
         self::assertSame('completed', $result->fallbackOrder?->metadata['compensation_status'] ?? null);
-        self::assertSame('position_closed', $result->fallbackOrder?->metadata['compensation_outcome'] ?? null);
-        self::assertSame(1.0, $result->fallbackOrder?->metadata['compensation_quantity'] ?? null);
+        self::assertSame('entry_exposure_closed', $result->fallbackOrder?->metadata['compensation_outcome'] ?? null);
+        self::assertSame(0.6, $result->fallbackOrder?->metadata['compensation_quantity'] ?? null);
         self::assertSame(1.0, $result->fallbackOrder?->metadata['position_size_before_compensation'] ?? null);
-        self::assertSame(0.0, $result->fallbackOrder?->metadata['position_size_after_compensation'] ?? null);
-        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
-        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertSame(0.4, $result->fallbackOrder?->metadata['position_size_after_compensation'] ?? null);
+        self::assertSame(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size ?? null);
+        $protection = $this->adapter->getOpenOrders('BTCUSDT')[0] ?? null;
+        self::assertNotNull($protection);
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $protection->orderType);
+        self::assertSame(0.4, $protection->quantity);
         self::assertCount(1, $this->scenario->events('protection_order.rejected'));
-        self::assertCount(1, $this->scenario->events('position.closed'));
+        self::assertCount(0, $this->scenario->events('position.closed'));
     }
 
     public function testFallbackTakerIsForbiddenWhenPersistedPolicyIsDisabled(): void
@@ -2029,6 +2033,199 @@ final class FakeExchangeAdapterTest extends TestCase
         self::assertSame(ExchangeOrderType::STOP_LOSS, $openOrders[0]->orderType);
         self::assertTrue($openOrders[0]->reduceOnly);
         self::assertCount(1, $this->scenario->events('protection_order.created'));
+    }
+
+    public function testFirstOrdinaryPartialFillImmediatelyCreatesExactStopProtection(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-protection-first',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+
+        $parent = $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        $openOrders = $this->adapter->getOpenOrders('BTCUSDT');
+        $stops = array_values(array_filter(
+            $openOrders,
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ));
+        self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $parent?->status);
+        self::assertCount(2, $openOrders);
+        self::assertCount(1, $stops);
+        self::assertSame(0.4, $stops[0]->quantity);
+        self::assertSame(0.4, $stops[0]->remainingQuantity);
+        self::assertSame($parent->exchangeOrderId, $stops[0]->metadata['parent_order_id'] ?? null);
+        self::assertCount(1, $this->scenario->events('protection_order.created'));
+    }
+
+    public function testSuccessiveOrdinaryPartialFillResizesSameStopExactlyOnce(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-protection-resize',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $firstStop = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ))[0];
+
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.2, 24960.0);
+
+        $stops = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ));
+        self::assertCount(1, $stops);
+        self::assertSame($firstStop->exchangeOrderId, $stops[0]->exchangeOrderId);
+        self::assertSame($firstStop->clientOrderId, $stops[0]->clientOrderId);
+        self::assertSame(0.6, $stops[0]->quantity);
+        self::assertSame(0.6, $stops[0]->remainingQuantity);
+        self::assertCount(1, $this->scenario->events('protection_order.created'));
+        self::assertCount(1, $this->scenario->events('protection_order.resized'));
+    }
+
+    public function testRejectedFirstPartialProtectionCompensatesFillAndCancelsResidual(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-protection-rejected',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->rejectNextProtectionOrder();
+
+        $parent = $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $parent?->status);
+        self::assertSame('completed', $parent?->metadata['compensation_status'] ?? null);
+        self::assertSame(0.4, $parent?->metadata['compensation_quantity'] ?? null);
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertCount(1, $this->scenario->events('protection_order.rejected'));
+        self::assertCount(1, array_filter(
+            $this->scenario->events('order.cancelled'),
+            static fn ($event): bool => ($event->payload['reason'] ?? null) === 'partial_fill_protection_rejected',
+        ));
+    }
+
+    public function testRejectedPartialProtectionResizeKeepsPriorStopAndCompensatesOnlyIncrement(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-protection-resize-rejected',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->scenario->rejectNextProtectionOrder();
+
+        $parent = $this->scenario->fillOrder($placed->exchangeOrderId, 0.2, 24960.0);
+
+        $stops = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ));
+        self::assertSame(ExchangeOrderStatus::CANCELLED, $parent?->status);
+        self::assertSame(0.2, $parent?->metadata['compensation_quantity'] ?? null);
+        self::assertCount(1, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertEqualsWithDelta(0.4, $this->adapter->getOpenPositions('BTCUSDT')[0]->size, 0.00000001);
+        self::assertCount(1, $stops);
+        self::assertSame(0.4, $stops[0]->quantity);
+        self::assertSame(0.4, $stops[0]->remainingQuantity);
+    }
+
+    public function testPartialStopFillCancelsActiveEntryResidual(): void
+    {
+        $placed = $this->adapter->placeOrder($this->request(
+            price: 24950.0,
+            clientOrderId: 'cid-partial-protection-race',
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $stop = array_values(array_filter(
+            $this->adapter->getOpenOrders('BTCUSDT'),
+            static fn (ExchangeOrderDto $order): bool => $order->orderType === ExchangeOrderType::STOP_LOSS,
+        ))[0];
+
+        $this->scenario->fillOrder($stop->exchangeOrderId, null, 24790.0);
+
+        self::assertCount(0, $this->adapter->getOpenPositions('BTCUSDT'));
+        self::assertCount(0, $this->adapter->getOpenOrders('BTCUSDT'));
+        self::assertSame(
+            ExchangeOrderStatus::CANCELLED,
+            $this->adapter->getOrder('BTCUSDT', $placed->exchangeOrderId)?->status,
+        );
+        self::assertCount(1, array_filter(
+            $this->scenario->events('order.cancelled'),
+            static fn ($event): bool => ($event->payload['reason'] ?? null) === 'attached_protection_filled',
+        ));
+    }
+
+    public function testPartialProtectionSurvivesRestartAndCancelReplayWithoutDuplication(): void
+    {
+        $stateFile = tempnam(sys_get_temp_dir(), 'fake-partial-protection-restart-');
+        self::assertIsString($stateFile);
+        @unlink($stateFile);
+
+        try {
+            $state = new FakeExchangeStateStore($stateFile);
+            $book = new FakeExchangeOrderBook($state);
+            $engine = new FakeExchangeMatchingEngine($state, $book, $this->fixedClock());
+            $adapter = new FakeExchangeAdapter($state, $book, $engine, $this->fixedClock());
+            $scenario = new FakeExchangeScenarioService($state, $book, $engine);
+            $placed = $adapter->placeOrder($this->request(
+                price: 24950.0,
+                clientOrderId: 'cid-partial-protection-restart',
+                postOnly: true,
+                attachedStopLossPrice: 24800.0,
+            ));
+            self::assertNotNull($placed->exchangeOrderId);
+            $scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+
+            $restoredState = new FakeExchangeStateStore($stateFile);
+            $restoredBook = new FakeExchangeOrderBook($restoredState);
+            $restoredEngine = new FakeExchangeMatchingEngine($restoredState, $restoredBook, $this->fixedClock());
+            $restoredAdapter = new FakeExchangeAdapter(
+                $restoredState,
+                $restoredBook,
+                $restoredEngine,
+                $this->fixedClock(),
+            );
+            $restoredScenario = new FakeExchangeScenarioService($restoredState, $restoredBook, $restoredEngine);
+            $beforeCancel = $restoredAdapter->getOpenOrders('BTCUSDT');
+            self::assertCount(2, $beforeCancel);
+
+            $request = new CancelOrderRequest(
+                exchange: Exchange::FAKE,
+                marketType: MarketType::PERPETUAL,
+                symbol: 'BTCUSDT',
+                exchangeOrderId: $placed->exchangeOrderId,
+                clientOrderId: $placed->clientOrderId,
+            );
+            self::assertTrue($restoredAdapter->cancelOrder($request)->cancelled);
+            self::assertTrue($restoredAdapter->cancelOrder($request)->cancelled);
+
+            $afterReplay = $restoredAdapter->getOpenOrders('BTCUSDT');
+            self::assertCount(1, $afterReplay);
+            self::assertSame(ExchangeOrderType::STOP_LOSS, $afterReplay[0]->orderType);
+            self::assertSame(0.4, $afterReplay[0]->quantity);
+            self::assertCount(1, $restoredScenario->events('protection_order.created'));
+            self::assertCount(0, $restoredScenario->events('protection_order.resized'));
+        } finally {
+            @unlink($stateFile);
+            @unlink($stateFile . '.lock');
+        }
     }
 
     public function testRejectedAttachedProtectionClosesPositionWithReduceOnlyCompensation(): void
@@ -2282,6 +2479,7 @@ final class FakeExchangeAdapterTest extends TestCase
         $closedEvents = $this->scenario->events('position.closed');
         self::assertCount(1, $closedEvents);
         self::assertSame('entry-cid-from-execution', $closedEvents[0]->payload['client_order_id'] ?? null);
+        self::assertSame('reduce-cid-from-execution', $closedEvents[0]->payload['closing_client_order_id'] ?? null);
         self::assertSame('456', $closedEvents[0]->payload['order_intent_id'] ?? null);
         self::assertSame('complete', $closedEvents[0]->payload['cost_completeness'] ?? null);
     }

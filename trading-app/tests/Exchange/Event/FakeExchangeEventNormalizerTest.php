@@ -19,6 +19,7 @@ use App\Exchange\Event\ExchangeOrderFilled;
 use App\Exchange\Event\ExchangeOrderPartiallyFilled;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
+use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
 use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
@@ -39,6 +40,7 @@ use Psr\Clock\ClockInterface;
 #[CoversClass(FakeExchangeScenarioService::class)]
 #[CoversClass(ExchangeOrderPartiallyFilled::class)]
 #[CoversClass(ExchangeOrderCreated::class)]
+#[CoversClass(ExchangeOrderUpdated::class)]
 #[CoversClass(ExchangeFillReceived::class)]
 #[CoversClass(ExchangePositionClosed::class)]
 #[CoversClass(ExchangePositionOpened::class)]
@@ -90,6 +92,28 @@ final class FakeExchangeEventNormalizerTest extends TestCase
             $normalized[1]->fill()->fillId,
             $this->scenarioAdapter()->getFillsSnapshot('BTCUSDT')[0]->fillId,
         );
+    }
+
+    public function testNormalizesPartialProtectionResizeAsOrderUpdate(): void
+    {
+        $placed = $this->scenarioAdapter()->placeOrder($this->request(
+            price: 24950.0,
+            postOnly: true,
+            attachedStopLossPrice: 24800.0,
+        ));
+        self::assertNotNull($placed->exchangeOrderId);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.4, 24950.0);
+        $this->scenario->fillOrder($placed->exchangeOrderId, 0.2, 24960.0);
+
+        $events = $this->scenario->events('protection_order.resized');
+        self::assertCount(1, $events);
+        $normalized = $this->normalizer->normalize($events[0]);
+
+        self::assertCount(1, $normalized);
+        self::assertInstanceOf(ExchangeOrderUpdated::class, $normalized[0]);
+        self::assertSame('exchange.order.updated', $normalized[0]->eventType());
+        self::assertSame(ExchangeOrderType::STOP_LOSS, $normalized[0]->order()->orderType);
+        self::assertSame(0.6, $normalized[0]->order()->quantity);
     }
 
     public function testEveryFillCarriesWhitelistedPaperCellLineage(): void

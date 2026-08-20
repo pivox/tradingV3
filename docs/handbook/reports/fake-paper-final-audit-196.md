@@ -2,8 +2,17 @@
 
 ## Décision
 
-**Le résultat métier de l'issue #196 reste `blocked`/incomplet, et le Prompt 9
-pourra être marqué `done` seulement après validation et merge de sa PR.**
+**Le résultat métier de l'issue #196 reste incomplet. Le présent rapport est une
+baseline historique mise à jour par les lots correctifs listés ci-dessous.**
+
+### Mise à jour du 20 août 2026 — protection partielle
+
+Le premier P0 de l'audit est levé : le matching engine attache un SL exact dès
+le premier fill partiel, redimensionne le même stop sur les fills successifs et
+compense uniquement l'incrément non protégé en cas de rejet. Le reliquat parent
+est annulé après rejet ou déclenchement du stop. Restart, replay et fallback
+maker/taker conservent cette garantie. Le scénario golden 3 ne crée plus de stop
+manuellement et prouve désormais le comportement runtime.
 
 L'audit du 19 juillet 2026 porte sur le dépôt `pivox/tradingV3`, la branche
 `issue/196-fake-paper-final-audit` et la base exacte
@@ -23,9 +32,8 @@ Le résultat vérifié est le suivant :
 - aucun contrat de seed fixe n'existe pour l'ensemble Fake/Paper ; des identités
   internes utilisent encore une source aléatoire, même si les résultats golden
   normalisés observés sont stables ;
-- une entrée ordinaire partiellement remplie peut ouvrir une exposition avant
-  qu'une protection soit attachée. Le scénario 3 masquait ce point en soumettant
-  lui-même une protection après le cancel ;
+- la faille historique de protection des fills partiels est corrigée par la mise
+  à jour du 20 août 2026 ci-dessus ;
 - le mode Paper réel/replay, la matrice complète de capabilities, plusieurs
   modes de fill, le public WS et la matrice de remplacement Bitmart restent à
   livrer.
@@ -166,24 +174,20 @@ capability existe sur un exchange réel.
 
 ### P0 — empêche la clôture de #196
 
-1. **Protection au fill partiel ordinaire.** Au premier accroissement
-   d'exposition, attacher/redimensionner un SL accepté de quantité exacte ou
-   compenser immédiatement. Tester fill partiel, fills successifs, cancel,
-   timeout/replay, restart et course avec SL/TP.
-2. **Scénario 15 complet.** Après disconnect, imposer `requiresResync`, obtenir
+1. **Scénario 15 complet.** Après disconnect, imposer `requiresResync`, obtenir
    un snapshot Fake local, appeler le service de réconciliation, terminer le
    resync puis seulement reprendre la projection. Exécuter deux fois depuis
    fichiers frais.
-3. **Scénario 20 sur pile réelle locale.** Démarrer deux états applicatifs
+2. **Scénario 20 sur pile réelle locale.** Démarrer deux états applicatifs
    indépendants ou remettre à zéro toutes les persistences, lancer réellement la
    recette R12 vers Symfony local Fake, instrumenter les frontières HTTP de tous
    les exchanges et comparer les rapports. Les doubles HTTP en mémoire restent
    des tests unitaires, pas la preuve golden finale.
-4. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
+3. **Contrat de déterminisme seedé.** Introduire un seed explicite dans le
    scénario/runtime, dériver les identités non métier de ce seed ou les exclure
    contractuellement avec justification, puis comparer l'état persistant complet
    et les coûts/événements de deux exécutions fraîches.
-5. **Mode Paper.** Implémenter une source marché réelle publique ou replay
+4. **Mode Paper.** Implémenter une source marché réelle publique ou replay
    enregistrée, versionnée et redacted, sans client privé et sans write, puis
    rendre le runtime-check ready uniquement si source et horloge sont prêtes.
 
@@ -219,7 +223,7 @@ devenir zéro ou PASS.
 | MARKET | Top-of-book + coût séparé | Adapter expose placement | Prix demandé/exécuté, quantité, rôle, fee, slippage et timestamps redacted | À mesurer |
 | LIMIT / post-only / IOC | Repos/crossing/partial/expiry | Post-only et IOC déclarés supportés | Lifecycle complet avec maker non rempli, partiel, cancel et expiry | À mesurer |
 | Reduce-only | Fermeture exacte et guards | Déclaré supporté | Rejet de sur-réduction, position absente, course terminale | À mesurer |
-| SL/TP attachés | Déclarés/supportés Fake, gap fill et compensation | Attachés SL et TP déclarés supportés | Identités parent/enfants, acceptation, partial fill, resize, rejet et compensation | À mesurer ; P0 protection partielle côté Fake |
+| SL/TP attachés | Déclarés/supportés Fake, protection partielle immédiate, resize, gap fill et compensation exacte | Attachés SL et TP déclarés supportés | Identités parent/enfants, acceptation, partial fill, resize, rejet et compensation | P0 Fake levé ; parité externe à mesurer |
 | Trigger orders | Ordres stop locaux | Déclaré non supporté | Déterminer si attachments Bitmart remplacent le trigger générique ; échec typé sinon | Divergence contractuelle |
 | Modify / replace | Non supporté | Non supporté | Conserver fail-closed ou spécifier cancel+new avec nouvelle identité et risque | Parité unsupported |
 | One-Way / Hedge | One-Way seulement, Hedge rejeté | Non représenté dans le DTO actuel | Mode compte réel, side mapping, conflits et reduce-only avec fixtures redacted | À mesurer |

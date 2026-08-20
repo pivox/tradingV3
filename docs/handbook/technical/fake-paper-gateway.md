@@ -696,7 +696,7 @@ avec un test vert constitue une preuve. Les lignes `partial` et `unsupported` ne
 peuvent ni rendre le runtime-check ready, ni autoriser une mutation demo/testnet.
 
 Les dix-huit scenarios executes dans cette version sont : maker limit rempli, limit
-IOC expire sans fill, partial fill puis cancel, fallback taker de fin de zone sur
+IOC expire sans fill, partial fill immédiatement protégé puis cancel, fallback taker de fin de zone sur
 le reliquat exact, market avec slippage 5 bps, insufficient balance, precision
 reject, leverage cap reject, replay du `client_order_id`, timeout apres
 acceptation, attachement SL reussi, echec d attachement SL compense par fermeture
@@ -733,6 +733,17 @@ php vendor/bin/phpunit \
 La suite appelle uniquement les moteurs Fake locaux, avec horloge controlee et etat
 ephemere. Elle ne lit aucun secret, ne contacte aucun endpoint prive exchange et
 n envoie aucun ordre reel, demo ou testnet.
+
+## Protection immédiate des fills partiels
+
+Tout fill d'entrée Fake portant un SL attaché crée désormais le stop reduce-only
+dans la même transaction que la position. Les fills successifs redimensionnent
+le même ordre de protection sans changer ses identifiants. Si la création ou le
+resize est rejeté, seul le nouvel incrément non protégé est compensé au marché ;
+le reliquat d'entrée est annulé et une exposition antérieure déjà protégée reste
+ouverte. Si le stop se déclenche avant la fin de l'entrée, son reliquat est
+annulé. Le scénario golden 3 exerce ce chemin runtime sans soumettre lui-même un
+stop, y compris après restart et replay de l'annulation.
 
 ## Rollback
 

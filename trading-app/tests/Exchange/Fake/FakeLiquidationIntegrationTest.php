@@ -673,7 +673,7 @@ final class FakeLiquidationIntegrationTest extends TestCase
             self::assertSame(ExchangeOrderStatus::PARTIALLY_FILLED, $partial?->status);
             self::assertSame(0.4, $partial->filledQuantity);
             self::assertSame(0.6, $partial->remainingQuantity);
-            self::assertCount(1, $adapter->getOpenOrders('BTCUSDT'));
+            self::assertCount(2, $adapter->getOpenOrders('BTCUSDT'));
 
             $state->setMarkPrice('BTCUSDT', '22000');
             $blocked = $scenario->fillOrder($resting->exchangeOrderId, 0.6, 24900.0);
