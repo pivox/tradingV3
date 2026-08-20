@@ -26,6 +26,8 @@ use Symfony\Component\DependencyInjection\Attribute\Autowire;
 #[Autoconfigure(lazy: true)]
 class FakeExchangeStateStore
 {
+    public const RECONCILIATION_EVENT_SEQUENCE_WATERMARK = 'fake_private_ws_event_sequence_watermark';
+
     private const STATE_FORMAT_VERSION = 1;
     private const ENGINE_VERSION = 'fake-paper-state-v1';
     private const SCENARIO_CONFIG_ID = 'fake-paper-default-v1';
@@ -859,13 +861,16 @@ class FakeExchangeStateStore
             return $reconciliation->reconcileBase($adapter, $symbol);
         }
 
+        $eventSequenceWatermark = $this->maximumCanonicalNumericEventSequence();
         $pendingProof = $this->capturePrivateWsSnapshotProof();
         $result = $reconciliation->reconcileBase($adapter);
-        if ($pendingProof === null || $result->errors !== []) {
-            return $result;
+        $metadata = array_replace($result->metadata, [
+            self::RECONCILIATION_EVENT_SEQUENCE_WATERMARK => $pendingProof['event_sequence_watermark']
+                ?? $eventSequenceWatermark,
+        ]);
+        if ($pendingProof !== null && $result->errors === []) {
+            $metadata['fake_private_ws_snapshot_proof'] = $this->attestPrivateWsSnapshotProof($pendingProof);
         }
-
-        $proof = $this->attestPrivateWsSnapshotProof($pendingProof);
 
         return new ExchangeReconciliationResult(
             exchange: $result->exchange,
@@ -880,7 +885,7 @@ class FakeExchangeStateStore
             staleOrdersClosed: $result->staleOrdersClosed,
             unknownOrdersDetected: $result->unknownOrdersDetected,
             errors: $result->errors,
-            metadata: array_replace($result->metadata, ['fake_private_ws_snapshot_proof' => $proof]),
+            metadata: $metadata,
         );
     }
 

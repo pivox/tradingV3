@@ -3,7 +3,8 @@
 ## Scope
 
 Promote `websocket_disconnect_resync` from `partial` to `executable` without
-adding exchange traffic or changing Fake runtime behavior.
+adding exchange traffic. Harden the local Fake runtime so snapshot completion
+cannot consume events that arrived after the snapshot watermark.
 
 ## Decision
 
@@ -15,20 +16,22 @@ events are acknowledged, the client must disconnect and expose
 
 The runner then calls the canonical `ExchangeReconciliationService::reconcile()` against
 the Fake adapter, verifies the authoritative local snapshot and passes the
-result to `FakeExchangeWsClient::completeSnapshotResync()`. Only after that
-handshake may it reconnect, create a second protected symbol and drain the new
-events. A final drain must be empty and normalized projections must be unique.
-The canonical golden test invokes the runner twice, so each execution gets an
-independent state file and the exact result must match.
+result to `FakeExchangeWsClient::completeSnapshotResync()`. The reconciliation
+result carries the maximum canonical event sequence captured before the
+snapshot. An event is then appended before completion to exercise the race:
+completion acknowledges only sequences at or below that watermark. Only after
+that handshake may the client reconnect and drain the newer event. A final
+drain must be empty. The canonical golden test invokes the runner twice, so
+each execution gets an independent state file and the exact result must match.
 
 ## Alternatives
 
-- Reconnect directly: already covered by a unit test but does not exercise the
+- Reconnect directly: fail-closed because a disconnect requires the
   snapshot/reconciliation contract named by scenario 15.
 - Reuse scenario 16's sequence-gap fixture: proves out-of-order recovery, not a
   deterministic transport disconnect.
 - Add disconnect persistence to the scenario DSL: useful future hardening, but
-  unnecessarily expands this evidence-only P0.
+  unnecessary for this deterministic local runtime path.
 
 ## Safety
 

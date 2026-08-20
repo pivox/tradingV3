@@ -778,9 +778,6 @@ final class FakePaperGoldenScenarioRunner
                 $this->clock(),
                 new NullLogger(),
             ))->reconcile($adapter);
-            $client->completeSnapshotResync($reconciliation);
-            $client->reconnect();
-
             $adapter->placeOrder($this->request(
                 symbol: 'ETHUSDT',
                 orderType: ExchangeOrderType::MARKET,
@@ -788,6 +785,9 @@ final class FakePaperGoldenScenarioRunner
                 clientOrderId: 'golden-disconnect-eth',
                 attachedStopLossPrice: 1750.0,
             ));
+            $client->completeSnapshotResync($reconciliation);
+            $client->reconnect();
+
             $resumed = $ingestion->drain($client);
             $empty = $ingestion->drain($client);
             $signatures = $projectionStore->normalizedSignatures();

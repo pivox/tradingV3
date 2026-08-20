@@ -141,12 +141,9 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
             return;
         }
 
-        if ($this->resyncReason === 'fake_private_ws_sequence_gap') {
+        if ($this->resyncRequired) {
             throw new \LogicException('fake_private_ws_snapshot_resync_required');
         }
-
-        $this->resyncRequired = false;
-        $this->resyncReason = null;
     }
 
     public function completeSnapshotResync(?ExchangeReconciliationResult $reconciliation = null): void
@@ -161,14 +158,36 @@ final class FakeExchangeWsClient implements ExchangeWsClientInterface
             return;
         }
 
+        if (
+            !$reconciliation instanceof ExchangeReconciliationResult
+            || $reconciliation->exchange !== Exchange::FAKE
+            || $reconciliation->marketType !== MarketType::PERPETUAL
+            || $reconciliation->symbol !== null
+        ) {
+            throw new \LogicException('fake_private_ws_global_reconciliation_required');
+        }
+        if ($reconciliation->errors !== []) {
+            throw new \LogicException('fake_private_ws_reconciliation_failed');
+        }
+        $watermark = $reconciliation->metadata[
+            FakeExchangeStateStore::RECONCILIATION_EVENT_SEQUENCE_WATERMARK
+        ] ?? null;
+        if (!\is_int($watermark) || $watermark < 0) {
+            throw new \LogicException('fake_private_ws_snapshot_watermark_invalid');
+        }
+
         foreach ($this->stateStore->events() as $index => $event) {
             $sequence = $this->sequence($event, $index);
+            $numericSequence = $this->numericSequence($sequence);
+            if ($numericSequence === null || $numericSequence > $watermark) {
+                continue;
+            }
             $this->consumedSequences[$sequence] = true;
             $this->lastAcknowledgedSequence = $sequence;
-            $numericSequence = $this->numericSequence($sequence);
-            if ($numericSequence !== null) {
-                $this->lastObservedNumericSequence = max($this->lastObservedNumericSequence, $numericSequence);
-            }
+            $this->lastObservedNumericSequence = max($this->lastObservedNumericSequence, $numericSequence);
+        }
+        if ($this->lastObservedNumericSequence < $watermark) {
+            throw new \LogicException('fake_private_ws_snapshot_watermark_invalid');
         }
 
         $this->resyncRequired = false;

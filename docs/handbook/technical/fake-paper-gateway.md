@@ -218,8 +218,8 @@ quota glissant, la latence/jitter avec seed, les erreurs de precision/marge, ni 
 divergences Bitmart. `FakeExchangeWsClient` couvre la deconnexion/reconnexion et
 une fixture distincte couvre le gap avec snapshot resync. Le scenario golden 15
 chaîne désormais déconnexion, blocage `requiresResync`, snapshot Fake local,
-`ExchangeReconciliationService`, acquittement du snapshot et reprise sans perte
-ni doublon.
+`ExchangeReconciliationService`, événement concurrent après snapshot,
+acquittement borné au watermark et reprise sans perte.
 
 ## Runtime-check Fake/Paper
 
@@ -610,15 +610,17 @@ Le contrat runtime est le suivant :
 - le filtre symbole ne consomme jamais une livraison d un autre symbole.
 
 La reprise impose d abord un `ExchangeReconciliationService` global sur les
-snapshots REST Fake locaux. En mode scenario, `completeSnapshotResync()` exige
+snapshots REST Fake locaux. Hors mode scénario comme en mode scénario,
+`completeSnapshotResync()` exige
 le `ExchangeReconciliationResult` Fake/Perpetual correspondant, avec
 `symbol === null` et aucune erreur. Une preuve absente, echouee ou limitee a un
 symbole ne modifie ni curseur ni `resync_required`. Ensuite seulement, la
 sequence numerique maximale de l etat canonique sert de watermark : le curseur
 avance dans l ordre declare sur toutes les livraisons couvertes, y compris `3`
 puis `2`, et incremente `resync_total` une fois. Un evenement canonique ajoute
-apres ce watermark prolonge la fixture active et reprend sur la sequence
-contigue.
+apres ce watermark n'est jamais acquitté par la complétion du snapshot et reste
+livrable après reconnexion. Un simple `reconnect()` pendant
+`resync_required` échoue fermé.
 
 `privateWsAudit()` expose les cinq compteurs, l etat et la raison de resync, les
 watermarks et au plus 100 enregistrements. Ces enregistrements sont rediges :
