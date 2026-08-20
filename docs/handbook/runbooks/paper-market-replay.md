@@ -6,13 +6,11 @@ Paper replay always executes through the Fake exchange. `market_data_venue` reco
 the public-data origin and may be `okx` or `hyperliquid`; it never changes the
 execution venue.
 
-PR 1 provides the dataset contract only. It does not provide an operator capture
-or replay command. Commands from the approved design arrive with their owning
-source or execution PR.
-
-Keep `PAPER_EXECUTION_ENABLED=0` as the expected default until that wiring exists.
-This foundation has no private APIs, credentials, exchange writes, strategy tuning,
-or Bitmart scope.
+Public OKX and Hyperliquid capture/replay sources and the Paper execution
+coordinator are wired. Keep `PAPER_EXECUTION_ENABLED=0` as the safe default;
+enable it only in the dedicated Paper process connected to the allowlisted Paper
+database. The execution graph contains no private client or real exchange adapter.
+It has no credentials, exchange writes, strategy tuning or Bitmart scope.
 
 ## Dataset contract
 
@@ -48,12 +46,48 @@ that checkpoint in the deterministic replay order. The controlled replay clock m
 monotonically with the delivered event timestamp; wall-clock time must not alter a
 replay result.
 
+## Readiness check
+
+Run the read-only check with the exact inputs that will be replayed:
+
+```bash
+PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:runtime-check \
+  --dataset=/absolute/private/dataset \
+  --configuration=/absolute/private/configuration.json \
+  --profile=regular \
+  --run-id=run-20260820-001
+```
+
+The command verifies the completed public dataset and checksum, certifiable
+network provenance, the private/redacted configuration snapshot, controlled
+clock, exact execution cell, Paper database and Fake-only/write-disabled runtime.
+It does not register state, bind a dataset, write a checkpoint or consume an
+event.
+
+Success returns schema `paper-replay-readiness-v1` with `ready=true`. Read
+`baseline_eligible` separately: the legacy profiles `regular`, `scalper` and
+`scalper_micro` remain `reference_only`, so technical readiness does not make
+their trades eligible for a modern baseline. Failure returns `ready=false` and
+one stable `blocker`; paths and configuration contents are never output.
+
+After a successful check, execute the same tuple:
+
+```bash
+PAPER_EXECUTION_ENABLED=1 php bin/console app:paper-market:replay \
+  --dataset=/absolute/private/dataset \
+  --configuration=/absolute/private/configuration.json \
+  --profile=regular \
+  --run-id=run-20260820-001
+```
+
+The replay command uses the same preparation contract before any state write.
+
 ## Database and rollback rules
 
 The only allowed Paper database is `trading_paper`. Tests may use names matching
 `*_paper_test`; no other database name is valid for Paper operations.
 
-To roll back a future local replay, stop its local consumers and preserve the
+To roll back a local replay, stop its local consumers and preserve the
 dataset manifests and event files for audit. Recreate only the dedicated Paper
 database, and only after explicit approval. Do not remove or alter a dataset as part
 of rollback.

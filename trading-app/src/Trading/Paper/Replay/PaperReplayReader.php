@@ -55,6 +55,7 @@ final class PaperReplayReader
         #[\SensitiveParameter] string $datasetDirectory,
         string $consumerId,
         ?PaperReplayCheckpoint $checkpoint = null,
+        ?PaperDatasetManifest $expectedManifest = null,
     ): \Generator {
         $this->currentEventIndex = null;
         $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory);
@@ -72,6 +73,11 @@ final class PaperReplayReader
                 }
 
                 throw $failure;
+            }
+            if ($expectedManifest !== null
+                && CanonicalJson::encode($manifest->toArray()) !== CanonicalJson::encode($expectedManifest->toArray())
+            ) {
+                throw new \RuntimeException('paper_replay_dataset_identity_changed');
             }
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,

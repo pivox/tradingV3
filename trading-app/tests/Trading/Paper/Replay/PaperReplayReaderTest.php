@@ -112,6 +112,46 @@ final class PaperReplayReaderTest extends TestCase
         self::assertSame(7, $reader->currentEventIndex());
     }
 
+    public function testRejectsAReplaySourceThatNoLongerMatchesThePreparedManifest(): void
+    {
+        $event = $this->event(
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            '1',
+            '2026-07-19T10:00:00.000000Z',
+            '2026-07-19T10:00:00.000001Z',
+        );
+        $dataset = $this->completeDataset([$event]);
+        $actual = $dataset['manifest'];
+        $expected = new PaperDatasetManifest(
+            schemaVersion: $actual->schemaVersion,
+            recorderVersion: $actual->recorderVersion,
+            datasetId: 'dataset-okx-expected',
+            venue: $actual->venue,
+            network: $actual->network,
+            symbols: $actual->symbols,
+            startExchangeTimestamp: $actual->startExchangeTimestamp,
+            endExchangeTimestamp: $actual->endExchangeTimestamp,
+            channels: $actual->channels,
+            eventCount: $actual->eventCount,
+            sequenceGaps: $actual->sequenceGaps,
+            quality: $actual->quality,
+            modelName: $actual->modelName,
+            modelVersion: $actual->modelVersion,
+            eventsFileSha256: $actual->eventsFileSha256,
+            state: $actual->state,
+            lastEventId: $actual->lastEventId,
+        );
+
+        $this->expectExceptionMessage('paper_replay_dataset_identity_changed');
+        iterator_to_array($this->reader(new PaperReplayClock())->read(
+            $dataset['directory'],
+            'paper.worker-01',
+            null,
+            $expected,
+        ));
+    }
+
     public function testHyperliquidHistoricalReplayPreservesMultiSymbolMultiIntervalCaptureOrder(): void
     {
         $close = '2024-01-01T00:59:59.999000Z';

@@ -8,10 +8,12 @@ use App\Command\PaperExecutionReplayCommand;
 use App\Trading\Paper\Dataset\PaperDatasetVerifier;
 use App\Trading\Paper\Dataset\PaperDatasetManifestCodec;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshotFactory;
+use App\Trading\Paper\Execution\Configuration\PaperPrivateConfigurationReader;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -19,6 +21,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
+use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -72,7 +75,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 '--profile' => 'regular',
                 '--run-id' => 'paper-run-001',
             ]));
-            self::assertStringContainsString('paper_execution_legacy_dataset_forbidden', $tester->getDisplay());
+            self::assertStringContainsString('paper_dataset_network_provenance_uncertifiable', $tester->getDisplay());
         } finally {
             foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
             @rmdir($dataset);
@@ -172,10 +175,18 @@ final class PaperExecutionReplayCommandTest extends TestCase
         };
         $store ??= new InMemoryPaperExecutionStore();
 
+        $verifier ??= (new \ReflectionClass(PaperDatasetVerifier::class))->newInstanceWithoutConstructor();
+
         return new PaperExecutionReplayCommand(
-            $verifier ?? (new \ReflectionClass(PaperDatasetVerifier::class))->newInstanceWithoutConstructor(),
+            new PaperReplayReadinessService(
+                $verifier,
+                new PaperPrivateConfigurationReader(),
+                new PaperConfigurationSnapshotFactory(),
+                new PaperProfileRegistry(),
+                new PaperReplayClock(),
+                $coordinator,
+            ),
             $reader ?? (new \ReflectionClass(PaperReplayReader::class))->newInstanceWithoutConstructor(),
-            new PaperConfigurationSnapshotFactory(),
             $store,
             $coordinator,
         );
