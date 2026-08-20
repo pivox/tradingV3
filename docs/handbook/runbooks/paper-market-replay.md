@@ -62,6 +62,9 @@ The command verifies the completed public dataset and checksum, certifiable
 network provenance, the private/redacted configuration snapshot, controlled
 clock, the replay reader event bound, exact execution cell, existing dataset
 binding and kill state, Paper database and Fake-only/write-disabled runtime.
+For an existing cell, the persisted resume event must also exist at the exact
+position and timestamp in the prepared dataset; validation does not advance the
+controlled clock.
 It does not register state, bind a dataset, write a checkpoint or consume an
 event.
 

@@ -22,6 +22,7 @@ use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
+use App\Trading\Paper\Runtime\PaperReplayCheckpointResolver;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -29,6 +30,7 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Tester\CommandTester;
 
 #[CoversClass(PaperExecutionReplayCommand::class)]
+#[CoversClass(PaperReplayCheckpointResolver::class)]
 final class PaperExecutionReplayCommandTest extends TestCase
 {
     public function testEveryOperatorOptionIsMandatory(): void
@@ -103,10 +105,11 @@ final class PaperExecutionReplayCommandTest extends TestCase
         $manifest = (new PaperDatasetManifestCodec())->decode((string) file_get_contents($manifestPath));
         self::assertNotNull($manifest->eventsFileSha256);
         $store->bindDataset($cell, $manifest->datasetId, $manifest->eventsFileSha256);
-        $command = $this->command(store: $store);
-        $method = new \ReflectionMethod($command, 'replayCheckpoint');
-
-        $checkpoint = $method->invoke($command, $cell, $manifest, 'paper-consumer');
+        $checkpoint = (new PaperReplayCheckpointResolver($store))->resolve(
+            $cell,
+            $manifest,
+            'paper-consumer',
+        );
 
         self::assertNotNull($checkpoint);
         self::assertSame(0, $checkpoint->eventIndex);
@@ -189,6 +192,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 $coordinator,
                 $reader,
                 $store,
+                new PaperReplayCheckpointResolver($store),
             ),
             $reader,
             $store,

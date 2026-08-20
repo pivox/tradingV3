@@ -4,12 +4,9 @@ declare(strict_types=1);
 
 namespace App\Command;
 
-use App\Trading\Paper\Dataset\PaperDatasetManifest;
-use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\PaperExecutionConsumer;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
-use App\Trading\Paper\Replay\PaperReplayCheckpoint;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -61,9 +58,13 @@ final class PaperExecutionReplayCommand extends Command
             $this->store->bindDataset($cell, $manifest->datasetId, $manifest->eventsFileSha256);
 
             $consumer = new PaperExecutionConsumer($this->coordinator, $this->store, $cell, $eligibility);
-            $consumerId = 'paper-exec-' . substr($cell->id, 7, 16);
-            $checkpoint = $this->replayCheckpoint($cell, $manifest, $consumerId);
-            foreach ($this->reader->read($datasetPath, $consumerId, $checkpoint, $manifest) as $event) {
+            foreach ($this->reader->read(
+                $datasetPath,
+                $preparation->consumerId,
+                $preparation->checkpoint,
+                $manifest,
+                false,
+            ) as $event) {
                 $position = $this->reader->currentEventIndex();
                 if ($position === null) {
                     throw new \LogicException('paper_replay_event_position_missing');
@@ -102,35 +103,4 @@ final class PaperExecutionReplayCommand extends Command
         return trim($value);
     }
 
-    private function replayCheckpoint(PaperExecutionCell $cell, PaperDatasetManifest $manifest, string $consumerId): ?PaperReplayCheckpoint
-    {
-        $checkpoint = $this->store->checkpoint($cell);
-        $pending = $this->store->pendingEffects($cell);
-        $position = $pending[0]->sourcePosition ?? $checkpoint->nextSourcePosition;
-        if ($position === 0) {
-            return null;
-        }
-        $dataset = $this->store->datasetIdentity($cell);
-        if ($dataset['dataset_id'] !== $manifest->datasetId
-            || $manifest->eventsFileSha256 === null
-            || !hash_equals($dataset['events_file_sha256'], $manifest->eventsFileSha256)
-        ) {
-            throw new \LogicException('paper_execution_dataset_identity_conflict');
-        }
-        $events = $this->store->acknowledgedSources($cell);
-        $last = $events[$position - 1] ?? null;
-        if ($last === null) {
-            throw new \LogicException('paper_execution_checkpoint_corrupt');
-        }
-
-        return new PaperReplayCheckpoint(
-            $manifest->network,
-            $dataset['dataset_id'],
-            $consumerId,
-            $last->eventId,
-            $position - 1,
-            $last->exchangeTimestamp,
-            $dataset['events_file_sha256'],
-        );
-    }
 }

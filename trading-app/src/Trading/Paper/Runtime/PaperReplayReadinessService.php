@@ -34,6 +34,7 @@ final readonly class PaperReplayReadinessService
         private PaperEventCoordinatorInterface $coordinator,
         private PaperReplayReader $reader,
         private PaperExecutionStoreInterface $store,
+        private PaperReplayCheckpointResolver $checkpoints,
     ) {
     }
 
@@ -82,7 +83,22 @@ final readonly class PaperReplayReadinessService
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }
-        return new PaperReplayPreparation($manifest, $snapshot, $eligibility, $cell);
+        $consumerId = $this->checkpoints->consumerId($cell);
+        $checkpoint = $state->registered
+            ? $this->checkpoints->resolve($cell, $manifest, $consumerId)
+            : null;
+        if ($checkpoint !== null) {
+            $this->reader->assertCanResume($datasetPath, $consumerId, $checkpoint, $manifest);
+        }
+
+        return new PaperReplayPreparation(
+            $manifest,
+            $snapshot,
+            $eligibility,
+            $cell,
+            $consumerId,
+            $checkpoint,
+        );
     }
 
     private function assertAbsolute(string $path): void

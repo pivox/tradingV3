@@ -61,8 +61,53 @@ final class PaperReplayReader
         string $consumerId,
         ?PaperReplayCheckpoint $checkpoint = null,
         ?PaperDatasetManifest $expectedManifest = null,
+        bool $loadDatasetCheckpoint = true,
     ): \Generator {
-        $this->currentEventIndex = null;
+        yield from $this->replay(
+            $datasetDirectory,
+            $consumerId,
+            $checkpoint,
+            $expectedManifest,
+            true,
+            $loadDatasetCheckpoint,
+        );
+    }
+
+    public function assertCanResume(
+        #[\SensitiveParameter] string $datasetDirectory,
+        string $consumerId,
+        PaperReplayCheckpoint $checkpoint,
+        PaperDatasetManifest $expectedManifest,
+    ): void {
+        $currentEventIndex = $this->currentEventIndex;
+        $validation = $this->replay(
+            $datasetDirectory,
+            $consumerId,
+            $checkpoint,
+            $expectedManifest,
+            false,
+            false,
+        );
+        try {
+            $validation->valid();
+        } finally {
+            unset($validation);
+            $this->currentEventIndex = $currentEventIndex;
+        }
+    }
+
+    /** @return \Generator<int, PaperMarketEvent> */
+    private function replay(
+        #[\SensitiveParameter] string $datasetDirectory,
+        string $consumerId,
+        ?PaperReplayCheckpoint $checkpoint,
+        ?PaperDatasetManifest $expectedManifest,
+        bool $advanceClock,
+        bool $loadDatasetCheckpoint,
+    ): \Generator {
+        if ($advanceClock) {
+            $this->currentEventIndex = null;
+        }
         $datasetPin = $this->openPinnedDatasetDirectory($datasetDirectory);
         $datasetDirectory = $datasetPin['path'];
         try {
@@ -110,12 +155,14 @@ final class PaperReplayReader
                 'paper_replay_dataset_after_sort',
             );
 
-            $checkpoint ??= $this->checkpointStore->load(
-                $datasetDirectory,
-                $consumerId,
-                $datasetPin['identity'],
-                true,
-            );
+            if ($checkpoint === null && $loadDatasetCheckpoint) {
+                $checkpoint = $this->checkpointStore->load(
+                    $datasetDirectory,
+                    $consumerId,
+                    $datasetPin['identity'],
+                    true,
+                );
+            }
             $this->assertPinnedDatasetDirectory(
                 $datasetPin,
                 'paper_replay_dataset_after_checkpoint_load',
@@ -132,8 +179,10 @@ final class PaperReplayReader
                     'paper_replay_dataset_before_yield',
                 );
                 $event = $events[$index]['event'];
-                $this->clock->advanceTo($event->exchangeTimestamp);
-                $this->currentEventIndex = $index;
+                if ($advanceClock) {
+                    $this->clock->advanceTo($event->exchangeTimestamp);
+                    $this->currentEventIndex = $index;
+                }
 
                 yield $index => $event;
 

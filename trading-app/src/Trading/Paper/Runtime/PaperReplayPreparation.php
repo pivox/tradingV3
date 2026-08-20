@@ -8,6 +8,7 @@ use App\Trading\Paper\Dataset\PaperDatasetManifest;
 use App\Trading\Paper\Execution\Configuration\PaperConfigurationSnapshot;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
+use App\Trading\Paper\Replay\PaperReplayCheckpoint;
 
 final readonly class PaperReplayPreparation
 {
@@ -18,6 +19,8 @@ final readonly class PaperReplayPreparation
         public PaperConfigurationSnapshot $snapshot,
         public PaperProfileEligibility $eligibility,
         public PaperExecutionCell $cell,
+        public string $consumerId,
+        public ?PaperReplayCheckpoint $checkpoint,
     ) {
     }
 

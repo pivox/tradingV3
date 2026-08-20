@@ -16,12 +16,14 @@ use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Replay\PaperReplayCheckpointStore;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
+use App\Trading\Paper\Runtime\PaperReplayCheckpointResolver;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -31,6 +33,7 @@ use Symfony\Component\Console\Tester\CommandTester;
 #[CoversClass(PaperReplayRuntimeCheckCommand::class)]
 #[CoversClass(PaperReplayReadinessService::class)]
 #[CoversClass(PaperExecutionCellState::class)]
+#[CoversClass(PaperReplayCheckpointResolver::class)]
 final class PaperReplayRuntimeCheckCommandTest extends TestCase
 {
     private string $root;
@@ -199,6 +202,36 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertStringNotContainsString('ghp_', $tester->getDisplay());
     }
 
+    public function testPersistedResumeAnchorMustExistInThePreparedDataset(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $cell = $this->cell();
+        $store->registerCell($cell, PaperProfileEligibility::REFERENCE_ONLY);
+        $manifest = json_decode((string) file_get_contents($this->dataset . '/manifest.json'), true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($manifest);
+        self::assertIsString($manifest['events_file_sha256']);
+        $store->bindDataset($cell, 'paper-exec-okx-mainnet-001', $manifest['events_file_sha256']);
+        $timestamp = new \DateTimeImmutable('2026-08-01T09:59:59Z');
+        $store->claimSource($cell, 0, PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            PaperMarketDataVenue::OKX,
+            'BTCUSDT',
+            PaperMarketDataChannel::TOP_OF_BOOK,
+            $timestamp,
+            $timestamp,
+            '999',
+            ['bid_price' => '99', 'ask_price' => '101'],
+        ));
+        $clock = new PaperReplayClock();
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), $clock, $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_replay_checkpoint_event_not_found', $payload['blocker']);
+        self::assertSame('1970-01-01T00:00:00.000000Z', $clock->now()->format('Y-m-d\TH:i:s.u\Z'));
+    }
+
     /** @return array<string, string> */
     private function options(): array
     {
@@ -218,6 +251,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
     ): PaperReplayRuntimeCheckCommand {
         $verifier = new PaperDatasetVerifier();
         $clock ??= new PaperReplayClock();
+        $store ??= new InMemoryPaperExecutionStore();
         $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), $clock, $eventLimit);
 
         return new PaperReplayRuntimeCheckCommand(new PaperReplayReadinessService(
@@ -228,7 +262,8 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
             $clock,
             $coordinator,
             $reader,
-            $store ?? new InMemoryPaperExecutionStore(),
+            $store,
+            new PaperReplayCheckpointResolver($store),
         ));
     }
 
