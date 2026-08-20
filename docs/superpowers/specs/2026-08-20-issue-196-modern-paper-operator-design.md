@@ -13,6 +13,8 @@ all of `--mode-id`, `--mode-version`, `--setup-id`, `--setup-version` and
 `--side`, and forbids `--profile`. The verified dataset supplies the public
 venue and network environment; the capability is always exactly `paper`.
 Missing, partial or mixed selection fails closed without aliases or fallback.
+Identity errors and resolver failures are normalized to stable blocker codes;
+underlying YAML and filesystem paths are never returned by either command.
 
 ## Readiness result
 

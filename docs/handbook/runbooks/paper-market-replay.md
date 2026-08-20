@@ -118,7 +118,8 @@ modern field or using a legacy alias fails closed. The check resolves the exact
 Effective Config and emits only its canonical hashes and identity. It currently
 returns `ready=false` with `paper_modern_strategy_bridge_unavailable`. Supplying
 the same options to `app:paper-market:replay` stops before any Paper snapshot,
-cell or dataset binding is written.
+cell or dataset binding is written. Identity/configuration failures use stable
+redacted blocker codes and never expose an Effective Config filesystem path.
 
 ## Database and rollback rules
 

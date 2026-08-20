@@ -17,6 +17,7 @@ use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Config\Exception\TradingConfigException;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
 final readonly class PaperReplayReadinessService
@@ -74,8 +75,8 @@ final readonly class PaperReplayReadinessService
 
         if ($strategy->isModern()) {
             $identity = $strategy->modernIdentity();
-            $effective = $this->effectiveConfigResolver->resolve(
-                new EffectiveTradingConfigRequest(
+            try {
+                $request = new EffectiveTradingConfigRequest(
                     $identity['mode_id'],
                     $identity['mode_version'],
                     $identity['setup_id'],
@@ -84,8 +85,15 @@ final readonly class PaperReplayReadinessService
                     $manifest->network->value,
                     $identity['side'],
                     ShadowExecutionCapability::Paper,
-                ),
-            );
+                );
+            } catch (TradingConfigException $failure) {
+                throw new \InvalidArgumentException($this->identityFailureCode($failure), 0, $failure);
+            }
+            try {
+                $effective = $this->effectiveConfigResolver->resolve($request);
+            } catch (TradingConfigException $failure) {
+                throw new \RuntimeException('paper_modern_effective_config_unavailable', 0, $failure);
+            }
             $modernIdentity = PaperModernStrategyIdentity::fromResolvedSnapshot(
                 $manifest->network,
                 $manifest->venue,
@@ -156,6 +164,20 @@ final readonly class PaperReplayReadinessService
         if (!str_starts_with($path, DIRECTORY_SEPARATOR)) {
             throw new \InvalidArgumentException('paper_execution_path_must_be_absolute');
         }
+    }
+
+    private function identityFailureCode(TradingConfigException $failure): string
+    {
+        $message = $failure->getMessage();
+
+        return match (true) {
+            str_starts_with($message, 'Unknown modern mode id ') => 'paper_modern_mode_id_invalid',
+            str_starts_with($message, 'Unknown canonical setup id ') => 'paper_modern_setup_id_invalid',
+            str_starts_with($message, 'mode_version must ') => 'paper_modern_mode_version_invalid',
+            str_starts_with($message, 'setup_version must ') => 'paper_modern_setup_version_invalid',
+            str_starts_with($message, 'side must ') => 'paper_modern_side_invalid',
+            default => 'paper_modern_strategy_identity_invalid',
+        };
     }
 
     private function throwNormalizedStateFailure(\Throwable $failure): never

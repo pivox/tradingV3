@@ -25,6 +25,7 @@ use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Runtime\PaperReplayCheckpointResolver;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
+use App\TradingCore\Config\TradingConfigLayerLoader;
 use App\Tests\Trading\Paper\Execution\InMemoryPaperExecutionStore;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -161,8 +162,31 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
 
         self::assertSame(Command::INVALID, $tester->execute($options));
         $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
-        self::assertStringContainsString('Unknown modern mode id "regular"', $payload['blocker']);
+        self::assertSame('paper_modern_mode_id_invalid', $payload['blocker']);
         self::assertArrayNotHasKey('strategy', $payload);
+    }
+
+    public function testEffectiveConfigFailureNeverLeaksItsAbsoluteLayerPath(): void
+    {
+        $privateRoot = $this->root . '/private-effective-config';
+        $tester = new CommandTester($this->command(
+            $this->acceptingCoordinator(),
+            resolver: new EffectiveTradingConfigResolver(loader: new TradingConfigLayerLoader($privateRoot)),
+        ));
+        $options = $this->options();
+        unset($options['--profile']);
+        $options += [
+            '--mode-id' => 'day_trading',
+            '--mode-version' => '1.1.0',
+            '--setup-id' => 'day_trading.trend_continuation.long',
+            '--setup-version' => '1.1.0',
+            '--side' => 'long',
+        ];
+
+        self::assertSame(Command::INVALID, $tester->execute($options));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+        self::assertSame('paper_modern_effective_config_unavailable', $payload['blocker']);
+        self::assertStringNotContainsString($privateRoot, $tester->getDisplay());
     }
 
     public function testFailureIsStableJsonAndDoesNotLeakPaths(): void
@@ -338,6 +362,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         ?PaperReplayClock $clock = null,
         ?PaperExecutionStoreInterface $store = null,
         int $eventLimit = PaperReplayReader::DEFAULT_EVENT_LIMIT,
+        ?EffectiveTradingConfigResolver $resolver = null,
     ): PaperReplayRuntimeCheckCommand {
         $verifier = new PaperDatasetVerifier();
         $clock ??= new PaperReplayClock();
@@ -354,7 +379,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
             $reader,
             $store,
             new PaperReplayCheckpointResolver($store),
-            new EffectiveTradingConfigResolver(),
+            $resolver ?? new EffectiveTradingConfigResolver(),
         ));
     }
 
