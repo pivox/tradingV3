@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Execution\Fake;
 
-use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Enum\ExchangeOrderStatus;
-use App\Exchange\Fake\FakeExchangeEvent;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
@@ -36,13 +34,15 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
         self::assertIsString($previousPrecision);
         try {
             self::assertNotFalse(ini_set('precision', '2'));
-            $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-10T12:00:00Z')))
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))
                 ->forCell($this->cell($effect->provenance));
             $runtime->applyMarketEvent($this->topOfBook());
-            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
 
             $first = $dispatcher->dispatch($runtime, $effect);
             self::assertTrue($runtime->adapter->setLeverage('BTCUSDT', 2, 'isolated'));
+            $clock->modify('+1 hour');
             $replayCursor = $runtime->eventCursor();
             $second = $dispatcher->dispatch($runtime, $effect);
 
@@ -99,27 +99,21 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
         $root = sys_get_temp_dir() . '/paper_canonical_fake_compensation_' . bin2hex(random_bytes(6));
         $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
         try {
-            $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-10T12:00:00Z')))
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))
                 ->forCell($this->cell($effect->provenance));
             $runtime->applyMarketEvent($this->topOfBook());
-            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
             self::assertSame(
                 ExecutionResult::STATUS_SUBMITTED_PROTECTED,
                 $dispatcher->dispatch($runtime, $effect)->execution->status,
             );
 
-            $rawCreated = array_values(array_filter(
-                $runtime->eventsSince(0),
-                static fn ($event): bool => $event->type === 'order.created',
-            ))[0] ?? null;
-            self::assertInstanceOf(FakeExchangeEvent::class, $rawCreated);
+            $runtime->stateStore->rejectNextProtectionOrder();
+            $fillCursor = $runtime->eventCursor();
+            $runtime->applyMarketEvent($this->topOfBook('100.08', '100.09', '2'));
             $fillEvents = array_values(array_filter(
-                (new FakeExchangeEventNormalizer())->normalize(new FakeExchangeEvent(
-                    'order.filled',
-                    'BTCUSDT',
-                    new \DateTimeImmutable('2026-08-10T12:00:01Z'),
-                    $rawCreated->payload,
-                )),
+                $dispatcher->normalizeSince($runtime, $fillCursor),
                 static fn ($event): bool => $event instanceof ExchangeFillReceived,
             ));
             self::assertNotEmpty($fillEvents);
@@ -129,37 +123,13 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
                     self::assertSame($effect->provenance[$key], $event->fill()->metadata[$key] ?? null);
                 }
             }
-
-            $entry = $runtime->stateStore->getOrderByClientOrderId('BTCUSDT', 'paper-modern-cid-001');
-            self::assertInstanceOf(ExchangeOrderDto::class, $entry);
-            $runtime->stateStore->saveOrder(new ExchangeOrderDto(
-                exchange: $entry->exchange,
-                marketType: $entry->marketType,
-                symbol: $entry->symbol,
-                exchangeOrderId: $entry->exchangeOrderId,
-                clientOrderId: $entry->clientOrderId,
-                side: $entry->side,
-                positionSide: $entry->positionSide,
-                orderType: $entry->orderType,
-                status: ExchangeOrderStatus::FILLED,
-                quantity: $entry->quantity,
-                filledQuantity: $entry->quantity,
-                remainingQuantity: 0.0,
-                price: $entry->price,
-                averagePrice: $entry->price,
-                stopPrice: $entry->stopPrice,
-                reduceOnly: $entry->reduceOnly,
-                postOnly: $entry->postOnly,
-                timeInForce: $entry->timeInForce,
-                createdAt: $entry->createdAt,
-                updatedAt: new \DateTimeImmutable('2026-08-10T12:00:01Z'),
-                metadata: array_replace($entry->metadata, [
-                    'protection_status' => 'rejected',
-                    'protection_reject_reason' => 'protection_rejected_by_scenario',
-                    'compensation_status' => 'completed',
-                    'compensation_outcome' => 'position_closed',
-                ]),
-            ));
+            $restFills = $runtime->adapter->getFillsSnapshot('BTCUSDT');
+            self::assertNotEmpty($restFills);
+            foreach ($restFills as $fill) {
+                foreach (PaperExecutionProvenance::MODERN_KEYS as $key) {
+                    self::assertSame($effect->provenance[$key], $fill->metadata[$key] ?? null);
+                }
+            }
             $replayCursor = $runtime->eventCursor();
             $replay = $dispatcher->dispatch($runtime, $effect);
             self::assertTrue($replay->idempotentReplay);
@@ -173,14 +143,64 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
         }
     }
 
+    public function testExpiredNewEffectIsRejectedBeforeFakeMutation(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_canonical_fake_expired_' . bin2hex(random_bytes(6));
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        try {
+            $clock = new MockClock('2026-08-10T13:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))->forCell($this->cell($effect->provenance));
+            $runtime->applyMarketEvent($this->topOfBook());
+            $cursor = $runtime->eventCursor();
+
+            $result = (new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock))
+                ->dispatch($runtime, $effect);
+
+            self::assertSame(ExecutionResult::STATUS_ERROR, $result->execution->status);
+            self::assertSame('paper_canonical_fake_plan_expired', $result->execution->raw['reason'] ?? null);
+            self::assertSame([], $runtime->adapter->getOrdersSnapshot('BTCUSDT'));
+            self::assertSame([], $runtime->eventsSince($cursor));
+            self::assertNull($runtime->stateStore->getLeverageSetting('BTCUSDT'));
+        } finally {
+            $this->removeRuntime($root);
+        }
+    }
+
+    public function testRestingMakerExpiresAtCanonicalDeadlineOnNextMarketEvent(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_canonical_fake_deadline_' . bin2hex(random_bytes(6));
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        try {
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))->forCell($this->cell($effect->provenance));
+            $runtime->applyMarketEvent($this->topOfBook());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
+            $placed = $dispatcher->dispatch($runtime, $effect);
+            self::assertNotNull($placed->execution->exchangeOrderId);
+
+            $clock->modify('+2 minutes');
+            $runtime->applyMarketEvent($this->topOfBook('100.095', '100.105', '2'));
+
+            $order = $runtime->adapter->getOrder('BTCUSDT', $placed->execution->exchangeOrderId);
+            self::assertNotNull($order);
+            self::assertSame(ExchangeOrderStatus::EXPIRED, $order->status);
+            self::assertSame('canonical_entry_deadline_elapsed', $order->metadata['reason'] ?? null);
+            self::assertCount(1, $runtime->stateStore->events('order.expired'));
+            self::assertSame([], $runtime->adapter->getOpenPositions('BTCUSDT'));
+        } finally {
+            $this->removeRuntime($root);
+        }
+    }
+
     public function testCrossCellCanonicalEffectFailsBeforeFakeMutation(): void
     {
         $root = sys_get_temp_dir() . '/paper_canonical_fake_scope_' . bin2hex(random_bytes(6));
         $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
         try {
+            $clock = new MockClock('2026-08-10T12:00:00Z');
             $provenance = $effect->provenance;
             $provenance['run_id'] = 'another-run';
-            $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-10T12:00:00Z')))
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))
                 ->forCell($this->cell($provenance));
             $runtime->applyMarketEvent($this->topOfBook());
             $cursor = $runtime->eventCursor();
@@ -188,7 +208,7 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
             $this->expectException(\InvalidArgumentException::class);
             $this->expectExceptionMessage('paper_canonical_fake_effect_invalid');
             try {
-                (new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer()))
+                (new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock))
                     ->dispatch($runtime, $effect);
             } finally {
                 self::assertSame([], $runtime->adapter->getOrdersSnapshot('BTCUSDT'));

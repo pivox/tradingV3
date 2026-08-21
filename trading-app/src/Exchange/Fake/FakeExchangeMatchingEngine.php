@@ -56,6 +56,8 @@ final readonly class FakeExchangeMatchingEngine
         'plan_hash',
         'target_id',
         'canonical_dispatch_source',
+        'canonical_plan_expires_at',
+        'canonical_cancel_after_at',
     ];
     /**
      * @var string[]
@@ -827,8 +829,11 @@ final readonly class FakeExchangeMatchingEngine
 
         $filled = [];
         foreach ($this->stateStore->getOpenOrders($symbol) as $order) {
+            if ($this->expireCanonicalEntryAtDeadline($order)) {
+                continue;
+            }
             if ($order->orderType === ExchangeOrderType::LIMIT) {
-                if ($order->price === null || $order->postOnly || !$this->limitOrderCrossesBook($order)) {
+                if ($order->price === null || !$this->limitOrderCrossesBook($order)) {
                     continue;
                 }
             } elseif (!$this->triggerOrderCrossesBook($order)) {
@@ -842,6 +847,46 @@ final readonly class FakeExchangeMatchingEngine
         }
 
         return $filled;
+    }
+
+    private function expireCanonicalEntryAtDeadline(ExchangeOrderDto $order): bool
+    {
+        if ($order->reduceOnly
+            || ($order->metadata['canonical_dispatch_source'] ?? null) !== 'paper_canonical_fake_dispatcher'
+        ) {
+            return false;
+        }
+        $rawDeadlines = array_filter([
+            $order->metadata['canonical_plan_expires_at'] ?? null,
+            $order->metadata['canonical_cancel_after_at'] ?? null,
+        ], static fn (mixed $value): bool => is_string($value) && $value !== '');
+        if ($rawDeadlines === []) {
+            throw new \LogicException('fake_canonical_entry_deadline_missing');
+        }
+        try {
+            $deadlines = array_map(
+                static fn (string $value): \DateTimeImmutable => new \DateTimeImmutable($value),
+                $rawDeadlines,
+            );
+        } catch (\Throwable $exception) {
+            throw new \LogicException('fake_canonical_entry_deadline_invalid', 0, $exception);
+        }
+        usort(
+            $deadlines,
+            static fn (\DateTimeImmutable $left, \DateTimeImmutable $right): int => $left <=> $right,
+        );
+        if ($this->clock->now() < $deadlines[0]) {
+            return false;
+        }
+
+        $expired = $this->withOrderStatus($order, ExchangeOrderStatus::EXPIRED, array_replace(
+            $order->metadata,
+            ['reason' => 'canonical_entry_deadline_elapsed'],
+        ));
+        $this->stateStore->saveOrder($expired);
+        $this->appendEvent('order.expired', $expired, ['reason' => 'canonical_entry_deadline_elapsed']);
+
+        return true;
     }
 
     private function evaluateLiquidation(string $symbol): void

@@ -20,11 +20,14 @@ use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
+use Psr\Clock\ClockInterface;
 
 final readonly class PaperCanonicalFakeEffectDispatcher
 {
-    public function __construct(private FakeExchangeEventNormalizer $normalizer)
-    {
+    public function __construct(
+        private FakeExchangeEventNormalizer $normalizer,
+        private ClockInterface $clock,
+    ) {
     }
 
     public function dispatch(
@@ -48,6 +51,19 @@ final readonly class PaperCanonicalFakeEffectDispatcher
         $existing = $this->existingOrder($runtime, $effect);
         if ($existing instanceof ExchangeOrderDto) {
             return $this->replay($effect, $existing);
+        }
+        $inactiveReason = $this->inactiveReason($effect);
+        if ($inactiveReason !== null) {
+            return $this->result(
+                $effect->orderIntentIdentity['client_order_id'],
+                null,
+                false,
+                ExchangeOrderStatus::REJECTED->value,
+                ['reason' => $inactiveReason, 'plan_hash' => $effect->plan->planHash],
+                false,
+                $effect->plan->planHash,
+                [],
+            );
         }
         if (!$runtime->adapter->setLeverage($effect->plan->symbol, $effect->plan->finalLeverage, 'isolated')) {
             return new PaperFakeDispatchResult(
@@ -77,6 +93,20 @@ final readonly class PaperCanonicalFakeEffectDispatcher
             $effect->plan->planHash,
             $this->normalizeSince($runtime, $cursor),
         );
+    }
+
+    private function inactiveReason(PaperCanonicalPreparedEffect $effect): ?string
+    {
+        $now = $this->clock->now();
+        if ($effect->plan->createdAt > $now) {
+            return 'paper_canonical_fake_plan_not_active';
+        }
+        $deadline = $effect->plan->expiresAt;
+        if ($effect->plan->cancelAfterAt !== null && $effect->plan->cancelAfterAt < $deadline) {
+            $deadline = $effect->plan->cancelAfterAt;
+        }
+
+        return $now >= $deadline ? 'paper_canonical_fake_plan_expired' : null;
     }
 
     private function existingOrder(
@@ -229,6 +259,10 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                 'target_id' => $target->id,
                 'canonical_side' => strtoupper($plan->side),
                 'canonical_dispatch_source' => 'paper_canonical_fake_dispatcher',
+                'canonical_plan_expires_at' => $this->time($plan->expiresAt),
+                'canonical_cancel_after_at' => $plan->cancelAfterAt !== null
+                    ? $this->time($plan->cancelAfterAt)
+                    : null,
             ],
         );
         PaperMarketEventRedactor::assertSafe($metadata);
@@ -268,6 +302,11 @@ final readonly class PaperCanonicalFakeEffectDispatcher
             $value,
             'paper_canonical_fake_effect_invalid',
         )->stripTrailingZeros();
+    }
+
+    private function time(\DateTimeImmutable $value): string
+    {
+        return $value->format('Y-m-d\\TH:i:s.uP');
     }
 
     /** @return list<ExchangeEventInterface> */
