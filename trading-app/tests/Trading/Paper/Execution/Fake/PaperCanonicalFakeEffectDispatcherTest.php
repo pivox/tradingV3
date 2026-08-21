@@ -6,10 +6,12 @@ namespace App\Tests\Trading\Paper\Execution\Fake;
 
 use App\Exchange\Event\ExchangeFillReceived;
 use App\Exchange\Event\ExchangeOrderCreated;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeInstrumentDescriptor;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeReservationDescriptor;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
@@ -89,6 +91,11 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
             self::assertSame('100.1', $entries[0]->metadata['price_decimal'] ?? null);
             self::assertSame('98.6', $entries[0]->metadata['attached_stop_loss_price_decimal'] ?? null);
             self::assertSame('102.8', $entries[0]->metadata['attached_take_profit_price_decimal'] ?? null);
+            $reservationDescriptor = $entries[0]->metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null;
+            self::assertIsString($reservationDescriptor);
+            PaperCanonicalFakeReservationDescriptor::decode($reservationDescriptor)
+                ->assertCell($runtime->cell)
+                ->assertEffect($effect);
         } finally {
             ini_set('precision', $previousPrecision);
             $this->removeRuntime($root);
@@ -184,6 +191,61 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
                 $entry->metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY],
                 $positions[0]->metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY] ?? null,
             );
+            $reservationDescriptor = $entry->metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null;
+            self::assertIsString($reservationDescriptor);
+            self::assertSame(
+                $reservationDescriptor,
+                $positions[0]->metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null,
+            );
+            $protections = array_values(array_filter(
+                $restored->adapter->getOpenOrders('BTCUSDT'),
+                static fn (ExchangeOrderDto $order): bool => $order->reduceOnly,
+            ));
+            self::assertNotEmpty($protections);
+            foreach ($protections as $protection) {
+                self::assertSame(
+                    $reservationDescriptor,
+                    $protection->metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null,
+                );
+            }
+            $replayCursor = $restored->eventCursor();
+            $replay = $dispatcher->dispatch($restored, $effect);
+            self::assertTrue($replay->idempotentReplay);
+            self::assertSame([], $restored->eventsSince($replayCursor));
+        } finally {
+            $this->removeRuntime($root);
+        }
+    }
+
+    public function testForgedPersistedReservationDescriptorRejectsReplayWithoutMutation(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_canonical_fake_reservation_forged_' . bin2hex(random_bytes(6));
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        try {
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))->forCell($this->cell($effect->provenance));
+            $runtime->applyMarketEvent($this->topOfBook());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
+            $placed = $dispatcher->dispatch($runtime, $effect);
+            self::assertNotNull($placed->execution->exchangeOrderId);
+            $entry = $runtime->adapter->getOrder('BTCUSDT', $placed->execution->exchangeOrderId);
+            self::assertNotNull($entry);
+            $runtime->stateStore->saveOrder($this->withMetadata($entry, array_replace(
+                $entry->metadata,
+                [PaperCanonicalFakeReservationDescriptor::METADATA_KEY => '{}'],
+            )));
+            $cursor = $runtime->eventCursor();
+
+            $replay = $dispatcher->dispatch($runtime, $effect);
+
+            self::assertFalse($replay->idempotentReplay);
+            self::assertSame(ExecutionResult::STATUS_ERROR, $replay->execution->status);
+            self::assertSame('duplicate_client_order_id_intent_mismatch', $replay->execution->raw['reason'] ?? null);
+            self::assertCount(1, array_filter(
+                $runtime->adapter->getOrdersSnapshot('BTCUSDT'),
+                static fn (ExchangeOrderDto $order): bool => !$order->reduceOnly,
+            ));
+            self::assertSame([], $runtime->eventsSince($cursor));
         } finally {
             $this->removeRuntime($root);
         }
@@ -316,6 +378,34 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
             new \DateTimeImmutable('2026-08-10T11:59:46Z'),
             $sourceOrdinal,
             ['bid_price' => $bidPrice, 'ask_price' => $askPrice],
+        );
+    }
+
+    /** @param array<string, mixed> $metadata */
+    private function withMetadata(ExchangeOrderDto $order, array $metadata): ExchangeOrderDto
+    {
+        return new ExchangeOrderDto(
+            $order->exchange,
+            $order->marketType,
+            $order->symbol,
+            $order->exchangeOrderId,
+            $order->clientOrderId,
+            $order->side,
+            $order->positionSide,
+            $order->orderType,
+            $order->status,
+            $order->quantity,
+            $order->filledQuantity,
+            $order->remainingQuantity,
+            $order->price,
+            $order->averagePrice,
+            $order->stopPrice,
+            $order->reduceOnly,
+            $order->postOnly,
+            $order->timeInForce,
+            $order->createdAt,
+            $order->updatedAt,
+            $metadata,
         );
     }
 
