@@ -24,6 +24,8 @@ use App\TradeEntry\Policy\OrderModePolicyInterface;
 use App\TradeEntry\Service\TradeEntryMetricsService;
 use App\TradeEntry\Types\Side;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
+use App\Trading\Lineage\LineageContext;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
@@ -33,7 +35,12 @@ use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\PaperExecutionCoordinator;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Persistence\PaperOrderIntentRecorderInterface;
+use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyDecision;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterface;
 use App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -46,6 +53,8 @@ use App\Trading\Paper\Runtime\PaperRuntimeGuard;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
+use App\Tests\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodecTest;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
@@ -54,6 +63,98 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(PaperExecutionCoordinator::class)]
 final class PaperExecutionCoordinatorTest extends TestCase
 {
+    public function testModernCanonicalEffectIsReservedDispatchedAndReplayedWithoutLegacyIntentMutation(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_modern_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $projection = new RecordingProjectionStore();
+            $legacyIntents = new RecordingPaperOrderIntents();
+            $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
+            $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+            $cell = self::modernCellFromEffect($effect);
+            $coordinator = $this->coordinator(
+                $store,
+                $projection,
+                $root,
+                legacyIntents: $legacyIntents,
+                canonicalStrategy: new DeterministicCanonicalPaperStrategy($effect),
+                canonicalIntents: $canonicalIntents,
+                clock: new MockClock('2026-08-10T12:00:00Z'),
+            );
+            $event = $this->modernEvent();
+
+            $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+            $coordinator->consumeAt($cell, PaperProfileEligibility::REFERENCE_ONLY, 'dataset-modern-1', 0, $event);
+
+            $runtime = (new PaperFakeRuntimeFactory($root, new MockClock('2026-08-10T12:00:00Z')))->forCell($cell);
+            $entries = array_values(array_filter(
+                $runtime->stateStore->getOrders('BTCUSDT'),
+                static fn ($order): bool => !$order->reduceOnly,
+            ));
+            self::assertCount(1, $entries);
+            self::assertSame($effect->plan->planHash, $entries[0]->metadata['plan_hash'] ?? null);
+            self::assertSame(1, $canonicalIntents->reservations);
+            self::assertSame(1, $canonicalIntents->acknowledgements);
+            self::assertSame(0, $legacyIntents->reservations);
+            self::assertSame(0, $legacyIntents->acknowledgements);
+            self::assertSame(2, $coordinator->counters($cell)->requested);
+            self::assertSame(2, $coordinator->counters($cell)->acknowledged);
+            self::assertSame([], $store->pendingEffects($cell));
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
+    public function testModernCanonicalSymbolMismatchFailsBeforeIntentOrJournalMutation(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_modern_invalid_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
+            $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+            $cell = self::modernCellFromEffect($effect);
+            $coordinator = $this->coordinator(
+                $store,
+                new RecordingProjectionStore(),
+                $root,
+                canonicalStrategy: new DeterministicCanonicalPaperStrategy($effect),
+                canonicalIntents: $canonicalIntents,
+                clock: new MockClock('2026-08-10T12:00:00Z'),
+            );
+            $event = PaperMarketEvent::create(
+                PaperMarketDataNetwork::TESTNET,
+                PaperMarketDataVenue::HYPERLIQUID,
+                'ETHUSDT',
+                PaperMarketDataChannel::CANDLE_1M,
+                new \DateTimeImmutable('2026-08-10T11:59:59Z'),
+                new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+                '1',
+                $this->payload(),
+            );
+
+            try {
+                $coordinator->consumeAt(
+                    $cell,
+                    PaperProfileEligibility::REFERENCE_ONLY,
+                    'dataset-modern-1',
+                    0,
+                    $event,
+                );
+                self::fail('Mismatched canonical symbol was accepted.');
+            } catch (\LogicException $exception) {
+                self::assertSame('paper_canonical_strategy_symbol_mismatch', $exception->getMessage());
+            }
+
+            self::assertSame(0, $canonicalIntents->reservations);
+            self::assertSame(0, $canonicalIntents->acknowledgements);
+            self::assertSame(0, $store->checkpoint($cell)->nextSourcePosition);
+            self::assertSame(0, $coordinator->counters($cell)->requested);
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
     public function testAcceptedEffectAndExactReplayProduceOneFakeOrder(): void
     {
         $root = sys_get_temp_dir() . '/paper_coord_' . bin2hex(random_bytes(5));
@@ -168,9 +269,18 @@ final class PaperExecutionCoordinatorTest extends TestCase
         }
     }
 
-    private function coordinator(InMemoryPaperExecutionStore $store, RecordingProjectionStore $projection, string $root, ?PaperStrategyPreparationInterface $strategy = null): PaperExecutionCoordinator
+    private function coordinator(
+        InMemoryPaperExecutionStore $store,
+        RecordingProjectionStore $projection,
+        string $root,
+        ?PaperStrategyPreparationInterface $strategy = null,
+        ?RecordingPaperOrderIntents $legacyIntents = null,
+        ?PaperCanonicalStrategyPreparationInterface $canonicalStrategy = null,
+        ?RecordingCanonicalPaperOrderIntents $canonicalIntents = null,
+        ?MockClock $clock = null,
+    ): PaperExecutionCoordinator
     {
-        $clock = new MockClock('2026-08-01T10:00:00Z');
+        $clock ??= new MockClock('2026-08-01T10:00:00Z');
         return new PaperExecutionCoordinator(
             $store,
             new PaperMarketStateProjector(new PaperKlineProvider()),
@@ -179,13 +289,17 @@ final class PaperExecutionCoordinatorTest extends TestCase
             new PaperFakeRuntimeFactory($root, $clock),
             new PaperFakeEffectDispatcher($this->executionService(), new FakeExchangeEventNormalizer()),
             $projection,
-            new RecordingPaperOrderIntents(),
+            $legacyIntents ?? new RecordingPaperOrderIntents(),
             new PaperRuntimeGuard(),
             new PaperDatabaseGuard(new class implements PaperDatabaseInspectorInterface {
                 public function inspect(): PaperDatabaseInspection { return new PaperDatabaseInspection('unit_paper_test', 0); }
             }),
             'test',
             true,
+            canonicalStrategy: $canonicalStrategy,
+            canonicalCodec: new PaperCanonicalPreparedEffectCodec(),
+            canonicalDispatcher: new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock),
+            canonicalOrderIntents: $canonicalIntents,
         );
     }
 
@@ -231,6 +345,45 @@ final class PaperExecutionCoordinatorTest extends TestCase
                 $snapshot,
             ),
             'modern-run-1',
+        );
+    }
+
+    private static function modernCellFromEffect(PaperCanonicalPreparedEffect $effect): PaperExecutionCell
+    {
+        $provenance = $effect->provenance;
+        $network = PaperMarketDataNetwork::from($provenance['paper_network']);
+        $venue = PaperMarketDataVenue::from($provenance['market_data_venue']);
+
+        return PaperExecutionCell::createModern(
+            $network,
+            $venue,
+            $provenance['configuration_snapshot_id'],
+            PaperModernStrategyIdentity::fromDurableIdentity(
+                $network,
+                $venue,
+                $provenance['mode_id'],
+                $provenance['mode_version'],
+                $provenance['setup_id'],
+                $provenance['setup_version'],
+                $provenance['side'],
+                $provenance['config_hash'],
+                $provenance['condition_catalog_hash'],
+            ),
+            $provenance['run_id'],
+        );
+    }
+
+    private function modernEvent(): PaperMarketEvent
+    {
+        return PaperMarketEvent::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'BTCUSDT',
+            PaperMarketDataChannel::CANDLE_1M,
+            new \DateTimeImmutable('2026-08-10T11:59:59Z'),
+            new \DateTimeImmutable('2026-08-10T12:00:00Z'),
+            '1',
+            $this->payload(),
         );
     }
 
@@ -293,6 +446,44 @@ final class RecordingPaperOrderIntents implements PaperOrderIntentRecorderInterf
         $this->reserved[] = ['prepared' => $prepared, 'identity' => $identity, 'provenance' => $provenance];
 
         return $identity + ['order_intent_id' => 42];
+    }
+
+    public function acknowledge(array $identity, \App\TradeEntry\Dto\ExecutionResult $result): void
+    {
+        ++$this->acknowledgements;
+        $this->acknowledged[] = ['identity' => $identity, 'result' => $result];
+    }
+}
+
+final class DeterministicCanonicalPaperStrategy implements PaperCanonicalStrategyPreparationInterface
+{
+    public function __construct(private readonly PaperCanonicalPreparedEffect $effect) {}
+
+    public function prepareFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PaperCanonicalStrategyDecision
+    {
+        return PaperCanonicalStrategyDecision::fromPreparedEffect($this->effect);
+    }
+}
+
+final class RecordingCanonicalPaperOrderIntents implements PaperCanonicalOrderIntentRecorderInterface
+{
+    public int $reservations = 0;
+    public int $acknowledgements = 0;
+    /** @var list<array<string, mixed>> */ public array $reserved = [];
+    /** @var list<array<string, mixed>> */ public array $acknowledged = [];
+
+    public function reserve(
+        CanonicalOrderPlan $plan,
+        LineageContext $lineage,
+        string $decisionKey,
+        string $executionTimeframe,
+        array $identity,
+        array $provenance,
+    ): array {
+        ++$this->reservations;
+        $this->reserved[] = compact('plan', 'lineage', 'decisionKey', 'executionTimeframe', 'identity', 'provenance');
+
+        return $identity + ['order_intent_id' => 84];
     }
 
     public function acknowledge(array $identity, \App\TradeEntry\Dto\ExecutionResult $result): void

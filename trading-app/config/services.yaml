@@ -198,10 +198,19 @@ services:
         arguments:
             $execution: '@paper.execution.exchange_execution_service'
 
+    App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher:
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
     App\Trading\Paper\Execution\PaperExecutionCoordinator:
         arguments:
             $environment: '%kernel.environment%'
             $enabled: '%env(bool:PAPER_EXECUTION_ENABLED)%'
+            # Kept fail-closed until the canonical replay strategy-input assembler lands.
+            $canonicalStrategy: null
+            $canonicalCodec: '@App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec'
+            $canonicalDispatcher: '@App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher'
+            $canonicalOrderIntents: '@App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface'
 
     App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReaderInterface:
         alias: App\Trading\Backfill\PositionTradeAnalysisBackfillDivergenceReader

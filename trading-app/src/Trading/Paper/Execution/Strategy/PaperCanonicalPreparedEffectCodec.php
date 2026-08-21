@@ -50,6 +50,12 @@ final class PaperCanonicalPreparedEffectCodec
     }
 
     /** @param array<string, mixed> $encoded */
+    public function supports(array $encoded): bool
+    {
+        return ($encoded['schema_version'] ?? null) === self::SCHEMA_VERSION;
+    }
+
+    /** @param array<string, mixed> $encoded */
     public function decode(array $encoded): PaperCanonicalPreparedEffect
     {
         try {

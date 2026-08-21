@@ -9,6 +9,7 @@ use App\Exchange\Event\ExchangeEventInterface;
 use App\Exchange\Event\ExchangeLocalProjectionStoreInterface;
 use App\TradeEntry\Dto\ExecutionResult;
 use App\TradeEntry\Policy\IdempotencyPolicy;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeDispatchResult;
 use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntime;
@@ -17,10 +18,15 @@ use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\Market\PaperMarketEffectCodec;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionStoreInterface;
+use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Persistence\PaperOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Persistence\PaperSourceClaim;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedDecision;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffect;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyDecision;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparationInterface;
 use App\Trading\Paper\Execution\Strategy\PaperPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface;
 use App\Trading\Paper\MarketData\CanonicalJson;
@@ -54,6 +60,10 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         private readonly bool $enabled = false,
         ?callable $crashInjector = null,
         ?PaperMarketEffectCodec $marketCodec = null,
+        private readonly ?PaperCanonicalStrategyPreparationInterface $canonicalStrategy = null,
+        private readonly ?PaperCanonicalPreparedEffectCodec $canonicalCodec = null,
+        private readonly ?PaperCanonicalFakeEffectDispatcher $canonicalDispatcher = null,
+        private readonly ?PaperCanonicalOrderIntentRecorderInterface $canonicalOrderIntents = null,
     ) {
         $this->crashInjector = $crashInjector === null ? null : \Closure::fromCallable($crashInjector);
         $this->marketCodec = $marketCodec ?? new PaperMarketEffectCodec();
@@ -62,7 +72,11 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
     public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
     {
         $cell->provenance($eligibility);
-        if ($cell->isModern()) {
+        if ($cell->isModern() && ($this->canonicalStrategy === null
+            || $this->canonicalCodec === null
+            || $this->canonicalDispatcher === null
+            || $this->canonicalOrderIntents === null
+        )) {
             throw new \LogicException('paper_modern_strategy_bridge_unavailable');
         }
         $this->databaseGuard->assertReady($this->environment);
@@ -93,11 +107,17 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
 
         $snapshot = $this->market->events();
+        $prepared = null;
+        $canonicalDecision = null;
         try {
             $this->market->apply($event);
-            $prepared = $this->strategy->prepareFor($cell, $event);
-            if ($prepared !== null) {
-                $prepared = $this->dispatcher->prepare($prepared);
+            if ($cell->isModern()) {
+                $canonicalDecision = $this->canonicalStrategy()->prepareFor($cell, $event);
+            } else {
+                $prepared = $this->strategy->prepareFor($cell, $event);
+                if ($prepared !== null) {
+                    $prepared = $this->dispatcher->prepare($prepared);
+                }
             }
         } finally {
             $this->market->restore($snapshot);
@@ -111,25 +131,38 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         ]));
         $tradeEffectKey = null;
         $identity = null;
+        $decisionKey = null;
         if ($prepared !== null && $prepared->plan !== null) {
             $prepared->lifecycle->merge($provenance + [
                 'paper_source_event_id' => $event->eventId,
                 'paper_dataset_id' => $datasetId,
             ]);
+            $decisionKey = $prepared->decisionKey;
+        } elseif ($canonicalDecision instanceof PaperCanonicalStrategyDecision) {
+            if ($canonicalDecision->plan->symbol !== $event->symbol) {
+                throw new \LogicException('paper_canonical_strategy_symbol_mismatch');
+            }
+            $decisionKey = $canonicalDecision->decisionKey;
+        }
+        if ($decisionKey !== null) {
             $identity = ['client_order_id' => (new IdempotencyPolicy())->clientOrderIdFromDecisionKey(
-                $cell->id . '|' . $event->eventId . '|' . $prepared->decisionKey,
+                $cell->id . '|' . $event->eventId . '|' . $decisionKey,
             )];
             $tradeEffectKey = 'sha256:' . hash('sha256', CanonicalJson::encode([
                 'cell_id' => $cell->id,
                 'source_event_id' => $event->eventId,
-                'decision_key' => $prepared->decisionKey,
+                'decision_key' => $decisionKey,
                 'effect_type' => 'trade_entry',
             ]));
+            if ($canonicalDecision instanceof PaperCanonicalStrategyDecision) {
+                $canonicalDecision->prepare($identity + ['order_intent_id' => 1], $provenance);
+            }
         }
 
         $this->crash(PaperCrashPoint::BEFORE_PHASE_1_COMMIT);
         $decision = null;
-        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $marketEffectKey, $tradeEffectKey, $prepared, $identity, $provenance, &$decision): PaperSourceClaim {
+        $canonicalEffect = null;
+        $claim = $this->store->transactional(function () use ($cell, $sourcePosition, $event, $marketEffectKey, $tradeEffectKey, $prepared, $canonicalDecision, $identity, $provenance, &$decision, &$canonicalEffect): PaperSourceClaim {
             $claim = $this->store->claimSource($cell, $sourcePosition, $event);
             if ($claim->status === PaperSourceClaim::ACCEPTED) {
                 $this->store->appendEffect($cell, $sourcePosition, $marketEffectKey, $this->marketCodec->encode($event));
@@ -137,6 +170,22 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                     $durableIdentity = $this->orderIntents->reserve($prepared, $identity, $provenance);
                     $decision = new PaperPreparedDecision($prepared, $durableIdentity, $provenance);
                     $this->store->appendEffect($cell, $sourcePosition, $tradeEffectKey, $this->codec->encode($prepared, $durableIdentity, $provenance));
+                } elseif ($canonicalDecision instanceof PaperCanonicalStrategyDecision && $identity !== null && $tradeEffectKey !== null) {
+                    $durableIdentity = $this->canonicalOrderIntents()->reserve(
+                        $canonicalDecision->plan,
+                        $canonicalDecision->lineage,
+                        $canonicalDecision->decisionKey,
+                        $canonicalDecision->executionTimeframe,
+                        $identity,
+                        $provenance,
+                    );
+                    $canonicalEffect = $canonicalDecision->prepare($durableIdentity, $provenance);
+                    $this->store->appendEffect(
+                        $cell,
+                        $sourcePosition,
+                        $tradeEffectKey,
+                        $this->canonicalCodec()->encode($canonicalEffect),
+                    );
                 }
             }
 
@@ -152,6 +201,11 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
 
         if ($prepared !== null && $prepared->plan !== null && !$decision instanceof PaperPreparedDecision) {
             throw new \LogicException('paper_order_intent_reservation_missing');
+        }
+        if ($canonicalDecision instanceof PaperCanonicalStrategyDecision
+            && !$canonicalEffect instanceof PaperCanonicalPreparedEffect
+        ) {
+            throw new \LogicException('paper_canonical_order_intent_reservation_missing');
         }
 
         $this->reconcilePending($cell, $runtime, false);
@@ -180,6 +234,30 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
                 }
                 $this->crash(PaperCrashPoint::AFTER_FAKE_EFFECT);
                 $this->completeMarketEffect($cell, $pending->sourcePosition, $pending->effectKey, $runtime, $cursor);
+
+                continue;
+            }
+            if ($this->canonicalCodec !== null && $this->canonicalCodec->supports($pending->payload)) {
+                $effect = $this->canonicalCodec->decode($pending->payload);
+                $cursor = $this->store->checkpoint($cell)->fakeEventCursor;
+                $dispatch = $this->dispatchCanonicalEffect(
+                    $cell,
+                    $pending->sourcePosition,
+                    $pending->effectKey,
+                    $runtime,
+                    $effect,
+                    $retry,
+                );
+                $this->crash(PaperCrashPoint::AFTER_FAKE_EFFECT);
+                $this->completeCanonicalEffect(
+                    $cell,
+                    $pending->sourcePosition,
+                    $pending->effectKey,
+                    $runtime,
+                    $effect,
+                    $dispatch,
+                    $cursor,
+                );
 
                 continue;
             }
@@ -226,6 +304,30 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         }
     }
 
+    private function dispatchCanonicalEffect(
+        PaperExecutionCell $cell,
+        int $sourcePosition,
+        string $effectKey,
+        PaperFakeRuntime $runtime,
+        PaperCanonicalPreparedEffect $effect,
+        bool $retry,
+    ): PaperFakeDispatchResult {
+        if ($retry) {
+            $this->store->recordEffectRetry($cell, $sourcePosition, $effectKey);
+        }
+        try {
+            return $this->canonicalDispatcher()->dispatch($runtime, $effect);
+        } catch (\Throwable $exception) {
+            $this->store->recordEffectFailure(
+                $cell,
+                $sourcePosition,
+                $effectKey,
+                'fake_canonical_effect_dispatch_failed',
+            );
+            throw $exception;
+        }
+    }
+
     private function completeEffect(
         PaperExecutionCell $cell,
         int $sourcePosition,
@@ -243,6 +345,33 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             $this->exchangeProjection->projectAtomically($events);
             $this->orderIntents->acknowledge($decision->orderIntentIdentity, $dispatch->execution);
             $this->store->acknowledge($cell, $sourcePosition, $effectKey, $acknowledgement, $runtime->eventCursor());
+        });
+        $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
+    }
+
+    private function completeCanonicalEffect(
+        PaperExecutionCell $cell,
+        int $sourcePosition,
+        string $effectKey,
+        PaperFakeRuntime $runtime,
+        PaperCanonicalPreparedEffect $effect,
+        PaperFakeDispatchResult $dispatch,
+        int $cursor,
+    ): void {
+        $events = $this->canonicalDispatcher()->normalizeSince($runtime, $cursor);
+        $acknowledgement = $this->acknowledgementPayload($dispatch->execution, $events);
+
+        $this->crash(PaperCrashPoint::BEFORE_PHASE_3_COMMIT);
+        $this->store->transactional(function () use ($cell, $sourcePosition, $effectKey, $runtime, $effect, $dispatch, $events, $acknowledgement): void {
+            $this->exchangeProjection->projectAtomically($events);
+            $this->canonicalOrderIntents()->acknowledge($effect->orderIntentIdentity, $dispatch->execution);
+            $this->store->acknowledge(
+                $cell,
+                $sourcePosition,
+                $effectKey,
+                $acknowledgement,
+                $runtime->eventCursor(),
+            );
         });
         $this->crash(PaperCrashPoint::AFTER_PHASE_3_COMMIT);
     }
@@ -278,6 +407,30 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
             'exchange_order_id' => $result->exchangeOrderId,
             'event_types' => array_map(static fn (ExchangeEventInterface $event): string => $event->eventType(), $events),
         ];
+    }
+
+    private function canonicalStrategy(): PaperCanonicalStrategyPreparationInterface
+    {
+        return $this->canonicalStrategy
+            ?? throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+    }
+
+    private function canonicalCodec(): PaperCanonicalPreparedEffectCodec
+    {
+        return $this->canonicalCodec
+            ?? throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+    }
+
+    private function canonicalDispatcher(): PaperCanonicalFakeEffectDispatcher
+    {
+        return $this->canonicalDispatcher
+            ?? throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+    }
+
+    private function canonicalOrderIntents(): PaperCanonicalOrderIntentRecorderInterface
+    {
+        return $this->canonicalOrderIntents
+            ?? throw new \LogicException('paper_modern_strategy_bridge_unavailable');
     }
 
     private function crash(PaperCrashPoint $point): void

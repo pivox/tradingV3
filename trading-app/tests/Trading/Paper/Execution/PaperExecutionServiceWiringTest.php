@@ -11,6 +11,7 @@ use App\Trading\Paper\Execution\PaperEventCoordinatorInterface;
 use App\Trading\Paper\Execution\PaperExecutionCoordinator;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Fake\PaperFakeEffectDispatcher;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Market\PaperKlineProviderAdapter;
 use App\Indicator\Provider\IndicatorProviderService;
 use App\MtfValidator\Service\MtfValidatorCoreService;
@@ -20,6 +21,8 @@ use App\Trading\Paper\Replay\PaperReplayClock;
 use App\Trading\Paper\Replay\PaperReplayReader;
 use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
+use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -37,7 +40,28 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         self::bootKernel(['environment' => 'test', 'debug' => false]);
         $container = static::getContainer();
 
-        self::assertInstanceOf(PaperExecutionCoordinator::class, $container->get(PaperEventCoordinatorInterface::class));
+        $coordinator = $container->get(PaperEventCoordinatorInterface::class);
+        self::assertInstanceOf(PaperExecutionCoordinator::class, $coordinator);
+        self::assertNull(
+            (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalStrategy'))->getValue($coordinator),
+            'Modern Paper must stay fail-closed until a canonical strategy-input assembler is wired.',
+        );
+        self::assertInstanceOf(
+            PaperCanonicalPreparedEffectCodec::class,
+            (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalCodec'))->getValue($coordinator),
+        );
+        $canonicalDispatcher = (new \ReflectionProperty(
+            PaperExecutionCoordinator::class,
+            'canonicalDispatcher',
+        ))->getValue($coordinator);
+        self::assertInstanceOf(
+            PaperCanonicalFakeEffectDispatcher::class,
+            $canonicalDispatcher,
+        );
+        self::assertInstanceOf(
+            PaperCanonicalOrderIntentRecorderInterface::class,
+            (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalOrderIntents'))->getValue($coordinator),
+        );
         self::assertInstanceOf(PaperExecutionReplayCommand::class, $container->get(PaperExecutionReplayCommand::class));
         self::assertInstanceOf(PaperReplayRuntimeCheckCommand::class, $container->get(PaperReplayRuntimeCheckCommand::class));
         $factory = $container->get(PaperFakeRuntimeFactory::class);
@@ -49,6 +73,11 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         $readerClock = (new \ReflectionProperty(PaperReplayReader::class, 'clock'))->getValue($reader);
         self::assertInstanceOf(PaperReplayClock::class, $runtimeClock);
         self::assertSame($readerClock, $runtimeClock, 'Replay reader and Fake matching must share dataset time.');
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty(PaperCanonicalFakeEffectDispatcher::class, 'clock'))->getValue($canonicalDispatcher),
+            'Canonical plan deadlines must be evaluated against dataset time.',
+        );
         $readiness = $container->get(PaperReplayReadinessService::class);
         $readinessClock = (new \ReflectionProperty(PaperReplayReadinessService::class, 'clock'))->getValue($readiness);
         self::assertSame($readerClock, $readinessClock, 'Readiness and replay must validate the same controlled clock.');
