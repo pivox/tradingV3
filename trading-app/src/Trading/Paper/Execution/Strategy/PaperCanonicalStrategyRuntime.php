@@ -44,7 +44,7 @@ final readonly class PaperCanonicalStrategyRuntime implements PaperCanonicalStra
                 ),
                 new PaperCanonicalPortfolioAdapter(
                     $admission,
-                    new InMemoryCanonicalPortfolioReservationStore(),
+                    new PaperCanonicalPortfolioReservationStore(),
                 ),
                 new BacktestCanonicalPortfolioAdapter(
                     $admission,

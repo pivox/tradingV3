@@ -24,6 +24,7 @@ use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPortfolioReservationStore;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
@@ -122,6 +123,14 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
             AbstractCanonicalPortfolioAdapter::class,
             'admissionEngine',
         ))->getValue($paperPortfolio);
+        self::assertInstanceOf(
+            PaperCanonicalPortfolioReservationStore::class,
+            (new \ReflectionProperty(
+                AbstractCanonicalPortfolioAdapter::class,
+                'reservationStore',
+            ))->getValue($paperPortfolio),
+            'Canonical Paper admission must not keep a second lifecycle state.',
+        );
         self::assertSame(
             $readerClock,
             (new \ReflectionProperty($admissionEngine::class, 'clock'))->getValue($admissionEngine),
