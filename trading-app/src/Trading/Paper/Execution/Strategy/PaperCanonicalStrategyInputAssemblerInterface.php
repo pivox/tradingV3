@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Trading\Paper\Execution\Strategy;
+
+use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\MarketData\PaperMarketEvent;
+
+interface PaperCanonicalStrategyInputAssemblerInterface
+{
+    public function assemble(
+        PaperExecutionCell $cell,
+        PaperMarketEvent $event,
+    ): ?PaperCanonicalStrategyInput;
+}
