@@ -32,14 +32,17 @@ final class PaperCanonicalFakeInstrumentRegistryTest extends TestCase
         $cell = $this->cell($effect->provenance);
         $registry = new PaperCanonicalFakeInstrumentRegistry($cell, new FakeExchangeStateStore());
 
-        self::assertNull($registry->find('BTCUSDT'));
         $first = $registry->bind($effect->plan);
-        self::assertSame('1', $registry->find('BTCUSDT')?->contractSize);
+        $bound = $registry->find('BTCUSDT');
+        self::assertNotNull($bound);
+        self::assertSame('1', $bound->contractSize);
         self::assertSame($first, $registry->bind($effect->plan));
 
         $replacement = PaperCanonicalPreparedEffectCodecTest::fixture(contractSize: 0.01);
         self::assertNotSame($first, $registry->bind($replacement->plan));
-        self::assertSame('0.01', $registry->find('BTCUSDT')?->contractSize);
+        $rebound = $registry->find('BTCUSDT');
+        self::assertNotNull($rebound);
+        self::assertSame('0.01', $rebound->contractSize);
     }
 
     public function testRestoresTheExactDescriptorFromAnActiveCanonicalOrder(): void
