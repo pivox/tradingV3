@@ -30,7 +30,9 @@ For the exact modern cell and current replay trigger, the provider:
 
 The instrument source exposes an atomic pair containing both the existing risk
 instrument and the price tick derived from the same metadata record. No second
-metadata selection or fallback is allowed.
+metadata selection or fallback is allowed. The execution pair is revalidated at
+the current replay clock while retaining the exact metadata-record hash; the
+standalone source snapshot keeps the original metadata timestamp for audit.
 
 The order-plan evidence source uses the book-side maker price (bid for long,
 ask for short), indicator VWAP/ATR values selected by policy, portfolio equity
@@ -77,4 +79,3 @@ prove the concrete bridge reaches the coordinator, and readiness tests prove a
 modern cell is registered, resumable and runnable without weakening legacy
 behaviour. Adjacent Paper/TradingCore tests, PHPStan, container/YAML lint and
 diff checks complete verification.
-

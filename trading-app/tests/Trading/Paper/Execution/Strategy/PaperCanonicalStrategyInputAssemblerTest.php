@@ -33,13 +33,14 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
 {
     private const SOURCE_DATASET_ID = 'paper-modern-dataset';
     private const SOURCE_EVENTS_FILE_SHA256 = '4444444444444444444444444444444444444444444444444444444444444444';
+    private const SOURCE_BUILD_VERSION = 'paper-dataset-recorder.v2';
     private const SOURCE_CHECKSUM = 'sha256:' . self::SOURCE_EVENTS_FILE_SHA256;
 
     public function testAssemblesTheExactCanonicalInputsForTheModernCell(): void
     {
         [$cell, $evidence] = $this->fixture();
         $input = (new PaperCanonicalStrategyInputAssembler($this->provider($evidence)))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
 
         self::assertNotNull($input);
         self::assertSame('15m', $input->executionTimeframe);
@@ -67,6 +68,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
                 PaperMarketEvent $event,
                 string $sourceDatasetId,
                 string $sourceEventsFileSha256,
+                string $sourceBuildVersion,
             ): ?PaperCanonicalStrategyEvidence
             {
                 return null;
@@ -78,6 +80,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $this->event(),
             self::SOURCE_DATASET_ID,
             self::SOURCE_EVENTS_FILE_SHA256,
+            self::SOURCE_BUILD_VERSION,
         ));
     }
 
@@ -90,6 +93,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence->indicatorProjection,
             $evidence->sourceDatasetId,
             $evidence->sourceEventsFileSha256,
+            $evidence->sourceBuildVersion,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -101,7 +105,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
 
         try {
             (new PaperCanonicalStrategyInputAssembler($this->provider($drifted)))
-                ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+                ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
             self::fail('Decision drift was accepted.');
         } catch (\LogicException $exception) {
             self::assertSame('paper_canonical_strategy_input_identity_mismatch', $exception->getMessage());
@@ -115,6 +119,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
                 $this->event(PaperMarketDataChannel::CANDLE_1M),
                 self::SOURCE_DATASET_ID,
                 self::SOURCE_EVENTS_FILE_SHA256,
+                self::SOURCE_BUILD_VERSION,
             );
     }
 
@@ -131,7 +136,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         );
 
         try {
-            $assembler->assemble($legacy, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            $assembler->assemble($legacy, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
             self::fail('Legacy cell was accepted by the canonical assembler.');
         } catch (\LogicException $exception) {
             self::assertSame('paper_canonical_strategy_cell_identity_missing', $exception->getMessage());
@@ -149,7 +154,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             new \DateTimeImmutable('2026-08-10T12:00:00Z'),
             '1',
             $this->payload('15m'),
-        ), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+        ), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     public function testRejectsEvidenceFromADifferentExecutionCandle(): void
@@ -162,7 +167,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(klineTime: '2026-08-10T11:30:00Z'),
         ))))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     public function testRejectsExecutionSnapshotWithDifferentSourceIdentity(): void
@@ -175,7 +180,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(snapshotExchange: 'okx'),
         ))))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     public function testRejectsIndicatorProjectionDatasetSourceDrift(): void
@@ -188,7 +193,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(sourceVenue: 'okx'),
         ))))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     public function testRejectsIndicatorProjectionFromADifferentReplayChecksum(): void
@@ -206,6 +211,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
                 $this->event(),
                 self::SOURCE_DATASET_ID,
                 self::SOURCE_EVENTS_FILE_SHA256,
+                self::SOURCE_BUILD_VERSION,
             );
     }
 
@@ -218,6 +224,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence->indicatorProjection,
             'paper-foreign-dataset',
             $evidence->sourceEventsFileSha256,
+            $evidence->sourceBuildVersion,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -230,7 +237,32 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_dataset_mismatch');
         (new PaperCanonicalStrategyInputAssembler($this->provider($foreign)))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
+    }
+
+    public function testRejectsEvidenceSelectedForADifferentRecorderBuild(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+        $foreign = new PaperCanonicalStrategyEvidence(
+            $evidence->configRequest,
+            $evidence->lineage,
+            $evidence->indicatorProjection,
+            $evidence->sourceDatasetId,
+            $evidence->sourceEventsFileSha256,
+            'paper-dataset-recorder.foreign',
+            $evidence->orderPlanRequest,
+            $evidence->portfolioScope,
+            $evidence->portfolioSnapshot,
+            $evidence->decisionKey,
+            $evidence->liveSpreadBps,
+            $evidence->estimatedSlippageBps,
+            $evidence->orderBook,
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_dataset_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($foreign)))
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     #[DataProvider('nonCanonicalSnapshotTimestamps')]
@@ -244,7 +276,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(klineTime: $timestamp),
         ))))
-            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256, self::SOURCE_BUILD_VERSION);
     }
 
     /** @return iterable<string, array{string}> */
@@ -337,6 +369,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $this->projection(),
             self::SOURCE_DATASET_ID,
             self::SOURCE_EVENTS_FILE_SHA256,
+            self::SOURCE_BUILD_VERSION,
             new CanonicalOrderPlanBuildRequest(...CanonicalOrderPlanPipelineFixture::accepted(
                 executionPolicy: $policy,
                 exchange: 'hyperliquid',
@@ -360,6 +393,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $projection,
             $evidence->sourceDatasetId,
             $evidence->sourceEventsFileSha256,
+            $evidence->sourceBuildVersion,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -425,6 +459,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
                 PaperMarketEvent $event,
                 string $sourceDatasetId,
                 string $sourceEventsFileSha256,
+                string $sourceBuildVersion,
             ): ?PaperCanonicalStrategyEvidence
             {
                 return $this->evidence;

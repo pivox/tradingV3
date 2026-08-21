@@ -14,5 +14,6 @@ interface PaperCanonicalStrategyPreparationInterface
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): ?PaperCanonicalStrategyDecision;
 }

@@ -110,8 +110,6 @@ services:
             - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSource.php'
             - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperLiveCheckpointStore.php'
             - '../src/Trading/Paper/Hyperliquid/Live/PawlHyperliquidPaperPublicWebSocketTransport.php'
-            # Deliberately dormant until the production canonical evidence provider is complete.
-            - '../src/Trading/Paper/Execution/Strategy/PaperCanonicalStrategyPreparation.php'
             # Runtime-owned per-cell registry; constructed by PaperFakeRuntimeFactory.
             - '../src/Trading/Paper/Execution/Fake/PaperCanonicalFakeInstrumentRegistry.php'
 
@@ -153,6 +151,18 @@ services:
 
     App\Trading\Paper\Execution\Strategy\PaperStrategyPreparationInterface:
         alias: App\Trading\Paper\Execution\Strategy\PaperMtfStrategyBridge
+
+    App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProviderInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProvider
+
+    App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSourceInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSource
+
+    App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInputAssemblerInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInputAssembler
+
+    App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntimeInterface:
+        alias: App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime
 
     App\Trading\Pnl\CanonicalTradeFillWindowResolverInterface:
         alias: App\Trading\Pnl\LedgerCanonicalTradeFillWindowResolver
@@ -206,12 +216,19 @@ services:
         arguments:
             $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
 
+    App\Trading\Paper\Execution\Fake\PaperCanonicalFakePortfolioSource:
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
+    App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource:
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
     App\Trading\Paper\Execution\PaperExecutionCoordinator:
         arguments:
             $environment: '%kernel.environment%'
             $enabled: '%env(bool:PAPER_EXECUTION_ENABLED)%'
-            # Kept fail-closed until the canonical replay strategy-input assembler lands.
-            $canonicalStrategy: null
+            $canonicalStrategy: '@App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparation'
             $canonicalCodec: '@App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec'
             $canonicalDispatcher: '@App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher'
             $canonicalOrderIntents: '@App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface'

@@ -24,6 +24,13 @@ use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparation;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProvider;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceProviderInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSource;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyEvidenceSourceInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalOrderPlanEvidenceSource;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakePortfolioSource;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPortfolioReservationStore;
 use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
 use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
@@ -49,9 +56,17 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
 
         $coordinator = $container->get(PaperEventCoordinatorInterface::class);
         self::assertInstanceOf(PaperExecutionCoordinator::class, $coordinator);
-        self::assertNull(
+        self::assertInstanceOf(
+            PaperCanonicalStrategyPreparation::class,
             (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalStrategy'))->getValue($coordinator),
-            'Modern Paper must stay fail-closed until a canonical strategy-input assembler is wired.',
+        );
+        self::assertInstanceOf(
+            PaperCanonicalStrategyEvidenceProvider::class,
+            $container->get(PaperCanonicalStrategyEvidenceProviderInterface::class),
+        );
+        self::assertInstanceOf(
+            PaperCanonicalStrategyEvidenceSource::class,
+            $container->get(PaperCanonicalStrategyEvidenceSourceInterface::class),
         );
         self::assertInstanceOf(
             PaperCanonicalPreparedEffectCodec::class,
@@ -84,6 +99,16 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
             $readerClock,
             (new \ReflectionProperty(PaperCanonicalFakeEffectDispatcher::class, 'clock'))->getValue($canonicalDispatcher),
             'Canonical plan deadlines must be evaluated against dataset time.',
+        );
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty(PaperCanonicalOrderPlanEvidenceSource::class, 'clock'))
+                ->getValue($container->get(PaperCanonicalOrderPlanEvidenceSource::class)),
+        );
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty(PaperCanonicalFakePortfolioSource::class, 'clock'))
+                ->getValue($container->get(PaperCanonicalFakePortfolioSource::class)),
         );
         $canonicalRuntime = new PaperCanonicalStrategyRuntime(
             $container->get(EffectiveTradingConfigResolver::class),

@@ -106,21 +106,18 @@ final readonly class PaperReplayReadinessService
                 $modernIdentity,
                 $runId,
             );
-
-            return new PaperReplayPreparation(
-                $manifest,
-                $snapshot,
-                PaperProfileEligibility::REFERENCE_ONLY,
-                $cell,
-                $this->checkpoints->consumerId($cell),
-                null,
-                'paper_modern_strategy_bridge_unavailable',
+            $eligibility = PaperProfileEligibility::REFERENCE_ONLY;
+        } else {
+            $profile = $strategy->legacyProfile();
+            $eligibility = $this->profiles->require($profile);
+            $cell = PaperExecutionCell::create(
+                $manifest->network,
+                $manifest->venue,
+                $snapshot->id,
+                $profile,
+                $runId,
             );
         }
-
-        $profile = $strategy->legacyProfile();
-        $eligibility = $this->profiles->require($profile);
-        $cell = PaperExecutionCell::create($manifest->network, $manifest->venue, $snapshot->id, $profile, $runId);
         $this->coordinator->assertReady($cell, $eligibility, array_keys($manifest->symbols));
         try {
             $state = $this->store->inspectCell($cell, $eligibility);
