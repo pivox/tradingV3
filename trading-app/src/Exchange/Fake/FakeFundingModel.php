@@ -176,7 +176,11 @@ final readonly class FakeFundingModel
         $metadata = [
             'position_opened_at' => $position->openedAt?->format(\DateTimeInterface::ATOM),
         ];
-        foreach (['decision_key', 'paper_canonical_reservation_descriptor'] as $key) {
+        foreach ([
+            'decision_key',
+            'paper_canonical_reservation_descriptor',
+            'paper_canonical_instrument_descriptor',
+        ] as $key) {
             $value = $position->metadata[$key] ?? null;
             if (\is_string($value) && $value !== '') {
                 $metadata[$key] = $value;

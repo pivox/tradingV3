@@ -240,6 +240,7 @@ final class FakeFundingModelTest extends TestCase
         $position = $this->position(ExchangePositionSide::LONG, metadata: [
             'decision_key' => 'decision-private-1',
             'paper_canonical_reservation_descriptor' => '{"descriptor":"exact"}',
+            'paper_canonical_instrument_descriptor' => '{"instrument":"exact"}',
         ]);
 
         $result = $this->model()->settle(
@@ -254,12 +255,20 @@ final class FakeFundingModelTest extends TestCase
             '{"descriptor":"exact"}',
             $result->funding->metadata['paper_canonical_reservation_descriptor'] ?? null,
         );
+        self::assertSame(
+            '{"instrument":"exact"}',
+            $result->funding->metadata['paper_canonical_instrument_descriptor'] ?? null,
+        );
         $event = $state->events('funding.accrued')[0] ?? null;
         self::assertNotNull($event);
         self::assertSame('decision-private-1', $event->payload['metadata']['decision_key'] ?? null);
         self::assertSame(
             '{"descriptor":"exact"}',
             $event->payload['metadata']['paper_canonical_reservation_descriptor'] ?? null,
+        );
+        self::assertSame(
+            '{"instrument":"exact"}',
+            $event->payload['metadata']['paper_canonical_instrument_descriptor'] ?? null,
         );
     }
 

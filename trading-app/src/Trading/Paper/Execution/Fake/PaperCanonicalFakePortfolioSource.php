@@ -73,7 +73,7 @@ final readonly class PaperCanonicalFakePortfolioSource
             }
 
             $projector = $this->ledgerProjector ?? new FakeMonetaryLedgerProjector();
-            $this->assertMonetaryScope($state->events, $cell, $projector);
+            $this->assertMonetaryScope($state->events, $cell, $policy->quoteCurrency, $projector);
             $lifetime = $projector->project($state->events, $observedAt);
             $daily = $projector->project($state->events, $observedAt, $dayStart, $dayEnd);
             $active = $this->activeState($state, $cell, $policy->quoteCurrency);
@@ -162,6 +162,7 @@ final readonly class PaperCanonicalFakePortfolioSource
     private function assertMonetaryScope(
         array $events,
         \App\Trading\Paper\Execution\Identity\PaperExecutionCell $cell,
+        string $quoteCurrency,
         FakeMonetaryLedgerProjector $projector,
     ): void {
         foreach ($events as $event) {
@@ -175,12 +176,20 @@ final readonly class PaperCanonicalFakePortfolioSource
                 throw new \LogicException();
             }
             $encoded = $metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null;
+            $instrumentEncoded = $metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY] ?? null;
             $decisionKey = $metadata['decision_key'] ?? null;
-            if (!\is_string($encoded) || !\is_string($decisionKey)) {
+            if (!\is_string($encoded) || !\is_string($instrumentEncoded) || !\is_string($decisionKey)) {
                 throw new \LogicException();
             }
             $descriptor = PaperCanonicalFakeReservationDescriptor::decode($encoded)->assertCell($cell);
+            $instrument = PaperCanonicalFakeInstrumentDescriptor::decode($instrumentEncoded);
             if (!hash_equals($descriptor->decisionKey(), $decisionKey)) {
+                throw new \LogicException();
+            }
+            if (!hash_equals($instrument->cellId(), $cell->id)
+                || !hash_equals($instrument->symbol(), $event->symbol)
+                || !hash_equals($instrument->instrument()->quoteAsset, $quoteCurrency)
+            ) {
                 throw new \LogicException();
             }
         }
