@@ -62,6 +62,9 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
     public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
     {
         $cell->provenance($eligibility);
+        if ($cell->isModern()) {
+            throw new \LogicException('paper_modern_strategy_bridge_unavailable');
+        }
         $this->databaseGuard->assertReady($this->environment);
         $this->runtimeGuard->assertSafe(new PaperRuntimeContext('paper', Exchange::FAKE, $this->enabled, false, false, $symbols, $cell));
     }
