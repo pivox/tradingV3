@@ -113,6 +113,7 @@ final class PaperExecutionCoordinatorRecoveryTest extends TestCase
         $store = new InMemoryPaperExecutionStore();
         $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
         $cell = $this->modernCell($effect);
+        $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
         $event = $this->modernEvent();
         $thrown = false;
         try {

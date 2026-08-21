@@ -7,12 +7,12 @@ namespace App\Trading\Paper\Execution\Strategy;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 
-interface PaperCanonicalStrategyPreparationInterface
+interface PaperCanonicalStrategyEvidenceProviderInterface
 {
-    public function prepareFor(
+    public function evidenceFor(
         PaperExecutionCell $cell,
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
-    ): ?PaperCanonicalStrategyDecision;
+    ): ?PaperCanonicalStrategyEvidence;
 }

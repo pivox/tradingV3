@@ -73,12 +73,14 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
             $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
             $cell = self::modernCellFromEffect($effect);
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
+            $canonicalStrategy = new DeterministicCanonicalPaperStrategy($effect);
             $coordinator = $this->coordinator(
                 $store,
                 $projection,
                 $root,
                 legacyIntents: $legacyIntents,
-                canonicalStrategy: new DeterministicCanonicalPaperStrategy($effect),
+                canonicalStrategy: $canonicalStrategy,
                 canonicalIntents: $canonicalIntents,
                 clock: new MockClock('2026-08-10T12:00:00Z'),
             );
@@ -98,6 +100,8 @@ final class PaperExecutionCoordinatorTest extends TestCase
             self::assertSame(1, $canonicalIntents->acknowledgements);
             self::assertSame(0, $legacyIntents->reservations);
             self::assertSame(0, $legacyIntents->acknowledgements);
+            self::assertSame('dataset-modern-1', $canonicalStrategy->observedSourceDatasetId);
+            self::assertSame(str_repeat('4', 64), $canonicalStrategy->observedSourceEventsFileSha256);
             self::assertSame(2, $coordinator->counters($cell)->requested);
             self::assertSame(2, $coordinator->counters($cell)->acknowledged);
             self::assertSame([], $store->pendingEffects($cell));
@@ -114,6 +118,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
             $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
             $cell = self::modernCellFromEffect($effect);
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
             $coordinator = $this->coordinator(
                 $store,
                 new RecordingProjectionStore(),
@@ -150,6 +155,44 @@ final class PaperExecutionCoordinatorTest extends TestCase
             self::assertSame(0, $canonicalIntents->acknowledgements);
             self::assertSame(0, $store->checkpoint($cell)->nextSourcePosition);
             self::assertSame(0, $coordinator->counters($cell)->requested);
+        } finally {
+            $this->cleanup($root);
+        }
+    }
+
+    public function testModernCanonicalDatasetMismatchFailsBeforeStrategyOrJournalMutation(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_coord_modern_dataset_' . bin2hex(random_bytes(5));
+        try {
+            $store = new InMemoryPaperExecutionStore();
+            $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+            $cell = self::modernCellFromEffect($effect);
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
+            $strategy = new DeterministicCanonicalPaperStrategy($effect);
+            $coordinator = $this->coordinator(
+                $store,
+                new RecordingProjectionStore(),
+                $root,
+                canonicalStrategy: $strategy,
+                canonicalIntents: new RecordingCanonicalPaperOrderIntents(),
+                clock: new MockClock('2026-08-10T12:00:00Z'),
+            );
+
+            try {
+                $coordinator->consumeAt(
+                    $cell,
+                    PaperProfileEligibility::REFERENCE_ONLY,
+                    'dataset-foreign',
+                    0,
+                    $this->modernEvent(),
+                );
+                self::fail('A foreign canonical replay dataset was accepted.');
+            } catch (\LogicException $exception) {
+                self::assertSame('paper_canonical_strategy_dataset_mismatch', $exception->getMessage());
+            }
+
+            self::assertNull($strategy->observedSourceDatasetId);
+            self::assertSame(0, $store->checkpoint($cell)->nextSourcePosition);
         } finally {
             $this->cleanup($root);
         }
@@ -457,10 +500,20 @@ final class RecordingPaperOrderIntents implements PaperOrderIntentRecorderInterf
 
 final class DeterministicCanonicalPaperStrategy implements PaperCanonicalStrategyPreparationInterface
 {
+    public ?string $observedSourceDatasetId = null;
+    public ?string $observedSourceEventsFileSha256 = null;
+
     public function __construct(private readonly PaperCanonicalPreparedEffect $effect) {}
 
-    public function prepareFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PaperCanonicalStrategyDecision
-    {
+    public function prepareFor(
+        PaperExecutionCell $cell,
+        PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
+    ): ?PaperCanonicalStrategyDecision {
+        $this->observedSourceDatasetId = $sourceDatasetId;
+        $this->observedSourceEventsFileSha256 = $sourceEventsFileSha256;
+
         return PaperCanonicalStrategyDecision::fromPreparedEffect($this->effect);
     }
 }
