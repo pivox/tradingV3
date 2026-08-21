@@ -53,6 +53,9 @@ final class PaperCanonicalFakeReservationDescriptorTest extends TestCase
             $this->mutate($encoded, static function (array &$document): void {
                 $document['unexpected'] = 'field';
             }, rehash: true),
+            $this->mutate($encoded, static function (array &$document): void {
+                $document['public_venue'] = 'okx';
+            }, rehash: true),
         ];
 
         foreach ($variants as $variant) {

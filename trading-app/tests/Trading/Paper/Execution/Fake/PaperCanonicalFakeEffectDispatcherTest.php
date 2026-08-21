@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Tests\Trading\Paper\Execution\Fake;
 
-use App\Exchange\Event\ExchangeFillReceived;
-use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Enum\ExchangeOrderStatus;
+use App\Exchange\Event\ExchangeFillReceived;
+use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeInstrumentDescriptor;
