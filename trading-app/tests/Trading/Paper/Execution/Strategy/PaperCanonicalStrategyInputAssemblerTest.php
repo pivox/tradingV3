@@ -24,6 +24,7 @@ use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioScope;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioSnapshot;
 use App\TradingCore\Shadow\ShadowRuntimeRequest;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperCanonicalStrategyInputAssembler::class)]
@@ -148,6 +149,26 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
         (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
             ->assemble($cell, $this->event());
+    }
+
+    #[DataProvider('nonCanonicalSnapshotTimestamps')]
+    public function testRejectsNonCanonicalExecutionSnapshotTimestamp(string $timestamp): void
+    {
+        [$cell, $evidence] = $this->fixture();
+        $indicators = $evidence->indicatorsByTimeframe;
+        $indicators['15m']['kline_time'] = $timestamp;
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+            ->assemble($cell, $this->event());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function nonCanonicalSnapshotTimestamps(): iterable
+    {
+        yield 'relative epoch syntax' => ['@1786362300'];
+        yield 'overflowing seconds normalized by PHP' => ['2026-08-10T11:44:60Z'];
     }
 
     /** @return array{PaperExecutionCell, PaperCanonicalStrategyEvidence} */

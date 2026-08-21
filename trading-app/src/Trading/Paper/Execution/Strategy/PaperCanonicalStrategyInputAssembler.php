@@ -193,33 +193,21 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
 
     private function canonicalSecond(mixed $value): ?int
     {
-        if ($value instanceof \DateTimeInterface) {
-            $instant = \DateTimeImmutable::createFromInterface($value);
-
-            return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
-        }
-        if (is_int($value)) {
-            return $value > 10_000_000_000 && $value % 1000 === 0
-                ? intdiv($value, 1000)
-                : ($value <= 10_000_000_000 ? $value : null);
-        }
-        if (is_float($value)) {
-            if (!is_finite($value)) {
-                return null;
-            }
-            $seconds = $value > 10_000_000_000 ? $value / 1000.0 : $value;
-
-            return floor($seconds) === $seconds ? (int) $seconds : null;
-        }
-        if (!is_string($value) || trim($value) === '') {
+        if (!is_string($value)
+            || preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\z/D', $value) !== 1
+        ) {
             return null;
         }
-        try {
-            $instant = new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
-        } catch (\Exception) {
+        $format = str_contains($value, '.') ? '!Y-m-d\TH:i:s.u\Z' : '!Y-m-d\TH:i:s\Z';
+        $instant = \DateTimeImmutable::createFromFormat($format, $value, new \DateTimeZone('UTC'));
+        $errors = \DateTimeImmutable::getLastErrors();
+        if (!$instant instanceof \DateTimeImmutable
+            || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))
+            || $instant->format('u') !== '000000'
+        ) {
             return null;
         }
 
-        return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
+        return $instant->getTimestamp();
     }
 }
