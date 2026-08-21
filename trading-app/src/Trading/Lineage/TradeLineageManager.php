@@ -37,8 +37,15 @@ final class TradeLineageManager
     ) {
     }
 
-    /** @param array<string,mixed>|LineageContext $context */
-    public function ensureForIntent(OrderIntent $intent, array|LineageContext $context = []): TradeLineage
+    /**
+     * @param array<string,mixed>|LineageContext $context
+     * @param array<string,mixed>|null           $paperProvenance
+     */
+    public function ensureForIntent(
+        OrderIntent $intent,
+        array|LineageContext $context = [],
+        ?array $paperProvenance = null,
+    ): TradeLineage
     {
         $identity = $context instanceof LineageContext ? $context : null;
         if ($identity === null && $this->containsModernIdentity($context)) {
@@ -49,12 +56,15 @@ final class TradeLineageManager
         }
         $context = $identity?->toArray() ?? $context;
 
-        $paperProvenance = PaperExecutionProvenance::extract($context);
+        $paperProvenance ??= PaperExecutionProvenance::extract($context);
         if ($intent->getPaperExecutionCellId() !== null && $paperProvenance === null) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
         if ($paperProvenance !== null) {
+            $paperProvenance = PaperExecutionProvenance::validate($paperProvenance);
             PaperExecutionProvenance::assertMatches($intent, $paperProvenance);
+            $context['run_id'] = $paperProvenance['run_id'];
+            $context['profile'] = $paperProvenance['strategy_profile'];
         }
 
         $intentId = $intent->getId();
@@ -249,7 +259,7 @@ final class TradeLineageManager
             return $extra;
         }
 
-        $paperProvenance = PaperExecutionProvenance::validate([
+        $paperProvenance = [
             'paper_network' => $lineage->getPaperNetwork(),
             'market_data_venue' => $lineage->getMarketDataVenue(),
             'paper_execution_cell_id' => $lineage->getPaperExecutionCellId(),
@@ -258,7 +268,19 @@ final class TradeLineageManager
             'strategy_profile' => $lineage->getProfile(),
             'run_id' => $lineage->getRunId(),
             'exchange' => $lineage->getExchange(),
-        ]);
+        ];
+        if ($lineage->getModeId() !== null) {
+            $paperProvenance += [
+                'mode_id' => $lineage->getModeId(),
+                'mode_version' => $lineage->getModeVersion(),
+                'setup_id' => $lineage->getSetupId(),
+                'setup_version' => $lineage->getSetupVersion(),
+                'side' => strtolower((string) $lineage->getSide()),
+                'config_hash' => $lineage->getConfigHash(),
+                'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
+            ];
+        }
+        $paperProvenance = PaperExecutionProvenance::validate($paperProvenance);
 
         return $extra + $paperProvenance;
     }
@@ -360,7 +382,9 @@ final class TradeLineageManager
     private function assertIntentMatchesIdentity(OrderIntent $intent, LineageContext $identity): void
     {
         $actual = [
-            'exchange' => $intent->getExchange(),
+            'exchange' => $intent->getPaperExecutionCellId() === null
+                ? $intent->getExchange()
+                : $intent->getMarketDataVenue(),
             'market_type' => $intent->getMarketType(),
             'symbol' => strtoupper($intent->getSymbol()),
             'side' => $this->sideFromIntent($intent),
@@ -392,7 +416,9 @@ final class TradeLineageManager
             'config_hash' => $lineage->getConfigHash(),
             'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
             'side' => $lineage->getSide(),
-            'exchange' => $lineage->getExchange(),
+            'exchange' => $lineage->getPaperExecutionCellId() === null
+                ? $lineage->getExchange()
+                : $lineage->getMarketDataVenue(),
             'market_type' => $lineage->getMarketType(),
             'symbol' => $lineage->getSymbol(),
             'decision_id' => $lineage->getDecisionId(),

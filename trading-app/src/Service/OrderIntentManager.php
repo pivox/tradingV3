@@ -12,6 +12,7 @@ use App\TradeEntry\Idempotency\DecisionKeyFactory;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\LineageContextException;
+use Brick\Math\BigDecimal;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -41,14 +42,16 @@ final class OrderIntentManager
      * @param array<string,mixed> $orderParams
      * @param array<string,mixed> $quantization
      * @param array<string,mixed>|null $rawInputs
+     * @param array<string,mixed>|null $paperProvenance
      */
     public function createIntent(
         array $orderParams,
         array $quantization = [],
         ?array $rawInputs = null,
         ?LineageContext $lineageContext = null,
+        ?array $paperProvenance = null,
     ): OrderIntent {
-        $intent = $this->buildIntent($orderParams, $quantization, $rawInputs, $lineageContext);
+        $intent = $this->buildIntent($orderParams, $quantization, $rawInputs, $lineageContext, $paperProvenance);
 
         $this->entityManager->persist($intent);
         $this->entityManager->flush();
@@ -268,7 +271,7 @@ final class OrderIntentManager
         if (!\in_array($type, [OrderIntent::TYPE_LIMIT, OrderIntent::TYPE_MARKET], true)) {
             $errors['type'] = 'Invalid type value';
         }
-        if ((int)($orderParams['size'] ?? 0) <= 0) {
+        if (!$this->isPositiveQuantity($orderParams['size'] ?? null)) {
             $errors['size'] = 'Size must be positive';
         }
         if ($type === OrderIntent::TYPE_LIMIT && trim((string)($orderParams['price'] ?? '')) === '') {
@@ -396,12 +399,14 @@ final class OrderIntentManager
      * @param array<string,mixed> $orderParams
      * @param array<string,mixed> $quantization
      * @param array<string,mixed>|null $rawInputs
+     * @param array<string,mixed>|null $paperProvenance
      */
     private function buildIntent(
         array $orderParams,
         array $quantization = [],
         ?array $rawInputs = null,
         ?LineageContext $lineageContext = null,
+        ?array $paperProvenance = null,
     ): OrderIntent {
         $intent = new OrderIntent();
 
@@ -424,7 +429,8 @@ final class OrderIntentManager
             $intent->setPrice((string)$orderParams['price']);
         }
 
-        $intent->setSize((int)($orderParams['size'] ?? 0));
+        $size = $orderParams['size'] ?? 0;
+        $intent->setSize(\is_int($size) || \is_string($size) ? $size : (string) $size);
 
         $clientOrderId = $orderParams['client_order_id']
             ?? $this->generateClientOrderId($intent->getSymbol());
@@ -439,19 +445,22 @@ final class OrderIntentManager
         $intent->setQuantization($quantization);
         $intent->setRawInputs($rawInputs);
         $intent->setStatus(OrderIntent::STATUS_DRAFT);
+        $paperProvenance ??= PaperExecutionProvenance::extract($orderParams);
+        if ($paperProvenance !== null) {
+            $paperProvenance = PaperExecutionProvenance::validate($paperProvenance);
+        }
         if ($lineageContext !== null) {
             if ($lineageContext->isModern()) {
                 $lineageContext->assertTradeBoundary(
                     $intent->getSymbol(),
                     \in_array($intent->getSide(), [1, 2], true) ? 'LONG' : 'SHORT',
-                    $intent->getExchange(),
+                    $paperProvenance['market_data_venue'] ?? $intent->getExchange(),
                     $intent->getMarketType(),
                 );
             }
             $intent->applyLineageContext($lineageContext);
         }
 
-        $paperProvenance = PaperExecutionProvenance::extract($orderParams);
         if ($paperProvenance !== null) {
             $intent->applyPaperExecutionProvenance($paperProvenance);
         }
@@ -476,7 +485,43 @@ final class OrderIntentManager
             $intent->addProtection($sl);
         }
 
+        if (isset($orderParams['canonical_protections'])) {
+            if (!\is_array($orderParams['canonical_protections']) || !array_is_list($orderParams['canonical_protections'])) {
+                throw new \InvalidArgumentException('canonical_order_protections_invalid');
+            }
+            foreach ($orderParams['canonical_protections'] as $protection) {
+                if (!\is_array($protection)
+                    || array_keys($protection) !== ['type', 'price', 'metadata']
+                    || !\in_array($protection['type'] ?? null, [OrderProtection::TYPE_STOP_LOSS, OrderProtection::TYPE_TAKE_PROFIT], true)
+                    || !\is_string($protection['price'] ?? null)
+                    || !\is_array($protection['metadata'] ?? null)
+                ) {
+                    throw new \InvalidArgumentException('canonical_order_protections_invalid');
+                }
+                $canonical = (new OrderProtection())
+                    ->setExchange($intent->getExchange())
+                    ->setMarketType($intent->getMarketType())
+                    ->setType($protection['type'])
+                    ->setPrice($protection['price'])
+                    ->setPriceType(1)
+                    ->setMetadata($protection['metadata']);
+                $intent->addProtection($canonical);
+            }
+        }
+
         return $intent;
+    }
+
+    private function isPositiveQuantity(mixed $value): bool
+    {
+        if (!\is_int($value) && !\is_float($value) && !\is_string($value)) {
+            return false;
+        }
+        try {
+            return BigDecimal::of($value)->isGreaterThan(0);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**

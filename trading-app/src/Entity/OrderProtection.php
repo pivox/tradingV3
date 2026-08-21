@@ -38,7 +38,7 @@ class OrderProtection
     #[ORM\Column(type: Types::STRING, length: 20)]
     private string $type; // take_profit, stop_loss
 
-    #[ORM\Column(type: Types::DECIMAL, precision: 24, scale: 12)]
+    #[ORM\Column(type: Types::DECIMAL, precision: 65, scale: 30)]
     private string $price; // Prix de déclenchement
 
     #[ORM\Column(type: Types::INTEGER, nullable: true)]
@@ -53,6 +53,7 @@ class OrderProtection
     #[ORM\Column(type: Types::STRING, length: 80, nullable: true)]
     private ?string $clientOrderId = null;
 
+    /** @var array<string, mixed>|null */
     #[ORM\Column(type: Types::JSON, options: ['jsonb' => true], nullable: true)]
     private ?array $metadata = null; // Données supplémentaires
 
