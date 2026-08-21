@@ -8,6 +8,8 @@ use App\Trading\Paper\Backtesting\NormalizedBacktestCandle;
 use App\Trading\Paper\Backtesting\PaperBacktestDatasetAdapter;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
+use App\Trading\Paper\MarketData\CanonicalJson;
+use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Replay\PaperReplayClock;
 
@@ -63,7 +65,13 @@ final readonly class PaperCanonicalIndicatorWindowSource
                 && $event->symbol === $trigger->symbol,
         ));
         $latest = $projectedEvents === [] ? null : $projectedEvents[array_key_last($projectedEvents)];
-        if (!$latest instanceof PaperMarketEvent || !hash_equals($latest->eventId, $trigger->eventId)) {
+        if (!$latest instanceof PaperMarketEvent
+            || !hash_equals($latest->eventId, $trigger->eventId)
+            || !hash_equals(
+                CanonicalJson::encode($latest->toArray()),
+                CanonicalJson::encode($trigger->toArray()),
+            )
+        ) {
             throw new \LogicException('paper_canonical_strategy_trigger_not_current');
         }
         $events = array_values(array_filter(
@@ -81,6 +89,8 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         $windows = [];
+        $triggerTimeframe = $this->timeframe($trigger->channel);
+        $triggerBound = false;
         $fourHourRequested = in_array('4h', $requestedTimeframes, true);
         foreach (self::NATIVE_TIMEFRAMES as $timeframe) {
             $derivedHourlySourceRequired = $timeframe === '1h' && $fourHourRequested;
@@ -98,13 +108,20 @@ final readonly class PaperCanonicalIndicatorWindowSource
             ) {
                 throw new \LogicException('paper_canonical_strategy_indicator_window_invalid');
             }
+            if ($timeframe === $triggerTimeframe) {
+                $last = $window[array_key_last($window)];
+                if (!hash_equals($last->sourceRecordId, $trigger->eventId)) {
+                    return null;
+                }
+                $triggerBound = true;
+            }
             $windows[$timeframe] = array_map(
                 static fn (NormalizedBacktestCandle $candle): array => $candle->toArray(),
                 $window,
             );
         }
 
-        return $windows;
+        return $triggerBound ? $windows : null;
     }
 
     /** @param list<NormalizedBacktestCandle> $window */
@@ -117,5 +134,16 @@ final readonly class PaperCanonicalIndicatorWindowSource
         }
 
         return true;
+    }
+
+    private function timeframe(PaperMarketDataChannel $channel): ?string
+    {
+        return match ($channel) {
+            PaperMarketDataChannel::CANDLE_1M => '1m',
+            PaperMarketDataChannel::CANDLE_5M => '5m',
+            PaperMarketDataChannel::CANDLE_15M => '15m',
+            PaperMarketDataChannel::CANDLE_1H => '1h',
+            default => null,
+        };
     }
 }

@@ -67,9 +67,9 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
 
     public function testCandleReceivedBeforeItsCloseIsNotYetAvailable(): void
     {
-        $events = $this->candles(250);
-        $last = $events[249];
-        $events[249] = PaperMarketEvent::create(
+        $events = $this->candles(251);
+        $last = $events[250];
+        $events[250] = PaperMarketEvent::create(
             $last->sourceNetwork,
             $last->sourceVenue,
             $last->symbol,
@@ -79,12 +79,12 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
             $last->sequence,
             $last->payload,
         );
-        $clock = new PaperReplayClock($events[249]->receivedTimestamp);
+        $clock = new PaperReplayClock($events[250]->receivedTimestamp);
         $market = new PaperMarketStateProjector(new PaperKlineProvider());
         $market->restore($events);
         $source = new PaperCanonicalIndicatorWindowSource($market, $clock);
 
-        self::assertNull($source->windowsFor($this->cell(), $events[249], ['1m']));
+        self::assertNull($source->windowsFor($this->cell(), $events[250], ['1m']));
     }
 
     public function testRejectsAWindowWithMissingMarketHistory(): void
@@ -132,6 +132,36 @@ final class PaperCanonicalIndicatorWindowSourceTest extends TestCase
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_not_current');
 
         $source->windowsFor($this->cell(), $events[249], ['1m']);
+    }
+
+    public function testRejectsTriggerEnvelopeWithForgedReceiptTime(): void
+    {
+        $events = $this->candles(1);
+        $projected = $events[0];
+        $forged = PaperMarketEvent::create(
+            $projected->sourceNetwork,
+            $projected->sourceVenue,
+            $projected->symbol,
+            $projected->channel,
+            $projected->exchangeTimestamp,
+            $projected->exchangeTimestamp,
+            $projected->sequence,
+            $projected->payload,
+        );
+        self::assertSame($projected->eventId, $forged->eventId);
+        self::assertNotEquals($projected->receivedTimestamp, $forged->receivedTimestamp);
+
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore($events);
+        $source = new PaperCanonicalIndicatorWindowSource(
+            $market,
+            new PaperReplayClock($forged->receivedTimestamp),
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_trigger_not_current');
+
+        $source->windowsFor($this->cell(), $forged, ['1m']);
     }
 
     /** @return list<PaperMarketEvent> */

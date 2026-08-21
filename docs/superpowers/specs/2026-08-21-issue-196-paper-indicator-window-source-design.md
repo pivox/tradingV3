@@ -19,12 +19,14 @@ Paper replay.
 
 1. accepts only a modern cell whose network and venue match the trigger;
 2. requires requested timeframes in canonical duration order;
-3. requires the trigger to be the current event in the projected prefix;
+3. requires the trigger's complete canonical envelope, including its receipt
+   timestamp, to equal the current event in the projected prefix;
 4. excludes events and normalized candles unavailable at the shared replay
    clock, including candles received before their close;
 5. reuses `PaperBacktestDatasetAdapter::adaptCandleEvents()` so venue payload,
    native-symbol and source-event provenance remain exact;
-6. returns exactly 250 contiguous native candles per requested timeframe;
+6. returns exactly 250 contiguous native candles per requested timeframe only
+   when the applicable source suffix ends at the normalized trigger candle;
 7. returns 1,000 aligned hourly source candles when a derived `4h` projection
    is requested; and
 8. returns no evidence when history is insufficient, while malformed or
