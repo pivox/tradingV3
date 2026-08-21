@@ -12,5 +12,7 @@ interface PaperCanonicalStrategyEvidenceProviderInterface
     public function evidenceFor(
         PaperExecutionCell $cell,
         PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
     ): ?PaperCanonicalStrategyEvidence;
 }

@@ -112,7 +112,16 @@ final class PaperExecutionCoordinator implements PaperEventCoordinatorInterface
         try {
             $this->market->apply($event);
             if ($cell->isModern()) {
-                $canonicalDecision = $this->canonicalStrategy()->prepareFor($cell, $event);
+                $datasetIdentity = $this->store->datasetIdentity($cell);
+                if ($datasetIdentity['dataset_id'] !== $datasetId) {
+                    throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
+                }
+                $canonicalDecision = $this->canonicalStrategy()->prepareFor(
+                    $cell,
+                    $event,
+                    $datasetIdentity['dataset_id'],
+                    $datasetIdentity['events_file_sha256'],
+                );
             } else {
                 $prepared = $this->strategy->prepareFor($cell, $event);
                 if ($prepared !== null) {

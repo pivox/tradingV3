@@ -12,5 +12,7 @@ interface PaperCanonicalStrategyPreparationInterface
     public function prepareFor(
         PaperExecutionCell $cell,
         PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
     ): ?PaperCanonicalStrategyDecision;
 }

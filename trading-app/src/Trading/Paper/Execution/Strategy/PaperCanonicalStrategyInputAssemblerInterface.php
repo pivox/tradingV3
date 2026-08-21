@@ -12,5 +12,7 @@ interface PaperCanonicalStrategyInputAssemblerInterface
     public function assemble(
         PaperExecutionCell $cell,
         PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
     ): ?PaperCanonicalStrategyInput;
 }

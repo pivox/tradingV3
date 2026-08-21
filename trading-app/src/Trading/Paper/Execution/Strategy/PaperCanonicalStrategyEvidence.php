@@ -19,6 +19,8 @@ final readonly class PaperCanonicalStrategyEvidence
         public EffectiveTradingConfigRequest $configRequest,
         public LineageContext $lineage,
         public CanonicalIndicatorProjection $indicatorProjection,
+        public string $sourceDatasetId,
+        public string $sourceEventsFileSha256,
         public CanonicalOrderPlanBuildRequest $orderPlanRequest,
         public CanonicalPortfolioScope $portfolioScope,
         public CanonicalPortfolioSnapshot $portfolioSnapshot,

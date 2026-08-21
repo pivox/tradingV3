@@ -24,6 +24,8 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
     public function assemble(
         PaperExecutionCell $cell,
         PaperMarketEvent $event,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
     ): ?PaperCanonicalStrategyInput {
         $identity = $cell->modernIdentity;
         if ($identity === null) {
@@ -32,10 +34,27 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         if ($event->sourceNetwork !== $cell->network || $event->sourceVenue !== $cell->marketDataVenue) {
             throw new \LogicException('paper_canonical_strategy_market_scope_mismatch');
         }
+        if (preg_match('/\A[a-z0-9][a-z0-9._-]{2,127}\z/D', $sourceDatasetId) !== 1
+            || preg_match('/\A[a-f0-9]{64}\z/D', $sourceEventsFileSha256) !== 1
+        ) {
+            throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
+        }
 
-        $evidence = $this->evidence->evidenceFor($cell, $event);
+        $evidence = $this->evidence->evidenceFor(
+            $cell,
+            $event,
+            $sourceDatasetId,
+            $sourceEventsFileSha256,
+        );
         if ($evidence === null) {
             return null;
+        }
+        if (!$this->datasetMatches(
+            $evidence,
+            $sourceDatasetId,
+            $sourceEventsFileSha256,
+        )) {
+            throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
         }
         $request = $evidence->toRuntimeRequest();
 
@@ -55,6 +74,23 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         }
 
         return new PaperCanonicalStrategyInput($request, $executionTimeframe);
+    }
+
+    private function datasetMatches(
+        PaperCanonicalStrategyEvidence $evidence,
+        string $sourceDatasetId,
+        string $sourceEventsFileSha256,
+    ): bool {
+        $projection = $evidence->indicatorProjection->toArray();
+        $binding = $projection['dataset_binding'] ?? null;
+        $projectionSourceChecksum = is_array($binding) && !array_is_list($binding)
+            ? ($binding['source_checksum'] ?? null)
+            : null;
+
+        return $evidence->sourceDatasetId === $sourceDatasetId
+            && hash_equals($evidence->sourceEventsFileSha256, $sourceEventsFileSha256)
+            && is_string($projectionSourceChecksum)
+            && hash_equals('sha256:' . $sourceEventsFileSha256, $projectionSourceChecksum);
     }
 
     private function identityMatches(

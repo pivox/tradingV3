@@ -31,11 +31,15 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperCanonicalStrategyInputAssembler::class)]
 final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
 {
+    private const SOURCE_DATASET_ID = 'paper-modern-dataset';
+    private const SOURCE_EVENTS_FILE_SHA256 = '4444444444444444444444444444444444444444444444444444444444444444';
+    private const SOURCE_CHECKSUM = 'sha256:' . self::SOURCE_EVENTS_FILE_SHA256;
+
     public function testAssemblesTheExactCanonicalInputsForTheModernCell(): void
     {
         [$cell, $evidence] = $this->fixture();
         $input = (new PaperCanonicalStrategyInputAssembler($this->provider($evidence)))
-            ->assemble($cell, $this->event());
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
 
         self::assertNotNull($input);
         self::assertSame('15m', $input->executionTimeframe);
@@ -58,13 +62,23 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
     {
         [$cell] = $this->fixture();
         $provider = new class implements PaperCanonicalStrategyEvidenceProviderInterface {
-            public function evidenceFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PaperCanonicalStrategyEvidence
+            public function evidenceFor(
+                PaperExecutionCell $cell,
+                PaperMarketEvent $event,
+                string $sourceDatasetId,
+                string $sourceEventsFileSha256,
+            ): ?PaperCanonicalStrategyEvidence
             {
                 return null;
             }
         };
 
-        self::assertNull((new PaperCanonicalStrategyInputAssembler($provider))->assemble($cell, $this->event()));
+        self::assertNull((new PaperCanonicalStrategyInputAssembler($provider))->assemble(
+            $cell,
+            $this->event(),
+            self::SOURCE_DATASET_ID,
+            self::SOURCE_EVENTS_FILE_SHA256,
+        ));
     }
 
     public function testRejectsDecisionAndTriggerDriftBeforeTheCanonicalRuntime(): void
@@ -74,6 +88,8 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence->configRequest,
             $evidence->lineage,
             $evidence->indicatorProjection,
+            $evidence->sourceDatasetId,
+            $evidence->sourceEventsFileSha256,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -85,7 +101,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
 
         try {
             (new PaperCanonicalStrategyInputAssembler($this->provider($drifted)))
-                ->assemble($cell, $this->event());
+                ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
             self::fail('Decision drift was accepted.');
         } catch (\LogicException $exception) {
             self::assertSame('paper_canonical_strategy_input_identity_mismatch', $exception->getMessage());
@@ -94,7 +110,12 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
         (new PaperCanonicalStrategyInputAssembler($this->provider($evidence)))
-            ->assemble($cell, $this->event(PaperMarketDataChannel::CANDLE_1M));
+            ->assemble(
+                $cell,
+                $this->event(PaperMarketDataChannel::CANDLE_1M),
+                self::SOURCE_DATASET_ID,
+                self::SOURCE_EVENTS_FILE_SHA256,
+            );
     }
 
     public function testRejectsLegacyCellsAndModernMarketScopeDrift(): void
@@ -110,7 +131,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         );
 
         try {
-            $assembler->assemble($legacy, $this->event());
+            $assembler->assemble($legacy, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
             self::fail('Legacy cell was accepted by the canonical assembler.');
         } catch (\LogicException $exception) {
             self::assertSame('paper_canonical_strategy_cell_identity_missing', $exception->getMessage());
@@ -128,7 +149,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             new \DateTimeImmutable('2026-08-10T12:00:00Z'),
             '1',
             $this->payload('15m'),
-        ));
+        ), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
     }
 
     public function testRejectsEvidenceFromADifferentExecutionCandle(): void
@@ -141,7 +162,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(klineTime: '2026-08-10T11:30:00Z'),
         ))))
-            ->assemble($cell, $this->event());
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
     }
 
     public function testRejectsExecutionSnapshotWithDifferentSourceIdentity(): void
@@ -154,7 +175,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(snapshotExchange: 'okx'),
         ))))
-            ->assemble($cell, $this->event());
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
     }
 
     public function testRejectsIndicatorProjectionDatasetSourceDrift(): void
@@ -167,7 +188,49 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(sourceVenue: 'okx'),
         ))))
-            ->assemble($cell, $this->event());
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
+    }
+
+    public function testRejectsIndicatorProjectionFromADifferentReplayChecksum(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_dataset_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withProjection(
+            $evidence,
+            $this->projection(sourceChecksum: 'sha256:' . str_repeat('5', 64)),
+        ))))
+            ->assemble(
+                $cell,
+                $this->event(),
+                self::SOURCE_DATASET_ID,
+                self::SOURCE_EVENTS_FILE_SHA256,
+            );
+    }
+
+    public function testRejectsEvidenceSelectedForADifferentReplayDatasetId(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+        $foreign = new PaperCanonicalStrategyEvidence(
+            $evidence->configRequest,
+            $evidence->lineage,
+            $evidence->indicatorProjection,
+            'paper-foreign-dataset',
+            $evidence->sourceEventsFileSha256,
+            $evidence->orderPlanRequest,
+            $evidence->portfolioScope,
+            $evidence->portfolioSnapshot,
+            $evidence->decisionKey,
+            $evidence->liveSpreadBps,
+            $evidence->estimatedSlippageBps,
+            $evidence->orderBook,
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_dataset_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($foreign)))
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
     }
 
     #[DataProvider('nonCanonicalSnapshotTimestamps')]
@@ -181,7 +244,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence,
             $this->projection(klineTime: $timestamp),
         ))))
-            ->assemble($cell, $this->event());
+            ->assemble($cell, $this->event(), self::SOURCE_DATASET_ID, self::SOURCE_EVENTS_FILE_SHA256);
     }
 
     /** @return iterable<string, array{string}> */
@@ -272,6 +335,8 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $config,
             $lineage,
             $this->projection(),
+            self::SOURCE_DATASET_ID,
+            self::SOURCE_EVENTS_FILE_SHA256,
             new CanonicalOrderPlanBuildRequest(...CanonicalOrderPlanPipelineFixture::accepted(
                 executionPolicy: $policy,
                 exchange: 'hyperliquid',
@@ -293,6 +358,8 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence->configRequest,
             $evidence->lineage,
             $projection,
+            $evidence->sourceDatasetId,
+            $evidence->sourceEventsFileSha256,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -309,6 +376,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         string $snapshotEnvironment = 'test',
         string $sourceNetwork = 'testnet',
         string $sourceVenue = 'hyperliquid',
+        string $sourceChecksum = self::SOURCE_CHECKSUM,
     ): CanonicalIndicatorProjection {
         $datasetChecksum = 'sha256:' . str_repeat('1', 64);
 
@@ -323,7 +391,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
                 'dataset_checksum' => $datasetChecksum,
                 'candles_checksum' => 'sha256:' . str_repeat('2', 64),
                 'quality_report_checksum' => 'sha256:' . str_repeat('3', 64),
-                'source_checksum' => 'sha256:' . str_repeat('4', 64),
+                'source_checksum' => $sourceChecksum,
                 'source_network' => $sourceNetwork,
                 'market_data_venue' => $sourceVenue,
                 'market_type' => 'perpetual',
@@ -352,7 +420,12 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             {
             }
 
-            public function evidenceFor(PaperExecutionCell $cell, PaperMarketEvent $event): ?PaperCanonicalStrategyEvidence
+            public function evidenceFor(
+                PaperExecutionCell $cell,
+                PaperMarketEvent $event,
+                string $sourceDatasetId,
+                string $sourceEventsFileSha256,
+            ): ?PaperCanonicalStrategyEvidence
             {
                 return $this->evidence;
             }
