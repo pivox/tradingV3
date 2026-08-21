@@ -152,6 +152,18 @@ final class PaperCanonicalExecutionCostSourceTest extends TestCase
         self::assertNotNull($changedBook);
         self::assertNotSame($first->inputHash, $changedBook->inputHash);
         self::assertEqualsWithDelta($first->entrySpreadRate, $changedBook->entrySpreadRate, 1.0e-12);
+
+        [$targetPolicy, $targetSnapshot] = $this->forgedPolicy(static function (array &$payload): void {
+            $payload['setup']['ast']['execution']['targets']['value'][0]['liquidity_role'] = 'maker';
+        });
+        [$targetSource, $targetCell, $targetTrigger] = $this->context(
+            policy: $targetPolicy,
+            snapshot: $targetSnapshot,
+        );
+        $changedTarget = $targetSource->snapshotFor($targetCell, $targetTrigger, $targetPolicy);
+        self::assertNotNull($changedTarget);
+        self::assertSame(0.0, $changedTarget->targets[0]->slippageRate);
+        self::assertNotSame($first->inputHash, $changedTarget->inputHash);
     }
 
     public function testRejectsLegacyCellCrossScopeTriggerAndStaleTrigger(): void

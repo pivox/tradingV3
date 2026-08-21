@@ -38,6 +38,8 @@ final readonly class PaperCanonicalExecutionCostSource
         if ($book === null) {
             return null;
         }
+        $this->assertBook($cell, $trigger, $policy, $book);
+
         $funding = $this->funding->snapshotFor(
             $cell,
             $trigger,
@@ -47,7 +49,6 @@ final readonly class PaperCanonicalExecutionCostSource
             return null;
         }
 
-        $this->assertBook($cell, $trigger, $policy, $book);
         if ($funding->source !== $policy->costContract->fundingSource
             || $funding->intervalSeconds !== $policy->costContract->fundingIntervalSeconds
             || $funding->observedAt > $this->clock->now()
@@ -149,7 +150,6 @@ final readonly class PaperCanonicalExecutionCostSource
             || $contract->targetSlippageSource !== 'execution_model'
             || $contract->fundingSource !== 'venue_schedule'
             || $contract->fundingIntervalSeconds < 1
-            || $policy->targets === []
         ) {
             throw new \LogicException('paper_canonical_execution_cost_contract_mismatch');
         }
@@ -280,14 +280,19 @@ final readonly class PaperCanonicalExecutionCostSource
                 'slippage_rate' => $stopSlippage,
             ],
             'targets' => array_map(
-                static fn (CanonicalTargetCostSnapshot $target): array => [
+                static fn (
+                    CanonicalTargetCostSnapshot $target,
+                    CanonicalTargetPolicy $targetPolicy,
+                ): array => [
                     'target_id' => $target->targetId,
+                    'liquidity_role' => $targetPolicy->liquidityRole,
                     'spread_source' => $target->spreadSource,
                     'spread_rate' => $target->spreadRate,
                     'slippage_source' => $target->slippageSource,
                     'slippage_rate' => $target->slippageRate,
                 ],
                 $targets,
+                $policy->targets,
             ),
         ];
     }
