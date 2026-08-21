@@ -49,7 +49,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
         $cursor = $runtime->eventCursor();
         $existing = $this->existingOrder($runtime, $effect);
         if ($existing instanceof ExchangeOrderDto) {
-            return $this->replay($effect, $existing);
+            return $this->replay($runtime, $effect, $existing);
         }
         $inactiveReason = $this->inactiveReason($effect);
         if ($inactiveReason !== null) {
@@ -64,9 +64,13 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                 [],
             );
         }
+        $reservationDescriptor = PaperCanonicalFakeReservationDescriptor::fromEffect(
+            $runtime->cell,
+            $effect,
+        )->encoded();
         $instrumentDescriptor = $runtime->bindCanonicalInstrument($effect->plan);
         try {
-            $request = $this->request($effect, $instrumentDescriptor);
+            $request = $this->request($effect, $instrumentDescriptor, $reservationDescriptor);
         } catch (\Throwable $exception) {
             throw new \InvalidArgumentException('paper_canonical_fake_effect_invalid', 0, $exception);
         }
@@ -128,15 +132,29 @@ final readonly class PaperCanonicalFakeEffectDispatcher
     }
 
     private function replay(
+        PaperFakeRuntime $runtime,
         PaperCanonicalPreparedEffect $effect,
         ExchangeOrderDto $order,
     ): PaperFakeDispatchResult {
         $planHash = $order->metadata['plan_hash'] ?? null;
         $orderIntentId = $order->metadata['order_intent_id'] ?? null;
+        $reservationDescriptor = $order->metadata[PaperCanonicalFakeReservationDescriptor::METADATA_KEY] ?? null;
+        try {
+            if (!is_string($reservationDescriptor)) {
+                throw new \LogicException();
+            }
+            PaperCanonicalFakeReservationDescriptor::decode($reservationDescriptor)
+                ->assertCell($runtime->cell)
+                ->assertEffect($effect);
+            $reservationMatches = true;
+        } catch (\Throwable) {
+            $reservationMatches = false;
+        }
         if (!is_string($planHash)
             || !hash_equals($effect->plan->planHash, $planHash)
             || $orderIntentId !== $effect->orderIntentIdentity['order_intent_id']
             || ($order->metadata['canonical_dispatch_source'] ?? null) !== 'paper_canonical_fake_dispatcher'
+            || !$reservationMatches
         ) {
             return $this->result(
                 $effect->orderIntentIdentity['client_order_id'],
@@ -238,6 +256,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
     private function request(
         PaperCanonicalPreparedEffect $effect,
         string $instrumentDescriptor,
+        string $reservationDescriptor,
     ): PlaceOrderRequest
     {
         $plan = $effect->plan;
@@ -272,6 +291,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                     ? $this->time($plan->cancelAfterAt)
                     : null,
                 PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY => $instrumentDescriptor,
+                PaperCanonicalFakeReservationDescriptor::METADATA_KEY => $reservationDescriptor,
             ],
         );
         PaperMarketEventRedactor::assertSafe($metadata);
