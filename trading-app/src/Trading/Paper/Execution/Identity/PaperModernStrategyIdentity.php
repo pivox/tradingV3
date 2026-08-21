@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Execution\Identity;
 use App\Trading\Lineage\CanonicalEffectiveConfigSnapshot;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigSnapshot;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 
@@ -61,7 +62,7 @@ final readonly class PaperModernStrategyIdentity
             throw new \InvalidArgumentException('paper_modern_identity_snapshot_invalid', 0, $exception);
         }
 
-        return new self(
+        return self::fromDurableIdentity(
             $network,
             $marketDataVenue,
             $request->modeId,
@@ -71,6 +72,51 @@ final readonly class PaperModernStrategyIdentity
             $request->side,
             $snapshot->configHash,
             $catalogHash,
+        );
+    }
+
+    public static function fromDurableIdentity(
+        PaperMarketDataNetwork $network,
+        PaperMarketDataVenue $marketDataVenue,
+        string $modeId,
+        string $modeVersion,
+        string $setupId,
+        string $setupVersion,
+        string $side,
+        string $configHash,
+        string $conditionCatalogHash,
+    ): self {
+        try {
+            if ($network === PaperMarketDataNetwork::LEGACY_UNKNOWN
+                || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $configHash) !== 1
+                || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $conditionCatalogHash) !== 1
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            new EffectiveTradingConfigRequest(
+                $modeId,
+                $modeVersion,
+                $setupId,
+                $setupVersion,
+                $marketDataVenue->value,
+                $network->value,
+                $side,
+                ShadowExecutionCapability::Paper,
+            );
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException('paper_modern_identity_durable_invalid', 0, $exception);
+        }
+
+        return new self(
+            $network,
+            $marketDataVenue,
+            $modeId,
+            $modeVersion,
+            $setupId,
+            $setupVersion,
+            $side,
+            $configHash,
+            $conditionCatalogHash,
         );
     }
 }

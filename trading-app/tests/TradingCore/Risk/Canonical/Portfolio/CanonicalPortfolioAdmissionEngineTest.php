@@ -34,13 +34,14 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
     public function testAdmissionProofRoundTripsExactSerializableInputsAndReplaysOpeningAuthority(): void
     {
         $request = $this->request();
-        $proof = CanonicalPortfolioAdmissionProof::fromRequest($request);
         $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00'));
         $reservation = CanonicalPortfolioReservation::open($engine->admit($request), $request->plan);
+        $proof = CanonicalPortfolioAdmissionProof::fromReservation($request, $reservation);
 
         self::assertSame([
             'schema',
             'decision_key',
+            'admitted_at',
             'policy',
             'scope',
             'snapshot',
@@ -50,7 +51,38 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
             CanonicalPortfolioAdmissionProof::fromArray($proof->toArray())->toArray(),
         );
         self::assertIsString(json_encode($proof->toArray(), JSON_THROW_ON_ERROR));
+        $rehydrated = $proof->openReservation($request->plan, $request->policy);
+        self::assertEquals($reservation, $rehydrated);
+        self::assertSame($reservation->stateHash, $rehydrated->stateHash);
+        self::assertSame($rehydrated->expectedStateHash(), $rehydrated->stateHash);
         self::assertSame($proof, $proof->verify($request->plan, $reservation, $request->policy));
+    }
+
+    public function testAdmissionProofReplaysTheAuthenticatedAdmissionInstantAfterPlanCreation(): void
+    {
+        $request = $this->request();
+        $engine = new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:01.123456+00:00'));
+        $reservation = CanonicalPortfolioReservation::open($engine->admit($request), $request->plan);
+        $proof = CanonicalPortfolioAdmissionProof::fromReservation($request, $reservation);
+
+        self::assertSame('2026-08-10T12:00:01.123456+00:00', $proof->toArray()['admitted_at']);
+        self::assertSame($reservation->stateHash, $proof->openReservation($request->plan, $request->policy)->stateHash);
+        self::assertSame($proof, $proof->verify($request->plan, $reservation, $request->policy));
+    }
+
+    public function testLegacyAdmissionProofRemainsReadableAndVerifiable(): void
+    {
+        $request = $this->request();
+        $reservation = CanonicalPortfolioReservation::open(
+            (new CanonicalPortfolioAdmissionEngine(new MockClock('2026-08-10T12:00:00+00:00')))->admit($request),
+            $request->plan,
+        );
+        $legacy = CanonicalPortfolioAdmissionProof::fromRequest($request);
+
+        self::assertSame('canonical-portfolio-admission-proof.v1', $legacy->toArray()['schema']);
+        self::assertArrayNotHasKey('admitted_at', $legacy->toArray());
+        self::assertEquals($legacy, CanonicalPortfolioAdmissionProof::fromArray($legacy->toArray()));
+        self::assertSame($legacy, $legacy->verify($request->plan, $reservation, $request->policy));
     }
 
     public function testAdmissionProofStrictParserRejectsUnknownAndIncompleteEvidence(): void

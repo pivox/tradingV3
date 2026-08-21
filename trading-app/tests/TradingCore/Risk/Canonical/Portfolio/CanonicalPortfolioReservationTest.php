@@ -45,6 +45,8 @@ final class CanonicalPortfolioReservationTest extends TestCase
         yield 'admission hash' => ['admission_hash'];
         yield 'version' => ['version'];
         yield 'plan quantity mismatch' => ['plan_quantity'];
+        yield 'admission before plan' => ['observed_before_plan'];
+        yield 'admission after expiry' => ['observed_after_expiry'];
     }
 
     #[DataProvider('invalidCanonicalOpeningStateCases')]
@@ -60,6 +62,8 @@ final class CanonicalPortfolioReservationTest extends TestCase
             'admission_hash' => self::mutateProperty($reservation, 'admissionHash', $reservation->admissionHash, 'invalid'),
             'version' => self::mutateProperty($reservation, 'version', $reservation->version, 2),
             'plan_quantity' => self::mutateProperty($reservation, 'plannedQuantity', $reservation->plannedQuantity, $reservation->plannedQuantity + $plan->quantityStep),
+            'observed_before_plan' => self::mutateProperty($reservation, 'observedAt', $reservation->observedAt, $plan->createdAt->modify('-1 microsecond')),
+            'observed_after_expiry' => self::mutateProperty($reservation, 'observedAt', $reservation->observedAt, $plan->expiresAt->modify('+1 microsecond')),
             default => throw new \LogicException('Unknown opening-state forgery.'),
         };
         $forged = self::mutateProperty(

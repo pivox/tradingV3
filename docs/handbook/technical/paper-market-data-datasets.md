@@ -96,24 +96,56 @@ ses bid/ask. Une bougie utilise uniquement sa clôture avec le modèle déclaré
 un chemin intrabar. Les fenêtres MTF du contexte `FAKE` lisent directement les
 klines projetées Paper, et non le provider Fake vide du mode démonstration.
 
-Une cellule est l'identité immuable suivante :
+Une cellule legacy conserve exactement l'identité v1 suivante :
 
 ```text
 network + market_data_venue + configuration_snapshot_id + strategy_profile + run_id
 ```
 
-Son identifiant est le SHA-256 du tuple canonique. Aucun alias, profil par
-défaut ou fallback de venue n'est accepté. La configuration fournie est
-normalisée puis hashée dans `configuration_snapshot_id`; son contenu complet
-n'est jamais affiché par la commande opérateur. Dans ce lot technique, elle est
-une provenance demandée et non encore une preuve de configuration runtime
-effective : cette propagation appartient explicitement à #133/#302. Tous les
-profils actuellement acceptés restent donc `reference_only` et non certifiables
-pour une baseline moderne.
+Une cellule moderne utilise l'identité v2 distincte :
+
+```text
+network + market_data_venue + configuration_snapshot_id
++ mode_id + mode_version + setup_id + setup_version + side
++ config_hash + condition_catalog_hash + run_id
+```
+
+L'identifiant est le SHA-256 du tuple canonique complet. Aucun alias, profil par
+défaut, version implicite ou fallback de venue n'est accepté. La configuration
+Paper privée est normalisée dans `configuration_snapshot_id`; l'Effective
+Config moderne est résolue avec la venue et le réseau exacts du dataset et lie
+la cellule via `config_hash` et `condition_catalog_hash`. Aucun contenu de
+configuration ni chemin n'est affiché par les commandes opérateur.
 
 Les profils legacy actuellement enregistrés sont `reference_only`. Leurs
 trades peuvent prouver le fonctionnement technique de la chaîne, mais sont
 exclus de toute baseline moderne et de toute agrégation certifiée.
+
+### Effet durable canonique moderne
+
+Le contrat `paper-canonical-prepared-effect.v1` conserve le plan canonique
+complet, la preuve d'admission portefeuille, la lineage Effective Config,
+l'identité durable de l'`OrderIntent` et la provenance v2 de la cellule. La
+réservation portefeuille n'est jamais sérialisée comme objet PHP : la preuve
+v2 authentifie l'instant réel d'admission et le decoder la recrée à cet instant
+depuis la preuve, le plan et la politique recompilée depuis le snapshot de
+lineage, puis exige le même hash d'état initial. Les preuves v1 historiques
+restent lisibles et vérifiables avec leur réservation existante, mais ne peuvent
+pas ouvrir seules une nouvelle réservation.
+
+Le champ `exchange` de la provenance d'exécution vaut toujours `fake`. Le champ
+`market_data_venue`, le plan et l'Effective Config conservent la venue publique
+du dataset (`okx` ou `hyperliquid`) ; aucune réécriture vers le modèle legacy
+`OrderPlanModel` n'est autorisée. Le réseau et le namespace de compte du scope
+portefeuille doivent également correspondre exactement à la cellule v2. Un
+écart de plan, preuve, décision, cellule, réseau, venue, version, side ou hash échoue avec
+`paper_canonical_prepared_effect_payload_invalid`.
+
+Cette frontière est volontairement non exécutable seule. Le runtime moderne
+reste bloqué par `paper_modern_strategy_bridge_unavailable` tant que
+l'assemblage des inputs marché/risque, la réservation d'intent, le dispatcher
+Fake canonique et la reprise des partial fills ne consomment pas tous ce même
+contrat. Aucune cellule moderne n'est donc promue par ce lot.
 
 ### Stockage et reprise
 

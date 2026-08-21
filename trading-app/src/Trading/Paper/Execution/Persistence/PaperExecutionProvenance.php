@@ -6,6 +6,7 @@ namespace App\Trading\Paper\Execution\Persistence;
 
 use App\Entity\PaperExecutionProvenanceAwareInterface;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Profile\PaperProfileEligibility;
 use App\Trading\Paper\Execution\Profile\PaperProfileRegistry;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
@@ -23,6 +24,27 @@ final class PaperExecutionProvenance
         'strategy_profile',
         'run_id',
         'exchange',
+    ];
+
+    /** @var list<string> */
+    public const MODERN_KEYS = [
+        ...self::KEYS,
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'side',
+        'config_hash',
+        'condition_catalog_hash',
+    ];
+
+    /** @var list<string> */
+    private const MODERN_MARKER_KEYS = [
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'condition_catalog_hash',
     ];
 
     /** @var list<string> */
@@ -44,7 +66,10 @@ final class PaperExecutionProvenance
         }
 
         $candidate = [];
-        foreach (self::KEYS as $key) {
+        $keys = array_intersect(self::MODERN_MARKER_KEYS, array_keys($source)) === []
+            ? self::KEYS
+            : self::MODERN_KEYS;
+        foreach ($keys as $key) {
             $candidate[$key] = $source[$key] ?? null;
         }
 
@@ -57,7 +82,8 @@ final class PaperExecutionProvenance
      */
     public static function validate(array $candidate): array
     {
-        if (array_keys($candidate) !== self::KEYS) {
+        $modern = array_keys($candidate) === self::MODERN_KEYS;
+        if (!$modern && array_keys($candidate) !== self::KEYS) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
         foreach ($candidate as $value) {
@@ -70,13 +96,34 @@ final class PaperExecutionProvenance
             $network = PaperMarketDataNetwork::from($candidate['paper_network']);
             $venue = PaperMarketDataVenue::from($candidate['market_data_venue']);
             $eligibility = PaperProfileEligibility::from($candidate['paper_eligibility']);
-            $cell = PaperExecutionCell::create(
-                $network,
-                $venue,
-                $candidate['configuration_snapshot_id'],
-                $candidate['strategy_profile'],
-                $candidate['run_id'],
-            );
+            if ($modern) {
+                $identity = PaperModernStrategyIdentity::fromDurableIdentity(
+                    $network,
+                    $venue,
+                    $candidate['mode_id'],
+                    $candidate['mode_version'],
+                    $candidate['setup_id'],
+                    $candidate['setup_version'],
+                    $candidate['side'],
+                    $candidate['config_hash'],
+                    $candidate['condition_catalog_hash'],
+                );
+                $cell = PaperExecutionCell::createModern(
+                    $network,
+                    $venue,
+                    $candidate['configuration_snapshot_id'],
+                    $identity,
+                    $candidate['run_id'],
+                );
+            } else {
+                $cell = PaperExecutionCell::create(
+                    $network,
+                    $venue,
+                    $candidate['configuration_snapshot_id'],
+                    $candidate['strategy_profile'],
+                    $candidate['run_id'],
+                );
+            }
         } catch (\Throwable) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
@@ -84,7 +131,9 @@ final class PaperExecutionProvenance
         if ($candidate['exchange'] !== 'fake'
             || $network === PaperMarketDataNetwork::LEGACY_UNKNOWN
             || $cell->id !== $candidate['paper_execution_cell_id']
-            || (new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility
+            || ($modern
+                ? $candidate['strategy_profile'] !== $cell->modernIdentity?->modeId
+                : (new PaperProfileRegistry())->require($cell->strategyProfile) !== $eligibility)
         ) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
