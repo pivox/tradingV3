@@ -172,7 +172,11 @@ final class PaperReplayReader
                 $datasetPin,
                 'paper_replay_dataset_after_resume',
             );
+            if ($advanceClock && $startIndex > 0) {
+                $this->restoreObservationWatermark($events, $startIndex);
+            }
             $count = count($events);
+            $strictInitialObservation = $startIndex === 0;
             for ($index = $startIndex; $index < $count; ++$index) {
                 $this->assertPinnedDatasetDirectory(
                     $datasetPin,
@@ -180,7 +184,8 @@ final class PaperReplayReader
                 );
                 $event = $events[$index]['event'];
                 if ($advanceClock) {
-                    $this->clock->advanceTo($event->exchangeTimestamp);
+                    $this->advanceClockToObservation($event, $strictInitialObservation);
+                    $strictInitialObservation = false;
                     $this->currentEventIndex = $index;
                 }
 
@@ -194,6 +199,38 @@ final class PaperReplayReader
         } finally {
             fclose($datasetPin['handle']);
         }
+    }
+
+    private function advanceClockToObservation(PaperMarketEvent $event, bool $strictInitialObservation): void
+    {
+        $observedAt = $this->observationTimestamp($event);
+        if ($strictInitialObservation || $observedAt > $this->clock->now()) {
+            $this->clock->advanceTo($observedAt);
+        }
+    }
+
+    /**
+     * @param list<array{event: PaperMarketEvent, input_index: int}> $events
+     */
+    private function restoreObservationWatermark(array $events, int $endExclusive): void
+    {
+        $watermark = $this->clock->now();
+        for ($index = 0; $index < $endExclusive; ++$index) {
+            $observedAt = $this->observationTimestamp($events[$index]['event']);
+            if ($observedAt > $watermark) {
+                $watermark = $observedAt;
+            }
+        }
+        if ($watermark > $this->clock->now()) {
+            $this->clock->advanceTo($watermark);
+        }
+    }
+
+    private function observationTimestamp(PaperMarketEvent $event): \DateTimeImmutable
+    {
+        return $event->receivedTimestamp > $event->exchangeTimestamp
+            ? $event->receivedTimestamp
+            : $event->exchangeTimestamp;
     }
 
     /**

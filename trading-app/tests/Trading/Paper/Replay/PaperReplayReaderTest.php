@@ -67,7 +67,7 @@ final class PaperReplayReaderTest extends TestCase
         self::assertSame('2026-07-19T09:00:00.000000Z', $clock->now()->format('Y-m-d\TH:i:s.u\Z'));
     }
 
-    public function testSortsByExactBusinessKeyAndIgnoresReceivedTimestamp(): void
+    public function testSortsByExactBusinessKeyAndAdvancesAMonotoneObservationWatermark(): void
     {
         $timestamp = '2026-07-19T10:00:00.000000Z';
         $later = $this->event('BTCUSDT', PaperMarketDataChannel::CANDLE_1M, '1', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:01.100000Z');
@@ -91,9 +91,12 @@ final class PaperReplayReaderTest extends TestCase
         $clock = new PaperReplayClock(new \DateTimeImmutable($timestamp));
         $reader = $this->reader($clock);
         $actual = [];
+        $observationWatermark = $clock->now();
 
         foreach ($reader->read($dataset['directory'], 'paper.worker-01') as $event) {
-            self::assertEquals($event->exchangeTimestamp, $clock->now());
+            $observedAt = max($event->exchangeTimestamp, $event->receivedTimestamp);
+            $observationWatermark = max($observationWatermark, $observedAt);
+            self::assertEquals($observationWatermark, $clock->now());
             self::assertSame(count($actual), $reader->currentEventIndex());
             $actual[] = $event->eventId;
         }
@@ -497,7 +500,30 @@ final class PaperReplayReaderTest extends TestCase
             $yielded,
         ));
         self::assertSame(2, $reader->currentEventIndex());
-        self::assertEquals($events[2]->exchangeTimestamp, $clock->now());
+        self::assertEquals($events[2]->receivedTimestamp, $clock->now());
+    }
+
+    public function testResumeRestoresALaterObservationWatermarkFromTheAcknowledgedPrefix(): void
+    {
+        $events = [
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:10.000000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:02.000000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '3', '2026-07-19T10:00:02.000000Z', '2026-07-19T10:00:03.000000Z'),
+        ];
+        $dataset = $this->completeDataset($events);
+        $checkpoint = $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[1], 1);
+        $store = new PaperReplayCheckpointStore();
+        $store->save($dataset['directory'], $checkpoint);
+        $clock = new PaperReplayClock();
+        $reader = new PaperReplayReader(new PaperDatasetVerifier(), $store, $clock);
+
+        $yielded = iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
+
+        self::assertSame([$events[2]->eventId], array_map(
+            static fn (PaperMarketEvent $event): string => $event->eventId,
+            $yielded,
+        ));
+        self::assertEquals($events[0]->receivedTimestamp, $clock->now());
     }
 
     public function testRejectsCheckpointDatasetChecksumAndConsumerMismatches(): void
