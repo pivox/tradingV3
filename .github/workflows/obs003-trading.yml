@@ -45,7 +45,10 @@ jobs:
           POSTGRES_PASSWORD: trading
         ports:
           - 5432:5432
+        # This database is disposable. Keep its write-heavy integration-test data out of
+        # hosted-runner overlay storage, where checkpoints can otherwise stall for minutes.
         options: >-
+          --tmpfs /var/lib/postgresql/data:rw
           --health-cmd "pg_isready -U trading -d trading_app_test"
           --health-interval 10s
           --health-timeout 5s
