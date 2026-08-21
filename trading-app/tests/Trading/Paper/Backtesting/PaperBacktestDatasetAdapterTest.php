@@ -32,6 +32,42 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperBacktestDatasetEncoder::class)]
 final class PaperBacktestDatasetAdapterTest extends TestCase
 {
+    public function testAdaptsCanonicalCandlePrefixWithoutRewritingEventProvenance(): void
+    {
+        $candle = $this->okxEvent();
+        $book = $this->okxBook();
+        $expected = (new PaperBacktestDatasetAdapter())
+            ->adapt($this->snapshot($candle))->candles[0];
+
+        $actual = (new PaperBacktestDatasetAdapter())->adaptCandleEvents([$book, $candle]);
+
+        self::assertCount(1, $actual);
+        self::assertSame($expected->toArray(), $actual[0]->toArray());
+        self::assertSame($candle->eventId, $actual[0]->sourceRecordId);
+        self::assertSame('2026-08-13T10:01:00.000000Z', $actual[0]->availableAt);
+    }
+
+    public function testCandlePrefixRejectsDuplicateOrInvalidNativeProvenance(): void
+    {
+        $adapter = new PaperBacktestDatasetAdapter();
+        $event = $this->okxEvent();
+        foreach ([
+            [$event, $event],
+            [$this->okxEvent(['native_symbol' => 'ETH-USDT-SWAP'])],
+            ['not-an-event'],
+        ] as $events) {
+            try {
+                $adapter->adaptCandleEvents($events);
+                self::fail('Invalid canonical candle prefix was accepted.');
+            } catch (PaperBacktestAdapterException $exception) {
+                self::assertContains($exception->getMessage(), [
+                    'paper_backtest_candle_events_invalid',
+                    'paper_backtest_event_provenance_invalid',
+                ]);
+            }
+        }
+    }
+
     public function testPublicBookValueAndDatasetAreStrictlySourceBound(): void
     {
         $dataset = (new PaperBacktestDatasetAdapter())->adapt($this->snapshot($this->okxEvent()));
