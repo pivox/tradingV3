@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Trading\Paper\Execution\Strategy;
 
+use App\Common\Enum\Timeframe;
 use App\Trading\Lineage\LineageContextException;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
 use App\TradingCore\Shadow\ShadowRuntimeRequest;
 
 final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanonicalStrategyInputAssemblerInterface
@@ -47,7 +49,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         }
 
         $executionTimeframe = $this->executionTimeframe($request);
-        if (!$this->isExactTrigger($event, $executionTimeframe)) {
+        if (!$this->isExactTrigger($event, $executionTimeframe, $request)) {
             throw new \LogicException('paper_canonical_strategy_trigger_mismatch');
         }
 
@@ -130,8 +132,11 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         return $timeframe;
     }
 
-    private function isExactTrigger(PaperMarketEvent $event, string $timeframe): bool
-    {
+    private function isExactTrigger(
+        PaperMarketEvent $event,
+        string $timeframe,
+        ShadowRuntimeRequest $request,
+    ): bool {
         $channel = match ($timeframe) {
             '1m' => PaperMarketDataChannel::CANDLE_1M,
             '5m' => PaperMarketDataChannel::CANDLE_5M,
@@ -140,11 +145,81 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
             default => null,
         };
         $declared = $event->payload['interval'] ?? $event->payload['bar'] ?? null;
+        $snapshot = $request->indicatorsByTimeframe[$timeframe] ?? null;
+        if (!is_array($snapshot)) {
+            return false;
+        }
+        $identityData = $snapshot['snapshot_identity'] ?? null;
+        $identity = is_array($identityData) && !array_is_list($identityData)
+            ? CanonicalIndicatorSnapshotIdentity::tryFromArray($identityData)
+            : null;
+        $eventOpen = $this->eventCandleOpenSecond($event, $timeframe);
+        $snapshotOpen = $this->canonicalSecond($snapshot['kline_time'] ?? null);
 
         return $channel !== null
             && $event->channel === $channel
             && ($event->payload['confirmed'] ?? null) === true
             && is_string($declared)
-            && strtolower($declared) === $timeframe;
+            && strtolower($declared) === $timeframe
+            && $identity !== null
+            && $identity->matches(
+                $timeframe,
+                $event->symbol,
+                $event->sourceVenue->value,
+                $event->sourceNetwork->value,
+                'perpetual',
+            )
+            && $eventOpen !== null
+            && $eventOpen === $snapshotOpen;
+    }
+
+    private function eventCandleOpenSecond(PaperMarketEvent $event, string $timeframe): ?int
+    {
+        $value = $event->payload['start_time'] ?? null;
+        if (!is_string($value) || preg_match('/\A[0-9]{13}\z/D', $value) !== 1) {
+            return null;
+        }
+        $milliseconds = (int) $value;
+        $timeframeValue = Timeframe::tryFrom($timeframe);
+        if ($milliseconds % 1000 !== 0
+            || $timeframeValue === null
+            || intdiv($milliseconds, 1000) % $timeframeValue->getStepInSeconds() !== 0
+        ) {
+            return null;
+        }
+
+        return intdiv($milliseconds, 1000);
+    }
+
+    private function canonicalSecond(mixed $value): ?int
+    {
+        if ($value instanceof \DateTimeInterface) {
+            $instant = \DateTimeImmutable::createFromInterface($value);
+
+            return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
+        }
+        if (is_int($value)) {
+            return $value > 10_000_000_000 && $value % 1000 === 0
+                ? intdiv($value, 1000)
+                : ($value <= 10_000_000_000 ? $value : null);
+        }
+        if (is_float($value)) {
+            if (!is_finite($value)) {
+                return null;
+            }
+            $seconds = $value > 10_000_000_000 ? $value / 1000.0 : $value;
+
+            return floor($seconds) === $seconds ? (int) $seconds : null;
+        }
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+        try {
+            $instant = new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
+        } catch (\Exception) {
+            return null;
+        }
+
+        return $instant->format('u') === '000000' ? $instant->getTimestamp() : null;
     }
 }

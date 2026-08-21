@@ -126,6 +126,30 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         ));
     }
 
+    public function testRejectsEvidenceFromADifferentExecutionCandle(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+        $indicators = $evidence->indicatorsByTimeframe;
+        $indicators['15m']['kline_time'] = '2026-08-10T11:30:00Z';
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+            ->assemble($cell, $this->event());
+    }
+
+    public function testRejectsExecutionSnapshotWithDifferentSourceIdentity(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+        $indicators = $evidence->indicatorsByTimeframe;
+        $indicators['15m']['snapshot_identity']['exchange'] = 'okx';
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+            ->assemble($cell, $this->event());
+    }
+
     /** @return array{PaperExecutionCell, PaperCanonicalStrategyEvidence} */
     private function fixture(): array
     {
@@ -206,7 +230,18 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         return [$cell, new PaperCanonicalStrategyEvidence(
             $config,
             $lineage,
-            [],
+            [
+                '15m' => [
+                    'snapshot_identity' => [
+                        'timeframe' => '15m',
+                        'symbol' => 'BTCUSDT',
+                        'exchange' => 'hyperliquid',
+                        'environment' => 'testnet',
+                        'market_type' => 'perpetual',
+                    ],
+                    'kline_time' => '2026-08-10T11:45:00Z',
+                ],
+            ],
             new CanonicalOrderPlanBuildRequest(...CanonicalOrderPlanPipelineFixture::accepted(
                 executionPolicy: $policy,
                 exchange: 'hyperliquid',
@@ -218,6 +253,25 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             1.0,
             1.0,
         )];
+    }
+
+    /** @param array<string, array<string, mixed>> $indicators */
+    private function withIndicators(
+        PaperCanonicalStrategyEvidence $evidence,
+        array $indicators,
+    ): PaperCanonicalStrategyEvidence {
+        return new PaperCanonicalStrategyEvidence(
+            $evidence->configRequest,
+            $evidence->lineage,
+            $indicators,
+            $evidence->orderPlanRequest,
+            $evidence->portfolioScope,
+            $evidence->portfolioSnapshot,
+            $evidence->decisionKey,
+            $evidence->liveSpreadBps,
+            $evidence->estimatedSlippageBps,
+            $evidence->orderBook,
+        );
     }
 
     private function provider(PaperCanonicalStrategyEvidence $evidence): PaperCanonicalStrategyEvidenceProviderInterface
