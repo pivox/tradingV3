@@ -76,6 +76,7 @@ final readonly class PaperCanonicalPreparedEffect
             if ($snapshot === null
                 || !hash_equals($this->plan->expectedPlanHash(), $this->plan->planHash)
                 || !hash_equals($this->reservation->expectedStateHash(), $this->reservation->stateHash)
+                || $this->executionTimeframe !== self::configuredExecutionTimeframe($this->lineage)
             ) {
                 throw new \InvalidArgumentException();
             }
@@ -131,5 +132,16 @@ final readonly class PaperCanonicalPreparedEffect
         }
 
         return $this;
+    }
+
+    private static function configuredExecutionTimeframe(LineageContext $lineage): ?string
+    {
+        $config = $lineage->effectiveConfigSnapshot?->config();
+        $decision = $config['setup']['ast']['execution']['execution_timeframe'] ?? null;
+
+        return is_array($decision) && ($decision['state'] ?? null) === 'defined'
+            && is_string($decision['value'] ?? null)
+            ? $decision['value']
+            : null;
     }
 }

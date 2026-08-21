@@ -37,8 +37,15 @@ final class TradeLineageManager
     ) {
     }
 
-    /** @param array<string,mixed>|LineageContext $context */
-    public function ensureForIntent(OrderIntent $intent, array|LineageContext $context = []): TradeLineage
+    /**
+     * @param array<string,mixed>|LineageContext $context
+     * @param array<string,mixed>|null           $paperProvenance
+     */
+    public function ensureForIntent(
+        OrderIntent $intent,
+        array|LineageContext $context = [],
+        ?array $paperProvenance = null,
+    ): TradeLineage
     {
         $identity = $context instanceof LineageContext ? $context : null;
         if ($identity === null && $this->containsModernIdentity($context)) {
@@ -49,7 +56,7 @@ final class TradeLineageManager
         }
         $context = $identity?->toArray() ?? $context;
 
-        $paperProvenance = PaperExecutionProvenance::extract($context);
+        $paperProvenance ??= PaperExecutionProvenance::extract($context);
         if ($intent->getPaperExecutionCellId() !== null && $paperProvenance === null) {
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
@@ -360,7 +367,9 @@ final class TradeLineageManager
     private function assertIntentMatchesIdentity(OrderIntent $intent, LineageContext $identity): void
     {
         $actual = [
-            'exchange' => $intent->getExchange(),
+            'exchange' => $intent->getPaperExecutionCellId() === null
+                ? $intent->getExchange()
+                : $intent->getMarketDataVenue(),
             'market_type' => $intent->getMarketType(),
             'symbol' => strtoupper($intent->getSymbol()),
             'side' => $this->sideFromIntent($intent),
@@ -392,7 +401,9 @@ final class TradeLineageManager
             'config_hash' => $lineage->getConfigHash(),
             'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
             'side' => $lineage->getSide(),
-            'exchange' => $lineage->getExchange(),
+            'exchange' => $lineage->getPaperExecutionCellId() === null
+                ? $lineage->getExchange()
+                : $lineage->getMarketDataVenue(),
             'market_type' => $lineage->getMarketType(),
             'symbol' => $lineage->getSymbol(),
             'decision_id' => $lineage->getDecisionId(),

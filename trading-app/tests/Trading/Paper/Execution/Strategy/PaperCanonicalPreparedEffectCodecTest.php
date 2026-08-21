@@ -40,7 +40,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
 {
     public function testCanonicalPreparedEffectRoundTripsEveryAuthenticatedBoundary(): void
     {
-        $effect = self::effect();
+        $effect = self::fixture();
         $codec = new PaperCanonicalPreparedEffectCodec();
 
         $encoded = $codec->encode($effect);
@@ -59,7 +59,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
 
     public function testTamperedOrCrossBoundCanonicalPreparedEffectFailsWithOneStableReason(): void
     {
-        $encoded = (new PaperCanonicalPreparedEffectCodec())->encode(self::effect());
+        $encoded = (new PaperCanonicalPreparedEffectCodec())->encode(self::fixture());
         $reordered = $encoded;
         $reordered['payload'] = array_reverse($reordered['payload'], true);
         self::rehash($reordered);
@@ -68,6 +68,9 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             array_replace($encoded, ['payload_checksum' => str_repeat('0', 64)]),
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['decision_key'] = 'another-decision';
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
+                $payload['execution_timeframe'] = '1m';
             }),
             self::mutate($encoded, static function (array &$payload): void {
                 $payload['cell_provenance']['run_id'] = 'another-run';
@@ -121,7 +124,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         }
     }
 
-    private static function effect(): PaperCanonicalPreparedEffect
+    public static function fixture(): PaperCanonicalPreparedEffect
     {
         $effective = self::effectiveConfig();
         $identity = PaperModernStrategyIdentity::fromResolvedSnapshot(
@@ -206,7 +209,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             $reservation,
             $lineage,
             $decisionKey,
-            '1m',
+            '5m',
             ['client_order_id' => 'paper-modern-cid-001', 'order_intent_id' => 42],
             $cell->provenance(PaperProfileEligibility::REFERENCE_ONLY),
         );
@@ -243,6 +246,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             'environment' => 'testnet',
             'market_type' => 'perpetual',
             'symbol' => 'BTCUSDT',
+            'decision_id' => '018f5f6d-8f4a-7abc-8def-0123456789ab',
             'decision_key' => $decisionKey,
             'dry_run' => true,
             'effective_config_reference' => 'effective-config-snapshot:' . $snapshot->toArray()['snapshot_hash'],

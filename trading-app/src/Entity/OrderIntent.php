@@ -8,6 +8,8 @@ use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
 use App\Repository\OrderIntentRepository;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\MathException;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\DBAL\Types\Types;
@@ -96,8 +98,8 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
     private ?string $price = null; // Prix limit (pour type=limit)
 
-    #[ORM\Column(type: Types::INTEGER)]
-    private int $size; // Nombre de contrats
+    #[ORM\Column(type: Types::DECIMAL, precision: 36, scale: 18)]
+    private string $size; // Quantité exacte; les anciens contrats entiers restent supportés.
 
     #[ORM\Column(type: Types::STRING, length: 80)]
     private string $clientOrderId; // Généré unique
@@ -414,14 +416,26 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
         return $this->touch();
     }
 
-    public function getSize(): int
+    public function getSize(): int|string
     {
-        return $this->size;
+        $normalized = (string) BigDecimal::of($this->size)->stripTrailingZeros();
+        if (preg_match('/\A[0-9]+\z/D', $normalized) === 1
+            && (strlen($normalized) < strlen((string) PHP_INT_MAX)
+                || (strlen($normalized) === strlen((string) PHP_INT_MAX) && strcmp($normalized, (string) PHP_INT_MAX) <= 0))
+        ) {
+            return (int) $normalized;
+        }
+
+        return $normalized;
     }
 
-    public function setSize(int $size): self
+    public function setSize(int|string $size): self
     {
-        $this->size = $size;
+        try {
+            $this->size = (string) BigDecimal::of($size)->stripTrailingZeros();
+        } catch (MathException $exception) {
+            throw new \InvalidArgumentException('order_intent_size_invalid', 0, $exception);
+        }
         return $this->touch();
     }
 
@@ -784,7 +798,7 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
             'correlation_run_id' => $this->correlationRunId,
             'orchestration_set_id' => $this->orchestrationSetId,
             'orchestration_dashboard_id' => $this->orchestrationDashboardId,
-            'exchange' => $this->exchange,
+            'exchange' => $this->paperExecutionCellId === null ? $this->exchange : $this->marketDataVenue,
             'environment' => $this->environment,
             'market_type' => $this->marketType,
             'symbol' => isset($this->symbol) ? $this->symbol : null,
