@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Trading\Paper\Okx\Http;
 
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRateLimiter;
+use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
@@ -28,6 +29,43 @@ use Symfony\Contracts\HttpClient\ResponseStreamInterface;
 #[CoversClass(OkxPaperPublicRestClient::class)]
 final class OkxPaperPublicRestClientTest extends TestCase
 {
+    public function testReadsOneExactPublicFundingRateWithoutPrivateHeaders(): void
+    {
+        $requests = [];
+        $row = self::okxFundingRow('BTC-USDT-SWAP');
+        $client = $this->client(new MockHttpClient(function (string $method, string $url, array $options) use (&$requests, $row): MockResponse {
+            $requests[] = [$method, $url, $options];
+
+            return new MockResponse(json_encode(['code' => '0', 'data' => [$row + ['ignoredFutureField' => 'safe']]], JSON_THROW_ON_ERROR));
+        }));
+
+        self::assertSame($row, $client->fundingRate('BTC-USDT-SWAP'));
+        self::assertInstanceOf(OkxPaperFundingRateClientInterface::class, $client);
+        self::assertSame('https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP', $requests[0][1]);
+        self::assertStringNotContainsString('ok-access-', strtolower(json_encode($requests[0][2], JSON_THROW_ON_ERROR)));
+    }
+
+    public function testFundingRateRequiresExactlyTheRequestedSupportedRowAndFields(): void
+    {
+        $valid = self::okxFundingRow('BTC-USDT-SWAP');
+        foreach ([
+            [],
+            [self::okxFundingRow('ETH-USDT-SWAP')],
+            [$valid, $valid],
+            [array_diff_key($valid, ['fundingRate' => true])],
+        ] as $rows) {
+            $client = $this->client(new MockHttpClient(new MockResponse(json_encode([
+                'code' => '0', 'data' => $rows,
+            ], JSON_THROW_ON_ERROR))));
+            try {
+                $client->fundingRate('BTC-USDT-SWAP');
+                self::fail('Invalid funding-rate response must fail closed.');
+            } catch (\RuntimeException $exception) {
+                self::assertSame('okx_paper_public_response_invalid', $exception->getMessage());
+            }
+        }
+    }
+
     public function testReadsOneExactPublicInstrumentWithoutPrivateHeaders(): void
     {
         $requests = [];
@@ -63,7 +101,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
         }
     }
 
-    public function testNamedMethodsUseOnlyTheFiveAllowlistedGetEndpointsWithoutPrivateHeaders(): void
+    public function testMarketDataMethodsUseOnlyTheFiveAllowlistedGetEndpointsWithoutPrivateHeaders(): void
     {
         $requests = [];
         $http = new MockHttpClient(function (string $method, string $url, array $options) use (&$requests): MockResponse {
@@ -469,6 +507,22 @@ final class OkxPaperPublicRestClientTest extends TestCase
             'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
             'lever' => '100',
             'state' => 'live',
+        ];
+    }
+
+    /** @return array<string, string> */
+    private static function okxFundingRow(string $instrumentId): array
+    {
+        return [
+            'instId' => $instrumentId,
+            'instType' => 'SWAP',
+            'fundingRate' => '0.0001',
+            'fundingTime' => '1787328000000',
+            'nextFundingTime' => '1787356800000',
+            'method' => 'current_period',
+            'formulaType' => 'withRate',
+            'settState' => 'settled',
+            'ts' => '1787311582161',
         ];
     }
 

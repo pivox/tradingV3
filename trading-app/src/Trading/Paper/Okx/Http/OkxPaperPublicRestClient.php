@@ -10,7 +10,7 @@ use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Symfony\Contracts\HttpClient\ResponseInterface;
 
-final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClientInterface, OkxPaperInstrumentMetadataClientInterface
+final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClientInterface, OkxPaperInstrumentMetadataClientInterface, OkxPaperFundingRateClientInterface
 {
     private const REQUEST_TIMEOUT_SECONDS = 10.0;
     private const MAX_RESPONSE_BYTES = 1_048_576;
@@ -132,6 +132,30 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
         }
 
         return $metadata;
+    }
+
+    public function fundingRate(string $instrumentId): array
+    {
+        $this->assertInstrumentId($instrumentId);
+        $rows = $this->get(OkxPublicEndpoint::FundingRate, [
+            'instId' => $instrumentId,
+        ], 1);
+        if (\count($rows) !== 1 || ($rows[0]['instId'] ?? null) !== $instrumentId) {
+            throw new \RuntimeException('okx_paper_public_response_invalid');
+        }
+        $funding = [];
+        foreach ([
+            'instId', 'instType', 'fundingRate', 'fundingTime', 'nextFundingTime',
+            'method', 'formulaType', 'settState', 'ts',
+        ] as $key) {
+            $value = $rows[0][$key] ?? null;
+            if (!\is_string($value)) {
+                throw new \RuntimeException('okx_paper_public_response_invalid');
+            }
+            $funding[$key] = $value;
+        }
+
+        return $funding;
     }
 
     /**

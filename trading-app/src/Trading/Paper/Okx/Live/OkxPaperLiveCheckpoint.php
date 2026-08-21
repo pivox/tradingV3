@@ -11,7 +11,7 @@ use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
 
 final readonly class OkxPaperLiveCheckpoint
 {
-    public const SCHEMA_VERSION = 2;
+    public const SCHEMA_VERSION = 3;
 
     /** @var list<string> */
     private const SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
@@ -596,6 +596,7 @@ final readonly class OkxPaperLiveCheckpoint
             'rest/candle_1m',
             'rest/candle_5m',
             'rest/instrument_metadata',
+            'rest/funding_rate',
             'rest/public_trade',
             'rest/top_of_book',
             'ws/candle_15m',
@@ -702,6 +703,7 @@ final readonly class OkxPaperLiveCheckpoint
 
         return match ($stage) {
             'instrument_metadata' => $suffix === 'rest/instrument_metadata',
+            'funding_rate' => $suffix === 'rest/funding_rate',
             'current_candles', 'history_candles' => preg_match('/\A(?:rest|ws)\/candle_(?:1m|5m|15m|1H)\z/D', $suffix) === 1,
             'recent_trades', 'history_trades' => preg_match('/\A(?:rest|ws)\/public_trade\z/D', $suffix) === 1,
             'order_book' => $suffix === 'rest/top_of_book',
@@ -722,6 +724,7 @@ final readonly class OkxPaperLiveCheckpoint
                     && \in_array($stage, [
                         'current_candles',
                         'instrument_metadata',
+                        'funding_rate',
                         'recent_trades',
                         'history_candles',
                         'history_trades',
@@ -1470,6 +1473,9 @@ final readonly class OkxPaperLiveCheckpoint
         }
         if ($channel === 'instrument_metadata') {
             return preg_match('/\A[1-9][0-9]*\|[a-f0-9]{64}\z/D', $sourceIdentity) === 1;
+        }
+        if ($channel === 'funding_rate') {
+            return preg_match('/\A[1-9][0-9]*\|[1-9][0-9]{12}\|[1-9][0-9]{12}\z/D', $sourceIdentity) === 1;
         }
         if ($channel === 'snapshot_boundary') {
             return preg_match(

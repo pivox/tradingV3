@@ -16,6 +16,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperPublicLiveSource;
@@ -59,7 +60,7 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
 
     public function testHealthyPublicFixtureCaptureReplaysAsTheExactNormalizedSequence(): void
     {
-        $clock = new MockClock('2026-07-25T08:59:59.999999Z');
+        $clock = new MockClock('2026-07-25T08:59:59.999998Z');
         $recorder = new PaperDatasetRecorder(
             $this->testRoot . '/paper-market-data',
             self::manifest(),
@@ -91,6 +92,7 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
             $checkpoint,
             $loop,
             metadataClient: new Task9MetadataClient(),
+            fundingClient: new Task9FundingClient(),
         );
         $consumer = new Task9IdempotentConsumer(
             $recorder->datasetDirectory(),
@@ -98,8 +100,9 @@ final class OkxPaperLiveCaptureReplayEqualityTest extends TestCase
                 if ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA
                     && $event->symbol === 'BTCUSDT'
                 ) {
-                    $clock->modify('2026-07-25T09:00:00.000000Z');
+                    $clock->modify('2026-07-25T08:59:59.999999Z');
                 } elseif ($event->channel === PaperMarketDataChannel::INSTRUMENT_METADATA
+                    || $event->channel === PaperMarketDataChannel::FUNDING_RATE
                     || ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
                         && $event->symbol === 'BTCUSDT'
                         && ($event->payload['reason'] ?? null) === 'initial')
@@ -3149,6 +3152,24 @@ final class Task9MetadataClient implements OkxPaperInstrumentMetadataClientInter
             'maxLmtSz' => '2000',
             'lever' => '100',
             'state' => 'live',
+        ];
+    }
+}
+
+final class Task9FundingClient implements OkxPaperFundingRateClientInterface
+{
+    public function fundingRate(string $instrumentId): array
+    {
+        return [
+            'instId' => $instrumentId,
+            'instType' => 'SWAP',
+            'fundingRate' => '0.0001',
+            'fundingTime' => '1784995200000',
+            'nextFundingTime' => '1785024000000',
+            'method' => 'current_period',
+            'formulaType' => 'withRate',
+            'settState' => 'settled',
+            'ts' => '1784969999000',
         ];
     }
 }

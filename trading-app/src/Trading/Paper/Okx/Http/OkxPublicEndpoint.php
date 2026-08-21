@@ -12,6 +12,7 @@ enum OkxPublicEndpoint: string
     case RecentTrades = '/api/v5/market/trades';
     case OrderBook = '/api/v5/market/books';
     case Instruments = '/api/v5/public/instruments';
+    case FundingRate = '/api/v5/public/funding-rate';
 
     public function maximumLimit(): int
     {
@@ -20,7 +21,7 @@ enum OkxPublicEndpoint: string
             self::HistoryTrades => 100,
             self::RecentTrades => 500,
             self::OrderBook => 400,
-            self::Instruments => 1,
+            self::Instruments, self::FundingRate => 1,
         };
     }
 

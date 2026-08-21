@@ -16,6 +16,7 @@ use App\Trading\Paper\Dataset\PaperLiveDatasetCapture;
 use App\Trading\Paper\Dataset\PaperLiveEventConsumerInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpoint;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveIntegrityException;
@@ -38,13 +39,14 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(OkxPaperPublicLiveSource::class)]
 final class OkxPaperPublicLiveSourceTest extends TestCase
 {
-    public function testAuthenticatedMetadataPrecedesWarmupMarketEvents(): void
+    public function testAuthenticatedReferenceDataPrecedesWarmupMarketEvents(): void
     {
         $source = $this->source(
             Task7RestClient::withInitialDataset(),
             new Task7Transport(),
             new Task7Transport(),
             metadataClient: new StaticOkxPaperMetadataClient(),
+            fundingClient: new StaticOkxPaperFundingClient(),
         );
         $events = $source->events();
         self::assertInstanceOf(\Generator::class, $events);
@@ -55,6 +57,13 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         self::assertSame('BTCUSDT', $metadata->symbol);
         self::assertSame(1, $metadata->payload['source_epoch']);
         $source->acknowledge($metadata->eventId);
+        $events->next();
+        $funding = $events->current();
+        self::assertInstanceOf(PaperMarketEvent::class, $funding);
+        self::assertSame(PaperMarketDataChannel::FUNDING_RATE, $funding->channel);
+        self::assertSame('BTCUSDT', $funding->symbol);
+        self::assertSame(28800, $funding->payload['funding_interval_seconds']);
+        $source->acknowledge($funding->eventId);
         $events->next();
         self::assertSame(PaperMarketDataChannel::CANDLE_1M, $events->current()?->channel);
         $source->stop();
@@ -8520,6 +8529,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
         ?OkxPaperPublicFrameQueue $publicQueue = null,
         ?OkxPaperPublicFrameQueue $businessQueue = null,
         ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
+        ?OkxPaperFundingRateClientInterface $fundingClient = null,
     ): OkxPaperPublicLiveSource {
         $store = $checkpointStore ?? new OkxPaperLiveCheckpointStore($this->testRoot);
         $checkpoint = $store->loadOrCreate(self::DATASET_ID, self::CONFIGURATION_SHA256);
@@ -8543,6 +8553,7 @@ final class OkxPaperPublicLiveSourceTest extends TestCase
             publicQueue: $publicQueue,
             businessQueue: $businessQueue,
             metadataClient: $metadataClient,
+            fundingClient: $fundingClient,
         );
     }
 
@@ -8762,6 +8773,19 @@ final class StaticOkxPaperMetadataClient implements OkxPaperInstrumentMetadataCl
             'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
             'lever' => '100',
             'state' => 'live',
+        ];
+    }
+}
+
+final class StaticOkxPaperFundingClient implements OkxPaperFundingRateClientInterface
+{
+    public function fundingRate(string $instrumentId): array
+    {
+        return [
+            'instId' => $instrumentId, 'instType' => 'SWAP', 'fundingRate' => '0.0001',
+            'fundingTime' => '1784995200000', 'nextFundingTime' => '1785024000000',
+            'method' => 'current_period', 'formulaType' => 'withRate',
+            'settState' => 'settled', 'ts' => '1784969999000',
         ];
     }
 }
