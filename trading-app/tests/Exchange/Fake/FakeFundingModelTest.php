@@ -234,6 +234,35 @@ final class FakeFundingModelTest extends TestCase
         self::assertSame([], $state->events('funding.accrued'));
     }
 
+    public function testSettlementPropagatesCanonicalPrivateReservationIdentity(): void
+    {
+        $state = new FakeExchangeStateStore($this->stateFile());
+        $position = $this->position(ExchangePositionSide::LONG, metadata: [
+            'decision_key' => 'decision-private-1',
+            'paper_canonical_reservation_descriptor' => '{"descriptor":"exact"}',
+        ]);
+
+        $result = $this->model()->settle(
+            $this->schedule(ExchangePositionSide::LONG, '0.0001'),
+            $position,
+            $state,
+        );
+
+        self::assertNotNull($result->funding);
+        self::assertSame('decision-private-1', $result->funding->metadata['decision_key'] ?? null);
+        self::assertSame(
+            '{"descriptor":"exact"}',
+            $result->funding->metadata['paper_canonical_reservation_descriptor'] ?? null,
+        );
+        $event = $state->events('funding.accrued')[0] ?? null;
+        self::assertNotNull($event);
+        self::assertSame('decision-private-1', $event->payload['metadata']['decision_key'] ?? null);
+        self::assertSame(
+            '{"descriptor":"exact"}',
+            $event->payload['metadata']['paper_canonical_reservation_descriptor'] ?? null,
+        );
+    }
+
     private function model(): FakeFundingModel
     {
         return new FakeFundingModel(FakeFundingModelConfig::v1(), $this->clock());

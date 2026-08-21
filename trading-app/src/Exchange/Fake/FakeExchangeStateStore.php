@@ -48,6 +48,10 @@ class FakeExchangeStateStore
 
     private int $nextEventSequence = 1;
 
+    private int $stateRevision = 1;
+
+    private bool $stateRevisionCertified = true;
+
     private bool $restored = false;
 
     private bool $restoredLegacyState = false;
@@ -111,6 +115,8 @@ class FakeExchangeStateStore
     {
         $this->nextOrderSequence = 1;
         $this->nextEventSequence = 1;
+        $this->stateRevision = 1;
+        $this->stateRevisionCertified = true;
         $this->restored = false;
         $this->restoredLegacyState = false;
         $this->seedCertified = true;
@@ -136,7 +142,10 @@ class FakeExchangeStateStore
                 total: 100000.0,
                 equity: 100000.0,
                 unrealizedPnl: 0.0,
-                metadata: ['source' => 'fake_exchange'],
+                metadata: [
+                    'source' => 'fake_exchange',
+                    FakeAccountLedgerOrigin::METADATA_KEY => FakeAccountLedgerOrigin::create('USDT', '100000')->encoded(),
+                ],
             ),
         ];
     }
@@ -302,6 +311,25 @@ class FakeExchangeStateStore
     public function getBalances(): array
     {
         return array_values($this->balances);
+    }
+
+    public function privateStateSnapshot(): FakeExchangePrivateStateSnapshot
+    {
+        return $this->transactional(function (): FakeExchangePrivateStateSnapshot {
+            if (!$this->stateRevisionCertified) {
+                throw new \LogicException('fake_exchange_state_revision_uncertified');
+            }
+
+            return new FakeExchangePrivateStateSnapshot(
+                stateRevision: $this->stateRevision,
+                balances: array_values($this->balances),
+                orders: array_values($this->orders),
+                positions: array_values($this->positions),
+                orderBooks: $this->orderBooks,
+                markPrices: $this->markPrices,
+                events: array_values($this->events),
+            );
+        });
     }
 
     public function totalBalanceUsdt(): float
@@ -1469,6 +1497,11 @@ class FakeExchangeStateStore
             return;
         }
 
+        if ($this->stateRevision === PHP_INT_MAX) {
+            throw new \LogicException('fake_exchange_state_revision_exhausted');
+        }
+        ++$this->stateRevision;
+
         if ($this->stateFile === null) {
             return;
         }
@@ -1481,6 +1514,8 @@ class FakeExchangeStateStore
         $payload = [
             'nextOrderSequence' => $this->nextOrderSequence,
             'nextEventSequence' => $this->nextEventSequence,
+            'stateRevision' => $this->stateRevision,
+            'stateRevisionCertified' => $this->stateRevisionCertified,
             'orders' => $this->orders,
             'clientOrderIndex' => $this->clientOrderIndex,
             'positions' => $this->positions,
@@ -1577,6 +1612,8 @@ class FakeExchangeStateStore
     private function hydrate(array $state): void
     {
         $nextOrderSequence = $state['nextOrderSequence'] ?? null;
+        $stateRevision = $state['stateRevision'] ?? null;
+        $stateRevisionCertified = $state['stateRevisionCertified'] ?? null;
         $orders = $state['orders'] ?? null;
         $clientOrderIndex = $state['clientOrderIndex'] ?? null;
         $positions = $state['positions'] ?? null;
@@ -1612,6 +1649,19 @@ class FakeExchangeStateStore
         }
 
         $this->nextOrderSequence = $nextOrderSequence;
+        if ($stateRevision === null && $stateRevisionCertified === null) {
+            $this->stateRevision = max(1, $nextOrderSequence);
+            $this->stateRevisionCertified = false;
+        } elseif (!\is_int($stateRevision)
+            || $stateRevision < 1
+            || $stateRevision === PHP_INT_MAX
+            || !\is_bool($stateRevisionCertified)
+        ) {
+            throw new FakeExchangeStateCorruptedException('fake_exchange_state_revision_invalid');
+        } else {
+            $this->stateRevision = $stateRevision;
+            $this->stateRevisionCertified = $stateRevisionCertified;
+        }
         $this->orders = $orders;
         $this->clientOrderIndex = $clientOrderIndex;
         $this->positions = $positions;
@@ -2277,6 +2327,8 @@ class FakeExchangeStateStore
         return [
             'nextOrderSequence' => $this->nextOrderSequence,
             'nextEventSequence' => $this->nextEventSequence,
+            'stateRevision' => $this->stateRevision,
+            'stateRevisionCertified' => $this->stateRevisionCertified,
             'restored' => $this->restored,
             'restoredLegacyState' => $this->restoredLegacyState,
             'orders' => $this->orders,
@@ -2300,6 +2352,8 @@ class FakeExchangeStateStore
     {
         $this->nextOrderSequence = $snapshot['nextOrderSequence'];
         $this->nextEventSequence = $snapshot['nextEventSequence'];
+        $this->stateRevision = $snapshot['stateRevision'];
+        $this->stateRevisionCertified = $snapshot['stateRevisionCertified'];
         $this->restored = $snapshot['restored'];
         $this->restoredLegacyState = $snapshot['restoredLegacyState'];
         $this->orders = $snapshot['orders'];
