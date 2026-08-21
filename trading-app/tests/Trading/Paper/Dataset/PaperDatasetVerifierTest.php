@@ -35,6 +35,73 @@ use Symfony\Component\Process\Process;
 #[CoversClass(CanonicalJson::class)]
 final class PaperDatasetVerifierTest extends TestCase
 {
+    public function testAcceptsStrictOkxFundingEvidence(): void
+    {
+        $valid = [
+            'funding_schema_version' => 'paper-funding-rate.v1',
+            'native_symbol' => 'BTC-USDT-SWAP', 'instrument_type' => 'perpetual',
+            'funding_rate' => '-0.0001', 'funding_time_ms' => '1787328000000',
+            'observed_at_ms' => '1787311582161',
+            'next_funding_time_ms' => '1787356800000', 'funding_interval_seconds' => 28800,
+            'method' => 'current_period', 'formula_type' => 'withRate',
+            'settlement_state' => 'settled', 'source_epoch' => 1,
+            'origin' => 'rest_public_funding_rate',
+        ];
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append(PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            new \DateTimeImmutable('2026-08-21T11:26:22.200Z'),
+            new \DateTimeImmutable('2026-08-21T11:26:22.200Z'), '1', $valid,
+        ));
+        $recorder->append(PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            new \DateTimeImmutable('2026-08-21T11:26:22.202Z'),
+            new \DateTimeImmutable('2026-08-21T11:26:22.202Z'), '2',
+            array_replace($valid, ['funding_rate' => '0.0002', 'observed_at_ms' => '1787311582162']),
+        ));
+        $recorder->append(PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'ETHUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            new \DateTimeImmutable('2026-08-21T11:26:22.201Z'),
+            new \DateTimeImmutable('2026-08-21T11:26:22.201Z'), '1',
+            array_replace($valid, ['native_symbol' => 'ETH-USDT-SWAP']),
+        ));
+        $manifest = $recorder->complete();
+        self::assertSame([PaperMarketDataChannel::FUNDING_RATE->value], $manifest->channels);
+
+    }
+
+    public function testRejectsContradictoryOkxFundingSchedule(): void
+    {
+        $valid = [
+            'funding_schema_version' => 'paper-funding-rate.v1',
+            'native_symbol' => 'BTC-USDT-SWAP', 'instrument_type' => 'perpetual',
+            'funding_rate' => '-0.0001', 'funding_time_ms' => '1787328000000',
+            'observed_at_ms' => '1787311582161',
+            'next_funding_time_ms' => '1787356800000', 'funding_interval_seconds' => 28800,
+            'method' => 'current_period', 'formula_type' => 'withRate',
+            'settlement_state' => 'settled', 'source_epoch' => 1,
+            'origin' => 'rest_public_funding_rate',
+        ];
+        $invalidRecorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $invalidRecorder->append(PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET, PaperMarketDataVenue::OKX, 'BTCUSDT',
+            PaperMarketDataChannel::FUNDING_RATE,
+            new \DateTimeImmutable('2026-08-21T11:26:22.200Z'),
+            new \DateTimeImmutable('2026-08-21T11:26:22.200Z'), '1',
+            array_replace($valid, ['funding_interval_seconds' => 14400]),
+        ));
+        try {
+            $invalidRecorder->complete();
+            self::fail('Contradictory funding schedule must fail dataset completion.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+            self::assertSame('paper_dataset_okx_funding_rate_invalid', $exception->getPrevious()?->getMessage());
+        }
+    }
+
     private string $testRoot;
 
     protected function setUp(): void

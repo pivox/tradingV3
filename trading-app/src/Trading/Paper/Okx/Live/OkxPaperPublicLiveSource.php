@@ -9,6 +9,7 @@ use App\Trading\Paper\MarketData\CanonicalJson;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface;
+use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Normalization\OkxMaterializedBookState;
 use App\Trading\Paper\Okx\Normalization\OkxPaperMarketEventNormalizer;
 use App\Trading\Paper\Okx\Normalization\OkxPaperSourceOrdinal;
@@ -108,6 +109,7 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
         ?OkxPaperPublicFrameQueue $publicQueue = null,
         ?OkxPaperPublicFrameQueue $businessQueue = null,
         private readonly ?OkxPaperInstrumentMetadataClientInterface $metadataClient = null,
+        private readonly ?OkxPaperFundingRateClientInterface $fundingClient = null,
     ) {
         $this->instruments = $instruments ?? new OkxPaperInstrumentMap();
         $this->subscriptions = $subscriptions ?? new OkxPaperPublicSubscriptionSet($this->instruments);
@@ -424,6 +426,24 @@ final class OkxPaperPublicLiveSource implements PaperLiveMarketDataSourceInterfa
                         'frontier' => $frontier,
                         'ordinal_state' => $this->ordinals->snapshot(),
                     ]], $metadataStream, $metadataTransition);
+                }
+            }
+            if ($this->fundingClient instanceof OkxPaperFundingRateClientInterface) {
+                $fundingStream = $symbol . '/rest/funding_rate';
+                $fundingTransition = $this->restTransition($symbol, $fundingStream, 'funding_rate');
+                if ($this->shouldExecuteWarmupTransition($fundingStream, $fundingTransition)) {
+                    $this->ensureTransition('warming', $fundingTransition);
+                    $row = $this->fundingClient->fundingRate($instrumentId);
+                    $event = $this->normalizer->fundingRate(
+                        $row,
+                        $this->checkpoint->sourceEpochs[$symbol],
+                    );
+                    $frontier = OkxPaperStreamFrontier::fromEvent($event);
+                    yield from $this->yieldMarketEvents([[
+                        'event' => $event,
+                        'frontier' => $frontier,
+                        'ordinal_state' => $this->ordinals->snapshot(),
+                    ]], $fundingStream, $fundingTransition);
                 }
             }
             foreach (['1m', '5m', '15m', '1H'] as $bar) {

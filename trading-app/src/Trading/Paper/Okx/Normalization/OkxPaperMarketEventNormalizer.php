@@ -178,6 +178,70 @@ final class OkxPaperMarketEventNormalizer
         );
     }
 
+    /** @param array<string, mixed> $row */
+    public function fundingRate(
+        #[\SensitiveParameter] array $row,
+        int $sourceEpoch,
+    ): PaperMarketEvent {
+        self::assertExactFundingKeys($row);
+        $instrumentId = $row['instId'] ?? null;
+        if (!\is_string($instrumentId) || $sourceEpoch < 1) {
+            throw self::invalidFundingRate('identity');
+        }
+        try {
+            $symbol = $this->instruments->normalizedSymbol($instrumentId);
+            $rate = self::canonicalSignedFundingDecimal($row['fundingRate'] ?? null);
+            $observedMs = self::canonicalMilliseconds($row['ts'] ?? null);
+            $fundingMs = self::canonicalMilliseconds($row['fundingTime'] ?? null);
+            $nextFundingMs = self::canonicalMilliseconds($row['nextFundingTime'] ?? null);
+            $intervalMs = BigDecimal::of($nextFundingMs)->minus($fundingMs);
+            if (!$intervalMs->isGreaterThan(0) || !$intervalMs->remainder(1000)->isZero()) {
+                throw new \InvalidArgumentException();
+            }
+            $intervalSeconds = $intervalMs->dividedBy(1000)->toInt();
+        } catch (\Throwable) {
+            throw self::invalidFundingRate('schedule');
+        }
+        if (($row['instType'] ?? null) !== 'SWAP'
+            || ($row['method'] ?? null) !== 'current_period'
+            || ($row['formulaType'] ?? null) !== 'withRate'
+            || !\in_array($row['settState'] ?? null, ['processing', 'settled'], true)
+        ) {
+            throw self::invalidFundingRate('contract');
+        }
+        $receiptTimestamp = $this->receiptTimestamp();
+        if ($this->timestamp($observedMs) > $receiptTimestamp
+            || BigDecimal::of($observedMs)->isGreaterThanOrEqualTo($fundingMs)
+        ) {
+            throw self::invalidFundingRate('schedule');
+        }
+
+        return $this->event(
+            symbol: $symbol,
+            channel: PaperMarketDataChannel::FUNDING_RATE,
+            exchangeTimestamp: $receiptTimestamp,
+            receivedTimestamp: $receiptTimestamp,
+            naturalIdentity: implode('|', [
+                'funding_rate', (string) $sourceEpoch, $observedMs, $fundingMs,
+            ]),
+            payload: [
+                'funding_schema_version' => 'paper-funding-rate.v1',
+                'native_symbol' => $instrumentId,
+                'instrument_type' => 'perpetual',
+                'funding_rate' => $rate,
+                'observed_at_ms' => $observedMs,
+                'funding_time_ms' => $fundingMs,
+                'next_funding_time_ms' => $nextFundingMs,
+                'funding_interval_seconds' => $intervalSeconds,
+                'method' => $row['method'],
+                'formula_type' => $row['formulaType'],
+                'settlement_state' => $row['settState'],
+                'source_epoch' => $sourceEpoch,
+                'origin' => 'rest_public_funding_rate',
+            ],
+        );
+    }
+
     public function connectionState(
         string $instrumentId,
         string $state,
@@ -511,6 +575,51 @@ final class OkxPaperMarketEventNormalizer
         if ($actual !== $expected) {
             throw self::invalidInstrumentMetadata('shape');
         }
+    }
+
+    /** @param array<string, mixed> $row */
+    private static function assertExactFundingKeys(array $row): void
+    {
+        $expected = [
+            'formulaType', 'fundingRate', 'fundingTime', 'instId', 'instType',
+            'method', 'nextFundingTime', 'settState', 'ts',
+        ];
+        $actual = array_keys($row);
+        sort($actual, \SORT_STRING);
+        sort($expected, \SORT_STRING);
+        if ($actual !== $expected) {
+            throw self::invalidFundingRate('shape');
+        }
+    }
+
+    private static function canonicalSignedFundingDecimal(#[\SensitiveParameter] mixed $value): string
+    {
+        if (!\is_string($value)
+            || \strlen($value) > 128
+            || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+        ) {
+            throw self::invalidFundingRate('rate');
+        }
+        $rate = BigDecimal::of($value);
+        if ($rate->isLessThanOrEqualTo(-1) || $rate->isGreaterThanOrEqualTo(1)) {
+            throw self::invalidFundingRate('rate');
+        }
+
+        return (string) $rate->stripTrailingZeros();
+    }
+
+    private static function canonicalMilliseconds(#[\SensitiveParameter] mixed $value): string
+    {
+        if (!\is_string($value) || preg_match('/\A[1-9][0-9]{12}\z/D', $value) !== 1) {
+            throw self::invalidFundingRate('timestamp');
+        }
+
+        return $value;
+    }
+
+    private static function invalidFundingRate(string $reason): \InvalidArgumentException
+    {
+        return new \InvalidArgumentException('okx_paper_funding_rate_' . $reason . '_invalid');
     }
 
     private static function invalidInstrumentMetadata(string $reason): \InvalidArgumentException

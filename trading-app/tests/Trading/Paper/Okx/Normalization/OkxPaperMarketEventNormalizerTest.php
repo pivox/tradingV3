@@ -24,6 +24,69 @@ use Symfony\Component\Clock\MockClock;
 #[CoversClass(OkxPaperInstrumentMap::class)]
 final class OkxPaperMarketEventNormalizerTest extends TestCase
 {
+    public function testFundingRatePreservesStrictVenueScheduleAndObservation(): void
+    {
+        $event = $this->normalizer()->fundingRate([
+            'instId' => 'BTC-USDT-SWAP',
+            'instType' => 'SWAP',
+            'fundingRate' => '-0.0001000000000000',
+            'fundingTime' => '1787328000000',
+            'nextFundingTime' => '1787356800000',
+            'method' => 'current_period',
+            'formulaType' => 'withRate',
+            'settState' => 'settled',
+            'ts' => '1784599199900',
+        ], sourceEpoch: 3);
+
+        self::assertSame(PaperMarketDataChannel::FUNDING_RATE, $event->channel);
+        self::assertSame('BTCUSDT', $event->symbol);
+        self::assertSame('2026-07-21T02:00:00.000000Z', $event->exchangeTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame('2026-07-21T02:00:00.000000Z', $event->receivedTimestamp->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame([
+            'funding_schema_version' => 'paper-funding-rate.v1',
+            'native_symbol' => 'BTC-USDT-SWAP',
+            'instrument_type' => 'perpetual',
+            'funding_rate' => '-0.0001',
+            'observed_at_ms' => '1784599199900',
+            'funding_time_ms' => '1787328000000',
+            'next_funding_time_ms' => '1787356800000',
+            'funding_interval_seconds' => 28800,
+            'method' => 'current_period',
+            'formula_type' => 'withRate',
+            'settlement_state' => 'settled',
+            'source_epoch' => 3,
+            'origin' => 'rest_public_funding_rate',
+        ], $event->payload);
+    }
+
+    public function testFundingRateFailsClosedForMalformedSchedule(): void
+    {
+        $row = [
+            'instId' => 'BTC-USDT-SWAP', 'instType' => 'SWAP',
+            'fundingRate' => '0.0001', 'fundingTime' => '1787328000000',
+            'nextFundingTime' => '1787356800000', 'method' => 'current_period',
+            'formulaType' => 'withRate', 'settState' => 'settled', 'ts' => '1784599199900',
+        ];
+
+        foreach ([
+            $row + ['unexpected' => true],
+            array_replace($row, ['instType' => 'FUTURES']),
+            array_replace($row, ['fundingRate' => '1']),
+            array_replace($row, ['fundingRate' => '1e-4']),
+            array_replace($row, ['nextFundingTime' => '1787328000000']),
+            array_replace($row, ['nextFundingTime' => '1787356800001']),
+            array_replace($row, ['method' => 'next_period']),
+            array_replace($row, ['ts' => '1787329000000']),
+        ] as $invalid) {
+            try {
+                $this->normalizer()->fundingRate($invalid, 1);
+                self::fail('Invalid OKX funding schedule must fail closed.');
+            } catch (\InvalidArgumentException $exception) {
+                self::assertStringStartsWith('okx_paper_funding_rate_', $exception->getMessage());
+            }
+        }
+    }
+
     public function testInstrumentMetadataPreservesStrictPublicContractUnitsAndEpoch(): void
     {
         $event = $this->normalizer()->instrumentMetadata([

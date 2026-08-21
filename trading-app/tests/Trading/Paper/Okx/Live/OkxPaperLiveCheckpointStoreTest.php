@@ -226,7 +226,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
         self::assertSame('43', $acknowledged->streamFrontiers[$stream]?->sourceIdentity);
     }
 
-    public function testFreshCheckpointHasTheCompleteClosedVersionTwoSchema(): void
+    public function testFreshCheckpointHasTheCompleteClosedVersionThreeSchema(): void
     {
         $checkpoint = OkxPaperLiveCheckpoint::fresh(self::DATASET_ID, self::CONFIGURATION_SHA256);
         $state = $checkpoint->toArray();
@@ -252,7 +252,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             'source_epochs',
             'stream_frontiers',
         ], array_keys($state));
-        self::assertSame(2, $state['schema_version']);
+        self::assertSame(3, $state['schema_version']);
         self::assertSame(self::DATASET_ID, $state['dataset_id']);
         self::assertSame(self::CONFIGURATION_SHA256, $state['configuration_sha256']);
         self::assertSame('warming', $state['phase']);
@@ -261,7 +261,7 @@ final class OkxPaperLiveCheckpointStoreTest extends TestCase
             ['symbol' => 'BTCUSDT', 'reason' => 'initial'],
             ['symbol' => 'ETHUSDT', 'reason' => 'initial'],
         ], $state['remaining_boundaries']);
-        self::assertCount(30, $state['stream_frontiers']);
+        self::assertCount(32, $state['stream_frontiers']);
         self::assertCount(20, $state['overlap_pagination_by_stream']);
         self::assertSame($state, OkxPaperLiveCheckpoint::fromArray($state)->toArray());
 

@@ -17,6 +17,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataQuality;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClient;
+use App\Trading\Paper\Okx\Http\OkxPaperFundingRateClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRestClientInterface;
 use App\Trading\Paper\Okx\Http\OkxPaperPublicRateLimiter;
 use App\Trading\Paper\Okx\Live\OkxPaperLiveCheckpointStore;
@@ -52,6 +53,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
 
         $client = $container->get(OkxPaperPublicRestClientInterface::class);
         self::assertInstanceOf(OkxPaperPublicRestClient::class, $client);
+        self::assertSame($client, $container->get(OkxPaperFundingRateClientInterface::class));
 
         $configProperty = new \ReflectionProperty(OkxPaperPublicRestClient::class, 'config');
         $config = $configProperty->getValue($client);
@@ -95,6 +97,7 @@ final class OkxPaperPublicServiceWiringTest extends KernelTestCase
             PaperDatasetManifestCodec::class,
             PaperDatasetRecorderFilesystem::class,
             \App\Trading\Paper\Okx\Http\OkxPaperInstrumentMetadataClientInterface::class,
+            OkxPaperFundingRateClientInterface::class,
         ], $dependencyTypes);
         foreach ($dependencyTypes as $dependencyType) {
             self::assertDoesNotMatchRegularExpression(

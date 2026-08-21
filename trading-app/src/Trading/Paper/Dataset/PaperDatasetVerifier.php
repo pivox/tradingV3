@@ -639,6 +639,8 @@ final class PaperDatasetVerifier
         $liveTradeIdentityHistory = [];
         /** @var array<string, int> $okxMetadataEpochs */
         $okxMetadataEpochs = [];
+        /** @var array<string, array{source_epoch: int, observed_at_ms: string}> $okxFundingEpochs */
+        $okxFundingEpochs = [];
         /** @var array<string, int> $okxInitialSnapshotEpochs */
         $okxInitialSnapshotEpochs = [];
 
@@ -734,6 +736,8 @@ final class PaperDatasetVerifier
                             $okxInitialSnapshotEpochs,
                             $okxMetadataEpochs,
                         );
+                    } elseif ($event->channel === PaperMarketDataChannel::FUNDING_RATE) {
+                        $this->assertOkxFundingRate($event, $okxFundingEpochs);
                     } elseif ($event->channel === PaperMarketDataChannel::SNAPSHOT_BOUNDARY
                         && ($event->payload['reason'] ?? null) === 'initial'
                     ) {
@@ -862,6 +866,15 @@ final class PaperDatasetVerifier
                 throw new \RuntimeException('paper_dataset_okx_instrument_metadata_invalid');
             }
         }
+        if ($okxFundingEpochs !== []) {
+            $fundingSymbols = array_keys($okxFundingEpochs);
+            $manifestSymbols = array_keys($manifest->symbols);
+            sort($fundingSymbols, \SORT_STRING);
+            sort($manifestSymbols, \SORT_STRING);
+            if ($fundingSymbols !== $manifestSymbols) {
+                throw new \RuntimeException('paper_dataset_okx_funding_rate_invalid');
+            }
+        }
 
         return [
             'event_count' => $count,
@@ -980,6 +993,80 @@ final class PaperDatasetVerifier
                 $exception,
             );
         }
+    }
+
+    /** @param array<string, array{source_epoch: int, observed_at_ms: string}> $fundingEpochs */
+    private function assertOkxFundingRate(PaperMarketEvent $event, array &$fundingEpochs): void
+    {
+        try {
+            $payload = $event->payload;
+            $expected = [
+                'formula_type', 'funding_interval_seconds', 'funding_rate',
+                'funding_schema_version', 'funding_time_ms', 'instrument_type',
+                'method', 'native_symbol', 'next_funding_time_ms', 'observed_at_ms', 'origin',
+                'settlement_state', 'source_epoch',
+            ];
+            $actual = array_keys($payload);
+            sort($actual, \SORT_STRING);
+            $native = match ($event->symbol) {
+                'BTCUSDT' => 'BTC-USDT-SWAP',
+                'ETHUSDT' => 'ETH-USDT-SWAP',
+                default => throw new \InvalidArgumentException(),
+            };
+            $rate = $payload['funding_rate'] ?? null;
+            $observed = $payload['observed_at_ms'] ?? null;
+            $funding = $payload['funding_time_ms'] ?? null;
+            $next = $payload['next_funding_time_ms'] ?? null;
+            $interval = $payload['funding_interval_seconds'] ?? null;
+            $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
+            $previous = $fundingEpochs[$event->symbol] ?? null;
+            if ($actual !== $expected
+                || ($payload['funding_schema_version'] ?? null) !== 'paper-funding-rate.v1'
+                || ($payload['native_symbol'] ?? null) !== $native
+                || ($payload['instrument_type'] ?? null) !== 'perpetual'
+                || !\is_string($rate) || \strlen($rate) > 128
+                || preg_match('/\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $rate) !== 1
+                || (string) BigDecimal::of($rate)->stripTrailingZeros() !== $rate
+                || BigDecimal::of($rate)->isLessThanOrEqualTo(-1)
+                || BigDecimal::of($rate)->isGreaterThanOrEqualTo(1)
+                || !\is_string($observed) || preg_match('/\A[1-9][0-9]{12}\z/D', $observed) !== 1
+                || !\is_string($funding) || preg_match('/\A[1-9][0-9]{12}\z/D', $funding) !== 1
+                || !\is_string($next) || preg_match('/\A[1-9][0-9]{12}\z/D', $next) !== 1
+                || !\is_int($interval) || $interval < 1
+                || !BigDecimal::of($next)->minus($funding)->isEqualTo($interval * 1000)
+                || BigDecimal::of($observed)->isGreaterThanOrEqualTo($funding)
+                || $this->millisecondsTimestamp($observed) > $event->receivedTimestamp
+                || $event->exchangeTimestamp != $event->receivedTimestamp
+                || ($payload['method'] ?? null) !== 'current_period'
+                || ($payload['formula_type'] ?? null) !== 'withRate'
+                || !\in_array($payload['settlement_state'] ?? null, ['processing', 'settled'], true)
+                || ($payload['origin'] ?? null) !== 'rest_public_funding_rate'
+                || $previous !== null
+                    && ($epoch < $previous['source_epoch']
+                        || BigDecimal::of($observed)->isLessThanOrEqualTo($previous['observed_at_ms']))
+            ) {
+                throw new \InvalidArgumentException();
+            }
+            $fundingEpochs[$event->symbol] = [
+                'source_epoch' => $epoch,
+                'observed_at_ms' => $observed,
+            ];
+        } catch (\Throwable $exception) {
+            throw new \RuntimeException('paper_dataset_okx_funding_rate_invalid', 0, $exception);
+        }
+    }
+
+    private function millisecondsTimestamp(string $milliseconds): \DateTimeImmutable
+    {
+        $timestamp = \DateTimeImmutable::createFromFormat(
+            'U.u',
+            substr($milliseconds, 0, -3) . '.' . substr($milliseconds, -3) . '000',
+        );
+        if (!$timestamp instanceof \DateTimeImmutable) {
+            throw new \InvalidArgumentException();
+        }
+
+        return $timestamp->setTimezone(new \DateTimeZone('UTC'));
     }
 
     /**

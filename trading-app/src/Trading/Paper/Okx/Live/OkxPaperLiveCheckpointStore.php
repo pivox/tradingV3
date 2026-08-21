@@ -576,6 +576,8 @@ final class OkxPaperLiveCheckpointStore
         $valid = $kind === 'rest_fetch' && match ($stage) {
             'instrument_metadata' => $channel === 'instrument_metadata'
                 && $origin === 'rest_public_instruments',
+            'funding_rate' => $channel === 'funding_rate'
+                && $origin === 'rest_public_funding_rate',
             'current_candles', 'history_candles' => str_starts_with($channel, 'candle_')
                 && \in_array($origin, ['rest_history', 'rest_warmup'], true),
             'recent_trades', 'history_trades' => $channel === 'public_trade'
@@ -640,6 +642,8 @@ final class OkxPaperLiveCheckpointStore
         $transport = match (true) {
             $channel === 'instrument_metadata'
                 && $origin === 'rest_public_instruments' => 'rest',
+            $channel === 'funding_rate'
+                && $origin === 'rest_public_funding_rate' => 'rest',
             str_starts_with($channel, 'candle_')
                 && \in_array($origin, ['rest_history', 'rest_warmup'], true) => 'rest',
             str_starts_with($channel, 'candle_') && $origin === 'ws_candle' => 'ws',
@@ -1162,6 +1166,17 @@ final class OkxPaperLiveCheckpointStore
         }
         if ($stage === 'instrument_metadata') {
             if ($stream !== $symbol . '/rest/instrument_metadata'
+                || ($checkpoint->streamFrontiers[$stream] ?? null) !== null
+                || ($checkpoint->streamFrontiers[$symbol . '/rest/candle_1m'] ?? null) !== null
+            ) {
+                throw self::invalidCheckpoint();
+            }
+
+            return;
+        }
+        if ($stage === 'funding_rate') {
+            if ($stream !== $symbol . '/rest/funding_rate'
+                || ($checkpoint->streamFrontiers[$symbol . '/rest/instrument_metadata'] ?? null) === null
                 || ($checkpoint->streamFrontiers[$stream] ?? null) !== null
                 || ($checkpoint->streamFrontiers[$symbol . '/rest/candle_1m'] ?? null) !== null
             ) {

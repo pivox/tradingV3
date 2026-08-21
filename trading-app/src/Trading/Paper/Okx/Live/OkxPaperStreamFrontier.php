@@ -70,6 +70,7 @@ final readonly class OkxPaperStreamFrontier
             PaperMarketDataChannel::PUBLIC_TRADE => self::tradeFields($event),
             PaperMarketDataChannel::TOP_OF_BOOK => self::bookFields($event),
             PaperMarketDataChannel::INSTRUMENT_METADATA => self::metadataFields($event),
+            PaperMarketDataChannel::FUNDING_RATE => self::fundingFields($event),
             PaperMarketDataChannel::CONNECTION_STATE => self::connectionFields($event),
             PaperMarketDataChannel::SNAPSHOT_BOUNDARY => self::boundaryFields($event),
         };
@@ -209,6 +210,22 @@ final readonly class OkxPaperStreamFrontier
 
         return [
             $epoch . '|' . hash('sha256', CanonicalJson::encode($sourceFields)),
+            $sourceFields,
+        ];
+    }
+
+    /** @return array{string, array<string, mixed>} */
+    private static function fundingFields(PaperMarketEvent $event): array
+    {
+        $payload = $event->payload;
+        $epoch = self::requiredPositiveInteger($payload, 'source_epoch');
+        $observed = self::requiredUnsignedString($payload, 'observed_at_ms');
+        $fundingTime = self::requiredUnsignedString($payload, 'funding_time_ms');
+        $sourceFields = $payload;
+        unset($sourceFields['native_symbol']);
+
+        return [
+            implode('|', [(string) $epoch, $observed, $fundingTime]),
             $sourceFields,
         ];
     }
