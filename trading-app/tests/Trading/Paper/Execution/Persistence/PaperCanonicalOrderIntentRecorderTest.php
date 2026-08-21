@@ -16,6 +16,8 @@ use App\Tests\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorder;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\Tools\SchemaTool;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -100,6 +102,43 @@ final class PaperCanonicalOrderIntentRecorderTest extends KernelTestCase
         self::assertSame('hyperliquid', $lineage->getMarketDataVenue());
         self::assertSame($effect->lineage->modeId, $lineage->getModeId());
         self::assertSame($effect->lineage->setupId, $lineage->getSetupId());
+        self::assertSame($effect->provenance['run_id'], $lineage->getRunId());
+        self::assertSame($effect->provenance['strategy_profile'], $lineage->getProfile());
+        $lifecycle = (new TradeLineageManager($lineages, $this->em, new NullLogger()))
+            ->lifecycleExtra($lineage);
+        foreach (PaperExecutionProvenance::MODERN_KEYS as $key) {
+            self::assertSame($effect->provenance[$key], $lifecycle[$key] ?? null, $key);
+        }
+    }
+
+    public function testReserveSerializesQuantityIndependentlyFromPhpPrecision(): void
+    {
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        $expected = (string) CanonicalOrderPlanDecimal::fromFloat(
+            $effect->plan->quantity,
+            'test_decimal_invalid',
+        );
+        $previousPrecision = ini_get('precision');
+        self::assertIsString($previousPrecision);
+
+        try {
+            self::assertNotFalse(ini_set('precision', '2'));
+            self::assertNotSame($expected, (string) $effect->plan->quantity);
+            $identity = $this->recorder()->reserve(
+                $effect->plan,
+                $effect->lineage,
+                $effect->decisionKey,
+                $effect->executionTimeframe,
+                ['client_order_id' => 'CIDPAPERCANONICAL004'],
+                $effect->provenance,
+            );
+        } finally {
+            ini_set('precision', $previousPrecision);
+        }
+
+        $intent = $this->em->getRepository(OrderIntent::class)->find($identity['order_intent_id']);
+        self::assertInstanceOf(OrderIntent::class, $intent);
+        self::assertSame($expected, (string) $intent->getSize());
     }
 
     public function testReserveRejectsCrossBoundDecisionBeforePersistence(): void

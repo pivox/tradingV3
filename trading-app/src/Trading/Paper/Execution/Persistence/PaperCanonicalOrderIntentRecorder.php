@@ -16,6 +16,7 @@ use App\Trading\Lineage\LineageContext;
 use App\Trading\Lineage\TradeLineageManager;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanDecimal;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\DependencyInjection\Attribute\AsAlias;
 
@@ -109,8 +110,8 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             'open_type' => OrderIntent::OPEN_TYPE_ISOLATED,
             'position_mode' => OrderIntent::POSITION_MODE_ONE_WAY,
             'leverage' => $plan->finalLeverage,
-            'price' => (string) $plan->entryPrice,
-            'size' => (string) $plan->quantity,
+            'price' => $this->decimal($plan->entryPrice),
+            'size' => $this->decimal($plan->quantity),
             'client_order_id' => $clientOrderId,
             'preset_mode' => OrderIntent::PRESET_MODE_NONE,
             'strategy_profile' => $plan->modeId,
@@ -143,9 +144,9 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             $intent = $this->intents->createIntent(
                 $params,
                 [
-                    'quantity_step' => (string) $plan->quantityStep,
-                    'contract_size' => (string) $plan->contractSize,
-                    'tick_size' => (string) $plan->tickSize,
+                    'quantity_step' => $this->decimal($plan->quantityStep),
+                    'contract_size' => $this->decimal($plan->contractSize),
+                    'tick_size' => $this->decimal($plan->tickSize),
                 ],
                 $rawInputs,
                 $intentLineage,
@@ -241,18 +242,30 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             : null;
     }
 
+    private function decimal(float $value): string
+    {
+        try {
+            return (string) CanonicalOrderPlanDecimal::fromFloat(
+                $value,
+                'paper_canonical_order_intent_invalid',
+            )->stripTrailingZeros();
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException('paper_canonical_order_intent_invalid', 0, $exception);
+        }
+    }
+
     /** @return list<array{type: string, price: string, metadata: array<string, mixed>}> */
     private function protections(CanonicalOrderPlan $plan): array
     {
         $protections = [[
             'type' => OrderProtection::TYPE_STOP_LOSS,
-            'price' => (string) $plan->stopPrice,
+            'price' => $this->decimal($plan->stopPrice),
             'metadata' => ['kind' => 'canonical_stop', 'plan_hash' => $plan->planHash],
         ]];
         foreach ($plan->targets as $target) {
             $protections[] = [
                 'type' => OrderProtection::TYPE_TAKE_PROFIT,
-                'price' => (string) $target->price,
+                'price' => $this->decimal($target->price),
                 'metadata' => [
                     'kind' => 'canonical_target',
                     'target_id' => $target->id,

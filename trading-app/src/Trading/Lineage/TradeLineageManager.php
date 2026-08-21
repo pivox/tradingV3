@@ -61,7 +61,10 @@ final class TradeLineageManager
             throw new \InvalidArgumentException('paper_execution_provenance_invalid');
         }
         if ($paperProvenance !== null) {
+            $paperProvenance = PaperExecutionProvenance::validate($paperProvenance);
             PaperExecutionProvenance::assertMatches($intent, $paperProvenance);
+            $context['run_id'] = $paperProvenance['run_id'];
+            $context['profile'] = $paperProvenance['strategy_profile'];
         }
 
         $intentId = $intent->getId();
@@ -256,7 +259,7 @@ final class TradeLineageManager
             return $extra;
         }
 
-        $paperProvenance = PaperExecutionProvenance::validate([
+        $paperProvenance = [
             'paper_network' => $lineage->getPaperNetwork(),
             'market_data_venue' => $lineage->getMarketDataVenue(),
             'paper_execution_cell_id' => $lineage->getPaperExecutionCellId(),
@@ -265,7 +268,19 @@ final class TradeLineageManager
             'strategy_profile' => $lineage->getProfile(),
             'run_id' => $lineage->getRunId(),
             'exchange' => $lineage->getExchange(),
-        ]);
+        ];
+        if ($lineage->getModeId() !== null) {
+            $paperProvenance += [
+                'mode_id' => $lineage->getModeId(),
+                'mode_version' => $lineage->getModeVersion(),
+                'setup_id' => $lineage->getSetupId(),
+                'setup_version' => $lineage->getSetupVersion(),
+                'side' => strtolower((string) $lineage->getSide()),
+                'config_hash' => $lineage->getConfigHash(),
+                'condition_catalog_hash' => $lineage->getConditionCatalogHash(),
+            ];
+        }
+        $paperProvenance = PaperExecutionProvenance::validate($paperProvenance);
 
         return $extra + $paperProvenance;
     }
