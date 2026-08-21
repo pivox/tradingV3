@@ -106,14 +106,11 @@ final readonly class PaperExecutionCell
     /** @return array<string, string> */
     public function provenance(PaperProfileEligibility $eligibility): array
     {
-        if ($this->isModern()) {
-            throw new \LogicException('paper_modern_strategy_bridge_unavailable');
-        }
-        if ((new PaperProfileRegistry())->require($this->strategyProfile) !== $eligibility) {
+        if (!$this->isModern() && (new PaperProfileRegistry())->require($this->strategyProfile) !== $eligibility) {
             throw new \InvalidArgumentException('paper_execution_cell_eligibility_conflict');
         }
 
-        return [
+        $provenance = [
             'paper_network' => $this->network->value,
             'market_data_venue' => $this->marketDataVenue->value,
             'paper_execution_cell_id' => $this->id,
@@ -122,6 +119,19 @@ final readonly class PaperExecutionCell
             'strategy_profile' => $this->strategyProfile,
             'run_id' => $this->runId,
             'exchange' => 'fake',
+        ];
+        if ($this->modernIdentity === null) {
+            return $provenance;
+        }
+
+        return $provenance + [
+            'mode_id' => $this->modernIdentity->modeId,
+            'mode_version' => $this->modernIdentity->modeVersion,
+            'setup_id' => $this->modernIdentity->setupId,
+            'setup_version' => $this->modernIdentity->setupVersion,
+            'side' => $this->modernIdentity->side,
+            'config_hash' => $this->modernIdentity->configHash,
+            'condition_catalog_hash' => $this->modernIdentity->conditionCatalogHash,
         ];
     }
 
