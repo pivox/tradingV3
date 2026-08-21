@@ -8760,6 +8760,7 @@ final class StaticOkxPaperMetadataClient implements OkxPaperInstrumentMetadataCl
             'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => $base,
             'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
             'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'lever' => '100',
             'state' => 'live',
         ];
     }

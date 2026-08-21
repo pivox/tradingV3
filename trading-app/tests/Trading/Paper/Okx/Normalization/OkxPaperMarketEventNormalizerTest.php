@@ -39,6 +39,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             'minSz' => '1.0',
             'maxMktSz' => '10000.0',
             'maxLmtSz' => '20000.0',
+            'lever' => '100.0',
             'state' => 'live',
         ], sourceEpoch: 3);
 
@@ -55,6 +56,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => 'BTC',
             'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
             'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'lever' => '100',
             'state' => 'live',
         ];
 
@@ -64,6 +66,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             array_replace($row, ['ctValCcy' => 'USDT']),
             array_replace($row, ['state' => 'suspend']),
             array_replace($row, ['ctVal' => '0']),
+            array_replace($row, ['lever' => '0']),
         ] as $invalid) {
             try {
                 $this->normalizer()->instrumentMetadata($invalid, 1);
@@ -265,7 +268,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
     private static function metadataPayload(string $nativeSymbol, string $baseAsset, int $epoch): array
     {
         return [
-            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'metadata_schema_version' => 'paper-instrument-metadata.v2',
             'native_symbol' => $nativeSymbol,
             'instrument_type' => 'perpetual',
             'base_asset' => $baseAsset,
@@ -277,6 +280,7 @@ final class OkxPaperMarketEventNormalizerTest extends TestCase
             'minimum_quantity' => '1',
             'maximum_market_quantity' => '10000',
             'maximum_limit_quantity' => '20000',
+            'maximum_leverage' => '100',
             'contract_value' => '0.01',
             'contract_multiplier' => '1',
             'contract_value_unit' => $baseAsset,

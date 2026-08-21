@@ -783,6 +783,11 @@ final class PaperBacktestDatasetAdapterTest extends TestCase
         self::assertSame('contracts', $dataset->instrumentMetadata[0]->quantityUnit);
         self::assertSame('0.01', $dataset->instrumentMetadata[0]->contractValue);
         self::assertSame('2', $dataset->instrumentMetadata[0]->contractMultiplier);
+        self::assertSame('0.1', $dataset->instrumentMetadata[0]->priceTick);
+        self::assertSame('0.1', $dataset->instrumentMetadata[0]->quantityStep);
+        self::assertSame('1000', $dataset->instrumentMetadata[0]->maxMarketQuantity);
+        self::assertSame('2000', $dataset->instrumentMetadata[0]->maxLimitQuantity);
+        self::assertNull($dataset->instrumentMetadata[0]->maxLeverage);
 
         self::assertCount(1, $dataset->tradeQuantityConversions);
         $trade = $dataset->tradeQuantityConversions[0];

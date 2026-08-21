@@ -159,6 +159,63 @@ final class PaperDatasetVerifierTest extends TestCase
         }
     }
 
+    #[DataProvider('invalidOkxV2LeverageProvider')]
+    public function testOkxV2InstrumentMetadataWithoutPositiveLeverageIsRejected(?string $maximumLeverage): void
+    {
+        $payload = [
+            'metadata_schema_version' => 'paper-instrument-metadata.v2',
+            'native_symbol' => 'BTC-USDT-SWAP',
+            'instrument_type' => 'perpetual',
+            'base_asset' => 'BTC',
+            'quote_asset' => 'USDT',
+            'settlement_asset' => 'USDT',
+            'status' => 'live',
+            'quantity_unit' => 'contracts',
+            'quantity_step' => '1',
+            'minimum_quantity' => '1',
+            'maximum_market_quantity' => '1000',
+            'maximum_limit_quantity' => '2000',
+            'contract_value' => '0.01',
+            'contract_multiplier' => '1',
+            'contract_value_unit' => 'BTC',
+            'price_tick' => '0.1',
+            'source_epoch' => 1,
+            'origin' => 'rest_public_instruments',
+        ];
+        if ($maximumLeverage !== null) {
+            $payload['maximum_leverage'] = $maximumLeverage;
+        }
+        $recorder = new PaperDatasetRecorder($this->datasetRoot(), $this->manifest());
+        $recorder->append(PaperMarketEvent::create(
+            PaperMarketDataNetwork::MAINNET,
+            venue: PaperMarketDataVenue::OKX,
+            symbol: 'BTCUSDT',
+            channel: PaperMarketDataChannel::INSTRUMENT_METADATA,
+            exchangeTimestamp: new \DateTimeImmutable('2026-07-19T09:59:59.999999Z'),
+            receivedTimestamp: new \DateTimeImmutable('2026-07-19T09:59:59.999999Z'),
+            sequence: '1',
+            payload: $payload,
+        ));
+
+        try {
+            $recorder->complete();
+            self::fail('Incomplete OKX v2 metadata must fail dataset completion.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('paper_dataset_complete_failed', $exception->getMessage());
+            self::assertSame(
+                'paper_dataset_okx_instrument_metadata_invalid',
+                $exception->getPrevious()?->getMessage(),
+            );
+        }
+    }
+
+    /** @return iterable<string, array{?string}> */
+    public static function invalidOkxV2LeverageProvider(): iterable
+    {
+        yield 'missing' => [null];
+        yield 'zero' => ['0'];
+    }
+
     public function testBaselineSnapshotDefensivelyCopiesAndValidatesItsEventList(): void
     {
         $events = ['source-key' => $this->event(sequence: '1', microseconds: 1)];

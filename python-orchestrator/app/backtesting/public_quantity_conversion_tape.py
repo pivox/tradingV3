@@ -49,6 +49,8 @@ def _canonical_decimal(value: Decimal) -> str:
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, InstrumentMetadataRecord):
+        return _json_value(value.model_dump(exclude_unset=True))
     if isinstance(value, BaseModel):
         return _json_value(value.model_dump())
     if isinstance(value, datetime):
@@ -68,7 +70,9 @@ def _canonical(value: Any) -> bytes:
 
 class InstrumentMetadataRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-    schema_version: Literal["backtest-instrument-metadata.v1"]
+    schema_version: Literal[
+        "backtest-instrument-metadata.v1", "backtest-instrument-metadata.v2"
+    ]
     source_record_id: str = Field(pattern=_RECORD_ID)
     source_checksum: str = Field(pattern=_HASH)
     source_network: Literal["mainnet", "testnet"]
@@ -82,15 +86,42 @@ class InstrumentMetadataRecord(BaseModel):
     contract_value: str
     contract_multiplier: str
     contract_value_unit: Literal["BTC", "ETH"]
+    metadata_schema_version: Literal[
+        "paper-instrument-metadata.v1", "paper-instrument-metadata.v2"
+    ] | None = None
+    happened_at: datetime | None = None
+    base_asset: Literal["BTC", "ETH"] | None = None
+    quote_asset: Literal["USDT", "USDC"] | None = None
+    settlement_asset: Literal["USDT", "USDC"] | None = None
+    price_tick: str | None = None
+    quantity_step: str | None = None
+    minimum_quantity: str | None = None
+    maximum_market_quantity: str | None = None
+    maximum_limit_quantity: str | None = None
+    maximum_leverage: str | None = None
 
-    @field_validator("available_at")
+    @field_validator("available_at", "happened_at")
     @classmethod
-    def _time(cls, value: datetime) -> datetime:
+    def _time(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         return _utc(value)
 
-    @field_validator("contract_value", "contract_multiplier", mode="before")
+    @field_validator(
+        "contract_value",
+        "contract_multiplier",
+        "price_tick",
+        "quantity_step",
+        "minimum_quantity",
+        "maximum_market_quantity",
+        "maximum_limit_quantity",
+        "maximum_leverage",
+        mode="before",
+    )
     @classmethod
-    def _decimals(cls, value: Any) -> str:
+    def _decimals(cls, value: Any) -> str | None:
+        if value is None:
+            return None
         return _decimal(value)
 
     @model_validator(mode="after")
@@ -107,6 +138,63 @@ class InstrumentMetadataRecord(BaseModel):
                     or self.contract_multiplier != "1"
                 )
             )
+        ):
+            raise ValueError("public_quantity_conversion_metadata_invalid")
+        extended = (
+            self.metadata_schema_version,
+            self.happened_at,
+            self.base_asset,
+            self.quote_asset,
+            self.settlement_asset,
+            self.price_tick,
+            self.quantity_step,
+            self.minimum_quantity,
+            self.maximum_market_quantity,
+            self.maximum_limit_quantity,
+            self.maximum_leverage,
+        )
+        if self.schema_version == "backtest-instrument-metadata.v1":
+            if any(value is not None for value in extended):
+                raise ValueError("public_quantity_conversion_metadata_invalid")
+            return self
+        if (
+            self.metadata_schema_version is None
+            or self.happened_at is None
+            or self.base_asset != base
+            or self.quote_asset is None
+            or self.settlement_asset is None
+            or self.price_tick is None
+            or self.quantity_step is None
+            or self.minimum_quantity is None
+            or self.happened_at > self.available_at
+            or Decimal(self.minimum_quantity) < Decimal(self.quantity_step)
+        ):
+            raise ValueError("public_quantity_conversion_metadata_invalid")
+        if self.market_data_venue == "okx":
+            if (
+                self.quote_asset != "USDT"
+                or self.settlement_asset != "USDT"
+                or self.maximum_market_quantity is None
+                or self.maximum_limit_quantity is None
+                or Decimal(self.maximum_market_quantity) < Decimal(self.minimum_quantity)
+                or Decimal(self.maximum_limit_quantity) < Decimal(self.minimum_quantity)
+                or (
+                    self.metadata_schema_version == "paper-instrument-metadata.v1"
+                    and self.maximum_leverage is not None
+                )
+                or (
+                    self.metadata_schema_version == "paper-instrument-metadata.v2"
+                    and self.maximum_leverage is None
+                )
+            ):
+                raise ValueError("public_quantity_conversion_metadata_invalid")
+        elif (
+            self.metadata_schema_version != "paper-instrument-metadata.v1"
+            or self.quote_asset != "USDC"
+            or self.settlement_asset != "USDC"
+            or self.maximum_market_quantity is not None
+            or self.maximum_limit_quantity is not None
+            or self.maximum_leverage is None
         ):
             raise ValueError("public_quantity_conversion_metadata_invalid")
         return self
@@ -316,7 +404,10 @@ def _serialize(
         for item in conversions
     ):
         raise ValueError("public_quantity_conversion_records_invalid")
-    metadata = tuple(InstrumentMetadataRecord.model_validate(item.model_dump()) for item in metadata)
+    metadata = tuple(
+        InstrumentMetadataRecord.model_validate(item.model_dump(exclude_unset=True))
+        for item in metadata
+    )
     conversions = tuple(
         type(item).model_validate(item.model_dump()) for item in conversions
     )

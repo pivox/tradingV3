@@ -467,6 +467,7 @@ final class OkxPaperPublicRestClientTest extends TestCase
             'ctVal' => '0.01', 'ctMult' => '1', 'ctValCcy' => str_starts_with($instrumentId, 'BTC') ? 'BTC' : 'ETH',
             'settleCcy' => 'USDT', 'tickSz' => '0.1', 'lotSz' => '1',
             'minSz' => '1', 'maxMktSz' => '10000', 'maxLmtSz' => '20000',
+            'lever' => '100',
             'state' => 'live',
         ];
     }

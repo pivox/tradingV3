@@ -91,6 +91,74 @@ def test_php_fixture_builds_a_dataset_bound_byte_deterministic_tape() -> None:
     assert first.tape_checksum.startswith("sha256:")
 
 
+def test_metadata_v2_is_strict_while_v1_keeps_its_original_shape() -> None:
+    _, _, _, metadata, _ = _inputs()
+    v2 = metadata[0].model_dump()
+    v2["metadata_schema_version"] = "paper-instrument-metadata.v2"
+    v2.pop("maximum_leverage")
+
+    with pytest.raises(ValueError, match="public_quantity_conversion_metadata_invalid"):
+        InstrumentMetadataRecord.model_validate(v2)
+
+    legacy_fields = (
+        "schema_version",
+        "source_record_id",
+        "source_checksum",
+        "source_network",
+        "market_data_venue",
+        "market_type",
+        "symbol",
+        "source_event_position",
+        "available_at",
+        "source_epoch",
+        "quantity_unit",
+        "contract_value",
+        "contract_multiplier",
+        "contract_value_unit",
+    )
+    legacy_payload = {
+        field: value for field, value in v2.items() if field in legacy_fields
+    }
+    legacy_payload["schema_version"] = "backtest-instrument-metadata.v1"
+    legacy = InstrumentMetadataRecord.model_validate(legacy_payload)
+
+    assert legacy.model_dump(exclude_unset=True) == legacy_payload
+
+
+def test_metadata_v2_accepts_only_complete_venue_specific_constraints() -> None:
+    _, _, _, metadata, _ = _inputs()
+    okx = metadata[0].model_dump()
+    okx["metadata_schema_version"] = "paper-instrument-metadata.v2"
+    okx["maximum_leverage"] = "100"
+    assert InstrumentMetadataRecord.model_validate(okx).maximum_leverage == "100"
+
+    hyperliquid = {
+        **okx,
+        "source_network": "testnet",
+        "market_data_venue": "hyperliquid",
+        "quantity_unit": "base_asset",
+        "contract_value": "1",
+        "contract_multiplier": "1",
+        "metadata_schema_version": "paper-instrument-metadata.v1",
+        "quote_asset": "USDC",
+        "settlement_asset": "USDC",
+        "maximum_market_quantity": None,
+        "maximum_limit_quantity": None,
+        "maximum_leverage": "50",
+    }
+    assert InstrumentMetadataRecord.model_validate(hyperliquid).maximum_leverage == "50"
+
+    invalid = (
+        {**okx, "happened_at": okx["available_at"].replace(year=2027)},
+        {**okx, "quantity_step": "2", "minimum_quantity": "1"},
+        {**okx, "maximum_market_quantity": "0.1", "minimum_quantity": "1"},
+        {**hyperliquid, "metadata_schema_version": "paper-instrument-metadata.v2"},
+    )
+    for payload in invalid:
+        with pytest.raises(ValueError, match="public_quantity_conversion_metadata_invalid"):
+            InstrumentMetadataRecord.model_validate(payload)
+
+
 def test_tape_independently_rejects_formula_drift_and_incomplete_coverage() -> None:
     dataset, execution, books, metadata, conversions = _inputs()
     forged = conversions[0].model_copy(update={"base_quantity": "0.06"})

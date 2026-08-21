@@ -905,6 +905,7 @@ final class PaperDatasetVerifier
     ): void {
         try {
             $payload = $event->payload;
+            $metadataSchemaVersion = $payload['metadata_schema_version'] ?? null;
             $expectedKeys = [
                 'base_asset', 'contract_multiplier', 'contract_value',
                 'contract_value_unit', 'instrument_type', 'maximum_limit_quantity',
@@ -913,6 +914,9 @@ final class PaperDatasetVerifier
                 'quantity_step', 'quantity_unit', 'quote_asset',
                 'settlement_asset', 'source_epoch', 'status',
             ];
+            if ($metadataSchemaVersion === 'paper-instrument-metadata.v2') {
+                $expectedKeys[] = 'maximum_leverage';
+            }
             $actualKeys = array_keys($payload);
             sort($actualKeys, \SORT_STRING);
             sort($expectedKeys, \SORT_STRING);
@@ -923,7 +927,10 @@ final class PaperDatasetVerifier
             };
             $epoch = $this->livePositiveInt($payload['source_epoch'] ?? null);
             if ($actualKeys !== $expectedKeys
-                || ($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+                || !\in_array($metadataSchemaVersion, [
+                    'paper-instrument-metadata.v1',
+                    'paper-instrument-metadata.v2',
+                ], true)
                 || ($payload['native_symbol'] ?? null) !== $contract['native_symbol']
                 || ($payload['instrument_type'] ?? null) !== 'perpetual'
                 || ($payload['base_asset'] ?? null) !== $contract['base_asset']
@@ -945,6 +952,17 @@ final class PaperDatasetVerifier
                 'price_tick',
             ] as $field) {
                 $value = $payload[$field] ?? null;
+                if (!\is_string($value)
+                    || \strlen($value) > 128
+                    || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1
+                    || !BigDecimal::of($value)->isGreaterThan(0)
+                    || (string) BigDecimal::of($value)->stripTrailingZeros() !== $value
+                ) {
+                    throw new \InvalidArgumentException();
+                }
+            }
+            if ($metadataSchemaVersion === 'paper-instrument-metadata.v2') {
+                $value = $payload['maximum_leverage'] ?? null;
                 if (!\is_string($value)
                     || \strlen($value) > 128
                     || preg_match('/\A(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/D', $value) !== 1

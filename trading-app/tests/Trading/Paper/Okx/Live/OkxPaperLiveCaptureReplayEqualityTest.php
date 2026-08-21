@@ -3147,6 +3147,7 @@ final class Task9MetadataClient implements OkxPaperInstrumentMetadataClientInter
             'minSz' => '1',
             'maxMktSz' => '1000',
             'maxLmtSz' => '2000',
+            'lever' => '100',
             'state' => 'live',
         ];
     }

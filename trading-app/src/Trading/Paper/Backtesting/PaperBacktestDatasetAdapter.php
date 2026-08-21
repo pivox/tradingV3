@@ -72,6 +72,15 @@ final class PaperBacktestDatasetAdapter
     ];
 
     /** @var list<string> */
+    private const OKX_METADATA_V2_KEYS = [
+        'metadata_schema_version', 'native_symbol', 'instrument_type', 'base_asset',
+        'quote_asset', 'settlement_asset', 'status', 'quantity_unit', 'quantity_step',
+        'minimum_quantity', 'maximum_market_quantity', 'maximum_limit_quantity',
+        'maximum_leverage', 'contract_value', 'contract_multiplier',
+        'contract_value_unit', 'price_tick', 'source_epoch', 'origin',
+    ];
+
+    /** @var list<string> */
     private const HYPERLIQUID_METADATA_KEYS = [
         'metadata_schema_version', 'native_symbol', 'instrument_type', 'base_asset',
         'quote_asset', 'settlement_asset', 'status', 'asset_id', 'quantity_unit',
@@ -277,16 +286,57 @@ final class PaperBacktestDatasetAdapter
         return ['books' => $books, 'trades' => $trades];
     }
 
+    /**
+     * @param list<PaperMarketEvent> $events
+     * @return list<NormalizedBacktestInstrumentMetadata>
+     */
+    public function adaptInstrumentMetadataEvents(array $events, string $sourceChecksum): array
+    {
+        if (preg_match('/\Asha256:[a-f0-9]{64}\z/D', $sourceChecksum) !== 1) {
+            throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_events_invalid');
+        }
+
+        $metadata = [];
+        $sourceIds = [];
+        foreach ($events as $sourceEventPosition => $event) {
+            if (!$event instanceof PaperMarketEvent) {
+                throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_events_invalid');
+            }
+            if ($event->channel !== PaperMarketDataChannel::INSTRUMENT_METADATA) {
+                continue;
+            }
+            if (isset($sourceIds[$event->eventId])) {
+                throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_events_invalid');
+            }
+            $metadata[] = $this->normalizeInstrumentMetadata(
+                $event,
+                $sourceChecksum,
+                $sourceEventPosition,
+            );
+            $sourceIds[$event->eventId] = true;
+        }
+        usort($metadata, static fn (
+            NormalizedBacktestInstrumentMetadata $left,
+            NormalizedBacktestInstrumentMetadata $right,
+        ): int => [$left->availableAt, $left->happenedAt, $left->sourceRecordId]
+            <=> [$right->availableAt, $right->happenedAt, $right->sourceRecordId]);
+
+        return $metadata;
+    }
+
     private function normalizeInstrumentMetadata(
         PaperMarketEvent $event,
         string $sourceChecksum,
         int $sourceEventPosition,
     ): NormalizedBacktestInstrumentMetadata {
         $payload = $event->payload;
+        $metadataSchemaVersion = $payload['metadata_schema_version'] ?? null;
         $this->assertExactKeys(
             $payload,
             $event->sourceVenue === PaperMarketDataVenue::OKX
-                ? self::OKX_METADATA_KEYS
+                ? ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                    ? self::OKX_METADATA_V2_KEYS
+                    : self::OKX_METADATA_KEYS)
                 : self::HYPERLIQUID_METADATA_KEYS,
         );
         $baseAsset = $event->symbol === 'BTCUSDT' ? 'BTC' : 'ETH';
@@ -302,6 +352,9 @@ final class PaperBacktestDatasetAdapter
                 && $this->canonicalPositiveMetadataDecimal($payload['minimum_quantity'] ?? null)
                 && $this->canonicalPositiveMetadataDecimal($payload['maximum_market_quantity'] ?? null)
                 && $this->canonicalPositiveMetadataDecimal($payload['maximum_limit_quantity'] ?? null)
+                && ($metadataSchemaVersion === 'paper-instrument-metadata.v1'
+                    || ($metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                        && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null)))
                 && $this->canonicalPositiveMetadataDecimal($payload['price_tick'] ?? null))
             : (($payload['quote_asset'] ?? null) === 'USDC'
                 && ($payload['settlement_asset'] ?? null) === 'USDC'
@@ -317,7 +370,9 @@ final class PaperBacktestDatasetAdapter
                 && ($payload['quantity_step'] ?? null) === $this->quantityStep($payload['size_decimals'])
                 && ($payload['minimum_quantity'] ?? null) === $payload['quantity_step']
                 && $this->canonicalPositiveMetadataDecimal($payload['maximum_leverage'] ?? null));
-        if (($payload['metadata_schema_version'] ?? null) !== 'paper-instrument-metadata.v1'
+        if (!\in_array($metadataSchemaVersion, $event->sourceVenue === PaperMarketDataVenue::OKX
+                ? ['paper-instrument-metadata.v1', 'paper-instrument-metadata.v2']
+                : ['paper-instrument-metadata.v1'], true)
             || ($payload['native_symbol'] ?? null) !== $nativeSymbol
             || ($payload['instrument_type'] ?? null) !== 'perpetual'
             || ($payload['base_asset'] ?? null) !== $baseAsset
@@ -342,6 +397,23 @@ final class PaperBacktestDatasetAdapter
                 $this->decimal($payload['contract_value'] ?? null, true),
                 $this->decimal($payload['contract_multiplier'] ?? null, true),
                 $payload['contract_value_unit'],
+                $metadataSchemaVersion,
+                $event->exchangeTimestamp->format(self::TIMESTAMP_FORMAT),
+                $payload['base_asset'],
+                $payload['quote_asset'],
+                $payload['settlement_asset'],
+                $this->decimal($payload['price_tick'] ?? $this->quantityStep($payload['price_max_decimals'] ?? -1), true),
+                $this->decimal($payload['quantity_step'] ?? null, true),
+                $this->decimal($payload['minimum_quantity'] ?? null, true),
+                isset($payload['maximum_market_quantity'])
+                    ? $this->decimal($payload['maximum_market_quantity'], true)
+                    : null,
+                isset($payload['maximum_limit_quantity'])
+                    ? $this->decimal($payload['maximum_limit_quantity'], true)
+                    : null,
+                isset($payload['maximum_leverage'])
+                    ? $this->decimal($payload['maximum_leverage'], true)
+                    : null,
             );
         } catch (PaperBacktestAdapterException|\InvalidArgumentException) {
             throw new PaperBacktestAdapterException('paper_backtest_instrument_metadata_invalid');

@@ -142,7 +142,7 @@ final class OkxPaperMarketEventNormalizer
         }
         $timestamp = $this->receiptTimestamp();
         $payload = [
-            'metadata_schema_version' => 'paper-instrument-metadata.v1',
+            'metadata_schema_version' => 'paper-instrument-metadata.v2',
             'native_symbol' => $instrumentId,
             'instrument_type' => 'perpetual',
             'base_asset' => $baseAsset,
@@ -154,6 +154,7 @@ final class OkxPaperMarketEventNormalizer
             'minimum_quantity' => self::canonicalMetadataDecimal($row['minSz'] ?? null),
             'maximum_market_quantity' => self::canonicalMetadataDecimal($row['maxMktSz'] ?? null),
             'maximum_limit_quantity' => self::canonicalMetadataDecimal($row['maxLmtSz'] ?? null),
+            'maximum_leverage' => self::canonicalMetadataDecimal($row['lever'] ?? null),
             'contract_value' => self::canonicalMetadataDecimal($row['ctVal'] ?? null),
             'contract_multiplier' => self::canonicalMetadataDecimal($row['ctMult'] ?? null),
             'contract_value_unit' => $baseAsset,
@@ -501,7 +502,7 @@ final class OkxPaperMarketEventNormalizer
     {
         $expected = [
             'ctMult', 'ctType', 'ctVal', 'ctValCcy', 'instId', 'instType',
-            'lotSz', 'maxLmtSz', 'maxMktSz', 'minSz', 'settleCcy', 'state',
+            'lever', 'lotSz', 'maxLmtSz', 'maxMktSz', 'minSz', 'settleCcy', 'state',
             'tickSz',
         ];
         $actual = array_keys($row);
