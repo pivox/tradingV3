@@ -49,7 +49,7 @@ public function testBuildsCompleteCostSnapshotFromCanonicalEvidence(): void
     self::assertSame(0.0005, $costs->stopSlippageRate);
     self::assertSame('venue_schedule', $costs->fundingSource);
     self::assertSame(0.0001, $costs->fundingRate);
-    self::assertSame(['tp1', 'tp2'], array_map(
+    self::assertSame(['tp1'], array_map(
         static fn (CanonicalTargetCostSnapshot $target): string => $target->targetId,
         $costs->targets,
     ));
