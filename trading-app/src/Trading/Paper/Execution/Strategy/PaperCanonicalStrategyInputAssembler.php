@@ -9,6 +9,7 @@ use App\Trading\Lineage\LineageContextException;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
 use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
 use App\TradingCore\Shadow\ShadowRuntimeRequest;
@@ -49,7 +50,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         }
 
         $executionTimeframe = $this->executionTimeframe($request);
-        if (!$this->isExactTrigger($event, $executionTimeframe, $request)) {
+        if (!$this->isExactTrigger($event, $executionTimeframe, $request, $evidence->indicatorProjection)) {
             throw new \LogicException('paper_canonical_strategy_trigger_mismatch');
         }
 
@@ -136,6 +137,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         PaperMarketEvent $event,
         string $timeframe,
         ShadowRuntimeRequest $request,
+        CanonicalIndicatorProjection $projection,
     ): bool {
         $channel = match ($timeframe) {
             '1m' => PaperMarketDataChannel::CANDLE_1M,
@@ -145,6 +147,25 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
             default => null,
         };
         $declared = $event->payload['interval'] ?? $event->payload['bar'] ?? null;
+        $projectionData = $projection->toArray();
+        $binding = $projectionData['dataset_binding'] ?? null;
+        $projectionEnvironment = $projectionData['environment'] ?? null;
+        $requestedTimeframes = $projectionData['requested_timeframes'] ?? null;
+        if (!is_array($binding)
+            || array_is_list($binding)
+            || !is_string($projectionEnvironment)
+            || !in_array($projectionEnvironment, ['local', 'test'], true)
+            || ($projectionData['indicator_engine_version'] ?? null) !== 'php_fallback_v1'
+            || ($projectionData['symbol'] ?? null) !== $event->symbol
+            || !is_array($requestedTimeframes)
+            || !array_is_list($requestedTimeframes)
+            || !in_array($timeframe, $requestedTimeframes, true)
+            || ($binding['source_network'] ?? null) !== $event->sourceNetwork->value
+            || ($binding['market_data_venue'] ?? null) !== $event->sourceVenue->value
+            || ($binding['market_type'] ?? null) !== 'perpetual'
+        ) {
+            return false;
+        }
         $snapshot = $request->indicatorsByTimeframe[$timeframe] ?? null;
         if (!is_array($snapshot)) {
             return false;
@@ -165,8 +186,8 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
             && $identity->matches(
                 $timeframe,
                 $event->symbol,
-                $event->sourceVenue->value,
-                $event->sourceNetwork->value,
+                'fake',
+                $projectionEnvironment,
                 'perpetual',
             )
             && $eventOpen !== null

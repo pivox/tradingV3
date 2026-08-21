@@ -15,6 +15,7 @@ use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
@@ -40,7 +41,10 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         self::assertSame('15m', $input->executionTimeframe);
         self::assertSame($evidence->configRequest, $input->request->configRequest);
         self::assertSame($evidence->lineage, $input->request->lineage);
-        self::assertSame($evidence->indicatorsByTimeframe, $input->request->indicatorsByTimeframe);
+        self::assertSame(
+            $evidence->indicatorProjection->toArray()['snapshots_by_timeframe'],
+            $input->request->indicatorsByTimeframe,
+        );
         self::assertSame($evidence->orderPlanRequest, $input->request->orderPlanRequest);
         self::assertSame($evidence->portfolioScope, $input->request->portfolioScope);
         self::assertSame($evidence->portfolioSnapshot, $input->request->portfolioSnapshot);
@@ -69,7 +73,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         $drifted = new PaperCanonicalStrategyEvidence(
             $evidence->configRequest,
             $evidence->lineage,
-            $evidence->indicatorsByTimeframe,
+            $evidence->indicatorProjection,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -130,24 +134,39 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
     public function testRejectsEvidenceFromADifferentExecutionCandle(): void
     {
         [$cell, $evidence] = $this->fixture();
-        $indicators = $evidence->indicatorsByTimeframe;
-        $indicators['15m']['kline_time'] = '2026-08-10T11:30:00Z';
 
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
-        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withProjection(
+            $evidence,
+            $this->projection(klineTime: '2026-08-10T11:30:00Z'),
+        ))))
             ->assemble($cell, $this->event());
     }
 
     public function testRejectsExecutionSnapshotWithDifferentSourceIdentity(): void
     {
         [$cell, $evidence] = $this->fixture();
-        $indicators = $evidence->indicatorsByTimeframe;
-        $indicators['15m']['snapshot_identity']['exchange'] = 'okx';
 
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
-        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withProjection(
+            $evidence,
+            $this->projection(snapshotExchange: 'okx'),
+        ))))
+            ->assemble($cell, $this->event());
+    }
+
+    public function testRejectsIndicatorProjectionDatasetSourceDrift(): void
+    {
+        [$cell, $evidence] = $this->fixture();
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withProjection(
+            $evidence,
+            $this->projection(sourceVenue: 'okx'),
+        ))))
             ->assemble($cell, $this->event());
     }
 
@@ -155,12 +174,13 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
     public function testRejectsNonCanonicalExecutionSnapshotTimestamp(string $timestamp): void
     {
         [$cell, $evidence] = $this->fixture();
-        $indicators = $evidence->indicatorsByTimeframe;
-        $indicators['15m']['kline_time'] = $timestamp;
 
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_canonical_strategy_trigger_mismatch');
-        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withIndicators($evidence, $indicators))))
+        (new PaperCanonicalStrategyInputAssembler($this->provider($this->withProjection(
+            $evidence,
+            $this->projection(klineTime: $timestamp),
+        ))))
             ->assemble($cell, $this->event());
     }
 
@@ -251,18 +271,7 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         return [$cell, new PaperCanonicalStrategyEvidence(
             $config,
             $lineage,
-            [
-                '15m' => [
-                    'snapshot_identity' => [
-                        'timeframe' => '15m',
-                        'symbol' => 'BTCUSDT',
-                        'exchange' => 'hyperliquid',
-                        'environment' => 'testnet',
-                        'market_type' => 'perpetual',
-                    ],
-                    'kline_time' => '2026-08-10T11:45:00Z',
-                ],
-            ],
+            $this->projection(),
             new CanonicalOrderPlanBuildRequest(...CanonicalOrderPlanPipelineFixture::accepted(
                 executionPolicy: $policy,
                 exchange: 'hyperliquid',
@@ -276,15 +285,14 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
         )];
     }
 
-    /** @param array<string, array<string, mixed>> $indicators */
-    private function withIndicators(
+    private function withProjection(
         PaperCanonicalStrategyEvidence $evidence,
-        array $indicators,
+        CanonicalIndicatorProjection $projection,
     ): PaperCanonicalStrategyEvidence {
         return new PaperCanonicalStrategyEvidence(
             $evidence->configRequest,
             $evidence->lineage,
-            $indicators,
+            $projection,
             $evidence->orderPlanRequest,
             $evidence->portfolioScope,
             $evidence->portfolioSnapshot,
@@ -293,6 +301,48 @@ final class PaperCanonicalStrategyInputAssemblerTest extends TestCase
             $evidence->estimatedSlippageBps,
             $evidence->orderBook,
         );
+    }
+
+    private function projection(
+        string $klineTime = '2026-08-10T11:45:00Z',
+        string $snapshotExchange = 'fake',
+        string $snapshotEnvironment = 'test',
+        string $sourceNetwork = 'testnet',
+        string $sourceVenue = 'hyperliquid',
+    ): CanonicalIndicatorProjection {
+        $datasetChecksum = 'sha256:' . str_repeat('1', 64);
+
+        return CanonicalIndicatorProjection::fromValidatedRequest([
+            'schema_version' => 'canonical-indicator-projection-request.v1',
+            'request_id' => 'paper-modern-indicators',
+            'evaluated_at' => '2026-08-10T12:00:00.000000Z',
+            'environment' => $snapshotEnvironment,
+            'indicator_engine_version' => 'php_fallback_v1',
+            'dataset_binding' => [
+                'dataset_id' => 'backtest-dataset-' . substr($datasetChecksum, 7),
+                'dataset_checksum' => $datasetChecksum,
+                'candles_checksum' => 'sha256:' . str_repeat('2', 64),
+                'quality_report_checksum' => 'sha256:' . str_repeat('3', 64),
+                'source_checksum' => 'sha256:' . str_repeat('4', 64),
+                'source_network' => $sourceNetwork,
+                'market_data_venue' => $sourceVenue,
+                'market_type' => 'perpetual',
+            ],
+            'symbol' => 'BTCUSDT',
+            'requested_timeframes' => ['15m'],
+            'candles_by_timeframe' => ['15m' => []],
+        ], [
+            '15m' => [
+                'snapshot_identity' => [
+                    'timeframe' => '15m',
+                    'symbol' => 'BTCUSDT',
+                    'exchange' => $snapshotExchange,
+                    'environment' => $snapshotEnvironment,
+                    'market_type' => 'perpetual',
+                ],
+                'kline_time' => $klineTime,
+            ],
+        ]);
     }
 
     private function provider(PaperCanonicalStrategyEvidence $evidence): PaperCanonicalStrategyEvidenceProviderInterface

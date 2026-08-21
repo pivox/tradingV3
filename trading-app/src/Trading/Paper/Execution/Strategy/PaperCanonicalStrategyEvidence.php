@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Execution\Strategy;
 
 use App\Trading\Lineage\LineageContext;
+use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Config\EffectiveTradingConfigRequest;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderBookSnapshot;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuildRequest;
@@ -14,11 +15,10 @@ use App\TradingCore\Shadow\ShadowRuntimeRequest;
 
 final readonly class PaperCanonicalStrategyEvidence
 {
-    /** @param array<string, array<string, mixed>> $indicatorsByTimeframe */
     public function __construct(
         public EffectiveTradingConfigRequest $configRequest,
         public LineageContext $lineage,
-        public array $indicatorsByTimeframe,
+        public CanonicalIndicatorProjection $indicatorProjection,
         public CanonicalOrderPlanBuildRequest $orderPlanRequest,
         public CanonicalPortfolioScope $portfolioScope,
         public CanonicalPortfolioSnapshot $portfolioSnapshot,
@@ -34,7 +34,7 @@ final readonly class PaperCanonicalStrategyEvidence
         return new ShadowRuntimeRequest(
             $this->configRequest,
             $this->lineage,
-            $this->indicatorsByTimeframe,
+            $this->indicatorsByTimeframe(),
             $this->orderPlanRequest,
             $this->portfolioScope,
             $this->portfolioSnapshot,
@@ -43,5 +43,22 @@ final readonly class PaperCanonicalStrategyEvidence
             $this->estimatedSlippageBps,
             $this->orderBook,
         );
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    public function indicatorsByTimeframe(): array
+    {
+        $snapshots = $this->indicatorProjection->toArray()['snapshots_by_timeframe'] ?? null;
+        if (!is_array($snapshots) || array_is_list($snapshots)) {
+            throw new \LogicException('paper_canonical_strategy_indicator_projection_invalid');
+        }
+        foreach ($snapshots as $timeframe => $snapshot) {
+            if (!is_string($timeframe) || !is_array($snapshot) || array_is_list($snapshot)) {
+                throw new \LogicException('paper_canonical_strategy_indicator_projection_invalid');
+            }
+        }
+
+        /** @var array<string, array<string, mixed>> $snapshots */
+        return $snapshots;
     }
 }
