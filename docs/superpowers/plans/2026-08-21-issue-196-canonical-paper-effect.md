@@ -13,7 +13,7 @@
 ## File map
 
 - Modify `trading-app/src/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProof.php`: expose verified reconstruction of the initial reservation.
-- Create `trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php`: reconstruction and mismatch tests.
+- Modify `trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php`: reconstruction and mismatch tests.
 - Modify `trading-app/src/Trading/Paper/Execution/Identity/PaperModernStrategyIdentity.php`: strict durable identity rehydration.
 - Modify `trading-app/src/Trading/Paper/Execution/Identity/PaperExecutionCell.php`: emit modern v2 provenance while preserving legacy bytes.
 - Modify `trading-app/src/Trading/Paper/Execution/Persistence/PaperExecutionProvenance.php`: validate exact legacy or modern provenance shapes.
@@ -27,7 +27,7 @@
 
 **Files:**
 - Modify: `trading-app/src/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProof.php`
-- Create: `trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php`
+- Modify: `trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php`
 
 - [ ] **Step 1: Write the failing reconstruction test**
 
@@ -49,7 +49,7 @@ Add cases for a policy from another config and a plan with another decision/scop
 ```bash
 cd trading-app
 XDEBUG_MODE=off php vendor/bin/phpunit \
-  tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php
+  tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php
 ```
 
 Expected: failure because `openReservation()` does not exist.
@@ -89,7 +89,6 @@ Keep the established stable verification reason by wrapping reconstruction failu
 
 ```bash
 XDEBUG_MODE=off php vendor/bin/phpunit \
-  tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php \
   tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php
 ```
 
@@ -99,7 +98,7 @@ Expected: all tests pass.
 
 ```bash
 git add trading-app/src/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProof.php \
-  trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php
+  trading-app/tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php
 git commit -m "feat(trading-core): rehydrate canonical admission state"
 ```
 
@@ -244,7 +243,7 @@ Decode uses `CanonicalOrderPlan::fromArray()`, `CanonicalPortfolioAdmissionProof
 XDEBUG_MODE=off php vendor/bin/phpunit \
   tests/Trading/Paper/Execution/Strategy \
   tests/TradingCore/OrderPlan/Canonical/CanonicalOrderPlanRehydrationTest.php \
-  tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionProofTest.php
+  tests/TradingCore/Risk/Canonical/Portfolio/CanonicalPortfolioAdmissionEngineTest.php
 ```
 
 Expected: all tests pass; the legacy codec tests remain green.
@@ -274,7 +273,7 @@ XDEBUG_MODE=off php vendor/bin/phpunit \
   tests/Trading/Paper/Execution \
   tests/Trading/Paper/Runtime \
   tests/Command/PaperExecutionReplayCommandTest.php \
-  tests/Command/PaperExecutionRuntimeCheckCommandTest.php \
+  tests/Command/PaperReplayRuntimeCheckCommandTest.php \
   tests/TradingCore/Risk/Canonical/Portfolio \
   tests/TradingCore/OrderPlan/Canonical/CanonicalOrderPlanRehydrationTest.php
 XDEBUG_MODE=off php -d memory_limit=1G vendor/bin/phpstan analyse \
