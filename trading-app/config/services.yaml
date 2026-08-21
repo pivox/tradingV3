@@ -112,6 +112,8 @@ services:
             - '../src/Trading/Paper/Hyperliquid/Live/PawlHyperliquidPaperPublicWebSocketTransport.php'
             # Deliberately dormant until the production canonical evidence provider is complete.
             - '../src/Trading/Paper/Execution/Strategy/PaperCanonicalStrategyPreparation.php'
+            # Runtime-owned per-cell registry; constructed by PaperFakeRuntimeFactory.
+            - '../src/Trading/Paper/Execution/Fake/PaperCanonicalFakeInstrumentRegistry.php'
 
     App\Exchange\Fake\FakeDailyLossCapPolicy:
         arguments:

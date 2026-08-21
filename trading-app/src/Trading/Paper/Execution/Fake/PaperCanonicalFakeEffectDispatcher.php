@@ -36,7 +36,6 @@ final readonly class PaperCanonicalFakeEffectDispatcher
     ): PaperFakeDispatchResult {
         try {
             $this->assertScope($runtime, $effect);
-            $request = $this->request($effect);
         } catch (\Throwable $exception) {
             if ($exception instanceof \InvalidArgumentException
                 && $exception->getMessage() === 'paper_canonical_fake_effect_invalid'
@@ -64,6 +63,12 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                 $effect->plan->planHash,
                 [],
             );
+        }
+        $instrumentDescriptor = $runtime->bindCanonicalInstrument($effect->plan);
+        try {
+            $request = $this->request($effect, $instrumentDescriptor);
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException('paper_canonical_fake_effect_invalid', 0, $exception);
         }
         if (!$runtime->adapter->setLeverage($effect->plan->symbol, $effect->plan->finalLeverage, 'isolated')) {
             return new PaperFakeDispatchResult(
@@ -230,7 +235,10 @@ final readonly class PaperCanonicalFakeEffectDispatcher
         }
     }
 
-    private function request(PaperCanonicalPreparedEffect $effect): PlaceOrderRequest
+    private function request(
+        PaperCanonicalPreparedEffect $effect,
+        string $instrumentDescriptor,
+    ): PlaceOrderRequest
     {
         $plan = $effect->plan;
         $side = match ($plan->side) {
@@ -263,6 +271,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
                 'canonical_cancel_after_at' => $plan->cancelAfterAt !== null
                     ? $this->time($plan->cancelAfterAt)
                     : null,
+                PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY => $instrumentDescriptor,
             ],
         );
         PaperMarketEventRedactor::assertSafe($metadata);

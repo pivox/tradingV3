@@ -15,6 +15,7 @@ use App\Exchange\Fake\FakeExchangeStateStore;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 
 final readonly class PaperFakeRuntime
 {
@@ -30,6 +31,7 @@ final readonly class PaperFakeRuntime
         private FakeExchangeOrderBook $orderBook,
         private FakeExchangeMatchingEngine $matchingEngine,
         ExchangeAdapterInterface $adapter,
+        private ?PaperCanonicalFakeInstrumentRegistry $canonicalInstruments = null,
     ) {
         if ($adapter->exchange() !== Exchange::FAKE
             || $adapter->marketType() !== MarketType::PERPETUAL
@@ -41,6 +43,15 @@ final readonly class PaperFakeRuntime
             throw new \InvalidArgumentException('paper_fake_runtime_state_mismatch');
         }
         $this->adapter = $adapter;
+    }
+
+    public function bindCanonicalInstrument(CanonicalOrderPlan $plan): string
+    {
+        if (!$this->cell->isModern() || !$this->canonicalInstruments instanceof PaperCanonicalFakeInstrumentRegistry) {
+            throw new \LogicException('paper_canonical_fake_instrument_registry_unavailable');
+        }
+
+        return $this->canonicalInstruments->bind($plan);
     }
 
     public function applyMarketEvent(PaperMarketEvent $event): void

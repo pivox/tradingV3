@@ -140,7 +140,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         }
     }
 
-    public static function fixture(): PaperCanonicalPreparedEffect
+    public static function fixture(float $contractSize = 1.0): PaperCanonicalPreparedEffect
     {
         $effective = self::effectiveConfig();
         $identity = PaperModernStrategyIdentity::fromResolvedSnapshot(
@@ -159,6 +159,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         $executionPolicy = (new CanonicalExecutionPolicyCompiler())->compile($effective);
         $components = CanonicalOrderPlanPipelineFixture::accepted(
             executionPolicy: $executionPolicy,
+            contractSize: $contractSize,
             exchange: 'hyperliquid',
             environment: 'testnet',
         );

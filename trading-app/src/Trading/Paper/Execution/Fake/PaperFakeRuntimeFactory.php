@@ -57,10 +57,26 @@ final class PaperFakeRuntimeFactory
         $state = new FakeExchangeStateStore($statePath, $cellSeed);
         $book = new FakeExchangeOrderBook($state);
         $clock = $this->serializableClock();
-        $engine = new FakeExchangeMatchingEngine($state, $book, $clock);
-        $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock);
+        $canonicalInstruments = $cell->isModern()
+            ? new PaperCanonicalFakeInstrumentRegistry($cell, $state)
+            : null;
+        $engine = new FakeExchangeMatchingEngine(
+            $state,
+            $book,
+            $clock,
+            instruments: $canonicalInstruments,
+        );
+        $adapter = new FakeExchangeAdapter($state, $book, $engine, $clock, $canonicalInstruments);
 
-        return new PaperFakeRuntime($cell, $statePath, $state, $book, $engine, $adapter);
+        return new PaperFakeRuntime(
+            $cell,
+            $statePath,
+            $state,
+            $book,
+            $engine,
+            $adapter,
+            $canonicalInstruments,
+        );
     }
 
     private function privateRoot(): string

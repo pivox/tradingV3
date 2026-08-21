@@ -9,6 +9,7 @@ use App\Exchange\Event\ExchangeOrderCreated;
 use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Fake\FakeExchangeEventNormalizer;
 use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeInstrumentDescriptor;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
@@ -138,6 +139,51 @@ final class PaperCanonicalFakeEffectDispatcherTest extends TestCase
             self::assertSame(ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED, $replay->execution->status);
             self::assertSame('protection_rejected_by_scenario', $replay->execution->raw['reason'] ?? null);
             self::assertSame([], $runtime->adapter->getOpenPositions('BTCUSDT'));
+        } finally {
+            $this->removeRuntime($root);
+        }
+    }
+
+    public function testCanonicalContractSizeDrivesFakeMarginCostsAndRestartedFill(): void
+    {
+        $root = sys_get_temp_dir() . '/paper_canonical_fake_units_' . bin2hex(random_bytes(6));
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture(contractSize: 0.01);
+        $cell = $this->cell($effect->provenance);
+        try {
+            $clock = new MockClock('2026-08-10T12:00:00Z');
+            $runtime = (new PaperFakeRuntimeFactory($root, $clock))->forCell($cell);
+            $runtime->applyMarketEvent($this->topOfBook());
+            $dispatcher = new PaperCanonicalFakeEffectDispatcher(new FakeExchangeEventNormalizer(), $clock);
+            $placed = $dispatcher->dispatch($runtime, $effect);
+            self::assertNotNull($placed->execution->exchangeOrderId);
+            $entry = $runtime->adapter->getOrder('BTCUSDT', $placed->execution->exchangeOrderId);
+            self::assertNotNull($entry);
+            self::assertSame('0.01', $entry->metadata['margin_contract_size'] ?? null);
+            self::assertIsString(
+                $entry->metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY] ?? null,
+            );
+
+            $restored = (new PaperFakeRuntimeFactory($root, $clock))->forCell($cell);
+            $restored->applyMarketEvent($this->topOfBook('100.08', '100.09', '2'));
+            $filled = $restored->adapter->getOrder('BTCUSDT', $placed->execution->exchangeOrderId);
+            self::assertNotNull($filled);
+            self::assertSame(ExchangeOrderStatus::FILLED, $filled->status);
+            self::assertSame('0.01', $filled->metadata['margin_contract_size'] ?? null);
+
+            $fills = $restored->adapter->getFillsSnapshot('BTCUSDT');
+            self::assertNotEmpty($fills);
+            $entryFill = $fills[0];
+            $expectedFee = round($entryFill->quantity * $entryFill->price * 0.01 * 0.0005, 12);
+            self::assertSame($expectedFee, $entryFill->fee);
+            $positions = $restored->adapter->getOpenPositions('BTCUSDT');
+            self::assertCount(1, $positions);
+            $expectedMargin = ($entryFill->quantity * $entryFill->price * 0.01)
+                / $effect->plan->finalLeverage;
+            self::assertEqualsWithDelta($expectedMargin, $positions[0]->margin, 1.0e-12);
+            self::assertSame(
+                $entry->metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY],
+                $positions[0]->metadata[PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY] ?? null,
+            );
         } finally {
             $this->removeRuntime($root);
         }
