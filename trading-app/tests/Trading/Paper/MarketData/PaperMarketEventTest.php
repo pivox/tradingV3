@@ -35,6 +35,7 @@ final class PaperMarketEventTest extends TestCase
             'candle_1h',
             'top_of_book',
             'instrument_metadata',
+            'funding_rate',
             'public_trade',
             'connection_state',
             'snapshot_boundary',
