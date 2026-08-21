@@ -6,8 +6,10 @@ namespace App\Trading\Paper\Execution\Fake;
 
 use App\Common\Enum\Exchange;
 use App\Common\Enum\MarketType;
+use App\Exchange\Dto\ExchangeOrderDto;
 use App\Exchange\Dto\PlaceOrderRequest;
 use App\Exchange\Enum\ExchangeOrderSide;
+use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
@@ -43,6 +45,10 @@ final readonly class PaperCanonicalFakeEffectDispatcher
         }
 
         $cursor = $runtime->eventCursor();
+        $existing = $this->existingOrder($runtime, $effect);
+        if ($existing instanceof ExchangeOrderDto) {
+            return $this->replay($effect, $existing);
+        }
         if (!$runtime->adapter->setLeverage($effect->plan->symbol, $effect->plan->finalLeverage, 'isolated')) {
             return new PaperFakeDispatchResult(
                 new ExecutionResult(
@@ -61,33 +67,123 @@ final readonly class PaperCanonicalFakeEffectDispatcher
         $orderMetadata = $placed->metadata !== []
             ? $placed->metadata
             : ($placed->order?->metadata ?? []);
+        return $this->result(
+            $placed->clientOrderId,
+            $placed->exchangeOrderId,
+            $placed->accepted,
+            $placed->status->value,
+            $orderMetadata,
+            $idempotentReplay,
+            $effect->plan->planHash,
+            $this->normalizeSince($runtime, $cursor),
+        );
+    }
+
+    private function existingOrder(
+        PaperFakeRuntime $runtime,
+        PaperCanonicalPreparedEffect $effect,
+    ): ?ExchangeOrderDto {
+        foreach ($runtime->adapter->getOrdersSnapshot($effect->plan->symbol) as $order) {
+            if ($order->clientOrderId === $effect->orderIntentIdentity['client_order_id']) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
+    private function replay(
+        PaperCanonicalPreparedEffect $effect,
+        ExchangeOrderDto $order,
+    ): PaperFakeDispatchResult {
+        $planHash = $order->metadata['plan_hash'] ?? null;
+        $orderIntentId = $order->metadata['order_intent_id'] ?? null;
+        if (!is_string($planHash)
+            || !hash_equals($effect->plan->planHash, $planHash)
+            || $orderIntentId !== $effect->orderIntentIdentity['order_intent_id']
+            || ($order->metadata['canonical_dispatch_source'] ?? null) !== 'paper_canonical_fake_dispatcher'
+        ) {
+            return $this->result(
+                $effect->orderIntentIdentity['client_order_id'],
+                $order->exchangeOrderId,
+                false,
+                ExchangeOrderStatus::REJECTED->value,
+                array_replace($order->metadata, ['reason' => 'duplicate_client_order_id_intent_mismatch']),
+                false,
+                $effect->plan->planHash,
+                [],
+            );
+        }
+
+        return $this->result(
+            $effect->orderIntentIdentity['client_order_id'],
+            $order->exchangeOrderId,
+            !in_array($order->status, [ExchangeOrderStatus::REJECTED, ExchangeOrderStatus::UNKNOWN], true),
+            $order->status->value,
+            array_replace($order->metadata, ['idempotent_replay' => true]),
+            true,
+            $effect->plan->planHash,
+            [],
+        );
+    }
+
+    /**
+     * @param array<string, mixed>         $metadata
+     * @param list<ExchangeEventInterface> $events
+     */
+    private function result(
+        string $clientOrderId,
+        ?string $exchangeOrderId,
+        bool $accepted,
+        string $exchangeStatus,
+        array $metadata,
+        bool $idempotentReplay,
+        string $planHash,
+        array $events,
+    ): PaperFakeDispatchResult {
+        $status = $this->executionStatus($accepted, $metadata);
         $raw = [
-            'accepted' => $placed->accepted,
-            'status' => $placed->status->value,
+            'accepted' => $accepted,
+            'status' => $exchangeStatus,
             'idempotent_replay' => $idempotentReplay,
-            'plan_hash' => $effect->plan->planHash,
-            'order' => [
-                'metadata' => $orderMetadata,
-            ],
+            'plan_hash' => $planHash,
+            'order' => ['metadata' => $metadata],
         ];
-        if (!$placed->accepted) {
-            $raw['reason'] = is_string($placed->metadata['reason'] ?? null)
-                ? $placed->metadata['reason']
-                : 'paper_canonical_fake_order_rejected';
+        if ($status !== ExecutionResult::STATUS_SUBMITTED_PROTECTED) {
+            $raw['reason'] = $this->failureReason($status, $metadata);
         }
 
         return new PaperFakeDispatchResult(
-            new ExecutionResult(
-                $placed->clientOrderId,
-                $placed->exchangeOrderId,
-                $placed->accepted
-                    ? ExecutionResult::STATUS_SUBMITTED_PROTECTED
-                    : ExecutionResult::STATUS_ERROR,
-                $raw,
-            ),
-            $this->normalizeSince($runtime, $cursor),
+            new ExecutionResult($clientOrderId, $exchangeOrderId, $status, $raw),
+            $events,
             $idempotentReplay,
         );
+    }
+
+    /** @param array<string, mixed> $metadata */
+    private function executionStatus(bool $accepted, array $metadata): string
+    {
+        if (($metadata['protection_status'] ?? null) === 'rejected') {
+            return ($metadata['compensation_status'] ?? null) === 'completed'
+                ? ExecutionResult::STATUS_FAILED_UNPROTECTED_CLOSED
+                : ExecutionResult::STATUS_CRITICAL_UNPROTECTED_POSITION;
+        }
+
+        return $accepted ? ExecutionResult::STATUS_SUBMITTED_PROTECTED : ExecutionResult::STATUS_ERROR;
+    }
+
+    /** @param array<string, mixed> $metadata */
+    private function failureReason(string $status, array $metadata): string
+    {
+        foreach (['protection_reject_reason', 'reason'] as $key) {
+            if (is_string($metadata[$key] ?? null) && $metadata[$key] !== '') {
+                return $metadata[$key];
+            }
+        }
+
+        return $status === ExecutionResult::STATUS_CRITICAL_UNPROTECTED_POSITION
+            ? 'paper_canonical_fake_unprotected_position'
+            : 'paper_canonical_fake_order_rejected';
     }
 
     private function assertScope(PaperFakeRuntime $runtime, PaperCanonicalPreparedEffect $effect): void
@@ -175,7 +271,7 @@ final readonly class PaperCanonicalFakeEffectDispatcher
     }
 
     /** @return list<ExchangeEventInterface> */
-    private function normalizeSince(PaperFakeRuntime $runtime, int $cursor): array
+    public function normalizeSince(PaperFakeRuntime $runtime, int $cursor): array
     {
         $normalized = [];
         foreach ($runtime->eventsSince($cursor) as $event) {

@@ -17,6 +17,7 @@ use App\Exchange\Enum\ExchangeOrderStatus;
 use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 use Brick\Math\RoundingMode;
@@ -37,7 +38,6 @@ final readonly class FakeExchangeMatchingEngine
         'exchange_position_id',
         'order_intent_id',
         'client_order_id',
-        'run_id',
         'correlation_run_id',
         'orchestration_run_id',
         'orchestration_set_id',
@@ -46,18 +46,7 @@ final readonly class FakeExchangeMatchingEngine
         'origin',
         'attempt_number',
         'decision_key',
-        'paper_network',
-        'market_data_venue',
-        'paper_execution_cell_id',
-        'configuration_snapshot_id',
-        'paper_eligibility',
-        'strategy_profile',
-        'mode_id',
-        'mode_version',
-        'setup_id',
-        'setup_version',
-        'config_hash',
-        'condition_catalog_hash',
+        ...PaperExecutionProvenance::MODERN_KEYS,
         'canonical_side',
         'decision_id',
         'intent_id',

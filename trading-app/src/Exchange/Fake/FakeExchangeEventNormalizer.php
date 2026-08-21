@@ -28,9 +28,10 @@ use App\Exchange\Event\ExchangeOrderUpdated;
 use App\Exchange\Event\ExchangePositionClosed;
 use App\Exchange\Event\ExchangePositionOpened;
 use App\Exchange\Event\ExchangePositionUpdated;
-use Brick\Math\BigDecimal;
 use App\Exchange\Event\ExchangeProtectionOrderCreated;
 use App\Exchange\Event\ExchangeProtectionOrderRejected;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use Brick\Math\BigDecimal;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
 #[AutoconfigureTag('app.exchange_event_normalizer')]
@@ -289,12 +290,7 @@ final readonly class FakeExchangeEventNormalizer implements ExchangeEventNormali
             'order_intent_id',
             'run_id',
             'decision_key',
-            'paper_network',
-            'market_data_venue',
-            'paper_execution_cell_id',
-            'configuration_snapshot_id',
-            'paper_eligibility',
-            'strategy_profile',
+            ...PaperExecutionProvenance::MODERN_KEYS,
         ]));
     }
 

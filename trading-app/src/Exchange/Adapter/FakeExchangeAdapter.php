@@ -32,6 +32,7 @@ use App\Exchange\Fake\FakeInstrumentProviderInterface;
 use App\Exchange\Reconciliation\ExchangeRestSnapshotProviderInterface;
 use App\Exchange\Reconciliation\ExchangeReconciliationService;
 use App\Exchange\Reconciliation\ExchangeReconciliationSnapshotProofOrchestratorInterface;
+use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Attribute\AutoconfigureTag;
 
@@ -456,6 +457,7 @@ final readonly class FakeExchangeAdapter implements
             'order_intent_id',
             'run_id',
             'decision_key',
+            ...PaperExecutionProvenance::MODERN_KEYS,
         ]));
     }
 
