@@ -52,6 +52,21 @@ final readonly class FakeExchangeMatchingEngine
         'configuration_snapshot_id',
         'paper_eligibility',
         'strategy_profile',
+        'mode_id',
+        'mode_version',
+        'setup_id',
+        'setup_version',
+        'config_hash',
+        'condition_catalog_hash',
+        'canonical_side',
+        'decision_id',
+        'intent_id',
+        'effective_config_reference',
+        'environment',
+        'dry_run',
+        'plan_hash',
+        'target_id',
+        'canonical_dispatch_source',
     ];
     /**
      * @var string[]
