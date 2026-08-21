@@ -10,24 +10,46 @@ use Symfony\Component\Clock\MockClock;
 
 final readonly class CanonicalPortfolioAdmissionProof
 {
-    private const SCHEMA = 'canonical-portfolio-admission-proof.v1';
+    private const LEGACY_SCHEMA = 'canonical-portfolio-admission-proof.v1';
+    private const SCHEMA = 'canonical-portfolio-admission-proof.v2';
 
     private function __construct(
+        private string $schema,
         public string $decisionKey,
         public CanonicalPortfolioPolicy $policy,
         public CanonicalPortfolioScope $scope,
         public CanonicalPortfolioSnapshot $snapshot,
+        public ?\DateTimeImmutable $admittedAt,
     ) {
     }
 
     public static function fromRequest(CanonicalPortfolioAdmissionRequest $request): self
     {
         return new self(
+            self::LEGACY_SCHEMA,
             $request->decisionKey,
             $request->policy,
             $request->scope,
             $request->snapshot,
+            null,
         );
+    }
+
+    public static function fromReservation(
+        CanonicalPortfolioAdmissionRequest $request,
+        CanonicalPortfolioReservation $reservation,
+    ): self {
+        $proof = new self(
+            self::SCHEMA,
+            $request->decisionKey,
+            $request->policy,
+            $request->scope,
+            $request->snapshot,
+            $reservation->observedAt,
+        );
+        $proof->verify($request->plan, $reservation, $request->policy);
+
+        return $proof;
     }
 
     /** @return array<string, mixed> */
@@ -36,9 +58,15 @@ final readonly class CanonicalPortfolioAdmissionProof
         $activeDecisionKeys = $this->snapshot->activeDecisionKeys;
         sort($activeDecisionKeys, SORT_STRING);
 
-        return [
-            'schema' => self::SCHEMA,
+        $proof = [
+            'schema' => $this->schema,
             'decision_key' => $this->decisionKey,
+        ];
+        if ($this->admittedAt !== null) {
+            $proof['admitted_at'] = self::time($this->admittedAt);
+        }
+
+        return $proof + [
             'policy' => $this->policy->toAdmissionProofArray(),
             'scope' => $this->scope->toArray(),
             'snapshot' => [
@@ -66,8 +94,20 @@ final readonly class CanonicalPortfolioAdmissionProof
     public static function fromArray(array $data): self
     {
         try {
-            self::exactKeys($data, ['schema', 'decision_key', 'policy', 'scope', 'snapshot']);
-            if (($data['schema'] ?? null) !== self::SCHEMA || !\is_string($data['decision_key'] ?? null)) {
+            $schema = $data['schema'] ?? null;
+            if ($schema === self::LEGACY_SCHEMA) {
+                self::exactKeys($data, ['schema', 'decision_key', 'policy', 'scope', 'snapshot']);
+                $admittedAt = null;
+            } elseif ($schema === self::SCHEMA) {
+                self::exactKeys($data, ['schema', 'decision_key', 'admitted_at', 'policy', 'scope', 'snapshot']);
+                if (!\is_string($data['admitted_at'] ?? null)) {
+                    throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+                }
+                $admittedAt = self::date($data['admitted_at']);
+            } else {
+                throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
+            }
+            if (!\is_string($data['decision_key'] ?? null)) {
                 throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
             }
             $policyData = self::mapping($data, 'policy');
@@ -149,10 +189,12 @@ final readonly class CanonicalPortfolioAdmissionProof
                 $snapshotData['input_hash'],
             );
             $proof = new self(
+                $schema,
                 $data['decision_key'],
                 CanonicalPortfolioPolicy::fromAdmissionProofArray($policyData),
                 $scope,
                 $snapshot,
+                $admittedAt,
             );
             if ($proof->toArray() !== $data) {
                 throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_invalid');
@@ -175,7 +217,11 @@ final readonly class CanonicalPortfolioAdmissionProof
         CanonicalPortfolioReservation $reservation,
         CanonicalPortfolioPolicy $expectedPolicy,
     ): self {
-        $expected = $this->openReservation($plan, $expectedPolicy);
+        $expected = $this->replayReservation(
+            $plan,
+            $expectedPolicy,
+            $this->admittedAt ?? $reservation->observedAt,
+        );
         if ($expected != $reservation) {
             throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_verification_failed');
         }
@@ -186,6 +232,18 @@ final readonly class CanonicalPortfolioAdmissionProof
     public function openReservation(
         CanonicalOrderPlan $plan,
         CanonicalPortfolioPolicy $expectedPolicy,
+    ): CanonicalPortfolioReservation {
+        if ($this->admittedAt === null) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_replay_time_missing');
+        }
+
+        return $this->replayReservation($plan, $expectedPolicy, $this->admittedAt);
+    }
+
+    private function replayReservation(
+        CanonicalOrderPlan $plan,
+        CanonicalPortfolioPolicy $expectedPolicy,
+        \DateTimeImmutable $admittedAt,
     ): CanonicalPortfolioReservation {
         if ($this->policy->toAdmissionProofArray() !== $expectedPolicy->toAdmissionProofArray()) {
             throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_policy_mismatch');
@@ -198,7 +256,7 @@ final readonly class CanonicalPortfolioAdmissionProof
                 $this->snapshot,
                 $this->decisionKey,
             );
-            $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock($plan->createdAt)))
+            $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock($admittedAt)))
                 ->admit($request);
             $expected = CanonicalPortfolioReservation::open($decision, $plan);
             $expected->assertCanonicalOpeningState($plan);

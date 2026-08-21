@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace App\Trading\Paper\Execution\Strategy;
 
 use App\Trading\Lineage\LineageContext;
+use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEventRedactor;
 use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlan;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
@@ -48,6 +52,25 @@ final readonly class PaperCanonicalPreparedEffect
             if (array_keys($provenance) !== PaperExecutionProvenance::MODERN_KEYS) {
                 throw new \InvalidArgumentException();
             }
+            $network = PaperMarketDataNetwork::from($provenance['paper_network']);
+            $venue = PaperMarketDataVenue::from($provenance['market_data_venue']);
+            $cell = PaperExecutionCell::createModern(
+                $network,
+                $venue,
+                $provenance['configuration_snapshot_id'],
+                PaperModernStrategyIdentity::fromDurableIdentity(
+                    $network,
+                    $venue,
+                    $provenance['mode_id'],
+                    $provenance['mode_version'],
+                    $provenance['setup_id'],
+                    $provenance['setup_version'],
+                    $provenance['side'],
+                    $provenance['config_hash'],
+                    $provenance['condition_catalog_hash'],
+                ),
+                $provenance['run_id'],
+            );
             $this->lineage->assertCanonicalIntegrity()->assertExecutableTradeContract();
             $snapshot = $this->lineage->effectiveConfigSnapshot;
             if ($snapshot === null
@@ -65,6 +88,8 @@ final readonly class PaperCanonicalPreparedEffect
                 [$this->decisionKey, $this->reservation->decisionKey],
                 [$this->plan->planHash, $this->reservation->planHash],
                 [$this->plan->configHash, $this->reservation->configHash],
+                [$cell->accountNamespace, $this->reservation->scope->accountId],
+                [$cell->network->value, $this->reservation->scope->network],
                 [$this->plan->modeId, $this->lineage->modeId],
                 [$this->plan->modeVersion, $this->lineage->modeVersion],
                 [$this->plan->setupId, $this->lineage->setupId],

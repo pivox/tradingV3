@@ -126,15 +126,19 @@ exclus de toute baseline moderne et de toute agrégation certifiée.
 Le contrat `paper-canonical-prepared-effect.v1` conserve le plan canonique
 complet, la preuve d'admission portefeuille, la lineage Effective Config,
 l'identité durable de l'`OrderIntent` et la provenance v2 de la cellule. La
-réservation portefeuille n'est jamais sérialisée comme objet PHP : le decoder
-la recrée depuis la preuve, le plan et la politique recompilée depuis le
-snapshot de lineage, puis exige le même hash d'état initial.
+réservation portefeuille n'est jamais sérialisée comme objet PHP : la preuve
+v2 authentifie l'instant réel d'admission et le decoder la recrée à cet instant
+depuis la preuve, le plan et la politique recompilée depuis le snapshot de
+lineage, puis exige le même hash d'état initial. Les preuves v1 historiques
+restent lisibles et vérifiables avec leur réservation existante, mais ne peuvent
+pas ouvrir seules une nouvelle réservation.
 
 Le champ `exchange` de la provenance d'exécution vaut toujours `fake`. Le champ
 `market_data_venue`, le plan et l'Effective Config conservent la venue publique
 du dataset (`okx` ou `hyperliquid`) ; aucune réécriture vers le modèle legacy
-`OrderPlanModel` n'est autorisée. Un écart de plan, preuve, décision, cellule,
-réseau, venue, version, side ou hash échoue avec
+`OrderPlanModel` n'est autorisée. Le réseau et le namespace de compte du scope
+portefeuille doivent également correspondre exactement à la cellule v2. Un
+écart de plan, preuve, décision, cellule, réseau, venue, version, side ou hash échoue avec
 `paper_canonical_prepared_effect_payload_invalid`.
 
 Cette frontière est volontairement non exécutable seule. Le runtime moderne

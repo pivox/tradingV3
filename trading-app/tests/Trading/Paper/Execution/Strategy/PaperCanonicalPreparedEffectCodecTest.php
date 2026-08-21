@@ -79,6 +79,18 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
                 $payload['admission_proof']['policy']['max_concurrent_positions'] = 99;
             }),
             self::mutate($encoded, static function (array &$payload): void {
+                $payload['admission_proof']['scope']['account_id'] = 'paper:cell:v2:' . str_repeat('f', 64);
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
+                $payload['admission_proof']['scope']['network'] = 'mainnet';
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
+                $payload['lineage']['unexpected'] = true;
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
+                $payload['lineage'] = array_reverse($payload['lineage'], true);
+            }),
+            self::mutate($encoded, static function (array &$payload): void {
                 $payload['order_intent_identity']['order_intent_id'] = 0;
             }),
             self::mutate($encoded, static function (array &$payload): void {
@@ -112,6 +124,18 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
     private static function effect(): PaperCanonicalPreparedEffect
     {
         $effective = self::effectiveConfig();
+        $identity = PaperModernStrategyIdentity::fromResolvedSnapshot(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            $effective,
+        );
+        $cell = PaperExecutionCell::createModern(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            'sha256:' . str_repeat('a', 64),
+            $identity,
+            'paper-modern-run-001',
+        );
         $clock = new MockClock('2026-08-10T12:00:00+00:00');
         $executionPolicy = (new CanonicalExecutionPolicyCompiler())->compile($effective);
         $components = CanonicalOrderPlanPipelineFixture::accepted(
@@ -137,7 +161,7 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             'testnet',
             'hyperliquid',
             'testnet',
-            'paper:cell:v2:' . str_repeat('a', 64),
+            $cell->accountNamespace,
             'scalping',
             'USDT',
         );
@@ -169,24 +193,12 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
             $portfolio,
             $decisionKey,
         );
-        $proof = CanonicalPortfolioAdmissionProof::fromRequest($admission);
         $reservation = CanonicalPortfolioReservation::open(
             (new CanonicalPortfolioAdmissionEngine($clock))->admit($admission),
             $plan,
         );
+        $proof = CanonicalPortfolioAdmissionProof::fromReservation($admission, $reservation);
         $lineage = self::lineage($effective, $decisionKey);
-        $identity = PaperModernStrategyIdentity::fromResolvedSnapshot(
-            PaperMarketDataNetwork::TESTNET,
-            PaperMarketDataVenue::HYPERLIQUID,
-            $effective,
-        );
-        $cell = PaperExecutionCell::createModern(
-            PaperMarketDataNetwork::TESTNET,
-            PaperMarketDataVenue::HYPERLIQUID,
-            'sha256:' . str_repeat('a', 64),
-            $identity,
-            'paper-modern-run-001',
-        );
 
         return new PaperCanonicalPreparedEffect(
             $plan,

@@ -236,7 +236,8 @@ final readonly class CanonicalPortfolioReservation
             || $this->transitionInputHashes !== [$this->portfolioInputHash]
             || $this->version !== 1
             || $this->previousStateHash !== null
-            || $this->observedAt != $plan->createdAt
+            || $this->observedAt < $plan->createdAt
+            || $this->observedAt > $plan->expiresAt
             || !hash_equals($expectedStateHash, $this->stateHash)
         ) {
             throw new CanonicalPortfolioException('canonical_portfolio_reservation_opening_state_invalid');

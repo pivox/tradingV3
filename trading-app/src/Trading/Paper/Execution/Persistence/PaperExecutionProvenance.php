@@ -40,7 +40,9 @@ final class PaperExecutionProvenance
 
     /** @var list<string> */
     private const MODERN_MARKER_KEYS = [
+        'mode_id',
         'mode_version',
+        'setup_id',
         'setup_version',
         'condition_catalog_hash',
     ];

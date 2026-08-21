@@ -78,6 +78,9 @@ final class PaperCanonicalPreparedEffectCodec
             $plan = CanonicalOrderPlan::fromArray($payload['plan']);
             $proof = CanonicalPortfolioAdmissionProof::fromArray($payload['admission_proof']);
             $lineage = LineageContext::fromArray($payload['lineage']);
+            if ($lineage->toArray() !== $payload['lineage']) {
+                throw new \InvalidArgumentException();
+            }
             $snapshot = $lineage->effectiveConfigSnapshot;
             if ($snapshot === null) {
                 throw new \InvalidArgumentException();

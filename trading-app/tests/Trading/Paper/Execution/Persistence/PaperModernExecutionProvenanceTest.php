@@ -106,6 +106,42 @@ final class PaperModernExecutionProvenanceTest extends TestCase
         }
     }
 
+    public function testExtractionRejectsEveryUnambiguousPartialModernIdentityMarker(): void
+    {
+        $legacy = PaperExecutionCell::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            self::SNAPSHOT_ID,
+            'regular',
+            'legacy-run-001',
+        )->provenance(PaperProfileEligibility::REFERENCE_ONLY);
+
+        foreach (['mode_id', 'mode_version', 'setup_id', 'setup_version', 'condition_catalog_hash'] as $marker) {
+            try {
+                PaperExecutionProvenance::extract($legacy + [$marker => 'partial-modern-value']);
+                self::fail(sprintf('Partial modern marker %s was silently discarded.', $marker));
+            } catch (\InvalidArgumentException $exception) {
+                self::assertSame('paper_execution_provenance_invalid', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testExtractionPreservesLegacyPayloadsWithGenericSideAndConfigHashFields(): void
+    {
+        $legacy = PaperExecutionCell::create(
+            PaperMarketDataNetwork::TESTNET,
+            PaperMarketDataVenue::HYPERLIQUID,
+            self::SNAPSHOT_ID,
+            'regular',
+            'legacy-run-001',
+        )->provenance(PaperProfileEligibility::REFERENCE_ONLY);
+
+        self::assertSame($legacy, PaperExecutionProvenance::extract($legacy + [
+            'side' => 1,
+            'config_hash' => self::SNAPSHOT_ID,
+        ]));
+    }
+
     private static function modernCell(): PaperExecutionCell
     {
         $conditionHash = 'sha256:' . str_repeat('c', 64);

@@ -25,9 +25,12 @@ The modern effect contains exactly:
 - the v2 Paper cell provenance;
 - a checksum over the canonical payload.
 
-The codec uses the existing plan and admission-proof wire contracts. Decode
-reconstructs the opening reservation from the proof, plan, and portfolio policy
-compiled from the lineage effective-config snapshot. This preserves the
+The codec uses the existing plan contract and an admission-proof v2 wire
+contract that authenticates the actual admission timestamp. Decode reconstructs
+the opening reservation at that timestamp from the proof, plan, and portfolio
+policy compiled from the lineage effective-config snapshot. Legacy v1 proofs
+remain readable and verifiable when an existing reservation supplies the
+timestamp, but cannot independently open a new reservation. This preserves the
 explicit serialization ban on `CanonicalPortfolioReservation` while proving
 that the recreated state hash is the authenticated opening state.
 
@@ -45,6 +48,8 @@ Rehydrating a modern cell from durable provenance requires:
   market-data venue;
 - the plan and lineage exchange to equal that public venue;
 - the plan environment to equal the Paper network;
+- the portfolio scope network and account namespace to equal the reconstructed
+  v2 Paper cell;
 - plan, lineage, admission proof, and cell identities to match exactly.
 
 The execution adapter and public/config venue are intentionally distinct. The
