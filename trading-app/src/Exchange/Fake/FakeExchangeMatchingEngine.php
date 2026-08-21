@@ -18,6 +18,7 @@ use App\Exchange\Enum\ExchangeOrderType;
 use App\Exchange\Enum\ExchangePositionSide;
 use App\Exchange\Enum\ExchangeTimeInForce;
 use App\Trading\Paper\Execution\Persistence\PaperExecutionProvenance;
+use App\Trading\Paper\Execution\Fake\PaperCanonicalFakeInstrumentDescriptor;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 use Brick\Math\RoundingMode;
@@ -58,6 +59,7 @@ final readonly class FakeExchangeMatchingEngine
         'canonical_dispatch_source',
         'canonical_plan_expires_at',
         'canonical_cancel_after_at',
+        PaperCanonicalFakeInstrumentDescriptor::METADATA_KEY,
     ];
     /**
      * @var string[]

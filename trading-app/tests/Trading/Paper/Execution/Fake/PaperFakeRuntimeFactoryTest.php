@@ -12,8 +12,10 @@ use App\Exchange\Fake\FakeExchangeOrderBook;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntime;
 use App\Trading\Paper\Execution\Fake\PaperFakeRuntimeFactory;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
+use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
+use App\Tests\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodecTest;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Clock\MockClock;
@@ -93,6 +95,37 @@ final class PaperFakeRuntimeFactoryTest extends TestCase
                 @rmdir($otherRoot);
             }
         }
+    }
+
+    public function testModernRuntimeRequiresAndAcceptsItsCanonicalInstrumentBinding(): void
+    {
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture(contractSize: 0.01);
+        $provenance = $effect->provenance;
+        $network = PaperMarketDataNetwork::from($provenance['paper_network']);
+        $venue = PaperMarketDataVenue::from($provenance['market_data_venue']);
+        $cell = PaperExecutionCell::createModern(
+            $network,
+            $venue,
+            $provenance['configuration_snapshot_id'],
+            PaperModernStrategyIdentity::fromDurableIdentity(
+                $network,
+                $venue,
+                $provenance['mode_id'],
+                $provenance['mode_version'],
+                $provenance['setup_id'],
+                $provenance['setup_version'],
+                $provenance['side'],
+                $provenance['config_hash'],
+                $provenance['condition_catalog_hash'],
+            ),
+            $provenance['run_id'],
+        );
+        $runtime = (new PaperFakeRuntimeFactory($this->root, new MockClock('2026-08-10T12:00:00Z')))
+            ->forCell($cell);
+
+        self::assertFalse($runtime->adapter->setLeverage('BTCUSDT', 2, 'isolated'));
+        self::assertNotSame('', $runtime->bindCanonicalInstrument($effect->plan));
+        self::assertTrue($runtime->adapter->setLeverage('BTCUSDT', 2, 'isolated'));
     }
 
     public function testPermissiveOrSymlinkedRootIsRejected(): void
