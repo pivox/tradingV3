@@ -57,6 +57,22 @@ final class PaperCanonicalPreparedEffectCodecTest extends TestCase
         self::assertSame($effect->provenance, $decoded->provenance);
     }
 
+    public function testCanonicalCodecDiscriminatorOnlyClaimsItsOwnSchema(): void
+    {
+        $codec = new PaperCanonicalPreparedEffectCodec();
+        $encoded = $codec->encode(self::fixture());
+
+        self::assertTrue($codec->supports($encoded));
+        self::assertFalse($codec->supports(array_replace($encoded, [
+            'schema_version' => 'paper-canonical-prepared-effect.v2',
+        ])));
+        self::assertFalse($codec->supports([
+            'schema_version' => 2,
+            'payload' => [],
+            'payload_checksum' => str_repeat('0', 64),
+        ]));
+    }
+
     public function testTamperedOrCrossBoundCanonicalPreparedEffectFailsWithOneStableReason(): void
     {
         $encoded = (new PaperCanonicalPreparedEffectCodec())->encode(self::fixture());
