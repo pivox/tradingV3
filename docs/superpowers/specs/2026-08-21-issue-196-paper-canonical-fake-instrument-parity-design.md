@@ -97,4 +97,3 @@ Focused tests prove:
 The adjacent Paper canonical dispatcher/runtime, Fake adapter/matching,
 funding, liquidation and restart suites, targeted PHPStan, container/YAML lint
 and repository CI must remain green.
-
