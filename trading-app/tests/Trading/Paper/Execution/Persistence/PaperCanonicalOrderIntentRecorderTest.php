@@ -82,6 +82,10 @@ final class PaperCanonicalOrderIntentRecorderTest extends KernelTestCase
         self::assertSame((string) $effect->plan->quantity, (string) $intent->getSize());
         self::assertSame($effect->plan->planHash, $intent->getRawInputs()['plan_hash'] ?? null);
         self::assertSame($effect->plan->toArray(), $intent->getRawInputs()['plan'] ?? null);
+        self::assertSame(65, $this->em->getClassMetadata(OrderIntent::class)->getFieldMapping('price')->precision);
+        self::assertSame(30, $this->em->getClassMetadata(OrderIntent::class)->getFieldMapping('price')->scale);
+        self::assertSame(65, $this->em->getClassMetadata(OrderProtection::class)->getFieldMapping('price')->precision);
+        self::assertSame(30, $this->em->getClassMetadata(OrderProtection::class)->getFieldMapping('price')->scale);
         self::assertArrayNotHasKey(
             'effective_config_snapshot',
             $intent->getRawInputs()['canonical_identity'] ?? [],
@@ -188,6 +192,39 @@ final class PaperCanonicalOrderIntentRecorderTest extends KernelTestCase
         $lineage = $this->em->getRepository(TradeLineage::class)->findOneBy(['orderIntent' => $intent]);
         self::assertInstanceOf(TradeLineage::class, $lineage);
         self::assertSame('fake-canonical-order-1', $lineage->getExchangeOrderId());
+    }
+
+    public function testAcknowledgeRejectsCrossBoundExecutionResultBeforeMutation(): void
+    {
+        $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        $recorder = $this->recorder();
+        $identity = $recorder->reserve(
+            $effect->plan,
+            $effect->lineage,
+            $effect->decisionKey,
+            $effect->executionTimeframe,
+            ['client_order_id' => 'CIDPAPERCANONICAL005'],
+            $effect->provenance,
+        );
+
+        try {
+            $recorder->acknowledge($identity, new ExecutionResult(
+                'ANOTHERCLIENTORDER',
+                'cross-bound-order',
+                ExecutionResult::STATUS_SUBMITTED,
+            ));
+            self::fail('A cross-bound execution result mutated the canonical intent.');
+        } catch (\LogicException $exception) {
+            self::assertSame('paper_canonical_order_intent_identity_conflict', $exception->getMessage());
+        }
+
+        $intent = $this->em->getRepository(OrderIntent::class)->find($identity['order_intent_id']);
+        self::assertInstanceOf(OrderIntent::class, $intent);
+        self::assertSame(OrderIntent::STATUS_READY_TO_SEND, $intent->getStatus());
+        self::assertNull($intent->getExchangeOrderId());
+        $lineage = $this->em->getRepository(TradeLineage::class)->findOneBy(['orderIntent' => $intent]);
+        self::assertInstanceOf(TradeLineage::class, $lineage);
+        self::assertNull($lineage->getExchangeOrderId());
     }
 
     public function testRecorderHasNoLegacyPlanDependency(): void

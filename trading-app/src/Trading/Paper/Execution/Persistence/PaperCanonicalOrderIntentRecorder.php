@@ -110,8 +110,8 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
             'open_type' => OrderIntent::OPEN_TYPE_ISOLATED,
             'position_mode' => OrderIntent::POSITION_MODE_ONE_WAY,
             'leverage' => $plan->finalLeverage,
-            'price' => $this->decimal($plan->entryPrice),
-            'size' => $this->decimal($plan->quantity),
+            'price' => $this->columnDecimal($plan->entryPrice, 65, 30),
+            'size' => $this->columnDecimal($plan->quantity, 36, 18),
             'client_order_id' => $clientOrderId,
             'preset_mode' => OrderIntent::PRESET_MODE_NONE,
             'strategy_profile' => $plan->modeId,
@@ -173,6 +173,7 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
         $intent = $this->intents->findIntentById($orderIntentId);
         if (!$intent instanceof OrderIntent
             || $intent->getClientOrderId() !== $clientOrderId
+            || $result->clientOrderId !== $clientOrderId
             || $intent->getExchange() !== Exchange::FAKE->value
             || !$intent->hasCompleteCanonicalIdentity()
         ) {
@@ -254,18 +255,37 @@ final readonly class PaperCanonicalOrderIntentRecorder implements PaperCanonical
         }
     }
 
+    private function columnDecimal(float $value, int $precision, int $scale): string
+    {
+        try {
+            $decimal = CanonicalOrderPlanDecimal::fromFloat(
+                $value,
+                'paper_canonical_order_intent_invalid',
+            )->stripTrailingZeros();
+            $digits = ltrim((string) $decimal->getUnscaledValue(), '-');
+            $integerDigits = max(0, strlen($digits) - $decimal->getScale());
+            if ($decimal->getScale() > $scale || $integerDigits > $precision - $scale) {
+                throw new \InvalidArgumentException();
+            }
+
+            return (string) $decimal;
+        } catch (\Throwable $exception) {
+            throw new \InvalidArgumentException('paper_canonical_order_intent_invalid', 0, $exception);
+        }
+    }
+
     /** @return list<array{type: string, price: string, metadata: array<string, mixed>}> */
     private function protections(CanonicalOrderPlan $plan): array
     {
         $protections = [[
             'type' => OrderProtection::TYPE_STOP_LOSS,
-            'price' => $this->decimal($plan->stopPrice),
+            'price' => $this->columnDecimal($plan->stopPrice, 65, 30),
             'metadata' => ['kind' => 'canonical_stop', 'plan_hash' => $plan->planHash],
         ]];
         foreach ($plan->targets as $target) {
             $protections[] = [
                 'type' => OrderProtection::TYPE_TAKE_PROFIT,
-                'price' => $this->decimal($target->price),
+                'price' => $this->columnDecimal($target->price, 65, 30),
                 'metadata' => [
                     'kind' => 'canonical_target',
                     'target_id' => $target->id,

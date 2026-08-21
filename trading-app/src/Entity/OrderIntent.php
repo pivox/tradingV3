@@ -95,7 +95,7 @@ class OrderIntent implements PaperExecutionProvenanceAwareInterface
     #[ORM\Column(type: Types::STRING, length: 20)]
     private string $positionMode; // one_way, hedge
 
-    #[ORM\Column(type: Types::DECIMAL, precision: 24, scale: 12, nullable: true)]
+    #[ORM\Column(type: Types::DECIMAL, precision: 65, scale: 30, nullable: true)]
     private ?string $price = null; // Prix limit (pour type=limit)
 
     #[ORM\Column(type: Types::DECIMAL, precision: 36, scale: 18)]
