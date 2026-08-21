@@ -206,6 +206,12 @@ final readonly class PaperCanonicalFakeReservationDescriptor
             $reservation = $effect->reservation->assertCanonicalOpeningState($effect->plan);
             $checks = [
                 [$effect->decisionKey, $this->string('decision_key')],
+                [$reservation->scope->network, $this->string('paper_network')],
+                [$reservation->scope->exchange, $this->string('public_venue')],
+                [$reservation->scope->environment, $this->string('paper_network')],
+                [$reservation->scope->accountId, $this->string('account_namespace')],
+                [$reservation->scope->modeId, $this->string('mode_id')],
+                [$reservation->scope->quoteCurrency, $this->string('quote_currency')],
                 [$effect->plan->modeId, $this->string('mode_id')],
                 [$effect->plan->modeVersion, $this->string('mode_version')],
                 [$effect->plan->setupId, $this->string('setup_id')],
