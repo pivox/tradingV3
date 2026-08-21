@@ -110,6 +110,8 @@ services:
             - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperPublicLiveSource.php'
             - '../src/Trading/Paper/Hyperliquid/Live/HyperliquidPaperLiveCheckpointStore.php'
             - '../src/Trading/Paper/Hyperliquid/Live/PawlHyperliquidPaperPublicWebSocketTransport.php'
+            # Deliberately dormant until the production canonical evidence provider is complete.
+            - '../src/Trading/Paper/Execution/Strategy/PaperCanonicalStrategyPreparation.php'
 
     App\Exchange\Fake\FakeDailyLossCapPolicy:
         arguments:
