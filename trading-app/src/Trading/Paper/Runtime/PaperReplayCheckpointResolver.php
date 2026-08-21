@@ -35,6 +35,8 @@ final readonly class PaperReplayCheckpointResolver
         if ($dataset['dataset_id'] !== $manifest->datasetId
             || $manifest->eventsFileSha256 === null
             || !hash_equals($dataset['events_file_sha256'], $manifest->eventsFileSha256)
+            || ($dataset['source_build_version'] !== null
+                && !hash_equals($dataset['source_build_version'], $manifest->recorderVersion))
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }

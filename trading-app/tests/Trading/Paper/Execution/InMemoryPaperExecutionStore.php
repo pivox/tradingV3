@@ -33,7 +33,7 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     private int $acks = 0;
     private int $retries = 0;
     private int $failures = 0;
-    /** @var array{dataset_id: string, events_file_sha256: string}|null */
+    /** @var array{dataset_id: string, events_file_sha256: string, source_build_version: string|null}|null */
     private ?array $datasetIdentity = null;
     /** @var array<string, PaperProfileEligibility> */
     private array $registeredCells = [];
@@ -44,12 +44,39 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
         ++$this->registrationWrites;
         $this->registeredCells[$cell->id] = $eligibility;
     }
-    public function bindDataset(PaperExecutionCell $cell, string $datasetId, string $eventsFileSha256): void
+    public function bindDataset(
+        PaperExecutionCell $cell,
+        string $datasetId,
+        string $eventsFileSha256,
+        ?string $sourceBuildVersion = null,
+    ): void
     {
+        if (($sourceBuildVersion !== null
+                && ($sourceBuildVersion === '' || trim($sourceBuildVersion) !== $sourceBuildVersion))
+            || ($cell->isModern() && $sourceBuildVersion === null)
+        ) {
+            throw new \InvalidArgumentException('paper_execution_dataset_identity_invalid');
+        }
         ++$this->registrationWrites;
-        $identity = ['dataset_id' => $datasetId, 'events_file_sha256' => $eventsFileSha256];
-        if ($this->datasetIdentity !== null && $this->datasetIdentity !== $identity) {
-            throw new \LogicException('paper_execution_dataset_identity_conflict');
+        $identity = [
+            'dataset_id' => $datasetId,
+            'events_file_sha256' => $eventsFileSha256,
+            'source_build_version' => $sourceBuildVersion,
+        ];
+        if ($this->datasetIdentity !== null) {
+            if ($this->datasetIdentity['dataset_id'] !== $datasetId
+                || !hash_equals($this->datasetIdentity['events_file_sha256'], $eventsFileSha256)
+                || ($sourceBuildVersion !== null
+                    && $this->datasetIdentity['source_build_version'] !== null
+                    && !hash_equals($this->datasetIdentity['source_build_version'], $sourceBuildVersion))
+            ) {
+                throw new \LogicException('paper_execution_dataset_identity_conflict');
+            }
+            if ($this->datasetIdentity['source_build_version'] === null && $sourceBuildVersion !== null) {
+                $this->datasetIdentity['source_build_version'] = $sourceBuildVersion;
+            }
+
+            return;
         }
         $this->datasetIdentity = $identity;
     }
@@ -69,11 +96,18 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
             $this->killed,
             $this->datasetIdentity['dataset_id'] ?? null,
             $this->datasetIdentity['events_file_sha256'] ?? null,
+            $this->datasetIdentity['source_build_version'] ?? null,
         );
     }
     public function datasetIdentity(PaperExecutionCell $cell): array
     {
-        return $this->datasetIdentity ?? throw new \LogicException('paper_execution_dataset_identity_missing');
+        $identity = $this->datasetIdentity
+            ?? throw new \LogicException('paper_execution_dataset_identity_missing');
+        if ($cell->isModern() && $identity['source_build_version'] === null) {
+            throw new \LogicException('paper_execution_dataset_identity_missing');
+        }
+
+        return $identity;
     }
     public function transactional(callable $operation): mixed { return $operation(); }
 

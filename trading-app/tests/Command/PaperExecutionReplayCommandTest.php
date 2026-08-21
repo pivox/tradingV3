@@ -193,6 +193,53 @@ final class PaperExecutionReplayCommandTest extends TestCase
         }
     }
 
+    public function testReplayPersistsExactVerifiedRecorderVersionWithoutEmittingIt(): void
+    {
+        $root = (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()) . '/paper_command_source_build_' . bin2hex(random_bytes(5));
+        $dataset = $root . '/dataset';
+        try {
+            mkdir($dataset, 0700, true);
+            foreach (['manifest.json', 'events.ndjson'] as $file) {
+                copy(__DIR__ . '/../Fixtures/PaperExecution/okx-mainnet-cell/' . $file, $dataset . '/' . $file);
+                chmod($dataset . '/' . $file, 0600);
+            }
+            $configuration = $root . '/configuration.json';
+            file_put_contents($configuration, '{"strategy":{}}');
+            chmod($configuration, 0600);
+            $store = new InMemoryPaperExecutionStore();
+            $coordinator = new class implements PaperEventCoordinatorInterface {
+                public ?PaperExecutionCell $cell = null;
+
+                public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void
+                {
+                    $this->cell = $cell;
+                }
+
+                public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
+                {
+                }
+            };
+            $verifier = new PaperDatasetVerifier();
+            $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), new PaperReplayClock());
+            $tester = new CommandTester($this->command($verifier, $reader, $store, $coordinator));
+
+            self::assertSame(Command::SUCCESS, $tester->execute([
+                '--dataset' => $dataset,
+                '--configuration' => $configuration,
+                '--profile' => 'regular',
+                '--run-id' => 'paper-source-build-run',
+            ]));
+            self::assertNotNull($coordinator->cell);
+            self::assertSame('1.0.0', $store->datasetIdentity($coordinator->cell)['source_build_version']);
+            self::assertStringNotContainsString('1.0.0', $tester->getDisplay());
+        } finally {
+            foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
+            @rmdir($dataset);
+            @unlink($root . '/configuration.json');
+            @rmdir($root);
+        }
+    }
+
     private function event(int $second): PaperMarketEvent
     {
         $timestamp = new \DateTimeImmutable(sprintf('2026-08-01T10:00:%02dZ', $second));

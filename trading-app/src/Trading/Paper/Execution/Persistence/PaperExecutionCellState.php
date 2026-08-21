@@ -11,11 +11,15 @@ final readonly class PaperExecutionCellState
         public bool $killed,
         public ?string $datasetId,
         public ?string $eventsFileSha256,
+        public ?string $sourceBuildVersion,
     ) {
-        if (!$registered && ($killed || $datasetId !== null || $eventsFileSha256 !== null)) {
+        if (!$registered && ($killed || $datasetId !== null || $eventsFileSha256 !== null || $sourceBuildVersion !== null)) {
             throw new \InvalidArgumentException('paper_execution_cell_state_invalid');
         }
         if (($datasetId === null) !== ($eventsFileSha256 === null)) {
+            throw new \InvalidArgumentException('paper_execution_cell_state_invalid');
+        }
+        if ($datasetId === null && $sourceBuildVersion !== null) {
             throw new \InvalidArgumentException('paper_execution_cell_state_invalid');
         }
         if ($datasetId !== null
@@ -24,18 +28,24 @@ final readonly class PaperExecutionCellState
         ) {
             throw new \InvalidArgumentException('paper_execution_cell_state_invalid');
         }
+        if ($sourceBuildVersion !== null
+            && ($sourceBuildVersion === '' || trim($sourceBuildVersion) !== $sourceBuildVersion)
+        ) {
+            throw new \InvalidArgumentException('paper_execution_cell_state_invalid');
+        }
     }
 
     public static function absent(): self
     {
-        return new self(false, false, null, null);
+        return new self(false, false, null, null, null);
     }
 
     public static function registered(
         bool $killed,
         ?string $datasetId,
         ?string $eventsFileSha256,
+        ?string $sourceBuildVersion = null,
     ): self {
-        return new self(true, $killed, $datasetId, $eventsFileSha256);
+        return new self(true, $killed, $datasetId, $eventsFileSha256, $sourceBuildVersion);
     }
 }
