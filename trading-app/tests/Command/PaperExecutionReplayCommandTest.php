@@ -155,7 +155,7 @@ final class PaperExecutionReplayCommandTest extends TestCase
         }
     }
 
-    public function testModernReplayStopsBeforeAnyPaperStateRegistration(): void
+    public function testModernReplayRegistersExactCellAndConsumesVerifiedDataset(): void
     {
         $root = (realpath(sys_get_temp_dir()) ?: sys_get_temp_dir()) . '/paper_command_modern_' . bin2hex(random_bytes(5));
         $dataset = $root . '/dataset';
@@ -169,11 +169,21 @@ final class PaperExecutionReplayCommandTest extends TestCase
             file_put_contents($configuration, '{"strategy":{"mode":"day_trading"}}');
             chmod($configuration, 0600);
             $store = new InMemoryPaperExecutionStore();
+            $coordinator = new class implements PaperEventCoordinatorInterface {
+                public int $consumed = 0;
+
+                public function assertReady(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, array $symbols): void {}
+
+                public function consumeAt(PaperExecutionCell $cell, PaperProfileEligibility $eligibility, string $datasetId, int $sourcePosition, PaperMarketEvent $event): void
+                {
+                    ++$this->consumed;
+                }
+            };
             $verifier = new PaperDatasetVerifier();
             $reader = new PaperReplayReader($verifier, new PaperReplayCheckpointStore(), new PaperReplayClock());
-            $tester = new CommandTester($this->command($verifier, $reader, $store));
+            $tester = new CommandTester($this->command($verifier, $reader, $store, $coordinator));
 
-            self::assertSame(Command::INVALID, $tester->execute([
+            self::assertSame(Command::SUCCESS, $tester->execute([
                 '--dataset' => $dataset,
                 '--configuration' => $configuration,
                 '--mode-id' => 'day_trading',
@@ -183,8 +193,9 @@ final class PaperExecutionReplayCommandTest extends TestCase
                 '--side' => 'long',
                 '--run-id' => 'paper-modern-run-001',
             ]));
-            self::assertStringContainsString('paper_modern_strategy_bridge_unavailable', $tester->getDisplay());
-            self::assertSame(0, $store->registrationWrites);
+            self::assertGreaterThan(0, $coordinator->consumed);
+            self::assertSame(3, $store->registrationWrites);
+            self::assertStringContainsString('profile=day_trading', $tester->getDisplay());
         } finally {
             foreach (glob($dataset . '/*') ?: [] as $file) { @unlink($file); }
             @rmdir($dataset);

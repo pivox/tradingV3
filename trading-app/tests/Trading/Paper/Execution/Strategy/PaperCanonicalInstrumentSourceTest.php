@@ -10,6 +10,7 @@ use App\Trading\Paper\Execution\Identity\PaperModernStrategyIdentity;
 use App\Trading\Paper\Execution\Market\PaperKlineProvider;
 use App\Trading\Paper\Execution\Market\PaperMarketStateProjector;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalInstrumentSource;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalInstrumentEvidence;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -19,6 +20,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(PaperCanonicalInstrumentSource::class)]
+#[CoversClass(PaperCanonicalInstrumentEvidence::class)]
 final class PaperCanonicalInstrumentSourceTest extends TestCase
 {
     public function testReturnsLatestCompleteOkxMetadataWithExactEventLineage(): void
@@ -49,6 +51,29 @@ final class PaperCanonicalInstrumentSourceTest extends TestCase
         self::assertNull($snapshot->symbolLeverageCap);
         self::assertSame('2026-08-01T10:00:58.000000Z', $snapshot->observedAt->format('Y-m-d\TH:i:s.u\Z'));
         self::assertSame('sha256:' . $lateReceipt->eventId, $snapshot->inputHash);
+    }
+
+    public function testReturnsInstrumentAndTickFromTheSameMetadataRecord(): void
+    {
+        $metadata = $this->okxMetadata('1', '0.1');
+        $trigger = $this->trigger('2', '2026-08-01T10:01:01.000000Z');
+        $market = new PaperMarketStateProjector(new PaperKlineProvider());
+        $market->restore([$metadata, $trigger]);
+
+        $evidence = (new PaperCanonicalInstrumentSource(
+            $market,
+            new PaperReplayClock($trigger->receivedTimestamp),
+        ))->evidenceFor($this->cell(), $trigger);
+
+        self::assertNotNull($evidence);
+        self::assertSame(0.1, $evidence->tick->tickSize);
+        self::assertSame($evidence->instrument->exchange, $evidence->tick->exchange);
+        self::assertSame($evidence->instrument->environment, $evidence->tick->environment);
+        self::assertSame($evidence->instrument->symbol, $evidence->tick->symbol);
+        self::assertSame($evidence->instrument->marketType, $evidence->tick->marketType);
+        self::assertSame('2026-08-01T10:01:01.000000Z', $evidence->instrument->observedAt->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame('2026-08-01T10:01:01.000000Z', $evidence->tick->observedAt->format('Y-m-d\TH:i:s.u\Z'));
+        self::assertSame($evidence->instrument->inputHash, $evidence->tick->inputHash);
     }
 
     public function testReturnsNoEvidenceForUnavailableV1OrHyperliquidMetadata(): void

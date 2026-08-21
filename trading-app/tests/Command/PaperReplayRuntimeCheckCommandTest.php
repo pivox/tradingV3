@@ -92,7 +92,7 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertSame(0, $store->registrationWrites);
     }
 
-    public function testModernIdentityIsResolvedExactlyButRemainsBlockedWithoutCanonicalBridge(): void
+    public function testModernIdentityIsResolvedExactlyAndReportedRunnableWithoutStateWrites(): void
     {
         $store = new InMemoryPaperExecutionStore();
         $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
@@ -106,13 +106,13 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
             '--side' => 'long',
         ];
 
-        self::assertSame(Command::INVALID, $tester->execute($options));
+        self::assertSame(Command::SUCCESS, $tester->execute($options));
         $payload = json_decode(trim($tester->getDisplay()), true, 32, JSON_THROW_ON_ERROR);
 
-        self::assertFalse($payload['ready']);
-        self::assertFalse($payload['runtime_ready']);
+        self::assertTrue($payload['ready']);
+        self::assertTrue($payload['runtime_ready']);
         self::assertFalse($payload['baseline_eligible']);
-        self::assertSame('paper_modern_strategy_bridge_unavailable', $payload['blocker']);
+        self::assertArrayNotHasKey('blocker', $payload);
         self::assertSame([
             'schema_version' => 2,
             'mode_id' => 'day_trading',

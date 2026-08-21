@@ -30,9 +30,6 @@ final readonly class PaperReplayPreparation
         if ($this->blocker !== null) {
             throw new \LogicException($this->blocker);
         }
-        if ($this->cell->isModern()) {
-            throw new \LogicException('paper_modern_strategy_bridge_unavailable');
-        }
     }
 
     /** @return array<string, mixed> */

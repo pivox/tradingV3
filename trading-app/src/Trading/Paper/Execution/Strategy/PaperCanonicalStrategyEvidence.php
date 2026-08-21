@@ -21,6 +21,7 @@ final readonly class PaperCanonicalStrategyEvidence
         public CanonicalIndicatorProjection $indicatorProjection,
         public string $sourceDatasetId,
         public string $sourceEventsFileSha256,
+        public string $sourceBuildVersion,
         public CanonicalOrderPlanBuildRequest $orderPlanRequest,
         public CanonicalPortfolioScope $portfolioScope,
         public CanonicalPortfolioSnapshot $portfolioSnapshot,

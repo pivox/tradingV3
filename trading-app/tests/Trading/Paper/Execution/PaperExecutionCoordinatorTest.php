@@ -102,6 +102,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             self::assertSame(0, $legacyIntents->acknowledgements);
             self::assertSame('dataset-modern-1', $canonicalStrategy->observedSourceDatasetId);
             self::assertSame(str_repeat('4', 64), $canonicalStrategy->observedSourceEventsFileSha256);
+            self::assertSame('paper-dataset-recorder.v2', $canonicalStrategy->observedSourceBuildVersion);
             self::assertSame(2, $coordinator->counters($cell)->requested);
             self::assertSame(2, $coordinator->counters($cell)->acknowledged);
             self::assertSame([], $store->pendingEffects($cell));
@@ -502,6 +503,7 @@ final class DeterministicCanonicalPaperStrategy implements PaperCanonicalStrateg
 {
     public ?string $observedSourceDatasetId = null;
     public ?string $observedSourceEventsFileSha256 = null;
+    public ?string $observedSourceBuildVersion = null;
 
     public function __construct(private readonly PaperCanonicalPreparedEffect $effect) {}
 
@@ -510,9 +512,11 @@ final class DeterministicCanonicalPaperStrategy implements PaperCanonicalStrateg
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): ?PaperCanonicalStrategyDecision {
         $this->observedSourceDatasetId = $sourceDatasetId;
         $this->observedSourceEventsFileSha256 = $sourceEventsFileSha256;
+        $this->observedSourceBuildVersion = $sourceBuildVersion;
 
         return PaperCanonicalStrategyDecision::fromPreparedEffect($this->effect);
     }

@@ -26,6 +26,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): ?PaperCanonicalStrategyInput {
         $identity = $cell->modernIdentity;
         if ($identity === null) {
@@ -36,6 +37,8 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         }
         if (preg_match('/\A[a-z0-9][a-z0-9._-]{2,127}\z/D', $sourceDatasetId) !== 1
             || preg_match('/\A[a-f0-9]{64}\z/D', $sourceEventsFileSha256) !== 1
+            || $sourceBuildVersion === ''
+            || trim($sourceBuildVersion) !== $sourceBuildVersion
         ) {
             throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
         }
@@ -45,6 +48,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
             $event,
             $sourceDatasetId,
             $sourceEventsFileSha256,
+            $sourceBuildVersion,
         );
         if ($evidence === null) {
             return null;
@@ -53,6 +57,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
             $evidence,
             $sourceDatasetId,
             $sourceEventsFileSha256,
+            $sourceBuildVersion,
         )) {
             throw new \LogicException('paper_canonical_strategy_dataset_mismatch');
         }
@@ -80,6 +85,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
         PaperCanonicalStrategyEvidence $evidence,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): bool {
         $projection = $evidence->indicatorProjection->toArray();
         $binding = $projection['dataset_binding'] ?? null;
@@ -89,6 +95,7 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
 
         return $evidence->sourceDatasetId === $sourceDatasetId
             && hash_equals($evidence->sourceEventsFileSha256, $sourceEventsFileSha256)
+            && hash_equals($evidence->sourceBuildVersion, $sourceBuildVersion)
             && is_string($projectionSourceChecksum)
             && hash_equals('sha256:' . $sourceEventsFileSha256, $projectionSourceChecksum);
     }

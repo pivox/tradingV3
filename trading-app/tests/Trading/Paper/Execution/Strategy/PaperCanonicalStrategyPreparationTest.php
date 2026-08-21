@@ -26,6 +26,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(PaperCanonicalStrategyPreparation::class)]
 final class PaperCanonicalStrategyPreparationTest extends TestCase
 {
+    private const SOURCE_BUILD_VERSION = 'paper-dataset-recorder.v2';
+
     public function testMissingEvidenceProducesNoDecisionWithoutRunningCanonicalRuntime(): void
     {
         $assembler = new RecordingCanonicalInputAssembler(null);
@@ -36,12 +38,14 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             self::event(),
             'paper-dataset-001',
             str_repeat('a', 64),
+            self::SOURCE_BUILD_VERSION,
         );
 
         self::assertNull($decision);
         self::assertSame(0, $runtime->calls);
         self::assertSame('paper-dataset-001', $assembler->sourceDatasetId);
         self::assertSame(str_repeat('a', 64), $assembler->sourceEventsFileSha256);
+        self::assertSame(self::SOURCE_BUILD_VERSION, $assembler->sourceBuildVersion);
     }
 
     public function testNoTradeOutcomeProducesNoPaperDecisionAndUsesExactCellPolicy(): void
@@ -57,6 +61,7 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             self::event(),
             'paper-dataset-001',
             str_repeat('a', 64),
+            self::SOURCE_BUILD_VERSION,
         ));
         self::assertSame(1, $runtime->calls);
         self::assertNotNull($runtime->policy);
@@ -95,7 +100,7 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         $decision = (new PaperCanonicalStrategyPreparation(
             new RecordingCanonicalInputAssembler(self::input()),
             new RecordingCanonicalStrategyRuntime($outcome),
-        ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64));
+        ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64), self::SOURCE_BUILD_VERSION);
 
         self::assertNotNull($decision);
         self::assertSame($effect->plan->planHash, $decision->plan->planHash);
@@ -127,6 +132,7 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
             self::event(),
             'paper-dataset-001',
             str_repeat('a', 64),
+            self::SOURCE_BUILD_VERSION,
         );
 
         self::assertNotNull($runtime->policy);
@@ -153,7 +159,7 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         (new PaperCanonicalStrategyPreparation(
             new RecordingCanonicalInputAssembler(self::input()),
             new RecordingCanonicalStrategyRuntime($outcome),
-        ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64));
+        ))->prepareFor(self::cell(), self::event(), 'paper-dataset-001', str_repeat('a', 64), self::SOURCE_BUILD_VERSION);
     }
 
     private static function input(): PaperCanonicalStrategyInput
@@ -230,6 +236,7 @@ final class RecordingCanonicalInputAssembler implements PaperCanonicalStrategyIn
 {
     public ?string $sourceDatasetId = null;
     public ?string $sourceEventsFileSha256 = null;
+    public ?string $sourceBuildVersion = null;
 
     public function __construct(private readonly ?PaperCanonicalStrategyInput $input)
     {
@@ -240,9 +247,11 @@ final class RecordingCanonicalInputAssembler implements PaperCanonicalStrategyIn
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): ?PaperCanonicalStrategyInput {
         $this->sourceDatasetId = $sourceDatasetId;
         $this->sourceEventsFileSha256 = $sourceEventsFileSha256;
+        $this->sourceBuildVersion = $sourceBuildVersion;
 
         return $this->input;
     }

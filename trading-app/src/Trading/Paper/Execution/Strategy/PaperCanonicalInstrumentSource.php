@@ -15,6 +15,7 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\Trading\Paper\Replay\PaperReplayClock;
 use App\TradingCore\Risk\Canonical\CanonicalInstrumentSnapshot;
 use App\TradingCore\Risk\Canonical\CanonicalRiskCalculationRequest;
+use App\TradingCore\OrderPlan\Canonical\CanonicalTickSnapshot;
 use Brick\Math\BigDecimal;
 
 final readonly class PaperCanonicalInstrumentSource
@@ -30,6 +31,42 @@ final readonly class PaperCanonicalInstrumentSource
         PaperExecutionCell $cell,
         PaperMarketEvent $trigger,
     ): ?CanonicalInstrumentSnapshot {
+        $metadata = $this->metadataFor($cell, $trigger);
+
+        return $metadata === null
+            ? null
+            : $this->instrumentFor($metadata, new \DateTimeImmutable($metadata->happenedAt));
+    }
+
+    public function evidenceFor(
+        PaperExecutionCell $cell,
+        PaperMarketEvent $trigger,
+    ): ?PaperCanonicalInstrumentEvidence {
+        $metadata = $this->metadataFor($cell, $trigger);
+        if ($metadata === null) {
+            return null;
+        }
+        $observedAt = \DateTimeImmutable::createFromInterface($this->clock->now());
+        $inputHash = 'sha256:' . $metadata->sourceRecordId;
+
+        return new PaperCanonicalInstrumentEvidence(
+            $this->instrumentFor($metadata, $observedAt),
+            new CanonicalTickSnapshot(
+                exchange: $metadata->marketDataVenue,
+                environment: $metadata->sourceNetwork,
+                symbol: $metadata->symbol,
+                marketType: 'perpetual',
+                tickSize: $this->finitePositive(BigDecimal::of($metadata->priceTick)),
+                observedAt: $observedAt,
+                inputHash: $inputHash,
+            ),
+        );
+    }
+
+    private function metadataFor(
+        PaperExecutionCell $cell,
+        PaperMarketEvent $trigger,
+    ): ?NormalizedBacktestInstrumentMetadata {
         if (!$cell->isModern()) {
             throw new \LogicException('paper_canonical_strategy_cell_identity_missing');
         }
@@ -92,6 +129,13 @@ final readonly class PaperCanonicalInstrumentSource
             return null;
         }
 
+        return $metadata;
+    }
+
+    private function instrumentFor(
+        NormalizedBacktestInstrumentMetadata $metadata,
+        \DateTimeImmutable $observedAt,
+    ): CanonicalInstrumentSnapshot {
         $contractSize = $this->finitePositive(
             BigDecimal::of($metadata->contractValue)->multipliedBy($metadata->contractMultiplier),
         );
@@ -111,6 +155,8 @@ final readonly class PaperCanonicalInstrumentSource
             throw new \LogicException('paper_canonical_instrument_constraints_invalid');
         }
 
+        $inputHash = 'sha256:' . $metadata->sourceRecordId;
+
         return new CanonicalInstrumentSnapshot(
             exchange: $metadata->marketDataVenue,
             environment: $metadata->sourceNetwork,
@@ -124,8 +170,8 @@ final readonly class PaperCanonicalInstrumentSource
             marketMaxQuantity: $marketMaxQuantity,
             exchangeLeverageCap: $leverageCap,
             symbolLeverageCap: null,
-            observedAt: new \DateTimeImmutable($metadata->happenedAt),
-            inputHash: 'sha256:' . $metadata->sourceRecordId,
+            observedAt: $observedAt,
+            inputHash: $inputHash,
         );
     }
 
@@ -151,4 +197,3 @@ final readonly class PaperCanonicalInstrumentSource
         return $float;
     }
 }
-

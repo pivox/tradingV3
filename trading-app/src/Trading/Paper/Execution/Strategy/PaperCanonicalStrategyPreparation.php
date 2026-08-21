@@ -24,12 +24,14 @@ final readonly class PaperCanonicalStrategyPreparation implements PaperCanonical
         PaperMarketEvent $event,
         string $sourceDatasetId,
         string $sourceEventsFileSha256,
+        string $sourceBuildVersion,
     ): ?PaperCanonicalStrategyDecision {
         $input = $this->assembler->assemble(
             $cell,
             $event,
             $sourceDatasetId,
             $sourceEventsFileSha256,
+            $sourceBuildVersion,
         );
         if ($input === null) {
             return null;
