@@ -122,7 +122,7 @@ final readonly class OkxPaperPublicRestClient implements OkxPaperPublicRestClien
         foreach ([
             'instId', 'instType', 'ctType', 'ctVal', 'ctMult', 'ctValCcy',
             'settleCcy', 'tickSz', 'lotSz', 'minSz', 'maxMktSz', 'maxLmtSz',
-            'state',
+            'lever', 'state',
         ] as $key) {
             $value = $rows[0][$key] ?? null;
             if (!\is_string($value)) {

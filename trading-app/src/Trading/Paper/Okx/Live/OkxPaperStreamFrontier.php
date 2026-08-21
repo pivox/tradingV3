@@ -198,7 +198,10 @@ final readonly class OkxPaperStreamFrontier
         $payload = $event->payload;
         $epoch = self::requiredPositiveInteger($payload, 'source_epoch');
         $schema = self::requiredString($payload, 'metadata_schema_version');
-        if ($schema !== 'paper-instrument-metadata.v1') {
+        if (!\in_array($schema, [
+            'paper-instrument-metadata.v1',
+            'paper-instrument-metadata.v2',
+        ], true)) {
             throw self::invalid();
         }
         $sourceFields = $payload;

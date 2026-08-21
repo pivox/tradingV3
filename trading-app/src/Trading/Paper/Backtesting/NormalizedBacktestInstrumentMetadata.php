@@ -8,7 +8,7 @@ use Brick\Math\BigDecimal;
 
 final readonly class NormalizedBacktestInstrumentMetadata
 {
-    public const SCHEMA_VERSION = 'backtest-instrument-metadata.v1';
+    public const SCHEMA_VERSION = 'backtest-instrument-metadata.v2';
     private const TIMESTAMP_FORMAT = 'Y-m-d\TH:i:s.u\Z';
 
     public function __construct(
@@ -24,8 +24,19 @@ final readonly class NormalizedBacktestInstrumentMetadata
         public string $contractValue,
         public string $contractMultiplier,
         public string $contractValueUnit,
+        public string $metadataSchemaVersion,
+        public string $happenedAt,
+        public string $baseAsset,
+        public string $quoteAsset,
+        public string $settlementAsset,
+        public string $priceTick,
+        public string $quantityStep,
+        public string $minQuantity,
+        public ?string $maxMarketQuantity,
+        public ?string $maxLimitQuantity,
+        public ?string $maxLeverage,
     ) {
-        $baseAsset = match ($symbol) {
+        $expectedBaseAsset = match ($symbol) {
             'BTCUSDT' => 'BTC',
             'ETHUSDT' => 'ETH',
             default => null,
@@ -34,22 +45,56 @@ final readonly class NormalizedBacktestInstrumentMetadata
             || preg_match('/\Asha256:[0-9a-f]{64}\z/D', $sourceChecksum) !== 1
             || !\in_array($sourceNetwork, ['mainnet', 'testnet'], true)
             || !\in_array($marketDataVenue, ['okx', 'hyperliquid'], true)
-            || $baseAsset === null
+            || $expectedBaseAsset === null
             || $sourceEventPosition < 0
             || $sourceEpoch < 1
-            || $contractValueUnit !== $baseAsset
+            || !\in_array($metadataSchemaVersion, [
+                'paper-instrument-metadata.v1',
+                'paper-instrument-metadata.v2',
+            ], true)
+            || $baseAsset !== $expectedBaseAsset
+            || $contractValueUnit !== $expectedBaseAsset
             || !self::decimal($contractValue)->isPositive()
             || !self::decimal($contractMultiplier)->isPositive()
+            || !self::decimal($priceTick)->isPositive()
+            || !self::decimal($quantityStep)->isPositive()
+            || !self::decimal($minQuantity)->isPositive()
+            || self::decimal($minQuantity)->isLessThan(self::decimal($quantityStep))
             || ($marketDataVenue === 'okx' && $quantityUnit !== 'contracts')
             || ($marketDataVenue === 'hyperliquid' && ($quantityUnit !== 'base_asset'
                 || $contractValue !== '1' || $contractMultiplier !== '1'))
         ) {
             throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
         }
+        if (($marketDataVenue === 'okx' && ($quoteAsset !== 'USDT' || $settlementAsset !== 'USDT'))
+            || ($marketDataVenue === 'hyperliquid' && ($quoteAsset !== 'USDC' || $settlementAsset !== 'USDC'))
+            || ($maxMarketQuantity !== null && !self::decimal($maxMarketQuantity)->isPositive())
+            || ($maxLimitQuantity !== null && !self::decimal($maxLimitQuantity)->isPositive())
+            || ($maxLeverage !== null && !self::decimal($maxLeverage)->isPositive())
+            || ($maxMarketQuantity !== null
+                && self::decimal($maxMarketQuantity)->isLessThan(self::decimal($minQuantity)))
+            || ($maxLimitQuantity !== null
+                && self::decimal($maxLimitQuantity)->isLessThan(self::decimal($minQuantity)))
+            || ($marketDataVenue === 'okx' && ($maxMarketQuantity === null || $maxLimitQuantity === null))
+            || ($marketDataVenue === 'okx'
+                && $metadataSchemaVersion === 'paper-instrument-metadata.v2'
+                && $maxLeverage === null)
+            || ($marketDataVenue === 'okx'
+                && $metadataSchemaVersion === 'paper-instrument-metadata.v1'
+                && $maxLeverage !== null)
+            || ($marketDataVenue === 'hyperliquid'
+                && ($metadataSchemaVersion !== 'paper-instrument-metadata.v1'
+                    || $maxMarketQuantity !== null
+                    || $maxLimitQuantity !== null
+                    || $maxLeverage === null))
+        ) {
+            throw new \InvalidArgumentException('paper_backtest_instrument_metadata_invalid');
+        }
+        self::timestamp($happenedAt);
         self::timestamp($availableAt);
     }
 
-    /** @return array<string, int|string> */
+    /** @return array<string, int|string|null> */
     public function toArray(): array
     {
         return [
@@ -61,9 +106,20 @@ final readonly class NormalizedBacktestInstrumentMetadata
             'market_type' => 'perpetual',
             'symbol' => $this->symbol,
             'source_event_position' => $this->sourceEventPosition,
+            'metadata_schema_version' => $this->metadataSchemaVersion,
+            'happened_at' => $this->happenedAt,
             'available_at' => $this->availableAt,
             'source_epoch' => $this->sourceEpoch,
+            'base_asset' => $this->baseAsset,
+            'quote_asset' => $this->quoteAsset,
+            'settlement_asset' => $this->settlementAsset,
+            'price_tick' => $this->priceTick,
             'quantity_unit' => $this->quantityUnit,
+            'quantity_step' => $this->quantityStep,
+            'minimum_quantity' => $this->minQuantity,
+            'maximum_market_quantity' => $this->maxMarketQuantity,
+            'maximum_limit_quantity' => $this->maxLimitQuantity,
+            'maximum_leverage' => $this->maxLeverage,
             'contract_value' => $this->contractValue,
             'contract_multiplier' => $this->contractMultiplier,
             'contract_value_unit' => $this->contractValueUnit,
