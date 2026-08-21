@@ -503,22 +503,23 @@ final class PaperReplayReaderTest extends TestCase
         self::assertEquals($events[2]->receivedTimestamp, $clock->now());
     }
 
-    public function testResumePreservesALaterObservationWatermarkFromTheAcknowledgedPrefix(): void
+    public function testResumeRestoresALaterObservationWatermarkFromTheAcknowledgedPrefix(): void
     {
         $events = [
             $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '1', '2026-07-19T10:00:00.000000Z', '2026-07-19T10:00:10.000000Z'),
             $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '2', '2026-07-19T10:00:01.000000Z', '2026-07-19T10:00:02.000000Z'),
+            $this->event('BTCUSDT', PaperMarketDataChannel::PUBLIC_TRADE, '3', '2026-07-19T10:00:02.000000Z', '2026-07-19T10:00:03.000000Z'),
         ];
         $dataset = $this->completeDataset($events);
-        $checkpoint = $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[0], 0);
+        $checkpoint = $this->checkpoint($dataset['manifest'], 'paper.worker-01', $events[1], 1);
         $store = new PaperReplayCheckpointStore();
         $store->save($dataset['directory'], $checkpoint);
-        $clock = new PaperReplayClock($events[0]->receivedTimestamp);
+        $clock = new PaperReplayClock();
         $reader = new PaperReplayReader(new PaperDatasetVerifier(), $store, $clock);
 
         $yielded = iterator_to_array($reader->read($dataset['directory'], 'paper.worker-01'), false);
 
-        self::assertSame([$events[1]->eventId], array_map(
+        self::assertSame([$events[2]->eventId], array_map(
             static fn (PaperMarketEvent $event): string => $event->eventId,
             $yielded,
         ));
