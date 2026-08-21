@@ -270,6 +270,30 @@ final class PaperReplayRuntimeCheckCommandTest extends TestCase
         self::assertSame($writes, $store->registrationWrites);
     }
 
+    public function testExistingCellBoundToAnotherSourceBuildIsNotReady(): void
+    {
+        $store = new InMemoryPaperExecutionStore();
+        $cell = $this->cell();
+        $manifest = json_decode((string) file_get_contents($this->dataset . '/manifest.json'), true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($manifest);
+        self::assertIsString($manifest['events_file_sha256']);
+        $store->registerCell($cell, PaperProfileEligibility::REFERENCE_ONLY);
+        $store->bindDataset(
+            $cell,
+            'paper-exec-okx-mainnet-001',
+            $manifest['events_file_sha256'],
+            'forged-recorder.v2',
+        );
+        $writes = $store->registrationWrites;
+        $tester = new CommandTester($this->command($this->acceptingCoordinator(), store: $store));
+
+        self::assertSame(Command::INVALID, $tester->execute($this->options()));
+        $payload = json_decode(trim($tester->getDisplay()), true, 8, JSON_THROW_ON_ERROR);
+
+        self::assertSame('paper_execution_dataset_identity_conflict', $payload['blocker']);
+        self::assertSame($writes, $store->registrationWrites);
+    }
+
     public function testStoreFailureIsNormalizedWithoutLeakingDatabaseDetails(): void
     {
         $store = new InMemoryPaperExecutionStore();

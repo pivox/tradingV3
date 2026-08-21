@@ -27,6 +27,7 @@ use Doctrine\DBAL\Schema\Schema;
 use Doctrine\Migrations\AbstractMigration;
 use DoctrineMigrations\Version20260801120000;
 use DoctrineMigrations\Version20260820170000;
+use DoctrineMigrations\Version20260821030000;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -153,13 +154,77 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
         $this->store->bindDataset($this->cell, 'dataset-original', $checksum);
         $this->store->bindDataset($this->cell, 'dataset-original', $checksum);
         self::assertSame(
-            ['dataset_id' => 'dataset-original', 'events_file_sha256' => $checksum],
+            [
+                'dataset_id' => 'dataset-original',
+                'events_file_sha256' => $checksum,
+                'source_build_version' => null,
+            ],
             (new DoctrinePaperExecutionStore($this->connection))->datasetIdentity($this->cell),
+        );
+        $this->store->bindDataset($this->cell, 'dataset-original', $checksum, 'paper-dataset-recorder.v2');
+        self::assertSame(
+            'paper-dataset-recorder.v2',
+            (new DoctrinePaperExecutionStore($this->connection))->datasetIdentity($this->cell)['source_build_version'],
         );
 
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('paper_execution_dataset_identity_conflict');
         $this->store->bindDataset($this->cell, 'dataset-substitute', str_repeat('b', 64));
+    }
+
+    public function testModernDatasetIdentityRequiresAndPersistsExactSourceBuildVersion(): void
+    {
+        $modern = $this->modernCell();
+        $this->store->registerCell($modern, PaperProfileEligibility::REFERENCE_ONLY);
+
+        try {
+            $this->store->bindDataset($modern, 'dataset-modern', str_repeat('a', 64));
+            self::fail('A modern dataset binding must require its source build version.');
+        } catch (\InvalidArgumentException $exception) {
+            self::assertSame('paper_execution_dataset_identity_invalid', $exception->getMessage());
+        }
+
+        $this->store->bindDataset(
+            $modern,
+            'dataset-modern',
+            str_repeat('a', 64),
+            'paper-dataset-recorder.v2',
+        );
+        $restarted = new DoctrinePaperExecutionStore($this->connection);
+        self::assertSame([
+            'dataset_id' => 'dataset-modern',
+            'events_file_sha256' => str_repeat('a', 64),
+            'source_build_version' => 'paper-dataset-recorder.v2',
+        ], $restarted->datasetIdentity($modern));
+        $restarted->bindDataset(
+            $modern,
+            'dataset-modern',
+            str_repeat('a', 64),
+            'paper-dataset-recorder.v2',
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_dataset_identity_conflict');
+        $restarted->bindDataset(
+            $modern,
+            'dataset-modern',
+            str_repeat('a', 64),
+            'forged-recorder.v2',
+        );
+    }
+
+    public function testModernDatasetIdentityWithoutPersistedSourceBuildVersionFailsClosed(): void
+    {
+        $modern = $this->modernCell();
+        $this->store->registerCell($modern, PaperProfileEligibility::REFERENCE_ONLY);
+        $this->connection->executeStatement(
+            'UPDATE paper_execution_cell SET dataset_id = ?, dataset_events_sha256 = ? WHERE id = ?',
+            ['dataset-modern', str_repeat('a', 64), $modern->id],
+        );
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('paper_execution_dataset_identity_missing');
+        $this->store->datasetIdentity($modern);
     }
 
     public function testReadOnlyCellInspectionExposesBindingAndKillState(): void
@@ -315,7 +380,8 @@ final class DoctrinePaperExecutionStoreTest extends TestCase
     {
         require_once __DIR__ . '/../../../../../migrations/Version20260801120000.php';
         require_once __DIR__ . '/../../../../../migrations/Version20260820170000.php';
-        foreach ([Version20260801120000::class, Version20260820170000::class] as $class) {
+        require_once __DIR__ . '/../../../../../migrations/Version20260821030000.php';
+        foreach ([Version20260801120000::class, Version20260820170000::class, Version20260821030000::class] as $class) {
             /** @var AbstractMigration $migration */
             $migration = new $class($this->connection, new NullLogger());
             $migration->up(new Schema());

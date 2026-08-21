@@ -73,7 +73,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
             $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
             $cell = self::modernCellFromEffect($effect);
-            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
             $canonicalStrategy = new DeterministicCanonicalPaperStrategy($effect);
             $coordinator = $this->coordinator(
                 $store,
@@ -118,7 +118,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $canonicalIntents = new RecordingCanonicalPaperOrderIntents();
             $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
             $cell = self::modernCellFromEffect($effect);
-            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
             $coordinator = $this->coordinator(
                 $store,
                 new RecordingProjectionStore(),
@@ -167,7 +167,7 @@ final class PaperExecutionCoordinatorTest extends TestCase
             $store = new InMemoryPaperExecutionStore();
             $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
             $cell = self::modernCellFromEffect($effect);
-            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64));
+            $store->bindDataset($cell, 'dataset-modern-1', str_repeat('4', 64), 'paper-dataset-recorder.v2');
             $strategy = new DeterministicCanonicalPaperStrategy($effect);
             $coordinator = $this->coordinator(
                 $store,

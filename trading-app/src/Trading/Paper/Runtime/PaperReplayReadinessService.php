@@ -133,7 +133,10 @@ final readonly class PaperReplayReadinessService
         if ($state->datasetId !== null
             && ($manifest->eventsFileSha256 === null
                 || $state->datasetId !== $manifest->datasetId
-                || !hash_equals((string) $state->eventsFileSha256, $manifest->eventsFileSha256))
+                || !hash_equals((string) $state->eventsFileSha256, $manifest->eventsFileSha256)
+                || ($cell->isModern() && $state->sourceBuildVersion === null)
+                || ($state->sourceBuildVersion !== null
+                    && !hash_equals($state->sourceBuildVersion, $manifest->recorderVersion)))
         ) {
             throw new \LogicException('paper_execution_dataset_identity_conflict');
         }

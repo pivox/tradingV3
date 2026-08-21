@@ -62,7 +62,12 @@ final class PaperExecutionReplayCommand extends Command
             if ($manifest->eventsFileSha256 === null) {
                 throw new \LogicException('paper_execution_dataset_checksum_missing');
             }
-            $this->store->bindDataset($cell, $manifest->datasetId, $manifest->eventsFileSha256);
+            $this->store->bindDataset(
+                $cell,
+                $manifest->datasetId,
+                $manifest->eventsFileSha256,
+                $manifest->recorderVersion,
+            );
 
             $consumer = new PaperExecutionConsumer($this->coordinator, $this->store, $cell, $eligibility);
             foreach ($this->reader->read(
