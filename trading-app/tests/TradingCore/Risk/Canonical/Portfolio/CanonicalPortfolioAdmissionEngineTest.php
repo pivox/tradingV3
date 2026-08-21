@@ -50,6 +50,10 @@ final class CanonicalPortfolioAdmissionEngineTest extends TestCase
             CanonicalPortfolioAdmissionProof::fromArray($proof->toArray())->toArray(),
         );
         self::assertIsString(json_encode($proof->toArray(), JSON_THROW_ON_ERROR));
+        $rehydrated = $proof->openReservation($request->plan, $request->policy);
+        self::assertEquals($reservation, $rehydrated);
+        self::assertSame($reservation->stateHash, $rehydrated->stateHash);
+        self::assertSame($rehydrated->expectedStateHash(), $rehydrated->stateHash);
         self::assertSame($proof, $proof->verify($request->plan, $reservation, $request->policy));
     }
 

@@ -175,6 +175,18 @@ final readonly class CanonicalPortfolioAdmissionProof
         CanonicalPortfolioReservation $reservation,
         CanonicalPortfolioPolicy $expectedPolicy,
     ): self {
+        $expected = $this->openReservation($plan, $expectedPolicy);
+        if ($expected != $reservation) {
+            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_verification_failed');
+        }
+
+        return $this;
+    }
+
+    public function openReservation(
+        CanonicalOrderPlan $plan,
+        CanonicalPortfolioPolicy $expectedPolicy,
+    ): CanonicalPortfolioReservation {
         if ($this->policy->toAdmissionProofArray() !== $expectedPolicy->toAdmissionProofArray()) {
             throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_policy_mismatch');
         }
@@ -186,18 +198,15 @@ final readonly class CanonicalPortfolioAdmissionProof
                 $this->snapshot,
                 $this->decisionKey,
             );
-            $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock($reservation->observedAt)))
+            $decision = (new CanonicalPortfolioAdmissionEngine(new MockClock($plan->createdAt)))
                 ->admit($request);
             $expected = CanonicalPortfolioReservation::open($decision, $plan);
             $expected->assertCanonicalOpeningState($plan);
         } catch (\Throwable $exception) {
             throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_verification_failed', [], $exception);
         }
-        if ($expected != $reservation) {
-            throw new CanonicalPortfolioException('canonical_portfolio_admission_proof_verification_failed');
-        }
 
-        return $this;
+        return $expected;
     }
 
     /**
