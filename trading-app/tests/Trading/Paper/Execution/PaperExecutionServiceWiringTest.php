@@ -23,6 +23,12 @@ use App\Trading\Paper\Runtime\PaperReplayReadinessService;
 use App\Trading\Paper\Execution\Strategy\PaperMtfPreparationResolver;
 use App\Trading\Paper\Execution\Persistence\PaperCanonicalOrderIntentRecorderInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntime;
+use App\MtfValidator\Policy\CanonicalSetupRuleRuntime;
+use App\TradingCore\OrderPlan\Canonical\CanonicalExecutionPolicyCompiler;
+use App\TradingCore\OrderPlan\Canonical\CanonicalOrderPlanBuilder;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\CanonicalPortfolioAdapterSelector;
+use App\TradingCore\Risk\Canonical\Portfolio\Adapter\AbstractCanonicalPortfolioAdapter;
 use App\TradingCore\Config\EffectiveTradingConfigResolver;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -77,6 +83,49 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
             $readerClock,
             (new \ReflectionProperty(PaperCanonicalFakeEffectDispatcher::class, 'clock'))->getValue($canonicalDispatcher),
             'Canonical plan deadlines must be evaluated against dataset time.',
+        );
+        $canonicalRuntime = new PaperCanonicalStrategyRuntime(
+            $container->get(EffectiveTradingConfigResolver::class),
+            $container->get(CanonicalSetupRuleRuntime::class),
+            new CanonicalExecutionPolicyCompiler(),
+            $readerClock,
+        );
+        $shadowRuntime = (new \ReflectionProperty(
+            PaperCanonicalStrategyRuntime::class,
+            'runtime',
+        ))->getValue($canonicalRuntime);
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty($shadowRuntime::class, 'clock'))->getValue($shadowRuntime),
+            'Canonical Paper rules and market freshness must use dataset time.',
+        );
+        $planBuilder = (new \ReflectionProperty(
+            $shadowRuntime::class,
+            'orderPlanBuilder',
+        ))->getValue($shadowRuntime);
+        self::assertInstanceOf(CanonicalOrderPlanBuilder::class, $planBuilder);
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty(CanonicalOrderPlanBuilder::class, 'clock'))->getValue($planBuilder),
+            'Canonical Paper plan deadlines must use dataset time.',
+        );
+        $portfolioAdapters = (new \ReflectionProperty(
+            $shadowRuntime::class,
+            'portfolioAdapters',
+        ))->getValue($shadowRuntime);
+        self::assertInstanceOf(CanonicalPortfolioAdapterSelector::class, $portfolioAdapters);
+        $paperPortfolio = (new \ReflectionProperty(
+            CanonicalPortfolioAdapterSelector::class,
+            'paper',
+        ))->getValue($portfolioAdapters);
+        $admissionEngine = (new \ReflectionProperty(
+            AbstractCanonicalPortfolioAdapter::class,
+            'admissionEngine',
+        ))->getValue($paperPortfolio);
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty($admissionEngine::class, 'clock'))->getValue($admissionEngine),
+            'Canonical Paper portfolio admission must use dataset time.',
         );
         $readiness = $container->get(PaperReplayReadinessService::class);
         $readinessClock = (new \ReflectionProperty(PaperReplayReadinessService::class, 'clock'))->getValue($readiness);

@@ -7,6 +7,7 @@ namespace App\Trading\Paper\Execution\Strategy;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioPolicy;
 use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
 
@@ -57,10 +58,17 @@ final readonly class PaperCanonicalStrategyPreparation implements PaperCanonical
             ) {
                 throw new \LogicException('paper_canonical_strategy_outcome_invalid');
             }
-            $proof->verify(
-                $plan,
+            $policy = CanonicalPortfolioPolicy::fromLineageSnapshot($snapshot);
+            $proof->verify($plan, $reservation, $policy);
+            $proof = CanonicalPortfolioAdmissionProof::fromReservation(
+                new CanonicalPortfolioAdmissionRequest(
+                    $policy,
+                    $plan,
+                    $input->request->portfolioScope,
+                    $input->request->portfolioSnapshot,
+                    $input->request->decisionKey,
+                ),
                 $reservation,
-                CanonicalPortfolioPolicy::fromLineageSnapshot($snapshot),
             );
 
             return new PaperCanonicalStrategyDecision(

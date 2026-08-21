@@ -10,6 +10,7 @@ use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInput;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyInputAssemblerInterface;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyPreparation;
 use App\Trading\Paper\Execution\Strategy\PaperCanonicalStrategyRuntimeInterface;
+use App\Trading\Paper\Execution\Strategy\PaperCanonicalPreparedEffectCodec;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
 use App\Trading\Paper\MarketData\PaperMarketDataNetwork;
 use App\Trading\Paper\MarketData\PaperMarketDataVenue;
@@ -17,6 +18,8 @@ use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\TradingCore\Shadow\ShadowRuntimeIdentityPolicy;
 use App\TradingCore\Shadow\ShadowRuntimeOutcome;
 use App\TradingCore\Shadow\ShadowRuntimeRequest;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionProof;
+use App\TradingCore\Risk\Canonical\Portfolio\CanonicalPortfolioAdmissionRequest;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -71,13 +74,22 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
     public function testPlannedOutcomeBecomesVerifiedPaperDecision(): void
     {
         $effect = PaperCanonicalPreparedEffectCodecTest::fixture();
+        $legacyProof = CanonicalPortfolioAdmissionProof::fromRequest(
+            new CanonicalPortfolioAdmissionRequest(
+                $effect->admissionProof->policy,
+                $effect->plan,
+                $effect->admissionProof->scope,
+                $effect->admissionProof->snapshot,
+                $effect->decisionKey,
+            ),
+        );
         $outcome = new ShadowRuntimeOutcome(
             'planned',
             'paper_canonical_strategy_planned',
             $effect->lineage,
             $effect->plan,
             $effect->reservation,
-            ['admission_proof' => $effect->admissionProof->toArray()],
+            ['admission_proof' => $legacyProof->toArray()],
         );
 
         $decision = (new PaperCanonicalStrategyPreparation(
@@ -89,9 +101,19 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         self::assertSame($effect->plan->planHash, $decision->plan->planHash);
         self::assertSame($effect->reservation->stateHash, $decision->reservation->stateHash);
         self::assertSame($effect->admissionProof->toArray(), $decision->admissionProof->toArray());
+        self::assertSame('canonical-portfolio-admission-proof.v2', $decision->admissionProof->toArray()['schema']);
         self::assertSame($effect->lineage->toArray(), $decision->lineage->toArray());
         self::assertSame($effect->decisionKey, $decision->decisionKey);
         self::assertSame('5m', $decision->executionTimeframe);
+        $codec = new PaperCanonicalPreparedEffectCodec();
+        $prepared = $decision->prepare(
+            ['client_order_id' => 'paper-preparation-review-cid', 'order_intent_id' => 77],
+            $effect->provenance,
+        );
+        self::assertSame(
+            'canonical-portfolio-admission-proof.v2',
+            $codec->decode($codec->encode($prepared))->admissionProof->toArray()['schema'],
+        );
     }
 
     public function testMicroScalpingRequiresBookAndAuthenticatedMicrostructure(): void
@@ -142,6 +164,8 @@ final class PaperCanonicalStrategyPreparationTest extends TestCase
         $request = $reflection->newInstanceWithoutConstructor();
         $reflection->getProperty('lineage')->setValue($request, $effect->lineage);
         $reflection->getProperty('decisionKey')->setValue($request, $effect->decisionKey);
+        $reflection->getProperty('portfolioScope')->setValue($request, $effect->admissionProof->scope);
+        $reflection->getProperty('portfolioSnapshot')->setValue($request, $effect->admissionProof->snapshot);
 
         return new PaperCanonicalStrategyInput($request, '5m');
     }
