@@ -198,6 +198,10 @@ services:
         arguments:
             $execution: '@paper.execution.exchange_execution_service'
 
+    App\Trading\Paper\Execution\Fake\PaperCanonicalFakeEffectDispatcher:
+        arguments:
+            $clock: '@App\Trading\Paper\Replay\PaperReplayClock'
+
     App\Trading\Paper\Execution\PaperExecutionCoordinator:
         arguments:
             $environment: '%kernel.environment%'

@@ -50,9 +50,13 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
             PaperCanonicalPreparedEffectCodec::class,
             (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalCodec'))->getValue($coordinator),
         );
+        $canonicalDispatcher = (new \ReflectionProperty(
+            PaperExecutionCoordinator::class,
+            'canonicalDispatcher',
+        ))->getValue($coordinator);
         self::assertInstanceOf(
             PaperCanonicalFakeEffectDispatcher::class,
-            (new \ReflectionProperty(PaperExecutionCoordinator::class, 'canonicalDispatcher'))->getValue($coordinator),
+            $canonicalDispatcher,
         );
         self::assertInstanceOf(
             PaperCanonicalOrderIntentRecorderInterface::class,
@@ -69,6 +73,11 @@ final class PaperExecutionServiceWiringTest extends KernelTestCase
         $readerClock = (new \ReflectionProperty(PaperReplayReader::class, 'clock'))->getValue($reader);
         self::assertInstanceOf(PaperReplayClock::class, $runtimeClock);
         self::assertSame($readerClock, $runtimeClock, 'Replay reader and Fake matching must share dataset time.');
+        self::assertSame(
+            $readerClock,
+            (new \ReflectionProperty(PaperCanonicalFakeEffectDispatcher::class, 'clock'))->getValue($canonicalDispatcher),
+            'Canonical plan deadlines must be evaluated against dataset time.',
+        );
         $readiness = $container->get(PaperReplayReadinessService::class);
         $readinessClock = (new \ReflectionProperty(PaperReplayReadinessService::class, 'clock'))->getValue($readiness);
         self::assertSame($readerClock, $readinessClock, 'Readiness and replay must validate the same controlled clock.');
