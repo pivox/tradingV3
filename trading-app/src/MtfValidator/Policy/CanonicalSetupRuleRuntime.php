@@ -6,6 +6,10 @@ namespace App\MtfValidator\Policy;
 
 use App\Indicator\Condition\ConditionInterface;
 use App\Trading\Lineage\LineageContext;
+use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
+use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
+use App\TradingCore\Microstructure\CanonicalMicrostructureRuntimeInputResolver;
+use App\TradingCore\Mode\ModeContractLoader;
 use App\TradingCore\Rules\Catalog\ConditionCatalog;
 use App\TradingCore\Rules\Catalog\ConditionCatalogException;
 use App\TradingCore\Rules\Catalog\ConditionCatalogResolver;
@@ -15,9 +19,6 @@ use App\TradingCore\Rules\Evaluation\RuleEvaluationResult;
 use App\TradingCore\Rules\Evaluation\RuleInputSnapshot;
 use App\TradingCore\Rules\Evaluation\StrictConditionRegistry;
 use App\TradingCore\Rules\Evaluation\StrictRuleEvaluator;
-use App\TradingCore\Mode\ModeContractLoader;
-use App\TradingCore\MarketData\CanonicalIndicatorSnapshotIdentity;
-use App\TradingCore\Microstructure\CanonicalMicrostructureRuntimeInputResolver;
 use App\TradingCore\Setup\SetupContract;
 use App\TradingCore\Setup\SetupContractLoader;
 use Symfony\Component\DependencyInjection\Attribute\AutowireIterator;
@@ -97,11 +98,12 @@ final class CanonicalSetupRuleRuntime
                 $snapshotIdentity = \is_array($snapshotIdentityData)
                     ? CanonicalIndicatorSnapshotIdentity::tryFromArray($snapshotIdentityData)
                     : null;
+                $expectedMarket = $this->indicatorSnapshotMarket($identity);
                 $expectedSnapshotIdentity = new CanonicalIndicatorSnapshotIdentity(
                     $timeframe,
                     (string) $identity->symbol,
-                    (string) $identity->exchange,
-                    (string) $identity->environment,
+                    $expectedMarket['exchange'],
+                    $expectedMarket['environment'],
                     (string) $identity->marketType,
                 );
                 if ($snapshotIdentity === null || !$snapshotIdentity->matches(
@@ -354,6 +356,21 @@ final class CanonicalSetupRuleRuntime
         }
 
         return null;
+    }
+
+    /** @return array{exchange:string,environment:string} */
+    private function indicatorSnapshotMarket(LineageContext $identity): array
+    {
+        $request = $identity->effectiveConfigSnapshot?->toArray()['request'] ?? null;
+        $capability = is_array($request) ? ($request['execution_capability'] ?? null) : null;
+        if ($capability === ShadowExecutionCapability::Paper->value) {
+            return ['exchange' => 'fake', 'environment' => 'test'];
+        }
+
+        return [
+            'exchange' => (string) $identity->exchange,
+            'environment' => (string) $identity->environment,
+        ];
     }
 
 }

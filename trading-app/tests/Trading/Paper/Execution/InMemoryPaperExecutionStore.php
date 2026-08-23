@@ -38,6 +38,18 @@ final class InMemoryPaperExecutionStore implements PaperExecutionStoreInterface
     /** @var array<string, PaperProfileEligibility> */
     private array $registeredCells = [];
 
+    /** @param list<PaperMarketEvent> $events */
+    public function seedSources(array $events): void
+    {
+        if ($this->sources !== [] || $this->pending !== []) {
+            throw new \LogicException('paper_execution_test_store_not_empty');
+        }
+        foreach ($events as $position => $event) {
+            $this->sources[$position] = $event;
+        }
+        $this->ordinal = count($events);
+    }
+
     public function registerSnapshot(PaperConfigurationSnapshot $snapshot): void { ++$this->registrationWrites; }
     public function registerCell(PaperExecutionCell $cell, PaperProfileEligibility $eligibility): void
     {

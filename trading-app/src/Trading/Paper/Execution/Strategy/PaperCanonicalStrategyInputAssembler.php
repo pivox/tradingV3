@@ -8,6 +8,7 @@ use App\Common\Enum\Timeframe;
 use App\Trading\Lineage\LineageContextException;
 use App\Trading\Paper\Execution\Identity\PaperExecutionCell;
 use App\Trading\Paper\MarketData\PaperMarketDataChannel;
+use App\Trading\Paper\MarketData\PaperMarketDataVenue;
 use App\Trading\Paper\MarketData\PaperMarketEvent;
 use App\TradingCore\Backtesting\Indicator\CanonicalIndicatorProjection;
 use App\TradingCore\Execution\Enum\ShadowExecutionCapability;
@@ -239,14 +240,27 @@ final readonly class PaperCanonicalStrategyInputAssembler implements PaperCanoni
 
     private function eventCandleOpenSecond(PaperMarketEvent $event, string $timeframe): ?int
     {
+        $timeframeValue = Timeframe::tryFrom($timeframe);
+        if ($timeframeValue === null) {
+            return null;
+        }
+        if ($event->sourceVenue === PaperMarketDataVenue::OKX) {
+            $microseconds = $event->exchangeTimestamp->format('u');
+            $seconds = $event->exchangeTimestamp->getTimestamp();
+
+            return $microseconds === '000000'
+                && $seconds >= 0
+                && $seconds % $timeframeValue->getStepInSeconds() === 0
+                    ? $seconds
+                    : null;
+        }
+
         $value = $event->payload['start_time'] ?? null;
         if (!is_string($value) || preg_match('/\A[0-9]{13}\z/D', $value) !== 1) {
             return null;
         }
         $milliseconds = (int) $value;
-        $timeframeValue = Timeframe::tryFrom($timeframe);
         if ($milliseconds % 1000 !== 0
-            || $timeframeValue === null
             || intdiv($milliseconds, 1000) % $timeframeValue->getStepInSeconds() !== 0
         ) {
             return null;
